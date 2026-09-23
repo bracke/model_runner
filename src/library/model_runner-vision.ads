@@ -370,6 +370,35 @@ private
       R_Ln_Kv_W, R_Ln_Kv_B   : T.Real_Array_Access := null;
       R_Ln_Post_W, R_Ln_Post_B : T.Real_Array_Access := null;
       R_Proj           : T.View := T.Empty_View;
+
+      --  MiniCPM-V 4.6's downsample-MLP head, in place of the resampler
+      --  above. Merge_Scale is the side of the square of patches merged into
+      --  one row (two, a 2x2 merge); the normalization, widening and
+      --  narrowing weights act on the merged row -- Merge_Scale squared times
+      --  the encoder width wide -- and Merge_Down projects it to the text
+      --  width.
+      Merge_Scale : Natural := 0;
+      Merge_Norm_W, Merge_Norm_B : T.Real_Array_Access := null;
+      Merge_Up    : T.View := T.Empty_View;
+      Merge_Up_B  : T.Real_Array_Access := null;
+      Merge_Down  : T.View := T.Empty_View;
+      Merge_Down_B : T.Real_Array_Access := null;
+
+      --  MiniCPM-V 4.6's intermediate windowed merger, inserted after
+      --  Insert_Layer: a windowed self-attention over the patch grid's
+      --  two-by-two windows, then a two-by-two downsample MLP. Its
+      --  feed-forward widens the merged row (Merge_Scale squared times the
+      --  width) to Merge_Feed and narrows it back to the width.
+      Insert_Layer : Natural := 0;
+      Merge_Feed   : Natural := 0;
+      VM_Ln1_W, VM_Ln1_B : T.Real_Array_Access := null;
+      VM_Q, VM_K, VM_V, VM_O : T.View := T.Empty_View;
+      VM_Q_B, VM_K_B, VM_V_B, VM_O_B : T.Real_Array_Access := null;
+      VM_Ds_Ln_W, VM_Ds_Ln_B : T.Real_Array_Access := null;
+      VM_Ds_Up   : T.View := T.Empty_View;
+      VM_Ds_Up_B : T.Real_Array_Access := null;
+      VM_Ds_Down : T.View := T.Empty_View;
+      VM_Ds_Down_B : T.Real_Array_Access := null;
    end record;
 
 end Model_Runner.Vision;

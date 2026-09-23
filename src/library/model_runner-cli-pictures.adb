@@ -232,8 +232,11 @@ package body Model_Runner.CLI.Pictures is
          Item.Video_Text := Model_Runner.Text.To_Bounded ("<|video_pad|>");
          Item.Video_Open := Model_Runner.Text.To_Bounded ("<|vision_start|>");
          Item.Video_Close := Model_Runner.Text.To_Bounded ("<|vision_end|>");
-      elsif Model_Runner.Vision.Projector (Item.Eyes) = "resampler" then
-         --  MiniCPM-V's resampler. Its processor wraps a picture's rows in
+      elsif Model_Runner.Vision.Projector (Item.Eyes) = "resampler"
+        or else Model_Runner.Vision.Projector (Item.Eyes) = "minicpmv4_6"
+      then
+         --  MiniCPM-V's resampler, and 4.6's downsample merger, which frame a
+         --  picture the same way. Its processor wraps a picture's rows in
          --  <image> and </image>, one unknown token a row between them; a
          --  picture larger than the encoder's side becomes an overview so
          --  wrapped and a grid of slices each wrapped in <slice> and

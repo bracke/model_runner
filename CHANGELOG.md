@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **MiniCPM-V 4.6 reads a picture.** The `minicpmv4_6` projector is now read:
+  the same SigLIP encoder the resampler runs, but with the model's windowed
+  merger in place of the resampler head -- the ViT layers up to the window
+  layer, then a windowed self-attention (each two-by-two window's four tokens
+  attend only among themselves) and a two-by-two downsample MLP, then the rest
+  of the ViT, a post norm, and a final two-by-two merge through an
+  error-function unit down to the text width. `Encode_Minicpm46` and its bind
+  reuse the SigLIP half; the picture is placed the way MiniCPM-V's resampler
+  places one, in `<image>`/`</image>`. Cross-checked against llama.cpp's clip on
+  the real `mmproj-MiniCPM-V-4.6` (encoder embeddings agree to fp16 noise), and
+  a red picture reads back "solid red" end to end through the text model.
+
 - **`run --delegate-system-file PATH` sets the sub-agent's system prompt.** The
   sub-agents a `delegate` call spawns were opened with one hard-coded system
   prompt; this reads their prompt from a file instead, so a caller can say what
