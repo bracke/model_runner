@@ -770,9 +770,24 @@ package body Model_Runner.Llama is
          --  only the first row is ever read, and the second is required
          --  because a file that has not got it is not the model this
          --  computes.
-         if Containers.Find_Tensor (Source, "token_types.weight") /= 0 then
-            Settings.Segments := 2;
-         end if;
+         declare
+            Idx : constant Natural :=
+              Containers.Find_Tensor (Source, "token_types.weight");
+         begin
+            if Idx /= 0 then
+               --  As many segment rows as the file carries: two for BERT,
+               --  one for the RoBERTa family, which drops the segment
+               --  embedding. Only the first row is ever read -- a text
+               --  embedded here is all one segment -- so the count is read
+               --  from the file rather than assumed, and a reranker built on
+               --  RoBERTa (bge-reranker among them) is no longer refused for
+               --  carrying one row where a BERT carries two.
+               Settings.Segments :=
+                 (if Containers.Tensor_Rank (Source, Idx) >= 2
+                  then Natural (Containers.Tensor_Dimension (Source, Idx, 2))
+                  else 1);
+            end if;
+         end;
       end if;
 
       Containers.Get_Float
@@ -4602,6 +4617,19 @@ package body Model_Runner.Llama is
                Fail (Status);
                return;
             end if;
+         end if;
+
+         --  A model that carries a scoring head -- cls.output.weight, one row
+         --  down to a relevance score -- is a reranker even where its file
+         --  forgot to say so with a pooling type, as several published GGUF
+         --  conversions do. Read as one, so it scores rather than handing back
+         --  a vector nothing asked for.
+         if E.Is_Ok (Status)
+           and then Item.Settings.Pooling /= Pool_Rank
+           and then Containers.Find_Tensor (Source, "cls.output.weight") /= 0
+           and then Containers.Find_Tensor (Source, "cls.weight") /= 0
+         then
+            Item.Settings.Pooling := Pool_Rank;
          end if;
 
          --  The scoring head of a reranker, where the pooling type asks for

@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 110) of Registry_Row :=
+   Registry : constant array (1 .. 111) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -114,6 +114,8 @@ package body Model_Runner.CLI.Options is
        Text ("tool_result_parts")),
       (Text ("--no-normalize"), [Command_Embed => True, others => False],
        Text ("no_normalize")),
+      (Text ("--query"), [Command_Embed => True, others => False],
+       Text ("query")),
       (Text ("--system"), [Command_Run => True, others => False], Text ("system")),
       (Text ("--system-file"), [Command_Run => True, others => False], Text ("system_file")),
       (Text ("--developer"), [Command_Run => True, others => False], Text ("developer")),
@@ -511,6 +513,10 @@ package body Model_Runner.CLI.Options is
          Item.Developer_Text.all := [others => ' '];
          Free_Text (Item.Developer_Text);
       end if;
+      if Item.Query_Text /= null then
+         Item.Query_Text.all := [others => ' '];
+         Free_Text (Item.Query_Text);
+      end if;
       if Item.Prompt_Parts_Text /= null then
          Item.Prompt_Parts_Text.all := [others => ' '];
          Free_Text (Item.Prompt_Parts_Text);
@@ -865,7 +871,7 @@ package body Model_Runner.CLI.Options is
       --  rather than a silent last-wins.
       type Option_Flag is
         (Flag_Prompt_File, Flag_Prompt_Parts, Flag_System, Flag_System_File,
-         Flag_Developer,
+         Flag_Developer, Flag_Query,
          Flag_Max_Tokens, Flag_Max_Steps, Flag_Context, Flag_Batch,
          Flag_Temperature,
          Flag_Rope_Scaling, Flag_Rope_Scale, Flag_Rope_Base,
@@ -1719,6 +1725,17 @@ package body Model_Runner.CLI.Options is
                      end if;
                      Take_Value (Name, Value_Present, Value_First, Argument,
                                  Result.Developer_Text, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--query" then
+                     Mark (Flag_Query, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument,
+                                 Result.Query_Text, Good);
                      if not Good then
                         return;
                      end if;

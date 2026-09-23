@@ -7,6 +7,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Reranking: a cross-encoder scores a query against a document.** `embed
+  MODEL --query TEXT --prompt DOCUMENT` joins the two as the model was trained
+  on -- `<s> query </s></s> document </s>` for the RoBERTa family, a `[SEP]`
+  where a BERT has one -- and reports the relevance score the model's `cls`
+  scoring head gives, so a retrieval step can order documents by a real
+  cross-encoder rather than by embedding distance. A model carrying the head is
+  read as a reranker even where its file omits the `pooling_type` metadata that
+  says so (several published GGUF conversions do), and a RoBERTa reranker's
+  single token-type row is read as one rather than refused for not being BERT's
+  two -- so bge-reranker-v2-m3 reranks here, scoring a query's own answer far
+  above an unrelated line, where the same file gives a stock llama.cpp only
+  zeros.
+
 - **Speculative decoding works above temperature zero.** A draft model (or the
   context lookup) may now propose for a sampled run, not only a greedy one:
   each proposal is accepted with probability min(1, p/q) -- p the target's

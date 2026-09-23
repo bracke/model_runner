@@ -4385,18 +4385,79 @@ package body Model_Runner.CLI.Execute is
                        when L.Pool_Last => Opt.Pool_Last,
                        when others      => Opt.Pool_Mean));
          begin
-            --  The end marker where the model is one that reads whole texts
-            --  and its file asks for one. Bert is trained with a marker at
-            --  each end and its states are what they are because of them;
-            --  a decoder's embedded text is not a finished utterance and
-            --  takes none, which is what this did for every model before.
-            Vocab.Encode
-              (Words.all, Prompt.all, Vocab.Adds_Beginning (Words.all),
-               not Settings.Causal and then Vocab.Adds_End (Words.all),
-               Tokens, Count, Condition);
-            if E.Is_Error (Condition) then
-               Fail (Condition);
-               return;
+            if Item.Query_Text /= null
+              and then Settings.Pooling = L.Pool_Rank
+            then
+               --  A reranker scores a query against a document. Join the two
+               --  as the model was trained on: a beginning marker, the query,
+               --  an end marker, a separator, the document, an end marker --
+               --  <s> query </s></s> document </s> for the RoBERTa family,
+               --  whose separator is its end marker; a BERT with a [SEP] of
+               --  its own uses that between them.
+               declare
+                  use type Vocab.Token_Id;
+                  Q_Tokens : Vocab.Token_Array (1 .. Tokens'Length);
+                  D_Tokens : Vocab.Token_Array (1 .. Tokens'Length);
+                  Q_Count, D_Count : Natural;
+                  Beginning : constant Vocab.Token_Id :=
+                    Vocab.Beginning_Token (Words.all);
+                  Ending    : constant Vocab.Token_Id :=
+                    Vocab.End_Token (Words.all);
+                  Sep       : constant Vocab.Token_Id :=
+                    (if Vocab.Find (Words.all, "[SEP]") /= Vocab.No_Token
+                     then Vocab.Find (Words.all, "[SEP]")
+                     else Ending);
+                  K : Natural := 0;
+
+                  procedure Put (Tok : Vocab.Token_Id) is
+                  begin
+                     if Tok /= Vocab.No_Token and then K < Tokens'Length then
+                        K := K + 1;
+                        Tokens (Tokens'First + K - 1) := Tok;
+                     end if;
+                  end Put;
+               begin
+                  Vocab.Encode (Words.all, Item.Query_Text.all, False, False,
+                                Q_Tokens, Q_Count, Condition);
+                  if E.Is_Error (Condition) then
+                     Fail (Condition);
+                     return;
+                  end if;
+                  Vocab.Encode (Words.all, Prompt.all, False, False,
+                                D_Tokens, D_Count, Condition);
+                  if E.Is_Error (Condition) then
+                     Fail (Condition);
+                     return;
+                  end if;
+
+                  if Vocab.Adds_Beginning (Words.all) then
+                     Put (Beginning);
+                  end if;
+                  for I in 1 .. Q_Count loop
+                     Put (Q_Tokens (Q_Tokens'First + I - 1));
+                  end loop;
+                  Put (Ending);
+                  Put (Sep);
+                  for I in 1 .. D_Count loop
+                     Put (D_Tokens (D_Tokens'First + I - 1));
+                  end loop;
+                  Put (Ending);
+                  Count := K;
+               end;
+            else
+               --  The end marker where the model is one that reads whole texts
+               --  and its file asks for one. Bert is trained with a marker at
+               --  each end and its states are what they are because of them;
+               --  a decoder's embedded text is not a finished utterance and
+               --  takes none, which is what this did for every model before.
+               Vocab.Encode
+                 (Words.all, Prompt.all, Vocab.Adds_Beginning (Words.all),
+                  not Settings.Causal and then Vocab.Adds_End (Words.all),
+                  Tokens, Count, Condition);
+               if E.Is_Error (Condition) then
+                  Fail (Condition);
+                  return;
+               end if;
             end if;
 
             if Count = 0 then

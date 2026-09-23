@@ -283,6 +283,10 @@ package Model_Runner.CLI.Options is
       --  own name or refuses it in its author's words.
       Developer_Text : Text_Access := null;
 
+      --  The query a reranker scores each document against, from --query. The
+      --  prompt is the document; the two are joined as the model's pair.
+      Query_Text : Text_Access := null;
+
       --  The turns that follow the prompt, in the order they were written.
       --  This is how a single run closes the loop a tool call opens: the
       --  model asks for a tool, the caller runs it and hands the answer

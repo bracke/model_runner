@@ -3100,6 +3100,11 @@ package body Tests.CLI_Cases is
       --  for the keys and no other, and only in one of the two packed
       --  storages.
       Expect (E.No_Error, "run m.gguf --prompt a --kv-cache q8 --kv-values q4");
+
+      --  A reranker's query pairs with the prompt on embed, and is not an
+      --  option run takes.
+      Expect (E.No_Error, "embed m.gguf --query q --prompt d");
+      Expect (E.CLI_Option_Not_For_Command, "run m.gguf --prompt a --query q");
       Expect (E.No_Error, "run m.gguf --prompt a --kv-cache q4 --kv-values q8");
       Expect (E.CLI_Option_Combination,
               "run m.gguf --prompt a --kv-cache f16 --kv-values q4");
