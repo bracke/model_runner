@@ -325,6 +325,51 @@ package body Tests.Tools_Cases is
               "the JSON envelope was taken as a recipient call");
    end Recipient_Is_Shaped;
 
+   --  A Functionary recipient reply keeps its spoken words apart from its
+   --  calls. Spoken_Span answers the ">>>all" block's body -- not the raw
+   --  blocks -- so a mixed reply round-trips as words beside its calls, a
+   --  pure call carries none, and the tag and JSON forms keep their prefix.
+   procedure Recipient_Spoken_Splits
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      LF : constant Character := ASCII.LF;
+
+      function Span
+        (Reply : String; Syntax : Tools.Call_Syntax) return String
+      is
+         First, Last : Natural;
+      begin
+         Tools.Spoken_Span (Reply, Syntax, First, Last);
+         return Reply (First .. Last);
+      end Span;
+   begin
+      --  Spoken text and then a call: the words alone.
+      Assert
+        (Span ("all" & LF & "Let me check." & LF & ">>>get_weather" & LF
+               & "{""city"":""Paris""}", Tools.Recipient_JSON)
+         = "Let me check.",
+         "the recipient spoken span did not isolate the words before a call");
+
+      --  A pure call: no words.
+      Assert
+        (Span ("get_weather" & LF & "{""city"":""Paris""}",
+               Tools.Recipient_JSON) = "",
+         "a recipient pure call carried words it did not say");
+
+      --  Spoken only: all of it.
+      Assert
+        (Span ("all" & LF & "Just an answer.", Tools.Recipient_JSON)
+         = "Just an answer.",
+         "a spoken-only recipient reply lost its words");
+
+      --  The JSON form is unchanged: the prose before the envelope.
+      Assert
+        (Span ("Here you go.<tool_call>{""name"":""x"",""arguments"":{}}"
+               & "</tool_call>", Tools.Tool_Call_JSON) = "Here you go.",
+         "the JSON form's spoken prefix changed");
+   end Recipient_Spoken_Splits;
+
    --  A delegator wired in runs the delegate tool's subtask; an inquirer
    --  wired in answers ask_user; an embedder wired in is what retrieve
    --  ranks with. Each is given as a stub that records what it was handed
@@ -1454,6 +1499,10 @@ package body Tests.Tools_Cases is
          "Functionary's recipient form is shaped by the call grammar: a "
          & "recipient on offer, its arguments object per the tool's schema, "
          & "spoken text and calls in one reply, and a short call refused");
+      Register_Routine
+        (T, Recipient_Spoken_Splits'Access,
+         "a Functionary recipient reply's spoken words are kept apart from "
+         & "its calls, a pure call carries none, and the JSON prefix holds");
       Register_Routine
         (T, Full_Set_Is_Tight'Access,
          "the whole built-in set builds the tight grammar, not the loose "

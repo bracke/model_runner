@@ -621,14 +621,16 @@ package body Model_Runner.Conversation is
       end if;
 
       declare
-         Before : constant Natural := Item.Used;
+         Before      : constant Natural := Item.Used;
+         First, Last : Natural;
       begin
-         Append_Asking
-           (Item,
-            Reply (Reply'First
-                   .. Reply'First
-                      + Model_Runner.Tools.Spoken_Length (Reply) - 1),
-            Status);
+         --  What the model said, taking the syntax into account: the prose
+         --  before the first block for the tag and JSON forms, the ">>>all"
+         --  block's body for Functionary's recipient form -- so a mixed
+         --  reply's words are kept beside its calls rather than the raw
+         --  blocks being handed back as text.
+         Model_Runner.Tools.Spoken_Span (Reply, Syntax, First, Last);
+         Append_Asking (Item, Reply (First .. Last), Status);
 
          for Index in 1 .. Model_Runner.Tools.Count (Asked) loop
             exit when E.Is_Error (Status);

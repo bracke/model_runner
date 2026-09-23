@@ -600,6 +600,97 @@ package body Model_Runner.Tools is
       return Reply'Length;
    end Spoken_Length;
 
+   -----------------
+   -- Spoken_Span --
+   -----------------
+
+   procedure Spoken_Span
+     (Reply  : String;
+      Syntax : Call_Syntax;
+      First  : out Natural;
+      Last   : out Natural)
+   is
+      Marker : constant String := ">>>";
+
+      function Marks (Position : Natural) return Boolean
+      is (Position + Marker'Length - 1 <= Reply'Last
+          and then Reply (Position .. Position + Marker'Length - 1) = Marker);
+   begin
+      if Syntax /= Recipient_JSON then
+         --  The prose before the first block, as a span from the start.
+         First := Reply'First;
+         Last  := Reply'First + Spoken_Length (Reply) - 1;
+         return;
+      end if;
+
+      --  The recipient form: what the model said is its ">>>all" block. Walk
+      --  the ">>>"-parted blocks the way Read_Calls does and answer the body
+      --  of the one whose recipient is "all"; answer an empty span when none
+      --  said anything.
+      First := Reply'First;
+      Last  := Reply'First - 1;
+
+      declare
+         Pos : Natural := Reply'First;
+      begin
+         if Marks (Pos) then
+            Pos := Pos + Marker'Length;
+         end if;
+
+         while Pos <= Reply'Last loop
+            declare
+               Name_Last : Natural := Pos;
+            begin
+               while Name_Last <= Reply'Last
+                 and then Reply (Name_Last) /= ASCII.LF
+               loop
+                  Name_Last := Name_Last + 1;
+               end loop;
+
+               --  A recipient with no line break after it is a reply that
+               --  stopped before its body; nothing to take.
+               exit when Name_Last > Reply'Last;
+
+               declare
+                  Name       : constant String := Reply (Pos .. Name_Last - 1);
+                  Body_First : constant Natural := Name_Last + 1;
+                  Body_Last  : Natural := Body_First - 1;
+               begin
+                  while Body_Last + Marker'Length <= Reply'Last
+                    and then not Marks (Body_Last + 1)
+                  loop
+                     Body_Last := Body_Last + 1;
+                  end loop;
+                  if Body_Last + Marker'Length > Reply'Last then
+                     Body_Last := Reply'Last;
+                  end if;
+
+                  if Name = "all" then
+                     First := Body_First;
+                     Last  := Body_Last;
+
+                     --  The newline before the next block, and any trailing
+                     --  space, belong to neither: the template writes one
+                     --  itself when there is something to separate.
+                     while Last >= First
+                       and then Reply (Last)
+                                in ' ' | ASCII.HT | ASCII.LF | ASCII.CR
+                     loop
+                        Last := Last - 1;
+                     end loop;
+                     return;
+                  end if;
+
+                  Pos := Body_Last + 1;
+                  if Marks (Pos) then
+                     Pos := Pos + Marker'Length;
+                  end if;
+               end;
+            end;
+         end loop;
+      end;
+   end Spoken_Span;
+
    ---------------------------------------------------------------------------
    --  Definitions
    ---------------------------------------------------------------------------

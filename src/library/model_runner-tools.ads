@@ -202,6 +202,26 @@ package Model_Runner.Tools is
    --    first block taken off; the whole reply when it called nothing.
    function Spoken_Length (Reply : String) return Natural;
 
+   --  The span of Reply that is what the model said, taking the call syntax
+   --  into account. For the tag and JSON syntaxes the spoken part is the
+   --  prose before the first block, so this is Spoken_Length as a span from
+   --  Reply'First. For Functionary's recipient form the spoken part is the
+   --  ">>>all" block's body, which is not a prefix -- a reply may open with a
+   --  call and carry the words after it -- so this finds that block wherever
+   --  it stands and answers its body, the trailing whitespace the template
+   --  re-adds taken off. Last below First is an empty span: a reply that only
+   --  called, whose turn carries the calls and no words.
+   --
+   --  @param Reply What the model produced.
+   --  @param Syntax The call syntax the reply is in.
+   --  @param First Where the spoken part begins.
+   --  @param Last Where it ends; below First when there is none.
+   procedure Spoken_Span
+     (Reply  : String;
+      Syntax : Call_Syntax;
+      First  : out Natural;
+      Last   : out Natural);
+
    --  Write a value back in the spelling this engine uses.
    --
    --  Exposed because a template renders text this produced and a test has

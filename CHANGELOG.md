@@ -21,9 +21,13 @@ Keep a Changelog and the project uses semantic versioning.
   arguments object the tool's own schema shapes -- so a call names a real tool
   and carries the arguments it requires, and spoken text and calls may stand in
   one reply. A tool whose schema will not compile falls back to admitting the
-  reply as prose, as the whole form did before. The multi-turn spoken-text
-  split -- rendering a mixed reply back as a spoken turn beside its calls -- is
-  the enhancement left for later.
+  reply as prose, as the whole form did before. And a mixed reply keeps its
+  words beside its calls: `Spoken_Span` reads the recipient form's `>>>all`
+  block as the turn's text, where the older prefix rule -- the prose up to the
+  first `<tool_call>` -- found no marker and kept the raw `>>>` blocks as text,
+  handing the model its own spelling back rather than the one its template
+  writes. A reply that only called carries no words, as its template renders
+  none.
 
 - **Reranking: a cross-encoder scores a query against documents.** `embed
   MODEL --query TEXT --prompt DOCUMENT` joins the two as the model was trained
