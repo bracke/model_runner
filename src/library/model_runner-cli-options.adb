@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 112) of Registry_Row :=
+   Registry : constant array (1 .. 113) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -171,6 +171,7 @@ package body Model_Runner.CLI.Options is
       (Text ("--mirostat-eta"), [Command_Run => True, others => False], Text ("mirostat_eta")),
       (Text ("--chat-template"), [Command_Run => True, others => False], Text ("chat_template")),
       (Text ("--chat-template-file"), [Command_Run => True, others => False], Text ("chat_template_file")),
+      (Text ("--delegate-system-file"), [Command_Run => True, others => False], Text ("delegate_system_file")),
       (Text ("--repeat-penalty"), [Command_Run => True, others => False], Text ("repeat_penalty")),
       (Text ("--frequency-penalty"), [Command_Run => True, others => False], Text ("frequency_penalty")),
       (Text ("--presence-penalty"), [Command_Run => True, others => False], Text ("presence_penalty")),
@@ -881,6 +882,7 @@ package body Model_Runner.CLI.Options is
          Flag_Top_K, Flag_Top_P, Flag_Min_P, Flag_Top_A, Flag_Repeat_Penalty,
          Flag_Repeat_Window, Flag_Frequency_Penalty, Flag_Presence_Penalty,
          Flag_Chat_Template, Flag_Chat_Template_File,
+         Flag_Delegate_System_File,
          Flag_Typical, Flag_Tail_Free,
          Flag_XTC_Probability, Flag_XTC_Threshold,
          Flag_DRY_Multiplier, Flag_DRY_Base, Flag_DRY_Allowed,
@@ -2029,6 +2031,14 @@ package body Model_Runner.CLI.Options is
                      Bounded_Value
                        (Flag_Chat_Template_File, Result.Chat_Template_Path,
                         Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                  elsif Name = "--delegate-system-file" then
+                     Bounded_Value
+                       (Flag_Delegate_System_File,
+                        Result.Delegate_System_Path, Good);
                      if not Good then
                         return;
                      end if;

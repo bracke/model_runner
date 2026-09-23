@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`run --delegate-system-file PATH` sets the sub-agent's system prompt.** The
+  sub-agents a `delegate` call spawns were opened with one hard-coded system
+  prompt; this reads their prompt from a file instead, so a caller can say what
+  a delegated task's agent is and how it should answer. Empty -- the option
+  unused -- keeps the built-in prompt, and a missing file reads as an open
+  failure rather than being ignored. The prompt is set on the delegator before
+  the loop, so every sub-agent it opens is opened with it.
+
 - **`run --chat-template-file PATH` takes a chat template from a file.** Where
   `--chat-template NAME` selects a format this build carries by name, this reads
   an arbitrary template out of a file and uses it in place of the model's own --

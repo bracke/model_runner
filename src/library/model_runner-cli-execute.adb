@@ -513,6 +513,10 @@ package body Model_Runner.CLI.Execute is
         Sessions : Session_Pool (1 .. Count);
         Leases   : Session_Leaser (Count);
         Ready    : Natural := 0;   --  sessions that opened; 0 until Open
+
+        --  The system prompt each sub-agent is opened with, read from a file
+        --  where the caller gave one; null for the built-in one below.
+        System_Text : Opt.Text_Access := null;
      end record;
 
    --  Two subtasks may overlap when the pool holds more than one open
@@ -538,10 +542,11 @@ package body Model_Runner.CLI.Execute is
       Slot : Positive;
 
       System_Prompt : constant String :=
-        "You are a sub-agent handed one self-contained task. Use the tools "
-        & "to complete it, then reply with a direct, complete answer that "
-        & "stands on its own -- the caller sees only your final answer, not "
-        & "your steps, and you keep no memory of it once you answer.";
+        (if Self.System_Text /= null then Self.System_Text.all
+         else "You are a sub-agent handed one self-contained task. Use the "
+         & "tools to complete it, then reply with a direct, complete answer "
+         & "that stands on its own -- the caller sees only your final answer, "
+         & "not your steps, and you keep no memory of it once you answer.");
    begin
       Last   := 0;
       Status := E.Success;
@@ -3461,6 +3466,23 @@ package body Model_Runner.CLI.Execute is
                   Read_File
                     (T.To_String (Item.Schema_Path),
                      Model_Runner.Schema.Max_Schema_Bytes, Answer, Condition);
+                  if E.Is_Error (Condition) then
+                     Conv.Close (Messages);
+                     Fail (Condition);
+                     return;
+                  end if;
+               end if;
+
+               --  A system prompt for the sub-agents a delegate spawns, read
+               --  from a file where one was named; the built-in one stands
+               --  otherwise. Set on the runner before the loop, so every
+               --  sub-agent it opens is opened with it.
+               if not T.Is_Empty (Item.Delegate_System_Path) then
+                  Read_File
+                    (T.To_String (Item.Delegate_System_Path),
+                     Model_Runner.Limits.Default_Session_Limits
+                       .Max_Prompt_Bytes,
+                     Delegate_Runner.System_Text, Condition);
                   if E.Is_Error (Condition) then
                      Conv.Close (Messages);
                      Fail (Condition);

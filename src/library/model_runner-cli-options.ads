@@ -324,6 +324,11 @@ package Model_Runner.CLI.Options is
       --  given; where both this and Chat_Template are, the file is used.
       Chat_Template_Path : Model_Runner.Text.Bounded;
 
+      --  The path of a file whose contents are the system prompt each
+      --  sub-agent a delegate spawns is opened with. Empty means the built-in
+      --  sub-agent prompt is used.
+      Delegate_System_Path : Model_Runner.Text.Bounded;
+
       Max_Tokens   : Natural := 256;
       Context_Size : Natural := 0;
 
