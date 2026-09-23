@@ -7,6 +7,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Functionary tool calling.** The Functionary family's recipient form is now
+  read and written: a reply is a run of blocks parted by `>>>`, each a
+  recipient and a body across a line break -- `>>>all` is what the model said,
+  any other name is a call and its body the arguments object. A new
+  `Recipient_JSON` call syntax reads it, a carried `functionary` chat format
+  (`--chat-template functionary`) writes the conversation and is recognised in
+  a model's own template by its `>>>` recipient, and the two are wired through
+  `Syntax_Of`. It closes the one mainstream tool-calling family the engine did
+  not read. The reply is left unconstrained for now (its output carries no
+  `<`, so the prose grammar admits it and the reader takes the calls out); a
+  tight recipient grammar and the multi-turn spoken-text split are the
+  enhancements left for later.
+
 - **Reranking: a cross-encoder scores a query against documents.** `embed
   MODEL --query TEXT --prompt DOCUMENT` joins the two as the model was trained
   on -- `<s> query </s></s> document </s>` for the RoBERTa family, a `[SEP]`

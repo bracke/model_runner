@@ -601,6 +601,64 @@ package body Model_Runner.Templates is
            & "<think>" & LF & LF & "</think>" & LF & LF
            & "{% endif %}"
            & "{% endif %}";
+      elsif Name = Format_Name (Format_Functionary) then
+         --  Functionary v3.2, carried because its own template calls a schema
+         --  generator this engine does not run. Turns are Llama-3's; a system
+         --  turn opens the prompt and, where tools are offered, carries the
+         --  recipient-format instructions and each tool's signature as JSON.
+         --  An assistant turn's words are its >>>all block and each call a
+         --  >>>name block; a tool answer is its own tool turn. The generation
+         --  prompt ends with >>> so the model writes the recipient at once,
+         --  and the call it writes back is read in Recipient_JSON syntax.
+         return
+           "{{ bos_token }}"
+           & "<|start_header_id|>system<|end_header_id|>" & LF & LF
+           & "{% if messages[0]['role'] == 'system' %}"
+           & "{{ messages[0]['content'] }}" & LF
+           & "{% else %}"
+           & "You are a helpful assistant." & LF
+           & "{% endif %}"
+           & "{% if tools %}"
+           & "You are capable of executing available function(s) if required."
+           & LF
+           & "Only execute function(s) when absolutely necessary." & LF
+           & "Use JSON for function arguments." & LF
+           & "Respond with a recipient and its content, the recipient on a "
+           & "line beginning >>> and the content on the lines after it; the "
+           & "recipient all is what you say to the user, a function's name is "
+           & "a call of it." & LF
+           & "Available functions:" & LF
+           & "{% for tool in tools +%}" & LF & "{{ tool | tojson }}"
+           & "{% endfor +%}" & LF
+           & "{% endif %}"
+           & "<|eot_id|>"
+           & "{% if messages[0]['role'] == 'system' %}"
+           & "{% set turns = messages[1:] %}"
+           & "{% else %}{% set turns = messages %}{% endif %}"
+           & "{% for message in turns %}"
+           & "{% if message.role == 'assistant' %}"
+           & "<|start_header_id|>assistant<|end_header_id|>" & LF & LF
+           & "{% if message.content is string and message.content %}"
+           & ">>>all" & LF & "{{ message.content }}" & LF
+           & "{% endif %}"
+           & "{% if message.tool_calls %}"
+           & "{% for tool_call in message.tool_calls %}"
+           & "{% if tool_call.function is defined %}"
+           & "{% set tool_call = tool_call.function %}{% endif %}"
+           & ">>>" & "{{ tool_call.name }}" & LF
+           & "{{ tool_call.arguments }}" & LF
+           & "{% endfor %}"
+           & "{% endif %}"
+           & "<|eot_id|>"
+           & "{% else %}"
+           & "<|start_header_id|>{{ message.role }}<|end_header_id|>" & LF & LF
+           & "{% if message.content is string %}{{ message.content }}"
+           & "{% endif %}<|eot_id|>"
+           & "{% endif %}"
+           & "{% endfor %}"
+           & "{% if add_generation_prompt %}"
+           & "<|start_header_id|>assistant<|end_header_id|>" & LF & LF & ">>>"
+           & "{% endif %}";
       else
          return "";
       end if;
@@ -624,6 +682,11 @@ package body Model_Runner.Templates is
          return Format_Name (Format_Qwen3_Coder);
       elsif Has ("<function name=") and then Has ("<param name=") then
          return Format_Name (Format_MiniCPM);
+      elsif Has (">>>all") then
+         --  Functionary before Llama3: its template opens turns the Llama3
+         --  way but writes tool calls in the recipient form, and it is the
+         --  ">>>" recipient that tells the two apart.
+         return Format_Name (Format_Functionary);
       elsif Has ("<|start_header_id|>") then
          return Format_Name (Format_Llama3);
       elsif Has ("<start_of_turn>") then
@@ -648,6 +711,8 @@ package body Model_Runner.Templates is
        then Model_Runner.Tools.Function_XML
        elsif Name = Format_Name (Format_Gemma)
        then Model_Runner.Tools.Open_JSON
+       elsif Name = Format_Name (Format_Functionary)
+       then Model_Runner.Tools.Recipient_JSON
        else Model_Runner.Tools.Tool_Call_JSON);
 
    procedure Compile

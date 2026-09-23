@@ -183,13 +183,26 @@ package body Tests.Template_Cases is
         & "<|im_start|>assistant" & LF & "yo<|im_end|>" & LF
         & "<|im_start|>assistant" & LF;
 
-      Wanted : constant array (1 .. 6) of Expectation :=
+      --  Functionary always opens with a system turn -- its instructions --
+      --  where the plain Llama-3 format opens straight at the user; an
+      --  assistant's words are its >>>all block, and the prompt ends at >>>.
+      Functionary_Text : aliased constant String :=
+        "<s><|start_header_id|>system<|end_header_id|>" & LF & LF
+        & "You are a helpful assistant." & LF & "<|eot_id|>"
+        & "<|start_header_id|>user<|end_header_id|>" & LF & LF
+        & "hi<|eot_id|>"
+        & "<|start_header_id|>assistant<|end_header_id|>" & LF & LF
+        & ">>>all" & LF & "yo" & LF & "<|eot_id|>"
+        & "<|start_header_id|>assistant<|end_header_id|>" & LF & LF & ">>>";
+
+      Wanted : constant array (1 .. 7) of Expectation :=
         [(Tmpl.Format_Llama3, Llama3_Text'Access),
          (Tmpl.Format_ChatML, ChatML_Text'Access),
          (Tmpl.Format_Gemma, Gemma_Text'Access),
          (Tmpl.Format_Phi3, Phi3_Text'Access),
          (Tmpl.Format_Qwen3_Coder, Coder_Text'Access),
-         (Tmpl.Format_MiniCPM, MiniCPM_Text'Access)];
+         (Tmpl.Format_MiniCPM, MiniCPM_Text'Access),
+         (Tmpl.Format_Functionary, Functionary_Text'Access)];
 
       Item     : Tmpl.Compiled;
       Messages : Conv.History;

@@ -464,6 +464,17 @@ package body Model_Runner.Tools.Constraint is
    is
       Tool_Count : constant Natural := Count (Offered);
    begin
+      if Syntax = Model_Runner.Tools.Recipient_JSON then
+         --  Functionary's ">>>" recipient form is not one this builder shapes
+         --  into a tight grammar yet. Its output carries no '<', so the prose
+         --  grammar admits it whole and the reader takes the calls out of it;
+         --  the model was trained on the form and writes it unheld. A tight
+         --  recipient grammar -- names bound to the tools, bodies to their
+         --  schemas -- is the enhancement this leaves for later.
+         Model_Runner.Grammar.Compile (Into, Prose_Only, Status);
+         return;
+      end if;
+
       if Tool_Count = 0 then
          if Answer_Schema = "" then
             Model_Runner.Grammar.Compile (Into, Prose_Only, Status);

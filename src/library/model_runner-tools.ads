@@ -125,7 +125,8 @@ package Model_Runner.Tools is
      (Tool_Call_JSON,   --  <tool_call>{"name": .., "arguments": {..}}</tool_call>
       Open_JSON,        --  that, or the object standing open in the text
       Function_XML,     --  <function name=".."><param name="p">v</param></function>
-      Qwen_XML);        --  <function=..><parameter=p>\nv\n</parameter></function>
+      Qwen_XML,         --  <function=..><parameter=p>\nv\n</parameter></function>
+      Recipient_JSON);  --  >>>name\n{"a": 1}, Functionary's recipient form
 
    --  Read every call a reply carries.
    --

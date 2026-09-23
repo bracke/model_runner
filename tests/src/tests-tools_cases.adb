@@ -1237,6 +1237,53 @@ package body Tests.Tools_Cases is
       Tools.Close (Asked);
    end Function_XML_Calls_Parse;
 
+   --  Recipient_JSON reads Functionary's form: blocks parted by ">>>", each a
+   --  recipient and a body across a line break. "all" is what the model said;
+   --  any other name is a call whose body is its arguments object.
+   procedure Recipient_JSON_Calls_Parse
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Asked  : Tools.Calls;
+      Status : E.Error_Info;
+   begin
+      --  The model spoke, then called two functions. The reply begins at the
+      --  first recipient -- the generation prompt's own ">>>" primed it -- and
+      --  the rest carry their own.
+      Tools.Read_Calls
+        (Asked,
+         "all" & ASCII.LF & "Let me check both." & ASCII.LF
+         & ">>>get_weather" & ASCII.LF & "{""city"": ""Hanoi""}"
+         & ">>>get_time" & ASCII.LF & "{""tz"": ""Asia/Bangkok""}",
+         Status, Syntax => Tools.Recipient_JSON);
+      Assert (E.Is_Ok (Status), "the recipient-form calls would not read");
+      Assert (Tools.Count (Asked) = 2,
+              "not two calls:" & Tools.Count (Asked)'Image);
+      Assert (Tools.Called (Asked, 1) = "get_weather",
+              "wrong first name: " & Tools.Called (Asked, 1));
+      Assert (Tools.Arguments (Asked, 1) = "{""city"": ""Hanoi""}",
+              "wrong first args: " & Tools.Arguments (Asked, 1));
+      Assert (Tools.Called (Asked, 2) = "get_time", "wrong second name");
+      Tools.Close (Asked);
+
+      --  A reply that only spoke calls nothing, and is not an error.
+      Tools.Read_Calls
+        (Asked, "all" & ASCII.LF & "The weather is fine.",
+         Status, Syntax => Tools.Recipient_JSON);
+      Assert (E.Is_Ok (Status) and then Tools.Count (Asked) = 0,
+              "a spoken-only reply named a call");
+      Tools.Close (Asked);
+
+      --  A lone call, the reply beginning at the function name, no arguments.
+      Tools.Read_Calls
+        (Asked, "now" & ASCII.LF & "{}",
+         Status, Syntax => Tools.Recipient_JSON);
+      Assert (E.Is_Ok (Status) and then Tools.Count (Asked) = 1
+              and then Tools.Called (Asked, 1) = "now",
+              "a lone call did not read");
+      Tools.Close (Asked);
+   end Recipient_JSON_Calls_Parse;
+
    --  Open_JSON reads the envelope, and the object a model trained on no
    --  envelope writes instead: bare on a line, or in a ```json fence, with
    --  prose around it. It is read only where it names a function and
@@ -1327,6 +1374,9 @@ package body Tests.Tools_Cases is
       Register_Routine
         (T, Memory_Round_Trips'Access,
          "memory keeps what one call wrote for a later call to read");
+      Register_Routine
+        (T, Recipient_JSON_Calls_Parse'Access,
+         "the recipient form parses Functionary's calls");
       Register_Routine
         (T, Function_XML_Calls_Parse'Access,
          "a MiniCPM function/param reply reads as calls with JSON arguments");

@@ -1477,6 +1477,109 @@ package body Model_Runner.Tools is
                end if;
             end loop;
          end;
+
+      when Recipient_JSON =>
+         --  Functionary's recipient form. The reply is a run of blocks, each
+         --  a recipient and a body separated by a line break, the blocks
+         --  parted by ">>>". A recipient of "all" is what the model said and
+         --  is not a call; any other names a function and its body is the
+         --  arguments object. The generation prompt ends with ">>>", so the
+         --  first block usually stands without one and the rest carry it.
+         declare
+            Marker : constant String := ">>>";
+            Pos    : Natural := Reply'First;
+         begin
+            if Marks (Pos, Marker) then
+               Pos := Pos + Marker'Length;
+            end if;
+
+            while Pos <= Reply'Last loop
+               declare
+                  Name_Last : Natural := Pos;
+               begin
+                  while Name_Last <= Reply'Last
+                    and then Reply (Name_Last) /= ASCII.LF
+                  loop
+                     Name_Last := Name_Last + 1;
+                  end loop;
+
+                  --  A recipient with no line break after it is a reply that
+                  --  stopped before its body; nothing to read.
+                  exit when Name_Last > Reply'Last;
+
+                  declare
+                     Name       : constant String :=
+                       Reply (Pos .. Name_Last - 1);
+                     Body_First : constant Natural := Name_Last + 1;
+                     Body_Last  : Natural := Body_First - 1;
+                  begin
+                     while Body_Last + Marker'Length <= Reply'Last
+                       and then not Marks (Body_Last + 1, Marker)
+                     loop
+                        Body_Last := Body_Last + 1;
+                     end loop;
+                     if Body_Last + Marker'Length > Reply'Last then
+                        Body_Last := Reply'Last;
+                     end if;
+
+                     if Name /= "all" and then Name'Length > 0 then
+                        declare
+                           Open : Natural := Body_First;
+                        begin
+                           while Open <= Body_Last
+                             and then Reply (Open) /= '{'
+                           loop
+                              Open := Open + 1;
+                           end loop;
+
+                           if Open > Body_Last then
+                              --  A named recipient with no object is a call
+                              --  with no arguments.
+                              Store (Name, "{}");
+                           else
+                              declare
+                                 Shut : constant Natural := Object_End (Open);
+                              begin
+                                 if Shut = 0 then
+                                    Status := E.Make (E.Tools_Call_Malformed);
+                                    E.Add_Integer
+                                      (Status, "index",
+                                       Long_Long_Integer (Item.Used + 1));
+                                    return;
+                                 end if;
+                                 declare
+                                    Room    : String (1 .. Max_Call_Bytes);
+                                    Written : Natural;
+                                    Reading : E.Error_Info;
+                                 begin
+                                    Rewrite (Reply (Open .. Shut),
+                                             Room, Written, Reading);
+                                    if E.Is_Error (Reading) then
+                                       Status :=
+                                         E.Make (E.Tools_Call_Malformed);
+                                       E.Add_Integer
+                                         (Status, "index",
+                                          Long_Long_Integer (Item.Used + 1));
+                                       return;
+                                    end if;
+                                    Store (Name, Room (1 .. Written));
+                                 end;
+                              end;
+                           end if;
+                           if E.Is_Error (Status) then
+                              return;
+                           end if;
+                        end;
+                     end if;
+
+                     Pos := Body_Last + 1;
+                     if Marks (Pos, Marker) then
+                        Pos := Pos + Marker'Length;
+                     end if;
+                  end;
+               end;
+            end loop;
+         end;
       end case;
    exception
       when others =>
