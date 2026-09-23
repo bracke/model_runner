@@ -2202,6 +2202,11 @@ package body Model_Runner.Backend.Device is
          Step_Attend, Step_Out, Step_Join, Step_Norm_Feed,
          Step_Router, Step_Route, Step_Downs, Step_Gates, Step_Mix : Natural := 0;
 
+         --  The queries, keys and values were one bias-less matmul, so the
+         --  ready-the-heads dispatches read their own rows out of the one
+         --  fused step, strided.
+         Biasless_Fused : Boolean := False;
+
          --  Whether the mixture has a shared expert beside the chosen ones.
          Shared : constant Boolean := T.Is_Present (Shared_Gate);
 
@@ -2739,10 +2744,11 @@ package body Model_Runner.Backend.Device is
                 * Model_Runner.Bytes.Byte_Count
                     (Model_Runner.GGUF.Block_Bytes (V.Format)));
 
-            Fusing : constant Boolean :=
+            --  The three lie one after another in the file, share a format
+            --  and a width, and read the one normalization: one matmul can
+            --  make all three.
+            Contiguous : constant Boolean :=
               not Head_Gates and then not Mirror
-              and then Query_Bias /= null and then Key_Bias /= null
-              and then Value_Bias /= null
               and then Q_P = K_P and then K_P = V_P
               and then Query.Format = Key.Format
               and then Key.Format = Value.Format
@@ -2758,6 +2764,31 @@ package body Model_Runner.Backend.Device is
                        = Key.Offset
                          + Row_Bytes (Key)
                            * Model_Runner.Bytes.Byte_Count (Key.Rows);
+
+            --  Each arm has a bias: the bias step that follows slices the
+            --  fused answer back apart, so everything after reads a
+            --  projection as it did.
+            Fusing : constant Boolean :=
+              Contiguous
+              and then Query_Bias /= null and then Key_Bias /= null
+              and then Value_Bias /= null;
+
+            --  No arm has a bias, so nothing slices the fused answer for the
+            --  readers: they must read it strided themselves. Only the two
+            --  ready-the-heads dispatches read the projections here (no head
+            --  norm, no packed cache, the heads kernel present, rotary keys),
+            --  and both now take a fused source, so the fusion is safe.
+            Biasless : constant Boolean :=
+              Contiguous
+              and then Query_Bias = null and then Key_Bias = null
+              and then Value_Bias = null
+              and then Query_Norm = null and then Key_Norm = null
+              and then Packed.K_Bits = 0
+              and then Products.Readies_Heads (Engine)
+              and then Rotary > 0
+              and then Head_Size <= 256
+              and then Natural (Key.Rows) = Natural (Value.Rows)
+              and then Natural (Key.Rows) mod Head_Size = 0;
 
             Total : constant Model_Runner.Numerics.Element_Count :=
               Query.Rows + Key.Rows + Value.Rows;
@@ -2804,6 +2835,23 @@ package body Model_Runner.Backend.Device is
                if not Added then
                   return;
                end if;
+               goto After_Projections;
+            elsif Biasless then
+               Fused.Rows := Total;
+               Add_Input_Product (Fused, Q_P, False, Added);
+               if not Added then
+                  return;
+               end if;
+               Step_Fused := Products.Length (Steps);
+               Step_Room (Total);
+
+               --  The three readers all take the one fused step, each its
+               --  own rows out of it: the ready-the-heads dispatches below
+               --  read it strided where Biasless_Fused is set.
+               Step_Q := Step_Fused;
+               Step_K := Step_Fused;
+               Step_V := Step_Fused;
+               Biasless_Fused := True;
                goto After_Projections;
             end if;
          end;
@@ -2931,7 +2979,11 @@ package body Model_Runner.Backend.Device is
                   Rotary, Pairing, At_Turn, Span, Epsilon, Added,
                   Weight => Weight_Of (Query_Norm),
                   Weight_Span => Span_Of (Query_Norm),
-                  Key => Weight_Of (Query_Norm), Kept => False);
+                  Key => Weight_Of (Query_Norm), Kept => False,
+                  Source_Stride =>
+                    (if Biasless_Fused
+                     then Natural (Query.Rows + Key.Rows + Value.Rows)
+                     else 0));
                if not Added then
                   return;
                end if;
@@ -2987,7 +3039,22 @@ package body Model_Runner.Backend.Device is
                   V_Step => Step_V, V_At_First => At_Value, V_Stride => V_Width,
                   Kept => False,
                   Pages_At => Pages_At, Page_Shift => Page_Shift,
-                  First_Position => First_Position);
+                  First_Position => First_Position,
+                  Source_At =>
+                    (if Biasless_Fused then Natural (Query.Rows) else 0),
+                  Source_Stride =>
+                    (if Biasless_Fused
+                     then Natural (Query.Rows + Key.Rows + Value.Rows)
+                     else 0),
+                  V_Source_At =>
+                    (if Biasless_Fused
+                     then Natural (Query.Rows + Key.Rows) else 0),
+                  V_Source_Stride =>
+                    (if Biasless_Fused
+                     then Natural (Query.Rows + Key.Rows + Value.Rows)
+                     else 0),
+                  V_Row_Count =>
+                    (if Biasless_Fused then Natural (Value.Rows) else 0));
                if not Added then
                   return;
                end if;

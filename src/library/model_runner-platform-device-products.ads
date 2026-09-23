@@ -1287,6 +1287,18 @@ package Model_Runner.Platform.Device.Products is
    --    for a cache in blocks.
    --  @param First_Position Which position of its session the batch's
    --    first row is, for a cache in pages.
+   --  @param Source_At Where this step's main stream begins in From_Step,
+   --    in rows, when From_Step is a fused product of the three projections;
+   --    zero reads it from the front.
+   --  @param Source_Stride How far apart two positions lie in a fused
+   --    From_Step, in rows -- the whole fused row count, not this stream's;
+   --    zero is the ordinary source, a position Heads * Head_Size apart.
+   --  @param V_Source_At Where the values begin in a fused V_Step, in rows.
+   --  @param V_Source_Stride A fused V_Step's per-position stride, in rows;
+   --    zero reads the values a width apart from their own step.
+   --  @param V_Row_Count The values' own row count where V_Step is a fused
+   --    slice and its whole row count is not the values'; zero takes it from
+   --    the step.
    procedure Add_Heads
      (Steps       : in out Sequence;
       From_Step   : Positive;
@@ -1311,7 +1323,12 @@ package Model_Runner.Platform.Device.Products is
       Kept        : Boolean := True;
       Pages_At       : Natural := 0;
       Page_Shift     : Natural := 0;
-      First_Position : Natural := 0);
+      First_Position : Natural := 0;
+      Source_At       : Natural := 0;
+      Source_Stride   : Natural := 0;
+      V_Source_At     : Natural := 0;
+      V_Source_Stride : Natural := 0;
+      V_Row_Count     : Natural := 0);
 
    --  Name a write into the device's cache for a sequence to perform.
    --
@@ -2988,6 +3005,13 @@ private
       --  source with the source's own width for a stride.
       Reads_At     : Natural := 0;
       Reads_Stride : Natural := 0;
+
+      --  The same slice for a step's second source -- the values a heads
+      --  step places while it turns the keys: where the values begin in the
+      --  fused answer and its whole row count for a stride. Both zero is the
+      --  ordinary case, the values read whole from their own step.
+      V_Reads_At     : Natural := 0;
+      V_Reads_Stride : Natural := 0;
 
       --  A join folded into the product it followed, and the two sides of
       --  that folding.

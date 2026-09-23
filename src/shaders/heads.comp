@@ -97,6 +97,14 @@ layout(push_constant) uniform Shape {
     uint pages_at;
     uint page_shift;
     uint first_position;
+
+    //  A fused source's per-position stride, where the queries, keys and
+    //  values were made by one matmul against one normalization: a position
+    //  spans the whole fused row count, not this reader's rows, and where
+    //  each reader begins is from and v_from. Zero is the ordinary case --
+    //  the stream heads * head_size apart, the values v_width apart.
+    uint src_stride;
+    uint v_src_stride;
 } shape;
 
 //  Where a placed row begins: the first row's place and one stride a
@@ -129,7 +137,9 @@ void main() {
             return;
         }
 
-        uint from = shape.v_from + pos * shape.v_width;
+        uint vspan = shape.v_src_stride == 0u
+                     ? shape.v_width : shape.v_src_stride;
+        uint from = shape.v_from + pos * vspan;
         uint into = placed_at (pos, shape.v_into, shape.v_stride);
 
         for (uint c = lane; c < shape.v_width; c += LANES) {
@@ -146,8 +156,9 @@ void main() {
     uint pos  = group / shape.heads;
     uint head = group - pos * shape.heads;
 
-    uint from = shape.from + pos * shape.heads * shape.head_size
-                + head * shape.head_size;
+    uint span = shape.src_stride == 0u
+                ? shape.heads * shape.head_size : shape.src_stride;
+    uint from = shape.from + pos * span + head * shape.head_size;
     uint into = placed_at (pos, shape.into, shape.stride)
                 + head * shape.head_size;
 

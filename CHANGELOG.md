@@ -7,6 +7,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A bias-less fused-QKV product on the device backend.** Where a model keeps
+  its queries, keys and values as one tensor and none of the three carries a
+  bias -- falcon and the like -- the three projections were three matmuls
+  against the one normalization. They are now one matmul over the whole matrix,
+  and the two dispatches that ready the heads read their own rows out of the
+  fused answer strided, so no bias step is needed to slice it apart. This is the
+  case the earlier fused-QKV work named as its next step: `heads.comp` and
+  `Add_Heads` gained a fused source's per-position stride, for the main stream
+  and for the values. It fires only where the three lie one after another in the
+  file, share a format and a width, no arm has a bias, there is no head norm,
+  the cache is unpacked and the heads kernel is present. Bit-identical to the
+  per-projection path on falcon at temperature zero, batched and single agreeing
+  (prefill neutral -- the reduction is in dispatch count, which this GPU is not
+  bound by); gpt2's biased fusion and a separate-tensor model's per-projection
+  path are untouched.
+
 - **MiniCPM-V 4.6 reads a picture.** The `minicpmv4_6` projector is now read:
   the same SigLIP encoder the resampler runs, but with the model's windowed
   merger in place of the resampler head -- the ViT layers up to the window

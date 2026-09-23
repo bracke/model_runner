@@ -1166,10 +1166,16 @@ package body Model_Runner.Platform.Device.Products is
       Pages_At       : C.unsigned := 0;
       Page_Shift     : C.unsigned := 0;
       First_Position : C.unsigned := 0;
+
+      --  A fused source's per-position stride, main stream and values: the
+      --  whole fused row count where one matmul made all three projections,
+      --  zero for the ordinary per-arm source.
+      Src_Stride     : C.unsigned := 0;
+      V_Src_Stride   : C.unsigned := 0;
    end record
      with Convention => C;
 
-   Heads_Bytes : constant := 21 * 4;
+   Heads_Bytes : constant := 23 * 4;
 
    --  What merge.comp is told.
    type Merge_Constants is record
@@ -8495,15 +8501,30 @@ package body Model_Runner.Platform.Device.Products is
       Kept        : Boolean := True;
       Pages_At       : Natural := 0;
       Page_Shift     : Natural := 0;
-      First_Position : Natural := 0)
+      First_Position : Natural := 0;
+      Source_At       : Natural := 0;
+      Source_Stride   : Natural := 0;
+      V_Source_At     : Natural := 0;
+      V_Source_Stride : Natural := 0;
+      V_Row_Count     : Natural := 0)
    is
       Width : constant Natural := Heads * Head_Size;
+
+      --  The values' own row count, which a fused V_Step's whole count is
+      --  not; the caller names it then, else it is the step's.
+      V_Actual : constant Natural :=
+        (if V_Step = 0 then 0
+         elsif V_Row_Count /= 0 then V_Row_Count
+         else Steps.Items (V_Step).Rows);
    begin
       Added := False;
 
       if Steps.Held = Sequence_Limit
         or else From_Step > Steps.Held
-        or else Steps.Items (From_Step).Rows /= Width
+        or else (Source_Stride = 0
+                 and then Steps.Items (From_Step).Rows /= Width)
+        or else (Source_Stride /= 0
+                 and then Source_At + Width > Steps.Items (From_Step).Rows)
         or else Head_Size > 256
         or else Rotary = 0
         or else Rotary mod 2 /= 0
@@ -8513,7 +8534,7 @@ package body Model_Runner.Platform.Device.Products is
         or else (V_Step /= 0
                  and then (not Into_Cache
                            or else V_Step > Steps.Held
-                           or else V_Stride < Steps.Items (V_Step).Rows))
+                           or else V_Stride < V_Actual))
         or else (not Into_Cache and then V_Step /= 0)
       then
          return;
@@ -8530,8 +8551,10 @@ package body Model_Runner.Platform.Device.Products is
          Turns => Rotary, Pairs => Pairing,
          Turn_Table => Table, Epsilon => Epsilon,
          Into_Cache => Into_Cache, At_First => At_First, Stride => Stride,
-         V_Rows => (if V_Step = 0 then 0 else Steps.Items (V_Step).Rows),
+         V_Rows => V_Actual,
          V_At_First => V_At_First, V_Stride => V_Stride,
+         Reads_At => Source_At, Reads_Stride => Source_Stride,
+         V_Reads_At => V_Source_At, V_Reads_Stride => V_Source_Stride,
          Pages_At => (if Into_Cache then Pages_At else 0),
          Page_Shift => (if Into_Cache then Page_Shift else 0),
          First_Position => (if Into_Cache then First_Position else 0),
@@ -10948,7 +10971,9 @@ package body Model_Runner.Platform.Device.Products is
                         Epsilon   => Bits (This.Epsilon),
                         Base      => C.unsigned (Places (Index).Base / 4),
                         From      =>
-                          C.unsigned (Places (This.Reads).At_Byte / 4),
+                          C.unsigned
+                            (Natural (Places (This.Reads).At_Byte / 4)
+                             + This.Reads_At),
                         Into      =>
                           (if This.Into_Cache then C.unsigned (This.At_First)
                            else 0),
@@ -10974,14 +10999,18 @@ package body Model_Runner.Platform.Device.Products is
                         V_From    =>
                           (if This.Reads_Two /= 0
                            then C.unsigned
-                                  (Places (This.Reads_Two).At_Byte / 4)
+                                  (Natural
+                                     (Places (This.Reads_Two).At_Byte / 4)
+                                   + This.V_Reads_At)
                            else 0),
                         V_Width   => C.unsigned (This.V_Rows),
                         V_Into    => C.unsigned (This.V_At_First),
                         V_Stride  => C.unsigned (This.V_Stride),
                         Pages_At       => C.unsigned (This.Pages_At),
                         Page_Shift     => C.unsigned (This.Page_Shift),
-                        First_Position => C.unsigned (This.First_Position));
+                        First_Position => C.unsigned (This.First_Position),
+                        Src_Stride     => C.unsigned (This.Reads_Stride),
+                        V_Src_Stride   => C.unsigned (This.V_Reads_Stride));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Heads_Bytes, Shape'Address);
