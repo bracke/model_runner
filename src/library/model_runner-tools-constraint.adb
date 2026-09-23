@@ -450,6 +450,115 @@ package body Model_Runner.Tools.Constraint is
       end if;
    end Build_Tight;
 
+   ---------------------
+   -- Build_Recipient --
+   ---------------------
+
+   --  Functionary's recipient form (§b for ">>>"). A reply is a run of
+   --  blocks parted by ">>>"; the first carries none because the generation
+   --  prompt ends with one. A block is either the spoken "all" -- free text
+   --  up to the next delimiter -- or a named call whose body is the
+   --  arguments object, shaped by the tool's own schema. This holds the
+   --  model to a recipient the tools offer and to each call's argument
+   --  shape, where the reply was admitted whole as prose before.
+   procedure Build_Recipient
+     (Offered : Definitions;
+      Scratch : Text_Access;
+      B       : in out Builder;
+      Ok      : out Boolean)
+   is
+      Count_Of : constant Natural := Count (Offered);
+   begin
+      Ok := True;
+
+      --  A block, then any number of ">>>"-led blocks after it. "all" is
+      --  what the model said; spoken text is anything not opening the
+      --  three-character delimiter, so a lone ">" or ">>" in prose is kept.
+      Put (B, "root ::= block ( "">>>"" block )*" & ASCII.LF);
+      Put (B, "block ::= ""all\x0A"" spoken | call" & ASCII.LF);
+      Put (B, "spoken ::= ( [^>] | "">"" [^>] | "">>"" [^>] )*" & ASCII.LF);
+
+      Put (B, "call ::= ");
+      for Index in 1 .. Count_Of loop
+         if Index > 1 then
+            Put (B, " | ");
+         end if;
+         Put (B, "call_" & Image (Index));
+      end loop;
+      Put (B, "" & ASCII.LF);
+
+      for Index in 1 .. Count_Of loop
+         declare
+            Def         : constant String := Definition (Offered, Index);
+            First, Last : Natural;
+            Present     : Boolean;
+         begin
+            Parameters_Of (Def, First, Last, Present);
+            if not Present then
+               Ok := False;
+               return;
+            end if;
+
+            declare
+               Grammar_Last : Natural;
+               St           : E.Error_Info;
+            begin
+               Model_Runner.Schema.To_Grammar
+                 (Def (First .. Last), Scratch.all, Grammar_Last, St);
+               if E.Is_Error (St) or else Grammar_Last = 0 then
+                  Ok := False;
+                  return;
+               end if;
+
+               --  As in Build_Tight: the schema grammar is "root ::= <body>"
+               --  and its shared helpers after. Rename root to this tool's
+               --  args rule; the helpers (str, num, ws, ...) are identical for
+               --  every schema and are emitted once, from the last tool.
+               declare
+                  Text  : String renames Scratch.all (1 .. Grammar_Last);
+                  Break : Natural := Text'First;
+               begin
+                  while Break <= Text'Last
+                    and then Text (Break) /= ASCII.LF
+                  loop
+                     Break := Break + 1;
+                  end loop;
+
+                  declare
+                     Head       : constant String := "root ::= ";
+                     Body_First : constant Natural := Text'First + Head'Length;
+                  begin
+                     if Break - 1 < Body_First
+                       or else Text (Text'First .. Body_First - 1) /= Head
+                     then
+                        Ok := False;
+                        return;
+                     end if;
+
+                     --  A named recipient, a line break, then the arguments
+                     --  object: ">>>name\n{...}", the object as the schema
+                     --  shapes it. The reader allows space before the object,
+                     --  so ws stands between the break and the args.
+                     Put (B, "call_" & Image (Index) & " ::= """
+                          & Tool_Name (Offered, Index) & "\x0A"" ws args_"
+                          & Image (Index) & ASCII.LF);
+                     Put (B, "args_" & Image (Index) & " ::= "
+                          & Text (Body_First .. Break - 1) & ASCII.LF);
+
+                     if Index = Count_Of and then Break < Text'Last then
+                        Put (B, Text (Break + 1 .. Text'Last));
+                     end if;
+                  end;
+               end;
+            end;
+         end;
+      end loop;
+
+      if B.Full then
+         Ok := False;
+      end if;
+   end Build_Recipient;
+
    ------------------------
    -- Compile_Call_Grammar --
    ------------------------
@@ -465,13 +574,38 @@ package body Model_Runner.Tools.Constraint is
       Tool_Count : constant Natural := Count (Offered);
    begin
       if Syntax = Model_Runner.Tools.Recipient_JSON then
-         --  Functionary's ">>>" recipient form is not one this builder shapes
-         --  into a tight grammar yet. Its output carries no '<', so the prose
-         --  grammar admits it whole and the reader takes the calls out of it;
-         --  the model was trained on the form and writes it unheld. A tight
-         --  recipient grammar -- names bound to the tools, bodies to their
-         --  schemas -- is the enhancement this leaves for later.
-         Model_Runner.Grammar.Compile (Into, Prose_Only, Status);
+         --  Functionary's ">>>" recipient form. With no tools offered the
+         --  reply is prose; with tools, a tight grammar holds the model to a
+         --  recipient on offer and to each call's argument shape. A tool whose
+         --  schema will not compile falls back to prose, as this form did
+         --  whole before -- the model was trained on it and writes it unheld.
+         if Tool_Count = 0 then
+            Model_Runner.Grammar.Compile (Into, Prose_Only, Status);
+            return;
+         end if;
+
+         declare
+            Scratch : Text_Access :=
+              new String (1 .. Model_Runner.Schema.Max_Grammar_Bytes);
+            Recip   : Builder :=
+              (Room => new String (1 .. 256 * 1024), others => <>);
+            Ok      : Boolean;
+         begin
+            Build_Recipient (Offered, Scratch, Recip, Ok);
+            if Ok then
+               Model_Runner.Grammar.Compile
+                 (Into, Recip.Room (1 .. Recip.Used), Status);
+               if E.Is_Ok (Status) then
+                  Free (Scratch);
+                  Free (Recip.Room);
+                  return;
+               end if;
+            end if;
+
+            Model_Runner.Grammar.Compile (Into, Prose_Only, Status);
+            Free (Scratch);
+            Free (Recip.Room);
+         end;
          return;
       end if;
 

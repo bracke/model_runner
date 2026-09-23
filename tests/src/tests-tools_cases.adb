@@ -292,6 +292,39 @@ package body Tests.Tools_Cases is
               "the JSON envelope was taken as a MiniCPM call");
    end Tag_Syntaxes_Are_Shaped;
 
+   --  Functionary's recipient form is shaped as the tag syntaxes are. A reply
+   --  is a run of ">>>"-parted blocks: "all" and free text is what the model
+   --  said, a tool name and its arguments object is a call, and the two may
+   --  stand in one reply -- spoken text, then a call. A call missing a
+   --  required argument is refused, and the JSON envelope is not a call here.
+   procedure Recipient_Is_Shaped
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      LF     : constant Character := ASCII.LF;
+      Spoken : constant String := "all" & LF & "Just an answer.";
+      Call   : constant String :=
+        "calculator" & LF & "{""a"":47,""op"":""+"",""b"":89}";
+      Spoken_Then_Call : constant String :=
+        "all" & LF & "Let me compute that." & ">>>"
+        & "calculator" & LF & "{""a"":47,""op"":""+"",""b"":89}";
+      Short    : constant String := "calculator" & LF & "{""a"":47}";
+      Envelope : constant String :=
+        "<tool_call>{""name"": ""calculator"", ""arguments"": "
+        & "{""a"":47,""op"":""+"",""b"":89}}</tool_call>";
+   begin
+      Assert (Full_Set_Takes_In (Tools.Recipient_JSON, Spoken),
+              "the recipient form refused a spoken 'all' reply");
+      Assert (Full_Set_Takes_In (Tools.Recipient_JSON, Call),
+              "the recipient form refused a well-formed call");
+      Assert (Full_Set_Takes_In (Tools.Recipient_JSON, Spoken_Then_Call),
+              "the recipient form refused spoken text followed by a call");
+      Assert (not Full_Set_Takes_In (Tools.Recipient_JSON, Short),
+              "a recipient call missing required arguments was taken");
+      Assert (not Full_Set_Takes_In (Tools.Recipient_JSON, Envelope),
+              "the JSON envelope was taken as a recipient call");
+   end Recipient_Is_Shaped;
+
    --  A delegator wired in runs the delegate tool's subtask; an inquirer
    --  wired in answers ask_user; an embedder wired in is what retrieve
    --  ranks with. Each is given as a stub that records what it was handed
@@ -1416,6 +1449,11 @@ package body Tests.Tools_Cases is
          "the Qwen3-Coder and MiniCPM tag syntaxes are shaped by the call "
          & "grammar: a parameter per tag, the schema in it, a think block "
          & "ahead, and a malformed tag refused");
+      Register_Routine
+        (T, Recipient_Is_Shaped'Access,
+         "Functionary's recipient form is shaped by the call grammar: a "
+         & "recipient on offer, its arguments object per the tool's schema, "
+         & "spoken text and calls in one reply, and a short call refused");
       Register_Routine
         (T, Full_Set_Is_Tight'Access,
          "the whole built-in set builds the tight grammar, not the loose "

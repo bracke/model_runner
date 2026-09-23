@@ -15,10 +15,15 @@ Keep a Changelog and the project uses semantic versioning.
   (`--chat-template functionary`) writes the conversation and is recognised in
   a model's own template by its `>>>` recipient, and the two are wired through
   `Syntax_Of`. It closes the one mainstream tool-calling family the engine did
-  not read. The reply is left unconstrained for now (its output carries no
-  `<`, so the prose grammar admits it and the reader takes the calls out); a
-  tight recipient grammar and the multi-turn spoken-text split are the
-  enhancements left for later.
+  not read. A tight recipient grammar now shapes the reply where tools are
+  offered: a reply is a run of `>>>`-parted blocks, `all` and free text is what
+  the model said, any other recipient is one the tools offer and its body the
+  arguments object the tool's own schema shapes -- so a call names a real tool
+  and carries the arguments it requires, and spoken text and calls may stand in
+  one reply. A tool whose schema will not compile falls back to admitting the
+  reply as prose, as the whole form did before. The multi-turn spoken-text
+  split -- rendering a mixed reply back as a spoken turn beside its calls -- is
+  the enhancement left for later.
 
 - **Reranking: a cross-encoder scores a query against documents.** `embed
   MODEL --query TEXT --prompt DOCUMENT` joins the two as the model was trained
@@ -85,6 +90,25 @@ Keep a Changelog and the project uses semantic versioning.
   group form.
 
 ### Changed
+
+- **A fused-QKV projection is one device matmul, sliced apart by the bias.**
+  Where a model keeps its queries, keys and values as one tensor and each
+  carries a bias -- gpt2, phi2, falcon and the like -- the three projections
+  were three matmuls against the one normalization; they are now a single
+  matmul over the whole matrix. The bias step that follows each arm slices its
+  own rows out of the fused answer: two Step fields (`Reads_At`,
+  `Reads_Stride`) name where a reader's rows begin in a fused product and how
+  far apart two positions lie in it (the fused row count, not the reader's),
+  `Add_Bias` carries them as `Source_At`/`Source_Stride`, and `bias.comp` reads
+  its source strided where they are set. The fused answer is vector-major, so a
+  slice is strided across positions and the sliced bias is what makes each arm
+  contiguous again -- so everything after it reads a projection exactly as
+  before. It fires only where the three lie one after another in the file,
+  share a format and a width, and each has a bias; a model whose q, k and v are
+  separate tensors, or that wants them mirrored back, declines it. Bit-identical
+  to the per-projection path on gpt2 at temperature zero, generation and
+  prefill, and performance-neutral (the win it opens is fewer dispatches, not a
+  faster kernel).
 
 - **The default sampling temperature is 0.4, down from 0.8.** For a personal
   tool driving mostly instruct and code models, steadier output is the better
@@ -17389,10 +17413,16 @@ sibling crates: it drives the repository, dependency and layering checks, the
 test suite, the conformance run and a 2000-case fuzzing campaign, and fails on
 any non-empty stderr log in a build tree.
 
-Quantized weights are decoded into a buffer and then multiplied; the multiply
-is not fused into the decode, there is no repacking, and there is no
-hand-written vector code. That is the largest remaining difference against a
-runtime built around the machine's vector instructions.
+Quantized weights are now multiplied through vector kernels, and their rows are
+repacked into panels the kernel reads in place. The integer product is compiled
+three ways -- a plain baseline, a wide one for x86-64-v3 (AVX2), and a deep one
+that names AVX-512's VNNI byte dot product -- and a run picks between them once,
+by asking the host what it carries. The decode is deliberately not fused into
+the multiply as one loop: a span is decoded into a small buffer and then
+multiplied, two loops the compiler vectorizes, where folding them into one it
+will not touch measured 44 per cent slower; on a VNNI host the deep kernel does
+the byte dot product itself. That was the largest remaining difference against a
+runtime built around the machine's vector instructions, and it is closed.
 
 The comparison against a reference runtime has now been performed: `llama.cpp`
 `b1-717dad5` against TinyLlama-1.1B-Chat-v1.0 Q8_0, matching on tokenization,

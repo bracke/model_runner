@@ -896,6 +896,12 @@ package Model_Runner.Platform.Device.Products is
    --    source is expert Members (1 + m mod Count). Count zero reads the
    --    routing step, or none.
    --  @param Count How many of Members are meant.
+   --  @param Source_At Row where the fused source this biases begins. With
+   --    Source_Stride it slices a fused source: a projection bias over Each
+   --    of the source's rows, its own rows lying at Source_At.
+   --  @param Source_Stride Gap between the fused source's rows, so every
+   --    Source_Stride after Source_At. Both zero is a bias over the whole
+   --    source.
    procedure Add_Bias
      (Steps       : in out Sequence;
       Base        : System.Address;
@@ -912,9 +918,6 @@ package Model_Runner.Platform.Device.Products is
       Count       : Natural := 0;
       Source_At     : Natural := 0;
       Source_Stride : Natural := 0);
-   --  Source_At and Source_Stride slice a fused source: a projection bias
-   --  over Each of the source's rows, its own rows lying at Source_At and
-   --  every Source_Stride after. Both zero is a bias over the whole source.
 
    --  Name a step that picks every other stretch of a row.
    --
