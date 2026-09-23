@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`run --chat-template-file PATH` takes a chat template from a file.** Where
+  `--chat-template NAME` selects a format this build carries by name, this reads
+  an arbitrary template out of a file and uses it in place of the model's own --
+  for a template the build has no name for, or one a caller wants to change. The
+  file's source is compiled and validated exactly as an embedded or named
+  template is, so an unusable file is refused (a malformed one by name) rather
+  than stored, and where both it and `--chat-template` are given the file is the
+  one used. The system prompt was already a file with `--system-file`; this is
+  the same for the template.
+
 - **Functionary tool calling.** The Functionary family's recipient form is now
   read and written: a reply is a run of blocks parted by `>>>`, each a
   recipient and a body across a line break -- `>>>all` is what the model said,

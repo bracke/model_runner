@@ -1631,6 +1631,33 @@ package body Model_Runner.CLI.Execute is
          --  its text is written in a carried format, that format stands
          --  in -- and a caller who asked to be told things is told.
          if E.Is_Ok (Status)
+           and then not Model_Runner.Text.Is_Empty (Item.Chat_Template_Path)
+         then
+            --  A template read from a file, for one this build carries no
+            --  name for. Its source is compiled and validated exactly as a
+            --  named format's is, so an unusable file is refused rather than
+            --  stored. Where both this and a named format were given, the
+            --  file is the one used.
+            declare
+               Path : constant String :=
+                 Model_Runner.Text.To_String (Item.Chat_Template_Path);
+               Source  : Opt.Text_Access;
+               Reading : E.Error_Info;
+            begin
+               Read_File
+                 (Path,
+                  Model_Runner.Limits.Default_Session_Limits.Max_Prompt_Bytes,
+                  Source, Reading);
+               if E.Is_Error (Reading) then
+                  Status := Reading;
+               else
+                  L.Use_Template (Prepared, Source.all, Bounds, Status);
+               end if;
+               if Source /= null then
+                  Free_Text (Source);
+               end if;
+            end;
+         elsif E.Is_Ok (Status)
            and then not Model_Runner.Text.Is_Empty (Item.Chat_Template)
          then
             L.Use_Template

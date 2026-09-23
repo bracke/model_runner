@@ -319,6 +319,11 @@ package Model_Runner.CLI.Options is
       --  Empty means the model's template is used.
       Chat_Template : Model_Runner.Text.Bounded;
 
+      --  The path of a template file whose contents replace the model's own,
+      --  for a template this build carries no name for. Empty means none was
+      --  given; where both this and Chat_Template are, the file is used.
+      Chat_Template_Path : Model_Runner.Text.Bounded;
+
       Max_Tokens   : Natural := 256;
       Context_Size : Natural := 0;
 
