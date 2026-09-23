@@ -4384,7 +4384,130 @@ package body Model_Runner.CLI.Execute is
                        when L.Pool_Cls | L.Pool_Rank => Opt.Pool_Cls,
                        when L.Pool_Last => Opt.Pool_Last,
                        when others      => Opt.Pool_Mean));
+
+            --  Build the query/document pair a reranker scores, into Tokens
+            --  and Count: <s> query </s></s> document </s> for the RoBERTa
+            --  family, whose separator is its end marker; a [SEP] where a BERT
+            --  has one. Sets Condition; leaves the pair for the caller to run.
+            procedure Encode_Pair (Document : String) is
+               use type Vocab.Token_Id;
+               Q_Tokens : Vocab.Token_Array (1 .. Tokens'Length);
+               D_Tokens : Vocab.Token_Array (1 .. Tokens'Length);
+               Q_Count, D_Count : Natural;
+               Beginning : constant Vocab.Token_Id :=
+                 Vocab.Beginning_Token (Words.all);
+               Ending    : constant Vocab.Token_Id :=
+                 Vocab.End_Token (Words.all);
+               Sep       : constant Vocab.Token_Id :=
+                 (if Vocab.Find (Words.all, "[SEP]") /= Vocab.No_Token
+                  then Vocab.Find (Words.all, "[SEP]") else Ending);
+               K : Natural := 0;
+
+               procedure Put (Tok : Vocab.Token_Id) is
+               begin
+                  if Tok /= Vocab.No_Token and then K < Tokens'Length then
+                     K := K + 1;
+                     Tokens (Tokens'First + K - 1) := Tok;
+                  end if;
+               end Put;
+            begin
+               Vocab.Encode (Words.all, Item.Query_Text.all, False, False,
+                             Q_Tokens, Q_Count, Condition);
+               if E.Is_Error (Condition) then
+                  return;
+               end if;
+               Vocab.Encode (Words.all, Document, False, False,
+                             D_Tokens, D_Count, Condition);
+               if E.Is_Error (Condition) then
+                  return;
+               end if;
+
+               if Vocab.Adds_Beginning (Words.all) then
+                  Put (Beginning);
+               end if;
+               for I in 1 .. Q_Count loop
+                  Put (Q_Tokens (Q_Tokens'First + I - 1));
+               end loop;
+               Put (Ending);
+               Put (Sep);
+               for I in 1 .. D_Count loop
+                  Put (D_Tokens (D_Tokens'First + I - 1));
+               end loop;
+               Put (Ending);
+               Count := K;
+            end Encode_Pair;
          begin
+            --  Reranking a query against several documents in one load: where
+            --  the prompt is more than one line, each line is a document, each
+            --  scored against --query and its score printed in turn. A single
+            --  document -- no line break -- falls through to the path below.
+            if Item.Query_Text /= null
+              and then Settings.Pooling = L.Pool_Rank
+              and then (for some C of Prompt.all => C = ASCII.LF)
+            then
+               declare
+                  First : Positive := Prompt.all'First;
+               begin
+                  while First <= Prompt.all'Last loop
+                     declare
+                        Stop : Natural := First;
+                     begin
+                        while Stop <= Prompt.all'Last
+                          and then Prompt.all (Stop) /= ASCII.LF
+                        loop
+                           Stop := Stop + 1;
+                        end loop;
+
+                        if Stop > First then
+                           Encode_Pair (Prompt.all (First .. Stop - 1));
+                           if E.Is_Error (Condition) then
+                              Fail (Condition);
+                              return;
+                           end if;
+
+                           L.Rewind (Session, 0, Condition);
+                           if E.Is_Error (Condition) then
+                              Fail (Condition);
+                              return;
+                           end if;
+
+                           declare
+                              Room : Model_Runner.Tensors.Real_Array_Access :=
+                                new N.Real_Array
+                                  (0 .. N.Element_Count (Count) * Width - 1);
+                              Score : N.Real;
+                           begin
+                              L.Evaluate_Batch
+                                (Session, Prepared, Tokens (1 .. Count),
+                                 Logits, States => Room, Status => Condition);
+                              if E.Is_Error (Condition) then
+                                 Free_Reals (Room);
+                                 Fail (Condition);
+                                 return;
+                              end if;
+
+                              --  The CLS position stands for the pair; its
+                              --  state through the head is the score.
+                              Pooled := Room.all (0 .. Width - 1);
+                              Free_Reals (Room);
+
+                              L.Rank (Session, Prepared, Pooled, Score,
+                                      Condition);
+                              if E.Is_Error (Condition) then
+                                 Fail (Condition);
+                                 return;
+                              end if;
+                              Pres.Put_Line
+                                (Screen, T.Image (Long_Float (Score), 6));
+                           end;
+                        end if;
+
+                        First := Stop + 1;
+                     end;
+                  end loop;
+                  return;
+               end;
+            end if;
             if Item.Query_Text /= null
               and then Settings.Pooling = L.Pool_Rank
             then
@@ -4394,56 +4517,11 @@ package body Model_Runner.CLI.Execute is
                --  <s> query </s></s> document </s> for the RoBERTa family,
                --  whose separator is its end marker; a BERT with a [SEP] of
                --  its own uses that between them.
-               declare
-                  use type Vocab.Token_Id;
-                  Q_Tokens : Vocab.Token_Array (1 .. Tokens'Length);
-                  D_Tokens : Vocab.Token_Array (1 .. Tokens'Length);
-                  Q_Count, D_Count : Natural;
-                  Beginning : constant Vocab.Token_Id :=
-                    Vocab.Beginning_Token (Words.all);
-                  Ending    : constant Vocab.Token_Id :=
-                    Vocab.End_Token (Words.all);
-                  Sep       : constant Vocab.Token_Id :=
-                    (if Vocab.Find (Words.all, "[SEP]") /= Vocab.No_Token
-                     then Vocab.Find (Words.all, "[SEP]")
-                     else Ending);
-                  K : Natural := 0;
-
-                  procedure Put (Tok : Vocab.Token_Id) is
-                  begin
-                     if Tok /= Vocab.No_Token and then K < Tokens'Length then
-                        K := K + 1;
-                        Tokens (Tokens'First + K - 1) := Tok;
-                     end if;
-                  end Put;
-               begin
-                  Vocab.Encode (Words.all, Item.Query_Text.all, False, False,
-                                Q_Tokens, Q_Count, Condition);
-                  if E.Is_Error (Condition) then
-                     Fail (Condition);
-                     return;
-                  end if;
-                  Vocab.Encode (Words.all, Prompt.all, False, False,
-                                D_Tokens, D_Count, Condition);
-                  if E.Is_Error (Condition) then
-                     Fail (Condition);
-                     return;
-                  end if;
-
-                  if Vocab.Adds_Beginning (Words.all) then
-                     Put (Beginning);
-                  end if;
-                  for I in 1 .. Q_Count loop
-                     Put (Q_Tokens (Q_Tokens'First + I - 1));
-                  end loop;
-                  Put (Ending);
-                  Put (Sep);
-                  for I in 1 .. D_Count loop
-                     Put (D_Tokens (D_Tokens'First + I - 1));
-                  end loop;
-                  Put (Ending);
-                  Count := K;
-               end;
+               Encode_Pair (Prompt.all);
+               if E.Is_Error (Condition) then
+                  Fail (Condition);
+                  return;
+               end if;
             else
                --  The end marker where the model is one that reads whole texts
                --  and its file asks for one. Bert is trained with a marker at

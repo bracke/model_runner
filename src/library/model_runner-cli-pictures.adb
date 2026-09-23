@@ -241,6 +241,19 @@ package body Model_Runner.CLI.Pictures is
          Item.Resampler := True;
          Item.Marker := Model_Runner.Tokenizer.Find (Words.all, "<image>");
          Item.Soft := Model_Runner.Tokenizer.Unknown_Token (Words.all);
+         --  The soft placeholder, whose embedding a picture's rows replace, so
+         --  its identity never reaches the model -- only its count and place.
+         --  Older MiniCPM-V uses the unknown token; the Qwen3-based 4.5 carries
+         --  <unk> as an ordinary token without naming it the unknown one, and
+         --  <|image_pad|> besides, so where the file names no unknown token
+         --  either of those stands in.
+         if Item.Soft = Model_Runner.Tokenizer.No_Token then
+            Item.Soft := Model_Runner.Tokenizer.Find (Words.all, "<unk>");
+         end if;
+         if Item.Soft = Model_Runner.Tokenizer.No_Token then
+            Item.Soft :=
+              Model_Runner.Tokenizer.Find (Words.all, "<|image_pad|>");
+         end if;
          Item.Closer := Model_Runner.Tokenizer.Find (Words.all, "</image>");
          Item.Keeps_Marker := True;
          if Item.Marker = Model_Runner.Tokenizer.No_Token

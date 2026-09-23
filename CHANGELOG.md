@@ -7,7 +7,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
-- **Reranking: a cross-encoder scores a query against a document.** `embed
+- **Reranking: a cross-encoder scores a query against documents.** `embed
   MODEL --query TEXT --prompt DOCUMENT` joins the two as the model was trained
   on -- `<s> query </s></s> document </s>` for the RoBERTa family, a `[SEP]`
   where a BERT has one -- and reports the relevance score the model's `cls`
@@ -18,7 +18,8 @@ Keep a Changelog and the project uses semantic versioning.
   single token-type row is read as one rather than refused for not being BERT's
   two -- so bge-reranker-v2-m3 reranks here, scoring a query's own answer far
   above an unrelated line, where the same file gives a stock llama.cpp only
-  zeros.
+  zeros. A prompt of several lines is several documents, each scored against
+  the query in one load, a score a line -- the shape a retrieval step wants.
 
 - **Speculative decoding works above temperature zero.** A draft model (or the
   context lookup) may now propose for a sampled run, not only a greedy one:
@@ -47,6 +48,14 @@ Keep a Changelog and the project uses semantic versioning.
   IQ3_S and IQ2_XXS.
 
 ### Fixed
+
+- **MiniCPM-V 4.5 reads a picture end to end.** Its Qwen3-based text model
+  carries `<unk>` as an ordinary token without naming it the unknown token, so
+  the picture's soft placeholder -- whose embedding the picture's rows replace,
+  its identity never reaching the model -- had nowhere to go and a run was
+  refused (`MR-ARCH-0020`). Where the file names no unknown token the resampler
+  now takes `<unk>` or `<|image_pad|>` as the placeholder, and 4.5 encodes and
+  answers about a picture as 2.5 and 2.6 do.
 
 - **A picture survives a filter or a string method in a chat template.** A
   message's content given as parts -- a picture and words -- renders inline
