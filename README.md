@@ -2042,76 +2042,27 @@ its cache held by another session, no room for the layer's weights, a shape
 the sequence does not take, or the sequence refused. The two about the cache
 are different answers: a context the device will not hold is a thing to fix
 by asking for less, and sixteen sessions that got there first is a thing
-that passes when one of them closes. It also says **blocks of the device's cache turned over to another
-session** and **seats in the device's room of rings turned over**, where
-either happened: there are sixteen of each, a seventeenth session takes the
-one gone longest unasked, and the session turned out writes what it holds
-back into whatever it is given next. A run that turns one over now and again
-and a run that turns one over every token used to read alike.
-
-What that costs is measured by `tests speed --turns N`, which opens N
-sessions and has them take turns a token apiece -- the shape the sixteen
-blocks are a limit on, where a round of at most sixteen members is not. On
-the same TinyLlama-1.1B Q8_0 at a context of 512:
-
-| Sessions taking turns | `device` | blocks turned over | `cpu`, 7 workers |
-| --- | ---: | ---: | ---: |
-| 8 | 49.1 | 0 | 39.1 |
-| 16 | **49.1** | 0 | 38.9 |
-| 17 | 48.0 | 1 | 38.9 |
-| 20 | 46.2 | 4 | 38.9 |
-| 32 | 42.2 | 16 | 38.9 |
-
-Tokens a second, all of them. The processor column is flat because it has
-nothing to run out of, and it is what the blocks are worth: **1.26 times at
-sixteen sessions and still 1.12 at thirty-two**, where half the sessions are
-attending on the processor for want of a block and only their products are on
-the device.
-
-A block is taken only from a session that has gone unasked since before the
-asking session's own previous token, so thirty-two sessions turn sixteen
-blocks over in the whole run rather than one a token. **Without that guard
-the same run turns a block over 528 times**, and where the cache is long the
-difference is the measurement: twenty sessions of a 1,419-token context read
-**7.8 tokens a second unguarded against 41.8 guarded**, a 64-megabyte cache
-written across the bus every token (84 turnovers in 80 tokens) against four
-writes in the run -- medians of three alternated pairs, and the unguarded
-reading does not move at all. The guard does cost in the other corner: where
-a session holds twenty-odd positions, carrying its cache back is nearly free
-and doing without a block is not. **Five alternated pairs at a context of
-512, thirty-two sessions: 43.2 a second guarded against 45.1, the unguarded
-binary ahead in every pair.** Two single sittings had read that difference at
-under one per cent and at four; the pairs are what settles it, as they do for
-every other cell this size, and four per cent is the price of not falling off
-the five-and-a-half-times cliff beside it. The unguarded readings were taken with the guard disabled in a
-build made for the purpose, which is the only way to take them.
+that passes when one of them closes. There are sixteen blocks and sixteen
+seats in the device's room of rings, shared by every session open on the
+device -- which a personal run reaches only with a draft model beside the
+target. A seventeenth session is not given one: it attends on the processor
+until a session holding a block closes. (Taking the block from the session
+gone longest unasked, and the `tests speed --turns` figures that priced it,
+went out with the several-sequences server; a single user never has
+seventeen sessions open.)
 
 The buffer is dealt a session at a time, each placed at the first gap that
 holds what it keeps, so a block is the size of the session in it.
 Blocks are packed forward where the buffer would otherwise grow past a gap
 too small to use, and only where the gaps below would hold what is being
-placed -- which is when the packing avoids the growth entirely. `tests speed
---turns N --churn K` prices it: a session leaves every K turns and one asking
-twice the context takes its place, which no gap a departure leaves can hold.
-Twelve sessions at a context of 512, a departure every other turn, medians of
-three alternated triples: **46.7 tokens a second under that rule, 45.1 when
-any gap at all sets the packing going, 46.6 with no packing -- and 594 MB of
-cache in all three**. That was a churn whose arrivals all asked for twice the
-context; what arrives now cycles through twice, half and the whole of it, and
-with a third of arrivals smaller than what left, every gap is reusable: 45.0
-and 45.2 tokens a second, no block moved, and the cache peaks at 528 MB. That rule reads 44.8, 44.6, 44.6 in a later sitting;
-the three were measured against each other within one, which is what the
-ordering rests on. The gaps on that workload are reusable, so packing them
-buys nothing and costs three and a half per cent; what the rule keeps is the
-pattern where two gaps, neither of which holds the arrival, together do. It used to
+placed -- which is when the packing avoids the growth entirely. It used to
 be dealt in blocks of one width -- the first session's -- which refused the
 device's cache to a session of any other width for as long as any session of
 the first was open, and gave sixteen short-context sessions behind one long
 one a block the long one's size each. The room a hybrid's rings sit in is
 dealt the same way, and moves its seats to the front rather than growing past
-a gap a larger ring cannot use: rings differ in size, seats come back in
-whatever order sessions close, and a ring moved costs what a session turned
-out of a seat pays anyway.
+a gap a larger ring cannot use: rings differ in size, and seats come back in
+whatever order sessions close.
 
 The same question gets the same answer where the shape is the model's
 rather than the context's: the packed attention reads four elements of a
@@ -9994,8 +9945,8 @@ the processor, saving a context, and rolling one.
 
 So it is owed instead of sent. A session records the range of positions the
 device has written and its copy has not been given; `Settle_Cache` fetches
-them, and the three readers call it before they read. A session turned out of
-its block settles what it owes before the block goes, so a range recorded is
+them, and the three readers call it before they read. A session giving its
+block back settles what it owes before the block goes, so a range recorded is
 still in the block it was written to when it is asked for.
 `Adopt` and `Reset` clear it instead of fetching, because a context replaced
 or dropped is one nothing will read.

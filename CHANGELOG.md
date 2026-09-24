@@ -148,7 +148,8 @@ Keep a Changelog and the project uses semantic versioning.
   ends it. `tests speed --max-tokens 0`, which the published prompt rows name,
   had read the nought as not positive and quietly generated its default twelve
   wherever the model did not end at once -- the 1419-token prompt did; the
-  rows quote the prompt's own seconds, so no figure moved.
+  rows quote the prompt's own seconds, so no figure moved. `run --help` says
+  what nought does.
 
 - **`--kv-cache f16` on the device past about thirty thousand positions.**
   The cache offsets a device attention is given were carried as a thirty-two-bit

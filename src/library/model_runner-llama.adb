@@ -6903,21 +6903,17 @@ package body Model_Runner.Llama is
    --  which is what makes a round free to form: its rows read the blocks
    --  their sessions were already in.
    --
-   --  Where every block is held, the one stamped longest ago is taken from
-   --  the session holding it. That session's cache is read back into the
-   --  host's copy first, which is the copy of record for every other thing
-   --  a session can do, and written into a block again when the session
-   --  next has a layer to put there. A seventeenth session used to be
-   --  refused the device's cache for the rest of its life and attend every
-   --  layer on the processor, whatever the sixteen holding blocks were
-   --  doing with them.
+   --  Where every block is held, none is given: the session attends on the
+   --  processor until a session holding one closes. Taking the block from
+   --  the session gone longest unasked went out with the several-sequences
+   --  server; one user does not open seventeen sessions.
    --
    --  @param Item The session.
    --  @param Ok True when the block is the session's and holds its cache.
    procedure Take_Block (Item : Session_Access; Ok : out Boolean);
 
    --  Read back whatever the device wrote that the host's copy has not
-   --  got. Declared here because a session turned out of its block must
+   --  got. Declared here because a session giving its block back must
    --  settle before the block goes; said where it is written, below.
    procedure Settle_Cache (Item : in out Session; Settled : out Boolean);
 
@@ -7185,7 +7181,7 @@ package body Model_Runner.Llama is
          end if;
 
          --  And last, the one that is neither: every block held by
-         --  another session, and none of them cold enough to turn out.
+         --  another session.
          --  Said only of a session that holds none itself, and true only
          --  of this moment -- a block given back is a block this session
          --  may have.
