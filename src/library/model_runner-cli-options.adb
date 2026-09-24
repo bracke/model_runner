@@ -1755,7 +1755,7 @@ package body Model_Runner.CLI.Options is
                      Result.Has_System := True;
 
                   elsif Name = "--max-tokens" then
-                     Natural_Value (Flag_Max_Tokens, 1, 1_000_000,
+                     Natural_Value (Flag_Max_Tokens, 0, 1_000_000,
                                     Result.Max_Tokens, Good);
                      if not Good then
                         return;

@@ -110,7 +110,8 @@ package Speed_Run is
    --
    --  @param Path Model file the caller already has; empty or absent skips.
    --  @param Prompt_Path File holding the prompt, read whole.
-   --  @param Tokens How many tokens to generate.
+   --  @param Tokens How many tokens to generate; nought evaluates the
+   --    prompt alone.
    --  @param Threads Worker tasks; one means the serial path.
    --  @param Batch Tokens per prefill batch, as --batch-size selects.
    --  @param Repack What to decode the weights into first, as --repack
@@ -167,7 +168,7 @@ package Speed_Run is
    procedure Run
      (Path        : String;
       Prompt_Path : String;
-      Tokens      : Positive;
+      Tokens      : Natural;
       Threads     : Positive;
       Batch       : Positive;
       Repack      : Model_Runner.Llama.Repack_Mode;

@@ -134,12 +134,6 @@ package body Model_Runner.Generation is
      (Item   : Request;
       Status : out E.Error_Info) is
    begin
-      if Item.Max_Tokens = 0 then
-         Status := E.Make (E.Generation_Invalid_Request);
-         E.Add_Text (Status, "field", "max_tokens", E.Param_Identifier);
-         return;
-      end if;
-
       if Item.Batch_Size = 0 then
          Status := E.Make (E.Generation_Invalid_Request);
          E.Add_Text (Status, "field", "batch_size", E.Param_Identifier);
@@ -1861,6 +1855,12 @@ package body Model_Runner.Generation is
          if not Finished then
             P.Publish (Observer, P.Generation_Progress (P.Generation_Started));
             L.Enter (Session, L.Generating);
+
+            --  Nothing asked for: the prompt is read and that is the run,
+            --  ended where a count ends it.
+            if Item.Max_Tokens = 0 then
+               Outcome.Reason := Maximum_Tokens;
+            end if;
 
             Decode_Loop :
             for Produced in 1 .. Item.Max_Tokens loop

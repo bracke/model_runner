@@ -2983,7 +2983,7 @@ package body Tests.CLI_Cases is
               "run m.gguf --prompt hi --backend cpu --backend cpu");
       Expect (E.CLI_Missing_Option_Value, "run m.gguf --prompt");
       Expect (E.CLI_Invalid_Option_Value, "run m.gguf --max-tokens abc");
-      Expect (E.CLI_Option_Out_Of_Range, "run m.gguf --max-tokens 0");
+      Expect (E.CLI_Option_Out_Of_Range, "run m.gguf --max-tokens 1000001");
       Expect (E.CLI_Repeated_Option, "run m.gguf --seed 1 --seed 2");
 
       --  A value on an option that does not take one. Dropping it silently
@@ -8192,11 +8192,12 @@ package body Tests.CLI_Cases is
          Model_Runner.Stops.Open (Stop);
          Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
 
-         --  A request for no tokens at all. Nothing to do is a mistake in the
-         --  asking, not a run that produces nothing.
+         --  A request for no tokens at all is not refused: it reads the
+         --  prompt and stops, which is what reading a document to save its
+         --  cache asks for.
          Request.Max_Tokens := 0;
-         Assert (Refusal ("ab") = E.Generation_Invalid_Request,
-                 "a request for no tokens was accepted");
+         Assert (Refusal ("ab") = E.No_Error,
+                 "a request for no tokens was refused");
 
          --  A batch of no tokens, the same mistake in the other field.
          Request.Max_Tokens := 4;

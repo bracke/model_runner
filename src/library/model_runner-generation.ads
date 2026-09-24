@@ -73,7 +73,9 @@ package Model_Runner.Generation is
 
    --  What to generate and how.
    type Request is record
-      --  Largest number of tokens to produce. Must be greater than zero.
+      --  Largest number of tokens to produce. Nought evaluates the prompt
+      --  and stops, which is what reading a document to save its cache
+      --  asks for.
       Max_Tokens : Natural := 256;
 
       --  Validated sampling configuration.

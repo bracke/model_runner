@@ -140,6 +140,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **`--max-tokens 0` reads the prompt and stops.** The README's way of saving a
+  document's cache -- `run --prompt-file document.txt --max-tokens 0
+  --save-session` -- was refused as out of range, and the library refused a
+  request for no tokens the same way. Nought is now a request like any other:
+  the prompt is evaluated, nothing is generated, and the run ends as a count
+  ends it. `tests speed --max-tokens 0`, which the published prompt rows name,
+  had read the nought as not positive and quietly generated its default twelve
+  wherever the model did not end at once -- the 1419-token prompt did; the
+  rows quote the prompt's own seconds, so no figure moved.
+
 - **`--kv-cache f16` on the device past about thirty thousand positions.**
   The cache offsets a device attention is given were carried as a thirty-two-bit
   signed number between the engine and the push constants, and the values'

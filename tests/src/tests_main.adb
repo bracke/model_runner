@@ -2627,6 +2627,18 @@ begin
                return Default;
          end Number;
 
+         --  A count that may be nought, which --max-tokens is: the published
+         --  prompt rows ask for none. Read through Number it was refused as
+         --  not positive and quietly became the default twelve, so a prompt
+         --  row generated twelve wherever the model did not end at once.
+         function Count (Name : String; Default : Natural) return Natural is
+         begin
+            return Natural'Value (Option (Name, ""));
+         exception
+            when others =>
+               return Default;
+         end Count;
+
          --  Named the way --repack names them.
          function Mode_Of (Word : String) return Model_Runner.Llama.Repack_Mode
          is
@@ -2707,7 +2719,7 @@ begin
             Prompt_Path =>
               Option ("--prompt-file",
                       "../tests/fixtures/speed-prompt-short.txt"),
-            Tokens      => Number ("--max-tokens", 12),
+            Tokens      => Count ("--max-tokens", 12),
             Threads     => Number ("--threads",
                                    Model_Runner.Platform.Core_Count - 1),
             --  The command's own default, not a copy of it. This carried

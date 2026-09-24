@@ -127,7 +127,7 @@ package body Speed_Run is
    procedure Run
      (Path        : String;
       Prompt_Path : String;
-      Tokens      : Positive;
+      Tokens      : Natural;
       Threads     : Positive;
       Batch       : Positive;
       Repack      : L.Repack_Mode;
