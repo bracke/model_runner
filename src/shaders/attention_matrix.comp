@@ -177,6 +177,12 @@ const uint DM = 64u;
 //  front.
 layout(std430, binding = 5) readonly buffer Halves { float16_t kvh[]; };
 
+//  The values' halves, in a buffer of their own where the copy is split so
+//  that neither half is past what one storage buffer may hold. Where it is
+//  not split this is the same buffer as the keys' above, and v_base points
+//  past the keys into it, so the read is the same bytes either way.
+layout(std430, binding = 6) readonly buffer Values { float16_t vh[]; };
+
 //  And as binary32, for the sinks.
 layout(std430, binding = 0) readonly buffer Floats { float kvf[]; };
 
@@ -480,7 +486,7 @@ void main() {
                         coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
                                 gl_MatrixUseB> vm;
 
-                        coopMatLoad (vm, kvh,
+                        coopMatLoad (vm, vh,
                                      place_of (base + n0, shape.v_base,
                                                shape.v_width)
                                      + v_at + t * 16u,

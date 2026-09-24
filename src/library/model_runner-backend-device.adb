@@ -941,7 +941,8 @@ package body Model_Runner.Backend.Device is
      (Elements        : Model_Runner.Numerics.Element_Count;
       Copy_Upto       : Model_Runner.Numerics.Element_Count;
       Ok              : out Boolean;
-      Allow_Copy_Only : Boolean := False) is
+      Allow_Copy_Only : Boolean := False;
+      Keys_Upto       : Model_Runner.Numerics.Element_Count := 0) is
    begin
       if not Ready_Now then
          Ok := False;
@@ -949,7 +950,8 @@ package body Model_Runner.Backend.Device is
       end if;
 
       Products.Reserve (Engine, Elements, Copy_Upto, Ok,
-                        Allow_Copy_Only => Allow_Copy_Only);
+                        Allow_Copy_Only => Allow_Copy_Only,
+                        Keys_Upto => Keys_Upto);
    end Reserve_Cache;
 
    -------------------

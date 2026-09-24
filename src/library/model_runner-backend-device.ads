@@ -458,7 +458,8 @@ package Model_Runner.Backend.Device is
      (Elements        : Model_Runner.Numerics.Element_Count;
       Copy_Upto       : Model_Runner.Numerics.Element_Count;
       Ok              : out Boolean;
-      Allow_Copy_Only : Boolean := False);
+      Allow_Copy_Only : Boolean := False;
+      Keys_Upto       : Model_Runner.Numerics.Element_Count := 0);
 
    --  How many bytes one storage buffer may hold here, which is what
    --  bounds a session's context: the cache is one buffer, binary32 with

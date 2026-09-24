@@ -7123,14 +7123,35 @@ package body Model_Runner.Llama is
          Room : constant Natural :=
            Model_Runner.Backend.Device.Attention_Head_Room;
 
-         Wanted : constant Interfaces.Unsigned_64 :=
-           Model_Runner.Backend.Device.Cache_Bytes_For
-             (Block_Span_Of (Item)
-              + Element_Count (Model_Runner.Backend.Device.Table_Room)
-              + Sink_Footprint (Item.Owner.Settings));
+         --  Where the model learned no sinks the device keeps only the
+         --  half-precision copy -- two bytes an element, not the cache
+         --  proper's four -- and past what one buffer holds it keeps the
+         --  copy in two, so what a buffer must hold is a half, not the
+         --  whole. The cache proper is on the host and bounded there.
+         --  Counting the copy, and a half of it where it splits, is what
+         --  lets a sinkless model attend on the device at a context the
+         --  cache proper would not fit; the reserve is the real guard on
+         --  each buffer.
+         Sinkless : constant Boolean :=
+           Sink_Footprint (Item.Owner.Settings) = 0;
 
          Bound : constant Interfaces.Unsigned_64 :=
            Model_Runner.Backend.Device.Cache_Bound;
+
+         Copy_Bytes : constant Interfaces.Unsigned_64 :=
+           Interfaces.Unsigned_64
+             (Block_Span_Of (Item)
+              + Element_Count (Model_Runner.Backend.Device.Table_Room)) * 2;
+
+         Wanted : constant Interfaces.Unsigned_64 :=
+           (if not Sinkless
+            then Model_Runner.Backend.Device.Cache_Bytes_For
+                   (Block_Span_Of (Item)
+                    + Element_Count (Model_Runner.Backend.Device.Table_Room)
+                    + Sink_Footprint (Item.Owner.Settings))
+            elsif Bound > 0 and then Copy_Bytes > Bound
+            then (Copy_Bytes + 1) / 2
+            else Copy_Bytes);
       begin
          --  A head wider than the room a kernel keeps is attended on the
          --  processor whatever the cache holds, so it is asked first and
@@ -7649,9 +7670,16 @@ package body Model_Runner.Llama is
             --  buffer may keep just the copy and still attend on the
             --  device. A model with sinks reads the binary32, and a round
             --  reads it too, so neither takes this.
+            --  Where the keys end and the values begin in the copy, in
+            --  halves: the copy is every layer's keys and then every
+            --  layer's values, so the keys' length is the boundary. A
+            --  context wide enough that even the copy will not fit one
+            --  buffer splits there, keeping the two halves apart.
             Model_Runner.Backend.Device.Reserve_Cache
               (Wanted, Copy_Upto, Ok,
-               Allow_Copy_Only => Sink_Footprint (Item.Owner.Settings) = 0);
+               Allow_Copy_Only => Sink_Footprint (Item.Owner.Settings) = 0,
+               Keys_Upto =>
+                 (if Item.Keys = null then 0 else Item.Keys.all'Length));
             if not Ok then
                return;
             end if;
@@ -13324,12 +13352,25 @@ package body Model_Runner.Llama is
       --  the device keeps its own copy of the cache beside the host's,
       --  and the host's memory is what both come out of on an integrated
       --  part.
+      --
+      --  Where the model learned no sinks the device keeps only the
+      --  half-precision copy, not the cache proper, so its half of the
+      --  count is halved -- which is what lets a sinkless model hold a
+      --  context whose two full copies would not fit, the copy split
+      --  across buffers so no one of them is too large.
       declare
+         Sinkless : constant Boolean := Sink_Footprint (Settings) = 0;
+
+         Device_Cache : constant Interfaces.Unsigned_64 :=
+           (if Model_Runner.Backend."="
+                 (Source.Able.Kind, Model_Runner.Backend.Backend_Device)
+            then (if Sinkless
+                  then Item.Plan.KV_Cache_Bytes / 2
+                  else Item.Plan.KV_Cache_Bytes)
+            else 0);
+
          Needed : constant Interfaces.Unsigned_64 :=
-           Item.Plan.Total_Resident
-           + (if Model_Runner.Backend."="
-                   (Source.Able.Kind, Model_Runner.Backend.Backend_Device)
-              then Item.Plan.KV_Cache_Bytes else 0);
+           Item.Plan.Total_Resident + Device_Cache;
       begin
          if Session_Bounds.Max_Session_Bytes /= 0
            and then Needed > Session_Bounds.Max_Session_Bytes

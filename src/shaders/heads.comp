@@ -48,6 +48,13 @@ layout(std430, binding = 3) readonly  buffer Kept   { float  kept[]; };
 layout(std430, binding = 5) writeonly buffer Halves { float16_t yh[]; };
 layout(std430, binding = 4) readonly  buffer Table  { double turn[]; };
 
+//  The values' half of the copy, its own buffer where the copy is split so
+//  neither half is past what one storage buffer may hold. A value's position
+//  writes here; a key's writes the keys' binding above. Where the copy is not
+//  split this is the same buffer and v_into points past the keys into it, so
+//  the write lands where it always did.
+layout(std430, binding = 6) writeonly buffer ValuesHalves { float16_t vh[]; };
+
 layout(push_constant) uniform Shape {
     uint heads;
     uint head_size;
@@ -152,8 +159,11 @@ void main() {
                 y[into + c] = value;
             }
 
+            //  A value's half goes to the values' binding, which is the
+            //  keys' buffer where the copy is not split and a buffer of its
+            //  own where it is; the base said which by where it points.
             if (shape.halves != 0u) {
-                yh[shape.half_base + into + c] = float16_t (value);
+                vh[shape.half_base + into + c] = float16_t (value);
             }
         }
         return;

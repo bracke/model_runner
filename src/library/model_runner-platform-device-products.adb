@@ -301,13 +301,18 @@ package body Model_Runner.Platform.Device.Products is
    --  that is written and not read costs nothing, and a second layout for
    --  the sake of one binding would cost a second pool, a second set of
    --  sets and a second of everything that names one.
-   type Binding_Array is array (1 .. 6) of Set_Layout_Binding;
+   --  Seven now: the six a kernel names at most were six until a copy-only
+   --  session's attention grew a seventh, the values' half of a cache split
+   --  in two so that neither half is past what one storage buffer may hold.
+   --  A kernel that names none of the seventh writes six and leaves it, as
+   --  it always left the ones it did not name.
+   type Binding_Array is array (1 .. 7) of Set_Layout_Binding;
 
    type Set_Layout_Create_Info is record
       Kind     : C.unsigned := Structure_Set_Layout;
       Next     : Address := Null_Handle;
       Flags    : C.unsigned := 0;
-      Count    : C.unsigned := 6;
+      Count    : C.unsigned := 7;
       Bindings : Address := Null_Handle;
    end record
      with Convention => C;
@@ -344,7 +349,7 @@ package body Model_Runner.Platform.Device.Products is
    end record
      with Convention => C;
 
-   type Buffer_Info_Array is array (1 .. 6) of aliased Buffer_Info;
+   type Buffer_Info_Array is array (1 .. 7) of aliased Buffer_Info;
 
    --  The fourth descriptor of every set: the half-precision copy of the
    --  batch where the engine has one, and the vectors again where it has
@@ -908,6 +913,19 @@ package body Model_Runner.Platform.Device.Products is
              Offset => 0,
              Extent => Item.Vector_Bytes));
 
+   --  Where a kernel reads the values' halves: the values' buffer where the
+   --  copy is split, and the copy buffer itself where it is not -- there the
+   --  values sit past the keys in the one buffer and the base says where, so
+   --  binding the same buffer to the values' binding and reading it at the
+   --  global base is the same bytes as reading the keys' binding was. A
+   --  dispatch that reads no values is still given something valid.
+   function Values_Copy_Descriptor (Item : Engine) return Buffer_Info
+   is (if Item.Copy_Split and then Item.Copy_Values_Buffer /= Null_Handle
+       then (Buffer => Item.Copy_Values_Buffer,
+             Offset => 0,
+             Extent => Item.Copy_Values_Bytes)
+       else Copy_Descriptor (Item));
+
    --  The cache proper, or a stand-in where only the copy is kept. A set
    --  is written whole, so the binding a copy-only session would name for
    --  the binary32 cache is given something valid: that session is
@@ -935,7 +953,7 @@ package body Model_Runner.Platform.Device.Products is
    end record
      with Convention => C;
 
-   type Write_Array is array (1 .. 6) of aliased Write_Descriptor;
+   type Write_Array is array (1 .. 7) of aliased Write_Descriptor;
 
    --  Bytes of push constants, which the layout declares and every dispatch
    --  writes. One number in two places is one number that can differ, so it
@@ -3345,7 +3363,7 @@ package body Model_Runner.Platform.Device.Products is
          --  every product read whatever the binding held last.
          Sizes   : aliased Pool_Size :=
            (Kind  => Descriptor_Storage,
-            Count => C.unsigned (6 * (1 + 2 * Sequence_Limit)));
+            Count => C.unsigned (7 * (1 + 2 * Sequence_Limit)));
          Request : aliased Descriptor_Pool_Info;
       begin
          if Create = null then
@@ -3731,10 +3749,21 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          Item.Copy_At := Null_Handle;
+
+         if Unmap /= null
+           and then Item.Logical /= Null_Handle
+           and then Item.Copy_Values_Memory /= Null_Handle
+         then
+            Unmap (Item.Logical, Item.Copy_Values_Memory);
+         end if;
+
+         Item.Copy_Values_At := Null_Handle;
       end;
 
       Give_Back_Buffer (Item, Item.Cache_Buffer, Item.Cache_Memory);
       Give_Back_Buffer (Item, Item.Copy_Buffer, Item.Copy_Memory);
+      Give_Back_Buffer
+        (Item, Item.Copy_Values_Buffer, Item.Copy_Values_Memory);
       Item.Cache_Bytes := 0;
       Item.Copy_Bytes := 0;
 
@@ -5707,7 +5736,8 @@ package body Model_Runner.Platform.Device.Products is
       Elements        : Model_Runner.Numerics.Element_Count;
       Copy_Upto       : Model_Runner.Numerics.Element_Count;
       Ok              : out Boolean;
-      Allow_Copy_Only : Boolean := False)
+      Allow_Copy_Only : Boolean := False;
+      Keys_Upto       : Model_Runner.Numerics.Element_Count := 0)
    is
       Ignored : constant Boolean := Set_Asking (Item);
 
@@ -5739,22 +5769,56 @@ package body Model_Runner.Platform.Device.Products is
       Copy_Wanted : constant Interfaces.Unsigned_64 :=
         Interfaces.Unsigned_64 (Copy_Upto) * 2;
 
-      --  Keep only the copy where the caller allows it and the cache
-      --  proper would not fit one storage buffer but the copy would --
-      --  the copy is two bytes an element to the cache's four, so it
-      --  reaches a context the cache does not. The environment variable
-      --  forces it at a context where both would fit, which is how the
-      --  copy-only path is checked against the both-buffers one: for a
-      --  sinkless model the cache proper is written and never read, so
-      --  the two must answer identically.
-      Copy_Only : constant Boolean :=
+      --  The keys' half of the copy and the values' half, in bytes, where
+      --  the caller said in halves where the keys end. A whole number of
+      --  the two makes the copy, so the values are what is left.
+      Keys_Wanted : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Keys_Upto) * 2;
+      Values_Wanted : constant Interfaces.Unsigned_64 :=
+        (if Copy_Wanted >= Keys_Wanted then Copy_Wanted - Keys_Wanted else 0);
+
+      --  Split the copy in two -- keys apart from values -- where even the
+      --  copy would not fit one storage buffer but its keys and its values
+      --  each would. Only a copy-only session splits, and only where the
+      --  caller said where the keys end. The environment variable forces
+      --  it where the whole copy would fit, which is how the split is
+      --  checked against the single buffer: the two hold the same halves at
+      --  the same places, so they must answer identically.
+      Split : constant Boolean :=
         Allow_Copy_Only
         and then Wants_Copy (Item)
         and then Copy_Wanted > 0
-        and then not Over_Limit (Item, Copy_Wanted)
+        and then Keys_Upto in 1 .. Copy_Upto - 1
+        and then not Over_Limit (Item, Keys_Wanted)
+        and then not Over_Limit (Item, Values_Wanted)
         and then
-          (Ada.Environment_Variables.Exists ("MR_FORCE_COPY_ONLY")
-           or else Over_Limit (Item, Wanted));
+          (Ada.Environment_Variables.Exists ("MR_FORCE_SPLIT_COPY")
+           or else Over_Limit (Item, Copy_Wanted));
+
+      --  Keep only the copy where the caller allows it and the cache
+      --  proper would not fit one storage buffer but the copy would --
+      --  the copy is two bytes an element to the cache's four, so it
+      --  reaches a context the cache does not. A split copy is a copy-only
+      --  one as well: it too keeps no cache proper. The environment
+      --  variable forces it at a context where both would fit, which is how
+      --  the copy-only path is checked against the both-buffers one: for a
+      --  sinkless model the cache proper is written and never read, so
+      --  the two must answer identically.
+      Copy_Only : constant Boolean :=
+        Split
+        or else
+          (Allow_Copy_Only
+           and then Wants_Copy (Item)
+           and then Copy_Wanted > 0
+           and then not Over_Limit (Item, Copy_Wanted)
+           and then
+             (Ada.Environment_Variables.Exists ("MR_FORCE_COPY_ONLY")
+              or else Over_Limit (Item, Wanted)));
+
+      --  What the copy buffer holds and is mapped and filled to: the keys'
+      --  half where the copy is split, the whole copy where it is not.
+      Copy_Alloc : constant Interfaces.Unsigned_64 :=
+        (if Split then Keys_Wanted else Copy_Wanted);
 
       --  What the buffers being replaced held, kept until the new ones
       --  have been made and mapped.
@@ -5783,8 +5847,12 @@ package body Model_Runner.Platform.Device.Products is
       --  first token. Refused, the session keeps its context on the host
       --  and attends there, as one the device has no room for does; a
       --  packed cache is a quarter of the size and fits.
+      --  A split copy is past the bound as a whole and under it in each
+      --  half, so it is the two halves that are held against the bound, not
+      --  the whole.
       if (not Copy_Only and then Over_Limit (Item, Wanted))
         or else (Wants_Copy (Item) and then Copy_Wanted > 0
+                 and then not Split
                  and then Over_Limit (Item, Copy_Wanted))
       then
          return;
@@ -5796,9 +5864,13 @@ package body Model_Runner.Platform.Device.Products is
       --  however large what is there, because the kernels are told which
       --  to write by what this reserved.
       if (Copy_Only or else Item.Cache_Bytes >= Wanted)
-        and then (Item.Copy_Bytes >= Copy_Wanted
-                  or else not Wants_Copy (Item))
         and then Item.Copy_Only = Copy_Only
+        and then Item.Copy_Split = Split
+        and then (if Split
+                  then Item.Copy_Bytes >= Keys_Wanted
+                       and then Item.Copy_Values_Bytes >= Values_Wanted
+                  else (Item.Copy_Bytes >= Copy_Wanted
+                        or else not Wants_Copy (Item)))
       then
          Ok := True;
          return;
@@ -5821,6 +5893,10 @@ package body Model_Runner.Platform.Device.Products is
          Was_Copy_Memory : Address := Item.Copy_Memory;
          Was_Copy_At     : constant Address := Item.Copy_At;
 
+         Was_Values_Buffer : Address := Item.Copy_Values_Buffer;
+         Was_Values_Memory : Address := Item.Copy_Values_Memory;
+         Was_Values_At     : constant Address := Item.Copy_Values_At;
+
          --  What the copy held, in bytes, which is no longer two for
          --  every element of the cache: it reaches as far as halves are
          --  read and no further, so what is carried into the new one is
@@ -5830,7 +5906,8 @@ package body Model_Runner.Platform.Device.Products is
          Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
 
          --  Both or neither: a cache without its copy is a cache the
-         --  matrix kernel would read nothing out of.
+         --  matrix kernel would read nothing out of. The values' buffer of
+         --  a split copy goes back with them.
          procedure Give_Both_Back is
          begin
             if Was_At /= Null_Handle and then Unmap /= null then
@@ -5841,12 +5918,19 @@ package body Model_Runner.Platform.Device.Products is
                Unmap (Item.Logical, Was_Copy_Memory);
             end if;
 
+            if Was_Values_At /= Null_Handle and then Unmap /= null then
+               Unmap (Item.Logical, Was_Values_Memory);
+            end if;
+
             Give_Back_Buffer (Item, Was_Buffer, Was_Memory);
             Give_Back_Buffer (Item, Was_Copy_Buffer, Was_Copy_Memory);
+            Give_Back_Buffer (Item, Was_Values_Buffer, Was_Values_Memory);
             Item.Cache_Bytes := 0;
             Item.Copy_Bytes := 0;
+            Item.Copy_Values_Bytes := 0;
             Item.Cache_Elements := 0;
             Item.Copy_Only := False;
+            Item.Copy_Split := False;
          end Give_Both_Back;
       begin
          Item.Cache_Buffer := Null_Handle;
@@ -5855,6 +5939,9 @@ package body Model_Runner.Platform.Device.Products is
          Item.Copy_Buffer := Null_Handle;
          Item.Copy_Memory := Null_Handle;
          Item.Copy_At := Null_Handle;
+         Item.Copy_Values_Buffer := Null_Handle;
+         Item.Copy_Values_Memory := Null_Handle;
+         Item.Copy_Values_At := Null_Handle;
 
          --  The cache proper, unless only the copy is kept.
          if not Copy_Only then
@@ -5866,13 +5953,29 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          --  The copy only where something on this device would read it,
-         --  and only as far as it is read.
+         --  and only as far as it is read -- the keys' half of it where it
+         --  is split, the whole otherwise.
          if Wants_Copy (Item) and then Copy_Wanted > 0 then
-            Take (Item, Copy_Wanted, Item.Copy_Buffer, Item.Copy_Memory, Ok);
+            Take (Item, Copy_Alloc, Item.Copy_Buffer, Item.Copy_Memory, Ok);
             if not Ok then
                Give_Back_Buffer (Item, Item.Cache_Buffer, Item.Cache_Memory);
                Give_Both_Back;
                return;
+            end if;
+
+            --  And the values' half, a buffer of its own, where the copy
+            --  is split because the whole would not fit one.
+            if Split then
+               Take (Item, Values_Wanted,
+                     Item.Copy_Values_Buffer, Item.Copy_Values_Memory, Ok);
+               if not Ok then
+                  Give_Back_Buffer
+                    (Item, Item.Cache_Buffer, Item.Cache_Memory);
+                  Give_Back_Buffer
+                    (Item, Item.Copy_Buffer, Item.Copy_Memory);
+                  Give_Both_Back;
+                  return;
+               end if;
             end if;
          else
             Ok := True;
@@ -5916,7 +6019,7 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          if Item.Copy_Buffer /= Null_Handle then
-            if Map (Item.Logical, Item.Copy_Memory, 0, Copy_Wanted, 0,
+            if Map (Item.Logical, Item.Copy_Memory, 0, Copy_Alloc, 0,
                     Where'Access) /= 0
             then
                Ok := False;
@@ -5926,6 +6029,20 @@ package body Model_Runner.Platform.Device.Products is
             end if;
 
             Item.Copy_At := Where;
+         end if;
+
+         if Item.Copy_Values_Buffer /= Null_Handle then
+            if Map (Item.Logical, Item.Copy_Values_Memory, 0, Values_Wanted, 0,
+                    Where'Access) /= 0
+            then
+               Ok := False;
+               Item.Cache_Bytes := 0;
+               Item.Copy_Bytes := 0;
+               Item.Copy_Values_Bytes := 0;
+               return;
+            end if;
+
+            Item.Copy_Values_At := Where;
          end if;
       end;
 
@@ -5988,7 +6105,11 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          if Item.Copy_Buffer /= Null_Handle then
-            Fill (Item.Buffer, Item.Copy_Buffer, 0, Copy_Wanted, 0);
+            Fill (Item.Buffer, Item.Copy_Buffer, 0, Copy_Alloc, 0);
+         end if;
+
+         if Item.Copy_Values_Buffer /= Null_Handle then
+            Fill (Item.Buffer, Item.Copy_Values_Buffer, 0, Values_Wanted, 0);
          end if;
 
          --  And what the buffers being replaced hold, carried into the
@@ -6076,9 +6197,13 @@ package body Model_Runner.Platform.Device.Products is
 
       Item.Cache_Bytes := (if Copy_Only then 0 else Wanted);
       Item.Copy_Bytes :=
-        (if Item.Copy_Buffer /= Null_Handle then Copy_Wanted else 0);
+        (if Item.Copy_Buffer /= Null_Handle then Copy_Alloc else 0);
+      Item.Copy_Values_Bytes :=
+        (if Item.Copy_Values_Buffer /= Null_Handle then Values_Wanted else 0);
       Item.Cache_Elements := Interfaces.Unsigned_64 (Elements);
       Item.Copy_Only := Copy_Only;
+      Item.Copy_Split := Split;
+      Item.Copy_Keys_Halves := (if Split then Interfaces.Unsigned_64 (Keys_Upto) else 0);
    end Reserve;
 
    -------------------
@@ -6113,18 +6238,26 @@ package body Model_Runner.Platform.Device.Products is
          if Item.Copy_At /= Null_Handle then
             Unmap (Item.Logical, Item.Copy_Memory);
          end if;
+
+         if Item.Copy_Values_At /= Null_Handle then
+            Unmap (Item.Logical, Item.Copy_Values_Memory);
+         end if;
       end if;
 
       Item.Cache_At := Null_Handle;
       Item.Copy_At := Null_Handle;
+      Item.Copy_Values_At := Null_Handle;
 
       Give_Back_Buffer (Item, Item.Cache_Buffer, Item.Cache_Memory);
       Give_Back_Buffer (Item, Item.Copy_Buffer, Item.Copy_Memory);
+      Give_Back_Buffer (Item, Item.Copy_Values_Buffer, Item.Copy_Values_Memory);
 
       Item.Cache_Bytes := 0;
       Item.Copy_Bytes := 0;
+      Item.Copy_Values_Bytes := 0;
       Item.Cache_Elements := 0;
       Item.Copy_Only := False;
+      Item.Copy_Split := False;
    end Release_Cache;
 
    ---------------
@@ -6179,25 +6312,45 @@ package body Model_Runner.Platform.Device.Products is
       --  wrote itself. Only where there is one: a caller may put values
       --  into a cache this engine took for itself rather than reserved,
       --  and there is no copy of such a cache to write.
-      if Item.Copy_At /= Null_Handle
-        and then Interfaces.Unsigned_64 (At_Value) * 2
-                 + Interfaces.Unsigned_64 (Values'Length) * 2
-                 <= Item.Copy_Bytes
-      then
-         declare
-            Halves : Model_Runner.Numerics.Half_Array (Values'Range)
-              with Import,
-                   Address =>
-                     System.Storage_Elements.To_Address
-                       (System.Storage_Elements.To_Integer (Item.Copy_At)
-                        + System.Storage_Elements.Integer_Address
-                            (Interfaces.Unsigned_64 (At_Value) * 2));
-         begin
-            for Index in Halves'Range loop
-               Halves (Index) := Model_Runner.Numerics.To_Half (Values (Index));
-            end loop;
-         end;
-      end if;
+      --
+      --  Where the copy is split, a row is all keys or all values -- a
+      --  position's keys and its values are put a call apart -- so which
+      --  buffer it goes to and where in it follow from where the element
+      --  sits against the keys' end.
+      declare
+         Into_Values : constant Boolean :=
+           Item.Copy_Split
+           and then Interfaces.Unsigned_64 (At_Value) >= Item.Copy_Keys_Halves;
+
+         At_Half : constant Interfaces.Unsigned_64 :=
+           (if Into_Values
+            then Interfaces.Unsigned_64 (At_Value) - Item.Copy_Keys_Halves
+            else Interfaces.Unsigned_64 (At_Value)) * 2;
+
+         Base_At : constant Address :=
+           (if Into_Values then Item.Copy_Values_At else Item.Copy_At);
+         Room_Bytes : constant Interfaces.Unsigned_64 :=
+           (if Into_Values then Item.Copy_Values_Bytes else Item.Copy_Bytes);
+      begin
+         if Base_At /= Null_Handle
+           and then At_Half + Interfaces.Unsigned_64 (Values'Length) * 2
+                    <= Room_Bytes
+         then
+            declare
+               Halves : Model_Runner.Numerics.Half_Array (Values'Range)
+                 with Import,
+                      Address =>
+                        System.Storage_Elements.To_Address
+                          (System.Storage_Elements.To_Integer (Base_At)
+                           + System.Storage_Elements.Integer_Address (At_Half));
+            begin
+               for Index in Halves'Range loop
+                  Halves (Index) :=
+                    Model_Runner.Numerics.To_Half (Values (Index));
+               end loop;
+            end;
+         end if;
+      end;
 
       Ok := True;
    end Put_Cache;
@@ -7380,6 +7533,11 @@ package body Model_Runner.Platform.Device.Products is
         or else (Item.Cache_Buffer = Null_Handle
                  and then not (Item.Copy_Only
                                and then Item.Copy_Buffer /= Null_Handle))
+        --  A split copy's values are on their own binding, read only by the
+        --  matrix kernel; a batch too small for it attends on the host.
+        or else (Item.Copy_Split
+                 and then not Attends_By_Matrix
+                                (Item, Slots, Head_Size, Value_Size))
         or else Query'Length
                   < Model_Runner.Numerics.Element_Count (Slots)
                     * Model_Runner.Numerics.Element_Count (Heads)
@@ -7458,6 +7616,7 @@ package body Model_Runner.Platform.Device.Products is
          Told (5) := Told (3);
 
          Told (6) := Copy_Descriptor (Item);
+         Told (7) := Values_Copy_Descriptor (Item);
 
          for Binding in Told'Range loop
             Notes (Binding).Target := Item.Descriptor;
@@ -7465,7 +7624,7 @@ package body Model_Runner.Platform.Device.Products is
             Notes (Binding).Buffers := Told (Binding)'Address;
          end loop;
 
-         Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
+         Update (Item.Logical, 7, Notes'Address, 0, Null_Handle);
       end;
 
       declare
@@ -7507,7 +7666,9 @@ package body Model_Runner.Platform.Device.Products is
               C.unsigned
                 (V_Base
                  + (if Reads_Copy (Item, Slots, Head_Size, Value_Size, False)
-                    then Natural (Copy_At (Item)) else 0)),
+                    then Natural (Copy_At (Item)) else 0)
+                 - (if Item.Copy_Split then Natural (Item.Copy_Keys_Halves)
+                    else 0)),
             KV_Width   => C.unsigned (KV_Width),
             V_Width    => C.unsigned (V_Width),
             Scale      => C.C_float (Scale),
@@ -9293,6 +9454,20 @@ package body Model_Runner.Platform.Device.Products is
                   return;
                end if;
 
+               --  A split copy keeps its values on a binding of their own,
+               --  which only the matrix kernel reads. A batch too small for
+               --  that kernel -- a generated token -- has no device kernel
+               --  that reads the split copy, so it is refused here and
+               --  attends on the host out of the host's own cache, as it
+               --  did before the copy grew past one buffer.
+               if Item.Copy_Split
+                 and then not Attends_By_Matrix
+                                (Item, Count, This.Head_Size, This.Value_Size)
+               then
+                  Item.Refused := Cache_Refused;
+                  return;
+               end if;
+
                --  A packed block needs the kernel that reads one, and a
                --  shape that kernel takes.
                if This.Packed.K_Bits /= 0
@@ -9912,6 +10087,7 @@ package body Model_Runner.Platform.Device.Products is
                Told (5) := Told (3);
 
                Told (6) := Copy_Descriptor (Item);
+               Told (7) := Values_Copy_Descriptor (Item);
 
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
@@ -9919,7 +10095,7 @@ package body Model_Runner.Platform.Device.Products is
                   Notes (Binding).Buffers := Told (Binding)'Address;
                end loop;
 
-               Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
+               Update (Item.Logical, 7, Notes'Address, 0, Null_Handle);
                goto Next_Set;
             end if;
 
@@ -10005,6 +10181,7 @@ package body Model_Runner.Platform.Device.Products is
                   Extent => Item.Turn_Bytes);
 
                Told (6) := Copy_Descriptor (Item);
+               Told (7) := Values_Copy_Descriptor (Item);
 
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
@@ -10012,7 +10189,7 @@ package body Model_Runner.Platform.Device.Products is
                   Notes (Binding).Buffers := Told (Binding)'Address;
                end loop;
 
-               Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
+               Update (Item.Logical, 7, Notes'Address, 0, Null_Handle);
                goto Next_Set;
             end if;
 
@@ -10908,6 +11085,9 @@ package body Model_Runner.Platform.Device.Products is
                                       This.Value_Size, False)
                                 then Copy_At (Item)
                                 else 0)),
+                        --  Where the copy is split the values are a buffer
+                        --  of their own, so the base is off its front, which
+                        --  is the keys' end taken away.
                         V_Base     =>
                           C.unsigned
                             (Interfaces.Unsigned_64 (This.V_Base)
@@ -10915,6 +11095,8 @@ package body Model_Runner.Platform.Device.Products is
                                      (Item, Count, This.Head_Size,
                                       This.Value_Size, False)
                                 then Copy_At (Item)
+                                else 0)
+                             - (if Item.Copy_Split then Item.Copy_Keys_Halves
                                 else 0)),
                         KV_Width   => C.unsigned (This.KV_Width),
                         V_Width    => C.unsigned (This.V_Width),
@@ -11239,7 +11421,14 @@ package body Model_Runner.Platform.Device.Products is
                                    + This.V_Reads_At)
                            else 0),
                         V_Width   => C.unsigned (This.V_Rows),
-                        V_Into    => C.unsigned (This.V_At_First),
+                        --  Where the copy is split the values are their own
+                        --  buffer, so a value's place is off its front, the
+                        --  keys' end taken away.
+                        V_Into    =>
+                          C.unsigned
+                            (Interfaces.Unsigned_64 (This.V_At_First)
+                             - (if Item.Copy_Split then Item.Copy_Keys_Halves
+                                else 0)),
                         V_Stride  => C.unsigned (This.V_Stride),
                         Pages_At       => C.unsigned (This.Pages_At),
                         Page_Shift     => C.unsigned (This.Page_Shift),

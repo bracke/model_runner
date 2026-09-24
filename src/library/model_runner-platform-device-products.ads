@@ -1694,12 +1694,16 @@ package Model_Runner.Platform.Device.Products is
    --    cache's four, so a context past what six bytes fits is held where
    --    two do, and the kernels that write the cache proper are told to
    --    skip it. False keeps the old both-or-neither rule.
+   --  Keys_Upto, where the keys end and the values begin in the copy, in
+   --  halves: past it the split copy keeps a buffer of its own, so that
+   --  neither half is past what one may hold. Zero asks for no split.
    procedure Reserve
      (Item            : in out Engine;
       Elements        : Model_Runner.Numerics.Element_Count;
       Copy_Upto       : Model_Runner.Numerics.Element_Count;
       Ok              : out Boolean;
-      Allow_Copy_Only : Boolean := False);
+      Allow_Copy_Only : Boolean := False;
+      Keys_Upto       : Model_Runner.Numerics.Element_Count := 0);
 
    --  Write bytes into that cache, as they are.
    --
@@ -2973,6 +2977,21 @@ private
       --  such a model: the matrix kernel reads the copy, and only a sink
       --  or a round reads the binary32, neither of which this holds.
       Copy_Only : Boolean := False;
+
+      --  The copy split in two, keys in Copy_Buffer above and values here,
+      --  because at a wide enough context even the copy -- two bytes an
+      --  element -- is past what one storage buffer may hold, where its
+      --  keys and its values apart are not. Only a copy-only session
+      --  splits, and only where the whole would not fit: the values kernel
+      --  reads and writes this buffer, the keys kernel the one above, and
+      --  the values' base is taken from the front of this rather than from
+      --  the keys' end. Copy_Keys_Halves is where that end is, in halves.
+      Copy_Split         : Boolean := False;
+      Copy_Values_Buffer : System.Address := System.Null_Address;
+      Copy_Values_Memory : System.Address := System.Null_Address;
+      Copy_Values_Bytes  : Interfaces.Unsigned_64 := 0;
+      Copy_Values_At     : System.Address := System.Null_Address;
+      Copy_Keys_Halves   : Interfaces.Unsigned_64 := 0;
 
       --  The cache mapped once and left mapped. A position is written every
       --  layer of every token -- hundreds of writes a run, at a millisecond
