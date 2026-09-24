@@ -1,0 +1,183 @@
+#version 450
+
+//  A Q5_K row against a batch of one, decoded a super-block at a time the way
+//  llama.cpp's own generating product does it -- the Q4_K super-block kernel
+//  (row_product_super.comp) with the fifth bit added. The eight sub-block
+//  scales are unpacked together as there, and a lane takes a whole
+//  super-block's region so the header is read once for sixteen weights; the
+//  difference is the extra bit, held in a mask of thirty-two bytes a block,
+//  which is shifted onto each nibble to make the range zero to thirty-one.
+//
+//  Sixteen lanes share a super-block and a workgroup of thirty-two takes two
+//  at a time; the subgroup adds the partials. One workgroup is one subgroup
+//  of thirty-two, which is what lets the device run it at that width.
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+#ifndef NUM_ROWS
+#define NUM_ROWS 2u
+#endif
+
+layout(local_size_x = 32) in;
+
+layout(std430, binding = 0) readonly  buffer Weights  { uint  w[]; };
+layout(std430, binding = 1) readonly  buffer Vectors  { float x[]; };
+layout(std430, binding = 2) writeonly buffer Result   { float y[]; };
+layout(std430, binding = 3) readonly  buffer Routing  { uint  route[]; };
+layout(std430, binding = 4) readonly  buffer Residual { float rj[]; };
+
+const uint LISTED_BY_POSITION = 2u;
+
+layout(push_constant) uniform Shape {
+    uint rows;
+    uint columns;
+    uint count;
+    uint first;
+    uint format;
+    uint base;
+    uint joins;
+    uint table;
+    uint members[16];
+    uint stride;
+    uint apart;
+    uint routed;
+} shape;
+
+//  A sixteen-bit field of the weights, index into the array of them that
+//  begins at a word.
+uint u16 (uint base_word, uint index) {
+    return (w[base_word + (index >> 1u)] >> ((index & 1u) * 16u)) & 0xFFFFu;
+}
+
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+    uint itid = tid & 15u;
+    uint ix = tid >> 4u;
+
+    uint il = itid >> 2u;
+    uint ir = itid & 3u;
+    uint v_im = il >> 1u;
+    uint v_in = il & 1u;
+    uint l0 = 4u * ir + 2u * v_in;       // 0..14 even
+    uint q_offset = 32u * v_im + l0;
+    uint y_offset = 64u * v_im + l0;
+
+    uint member = gl_WorkGroupID.z;
+    bool listed = shape.routed >= LISTED_BY_POSITION;
+    uint which = listed ? member
+               : shape.routed != 0u ? route[member] : shape.members[member];
+    uint slice = which * shape.stride;
+
+    uint experts = shape.members[0];
+    uint run_at = listed ? route[experts + member] : 0u;
+    uint run_count = listed ? route[member]
+                            : min(1u, shape.count - shape.first);
+    uint list_at = 2u * experts;
+
+    if (run_count == 0u) {
+        return;
+    }
+
+    uint from_base = listed
+          ? (shape.routed == LISTED_BY_POSITION
+               ? route[list_at + run_at] : run_at) * shape.columns
+          : min(shape.first, shape.count - 1u) * shape.columns
+            + member * shape.apart;
+
+    uint first_row = NUM_ROWS * gl_WorkGroupID.x;
+    uint blocks = shape.columns / 256u;
+    uint span = blocks * 176u;            // bytes a Q5_K row takes
+
+    float temp[NUM_ROWS];
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        temp[r] = 0.0;
+    }
+
+    for (uint i = ix; i < blocks; i += 2u) {
+        uint y1 = i * 256u + y_offset;
+        uint y2 = y1 + 128u;
+        uint yb = from_base + y1;
+        uint zb = from_base + y2;
+
+        //  This lane's sixteen activations of the two regions, four pairs
+        //  sixteen apart, as llama.cpp reads them.
+        float ay0 = x[yb];       float ay1 = x[yb + 1u];
+        float ay2 = x[yb + 16u]; float ay3 = x[yb + 17u];
+        float ay4 = x[yb + 32u]; float ay5 = x[yb + 33u];
+        float ay6 = x[yb + 48u]; float ay7 = x[yb + 49u];
+        float az0 = x[zb];       float az1 = x[zb + 1u];
+        float az2 = x[zb + 16u]; float az3 = x[zb + 17u];
+        float az4 = x[zb + 32u]; float az5 = x[zb + 33u];
+        float az6 = x[zb + 48u]; float az7 = x[zb + 49u];
+
+        for (uint r = 0u; r < NUM_ROWS; ++r) {
+            uint row = first_row + r;
+            uint at = shape.base + slice + row * span + i * 176u;
+            uint head = at >> 2u;
+
+            vec2 dm = unpackHalf2x16 (w[head]);
+
+            uint sbase = (at + 4u) >> 2u;
+            uint s0 = u16 (sbase, v_im);
+            uint s4 = u16 (sbase, v_im + 2u);
+            uint s8 = u16 (sbase, v_im + 4u);
+            uint sl = (s4 << 16u) | s0;
+            uint sh = (sl & 0xC0C0C0C0u) >> 2u;
+            vec4 s04 = vec4 (unpack8 (sl & 0x3F3F3F3Fu));
+            vec4 s8f = vec4 (unpack8 ((((s8 << 12u) | s8) & 0x0F0F0F0Fu) | sh));
+
+            uint qbase = (at + 48u) >> 2u;     // the quants, past the mask
+            uint qhb   = (at + 16u) >> 2u;     // the fifth-bit mask
+
+            uint qs0 = u16 (qbase, q_offset / 2u)
+                     | (u16 (qbase, q_offset / 2u + 8u) << 16u);
+            uint qs64 = u16 (qbase, q_offset / 2u + 32u)
+                      | (u16 (qbase, q_offset / 2u + 40u) << 16u);
+
+            uint qs0_lo = qs0 & 0x0F0F0F0Fu;
+            uint qs0_hi = (qs0 >> 4u) & 0x0F0F0F0Fu;
+            uint qs64_lo = qs64 & 0x0F0F0F0Fu;
+            uint qs64_hi = (qs64 >> 4u) & 0x0F0F0F0Fu;
+
+            uint qh = u16 (qhb, l0 / 2u) | (u16 (qhb, l0 / 2u + 8u) << 16u);
+            qs0_lo  += ((qh >> (2u * v_im)) & 0x01010101u) << 4u;
+            qs0_hi  += ((qh >> (2u * v_im)) & 0x02020202u) << 3u;
+            qs64_lo += ((qh >> (2u * v_im)) & 0x10101010u);
+            qs64_hi += ((qh >> (2u * v_im)) & 0x20202020u) >> 1u;
+
+            vec4 lo0 = vec4 (unpack8 (qs0_lo));
+            vec4 hi0 = vec4 (unpack8 (qs0_hi));
+            vec4 lo1 = vec4 (unpack8 (qs64_lo));
+            vec4 hi1 = vec4 (unpack8 (qs64_hi));
+
+            float sx = ay0 * lo0.x + ay1 * lo0.y + ay2 * lo0.z + ay3 * lo0.w;
+            float sy = ay4 * hi0.x + ay5 * hi0.y + ay6 * hi0.z + ay7 * hi0.w;
+            float sz = az0 * lo1.x + az1 * lo1.y + az2 * lo1.z + az3 * lo1.w;
+            float sw = az4 * hi1.x + az5 * hi1.y + az6 * hi1.z + az7 * hi1.w;
+
+            float smin = (ay0 + ay1 + ay2 + ay3) * s04.z
+                       + (ay4 + ay5 + ay6 + ay7) * s04.w
+                       + (az0 + az1 + az2 + az3) * s8f.z
+                       + (az4 + az5 + az6 + az7) * s8f.w;
+
+            temp[r] += dm.x * (sx * s04.x + sy * s04.y
+                               + sz * s8f.x + sw * s8f.y)
+                       - dm.y * smin;
+        }
+    }
+
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        float whole = subgroupAdd (temp[r]);
+        uint row = first_row + r;
+
+        if (tid == 0u && row < shape.rows) {
+            uint out_at = listed
+                          ? run_at * shape.rows + row
+                          : member * shape.rows * shape.count
+                            + shape.first * shape.rows + row;
+
+            y[out_at] = shape.joins != 0u ? whole + rj[out_at] : whole;
+        }
+    }
+}

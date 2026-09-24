@@ -2682,6 +2682,10 @@ private
       Wave_Shader : System.Address := System.Null_Address;
       Wave_Line   : System.Address := System.Null_Address;
 
+      --  The same for Q5_K, whose decode carries the fifth-bit mask.
+      Wave_Shader5 : System.Address := System.Null_Address;
+      Wave_Line5   : System.Address := System.Null_Address;
+
       Wide_Line   : System.Address := System.Null_Address;
       Group_Line  : System.Address := System.Null_Address;
       Tile_Line   : System.Address := System.Null_Address;

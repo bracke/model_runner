@@ -757,14 +757,16 @@ package body Model_Runner.Platform.Device.Products is
        and then Item.Half_Group_Line /= Null_Handle
        and then Packing in Packed_Q4_K | Packed_Q5_K);
 
-   --  Whether the super-block row product answers this: a Q4_K generating a
-   --  token, on a device that gave the engine the kernel. Bound for Q4_K
-   --  alone, whose decode it is written for.
+   --  Whether the super-block row product answers this: a Q4_K or Q5_K
+   --  generating a token, on a device that gave the engine the kernel. Each
+   --  format has its own decode and its own pipeline.
    function Waved
      (Item : Engine; Packing : Weight_Packing; Count : Natural) return Boolean
    is (Count = 1
-       and then Item.Wave_Line /= Null_Handle
-       and then Packing = Packed_Q4_K);
+       and then ((Packing = Packed_Q4_K and then Item.Wave_Line /= Null_Handle)
+                 or else
+                 (Packing = Packed_Q5_K
+                  and then Item.Wave_Line5 /= Null_Handle)));
 
    --  Invocations a workgroup of the bound row kernel has. The super-block
    --  kernel's workgroup is a single subgroup of thirty-two; the half-group
@@ -798,7 +800,7 @@ package body Model_Runner.Platform.Device.Products is
       Count   : Natural;
       Packing : Weight_Packing := Values_F32) return Address
    is (if Waved (Item, Packing, Count)
-       then Item.Wave_Line
+       then (if Packing = Packed_Q5_K then Item.Wave_Line5 else Item.Wave_Line)
        elsif Half_Grouped (Item, Packing, Count)
        then Item.Half_Group_Line
        elsif Count in Row_Line_Array'Range
@@ -2056,6 +2058,25 @@ package body Model_Runner.Platform.Device.Products is
                end if;
             end if;
          end;
+
+         declare
+            Create : constant Create_Call :=
+              To_Create (Point ("vkCreateShaderModule"));
+            Words  : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Row_Product_Super5;
+            Request : aliased Shader_Create_Info;
+         begin
+            if Create /= null then
+               Request.Size := Interfaces.C.size_t (Words'Length * 4);
+               Request.Code := Words'Address;
+
+               if Create (Item.Logical, Request'Address, Null_Handle,
+                          Made'Access) = 0
+               then
+                  Item.Wave_Shader5 := Made;
+               end if;
+            end if;
+         end;
       end if;
 
       --  The second kernel's module.
@@ -2763,10 +2784,17 @@ package body Model_Runner.Platform.Device.Products is
                Reqsize : aliased Required_Size_Info;
             begin
                Reqsize.Required := Wave_Lanes;
-               Request.Stage.Module := Item.Wave_Shader;
                Request.Stage.Next := Reqsize'Address;
                Request.Stage.Flags := Require_Full_Subgroups;
+
+               Request.Stage.Module := Item.Wave_Shader;
                Line (Wave_Lanes, 1, Item.Wave_Line);
+
+               if Item.Wave_Shader5 /= Null_Handle then
+                  Request.Stage.Module := Item.Wave_Shader5;
+                  Line (Wave_Lanes, 1, Item.Wave_Line5);
+               end if;
+
                Request.Stage.Module := Item.Shader;
                Request.Stage.Next := Null_Handle;
                Request.Stage.Flags := 0;
@@ -3726,6 +3754,7 @@ package body Model_Runner.Platform.Device.Products is
       end loop;
       Give_Back (Item.Half_Group_Line, "vkDestroyPipeline");
       Give_Back (Item.Wave_Line, "vkDestroyPipeline");
+      Give_Back (Item.Wave_Line5, "vkDestroyPipeline");
       Give_Back (Item.Wide_Line, "vkDestroyPipeline");
       Give_Back (Item.Extra_Line, "vkDestroyPipeline");
       Give_Back (Item.Halved_Line, "vkDestroyPipeline");
@@ -3801,6 +3830,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Blender, "vkDestroyShaderModule");
       Give_Back (Item.Shader, "vkDestroyShaderModule");
       Give_Back (Item.Wave_Shader, "vkDestroyShaderModule");
+      Give_Back (Item.Wave_Shader5, "vkDestroyShaderModule");
       Item.Matrices := False;
 
       Item.Logical := Null_Handle;
