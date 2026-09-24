@@ -111,6 +111,14 @@ package body Model_Runner.Platform.Device is
    function Has_Subgroup_Arithmetic (Item : Context) return Boolean
    is (Item.Subgroups);
 
+   --------------------------
+   -- Has_Sized_Subgroups --
+   --------------------------
+
+   --  Nor a subgroup whose width it will set.
+   function Has_Sized_Subgroups (Item : Context) return Boolean
+   is (Item.Sized_Subgroups);
+
    ---------------------
    -- Host_Alignment --
    ---------------------

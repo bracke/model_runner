@@ -191,6 +191,13 @@ package Model_Runner.Platform.Device is
    --  @return True when the subgroup attention kernel may be dispatched.
    function Has_Subgroup_Arithmetic (Item : Context) return Boolean;
 
+   --  Whether this device will run a compute shader at a subgroup of
+   --  thirty-two on request.
+   --
+   --  @param Item Open device.
+   --  @return True when a thirty-two-lane subgroup may be required.
+   function Has_Sized_Subgroups (Item : Context) return Boolean;
+
    --  What a host pointer must be aligned to before this device will take
    --  it.
    --
@@ -330,6 +337,11 @@ private
       --  and asks for no extension, so a device may have this and not the
       --  matrix instruction.
       Subgroups : Boolean := False;
+
+      --  Whether the device will run a compute shader at a subgroup of
+      --  thirty-two on request, which the super-block row product needs -- a
+      --  workgroup of thirty-two, one subgroup.
+      Sized_Subgroups : Boolean := False;
 
       --  Which memory kinds the processor can both write and see without
       --  being told to flush, as a mask over the device's list. An imported

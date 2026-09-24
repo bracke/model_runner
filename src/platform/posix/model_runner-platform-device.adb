@@ -249,6 +249,13 @@ package body Model_Runner.Platform.Device is
    Structure_Features_2       : constant := 1000059000;
    Structure_Memory_Model     : constant := 1000211000;
 
+   --  The subgroup-size control properties, and the core-1.3 feature set the
+   --  control's flag is read from where the device promoted it.
+   Structure_Size_Properties  : constant := 1000225000;
+   Structure_Vulkan13         : constant := 53;
+   Size_Control_Bit           : constant := 8;
+   Full_Subgroups_Bit         : constant := 9;
+
    --  Where shaderFloat64 sits in the core feature set: the fortieth flag,
    --  after shaderCullDistance and before shaderInt64. The shaders reduce in
    --  double -- norm and rotate and the packing among them -- and a device is
@@ -376,6 +383,31 @@ package body Model_Runner.Platform.Device is
       Stages     : C.unsigned := 0;
       Operations : C.unsigned := 0;
       Quads      : C.unsigned := 0;
+   end record
+     with Convention => C;
+
+   --  The width a compute shader's subgroup may be set to: least, most and
+   --  the stages the setting reaches. The super-block product wants thirty-two.
+   type Size_Properties is record
+      Kind      : C.unsigned := Structure_Size_Properties;
+      Next      : System.Address := System.Null_Address;
+      Least     : C.unsigned := 0;
+      Most      : C.unsigned := 0;
+      Max_Group : C.unsigned := 0;
+      Stages    : C.unsigned := 0;
+   end record
+     with Convention => C;
+
+   --  The core Vulkan 1.3 feature set, whose eighth flag is the subgroup-size
+   --  control and ninth the full-subgroup one, read and set through this
+   --  because a promoted device zeroes the extension's own structure.
+   type Vulkan13_Bits is array (1 .. 15) of C.unsigned
+     with Convention => C;
+
+   type Vulkan13_Features is record
+      Kind : C.unsigned := Structure_Vulkan13;
+      Next : System.Address := System.Null_Address;
+      Bits : Vulkan13_Bits := [others => 0];
    end record
      with Convention => C;
 
@@ -1067,6 +1099,10 @@ package body Model_Runner.Platform.Device is
             --  device may have it and not the matrix instruction.
             Grouped : Boolean := False;
 
+            --  And whether a compute shader's subgroup may be set to
+            --  thirty-two, which the super-block row product asks for.
+            Sized : Boolean := False;
+
             List  : constant Extension_List_Call :=
               To_Extension_List
                 (Entry_Point (From.Handle,
@@ -1095,8 +1131,13 @@ package body Model_Runner.Platform.Device is
             Ask_Half  : aliased Half_Features;
             Ask_Store : aliased Storage_Features;
             Ask_Model : aliased Memory_Model_Features;
+            Ask_13    : aliased Vulkan13_Features;
             Base      : aliased Feature_Bits := [others => 0];
             Models    : aliased Memory_Model_Features;
+
+            --  The core-1.3 set asked for in the create chain, its width and
+            --  full-subgroup flags enabled where the control is reported.
+            Sizes     : aliased Vulkan13_Features;
 
             Has_Float64 : Boolean := False;
             Has_Half    : Boolean := False;
@@ -1153,6 +1194,7 @@ package body Model_Runner.Platform.Device is
                           & "KHR"));
 
                   Wide     : aliased Subgroup_Properties;
+                  Sizing   : aliased Size_Properties;
                   Reported : aliased Properties_2;
                   Held     : aliased C.unsigned := Max_Shapes;
                   Offered  : aliased Shape_Array;
@@ -1161,6 +1203,7 @@ package body Model_Runner.Platform.Device is
                begin
                   if Widths /= null then
                      Reported.Next := Wide'Address;
+                     Wide.Next := Sizing'Address;
                      Widths (Physical, Reported'Address);
                      Right_Width := Wide.Width = 64;
 
@@ -1174,6 +1217,13 @@ package body Model_Runner.Platform.Device is
                         and (Subgroup_Basic or Subgroup_Arithmetic))
                        = (Subgroup_Basic or Subgroup_Arithmetic)
                        and then (Wide.Stages and Stage_Is_Compute) /= 0;
+
+                     --  Thirty-two within the range it sets a subgroup to,
+                     --  offered to compute; the feature is read below.
+                     Sized :=
+                       Sizing.Least <= 32
+                       and then Sizing.Most >= 32
+                       and then (Sizing.Stages and Stage_Is_Compute) /= 0;
                   end if;
 
                   if Widths /= null and then Shapes /= null
@@ -1225,7 +1275,8 @@ package body Model_Runner.Platform.Device is
                      Every.Next := Ask_Store'Address;
                      Ask_Store.Next := Ask_Half'Address;
                      Ask_Half.Next := Ask_Model'Address;
-                     Ask_Model.Next := System.Null_Address;
+                     Ask_Model.Next := Ask_13'Address;
+                     Ask_13.Next := System.Null_Address;
                      Features (Physical, Every'Address);
 
                      Has_Float64 := Every.Bits (Shader_Float64_At) /= 0;
@@ -1235,6 +1286,11 @@ package body Model_Runner.Platform.Device is
                      Has_Uni16   := Ask_Store.Uniform /= 0;
                      Has_Model   := Ask_Model.Model /= 0;
                      Has_Scope   := Ask_Model.Device /= 0;
+
+                     --  The range came from the properties; this is the
+                     --  feature that permits it, from the core structure.
+                     Sized :=
+                       Sized and then Ask_13.Bits (Size_Control_Bit) /= 0;
                   end if;
                end;
             end if;
@@ -1273,6 +1329,15 @@ package body Model_Runner.Platform.Device is
                Request.Next := Models'Address;
             end if;
 
+            --  Enable the width control and full subgroups where reported.
+            if Sized then
+               Sizes.Bits (Size_Control_Bit) := 1;
+               Sizes.Bits (Full_Subgroups_Bit) :=
+                 (if Ask_13.Bits (Full_Subgroups_Bit) /= 0 then 1 else 0);
+               Sizes.Next := Request.Next;
+               Request.Next := Sizes'Address;
+            end if;
+
             if Has_Float64 then
                Base (Shader_Float64_At) := 1;
                Request.Features := Base'Address;
@@ -1299,6 +1364,9 @@ package body Model_Runner.Platform.Device is
                --  product, on the interface's leave as an unasked device does.
                Request.Next := System.Null_Address;
                Request.Features := System.Null_Address;
+
+               --  The fallback chains no features, so the width may not be set.
+               Sized := False;
 
                if Usable then
                   Usable := False;
@@ -1341,6 +1409,7 @@ package body Model_Runner.Platform.Device is
 
             Item.Matrices := Usable;
             Item.Subgroups := Grouped;
+            Item.Sized_Subgroups := Sized;
 
             --  The alignment a host pointer needs is a property this build
             --  does not ask for -- it arrives through an interface version
@@ -1440,6 +1509,13 @@ package body Model_Runner.Platform.Device is
 
    function Has_Subgroup_Arithmetic (Item : Context) return Boolean
    is (Item.Subgroups);
+
+   --------------------------
+   -- Has_Sized_Subgroups --
+   --------------------------
+
+   function Has_Sized_Subgroups (Item : Context) return Boolean
+   is (Item.Sized_Subgroups);
 
    ---------------------
    -- Host_Alignment --

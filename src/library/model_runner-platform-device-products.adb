@@ -133,6 +133,12 @@ package body Model_Runner.Platform.Device.Products is
    --  invocations per row rather than one.
    Row_Lanes : constant := 8;
 
+   --  The super-block row product's workgroup is one subgroup of thirty-two
+   --  lanes, and it lands a band of this many rows -- the shader's NUM_ROWS,
+   --  which the two must agree on: the dispatch asks for one workgroup a band.
+   Wave_Lanes : constant := 32;
+   Wave_Rows  : constant := 2;
+
    --  Rows of the answer one workgroup of the matrix product computes, and
    --  vectors of it. The shader states both and this has to agree: the
    --  first says how many workgroups a matrix needs, the second says how
@@ -751,20 +757,49 @@ package body Model_Runner.Platform.Device.Products is
        and then Item.Half_Group_Line /= Null_Handle
        and then Packing in Packed_Q4_K | Packed_Q5_K);
 
-   --  Invocations a workgroup of the bound row kernel has, which decides
-   --  how many workgroups the dispatch asks for. One decision with the
-   --  kernel below, as the group width is with the batch.
+   --  Whether the super-block row product answers this: a Q4_K generating a
+   --  token, on a device that gave the engine the kernel. Bound for Q4_K
+   --  alone, whose decode it is written for.
+   function Waved
+     (Item : Engine; Packing : Weight_Packing; Count : Natural) return Boolean
+   is (Count = 1
+       and then Item.Wave_Line /= Null_Handle
+       and then Packing = Packed_Q4_K);
+
+   --  Invocations a workgroup of the bound row kernel has. The super-block
+   --  kernel's workgroup is a single subgroup of thirty-two; the half-group
+   --  kernel narrows; the rest are the group size.
    function Row_Width
      (Item : Engine; Packing : Weight_Packing; Count : Natural)
       return Positive
-   is (if Half_Grouped (Item, Packing, Count) then Half_Group
+   is (if Waved (Item, Packing, Count) then Wave_Lanes
+       elsif Half_Grouped (Item, Packing, Count) then Half_Group
        else Group_Size);
+
+   --  Lanes a row is divided into, which the dispatch multiplies the rows by.
+   --  The super-block kernel gives a band thirty-two; the rest give a row
+   --  eight.
+   function Row_Lane_Count
+     (Item : Engine; Packing : Weight_Packing; Count : Natural)
+      return Positive
+   is (if Waved (Item, Packing, Count) then Wave_Lanes else Row_Lanes);
+
+   --  Rows the dispatch reckons in: the super-block kernel's workgroup lands
+   --  a band of Wave_Rows rows, so it asks for a band's worth fewer.
+   function Row_Reach
+     (Item : Engine; Packing : Weight_Packing; Count : Natural; Rows : Natural)
+      return Natural
+   is (if Waved (Item, Packing, Count)
+       then (Rows + Wave_Rows - 1) / Wave_Rows
+       else Rows);
 
    function Row_Line
      (Item    : Engine;
       Count   : Natural;
       Packing : Weight_Packing := Values_F32) return Address
-   is (if Half_Grouped (Item, Packing, Count)
+   is (if Waved (Item, Packing, Count)
+       then Item.Wave_Line
+       elsif Half_Grouped (Item, Packing, Count)
        then Item.Half_Group_Line
        elsif Count in Row_Line_Array'Range
          and then Item.Row_Lines (Count) /= Null_Handle
@@ -949,6 +984,18 @@ package body Model_Runner.Platform.Device.Products is
       Module        : Address := Null_Handle;
       Name          : C.Strings.chars_ptr := C.Strings.Null_Ptr;
       Specialized   : Address := Null_Handle;
+   end record
+     with Convention => C;
+
+   --  A stage flag and a chained structure that pin a compute shader's
+   --  subgroup to a width: full subgroups, and the width itself.
+   Require_Full_Subgroups  : constant := 16#0000_0002#;
+   Structure_Required_Size : constant := 1000225002;
+
+   type Required_Size_Info is record
+      Kind     : C.unsigned := Structure_Required_Size;
+      Next     : Address := Null_Handle;
+      Required : C.unsigned := 0;
    end record
      with Convention => C;
 
@@ -1986,6 +2033,31 @@ package body Model_Runner.Platform.Device.Products is
          Item.Shader := Made;
       end;
 
+      --  The super-block row product's module, made only where the device
+      --  offers a subgroup to reduce across and the setting of its width to
+      --  thirty-two. A refusal leaves Wave_Shader null and the engine binds
+      --  the eight-lane kernel.
+      if Has_Subgroup_Arithmetic (On) and then Has_Sized_Subgroups (On) then
+         declare
+            Create : constant Create_Call :=
+              To_Create (Point ("vkCreateShaderModule"));
+            Words  : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Row_Product_Super;
+            Request : aliased Shader_Create_Info;
+         begin
+            if Create /= null then
+               Request.Size := Interfaces.C.size_t (Words'Length * 4);
+               Request.Code := Words'Address;
+
+               if Create (Item.Logical, Request'Address, Null_Handle,
+                          Made'Access) = 0
+               then
+                  Item.Wave_Shader := Made;
+               end if;
+            end if;
+         end;
+      end if;
+
       --  The second kernel's module.
       declare
          Create : constant Create_Call := To_Create (Point ("vkCreateShaderModule"));
@@ -2681,6 +2753,25 @@ package body Model_Runner.Platform.Device.Products is
 
          Line (Half_Group, 1, Item.Half_Group_Line);
          Line (Group_Size, Wide_Group, Item.Wide_Line);
+
+         --  The super-block row product, from its module, at a workgroup of
+         --  thirty-two pinned to a subgroup of thirty-two -- one subgroup a
+         --  workgroup, which is what lets the device honour the width. It
+         --  carries one vector, the generating width.
+         if Item.Wave_Shader /= Null_Handle then
+            declare
+               Reqsize : aliased Required_Size_Info;
+            begin
+               Reqsize.Required := Wave_Lanes;
+               Request.Stage.Module := Item.Wave_Shader;
+               Request.Stage.Next := Reqsize'Address;
+               Request.Stage.Flags := Require_Full_Subgroups;
+               Line (Wave_Lanes, 1, Item.Wave_Line);
+               Request.Stage.Module := Item.Shader;
+               Request.Stage.Next := Null_Handle;
+               Request.Stage.Flags := 0;
+            end;
+         end if;
 
          C.Strings.Free (Name);
       end;
@@ -3634,6 +3725,7 @@ package body Model_Runner.Platform.Device.Products is
          Give_Back (Item.Row_Lines (Count), "vkDestroyPipeline");
       end loop;
       Give_Back (Item.Half_Group_Line, "vkDestroyPipeline");
+      Give_Back (Item.Wave_Line, "vkDestroyPipeline");
       Give_Back (Item.Wide_Line, "vkDestroyPipeline");
       Give_Back (Item.Extra_Line, "vkDestroyPipeline");
       Give_Back (Item.Halved_Line, "vkDestroyPipeline");
@@ -3708,6 +3800,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Placer, "vkDestroyShaderModule");
       Give_Back (Item.Blender, "vkDestroyShaderModule");
       Give_Back (Item.Shader, "vkDestroyShaderModule");
+      Give_Back (Item.Wave_Shader, "vkDestroyShaderModule");
       Item.Matrices := False;
 
       Item.Logical := Null_Handle;
@@ -5474,7 +5567,8 @@ package body Model_Runner.Platform.Device.Products is
                      Dispatch
                        (Item.Buffer,
                         C.unsigned
-                          ((Rows * Row_Lanes
+                          ((Row_Reach (Item, Packing, Count, Rows)
+                              * Row_Lane_Count (Item, Packing, Count)
                             + Row_Width (Item, Packing, Count) - 1)
                            / Row_Width (Item, Packing, Count)), 1, 1);
                   end;
@@ -11619,7 +11713,9 @@ package body Model_Runner.Platform.Device.Products is
                      Dispatch
                        (Item.Buffer,
                         C.unsigned
-                          ((Natural (Shape.Rows) * Row_Lanes
+                          ((Row_Reach (Item, This.Packing, Count,
+                                       Natural (Shape.Rows))
+                              * Row_Lane_Count (Item, This.Packing, Count)
                             + Row_Width (Item, This.Packing, Count) - 1)
                            / Row_Width (Item, This.Packing, Count)),
                         1,
@@ -11675,7 +11771,9 @@ package body Model_Runner.Platform.Device.Products is
                      Dispatch
                        (Item.Buffer,
                         C.unsigned
-                          ((Natural (Shape.Rows) * Row_Lanes
+                          ((Row_Reach (Item, This.Packing, Count,
+                                       Natural (Shape.Rows))
+                              * Row_Lane_Count (Item, This.Packing, Count)
                             + Row_Width (Item, This.Packing, Count) - 1)
                            / Row_Width (Item, This.Packing, Count)),
                         1,

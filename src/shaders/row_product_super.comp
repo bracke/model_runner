@@ -1,0 +1,174 @@
+#version 450
+
+//  A Q4_K row against a batch of one, decoded a super-block at a time the way
+//  llama.cpp's own generating product does it -- the arrangement that reads
+//  its rate on this part where the eight-lane kernel and the wide float
+//  kernel both fall short. Two things make it: the eight sub-block scales are
+//  unpacked together, a handful of vector operations over the packed
+//  six-bit fields rather than a byte extracted at a time; and a lane takes a
+//  whole super-block's worth of one region rather than eight columns, so the
+//  header -- the scale word and the block's two factors -- is read once for
+//  sixteen weights instead of once for eight and never redundantly across a
+//  sub-block's lanes.
+//
+//  Sixteen lanes share a super-block and a workgroup of thirty-two takes two
+//  at a time, striding the row's super-blocks between them; each lane carries
+//  a partial for every row the workgroup lands, and the subgroup adds them at
+//  the end. One workgroup is one subgroup of thirty-two, which is what lets
+//  the device run it at that width.
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+#ifndef NUM_ROWS
+#define NUM_ROWS 2u
+#endif
+
+layout(local_size_x = 32) in;
+
+layout(std430, binding = 0) readonly  buffer Weights  { uint  w[]; };
+layout(std430, binding = 1) readonly  buffer Vectors  { float x[]; };
+layout(std430, binding = 1) readonly  buffer Vectors4 { vec4  x4[]; };
+layout(std430, binding = 2) writeonly buffer Result   { float y[]; };
+layout(std430, binding = 3) readonly  buffer Routing  { uint  route[]; };
+layout(std430, binding = 4) readonly  buffer Residual { float rj[]; };
+
+const uint LISTED_BY_POSITION = 2u;
+
+layout(push_constant) uniform Shape {
+    uint rows;
+    uint columns;
+    uint count;
+    uint first;
+    uint format;
+    uint base;
+    uint joins;
+    uint table;
+    uint members[16];
+    uint stride;
+    uint apart;
+    uint routed;
+} shape;
+
+void main() {
+    uint tid = gl_LocalInvocationID.x;   // 0..31
+    uint itid = tid & 15u;               // 0..15, the sixteen sharing a block
+    uint ix = tid >> 4u;                 // 0 or 1, which of two blocks in flight
+
+    uint il = itid >> 2u;                // 0..3
+    uint ir = itid & 3u;                 // 0..3
+    uint v_im = il >> 1u;                // 0 or 1: which half of the block
+    uint v_in = il & 1u;
+    uint l0 = 4u * (2u * ir + v_in);     // 0..15
+    uint q_word = (32u * v_im + l0) >> 2u;   // word of quants this lane reads
+    uint y_off = 64u * v_im + l0;            // element of the activation
+
+    uint member = gl_WorkGroupID.z;
+    bool listed = shape.routed >= LISTED_BY_POSITION;
+    uint which = listed ? member
+               : shape.routed != 0u ? route[member] : shape.members[member];
+    uint slice = which * shape.stride;
+
+    uint experts = shape.members[0];
+    uint run_at = listed ? route[experts + member] : 0u;
+    uint run_count = listed ? route[member]
+                            : min(1u, shape.count - shape.first);
+    uint list_at = 2u * experts;
+
+    if (run_count == 0u) {
+        return;
+    }
+
+    uint from_base = listed
+          ? (shape.routed == LISTED_BY_POSITION
+               ? route[list_at + run_at] : run_at) * shape.columns
+          : min(shape.first, shape.count - 1u) * shape.columns
+            + member * shape.apart;
+
+    uint first_row = NUM_ROWS * gl_WorkGroupID.x;
+    uint blocks = shape.columns / 256u;   // super-blocks a row
+    uint span = blocks * 144u;            // bytes a row takes
+
+    float temp[NUM_ROWS];
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        temp[r] = 0.0;
+    }
+
+    //  This lane's two super-blocks stride the row, ix and ix + 2, ix + 4 ...
+    for (uint i = ix; i < blocks; i += 2u) {
+        //  The activation of the two regions this lane's half owns, four
+        //  vectors of four: the near sixteen and the far sixteen.
+        uint y1 = i * 256u + y_off;
+        uint y2 = y1 + 128u;
+        uint b1 = (from_base + y1) >> 2u;
+        uint b2 = (from_base + y2) >> 2u;
+        vec4 by10  = x4[b1];
+        vec4 by132 = x4[b1 + 8u];
+        vec4 by20  = x4[b2];
+        vec4 by232 = x4[b2 + 8u];
+
+        float bs10  = by10.x  + by10.y  + by10.z  + by10.w;
+        float bs132 = by132.x + by132.y + by132.z + by132.w;
+        float bs20  = by20.x  + by20.y  + by20.z  + by20.w;
+        float bs232 = by232.x + by232.y + by232.z + by232.w;
+
+        for (uint r = 0u; r < NUM_ROWS; ++r) {
+            uint row = first_row + r;
+            uint at = shape.base + slice + row * span + i * 144u;
+            uint head = at >> 2u;
+
+            vec2 dm = unpackHalf2x16 (w[head]);
+            uvec3 sc = uvec3 (w[head + 1u], w[head + 2u], w[head + 3u]);
+
+            //  The eight sub-block scales unpacked together. The twelve scale
+            //  bytes are six sixteen-bit fields; this half reads three of
+            //  them, and the six-bit values come out four at a time -- the
+            //  low four bits in place and the top two carried from the shared
+            //  byte, exactly as the processor's own decoder packs them.
+            uint s0 = v_im == 0u ? (sc.x & 0xFFFFu) : (sc.x >> 16u);
+            uint s4 = v_im == 0u ? (sc.y & 0xFFFFu) : (sc.y >> 16u);
+            uint s8 = v_im == 0u ? (sc.z & 0xFFFFu) : (sc.z >> 16u);
+            uint sl = (s4 << 16u) | s0;
+            uint sh = (sl & 0xC0C0C0C0u) >> 2u;
+            vec4 s04 = vec4 (unpack8 (sl & 0x3F3F3F3Fu));
+            vec4 s8f = vec4 (unpack8 ((((s8 << 12u) | s8) & 0x0F0F0F0Fu) | sh));
+
+            uint qbase = (at + 16u) >> 2u;
+            uint qs0  = w[qbase + q_word];
+            uint qs64 = w[qbase + q_word + 16u];
+
+            vec4 q0lo  = vec4 (unpack8 (qs0  & 0x0F0F0F0Fu));
+            vec4 q0hi  = vec4 (unpack8 ((qs0  >> 4u) & 0x0F0F0F0Fu));
+            vec4 q64lo = vec4 (unpack8 (qs64 & 0x0F0F0F0Fu));
+            vec4 q64hi = vec4 (unpack8 ((qs64 >> 4u) & 0x0F0F0F0Fu));
+
+            float sx = dot (by10,  q0lo);
+            float sy = dot (by132, q0hi);
+            float sz = dot (by20,  q64lo);
+            float sw = dot (by232, q64hi);
+
+            //  The minimum term: the sum of each region's activation weighted
+            //  by that region's minimum scale, taken away once.
+            float smin = s04.z * bs10 + s04.w * bs132
+                       + s8f.z * bs20 + s8f.w * bs232;
+
+            temp[r] += dm.x * (sx * s04.x + sy * s04.y
+                               + sz * s8f.x + sw * s8f.y)
+                       - dm.y * smin;
+        }
+    }
+
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        float whole = subgroupAdd (temp[r]);
+        uint row = first_row + r;
+
+        if (tid == 0u && row < shape.rows) {
+            uint out_at = listed
+                          ? run_at * shape.rows + row
+                          : member * shape.rows * shape.count
+                            + shape.first * shape.rows + row;
+
+            y[out_at] = shape.joins != 0u ? whole + rj[out_at] : whole;
+        }
+    }
+}

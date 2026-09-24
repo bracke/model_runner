@@ -54,6 +54,7 @@ compile attention_bundled            attention.comp        vulkan1.1 SUBGROUPS H
 compile attention_bundle_exact       attention.comp        vulkan1.1 SUBGROUPS WIDE FOURS GROUPED
 compile combine                      combine.comp          vulkan1.0
 compile row_product                  row_product.comp      vulkan1.0
+compile row_product_super            row_product_super.comp vulkan1.1 NUM_ROWS=2u
 compile half_batch                   half_batch.comp       vulkan1.0
 compile matrix_product               matrix_product.comp   vulkan1.3
 compile matrix_extra                 matrix_product.comp   vulkan1.3 MORE_FORMATS

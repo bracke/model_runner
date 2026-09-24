@@ -2674,6 +2674,14 @@ private
       Row_Lines : Row_Line_Array := [others => System.Null_Address];
 
       Half_Group_Line : System.Address := System.Null_Address;
+
+      --  The super-block row product -- a workgroup of thirty-two, llama.cpp's
+      --  vectorized k-quant decode -- and its own module, made only where the
+      --  device runs a compute shader at a subgroup of thirty-two. Bound for a
+      --  Q4_K generating a token; null elsewhere.
+      Wave_Shader : System.Address := System.Null_Address;
+      Wave_Line   : System.Address := System.Null_Address;
+
       Wide_Line   : System.Address := System.Null_Address;
       Group_Line  : System.Address := System.Null_Address;
       Tile_Line   : System.Address := System.Null_Address;
