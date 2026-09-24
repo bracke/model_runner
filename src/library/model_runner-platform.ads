@@ -182,6 +182,13 @@ package Model_Runner.Platform is
    --  @return Bytes, or 0 when the host cannot be asked.
    function Physical_Memory return Interfaces.Unsigned_64;
 
+   --  Bytes the host could hand out now without swapping, where it will
+   --  say: the room a device budget on a part sharing the host's memory has
+   --  to stay inside.
+   --
+   --  @return Bytes, or 0 when the host cannot be asked.
+   function Available_Memory return Interfaces.Unsigned_64;
+
    --  Bytes free on the filesystem that holds a path, or zero where the
    --  host will not say -- what a download checks it has room for before it
    --  starts, rather than discovering halfway that it has not.

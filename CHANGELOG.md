@@ -242,6 +242,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The device budget takes the second heap by default,** as far as leaves six
+  gigabytes of the host's memory available when the device opens. A mixture
+  whose expert stacks outgrew the first heap's share ran none of its layers
+  whole on the device and kept its context on the host; Qwen3-Coder-30B-A3B at
+  Q2_K went from 86 to 365 tokens a second on a prompt and 18.7 to 35.6
+  generating, past llama.cpp's 294 and 32.5. The second heap had been left out
+  because it once cost two bytes of host memory a byte on the device; measured
+  again it costs one. `Platform.Available_Memory` reads what the host has
+  available (MemAvailable on Linux, unknown elsewhere, where the second heap
+  stays out).
+
 - **A fused-QKV projection is one device matmul, sliced apart by the bias.**
   Where a model keeps its queries, keys and values as one tensor and each
   carries a bias -- gpt2, phi2, falcon and the like -- the three projections

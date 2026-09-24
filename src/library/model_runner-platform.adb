@@ -493,6 +493,15 @@ package body Model_Runner.Platform is
          return 0;
    end Physical_Memory;
 
+   ----------------------
+   -- Available_Memory --
+   ----------------------
+
+   function Available_Memory return Interfaces.Unsigned_64 is
+   begin
+      return Model_Runner.Platform.Topology.Available_Memory;
+   end Available_Memory;
+
    ---------------------
    -- Free_Disk_Space --
    ---------------------

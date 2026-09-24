@@ -138,6 +138,11 @@ package body Model_Runner.Platform.Device.Products is
    --  The super-block row product's workgroup is one subgroup of thirty-two
    --  lanes, and it lands a band of this many rows -- the shader's NUM_ROWS,
    --  which the two must agree on: the dispatch asks for one workgroup a band.
+   --  Host memory a default device budget leaves available, on a part
+   --  whose device memory is the host's: the desktop and whatever else the
+   --  machine runs keep this much however large a model is.
+   Host_Reserve : constant := 6 * 1024 * 1024 * 1024;
+
    Wave_Lanes : constant := 32;
    Wave_Rows  : constant := 2;
 
@@ -2038,16 +2043,25 @@ package body Model_Runner.Platform.Device.Products is
       --  still evicts, and a caller who names more than the first heap's
       --  share gets the second heap rather than the driver's refusal.
       --
-      --  The second heap is NOT taken by default, and the reason is the
-      --  host's memory rather than the device's. On the integrated part
-      --  this was built on, the two heaps together hold 11.8 GB of an
-      --  11.26 GB mixture, and holding it cost about twenty-five gigabytes
-      --  of a thirty-gigabyte host -- the kernel reports the buffers as
-      --  shmem and pool pages both, at about two bytes of system memory
-      --  for every byte on the device -- and the desktop was killed for
-      --  want of memory, twice. The share of one heap is what this machine
-      --  can afford, and a caller who knows theirs can afford more says so
-      --  with the budget.
+      --  The second heap is taken by default now, as far as the host can
+      --  afford it. It was not, for a reason that has since gone: on the
+      --  integrated part this was built on, the two heaps together hold
+      --  11.8 GB of an 11.26 GB mixture, and holding it cost about
+      --  twenty-five gigabytes of a thirty-gigabyte host -- the buffers
+      --  counted as shmem and pool pages both, two bytes of system memory
+      --  for every byte on the device -- and the desktop was killed for want
+      --  of memory, twice. Measured again, the same mixture holds 11.15 GB
+      --  on the device for 10.95 GB of the host's memory, no shmem at all:
+      --  one to one. And leaving it out cost that mixture every layer: a
+      --  mixture whose stacks do not all fit the budget does not go to the
+      --  device whole, so it went piecemeal, its context on the host, at
+      --  18.7 tokens a second where the second heap gives 33.4 -- llama.cpp
+      --  reads 32.5. So the second heap's share is in the default budget,
+      --  but only as much of it as leaves Host_Reserve of the host's memory
+      --  available when the device is opened; where the host will not say
+      --  what is available, it is left out as before. A budget is a bound,
+      --  not an allocation: a model that fits the first heap takes what it
+      --  took.
       Item.Second := Second_Kind (On);
 
       declare
@@ -2059,7 +2073,18 @@ package body Model_Runner.Platform.Device.Products is
             else 0);
       begin
          if Budget = 0 then
-            Item.Tier_Limit := [First_Share, 0];
+            declare
+               Available : constant Interfaces.Unsigned_64 :=
+                 Model_Runner.Platform.Available_Memory;
+
+               Room : constant Interfaces.Unsigned_64 :=
+                 (if Available > Host_Reserve + First_Share
+                  then Available - Host_Reserve - First_Share
+                  else 0);
+            begin
+               Item.Tier_Limit :=
+                 [First_Share, Interfaces.Unsigned_64'Min (Second_Share, Room)];
+            end;
          elsif Item.Second < 0 then
             Item.Tier_Limit := [Budget, 0];
          else

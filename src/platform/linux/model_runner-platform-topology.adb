@@ -75,14 +75,13 @@ package body Model_Runner.Platform.Topology is
          return 0;
    end Physical_Cores;
 
-   ---------------------
-   -- Physical_Memory --
-   ---------------------
+   ------------------
+   -- Meminfo_Line --
+   ------------------
 
-   --  MemTotal out of /proc/meminfo, which is in kilobytes and is the
-   --  first line. Read the way the cores are read: through the file the
-   --  kernel publishes, and zero for anything unexpected.
-   function Physical_Memory return Interfaces.Unsigned_64 is
+   --  A line of /proc/meminfo, in kilobytes, as bytes: the file the kernel
+   --  publishes, and zero for anything unexpected.
+   function Meminfo_Line (Name : String) return Interfaces.Unsigned_64 is
       use type Interfaces.Unsigned_64;
 
       Path : constant String := "/proc/meminfo";
@@ -101,11 +100,14 @@ package body Model_Runner.Platform.Topology is
          while not Ada.Text_IO.End_Of_File (File) loop
             Ada.Text_IO.Get_Line (File, Line, Last);
 
-            if Last > 9 and then Line (1 .. 9) = "MemTotal:" then
+            if Last > Name'Length
+              and then Line (1 .. Name'Length) = Name
+            then
                declare
                   Named : constant Integer :=
                     Model_Runner.Text.Leading_Number
-                      (Model_Runner.Text.Trim (Line (10 .. Last)));
+                      (Model_Runner.Text.Trim
+                         (Line (Name'Length + 1 .. Last)));
                begin
                   Ada.Text_IO.Close (File);
                   return (if Named > 0
@@ -124,6 +126,23 @@ package body Model_Runner.Platform.Topology is
             Ada.Text_IO.Close (File);
          end if;
          return 0;
-   end Physical_Memory;
+   end Meminfo_Line;
+
+   ---------------------
+   -- Physical_Memory --
+   ---------------------
+
+   --  MemTotal, the first line.
+   function Physical_Memory return Interfaces.Unsigned_64 is
+     (Meminfo_Line ("MemTotal:"));
+
+   ----------------------
+   -- Available_Memory --
+   ----------------------
+
+   --  MemAvailable: the kernel's own estimate of what can be handed out
+   --  without swapping, reclaimable cache included.
+   function Available_Memory return Interfaces.Unsigned_64 is
+     (Meminfo_Line ("MemAvailable:"));
 
 end Model_Runner.Platform.Topology;

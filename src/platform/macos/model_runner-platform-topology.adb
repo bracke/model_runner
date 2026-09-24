@@ -95,4 +95,7 @@ package body Model_Runner.Platform.Topology is
          return 0;
    end Physical_Memory;
 
+   --  Not asked here yet: zero, so a device budget takes only what it took.
+   function Available_Memory return Interfaces.Unsigned_64 is (0);
+
 end Model_Runner.Platform.Topology;

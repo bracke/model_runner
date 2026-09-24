@@ -34,4 +34,6 @@ package body Model_Runner.Platform.Topology is
 
    function Physical_Memory return Interfaces.Unsigned_64 is (0);
 
+   function Available_Memory return Interfaces.Unsigned_64 is (0);
+
 end Model_Runner.Platform.Topology;

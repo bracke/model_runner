@@ -32,4 +32,11 @@ private package Model_Runner.Platform.Topology is
    --  @return Bytes of physical memory, or 0 when unknown.
    function Physical_Memory return Interfaces.Unsigned_64;
 
+   --  Bytes of memory the host could hand out now without swapping, where
+   --  the host will say: what a device budget on a part that shares the
+   --  host's memory has to leave room inside.
+   --
+   --  @return Bytes available, or 0 when unknown.
+   function Available_Memory return Interfaces.Unsigned_64;
+
 end Model_Runner.Platform.Topology;
