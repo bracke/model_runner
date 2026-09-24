@@ -7436,7 +7436,7 @@ reference B13E057DD33EA322 src/library/model_runner-backend-reference.adb src/li
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-device E2C52C36006ACC6D src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+device 60554F73144AED5D src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 
 # covers: the three-row table under "Drafting", the per-token costs derived
@@ -10361,7 +10361,7 @@ tokenizer CE3B696CD412A3B6 src/library/model_runner-tokenizer.adb
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-outside E2C52C36006ACC6D src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+outside 60554F73144AED5D src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-27  The row tile at sixty-four, and the instrument's first row
 #
@@ -22443,4 +22443,47 @@ panels 82FC45A89339FDD8 src/library/model_runner-quantization-interleave.ads src
 #
 #   GROUPS. device 61381990EAC02507 -> E2C52C36006ACC6D,
 #   outside 61381990EAC02507 -> E2C52C36006ACC6D.
+# model: TinyLlama-1.1B-Chat, requantized by llama-quantize from Q8_0
+
+# 2026-09-24 (late): the low-bit generating kernels made faster, measured on a
+# cool, idle part this time (54 C to start, nothing else running) -- so this
+# table, not the one above, is the one to compare against. TinyLlama-1.1B as
+# above, 128 tokens greedy from "Once upon a time", --backend device
+# --context-size 512, one run each; llama.cpp llama-bench tg128 -ngl 99 -r 2
+# on the same files in the same sitting.
+#
+#   format   before   now     llama.cpp   now / llama.cpp
+#   Q4_K      87.1     86.1     91.3       0.94   (unchanged; the reference)
+#   IQ3_S     87.7     99.8    112.9       0.88
+#   IQ3_XXS   94.0    103.8    116.4       0.89
+#   IQ2_XXS  110.9    128.8    144.2       0.89
+#   IQ2_XS   111.7    120.9    137.3       0.88
+#   IQ2_S    107.3    116.8    132.6       0.88
+#   IQ1_S     86.7    141.9    152.7       0.93
+#   IQ1_M     80.1    125.0    149.0       0.84
+#   TQ1_0     63.1     71.5     43.5       1.64
+#   TQ2_0     90.4    148.6    144.2       1.03
+#   Q1_0     152.9    179.0    158.4       1.13
+#   Q2_0     130.2    139.4    139.2       1.00
+#
+#   WHAT MOVED IT, in the order it was found:
+#     A wave of sixty-four, four groups in flight, where the k-quants' is
+#     thirty-two: every format, IQ2_XXS 112 -> 126, TQ2_0 90 -> 110, Q1_0
+#     153 -> 173. llama.cpp runs these at the device's native wave.
+#     IQ1's grid packed as two bits a value, value plus one, sixteen bits an
+#     entry: 4 KB where eight signed bytes took 16, one load where they took
+#     two. IQ1_S 87 -> 119 before the wave; the IQ2 and IQ3 grids packed the
+#     same way and decoded arithmetically were slower (IQ2_XXS 111 -> 87) --
+#     the decode cost more than the room saved -- and were put back.
+#     TQ2_0 mapped as llama.cpp maps it: a lane takes four bytes and all four
+#     fields of each, sixteen weights in one word, and reads its activations
+#     thirty-two apart. 110 -> 151.
+#     Q2_0 read as one word, its interleaved fields matched to the
+#     activations' components. 130 -> 141.
+#     Eight rows a workgroup rather than four: IQ1_S 135 -> 142, the rest
+#     within noise. Thirty-two elements a lane rather than sixteen was worse
+#     everywhere (IQ2_XXS 111 -> 97) and was put back.
+#
+#   GROUPS. device E2C52C36006ACC6D -> 60554F73144AED5D,
+#   outside E2C52C36006ACC6D -> 60554F73144AED5D.
 # model: TinyLlama-1.1B-Chat, requantized by llama-quantize from Q8_0

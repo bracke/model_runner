@@ -141,8 +141,13 @@ package body Model_Runner.Platform.Device.Products is
    Wave_Lanes : constant := 32;
    Wave_Rows  : constant := 2;
 
-   --  The low-bit subgroup kernels' band, their shader's NUM_ROWS.
-   Low_Wave_Rows : constant := 4;
+   --  The low-bit subgroup kernels' band, their shader's NUM_ROWS, and their
+   --  width: a wave of sixty-four -- four groups of 256 in flight -- where
+   --  the k-quants' is thirty-two. llama.cpp's own kernels for these
+   --  formats run at the device's native wave, and on this part the width
+   --  was worth more than any change to the decode.
+   Low_Wave_Rows  : constant := 8;
+   Low_Wave_Lanes : constant := 64;
 
    --  Rows of the answer one workgroup of the matrix product computes, and
    --  vectors of it. The shader states both and this has to agree: the
@@ -795,7 +800,8 @@ package body Model_Runner.Platform.Device.Products is
    function Row_Width
      (Item : Engine; Packing : Weight_Packing; Count : Natural)
       return Positive
-   is (if Waved (Item, Packing, Count) then Wave_Lanes
+   is (if Waved (Item, Packing, Count)
+       then (if Packing in Low_Packing then Low_Wave_Lanes else Wave_Lanes)
        elsif Half_Grouped (Item, Packing, Count) then Half_Group
        else Group_Size);
 
@@ -805,7 +811,9 @@ package body Model_Runner.Platform.Device.Products is
    function Row_Lane_Count
      (Item : Engine; Packing : Weight_Packing; Count : Natural)
       return Positive
-   is (if Waved (Item, Packing, Count) then Wave_Lanes else Row_Lanes);
+   is (if Waved (Item, Packing, Count)
+       then (if Packing in Low_Packing then Low_Wave_Lanes else Wave_Lanes)
+       else Row_Lanes);
 
    --  Rows a subgroup kernel's workgroup lands: the k-quants' band, or the
    --  low-bit formats' own.
@@ -2967,10 +2975,12 @@ package body Model_Runner.Platform.Device.Products is
                   Line (Wave_Lanes, 1, Item.Wave_Line6);
                end if;
 
+               Reqsize.Required := Low_Wave_Lanes;
+
                for Packing in Low_Packing loop
                   if Item.Low_Wave_Shaders (Packing) /= Null_Handle then
                      Request.Stage.Module := Item.Low_Wave_Shaders (Packing);
-                     Line (Wave_Lanes, 1, Item.Low_Wave_Lines (Packing));
+                     Line (Low_Wave_Lanes, 1, Item.Low_Wave_Lines (Packing));
                   end if;
                end loop;
 

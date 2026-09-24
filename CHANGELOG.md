@@ -7,20 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
-- **The low-bit formats generate on a subgroup of thirty-two.** A generated
-  token in any of the twelve now goes to `row_product_wave_low.comp`, compiled
-  once a format so each pipeline holds only its decode and codebook, in the
-  k-quant kernels' shape: sixteen lanes a group of 256, two groups in flight,
-  four rows a workgroup. The sign is a select with a negated operand and the
-  product an FMA -- llama.cpp's form, and the one that paid: the first version
-  built signs as vectors and gained a fifth. On a TinyLlama, IQ3_S went from
-  48 to 86 tokens a second, IQ3_XXS 57 to 87, IQ1_S 69 to 109, IQ1_M 67 to 93,
-  IQ2_XXS 90 to 110, Q1_0 103 to 134; TQ1_0 stays ahead of llama.cpp. The
-  per-format device test gained a one-vector shape, which is the only product
-  these kernels -- and the k-quants' -- answer, so it had asked nothing of
-  them. The compiled low-bit kernels are generated into a child package,
-  `Model_Runner.Shaders.Low`: their codebooks took the one file past the size
-  the repository allows a committed file.
+- **The low-bit formats generate on their own subgroup kernel.** A generated
+  token in any of the twelve goes to `row_product_wave_low.comp`, compiled
+  once a format so each pipeline holds only its decode and codebook, at the
+  device's native wave of sixty-four with eight rows a workgroup. On a
+  TinyLlama in each format, against llama.cpp on the same files: IQ3_S 88 ->
+  100 tokens a second (llama.cpp 113), IQ2_XXS 111 -> 129 (144), IQ1_S 87 ->
+  142 (153), IQ1_M 80 -> 125 (149), TQ2_0 90 -> 149 (144), Q1_0 153 -> 179
+  (158), Q2_0 130 -> 139 (139), TQ1_0 63 -> 72 (43). What paid: the sign as a
+  select with a negated operand and an FMA; the wave of sixty-four; IQ1's
+  grid packed at two bits a value; TQ2_0 mapped as llama.cpp maps it, sixteen
+  weights to a word. The per-format device test gained a one-vector shape,
+  the only product these kernels -- and the k-quants' -- answer. The compiled
+  low-bit kernels are generated into a child package, `Model_Runner.Shaders.Low`,
+  which keeps each generated file under the size the repository allows.
 
 - **The twelve low-bit formats on the device.** IQ3_S, IQ2_XXS, IQ2_XS,
   IQ2_S, IQ3_XXS, IQ1_S, IQ1_M, TQ1_0, TQ2_0, Q1_0, Q2_0 and NVFP4 were refused
