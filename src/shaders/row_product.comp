@@ -404,6 +404,30 @@ void sub_block_scale(uint at, uint index, out uint factor, out uint lowest) {
     }
 }
 
+//  The twelve scale bytes read as the three words they are rather than a
+//  word load a byte. A super-block's header is at a word boundary -- the
+//  backend aligns a tensor to a multiple of four -- so d and dmin are one
+//  word and the scales are the three after it. byte_at would fetch the same
+//  word once a byte and cost a load each; sharing the three words across the
+//  block's decode is a dozen loads a block turned into three, all of them
+//  the L1 hits they always were but a third the instructions to issue.
+uint sbyte(uvec3 sc, uint i) {
+    uint word = i < 4u ? sc.x : (i < 8u ? sc.y : sc.z);
+    return (word >> ((i & 3u) * 8u)) & 255u;
+}
+
+void sub_block_scale3(uvec3 sc, uint index, out uint factor, out uint lowest) {
+    if (index < 4u) {
+        factor = sbyte(sc, index) & 63u;
+        lowest = sbyte(sc, index + 4u) & 63u;
+    } else {
+        factor = (sbyte(sc, index + 4u) & 15u)
+                 | ((sbyte(sc, index - 4u) >> 6u) << 4u);
+        lowest = (sbyte(sc, index + 4u) >> 4u)
+                 | ((sbyte(sc, index) >> 6u) << 4u);
+    }
+}
+
 void main() {
     //  Every lane of a cluster takes the same row, so what follows is
     //  uniform across a cluster.
@@ -847,9 +871,16 @@ void main() {
 
         for (uint b = 0u; b < blocks; ++b) {
             uint at = base + b * 144u;
-            float d = half_at(at);
-            float dmin = half_at(at + 2u);
-            uint scales = at + 4u;
+            uint head = at >> 2u;
+
+            //  d and dmin are the two halves of one word, and the twelve
+            //  scale bytes are the three words after it: four loads for the
+            //  header where a byte at a time was a dozen and more.
+            vec2 dm = unpackHalf2x16(w[head]);
+            float d = dm.x;
+            float dmin = dm.y;
+            uvec3 sc = uvec3(w[head + 1u], w[head + 2u], w[head + 3u]);
+
             uint quants = at + 16u;
             uint col0 = b * 256u;
 
@@ -861,8 +892,8 @@ void main() {
             uint sub = group * 2u;
 
             uint f1, m1, f2, m2;
-            sub_block_scale(scales, sub, f1, m1);
-            sub_block_scale(scales, sub + 1u, f2, m2);
+            sub_block_scale3(sc, sub, f1, m1);
+            sub_block_scale3(sc, sub + 1u, f2, m2);
 
             //  A sub-block's scale and offset are the same for all
             //  thirty-two of its elements, so they are formed once here
