@@ -873,7 +873,10 @@ package body Model_Runner.Platform.Device.Products is
      (Item    : Engine;
       Packing : Weight_Packing;
       Count   : Natural) return Address
-   is (if Narrowed (Count)
+   is (if Packing in Low_Packing
+       then (if Narrowed (Count) then Item.Narrow_Low_Line
+             else Item.Low_Tile_Line)
+       elsif Narrowed (Count)
        then (if On_Extra (Packing)
              then Item.Narrow_More_Line else Item.Narrow_Line)
        else (if On_Extra (Packing)
@@ -883,7 +886,8 @@ package body Model_Runner.Platform.Device.Products is
    --  vectors, in the compilation that decodes the format.
    function Listed_Pipeline
      (Item : Engine; Packing : Weight_Packing) return Address
-   is (if On_Extra (Packing) then Item.Listed_More_Line
+   is (if Packing in Low_Packing then Item.Listed_Low_Line
+       elsif On_Extra (Packing) then Item.Listed_More_Line
        else Item.Listed_Line);
 
    function Uses_Matrix
@@ -916,6 +920,8 @@ package body Model_Runner.Platform.Device.Products is
                                      | Packed_Q5_1 | Packed_Q8_0
                                      | Packed_IQ4_NL | Packed_MXFP4
                           and then Columns mod Tile_Step (Count) = 0)
+                 or else (Packing in Low_Packing
+                          and then Columns mod 256 = 0)
                  or else (Packing in Super_Packing
                           and then Columns mod 256 = 0)));
 
@@ -2797,6 +2803,48 @@ package body Model_Runner.Platform.Device.Products is
                   then
                      Item.Listed_Tile_More := Made;
                   end if;
+
+                  declare
+                     Words : aliased constant Model_Runner.Shaders.Word_Array :=
+                       Model_Runner.Shaders.Low.Matrix_Low;
+                  begin
+                     Request.Size := Interfaces.C.size_t (Words'Length * 4);
+                     Request.Code := Words'Address;
+
+                     if Create (Item.Logical, Request'Address, Null_Handle,
+                                Made'Access) = 0
+                     then
+                        Item.Low_Tile := Made;
+                     end if;
+                  end;
+
+                  declare
+                     Words : aliased constant Model_Runner.Shaders.Word_Array :=
+                       Model_Runner.Shaders.Low.Matrix_Narrow_Low;
+                  begin
+                     Request.Size := Interfaces.C.size_t (Words'Length * 4);
+                     Request.Code := Words'Address;
+
+                     if Create (Item.Logical, Request'Address, Null_Handle,
+                                Made'Access) = 0
+                     then
+                        Item.Narrow_Low := Made;
+                     end if;
+                  end;
+
+                  declare
+                     Words : aliased constant Model_Runner.Shaders.Word_Array :=
+                       Model_Runner.Shaders.Low.Matrix_Listed_Low;
+                  begin
+                     Request.Size := Interfaces.C.size_t (Words'Length * 4);
+                     Request.Code := Words'Address;
+
+                     if Create (Item.Logical, Request'Address, Null_Handle,
+                                Made'Access) = 0
+                     then
+                        Item.Listed_Tile_Low := Made;
+                     end if;
+                  end;
                end if;
             end if;
          end;
@@ -3466,6 +3514,39 @@ package body Model_Runner.Platform.Device.Products is
                         Item.Narrow_More_Line := Made;
                      end if;
                   end if;
+
+                  if Item.Low_Tile /= Null_Handle then
+                     Request.Stage.Module := Item.Low_Tile;
+
+                     if Create (Item.Logical, Null_Handle, 1,
+                                Request'Address, Null_Handle,
+                                Made'Access) = 0
+                     then
+                        Item.Low_Tile_Line := Made;
+                     end if;
+                  end if;
+
+                  if Item.Narrow_Low /= Null_Handle then
+                     Request.Stage.Module := Item.Narrow_Low;
+
+                     if Create (Item.Logical, Null_Handle, 1,
+                                Request'Address, Null_Handle,
+                                Made'Access) = 0
+                     then
+                        Item.Narrow_Low_Line := Made;
+                     end if;
+                  end if;
+
+                  if Item.Listed_Tile_Low /= Null_Handle then
+                     Request.Stage.Module := Item.Listed_Tile_Low;
+
+                     if Create (Item.Logical, Null_Handle, 1,
+                                Request'Address, Null_Handle,
+                                Made'Access) = 0
+                     then
+                        Item.Listed_Low_Line := Made;
+                     end if;
+                  end if;
                end if;
             end if;
 
@@ -3983,6 +4064,9 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Narrow_More_Line, "vkDestroyPipeline");
       Give_Back (Item.Listed_Line, "vkDestroyPipeline");
       Give_Back (Item.Listed_More_Line, "vkDestroyPipeline");
+      Give_Back (Item.Low_Tile_Line, "vkDestroyPipeline");
+      Give_Back (Item.Narrow_Low_Line, "vkDestroyPipeline");
+      Give_Back (Item.Listed_Low_Line, "vkDestroyPipeline");
       Give_Back (Item.Halve_Line, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Line, "vkDestroyPipeline");
       Give_Back (Item.Attend_Line, "vkDestroyPipeline");
@@ -4007,6 +4091,9 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Narrow_More, "vkDestroyShaderModule");
       Give_Back (Item.Listed_Tile, "vkDestroyShaderModule");
       Give_Back (Item.Listed_Tile_More, "vkDestroyShaderModule");
+      Give_Back (Item.Low_Tile, "vkDestroyShaderModule");
+      Give_Back (Item.Narrow_Low, "vkDestroyShaderModule");
+      Give_Back (Item.Listed_Tile_Low, "vkDestroyShaderModule");
       Give_Back (Item.Halver, "vkDestroyShaderModule");
       Give_Back (Item.Matrix, "vkDestroyShaderModule");
       Give_Back (Item.Matrix_Attend, "vkDestroyPipeline");

@@ -277,17 +277,17 @@ package body Shader_Generation is
 
       Good : Boolean;
 
-      --  The low-bit kernels go to a child package of their own: the row
-      --  product's LOW_BITS compilation and the twelve generating kernels,
+      --  The low-bit kernels go to a child package of their own: every
+      --  LOW_BITS compilation (named _Low) and the twelve generating kernels,
       --  whose codebooks put the one file past the size the repository
       --  allows a committed file. The child uses the parent's Word_Array.
       function Is_Low (Pair : Shader_Pair) return Boolean is
          Name : constant String := Ada_Name (Pair.Compiled.all);
       begin
          --  The name is a slice of the path, so it does not begin at one.
-         return Ada.Strings.Fixed.Index (Name, "Row_Product_Low") = Name'First
-           or else Ada.Strings.Fixed.Index (Name, "Row_Product_Wave")
-                   = Name'First;
+         return Ada.Strings.Fixed.Index (Name, "Row_Product_Wave") = Name'First
+           or else (Name'Length >= 4
+                    and then Name (Name'Last - 3 .. Name'Last) = "_Low");
       end Is_Low;
 
       Low_Target : constant String :=

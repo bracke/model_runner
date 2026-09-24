@@ -6212,6 +6212,31 @@ package body Checks is
          end if;
       end;
 
+      --  And the tile's three LOW_BITS compilations.
+      for Which in 1 .. 3 loop
+         declare
+            Found : Boolean;
+
+            Digest : constant Interfaces.Unsigned_64 :=
+              Shader_Generation.Source_Digest
+                (Root & "/src/shaders/matrix_product.comp", Found);
+
+            Recorded : constant Interfaces.Unsigned_64 :=
+              (case Which is
+                  when 1 => Model_Runner.Shaders.Low.Matrix_Low_Digest,
+                  when 2 => Model_Runner.Shaders.Low.Matrix_Narrow_Low_Digest,
+                  when others =>
+                     Model_Runner.Shaders.Low.Matrix_Listed_Low_Digest);
+         begin
+            Result.Performed := Result.Performed + 1;
+
+            if Found and then Digest /= Recorded then
+               Fail ("a LOW_BITS compilation of src/shaders/matrix_product.comp"
+                     & " is older than the source; run ./compile-shaders.sh");
+            end if;
+         end;
+      end loop;
+
       --  And the twelve compilations of the low-bit generating kernel, one a
       --  format from the one source, each asked against it.
       for Which in 1 .. 12 loop

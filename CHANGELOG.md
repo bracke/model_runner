@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A tile for the low-bit formats.** A prompt in any of the twelve went
+  through the row product, a vector at a time; it now goes through the
+  matrix instruction like every other format, the tile's third compilation
+  (`matrix_product.comp` built with `LOW_BITS`, in its wide, narrow and
+  listed widths) decoding sixteen weights of a row a lane into the
+  half-precision tile by the format's own arithmetic. On a 110-token prompt
+  over a TinyLlama: IQ3_S 169 -> 815 tokens a second, IQ2_XXS 181 -> 963,
+  IQ1_S 178 -> 939, TQ2_0 100 -> 901, Q1_0 212 -> 979 -- each past Q4_K's own
+  tile at 645. The first two compilations keep their words.
+
 - **The low-bit formats generate on their own subgroup kernel.** A generated
   token in any of the twelve goes to `row_product_wave_low.comp`, compiled
   once a format so each pipeline holds only its decode and codebook, at the

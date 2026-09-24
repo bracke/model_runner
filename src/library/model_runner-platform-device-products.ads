@@ -2694,6 +2694,16 @@ private
       --  multiplies all the same.
       Listed_Line : System.Address := System.Null_Address;
       Listed_More_Line : System.Address := System.Null_Address;
+
+      --  The tile's LOW_BITS compilation, in the three widths the others
+      --  come in, for the twelve low-bit packings; each null leaves those
+      --  formats' batches on the row product.
+      Low_Tile        : System.Address := System.Null_Address;
+      Narrow_Low      : System.Address := System.Null_Address;
+      Listed_Tile_Low : System.Address := System.Null_Address;
+      Low_Tile_Line   : System.Address := System.Null_Address;
+      Narrow_Low_Line : System.Address := System.Null_Address;
+      Listed_Low_Line : System.Address := System.Null_Address;
       --  One for every count a round may bring, up to the eight-wide
       --  kernel, indexed by that count. A pipeline is cheap now the words
       --  are one module and the width is a constant it is told; what these
