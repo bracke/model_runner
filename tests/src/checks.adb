@@ -6206,6 +6206,42 @@ package body Checks is
          end if;
       end;
 
+      --  And the three that generate a K-quant row on a subgroup of
+      --  thirty-two, one per format, asked the same way.
+      for Which in 1 .. 3 loop
+         declare
+            Name : constant String :=
+              (case Which is
+                  when 1 => "row_product_super",
+                  when 2 => "row_product_super5",
+                  when others => "row_product_super6");
+
+            Found : Boolean;
+
+            Digest : constant Interfaces.Unsigned_64 :=
+              Shader_Generation.Source_Digest
+                (Root & "/src/shaders/" & Name & ".comp", Found);
+
+            Recorded : constant Interfaces.Unsigned_64 :=
+              (case Which is
+                  when 1 => Model_Runner.Shaders.Row_Product_Super_Digest,
+                  when 2 => Model_Runner.Shaders.Row_Product_Super5_Digest,
+                  when others =>
+                     Model_Runner.Shaders.Row_Product_Super6_Digest);
+         begin
+            Result.Performed := Result.Performed + 1;
+
+            if not Found then
+               Fail ("src/shaders/" & Name & ".comp is missing, and the "
+                     & "words compiled from it are committed");
+            elsif Digest /= Recorded then
+               Fail ("src/shaders/" & Name & ".comp has changed since it "
+                     & "was compiled; compile it and splice its words and "
+                     & "digest into src/library/model_runner-shaders.ads");
+            end if;
+         end;
+      end loop;
+
       --  And the bundle's width, which the shader states and the engine
       --  dispatches for. They have to agree for the same reason the query
       --  block's does: a workgroup that answers four heads where the

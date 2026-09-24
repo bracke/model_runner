@@ -1694,9 +1694,10 @@ package Model_Runner.Platform.Device.Products is
    --    cache's four, so a context past what six bytes fits is held where
    --    two do, and the kernels that write the cache proper are told to
    --    skip it. False keeps the old both-or-neither rule.
-   --  Keys_Upto, where the keys end and the values begin in the copy, in
-   --  halves: past it the split copy keeps a buffer of its own, so that
-   --  neither half is past what one may hold. Zero asks for no split.
+   --  @param Keys_Upto Where the keys end and the values begin in the
+   --    copy, in halves: past it the split copy keeps a buffer of its own,
+   --    so that neither half is past what one may hold. Zero asks for no
+   --    split.
    procedure Reserve
      (Item            : in out Engine;
       Elements        : Model_Runner.Numerics.Element_Count;

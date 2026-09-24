@@ -7,6 +7,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **K-quant generation on a subgroup of thirty-two.** The generating
+  matrix-vector product has a row kernel for Q4_K, Q5_K and Q6_K that decodes a
+  super-block the way llama.cpp's own kernel does: the sub-block scales unpacked
+  together, a lane taking a whole super-block region so its header is read once
+  for sixteen weights, sixteen lanes a super-block and the subgroup adding the
+  partials. Bound only where the device runs a compute shader at a subgroup of
+  thirty-two; every other device keeps the eight-lane kernel. Qwen3-8B Q4_K_M
+  generates at 13.3 tokens a second on the 780M against the eight-lane
+  kernel's 12.4 (llama.cpp 14.26), and the Q4_K header is read in four words
+  rather than a dozen bytes.
+
+- **A context too wide for one device buffer stays on the device.** A model
+  with no attention sink reads only the half-precision copy of its cache, so
+  where the binary32 cache would not fit one storage buffer -- about 14.5
+  thousand positions for an eight-billion model -- only the copy is kept, and
+  where even the copy would not, its keys and its values each take a buffer of
+  their own. Prompt and generated token both attend on the device out of it,
+  where before the whole of attention fell to the processor. The two budget
+  gates count what is actually held.
+
 - **A bias-less fused-QKV product on the device backend.** Where a model keeps
   its queries, keys and values as one tensor and none of the three carries a
   bias -- falcon and the like -- the three projections were three matmuls
@@ -119,6 +139,14 @@ Keep a Changelog and the project uses semantic versioning.
   IQ3_S and IQ2_XXS.
 
 ### Fixed
+
+- **`--kv-cache f16` on the device past about thirty thousand positions.**
+  The cache offsets a device attention is given were carried as a thirty-two-bit
+  signed number between the engine and the push constants, and the values'
+  base overflows it at a wide enough context; they are carried at full width
+  now. Where the copy is split, a whole-layer step's value base -- already
+  counted from the values' own buffer -- no longer has the keys' end taken off
+  it a second time. Qwen3-8B runs the whole 40,960 on the device.
 
 - **MiniCPM-V 4.5 reads a picture end to end.** Its Qwen3-based text model
   carries `<unk>` as an ordinary token without naming it the unknown token, so

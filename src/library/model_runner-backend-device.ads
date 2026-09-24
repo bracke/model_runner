@@ -454,6 +454,12 @@ package Model_Runner.Backend.Device is
    --    block's front. Nought where nothing reads halves, and then no copy
    --    is taken at all.
    --  @param Ok True when the room is there.
+   --  @param Allow_Copy_Only Where the cache proper alone would not fit one
+   --    storage buffer but its half-precision copy would, keep only the
+   --    copy; the caller states this where nothing reads the cache proper.
+   --  @param Keys_Upto Where the keys end and the values begin in the
+   --    copy, in halves, so that a copy past one buffer is split there.
+   --    Zero asks for no split.
    procedure Reserve_Cache
      (Elements        : Model_Runner.Numerics.Element_Count;
       Copy_Upto       : Model_Runner.Numerics.Element_Count;
