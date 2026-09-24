@@ -1302,7 +1302,7 @@ package body Tests.CLI_Cases is
                     (Engine, Cache, Asked,
                      Heads => Heads, Head_Size => Wide, Value_Size => Wide,
                      Group_Size => 1, First => 0, Last => Steps - 1,
-                     K_Base => 0, V_Base => V_At,
+                     K_Base => 0, V_Base => Model_Runner.Numerics.Element_Count (V_At),
                      KV_Width => Span, V_Width => Span,
                      Scale => Scale, Cap => 0.0,
                      Target => Got, Ok => Ok);

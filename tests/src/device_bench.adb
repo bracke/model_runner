@@ -112,7 +112,7 @@ package body Device_Bench is
                Heads => Heads, Head_Size => Wide, Value_Size => Wide,
                First => 0, Last => Steps - 1,
                K_Base => 0,
-               V_Base => Layers * Kept * Narrow,
+               V_Base => N.Element_Count (Layers * Kept * Narrow),
                KV_Width => Narrow, V_Width => Narrow,
                Group_Size => Sharing,
                Scale => 0.125, Cap => 0.0, Target => Got.all, Ok => Ok);
@@ -236,7 +236,7 @@ package body Device_Bench is
               (Engine, Asked.all,
                Heads => Heads, Head_Size => Wide, Value_Size => Wide,
                Group_Size => Sharing, First => 0, Last => Steps_Count - 1,
-               K_Base => 0, V_Base => Layers * Kept * Narrow,
+               K_Base => 0, V_Base => N.Element_Count (Layers * Kept * Narrow),
                KV_Width => Narrow, V_Width => Narrow,
                Scale => 0.125, Cap => 0.0, Target => Got.all, Ok => Ok);
             exit when not Ok;
@@ -301,7 +301,7 @@ package body Device_Bench is
                  (Engine, Asked.all,
                   Heads => Heads, Head_Size => Wide, Value_Size => Wide,
                   Group_Size => Sharing, First => 0, Last => Steps_Count - 1,
-                  K_Base => 0, V_Base => Layers * Kept * Narrow,
+                  K_Base => 0, V_Base => N.Element_Count (Layers * Kept * Narrow),
                   KV_Width => Narrow, V_Width => Narrow,
                   Scale => 0.125, Cap => 0.0, Target => Got.all, Ok => Ok);
                Products.Multiply
@@ -327,7 +327,7 @@ package body Device_Bench is
             Products.Open_Sequence (Order);
             Products.Add_Attention
               (Order, Heads, Wide, Wide, Sharing, 0, Steps_Count - 1,
-               0, Layers * Kept * Narrow, Narrow, Narrow, 0.125, 0.0, Added);
+               0, N.Element_Count (Layers * Kept * Narrow), Narrow, Narrow, 0.125, 0.0, Added);
             Products.Add_Chained_Product
               (Order, Weights.all'Address,
                Model_Runner.Bytes.Byte_Count (Weights.all'Length), 0,
@@ -396,7 +396,7 @@ package body Device_Bench is
                Products.Values_F32, Span, Cols, Added);
             Products.Add_Attention
               (Linked, Heads, Wide, Wide, Sharing, 0, Steps_Count - 1,
-               0, Layers * Kept * Narrow, Narrow, Narrow, 0.125, 0.0, Added,
+               0, N.Element_Count (Layers * Kept * Narrow), Narrow, Narrow, 0.125, 0.0, Added,
                Chained => True);
 
             --  The same product, and an attention reading queries that were
@@ -429,7 +429,7 @@ package body Device_Bench is
                      Heads => Heads, Head_Size => Wide, Value_Size => Wide,
                      Group_Size => Sharing, First => 0,
                      Last => Steps_Count - 1,
-                     K_Base => 0, V_Base => Layers * Kept * Narrow,
+                     K_Base => 0, V_Base => N.Element_Count (Layers * Kept * Narrow),
                      KV_Width => Narrow, V_Width => Narrow,
                      Scale => 0.125, Cap => 0.0, Target => Got.all,
                      Ok => Ok);
@@ -492,7 +492,7 @@ package body Device_Bench is
                     (Engine, Asked.all,
                      Heads => Heads, Head_Size => Wide, Value_Size => Wide,
                      Group_Size => Sharing, First => 0, Last => Steps_Count - 1,
-                     K_Base => 0, V_Base => Layers * Kept * Narrow,
+                     K_Base => 0, V_Base => N.Element_Count (Layers * Kept * Narrow),
                      KV_Width => Narrow, V_Width => Narrow,
                      Scale => 0.125, Cap => 0.0, Target => Got.all,
                      Ok => Ok);
@@ -521,9 +521,9 @@ package body Device_Bench is
                  (Engine, Asked.all,
                   Heads => Heads, Head_Size => Wide, Value_Size => Wide,
                   Group_Size => Sharing, First => 0, Last => Steps_Count - 1,
-                  K_Base => Layer * Kept * Narrow,
-                  V_Base => Layers * Kept * Narrow
-                            + Layer * Kept * Narrow,
+                  K_Base => N.Element_Count (Layer * Kept * Narrow),
+                  V_Base => N.Element_Count (Layers * Kept * Narrow)
+                            + N.Element_Count (Layer * Kept * Narrow),
                   KV_Width => Narrow, V_Width => Narrow,
                   Scale => 0.125, Cap => 0.0, Target => Got.all, Ok => Ok);
                exit when not Ok;
@@ -610,8 +610,8 @@ package body Device_Bench is
                  (Engine, Asked.all,
                   Heads => Heads, Head_Size => Wide, Value_Size => Wide,
                   Group_Size => Sharing, First => 0, Last => Step,
-                  K_Base => Layer * Kept * Narrow,
-                  V_Base => Layers * Kept * Narrow + Layer * Kept * Narrow,
+                  K_Base => N.Element_Count (Layer * Kept * Narrow),
+                  V_Base => N.Element_Count (Layers * Kept * Narrow) + N.Element_Count (Layer * Kept * Narrow),
                   KV_Width => Narrow, V_Width => Narrow,
                   Scale => 0.125, Cap => 0.0, Target => Got.all, Ok => Ok);
                Calls := Calls + 1;
@@ -647,8 +647,8 @@ package body Device_Bench is
                  (Engine, Batched.all,
                   Heads => Heads, Head_Size => Wide, Value_Size => Wide,
                   Group_Size => Sharing, First => 0, Last => 0,
-                  K_Base => Layer * Kept * Narrow,
-                  V_Base => Layers * Kept * Narrow + Layer * Kept * Narrow,
+                  K_Base => N.Element_Count (Layer * Kept * Narrow),
+                  V_Base => N.Element_Count (Layers * Kept * Narrow) + N.Element_Count (Layer * Kept * Narrow),
                   KV_Width => Narrow, V_Width => Narrow,
                   Scale => 0.125, Cap => 0.0, Target => Blends.all,
                   Ok => Ok, Positions => Steps);

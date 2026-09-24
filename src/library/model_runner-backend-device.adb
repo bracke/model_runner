@@ -1241,8 +1241,8 @@ package body Model_Runner.Backend.Device is
       Group_Size : Natural;
       First      : Natural;
       Last       : Natural;
-      K_Base     : Natural;
-      V_Base     : Natural;
+      K_Base     : Model_Runner.Numerics.Element_Count;
+      V_Base     : Model_Runner.Numerics.Element_Count;
       KV_Width   : Natural;
       V_Width    : Natural;
       Scale      : Model_Runner.Numerics.Real;
@@ -1326,8 +1326,8 @@ package body Model_Runner.Backend.Device is
       Group_Size : Natural;
       First      : Natural;
       Last       : Natural;
-      K_Base     : Natural;
-      V_Base     : Natural;
+      K_Base     : Model_Runner.Numerics.Element_Count;
+      V_Base     : Model_Runner.Numerics.Element_Count;
       KV_Width   : Natural;
       V_Width    : Natural;
       Scale      : Model_Runner.Numerics.Real;
@@ -1444,8 +1444,8 @@ package body Model_Runner.Backend.Device is
       Group_Size  : Natural;
       First       : Natural;
       Last        : Natural;
-      K_Base      : Natural;
-      V_Base      : Natural;
+      K_Base      : Model_Runner.Numerics.Element_Count;
+      V_Base      : Model_Runner.Numerics.Element_Count;
       KV_Width    : Natural;
       V_Width     : Natural;
       Scale       : Model_Runner.Numerics.Real;
@@ -2080,15 +2080,15 @@ package body Model_Runner.Backend.Device is
       Head_Size      : Natural;
       Rotary         : Natural;
       Split          : Boolean;
-      At_Key         : Natural;
-      At_Value       : Natural;
+      At_Key         : Model_Runner.Numerics.Element_Count;
+      At_Value       : Model_Runner.Numerics.Element_Count;
       Heads          : Natural;
       Value_Size     : Natural;
       Group_Size     : Natural;
       First          : Natural;
       Last           : Natural;
-      K_Base         : Natural;
-      V_Base         : Natural;
+      K_Base         : Model_Runner.Numerics.Element_Count;
+      V_Base         : Model_Runner.Numerics.Element_Count;
       KV_Width       : Natural;
       V_Width        : Natural;
       Scale          : Model_Runner.Numerics.Real;
@@ -3198,7 +3198,9 @@ package body Model_Runner.Backend.Device is
 
             Products.Add_Attention
               (Steps, Heads, Head_Size, Value_Size, Group_Size, First, Last,
-               Unpacked.K_Base, Unpacked.V_Base, KV_Width, V_Width, Scale, Cap,
+               Model_Runner.Numerics.Element_Count (Unpacked.K_Base),
+               Model_Runner.Numerics.Element_Count (Unpacked.V_Base),
+               KV_Width, V_Width, Scale, Cap,
                Added,
                Window => Window, Causal => Causal, Max_Bias => Max_Bias,
                Chained => True, From_Step => Step_Q_Turned, Kept => False,

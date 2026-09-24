@@ -522,8 +522,8 @@ package body Model_Runner.Platform.Device.Products is
       Head_Size  : Natural;
       Value_Size : Natural;
       Group_Size : Natural;
-      K_Base     : Natural := 0;
-      V_Base     : Natural := 0;
+      K_Base     : Model_Runner.Numerics.Element_Count := 0;
+      V_Base     : Model_Runner.Numerics.Element_Count := 0;
       KV_Width   : Natural := 0;
       V_Width    : Natural := 0;
       Span       : Natural := Bundle_Least) return Natural
@@ -559,8 +559,8 @@ package body Model_Runner.Platform.Device.Products is
       Head_Size  : Natural;
       Value_Size : Natural;
       Group_Size : Natural;
-      K_Base     : Natural := 0;
-      V_Base     : Natural := 0;
+      K_Base     : Model_Runner.Numerics.Element_Count := 0;
+      V_Base     : Model_Runner.Numerics.Element_Count := 0;
       KV_Width   : Natural := 0;
       V_Width    : Natural := 0;
       Span       : Natural := Bundle_Least) return Boolean
@@ -575,8 +575,8 @@ package body Model_Runner.Platform.Device.Products is
       Value_Size : Natural;
       Group_Size : Natural := 1;
       Rounding   : Boolean := False;
-      K_Base     : Natural := 0;
-      V_Base     : Natural := 0;
+      K_Base     : Model_Runner.Numerics.Element_Count := 0;
+      V_Base     : Model_Runner.Numerics.Element_Count := 0;
       KV_Width   : Natural := 0;
       V_Width    : Natural := 0;
       Span       : Natural := Bundle_Least) return Address
@@ -630,8 +630,8 @@ package body Model_Runner.Platform.Device.Products is
       Head_Size  : Natural;
       Value_Size : Natural;
       Rounding   : Boolean := False;
-      K_Base     : Natural := 0;
-      V_Base     : Natural := 0;
+      K_Base     : Model_Runner.Numerics.Element_Count := 0;
+      V_Base     : Model_Runner.Numerics.Element_Count := 0;
       KV_Width   : Natural := 0;
       V_Width    : Natural := 0;
       Span       : Natural := Bundle_Least) return C.unsigned
@@ -7491,8 +7491,8 @@ package body Model_Runner.Platform.Device.Products is
       Group_Size : Natural;
       First      : Natural;
       Last       : Natural;
-      K_Base     : Natural;
-      V_Base     : Natural;
+      K_Base     : Model_Runner.Numerics.Element_Count;
+      V_Base     : Model_Runner.Numerics.Element_Count;
       KV_Width   : Natural;
       V_Width    : Natural;
       Scale      : Model_Runner.Numerics.Real;
@@ -7661,13 +7661,22 @@ package body Model_Runner.Platform.Device.Products is
               C.unsigned
                 (K_Base
                  + (if Reads_Copy (Item, Slots, Head_Size, Value_Size, False)
-                    then Natural (Copy_At (Item)) else 0)),
+                    then Model_Runner.Numerics.Element_Count (Copy_At (Item))
+                    else 0)),
             V_Base     =>
               C.unsigned
                 (V_Base
                  + (if Reads_Copy (Item, Slots, Head_Size, Value_Size, False)
-                    then Natural (Copy_At (Item)) else 0)
-                 - (if Item.Copy_Split then Natural (Item.Copy_Keys_Halves)
+                    then Model_Runner.Numerics.Element_Count (Copy_At (Item))
+                    else 0)
+                 --  Off the values' buffer front where the copy is split
+                 --  and this is the global base -- a whole-layer step's is
+                 --  already the values' own and is left as it is.
+                 - (if Item.Copy_Split
+                      and then V_Base >= Model_Runner.Numerics.Element_Count
+                                           (Item.Copy_Keys_Halves)
+                    then Model_Runner.Numerics.Element_Count
+                           (Item.Copy_Keys_Halves)
                     else 0)),
             KV_Width   => C.unsigned (KV_Width),
             V_Width    => C.unsigned (V_Width),
@@ -7780,8 +7789,8 @@ package body Model_Runner.Platform.Device.Products is
       Group_Size : Natural;
       First      : Natural;
       Last       : Natural;
-      K_Base     : Natural;
-      V_Base     : Natural;
+      K_Base     : Model_Runner.Numerics.Element_Count;
+      V_Base     : Model_Runner.Numerics.Element_Count;
       KV_Width   : Natural;
       V_Width    : Natural;
       Scale      : Model_Runner.Numerics.Real;
@@ -8744,7 +8753,7 @@ package body Model_Runner.Platform.Device.Products is
      (Steps     : in out Sequence;
       Width     : Natural;
       Stride    : Natural;
-      At_First  : Natural;
+      At_First  : Model_Runner.Numerics.Element_Count;
       Added     : out Boolean;
       From_Step : Natural := 0;
       Packed    : Packing_Shape := Not_Packing;
@@ -8878,10 +8887,10 @@ package body Model_Runner.Platform.Device.Products is
       Weight_At   : Model_Runner.Bytes.Byte_Count := 0;
       Key         : System.Address := System.Null_Address;
       Into_Cache  : Boolean := False;
-      At_First    : Natural := 0;
+      At_First    : Model_Runner.Numerics.Element_Count := 0;
       Stride      : Natural := 0;
       V_Step      : Natural := 0;
-      V_At_First  : Natural := 0;
+      V_At_First  : Model_Runner.Numerics.Element_Count := 0;
       V_Stride    : Natural := 0;
       Kept        : Boolean := True;
       Pages_At       : Natural := 0;
@@ -9011,8 +9020,8 @@ package body Model_Runner.Platform.Device.Products is
       Group_Size : Natural;
       First      : Natural;
       Last       : Natural;
-      K_Base     : Natural;
-      V_Base     : Natural;
+      K_Base     : Model_Runner.Numerics.Element_Count;
+      V_Base     : Model_Runner.Numerics.Element_Count;
       KV_Width   : Natural;
       V_Width    : Natural;
       Scale      : Model_Runner.Numerics.Real;
@@ -11096,7 +11105,10 @@ package body Model_Runner.Platform.Device.Products is
                                       This.Value_Size, False)
                                 then Copy_At (Item)
                                 else 0)
-                             - (if Item.Copy_Split then Item.Copy_Keys_Halves
+                             - (if Item.Copy_Split
+                                  and then Interfaces.Unsigned_64 (This.V_Base)
+                                           >= Item.Copy_Keys_Halves
+                                then Item.Copy_Keys_Halves
                                 else 0)),
                         KV_Width   => C.unsigned (This.KV_Width),
                         V_Width    => C.unsigned (This.V_Width),
@@ -11427,7 +11439,11 @@ package body Model_Runner.Platform.Device.Products is
                         V_Into    =>
                           C.unsigned
                             (Interfaces.Unsigned_64 (This.V_At_First)
-                             - (if Item.Copy_Split then Item.Copy_Keys_Halves
+                             - (if Item.Copy_Split
+                                  and then Interfaces.Unsigned_64
+                                             (This.V_At_First)
+                                           >= Item.Copy_Keys_Halves
+                                then Item.Copy_Keys_Halves
                                 else 0)),
                         V_Stride  => C.unsigned (This.V_Stride),
                         Pages_At       => C.unsigned (This.Pages_At),

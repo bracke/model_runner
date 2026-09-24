@@ -2288,7 +2288,7 @@ package body Tests.Backend_Cases is
          First      => 0,
          Last       => Natural (Positions) - 1,
          K_Base     => 0,
-         V_Base     => Natural (Room),
+         V_Base     => Model_Runner.Numerics.Element_Count (Room),
          KV_Width   => Natural (Head_Size),
          V_Width    => Natural (Head_Size),
          Scale      => Scale,
@@ -2320,7 +2320,7 @@ package body Tests.Backend_Cases is
          First      => 0,
          Last       => Natural (Positions) - 1,
          K_Base     => 0,
-         V_Base     => Natural (Room),
+         V_Base     => Model_Runner.Numerics.Element_Count (Room),
          KV_Width   => Natural (Head_Size),
          V_Width    => Natural (Head_Size),
          Scale      => Scale,
@@ -2436,7 +2436,7 @@ package body Tests.Backend_Cases is
         (Engine, Query,
          Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
          Group_Size => 1, First => 0, Last => Positions - 1,
-         K_Base => 0, V_Base => Natural (Room),
+         K_Base => 0, V_Base => Model_Runner.Numerics.Element_Count (Room),
          KV_Width => Heads * Head_Size, V_Width => Heads * Head_Size,
          Scale => 0.25, Cap => 0.0, Target => Alone, Ok => Ok);
 
@@ -2447,7 +2447,7 @@ package body Tests.Backend_Cases is
         (Steps,
          Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
          Group_Size => 1, First => 0, Last => Positions - 1,
-         K_Base => 0, V_Base => Natural (Room),
+         K_Base => 0, V_Base => Model_Runner.Numerics.Element_Count (Room),
          KV_Width => Heads * Head_Size, V_Width => Heads * Head_Size,
          Scale => 0.25, Cap => 0.0, Added => Added);
 
@@ -2496,7 +2496,7 @@ package body Tests.Backend_Cases is
            (Steps,
             Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
             Group_Size => 1, First => 0, Last => Positions - 1,
-            K_Base => 0, V_Base => Natural (Room),
+            K_Base => 0, V_Base => Model_Runner.Numerics.Element_Count (Room),
             KV_Width => Heads * Head_Size, V_Width => Heads * Head_Size,
             Scale => 0.25, Cap => 0.0, Added => Added, Chained => True);
          Assert (Added, "a sequence would not take a chained attention");
@@ -2517,7 +2517,7 @@ package body Tests.Backend_Cases is
            (Steps,
             Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
             Group_Size => 1, First => 0, Last => Positions - 1,
-            K_Base => 0, V_Base => Natural (Room),
+            K_Base => 0, V_Base => Model_Runner.Numerics.Element_Count (Room),
             KV_Width => Heads * Head_Size, V_Width => Heads * Head_Size,
             Scale => 0.25, Cap => 0.0, Added => Added, Chained => True);
          Assert (not Added,
@@ -2577,7 +2577,7 @@ package body Tests.Backend_Cases is
            (Engine, Cache, Pair,
             Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
             Group_Size => 1, First => 0, Last => Positions - 2,
-            K_Base => 0, V_Base => Natural (Room),
+            K_Base => 0, V_Base => Model_Runner.Numerics.Element_Count (Room),
             KV_Width => Heads * Head_Size, V_Width => Heads * Head_Size,
             Scale => 0.25, Cap => 0.0, Target => Both, Ok => Ok,
             Positions => 2);
@@ -2592,7 +2592,7 @@ package body Tests.Backend_Cases is
                Value_Size => Head_Size,
                Group_Size => 1, First => 0,
                Last => Positions - 2 + Slot,
-               K_Base => 0, V_Base => Natural (Room),
+               K_Base => 0, V_Base => Model_Runner.Numerics.Element_Count (Room),
                KV_Width => Heads * Head_Size, V_Width => Heads * Head_Size,
                Scale => 0.25, Cap => 0.0, Target => Each, Ok => Ok);
 
@@ -2621,7 +2621,7 @@ package body Tests.Backend_Cases is
            (Steps,
             Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
             Group_Size => 1, First => 0, Last => Positions - 1,
-            K_Base => 0, V_Base => Natural (Room),
+            K_Base => 0, V_Base => Model_Runner.Numerics.Element_Count (Room),
             KV_Width => Heads * Head_Size, V_Width => Heads * Head_Size,
             Scale => 0.25, Cap => 0.0, Added => Added);
          Assert (Added, "recording does not need a cache; running does");
@@ -2836,7 +2836,7 @@ package body Tests.Backend_Cases is
       --  projection's activation.
       Model_Runner.Backend.Device.Attend
         (Query, Heads, Head_Size, Head_Size, 1, 0, Positions - 1,
-         0, Natural (Room), Heads * Head_Size, Heads * Head_Size,
+         0, Model_Runner.Numerics.Element_Count (Room), Heads * Head_Size, Heads * Head_Size,
          0.25, 0.0, Blend.all, Ok);
       Assert (Ok, "attention on its own was refused");
 
@@ -2847,7 +2847,7 @@ package body Tests.Backend_Cases is
       --  Together: one submission, and the blend never comes back.
       Model_Runner.Backend.Device.Attend_And_Project
         (Query, Heads, Head_Size, Head_Size, 1, 0, Positions - 1,
-         0, Natural (Room), Heads * Head_Size, Heads * Head_Size,
+         0, Model_Runner.Numerics.Element_Count (Room), Heads * Head_Size, Heads * Head_Size,
          0.25, 0.0, Matrix, Joint, Ok);
       Assert (Ok, "the pair named together was refused");
 
@@ -3055,7 +3055,7 @@ package body Tests.Backend_Cases is
       --  The parts, one at a time, with every result coming back.
       Model_Runner.Backend.Device.Attend
         (Query, Heads, Head_Size, Head_Size, 1, 0, Positions - 1,
-         0, Natural (Room), Heads * Head_Size, Heads * Head_Size,
+         0, Model_Runner.Numerics.Element_Count (Room), Heads * Head_Size, Heads * Head_Size,
          0.25, 0.0, Blend.all, Ok);
       Assert (Ok, "attention on its own was refused");
 
@@ -3111,7 +3111,7 @@ package body Tests.Backend_Cases is
       --  And the nine as one sequence.
       Model_Runner.Backend.Device.Attend_And_Feed
         (Query, Both (Span .. Span * 2 - 1), Heads, Head_Size, Head_Size, 1,
-         0, Positions - 1, 0, Natural (Room),
+         0, Positions - 1, 0, Model_Runner.Numerics.Element_Count (Room),
          Heads * Head_Size, Heads * Head_Size, 0.25, 0.0,
          Out_View, Gain, Epsilon, Gate_View, Up_View, Down_View, 0,
          Fused, Ok);
@@ -3577,7 +3577,7 @@ package body Tests.Backend_Cases is
            (Both (0 .. Positions * Width - 1),
             Both (Positions * Width .. Positions * Width * 2 - 1),
             Natural (Heads), Natural (Head_Size), Natural (Head_Size), 1,
-            0, Natural (Positions) - 1, 0, Natural (Context * Width),
+            0, Natural (Positions) - 1, 0, Model_Runner.Numerics.Element_Count (Context * Width),
             Natural (Width), Natural (Width), 0.25, 0.0,
             Views (4), Feed_Gain.all, Epsilon,
             Views (5), Views (6), Views (7), 0, Apart, Ok,
@@ -3597,9 +3597,9 @@ package body Tests.Backend_Cases is
         (Acts, Gain, Feed_Gain, Epsilon,
          Views (1), Views (2), Views (3), Angles,
          Natural (Head_Size), Natural (Rotary), False,
-         0, Natural (Context * Width),
+         0, Model_Runner.Numerics.Element_Count (Context * Width),
          Natural (Heads), Natural (Head_Size), 1,
-         0, Natural (Positions) - 1, 0, Natural (Context * Width),
+         0, Natural (Positions) - 1, 0, Model_Runner.Numerics.Element_Count (Context * Width),
          Natural (Width), Natural (Width), 0.25, 0.0,
          Views (4), Views (5), Views (6), Views (7), 0,
          Key_Row, Value_Row, Whole, Ok,
@@ -5905,7 +5905,7 @@ package body Tests.Backend_Cases is
         (Engine, Query,
          Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
          Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
-         K_Base => 0, V_Base => Natural (Room),
+         K_Base => 0, V_Base => Model_Runner.Numerics.Element_Count (Room),
          KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
          Scale => 0.125, Cap => 0.0, Target => Alone, Ok => Ok);
       Assert (Ok, "attention on its own was refused");
@@ -5915,7 +5915,7 @@ package body Tests.Backend_Cases is
         (Steps,
          Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
          Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
-         K_Base => 0, V_Base => Natural (Room),
+         K_Base => 0, V_Base => Model_Runner.Numerics.Element_Count (Room),
          KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
          Scale => 0.125, Cap => 0.0, Added => Added);
       Assert (Added, "a sequence would not take the attention step");
@@ -6013,7 +6013,7 @@ package body Tests.Backend_Cases is
                   Heads => Heads, Head_Size => Head_Size,
                   Value_Size => Head_Size, Group_Size => Heads / Groups,
                   First => 0, Last => Positions - 1 + Which,
-                  K_Base => 0, V_Base => Natural (Room),
+                  K_Base => 0, V_Base => Model_Runner.Numerics.Element_Count (Room),
                   KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
                   Scale => 0.125, Cap => 0.0, Target => One, Ok => Ok);
                Assert (Ok, "attention over the cache proper was refused");
@@ -6030,7 +6030,7 @@ package body Tests.Backend_Cases is
            (Engine, Query (0 .. Span - 1),
             Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
             Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
-            K_Base => 0, V_Base => Natural (Room),
+            K_Base => 0, V_Base => Model_Runner.Numerics.Element_Count (Room),
             KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
             Scale => 0.125, Cap => 0.0, Target => Halved, Ok => Ok);
          Assert (Ok, "attention out of the copy was refused");
@@ -6040,7 +6040,7 @@ package body Tests.Backend_Cases is
            (Steps,
             Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
             Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
-            K_Base => 0, V_Base => Natural (Room),
+            K_Base => 0, V_Base => Model_Runner.Numerics.Element_Count (Room),
             KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
             Scale => 0.125, Cap => 0.0, Added => Added);
          Assert (Added, "a sequence would not take the attention step");
@@ -6075,7 +6075,7 @@ package body Tests.Backend_Cases is
            (Engine, Query (0 .. Span - 1),
             Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
             Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
-            K_Base => 0, V_Base => Natural (Room),
+            K_Base => 0, V_Base => Model_Runner.Numerics.Element_Count (Room),
             KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
             Scale => 0.125, Cap => 0.0, Target => Halved, Ok => Ok);
          Assert (Ok, "attention off the matrix instruction was refused");
@@ -6352,7 +6352,7 @@ package body Tests.Backend_Cases is
                  (Engine, Query (0 .. Span * N.Element_Count (Positions_Now) - 1),
                   Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
                   Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
-                  K_Base => 0, V_Base => Natural (Room),
+                  K_Base => 0, V_Base => Model_Runner.Numerics.Element_Count (Room),
                   KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
                   Scale => 0.125, Cap => 0.0, Target => Exact_Blend, Ok => Ok,
                   Positions => Positions_Now, Window => Window);
@@ -6524,7 +6524,7 @@ package body Tests.Backend_Cases is
                        (Steps,
                         Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
                         Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
-                        K_Base => 0, V_Base => Natural (Room),
+                        K_Base => 0, V_Base => Model_Runner.Numerics.Element_Count (Room),
                         KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
                         Scale => 0.125, Cap => 0.0, Added => Added,
                         Chained => True, Sinks_At => Natural (Sinks_At));
@@ -6736,7 +6736,7 @@ package body Tests.Backend_Cases is
                  (Steps,
                   Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
                   Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
-                  K_Base => Natural (Copy_K), V_Base => Natural (Copy_V),
+                  K_Base => Model_Runner.Numerics.Element_Count (Copy_K), V_Base => Model_Runner.Numerics.Element_Count (Copy_V),
                   KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
                   Scale => 0.125, Cap => 0.0, Added => Added, Chained => True,
                   From_Step => 1);
@@ -7137,7 +7137,7 @@ package body Tests.Backend_Cases is
                   Heads => Heads, Head_Size => Head_Size,
                   Value_Size => Head_Size, Group_Size => Heads / Groups,
                   First => 0, Last => Positions - 1 + Which,
-                  K_Base => 0, V_Base => Natural (Room),
+                  K_Base => 0, V_Base => Model_Runner.Numerics.Element_Count (Room),
                   KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
                   Scale => 0.0625, Cap => 0.0, Target => One, Ok => Ok);
                Assert (Ok, "attention on its own was refused");
@@ -7151,7 +7151,7 @@ package body Tests.Backend_Cases is
            (Steps,
             Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
             Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
-            K_Base => 0, V_Base => Natural (Room),
+            K_Base => 0, V_Base => Model_Runner.Numerics.Element_Count (Room),
             KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
             Scale => 0.0625, Cap => 0.0, Added => Added);
          Assert (Added, "a sequence would not take the attention step");
@@ -7269,7 +7269,7 @@ package body Tests.Backend_Cases is
               (Steps,
                Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
                Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
-               K_Base => 0, V_Base => Natural (Room),
+               K_Base => 0, V_Base => Model_Runner.Numerics.Element_Count (Room),
                KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
                Scale => 0.0625, Cap => 0.0, Added => Added,
                Sinks_At => Natural (Sinks_At));

@@ -9183,8 +9183,8 @@ package body Model_Runner.Llama is
          Model_Runner.Backend.Device.Attend
            (Query, Natural (Heads), Natural (Head_Size), Natural (Value_Size),
             Source.Settings.Group_Size, Natural (First), Natural (Last),
-            Natural (Block_Base (Item) + K_Base),
-            Natural (Block_Base (Item) + Item.Keys.all'Length + V_Base),
+            Block_Base (Item) + K_Base,
+            Block_Base (Item) + Item.Keys.all'Length + V_Base,
             Natural (KV_Width), Natural (V_Width),
             Scale, Source.Settings.Attention_Cap, Target, Took,
             Positions => Natural (Positions), Window => Window,
@@ -17030,22 +17030,22 @@ package body Model_Runner.Llama is
                         Current.Query, Current.Key, Current.Value,
                         Angles, Natural (Head_Size), Settings.Rotary,
                         K."=" (Settings.Pairing, K.Split),
-                        Natural ((if Item.Paged then 0
-                                  else Block_Base (Item) + Slot)),
-                        Natural ((if Item.Paged then Page_Value_Base (Item)
-                                  else Block_Base (Item)
-                                       + Exact_Keys (Item) + V_Slot)),
+                        (if Item.Paged then 0
+                         else Block_Base (Item) + Slot),
+                        (if Item.Paged then Page_Value_Base (Item)
+                         else Block_Base (Item)
+                              + Exact_Keys (Item) + V_Slot),
                         Natural (Heads), Natural (Value_Size),
                         Settings.Group_Size,
                         Natural (Cell_Of (Item, Natural (Index),
                                           Earliest (Settings, Reserved,
                                                     Natural (Index)))),
                         Natural (Cell),
-                        Natural ((if Item.Paged then 0
-                                  else Block_Base (Item) + Base)),
-                        Natural ((if Item.Paged then Page_Value_Base (Item)
-                                  else Block_Base (Item)
-                                       + Exact_Keys (Item) + V_Base)),
+                        (if Item.Paged then 0
+                         else Block_Base (Item) + Base),
+                        (if Item.Paged then Page_Value_Base (Item)
+                         else Block_Base (Item)
+                              + Exact_Keys (Item) + V_Base),
                         Natural (KV_Width), Natural (V_Width),
                         Scale, Settings.Attention_Cap,
                         Current.Attention_Out,
@@ -17450,10 +17450,10 @@ package body Model_Runner.Llama is
                         Natural (Value_Size), Settings.Group_Size,
                         Natural (Cell_Of (Item, Natural (Index), First)),
                         Natural (Cell),
-                        Natural (Block_Base (Item) + Base),
+                        Block_Base (Item) + Base,
                         --  A packed session has no exact rows for the
                         --  values to follow; its step reads neither base.
-                        Natural (Block_Base (Item) + Exact_Keys (Item) + V_Base),
+                        Block_Base (Item) + Exact_Keys (Item) + V_Base,
                         Natural (KV_Width), Natural (V_Width), Scale,
                         Settings.Attention_Cap, Current.Attention_Out,
                         Current.Feed_Norm.all, Settings.Epsilon,
@@ -17488,8 +17488,8 @@ package body Model_Runner.Llama is
                        (Item.Query.all, Natural (Heads), Natural (Head_Size),
                         Natural (Value_Size), Settings.Group_Size,
                         Natural (Cell_Of (Item, Natural (Index), First)),
-                        Natural (Cell), Natural (Base),
-                        Natural (Exact_Keys (Item) + V_Base),
+                        Natural (Cell), Base,
+                        Exact_Keys (Item) + V_Base,
                         Natural (KV_Width), Natural (V_Width), Scale,
                         Settings.Attention_Cap, Current.Attention_Out,
                         Item.Normalized, Projected,
@@ -19178,16 +19178,16 @@ package body Model_Runner.Llama is
                          else No_Turns),
                         Natural (Head_Size), Settings.Rotary,
                         K."=" (Settings.Pairing, K.Split),
-                        Natural ((if Item.Paged then 0
-                                  else Block_Base (Item)
-                                       + Cell_Of (Item, Natural (Index),
-                                                  Reserved) * KV_Width
-                                       + Base)),
-                        Natural ((if Item.Paged then Page_Value_Base (Item)
-                                  else Block_Base (Item)
-                                       + Cell_Of (Item, Natural (Index),
-                                                  Reserved) * V_Width
-                                       + Exact_Keys (Item) + V_Base)),
+                        (if Item.Paged then 0
+                         else Block_Base (Item)
+                              + Cell_Of (Item, Natural (Index),
+                                         Reserved) * KV_Width
+                              + Base),
+                        (if Item.Paged then Page_Value_Base (Item)
+                         else Block_Base (Item)
+                              + Cell_Of (Item, Natural (Index),
+                                         Reserved) * V_Width
+                              + Exact_Keys (Item) + V_Base),
                         Natural (Heads), Natural (Value_Size),
                         Settings.Group_Size,
                         --  The lowest and highest cached positions this
@@ -19204,11 +19204,11 @@ package body Model_Runner.Llama is
                         --  s against 1.23 for sixteen at 1,419.
                         Natural (Lowest_Cell (Natural (Index))),
                         Natural (Highest_Cell (Natural (Index))),
-                        Natural ((if Item.Paged then 0
-                                  else Block_Base (Item) + Base)),
-                        Natural ((if Item.Paged then Page_Value_Base (Item)
-                                  else Block_Base (Item)
-                                       + Exact_Keys (Item) + V_Base)),
+                        (if Item.Paged then 0
+                         else Block_Base (Item) + Base),
+                        (if Item.Paged then Page_Value_Base (Item)
+                         else Block_Base (Item)
+                              + Exact_Keys (Item) + V_Base),
                         Natural (KV_Width), Natural (V_Width),
                         Scale, Settings.Attention_Cap,
                         Current.Attention_Out,
@@ -19925,8 +19925,8 @@ package body Model_Runner.Llama is
                            Natural (Heads), Natural (Head_Size),
                            Natural (Value_Size), Settings.Group_Size,
                            Natural (First_Step), Natural (Last_Step),
-                           Natural (Seat_At + Base),
-                           Natural (Seat_At + Exact_Keys (Item) + V_Base),
+                           Seat_At + Base,
+                           Seat_At + Exact_Keys (Item) + V_Base,
                            Natural (KV_Width), Natural (V_Width), Scale,
                            Settings.Attention_Cap, Current.Attention_Out,
                            Current.Feed_Norm.all, Settings.Epsilon,

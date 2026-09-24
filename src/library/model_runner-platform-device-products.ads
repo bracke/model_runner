@@ -1315,10 +1315,10 @@ package Model_Runner.Platform.Device.Products is
       Weight_At   : Model_Runner.Bytes.Byte_Count := 0;
       Key         : System.Address := System.Null_Address;
       Into_Cache  : Boolean := False;
-      At_First    : Natural := 0;
+      At_First    : Model_Runner.Numerics.Element_Count := 0;
       Stride      : Natural := 0;
       V_Step      : Natural := 0;
-      V_At_First  : Natural := 0;
+      V_At_First  : Model_Runner.Numerics.Element_Count := 0;
       V_Stride    : Natural := 0;
       Kept        : Boolean := True;
       Pages_At       : Natural := 0;
@@ -1378,7 +1378,7 @@ package Model_Runner.Platform.Device.Products is
      (Steps     : in out Sequence;
       Width     : Natural;
       Stride    : Natural;
-      At_First  : Natural;
+      At_First  : Model_Runner.Numerics.Element_Count;
       Added     : out Boolean;
       From_Step : Natural := 0;
       Packed    : Packing_Shape := Not_Packing;
@@ -1516,8 +1516,8 @@ package Model_Runner.Platform.Device.Products is
       Group_Size : Natural;
       First      : Natural;
       Last       : Natural;
-      K_Base     : Natural;
-      V_Base     : Natural;
+      K_Base     : Model_Runner.Numerics.Element_Count;
+      V_Base     : Model_Runner.Numerics.Element_Count;
       KV_Width   : Natural;
       V_Width    : Natural;
       Scale      : Model_Runner.Numerics.Real;
@@ -1650,8 +1650,8 @@ package Model_Runner.Platform.Device.Products is
       Group_Size : Natural;
       First      : Natural;
       Last       : Natural;
-      K_Base     : Natural;
-      V_Base     : Natural;
+      K_Base     : Model_Runner.Numerics.Element_Count;
+      V_Base     : Model_Runner.Numerics.Element_Count;
       KV_Width   : Natural;
       V_Width    : Natural;
       Scale      : Model_Runner.Numerics.Real;
@@ -2176,8 +2176,8 @@ package Model_Runner.Platform.Device.Products is
       Group_Size : Natural;
       First      : Natural;
       Last       : Natural;
-      K_Base     : Natural;
-      V_Base     : Natural;
+      K_Base     : Model_Runner.Numerics.Element_Count;
+      V_Base     : Model_Runner.Numerics.Element_Count;
       KV_Width   : Natural;
       V_Width    : Natural;
       Scale      : Model_Runner.Numerics.Real;
@@ -3122,7 +3122,7 @@ private
       --  every Stride after it.
       Places   : Boolean := False;
       Stride   : Natural := 0;
-      At_First : Natural := 0;
+      At_First : Model_Runner.Numerics.Element_Count := 0;
 
       --  Whether the caller wants this step's answer back. A step whose
       --  only reader is the step after it -- an arm of a gate, a blend a
@@ -3159,8 +3159,8 @@ private
       Group_Size : Natural := 1;
       First      : Natural := 0;
       Last       : Natural := 0;
-      K_Base     : Natural := 0;
-      V_Base     : Natural := 0;
+      K_Base     : Model_Runner.Numerics.Element_Count := 0;
+      V_Base     : Model_Runner.Numerics.Element_Count := 0;
       KV_Width   : Natural := 0;
       V_Width    : Natural := 0;
       Window     : Natural := 0;
@@ -3272,7 +3272,7 @@ private
       Turn_Table : System.Address := System.Null_Address;
       Into_Cache : Boolean := False;
       V_Rows     : Natural := 0;
-      V_At_First : Natural := 0;
+      V_At_First : Model_Runner.Numerics.Element_Count := 0;
       V_Stride   : Natural := 0;
    end record;
 
