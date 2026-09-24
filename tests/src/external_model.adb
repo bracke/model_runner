@@ -1,4 +1,6 @@
 with Ada.Exceptions;
+with Ada.Finalization;
+with Ada.Unchecked_Deallocation;
 --  This tool publishes counts and answers rather than timings, which is
 --  why it reports no load where `tests speed` and `tests benchmark` both
 --  do. A line carrying a load is a line that differs between two runs of
@@ -49,10 +51,35 @@ package body External_Model is
 
    Max_Captured : constant := 1_000_000;
 
+   --  A captured text's room, on the heap. A run holds seven of these at
+   --  once, and as strings in its frame they were seven megabytes of the
+   --  main task's eight: a test that called in a little deeper ran off the
+   --  end, and where the overflow landed inside free the signal unwound out
+   --  of it with the heap's lock still held, so the next free waited for
+   --  ever. The suite hung roughly one run in six.
+   type Text_Access is access String;
+   procedure Deallocate is new Ada.Unchecked_Deallocation (String, Text_Access);
+
+   type Held_Text is new Ada.Finalization.Limited_Controlled with record
+      Data : Text_Access;
+   end record;
+   overriding procedure Initialize (Item : in out Held_Text);
+   overriding procedure Finalize (Item : in out Held_Text);
+
+   overriding procedure Initialize (Item : in out Held_Text) is
+   begin
+      Item.Data := new String'(1 .. Max_Captured => ' ');
+   end Initialize;
+
+   overriding procedure Finalize (Item : in out Held_Text) is
+   begin
+      Deallocate (Item.Data);
+   end Finalize;
+
    --  A sink that keeps what generation produced, so the run can check the
    --  bytes rather than trust that something was printed.
    type Capture is limited new Model_Runner.Output.Sink with record
-      Data : String (1 .. Max_Captured) := [others => ' '];
+      Held : Held_Text;
       Used : Natural := 0;
    end record;
 
@@ -64,11 +91,11 @@ package body External_Model is
    overriding procedure Write
      (Self : in out Capture; Item : String; Closed : out Boolean) is
    begin
-      if Self.Used + Item'Length > Self.Data'Length then
+      if Self.Used + Item'Length > Self.Held.Data'Length then
          Closed := True;
          return;
       end if;
-      Self.Data (Self.Used + 1 .. Self.Used + Item'Length) := Item;
+      Self.Held.Data (Self.Used + 1 .. Self.Used + Item'Length) := Item;
       Self.Used := Self.Used + Item'Length;
       Closed := False;
    end Write;
@@ -117,7 +144,8 @@ package body External_Model is
              Model_Runner.Backend.Device.Describe.Supports_Parallel);
 
       Expected    : Expectations.Recording;
-      Greedy      : String (1 .. Max_Captured) := [others => ' '];
+      Greedy_Held : Held_Text;
+      Greedy : String renames Greedy_Held.Data.all;
       Greedy_Last : Natural := 0;
       Source      : Files.File_Source;
       Container : Containers.Container;
@@ -198,7 +226,7 @@ package body External_Model is
          Last := Natural'Min (Sink.Used, Text'Length);
          if Last > 0 then
             Text (Text'First .. Text'First + Last - 1) :=
-              Sink.Data (1 .. Last);
+              Sink.Held.Data (1 .. Last);
          end if;
 
          Ok := Outcome.Reason /= Gen.Runtime_Error;
@@ -400,9 +428,12 @@ package body External_Model is
       end if;
 
       declare
-         First   : String (1 .. Max_Captured);
-         Second  : String (1 .. Max_Captured);
-         Third   : String (1 .. Max_Captured);
+         First_Held : Held_Text;
+         First : String renames First_Held.Data.all;
+         Second_Held : Held_Text;
+         Second : String renames Second_Held.Data.all;
+         Third_Held : Held_Text;
+         Third : String renames Third_Held.Data.all;
          Last_1, Last_2, Last_3 : Natural;
          Count_1, Count_2, Count_3 : Natural;
          Ok_1, Ok_2, Ok_3 : Boolean;
@@ -473,7 +504,8 @@ package body External_Model is
 
             declare
                Plain  : L.Model;
-               Text   : String (1 .. Max_Captured) := [others => ' '];
+               Text_Held : Held_Text;
+               Text : String renames Text_Held.Data.all;
                Last   : Natural := 0;
                Count  : Natural := 0;
                Fine   : Boolean := False;
@@ -508,7 +540,7 @@ package body External_Model is
 
                         Last := Natural'Min (Sink.Used, Text'Length);
                         if Last > 0 then
-                           Text (1 .. Last) := Sink.Data (1 .. Last);
+                           Text (1 .. Last) := Sink.Held.Data (1 .. Last);
                         end if;
                         Count := Outcome.Generated_Tokens;
                         Fine := Outcome.Reason /= Gen.Runtime_Error;
@@ -543,7 +575,8 @@ package body External_Model is
             Draft_Container : Containers.Container;
             Draft_Engine    : aliased L.Model;
 
-            Text  : String (1 .. Max_Captured) := [others => ' '];
+            Text_Held : Held_Text;
+            Text : String renames Text_Held.Data.all;
             Last  : Natural := 0;
             Count : Natural := 0;
             Fine  : Boolean := False;
@@ -595,7 +628,7 @@ package body External_Model is
 
                      Last := Natural'Min (Sink.Used, Text'Length);
                      if Last > 0 then
-                        Text (1 .. Last) := Sink.Data (1 .. Last);
+                        Text (1 .. Last) := Sink.Held.Data (1 .. Last);
                      end if;
                      Count := Outcome.Generated_Tokens;
                      Fine := Outcome.Reason /= Gen.Runtime_Error;
