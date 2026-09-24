@@ -24,7 +24,7 @@
 #define NUM_ROWS 2u
 #endif
 
-layout(local_size_x = 32) in;
+layout(local_size_x = 64) in;
 
 layout(std430, binding = 0) readonly  buffer Weights  { uint  w[]; };
 layout(std430, binding = 1) readonly  buffer Vectors  { float x[]; };
@@ -95,7 +95,7 @@ void main() {
     }
 
     //  This lane's two super-blocks stride the row, ix and ix + 2, ix + 4 ...
-    for (uint i = ix; i < blocks; i += 2u) {
+    for (uint i = ix; i < blocks; i += 4u) {
         //  The activation of the two regions this lane's half owns, four
         //  vectors of four: the near sixteen and the far sixteen.
         uint y1 = i * 256u + y_off;

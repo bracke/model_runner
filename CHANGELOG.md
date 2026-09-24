@@ -7,6 +7,10 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The k-quant generating kernels run at the wave of sixty-four,** four
+  super-blocks in flight: qwen3-8b Q4_K_M 13.6 -> 13.8 tokens a second,
+  gemma-3-4b 23.3 -> 23.6, a TinyLlama 89.3 -> 90.9.
+
 - **Q8_0 generates on a subgroup kernel.** A generated token in Q8_0 went
   through the eight-lane row kernel; it now takes the low-bit formats'
   subgroup kernel compiled for it -- a lane half a block, sixteen signed bytes

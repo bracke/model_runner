@@ -143,7 +143,7 @@ package body Model_Runner.Platform.Device.Products is
    --  machine runs keep this much however large a model is.
    Host_Reserve : constant := 6 * 1024 * 1024 * 1024;
 
-   Wave_Lanes : constant := 32;
+   Wave_Lanes : constant := 64;
    Wave_Rows  : constant := 2;
 
    --  The low-bit subgroup kernels' band, their shader's NUM_ROWS, and their

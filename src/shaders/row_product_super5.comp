@@ -19,7 +19,7 @@
 #define NUM_ROWS 2u
 #endif
 
-layout(local_size_x = 32) in;
+layout(local_size_x = 64) in;
 
 layout(std430, binding = 0) readonly  buffer Weights  { uint  w[]; };
 layout(std430, binding = 1) readonly  buffer Vectors  { float x[]; };
@@ -94,7 +94,7 @@ void main() {
         temp[r] = 0.0;
     }
 
-    for (uint i = ix; i < blocks; i += 2u) {
+    for (uint i = ix; i < blocks; i += 4u) {
         uint y1 = i * 256u + y_offset;
         uint y2 = y1 + 128u;
         uint yb = from_base + y1;
