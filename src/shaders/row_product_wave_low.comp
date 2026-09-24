@@ -1524,6 +1524,23 @@ float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
 }
 #endif
 
+#ifdef Q8_0
+const uint BLOCK_ELEMS = 32u;
+const uint BLOCK_BYTES = 34u;
+
+//  Q8_0 is not a low-bit format, but it generates on this kernel too: a
+//  lane takes half a block, sixteen signed bytes read as four words, behind
+//  the block's half-precision scale.
+float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
+    uint q = at + 2u + within;
+    return half_at(at)
+           * (dot(a0, vec4(unpack8(int(quad_at(q)))))
+            + dot(a1, vec4(unpack8(int(quad_at(q + 4u)))))
+            + dot(a2, vec4(unpack8(int(quad_at(q + 8u)))))
+            + dot(a3, vec4(unpack8(int(quad_at(q + 12u))))));
+}
+#endif
+
 void main() {
     uint tid = gl_LocalInvocationID.x;
     uint itid = tid & 15u;

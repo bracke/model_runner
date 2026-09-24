@@ -6239,7 +6239,7 @@ package body Checks is
 
       --  And the twelve compilations of the low-bit generating kernel, one a
       --  format from the one source, each asked against it.
-      for Which in 1 .. 12 loop
+      for Which in 1 .. 13 loop
          declare
             Found : Boolean;
 
@@ -6260,7 +6260,8 @@ package body Checks is
                   when 9 => Model_Runner.Shaders.Low.Row_Product_Wave_Tq2_0_Digest,
                   when 10 => Model_Runner.Shaders.Low.Row_Product_Wave_Q1_0_Digest,
                   when 11 => Model_Runner.Shaders.Low.Row_Product_Wave_Q2_0_Digest,
-                  when others => Model_Runner.Shaders.Low.Row_Product_Wave_Nvfp4_Digest);
+                  when 12 => Model_Runner.Shaders.Low.Row_Product_Wave_Nvfp4_Digest,
+                  when others => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_Digest);
          begin
             Result.Performed := Result.Performed + 1;
 

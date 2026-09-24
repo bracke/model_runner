@@ -152,6 +152,10 @@ package body Model_Runner.Platform.Device.Products is
    --  formats run at the device's native wave, and on this part the width
    --  was worth more than any change to the decode.
    Low_Wave_Rows  : constant := 8;
+
+   --  Q8_0's band on the same kernel: fewer rows a workgroup, more
+   --  workgroups, which a format that is read rather than decoded wants.
+   Q8_Wave_Rows   : constant := 2;
    Low_Wave_Lanes : constant := 64;
 
    --  Rows of the answer one workgroup of the matrix product computes, and
@@ -797,7 +801,10 @@ package body Model_Runner.Platform.Device.Products is
                   and then Item.Wave_Line6 /= Null_Handle)
                  or else
                  (Packing in Low_Packing
-                  and then Item.Low_Wave_Lines (Packing) /= Null_Handle)));
+                  and then Item.Low_Wave_Lines (Packing) /= Null_Handle)
+                 or else
+                 (Packing = Packed_Q8_0
+                  and then Item.Q8_Wave_Line /= Null_Handle)));
 
    --  Invocations a workgroup of the bound row kernel has. The super-block
    --  kernel's workgroup is a single subgroup of thirty-two; the half-group
@@ -806,7 +813,8 @@ package body Model_Runner.Platform.Device.Products is
      (Item : Engine; Packing : Weight_Packing; Count : Natural)
       return Positive
    is (if Waved (Item, Packing, Count)
-       then (if Packing in Low_Packing then Low_Wave_Lanes else Wave_Lanes)
+       then (if Packing in Low_Packing | Packed_Q8_0 then Low_Wave_Lanes
+             else Wave_Lanes)
        elsif Half_Grouped (Item, Packing, Count) then Half_Group
        else Group_Size);
 
@@ -817,13 +825,16 @@ package body Model_Runner.Platform.Device.Products is
      (Item : Engine; Packing : Weight_Packing; Count : Natural)
       return Positive
    is (if Waved (Item, Packing, Count)
-       then (if Packing in Low_Packing then Low_Wave_Lanes else Wave_Lanes)
+       then (if Packing in Low_Packing | Packed_Q8_0 then Low_Wave_Lanes
+             else Wave_Lanes)
        else Row_Lanes);
 
    --  Rows a subgroup kernel's workgroup lands: the k-quants' band, or the
    --  low-bit formats' own.
    function Wave_Band (Packing : Weight_Packing) return Positive
-   is (if Packing in Low_Packing then Low_Wave_Rows else Wave_Rows);
+   is (if Packing in Low_Packing then Low_Wave_Rows
+       elsif Packing = Packed_Q8_0 then Q8_Wave_Rows
+       else Wave_Rows);
 
    --  Rows the dispatch reckons in: the super-block kernel's workgroup lands
    --  a band of Wave_Band rows, so it asks for a band's worth fewer.
@@ -840,6 +851,8 @@ package body Model_Runner.Platform.Device.Products is
       Packing : Weight_Packing := Values_F32) return Address
    is (if Packing in Low_Packing and then Waved (Item, Packing, Count)
        then Item.Low_Wave_Lines (Packing)
+       elsif Packing = Packed_Q8_0 and then Waved (Item, Packing, Count)
+       then Item.Q8_Wave_Line
        elsif Packing in Low_Packing
        then (if Count in Row_Line_Array'Range
                and then Item.Low_Row_Lines (Count) /= Null_Handle
@@ -2265,6 +2278,25 @@ package body Model_Runner.Platform.Device.Products is
                end if;
             end;
          end loop;
+
+         declare
+            Create : constant Create_Call :=
+              To_Create (Point ("vkCreateShaderModule"));
+            Words  : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0;
+            Request : aliased Shader_Create_Info;
+         begin
+            if Create /= null then
+               Request.Size := Interfaces.C.size_t (Words'Length * 4);
+               Request.Code := Words'Address;
+
+               if Create (Item.Logical, Request'Address, Null_Handle,
+                          Made'Access) = 0
+               then
+                  Item.Q8_Wave_Shader := Made;
+               end if;
+            end if;
+         end;
       end if;
 
       --  The second kernel's module.
@@ -3056,6 +3088,11 @@ package body Model_Runner.Platform.Device.Products is
                      Line (Low_Wave_Lanes, 1, Item.Low_Wave_Lines (Packing));
                   end if;
                end loop;
+
+               if Item.Q8_Wave_Shader /= Null_Handle then
+                  Request.Stage.Module := Item.Q8_Wave_Shader;
+                  Line (Low_Wave_Lanes, 1, Item.Q8_Wave_Line);
+               end if;
 
                Request.Stage.Module := Item.Shader;
                Request.Stage.Next := Null_Handle;
@@ -4065,6 +4102,7 @@ package body Model_Runner.Platform.Device.Products is
       for Packing in Low_Packing loop
          Give_Back (Item.Low_Wave_Lines (Packing), "vkDestroyPipeline");
       end loop;
+      Give_Back (Item.Q8_Wave_Line, "vkDestroyPipeline");
       Give_Back (Item.Low_Pipeline, "vkDestroyPipeline");
       Give_Back (Item.Low_Wide_Line, "vkDestroyPipeline");
       for Count in Item.Low_Row_Lines'Range loop
@@ -4155,6 +4193,7 @@ package body Model_Runner.Platform.Device.Products is
       for Packing in Low_Packing loop
          Give_Back (Item.Low_Wave_Shaders (Packing), "vkDestroyShaderModule");
       end loop;
+      Give_Back (Item.Q8_Wave_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Low_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Wave_Shader6, "vkDestroyShaderModule");
       Item.Matrices := False;

@@ -2732,6 +2732,10 @@ private
       Low_Wave_Shaders : Low_Address_Array := [others => System.Null_Address];
       Low_Wave_Lines   : Low_Address_Array := [others => System.Null_Address];
 
+      --  And Q8_0, on the same kernel compiled for it.
+      Q8_Wave_Shader : System.Address := System.Null_Address;
+      Q8_Wave_Line   : System.Address := System.Null_Address;
+
       Wide_Line   : System.Address := System.Null_Address;
 
       --  The row product's LOW_BITS compilation and its pipelines, one for

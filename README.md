@@ -1932,15 +1932,18 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.347 s | **0.283 s** |
-| -- evaluating the prompt | 0.042 s | 0.037 s |
-| -- generating | 0.302 s | **0.245 s** |
+| 6-token prompt, 12 generated | 0.347 s | **0.244 s** |
+| -- evaluating the prompt | 0.042 s | 0.035 s |
+| -- generating | 0.302 s | **0.208 s** |
 | -- processor time | 1.82 s | **0.12 s** |
 | 110-token prompt, one token | 0.327 s | **0.091 s** |
 | -- evaluating the prompt | 0.326 s | **0.090 s** |
 | -- processor time | 2.51 s | **0.01 s** |
 
-All the cells were taken in one sitting on 2026-09-18, back to back, at the
+The device's first four cells were taken again on 2026-09-25, when Q8_0 was
+given a subgroup kernel for a generated token -- 0.245 s generating became
+0.208 -- and its prompt rows read what they read (0.096 s for the 110
+tokens). The rest were taken in one sitting on 2026-09-18, back to back, at the
 same load -- so the two columns are comparable, which they were not in the
 version of this table before last. The cache is given back when the last session
 holding a block of it closes, so a run that read a long context and went on
@@ -7053,7 +7056,7 @@ somebody else's tool runs, not what it says.
 | --- | ---: | ---: |
 | model_runner, processor | **391.5 t/s** | **39.8 t/s** |
 | llama.cpp, processor | 383.9 t/s | 40.6 t/s |
-| model_runner, device | 1527.8 t/s | 54.2 t/s |
+| model_runner, device | 1527.8 t/s | **58.1 t/s** |
 | llama.cpp, device | 1637.7 t/s | 58.2 t/s |
 
 **Both short-prompt rows read 296.5 and 1078.4 until 2026-09-02**, and both
@@ -7075,15 +7078,16 @@ every change in this section is actually judged on:
 | --- | ---: | ---: |
 | model_runner, processor | **314.9 t/s** | **39.8 t/s** |
 | llama.cpp, processor | 298.6 t/s | 40.6 t/s |
-| model_runner, device | **1995.8 t/s** | 54.2 t/s |
+| model_runner, device | **1995.8 t/s** | **58.1 t/s** |
 | llama.cpp, device | 1908.4 t/s | 58.2 t/s |
 
 **Every processor row is ahead but the generated token, and that one is
 within two per cent.** 391.5 against 383.9 at 110 tokens, 314.9 against 298.6
 at 1419, and 39.8 against 40.6 generating -- **1.02 behind, where it was 1.07
 four sections above**. The device's long prompt is ahead too, 1995.8 against
-1908.4; its short prompt and its generated token are 1.07 behind and nothing
-in those four sections touched either.
+1908.4; its short prompt is 1.07 behind. Its generated token was too, until
+Q8_0 was given a subgroup kernel of its own (2026-09-25): 54.2 t/s became
+58.1 -- 64 tokens in 1.101 s -- against llama.cpp's 58.2, level.
 
 **THE WHOLE TABLE IS TAKEN AGAIN, BOTH SIDES, EVERY TIME.** This machine is
 a fifteen-watt part and its rows move a few per cent between sittings for
@@ -7308,7 +7312,7 @@ number of them.
 
 with `--backend device` added to the first two for the device rows. `tests
 speed` reports seconds and this table reports rates: 110 tokens in 0.286 s
-and 64 in 1.690 s on the processor, 0.067 s and 1.210 s on the device, and
+and 64 in 1.690 s on the processor, 0.067 s and 1.101 s on the device, and
 the long prompt in 4.510 s and 0.713 s, medians of three as everywhere else
 here. The 110-token file the prompt rows
 use is `speed-prompt-110.txt` rather than `speed-prompt.txt`, for the reason

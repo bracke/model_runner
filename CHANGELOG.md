@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Q8_0 generates on a subgroup kernel.** A generated token in Q8_0 went
+  through the eight-lane row kernel; it now takes the low-bit formats'
+  subgroup kernel compiled for it -- a lane half a block, sixteen signed bytes
+  read as four words -- at the wave of sixty-four and two rows a workgroup.
+  qwen3.5-4b at Q8_0 went from 12.0 to 14.2 tokens a second generating, past
+  llama.cpp's 13.6; TinyLlama at Q8_0 from 54.2 to 58.1, level with its 58.2.
+
 - **A tile for the low-bit formats.** A prompt in any of the twelve went
   through the row product, a vector at a time; it now goes through the
   matrix instruction like every other format, the tile's third compilation

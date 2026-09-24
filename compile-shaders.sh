@@ -69,6 +69,7 @@ compile row_product_wave_tq1_0       row_product_wave_low.comp vulkan1.1 NUM_ROW
 compile row_product_wave_tq2_0       row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u TQ2_0
 compile row_product_wave_q1_0        row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u Q1_0
 compile row_product_wave_q2_0        row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u Q2_0
+compile row_product_wave_q8_0         row_product_wave_low.comp vulkan1.1 NUM_ROWS=2u Q8_0
 compile row_product_wave_nvfp4       row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u NVFP4
 compile half_batch                   half_batch.comp       vulkan1.0
 compile matrix_product               matrix_product.comp   vulkan1.3
