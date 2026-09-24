@@ -23,6 +23,7 @@ with Template_Registry;
 with Tiny_Model;
 with Model_Runner.Platform.Device.Products;
 with Model_Runner.Shaders;
+with Model_Runner.Shaders.Low;
 with Shader_Generation;
 with Tool_Commands;
 
@@ -5539,7 +5540,7 @@ package body Checks is
             Fail ("src/shaders/row_product.comp has changed since it was "
                   & "compiled; compile it and run 'tests shader "
                   & "src/shaders/row_product.comp OUT.spv' again");
-         elsif Digest /= Model_Runner.Shaders.Row_Product_Low_Digest then
+         elsif Digest /= Model_Runner.Shaders.Low.Row_Product_Low_Digest then
             Fail ("the LOW_BITS compilation of src/shaders/row_product.comp "
                   & "is older than the source; run ./compile-shaders.sh, "
                   & "which compiles it with -DLOW_BITS to "
@@ -6210,6 +6211,43 @@ package body Checks is
                   & "every shader named");
          end if;
       end;
+
+      --  And the twelve compilations of the low-bit generating kernel, one a
+      --  format from the one source, each asked against it.
+      for Which in 1 .. 12 loop
+         declare
+            Found : Boolean;
+
+            Digest : constant Interfaces.Unsigned_64 :=
+              Shader_Generation.Source_Digest
+                (Root & "/src/shaders/row_product_wave_low.comp", Found);
+
+            Recorded : constant Interfaces.Unsigned_64 :=
+              (case Which is
+                  when 1 => Model_Runner.Shaders.Low.Row_Product_Wave_Iq3_S_Digest,
+                  when 2 => Model_Runner.Shaders.Low.Row_Product_Wave_Iq2_Xxs_Digest,
+                  when 3 => Model_Runner.Shaders.Low.Row_Product_Wave_Iq2_Xs_Digest,
+                  when 4 => Model_Runner.Shaders.Low.Row_Product_Wave_Iq2_S_Digest,
+                  when 5 => Model_Runner.Shaders.Low.Row_Product_Wave_Iq3_Xxs_Digest,
+                  when 6 => Model_Runner.Shaders.Low.Row_Product_Wave_Iq1_S_Digest,
+                  when 7 => Model_Runner.Shaders.Low.Row_Product_Wave_Iq1_M_Digest,
+                  when 8 => Model_Runner.Shaders.Low.Row_Product_Wave_Tq1_0_Digest,
+                  when 9 => Model_Runner.Shaders.Low.Row_Product_Wave_Tq2_0_Digest,
+                  when 10 => Model_Runner.Shaders.Low.Row_Product_Wave_Q1_0_Digest,
+                  when 11 => Model_Runner.Shaders.Low.Row_Product_Wave_Q2_0_Digest,
+                  when others => Model_Runner.Shaders.Low.Row_Product_Wave_Nvfp4_Digest);
+         begin
+            Result.Performed := Result.Performed + 1;
+
+            if not Found then
+               Fail ("src/shaders/row_product_wave_low.comp is missing, and "
+                     & "the words compiled from it are committed");
+            elsif Digest /= Recorded then
+               Fail ("src/shaders/row_product_wave_low.comp has changed since "
+                     & "it was compiled; run ./compile-shaders.sh");
+            end if;
+         end;
+      end loop;
 
       --  And the three that generate a K-quant row on a subgroup of
       --  thirty-two, one per format, asked the same way.

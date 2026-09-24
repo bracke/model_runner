@@ -175,6 +175,9 @@ package Model_Runner.Platform.Device.Products is
    --  has a tile; a batch in one goes to the row product.
    subtype Low_Packing is Weight_Packing range Packed_IQ3_S .. Packed_NVFP4;
 
+   --  One handle for each low-bit packing.
+   type Low_Address_Array is array (Low_Packing) of System.Address;
+
    --  The packings whose blocks hold two hundred and fifty-six elements
    --  rather than thirty-two. A row in one of these is a whole number of
    --  super-blocks, so a width that is not a multiple of 256 is refused
@@ -2713,6 +2716,11 @@ private
       --  And for Q6_K, six bits an element and a signed scale a sub-block.
       Wave_Shader6 : System.Address := System.Null_Address;
       Wave_Line6   : System.Address := System.Null_Address;
+
+      --  And the twelve low-bit formats: one source, row_product_wave_low,
+      --  compiled once a format, each with its decode and codebook alone.
+      Low_Wave_Shaders : Low_Address_Array := [others => System.Null_Address];
+      Low_Wave_Lines   : Low_Address_Array := [others => System.Null_Address];
 
       Wide_Line   : System.Address := System.Null_Address;
 

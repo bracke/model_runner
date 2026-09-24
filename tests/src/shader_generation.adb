@@ -1,3 +1,4 @@
+with Ada.Strings.Fixed;
 with Ada.Calendar;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
@@ -131,9 +132,11 @@ package body Shader_Generation is
       Handle : Ada.Text_IO.File_Type;
 
       --  Write one shader's digest and words.
-      procedure Emit (Pair : Shader_Pair; Ok : out Boolean);
+      procedure Emit
+        (Pair : Shader_Pair; Into : Ada.Text_IO.File_Type; Ok : out Boolean);
 
-      procedure Emit (Pair : Shader_Pair; Ok : out Boolean) is
+      procedure Emit
+        (Pair : Shader_Pair; Into : Ada.Text_IO.File_Type; Ok : out Boolean) is
          Room : Stream_Element_Array (1 .. 1_000_000);
          Last : Stream_Element_Offset;
          Read : Boolean;
@@ -194,24 +197,24 @@ package body Shader_Generation is
          end if;
 
          Ada.Text_IO.Put_Line
-           (Handle, "   --  Digest of " & Pair.Source.all & " when these");
-         Ada.Text_IO.Put_Line (Handle, "   --  words were made from it.");
+           (Into, "   --  Digest of " & Pair.Source.all & " when these");
+         Ada.Text_IO.Put_Line (Into, "   --  words were made from it.");
          Ada.Text_IO.Put_Line
-           (Handle,
+           (Into,
             "   " & Name & "_Digest : constant Interfaces.Unsigned_64 :=");
          Ada.Text_IO.Put_Line
-           (Handle, "     16#" & Hex (Digest) & "#;");
-         Ada.Text_IO.New_Line (Handle);
+           (Into, "     16#" & Hex (Digest) & "#;");
+         Ada.Text_IO.New_Line (Into);
          Ada.Text_IO.Put_Line
-           (Handle, "   --  The compiled words, as the device is given them.");
+           (Into, "   --  The compiled words, as the device is given them.");
          Ada.Text_IO.Put_Line
-           (Handle, "   " & Name & " : constant Word_Array :=");
+           (Into, "   " & Name & " : constant Word_Array :=");
 
          declare
             Words : constant Stream_Element_Offset := Last / 4;
             Column : Natural := 0;
          begin
-            Ada.Text_IO.Put (Handle, "     [");
+            Ada.Text_IO.Put (Into, "     [");
 
             for Index in 1 .. Words loop
                declare
@@ -242,11 +245,11 @@ package body Shader_Generation is
                     Plain (Plain'First + 1 .. Plain'Last);
                begin
                   if Column = 0 and then Index > 1 then
-                     Ada.Text_IO.Put_Line (Handle, "");
-                     Ada.Text_IO.Put (Handle, "      ");
+                     Ada.Text_IO.Put_Line (Into, "");
+                     Ada.Text_IO.Put (Into, "      ");
                   end if;
 
-                  Ada.Text_IO.Put (Handle, Text);
+                  Ada.Text_IO.Put (Into, Text);
 
                   --  The separator goes before the next word rather than
                   --  after this one when the line ends here, because a comma
@@ -259,20 +262,40 @@ package body Shader_Generation is
                   end if;
 
                   if Index < Words and then Column /= 0 then
-                     Ada.Text_IO.Put (Handle, ", ");
+                     Ada.Text_IO.Put (Into, ", ");
                   elsif Index < Words then
-                     Ada.Text_IO.Put (Handle, ",");
+                     Ada.Text_IO.Put (Into, ",");
                   end if;
                end;
             end loop;
 
-            Ada.Text_IO.Put_Line (Handle, "];");
+            Ada.Text_IO.Put_Line (Into, "];");
          end;
 
          Ok := True;
       end Emit;
 
       Good : Boolean;
+
+      --  The low-bit kernels go to a child package of their own: the row
+      --  product's LOW_BITS compilation and the twelve generating kernels,
+      --  whose codebooks put the one file past the size the repository
+      --  allows a committed file. The child uses the parent's Word_Array.
+      function Is_Low (Pair : Shader_Pair) return Boolean is
+         Name : constant String := Ada_Name (Pair.Compiled.all);
+      begin
+         --  The name is a slice of the path, so it does not begin at one.
+         return Ada.Strings.Fixed.Index (Name, "Row_Product_Low") = Name'First
+           or else Ada.Strings.Fixed.Index (Name, "Row_Product_Wave")
+                   = Name'First;
+      end Is_Low;
+
+      Low_Target : constant String :=
+        Root & "/src/library/model_runner-shaders-low.ads";
+
+      Low    : Ada.Text_IO.File_Type;
+      First  : Boolean := True;
+      Any_Low : Boolean := False;
    begin
       Written := False;
 
@@ -304,20 +327,60 @@ package body Shader_Generation is
       Ada.Text_IO.New_Line (Handle);
 
       for Index in Shaders'Range loop
-         Emit (Shaders (Index), Good);
-         if not Good then
-            Ada.Text_IO.Close (Handle);
-            return;
-         end if;
+         if Is_Low (Shaders (Index)) then
+            Any_Low := True;
+         else
+            if not First then
+               Ada.Text_IO.New_Line (Handle);
+            end if;
+            First := False;
 
-         if Index < Shaders'Last then
-            Ada.Text_IO.New_Line (Handle);
+            Emit (Shaders (Index), Handle, Good);
+            if not Good then
+               Ada.Text_IO.Close (Handle);
+               return;
+            end if;
          end if;
       end loop;
 
       Ada.Text_IO.New_Line (Handle);
       Ada.Text_IO.Put_Line (Handle, "end Model_Runner.Shaders;");
       Ada.Text_IO.Close (Handle);
+
+      if Any_Low then
+         Ada.Text_IO.Create (Low, Ada.Text_IO.Out_File, Low_Target);
+         Ada.Text_IO.Put_Line (Low, "with Interfaces;");
+         Ada.Text_IO.New_Line (Low);
+         Ada.Text_IO.Put_Line
+           (Low, "--  The low-bit kernels' compiled shaders, generated with");
+         Ada.Text_IO.Put_Line
+           (Low, "--  the parent package by `tests shader`: do not edit.");
+         Ada.Text_IO.Put_Line (Low, "--");
+         Ada.Text_IO.Put_Line
+           (Low, "--  Task safety: constants, readable from any task.");
+         Ada.Text_IO.Put_Line (Low, "package Model_Runner.Shaders.Low is");
+         Ada.Text_IO.New_Line (Low);
+         First := True;
+
+         for Index in Shaders'Range loop
+            if Is_Low (Shaders (Index)) then
+               if not First then
+                  Ada.Text_IO.New_Line (Low);
+               end if;
+               First := False;
+
+               Emit (Shaders (Index), Low, Good);
+               if not Good then
+                  Ada.Text_IO.Close (Low);
+                  return;
+               end if;
+            end if;
+         end loop;
+
+         Ada.Text_IO.New_Line (Low);
+         Ada.Text_IO.Put_Line (Low, "end Model_Runner.Shaders.Low;");
+         Ada.Text_IO.Close (Low);
+      end if;
 
       Written := True;
    exception

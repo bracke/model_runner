@@ -58,6 +58,18 @@ compile row_product_low              row_product.comp      vulkan1.0 LOW_BITS
 compile row_product_super            row_product_super.comp vulkan1.1 NUM_ROWS=2u
 compile row_product_super5           row_product_super5.comp vulkan1.1 NUM_ROWS=2u
 compile row_product_super6           row_product_super6.comp vulkan1.1 NUM_ROWS=2u
+compile row_product_wave_iq3_s       row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u IQ3_S
+compile row_product_wave_iq2_xxs     row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u IQ2_XXS
+compile row_product_wave_iq2_xs      row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u IQ2_XS
+compile row_product_wave_iq2_s       row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u IQ2_S
+compile row_product_wave_iq3_xxs     row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u IQ3_XXS
+compile row_product_wave_iq1_s       row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u IQ1_S
+compile row_product_wave_iq1_m       row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u IQ1_M
+compile row_product_wave_tq1_0       row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u TQ1_0
+compile row_product_wave_tq2_0       row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u TQ2_0
+compile row_product_wave_q1_0        row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u Q1_0
+compile row_product_wave_q2_0        row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u Q2_0
+compile row_product_wave_nvfp4       row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u NVFP4
 compile half_batch                   half_batch.comp       vulkan1.0
 compile matrix_product               matrix_product.comp   vulkan1.3
 compile matrix_extra                 matrix_product.comp   vulkan1.3 MORE_FORMATS

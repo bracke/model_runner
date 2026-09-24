@@ -1,394 +1,116 @@
 #version 450
-
-//  Four bytes of a word turned into four numbers at once, which is what
-//  unpack8 is for. A nibble taken out one at a time is a shift, a mask and
-//  a convert each; taken four at a time it is one mask on the word and one
-//  unpack. llama.cpp's own k-quant kernels read their quants this way and
-//  it is the one thing from them this program did not already do.
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
 
-//  Rows of a matrix against a batch of vectors, one row per invocation.
+//  The generating row product for the twelve low-bit formats, on a subgroup
+//  of thirty-two: compiled once a format, the format named by a define, so
+//  each pipeline carries its own decode and codebook and nothing else.
 //
-//  y[v][row] = sum over col of w[row][col] * x[v][col]
+//  Sixteen lanes share a group of 256 elements and a workgroup has two groups
+//  in flight; a lane takes sixteen elements one after another, which for
+//  every format here lies in one block and one run of its fields, and dots
+//  them with four vec4s of the activation. Where a format's value is a grid
+//  magnitude and a sign, the sign is a select with a negated operand and the
+//  product a fused multiply-add -- three operations an element; where it adds
+//  a constant to every element of a run (the ternary formats, IQ1's shift),
+//  the constant multiplies the run's activation sum once. The subgroup adds
+//  the partials, and a workgroup answers NUM_ROWS rows.
 //
-//  Two things are folded into one shader on purpose, because both are the
-//  same loop with a different way of reading w:
-//
-//  A batch. An invocation carries GROUP accumulators and reads each weight
-//  once for all of them, which is the saving a batch exists to make: the
-//  weights are what a product spends its time on, and reading them once for
-//  eight vectors is eight times less of it. A batch longer than GROUP is
-//  several dispatches, each told which vector it starts at -- and each of
-//  those dispatches reads the whole model again, which is why GROUP is the
-//  count a round of several sequences runs into first.
-//
-//  A format. A weight is either a floating-point value or a block of packed
-//  bits with a scale, and unpacking is a handful of arithmetic where reading
-//  the matrix again is a pass over the whole model. So the weights are bound
-//  as plain words and decoded here, which is what lets a quantized model
-//  reach a device without four bytes a weight being made for it first.
-//
-//  Every format this program reads is decoded here -- all twenty-eight, the
-//  same set Model_Runner.GGUF.Is_Supported names: sixteen in the compilation
-//  without LOW_BITS and the twelve low-bit ones in the compilation with it,
-//  which keeps the first's words what they were. It used to be three, and the
-//  other twelve reached a device only by being repacked into one of them
-//  first: a pass over the whole model at load, and four bytes a weight
-//  afterwards for anything repacked to binary32. A format the shader cannot
-//  read is a format the loader must refuse or convert, so the list here and
-//  the list in Backend.Device.Describe are the same list, and the test that
-//  compares them fails when they are not.
-//
-//  The accumulation is in binary32, which is what a device offers without
-//  asking for an extension. The processor's own kernels accumulate a row in
-//  binary64 and round once at the end, so the two do not agree bit for bit
-//  and are not meant to; what they have to agree on is the answer to within
-//  the tolerance the conformance sweep states.
-//
-//  Rows are contiguous, which is the layout every weight in this program
-//  already has: a row is what a matrix-vector product reads in one run.
+//  A lane finds its block from its column, so the formats of sixty-four and
+//  a hundred and twenty-eight elements need no width a multiple of 256: a
+//  group past the end of a row is skipped lane by lane.
 
-//  Invocations to a workgroup.
-//
-//  This was one number for every format and the best one is not: Q4_K
-//  generates in 0.941 s at a hundred and twenty-eight against 0.992 at two
-//  hundred and fifty-six, Q5_K in 1.036 against 1.046 -- and Q8_0 reads
-//  1.320 against 1.258 the other way, while Q2_K reads 1.053 against 0.894,
-//  which is sixteen per cent the wrong way. A wide group gives a row's lanes
-//  more neighbours to hide behind and a narrow one leaves more groups to
-//  schedule, and which of those a format wants depends on how long its
-//  decode is.
-//
-//  llama.cpp builds its own matrix-vector pipelines at two widths for this
-//  reason and picks per case. So does this now: the source is compiled once
-//  more with HALF_GROUP, and the engine binds it for the two formats that
-//  measured better on it.
-//  A specialization constant rather than a second compilation of the
-//  source. The words are the same either way and this repository will not
-//  hold another copy of them -- the generated package is a megabyte and
-//  that is the limit -- so the width is set when the pipeline is made.
-//  llama.cpp declares its own the same way, as local_size_x_id.
-layout(local_size_x_id = 0, local_size_x = 256) in;
+#ifndef NUM_ROWS
+#define NUM_ROWS 2u
+#endif
 
-layout(constant_id = 1) const uint GROUP = 8u;
+layout(local_size_x = 32) in;
 
-layout(std430, binding = 0) readonly  buffer Weights { uint  w[]; };
-layout(std430, binding = 1) readonly  buffer Vectors { float x[]; };
+layout(std430, binding = 0) readonly  buffer Weights  { uint  w[]; };
+layout(std430, binding = 1) readonly  buffer Vectors4 { vec4  x4[]; };
+layout(std430, binding = 2) writeonly buffer Result   { float y[]; };
+layout(std430, binding = 3) readonly  buffer Routing  { uint  route[]; };
+layout(std430, binding = 4) readonly  buffer Residual { float rj[]; };
 
-//  The same vectors four at a time, for a decode that takes four weights
-//  out of a word and wants their activations in one load rather than
-//  four. The same binding under a second name is how combine.comp reads
-//  its arms two ways, and a run of eight columns starts on a multiple of
-//  four wherever it is read this way.
-layout(std430, binding = 1) readonly  buffer Vectors4 { vec4 x4[]; };
-layout(std430, binding = 2) writeonly buffer Result  { float y[]; };
-
-//  The residual, where this product is one a join followed: the sum is
-//  stored rather than the product, and the join's own dispatch and the
-//  buffer between it and the normalization after it both stop existing.
-layout(std430, binding = 4) readonly buffer Residual { float rj[]; };
-
-//  A gather routed on the device: the expert numbers come out of what the
-//  routing step wrote rather than out of the push block, so that nothing
-//  between the router and the experts has to leave the device. Bound at
-//  three, which the tile kernel uses for its half-precision copy and this
-//  kernel never read.
-layout(std430, binding = 3) readonly buffer Routing { uint route[]; };
+const uint LISTED_BY_POSITION = 2u;
 
 layout(push_constant) uniform Shape {
     uint rows;
     uint columns;
-
-    //  How many vectors there are altogether, and which of them this
-    //  dispatch starts at. Both are needed: the first says where to read
-    //  and where to write, the count says which of this invocation's
-    //  accumulators are real.
     uint count;
     uint first;
-
-    //  Which format the weights are in. The numbering is
-    //  Weight_Packing'Pos, so the Ada enumeration is the definition and
-    //  the constants below are the copy -- they are in its order for that
-    //  reason. The host refuses anything outside the range before it gets
-    //  here, so the last branch needs no test of its own.
     uint format;
-
-    //  Where the matrix begins within the weight buffer. Zero when the host
-    //  copied the weights in, and the distance from a page boundary when it
-    //  handed the device its own memory instead: a pointer imported that way
-    //  has to be aligned to something larger than a tensor is, so the buffer
-    //  starts before the matrix does.
     uint base;
-
-    //  Whether the residual above is added before the answer is stored.
     uint joins;
-
-    //  A round's table, which this kernel never reads: the word is here so
-    //  that what follows lies where the host's push block puts it.
     uint table;
-
-    //  A mixture's chosen experts, gathered into one dispatch.
-    //
-    //  An expert's matrices are one slice of a stack the file stores
-    //  whole, and a token reads a few of the stack's many. Bound as one
-    //  buffer, the stack is uploaded once and kept once, and which slice a
-    //  workgroup reads is the third dispatch dimension: members names the
-    //  expert for each, stride is the bytes one expert's slice takes, and
-    //  apart is how far into the activation each member's own vector
-    //  begins -- zero where they all read the same one, as a gate and an
-    //  up projection do, and the expert's width where each reads its own,
-    //  as a projection down does. A member's answer lands rows * count
-    //  values after the one before it, which is where the host reads it.
-    //
-    //  A plain product is a gather of one: members[0] is zero, stride is
-    //  zero, and the third dimension is one, so nothing here moves.
     uint members[16];
     uint stride;
     uint apart;
-
-    //  Whether the member numbers are read from the routing buffer
-    //  instead: the first Used words of what a routing step wrote for the
-    //  one position a token is.
-    //
-    //  Two and three are a batch's experts, listed. The third dimension
-    //  is then the expert itself and the routing buffer holds what
-    //  invert.comp wrote from a batch's routing: how many positions chose
-    //  each expert, where each expert's run of them begins, the run of
-    //  positions, and the run of shares. A workgroup takes its expert's
-    //  whole run, a group of vectors at a time, and writes each answer at
-    //  the position's slot in the run rather than at the position -- so
-    //  a hundred and twenty-eight experts go over as one dispatch a
-    //  matrix rather than one sequence an expert, which is what a
-    //  prompt's mixture cost. Two reads its vectors by position, from the
-    //  list; three reads them by slot, which is what the product before
-    //  it wrote. members[0] is the expert count, which says where the
-    //  runs begin in the buffer.
     uint routed;
 } shape;
 
-const uint LISTED_BY_POSITION = 2u;
-const uint LISTED_BY_SLOT     = 3u;
-
-const uint FMT_F32    = 0u;
-const uint FMT_F16    = 1u;
-const uint FMT_BF16   = 2u;
-const uint FMT_Q4_0   = 3u;
-const uint FMT_Q4_1   = 4u;
-const uint FMT_Q5_0   = 5u;
-const uint FMT_Q5_1   = 6u;
-const uint FMT_Q8_0   = 7u;
-const uint FMT_IQ4_NL = 8u;
-const uint FMT_Q2_K   = 9u;
-const uint FMT_Q3_K   = 10u;
-const uint FMT_Q4_K   = 11u;
-const uint FMT_Q5_K   = 12u;
-const uint FMT_Q6_K   = 13u;
-const uint FMT_IQ4_XS = 14u;
-const uint FMT_MXFP4  = 15u;
-
-#ifdef LOW_BITS
-//  The low-bit formats, decoded only by the compilation that defines
-//  LOW_BITS: a branch costs the formats beside it registers whether or not
-//  it is taken, so the sixteen above keep a compilation of their own and
-//  these twelve share another. The numbers continue the packing's order.
-const uint FMT_IQ3_S   = 16u;
-const uint FMT_IQ2_XXS = 17u;
-const uint FMT_IQ2_XS  = 18u;
-const uint FMT_IQ2_S   = 19u;
-const uint FMT_IQ3_XXS = 20u;
-const uint FMT_IQ1_S   = 21u;
-const uint FMT_IQ1_M   = 22u;
-const uint FMT_TQ1_0   = 23u;
-const uint FMT_TQ2_0   = 24u;
-const uint FMT_Q1_0    = 25u;
-const uint FMT_Q2_0    = 26u;
-const uint FMT_NVFP4   = 27u;
-#endif
-
-//  Vectors carried at once by one invocation. A constant, so that the loops
-//  over it unroll and the accumulators stay in registers; making it the
-//  batch length instead would put them in memory and give back what the
-//  batching just bought.
-//  This source is compiled three times, and two of those compilations
-//  define a width. A generated token is one vector against every matrix in
-//  the model, and with GROUP at eight it carries eight accumulators, reads
-//  eight offsets and reserves eight kilobytes of shared memory for a
-//  reduction seven eighths of which is thrown away. The engine binds the
-//  narrow pipeline when the batch is one and the wide one otherwise, so
-//  neither pays for the other -- the same trade matrix_product.comp makes
-//  between its two compilations, and for the same measured reason.
-//
-//  WIDER carries sixteen, for the case the other two leave badly served: a
-//  round of nine to thirty-one sequences, which is two dispatches at eight
-//  and therefore two passes over every weight in the model, and which the
-//  matrix product does not take either because a tile is a hundred and
-//  twenty-eight vectors wide and would be mostly the zeros the rounding
-//  invented. Sixteen accumulators and sixteen kilobytes of shared memory
-//  buy one pass instead of two. That is a trade of occupancy against
-//  bandwidth and the measurement is what settles it, not the arithmetic.
-//  How many vectors an invocation carries, as a specialization constant
-//  rather than four compiled copies of this file.
-//
-//  It was four modules -- one, four, eight and sixteen -- and each of them
-//  is ninety-six kilobytes of SPIR-V in the generated Ada, which put that
-//  file over the size this repository accepts. A specialization constant is
-//  fixed when the pipeline is made, so the loops below still unroll and the
-//  arrays below still have a constant size; what it costs is nothing and
-//  what it saves is three copies of every format's decoder.
-//
-//  llama.cpp compiles one of these for every count from one to eight and
-//  indexes them by it. One module that takes the count is the same idea
-//  without the four hundred kilobytes.
-
-//  Invocations that share one row.
-//
-//  One invocation a row is the shape this began with, and it reads memory
-//  the worst way a device can be asked to: at any step the lanes of a wave
-//  want one byte each from addresses a whole row apart, so sixty-four lanes
-//  make sixty-four transactions to fetch what would fit in one. The part is
-//  not short of bandwidth -- 7.8 gigabytes a second of about ninety -- it is
-//  short of transactions, which is what that arrangement spends.
-//
-//  Eight lanes to a row, each taking every eighth block, is what this does.
-//
-//  Every eighth block rather than every eighth element, and the difference
-//  is the whole of what a block costs besides its quants: a scale to decode
-//  and an offset to work out, once per block. Divide inside a block and all
-//  eight lanes do that work for the same block -- eight times the scale
-//  decodes for an eighth of the multiplies each, which measured 0.603 s
-//  against 0.520 for the shape it replaced. Divide by block and it stays
-//  done once. Eight lanes then read from addresses a block apart rather
-//  than a row apart, which for eight-bit blocks is two hundred and seventy
-//  bytes rather than two thousand: a handful of cache lines instead of
-//  eight separate transactions.
-//
-//  What it costs is a reduction, and where that reduction goes is the whole
-//  difference between this and the attempt that failed. That one divided a
-//  row's blocks across lanes and reduced them at every block, through a
-//  barrier each time: 4.300 s at sixty-four lanes against 1.937 for the
-//  shape it replaced. This reduces once, at the end of the row, through one
-//  barrier for the whole workgroup -- sixty-four blocks of arithmetic per
-//  barrier rather than one.
-//
-//  Shared memory rather than a subgroup add, which would be fewer
-//  instructions and needs SPIR-V 1.3 and so a Vulkan 1.1 instance. This
-//  program asks for 1.0 and a device that offers only 1.0 runs everything
-//  else here; trading that away for one reduction a row is not a trade
-//  worth making.
-const uint LANES = 8u;
-
-//  Each invocation's share of its row, for the reduction below. Sized by
-//  the workgroup width declared above, which the two have to agree about.
-//  Room for the widest the constant above may be set to. A workgroup
-//  narrower than that leaves the tail of this unread, which is a kilobyte
-//  at a batch of one and worth less than a second set of words.
-shared float shares[256u * GROUP];
-//  The sixteen levels a non-linear four-bit quant may take. A nibble in
-//  IQ4_NL and IQ4_XS is not a number but an index into this, and the table
-//  belongs to the format rather than to any file.
-const int LEVELS[16] = int[16](-127, -104, -83, -65, -49, -35, -22, -10,
-                                  1,   13,  25,  38,  53,  69,  89, 113);
-
-//  MXFP4's own sixteen, which are the E2M1 floating-point values at twice
-//  their size: 0, 0.5, 1, 1.5, 2, 3, 4, 6 and the same again negated.
-//  Doubling them keeps the table whole, and the scale carries the halving
-//  -- which is why an exponent byte is read as two to the byte less a
-//  hundred and twenty-eight rather than a hundred and twenty-seven. The
-//  same table and the same reading as the processor's decoder.
-const int FOURS[16] = int[16](0, 1, 2, 3, 4, 6, 8, 12,
-                              0, -1, -2, -3, -4, -6, -8, -12);
-
-//  Where each of this invocation's vectors begins, and what it has
-//  accumulated. Both are at file scope so that the accumulation below can be
-//  a function rather than fifteen copies of the same three lines: a GLSL
-//  parameter of array type is copied at every call, and copying eight
-//  offsets per element would cost more than the decoding does.
-uint from[GROUP];
-float sum[GROUP];
-
-//  One weight against every vector in the batch.
-void accumulate(uint col, float weight) {
-    for (uint k = 0u; k < GROUP; ++k) {
-        sum[k] += weight * x[from[k] + col];
-    }
-}
-
-//  One byte of the weights. Blocks are 18 to 210 bytes long, so a block
-//  boundary is not a word boundary and reading a word at a time would need
-//  every offset to be a special case.
+//  One byte, a sixteen-bit field at an even position, and a half there.
 uint byte_at(uint at) {
     return (w[at >> 2u] >> ((at & 3u) * 8u)) & 255u;
 }
 
-//  Four bytes of the weights as one word, from a run that need not begin on
-//  a word boundary.
-//
-//  byte_at above is a word load, a shift and a mask for every byte, so a
-//  format whose quants are read one byte at a time pays four loads where one
-//  would do. Q8_0's own branch has read words since it was written; the
-//  k-quants did not, and a device generating with a four-bit k-quant was
-//  slower than one generating with the eight-bit format that moves twice the
-//  bytes -- 1.870 s against 1.281 for sixty-four tokens, which is what said
-//  the loads and not the bytes were the cost.
-//
-//  The shift is the run's offset within its first word and is the same for
-//  every block of a row, so a caller works it out once and passes it in.
-//  Zero is its own case because a shift of thirty-two is undefined.
-uint word_of(uint at_word, uint shift) {
-    uint first = w[at_word];
-
-    return shift == 0u
-         ? first
-         : (first >> shift) | (w[at_word + 1u] << (32u - shift));
+uint u16_at(uint at) {
+    return (w[at >> 2u] >> ((at & 2u) * 8u)) & 0xFFFFu;
 }
 
-//  One byte read as a signed number, which is how Q8_0 keeps a quant and
-//  Q6_K keeps a sub-block scale.
-int signed_at(uint at) {
-    int value = int(byte_at(at));
-    return value > 127 ? value - 256 : value;
+uint u32_at(uint at) {
+    return u16_at(at) | (u16_at(at + 2u) << 16u);
 }
 
-//  Four signed bytes out of one word, in the order they lie.
-//
-//  The same four values signed_at would give for four consecutive addresses,
-//  and about a quarter of the work: one load and two shifts an element,
-//  against a load, a shift, a mask, a compare and a subtract each. Shifting
-//  a byte to the top of a signed integer and back down is what sign-extends
-//  it, and it is exact where the unpacking built into the language is not --
-//  unpackSnorm4x8 clamps, and would turn a quant of -128 into -127 without
-//  saying so.
-//
-//  The decode is worth measuring rather than assuming: building this shader
-//  with the eight-bit branch's decode replaced by a constant takes the
-//  device prompt from 0.573 s to 0.427, so unpacking is about a quarter of
-//  what this spends.
-//  Kept as four expressions at the point of use rather than a vector
-//  returned from here: a vector of four returned across a call is a vector
-//  the compiler put in memory, and doing that measured sixteen per cent
-//  worse than the byte-at-a-time decode it was meant to replace.
+//  Four bytes from any position, as one word: two loads and a funnel where
+//  the run is not on a word, one where it is.
+uint quad_at(uint at) {
+    uint shift = (at & 3u) * 8u;
+    uint first = w[at >> 2u];
+    return shift == 0u ? first
+                       : (first >> shift) | (w[(at >> 2u) + 1u] << (32u - shift));
+}
 
-//  A half-precision number, which is how every packed format writes a scale
-//  and how F16 writes a weight.
 float half_at(uint at) {
-    return unpackHalf2x16(byte_at(at) | (byte_at(at + 1u) << 8u)).x;
+    return unpackHalf2x16(u16_at(at)).x;
 }
 
-//  An E8M0 exponent byte as the power of two it names, less one. The bit
-//  pattern of two to the byte less a hundred and twenty-eight has a biased
-//  exponent of the byte less one and no mantissa, so the whole of it is a
-//  shift; the two bytes below that are subnormal, where the shift is of
-//  the leading bit instead. Exact, where a power taken at run time need
-//  not be.
-float e8m0_at(uint at) {
-    uint e = byte_at(at);
-    return uintBitsToFloat(e < 2u ? (0x00200000u << e) : ((e - 1u) << 23u));
+//  The sign pattern a seven-bit index names: the index and its parity.
+uint ksign(uint index) {
+    return index | ((bitCount(index) & 1u) << 7u);
 }
 
-#ifdef LOW_BITS
-//  The codebooks the IQ formats index, as ggml-common.h has them: an entry
-//  of eight byte magnitudes is two words, the lower four bytes first; IQ3's
-//  entries are four magnitudes in a word; IQ1_S's bytes are signed.
+//  Eight unsigned magnitudes -- the four bytes of lo, then of hi -- against
+//  eight activations, each negated where its bit of signs is set.
+float signed_dot(uint lo, uint hi, uint signs, vec4 a, vec4 b) {
+    vec4 g0 = vec4(unpack8(lo));
+    vec4 g1 = vec4(unpack8(hi));
+    float sum = 0.0;
+    sum = fma(a.x, (signs & 1u)   != 0u ? -g0.x : g0.x, sum);
+    sum = fma(a.y, (signs & 2u)   != 0u ? -g0.y : g0.y, sum);
+    sum = fma(a.z, (signs & 4u)   != 0u ? -g0.z : g0.z, sum);
+    sum = fma(a.w, (signs & 8u)   != 0u ? -g0.w : g0.w, sum);
+    sum = fma(b.x, (signs & 16u)  != 0u ? -g1.x : g1.x, sum);
+    sum = fma(b.y, (signs & 32u)  != 0u ? -g1.y : g1.y, sum);
+    sum = fma(b.z, (signs & 64u)  != 0u ? -g1.z : g1.z, sum);
+    sum = fma(b.w, (signs & 128u) != 0u ? -g1.w : g1.w, sum);
+    return sum;
+}
+
+//  Eight signed bytes -- IQ1's grid -- against eight activations.
+float plain_dot(uint lo, uint hi, vec4 a, vec4 b) {
+    return dot(a, vec4(unpack8(int(lo)))) + dot(b, vec4(unpack8(int(hi))));
+}
+
+//  Four two-bit fields of a byte, the lowest first, as numbers.
+vec4 fields4(uint byte) {
+    return vec4(float(byte & 3u), float((byte >> 2u) & 3u),
+                float((byte >> 4u) & 3u), float(byte >> 6u));
+}
+
+#ifdef IQ2_XXS
+const uint BLOCK_ELEMS = 256u;
+const uint BLOCK_BYTES = 66u;
 const uint IQ2XXS_GRID[512] = uint[512](
     0x08080808u, 0x08080808u, 0x0808082Bu, 0x08080808u, 0x08081919u, 0x08080808u,
     0x08082B08u, 0x08080808u, 0x08082B2Bu, 0x08080808u, 0x08190819u, 0x08080808u,
@@ -478,6 +200,23 @@ const uint IQ2XXS_GRID[512] = uint[512](
     0x08081908u, 0x2B2B2B19u
 );
 
+float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
+    uint sub = within / 32u;
+    uint l = (within % 32u) / 8u;
+    uint q = at + 2u + 8u * sub;
+    uint aux0 = u32_at(q);
+    uint aux1 = u32_at(q + 4u);
+    float db = half_at(at) * (0.5 + float(aux1 >> 28u)) * 0.25;
+    uvec2 g0 = uvec2(IQ2XXS_GRID[2u * ((aux0 >> (8u * l)) & 255u)], IQ2XXS_GRID[2u * ((aux0 >> (8u * l)) & 255u) + 1u]);
+    uvec2 g1 = uvec2(IQ2XXS_GRID[2u * ((aux0 >> (8u * l + 8u)) & 255u)], IQ2XXS_GRID[2u * ((aux0 >> (8u * l + 8u)) & 255u) + 1u]);
+    return db * (signed_dot(g0.x, g0.y, ksign((aux1 >> (7u * l)) & 127u), a0, a1)
+               + signed_dot(g1.x, g1.y, ksign((aux1 >> (7u * l + 7u)) & 127u), a2, a3));
+}
+#endif
+
+#ifdef IQ2_XS
+const uint BLOCK_ELEMS = 256u;
+const uint BLOCK_BYTES = 74u;
 const uint IQ2XS_GRID[1024] = uint[1024](
     0x08080808u, 0x08080808u, 0x0808082Bu, 0x08080808u, 0x08081919u, 0x08080808u,
     0x08082B08u, 0x08080808u, 0x08082B2Bu, 0x08080808u, 0x08190819u, 0x08080808u,
@@ -652,6 +391,25 @@ const uint IQ2XS_GRID[1024] = uint[1024](
     0x2B190819u, 0x2B2B2B2Bu, 0x2B2B2B2Bu, 0x2B2B2B2Bu
 );
 
+float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
+    uint sub = within / 32u;
+    uint l = (within % 32u) / 8u;
+    uint lanes_at = at + 2u + 2u * (4u * sub + l);
+    uint lane0 = u16_at(lanes_at);
+    uint lane1 = u16_at(lanes_at + 2u);
+    uint scales = byte_at(at + 66u + sub);
+    uint scale = l < 2u ? (scales & 15u) : (scales >> 4u);
+    float db = half_at(at) * (0.5 + float(scale)) * 0.25;
+    uvec2 g0 = uvec2(IQ2XS_GRID[2u * (lane0 & 511u)], IQ2XS_GRID[2u * (lane0 & 511u) + 1u]);
+    uvec2 g1 = uvec2(IQ2XS_GRID[2u * (lane1 & 511u)], IQ2XS_GRID[2u * (lane1 & 511u) + 1u]);
+    return db * (signed_dot(g0.x, g0.y, ksign(lane0 >> 9u), a0, a1)
+               + signed_dot(g1.x, g1.y, ksign(lane1 >> 9u), a2, a3));
+}
+#endif
+
+#ifdef IQ2_S
+const uint BLOCK_ELEMS = 256u;
+const uint BLOCK_BYTES = 82u;
 const uint IQ2S_GRID[2048] = uint[2048](
     0x08080808u, 0x08080808u, 0x0808082Bu, 0x08080808u, 0x08081919u, 0x08080808u,
     0x08082B08u, 0x08080808u, 0x08082B2Bu, 0x08080808u, 0x08190819u, 0x08080808u,
@@ -997,6 +755,196 @@ const uint IQ2S_GRID[2048] = uint[2048](
     0x2B2B2B2Bu, 0x2B2B2B2Bu
 );
 
+float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
+    uint sub = within / 32u;
+    uint l = (within % 32u) / 8u;
+    uint tops = byte_at(at + 66u + sub);
+    uint scales = byte_at(at + 74u + sub);
+    uint scale = l < 2u ? (scales & 15u) : (scales >> 4u);
+    float db = half_at(at) * (0.5 + float(scale)) * 0.25;
+    uint lane = 4u * sub + l;
+    uvec2 g0 = uvec2(IQ2S_GRID[2u * (byte_at(at + 2u + lane) | (((tops >> (2u * l)) & 3u) << 8u))], IQ2S_GRID[2u * (byte_at(at + 2u + lane) | (((tops >> (2u * l)) & 3u) << 8u)) + 1u]);
+    uvec2 g1 = uvec2(IQ2S_GRID[2u * (byte_at(at + 3u + lane) | (((tops >> (2u * l + 2u)) & 3u) << 8u))], IQ2S_GRID[2u * (byte_at(at + 3u + lane) | (((tops >> (2u * l + 2u)) & 3u) << 8u)) + 1u]);
+    return db * (signed_dot(g0.x, g0.y, byte_at(at + 34u + lane), a0, a1)
+               + signed_dot(g1.x, g1.y, byte_at(at + 35u + lane), a2, a3));
+}
+#endif
+
+#ifdef IQ3_XXS
+const uint BLOCK_ELEMS = 256u;
+const uint BLOCK_BYTES = 98u;
+const uint IQ3XXS_GRID[256] = uint[256](
+    0x04040404u, 0x04040414u, 0x04040424u, 0x04040C0Cu, 0x04040C1Cu, 0x04040C3Eu,
+    0x04041404u, 0x04041414u, 0x04041C0Cu, 0x04042414u, 0x04043E1Cu, 0x04043E2Cu,
+    0x040C040Cu, 0x040C041Cu, 0x040C0C04u, 0x040C0C14u, 0x040C140Cu, 0x040C142Cu,
+    0x040C1C04u, 0x040C1C14u, 0x040C240Cu, 0x040C2C24u, 0x040C3E04u, 0x04140404u,
+    0x04140414u, 0x04140424u, 0x04140C0Cu, 0x04141404u, 0x04141414u, 0x04141C0Cu,
+    0x04141C1Cu, 0x04141C3Eu, 0x04142C0Cu, 0x04142C3Eu, 0x04143E2Cu, 0x041C040Cu,
+    0x041C043Eu, 0x041C0C04u, 0x041C0C14u, 0x041C142Cu, 0x041C3E04u, 0x04240C1Cu,
+    0x04241C3Eu, 0x04242424u, 0x04242C3Eu, 0x04243E1Cu, 0x04243E2Cu, 0x042C040Cu,
+    0x042C043Eu, 0x042C1C14u, 0x042C2C14u, 0x04341C2Cu, 0x04343424u, 0x043E0C04u,
+    0x043E0C24u, 0x043E0C34u, 0x043E241Cu, 0x043E340Cu, 0x0C04040Cu, 0x0C04041Cu,
+    0x0C040C04u, 0x0C040C14u, 0x0C04140Cu, 0x0C04141Cu, 0x0C041C04u, 0x0C041C14u,
+    0x0C041C24u, 0x0C04243Eu, 0x0C042C04u, 0x0C0C0404u, 0x0C0C0414u, 0x0C0C0C0Cu,
+    0x0C0C1404u, 0x0C0C1414u, 0x0C14040Cu, 0x0C14041Cu, 0x0C140C04u, 0x0C140C14u,
+    0x0C14140Cu, 0x0C141C04u, 0x0C143E14u, 0x0C1C0404u, 0x0C1C0414u, 0x0C1C1404u,
+    0x0C1C1C0Cu, 0x0C1C2434u, 0x0C1C3434u, 0x0C24040Cu, 0x0C24042Cu, 0x0C242C04u,
+    0x0C2C1404u, 0x0C2C1424u, 0x0C2C2434u, 0x0C2C3E0Cu, 0x0C34042Cu, 0x0C3E1414u,
+    0x0C3E2404u, 0x14040404u, 0x14040414u, 0x14040C0Cu, 0x14040C1Cu, 0x14041404u,
+    0x14041414u, 0x14041434u, 0x14041C0Cu, 0x14042414u, 0x140C040Cu, 0x140C041Cu,
+    0x140C042Cu, 0x140C0C04u, 0x140C0C14u, 0x140C140Cu, 0x140C1C04u, 0x140C341Cu,
+    0x140C343Eu, 0x140C3E04u, 0x14140404u, 0x14140414u, 0x14140C0Cu, 0x14140C3Eu,
+    0x14141404u, 0x14141414u, 0x14141C3Eu, 0x14142404u, 0x14142C2Cu, 0x141C040Cu,
+    0x141C0C04u, 0x141C0C24u, 0x141C3E04u, 0x141C3E24u, 0x14241C2Cu, 0x14242C1Cu,
+    0x142C041Cu, 0x142C143Eu, 0x142C240Cu, 0x142C3E24u, 0x143E040Cu, 0x143E041Cu,
+    0x143E0C34u, 0x143E242Cu, 0x1C04040Cu, 0x1C040C04u, 0x1C040C14u, 0x1C04140Cu,
+    0x1C04141Cu, 0x1C042C04u, 0x1C04342Cu, 0x1C043E14u, 0x1C0C0404u, 0x1C0C0414u,
+    0x1C0C1404u, 0x1C0C1C0Cu, 0x1C0C2424u, 0x1C0C2434u, 0x1C14040Cu, 0x1C14041Cu,
+    0x1C140C04u, 0x1C14142Cu, 0x1C142C14u, 0x1C143E14u, 0x1C1C0C0Cu, 0x1C1C1C1Cu,
+    0x1C241C04u, 0x1C24243Eu, 0x1C243E14u, 0x1C2C0404u, 0x1C2C0434u, 0x1C2C1414u,
+    0x1C2C2C2Cu, 0x1C340C24u, 0x1C341C34u, 0x1C34341Cu, 0x1C3E1C1Cu, 0x1C3E3404u,
+    0x24040424u, 0x24040C3Eu, 0x24041C2Cu, 0x24041C3Eu, 0x24042C1Cu, 0x24042C3Eu,
+    0x240C3E24u, 0x24141404u, 0x24141C3Eu, 0x24142404u, 0x24143404u, 0x24143434u,
+    0x241C043Eu, 0x241C242Cu, 0x24240424u, 0x24242C0Cu, 0x24243424u, 0x242C142Cu,
+    0x242C241Cu, 0x242C3E04u, 0x243E042Cu, 0x243E0C04u, 0x243E0C14u, 0x243E1C04u,
+    0x2C040C14u, 0x2C04240Cu, 0x2C043E04u, 0x2C0C0404u, 0x2C0C0434u, 0x2C0C1434u,
+    0x2C0C2C2Cu, 0x2C140C24u, 0x2C141C14u, 0x2C143E14u, 0x2C1C0414u, 0x2C1C2C1Cu,
+    0x2C240C04u, 0x2C24141Cu, 0x2C24143Eu, 0x2C243E14u, 0x2C2C0414u, 0x2C2C1C0Cu,
+    0x2C342C04u, 0x2C3E1424u, 0x2C3E2414u, 0x34041424u, 0x34042424u, 0x34042434u,
+    0x34043424u, 0x340C140Cu, 0x340C340Cu, 0x34140C3Eu, 0x34143424u, 0x341C1C04u,
+    0x341C1C34u, 0x34242424u, 0x342C042Cu, 0x342C2C14u, 0x34341C1Cu, 0x343E041Cu,
+    0x343E140Cu, 0x3E04041Cu, 0x3E04042Cu, 0x3E04043Eu, 0x3E040C04u, 0x3E041C14u,
+    0x3E042C14u, 0x3E0C1434u, 0x3E0C2404u, 0x3E140C14u, 0x3E14242Cu, 0x3E142C14u,
+    0x3E1C0404u, 0x3E1C0C2Cu, 0x3E1C1C1Cu, 0x3E1C3404u, 0x3E24140Cu, 0x3E24240Cu,
+    0x3E2C0404u, 0x3E2C0414u, 0x3E2C1424u, 0x3E341C04u
+);
+
+float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
+    uint sub = within / 32u;
+    uint l = (within % 32u) / 8u;
+    uint aux = u32_at(at + 66u + 4u * sub);
+    float db = half_at(at) * (0.5 + float(aux >> 28u)) * 0.5;
+    uint q = at + 2u + 8u * sub + 2u * l;
+    return db * (signed_dot(IQ3XXS_GRID[byte_at(q)], IQ3XXS_GRID[byte_at(q + 1u)],
+                            ksign((aux >> (7u * l)) & 127u), a0, a1)
+               + signed_dot(IQ3XXS_GRID[byte_at(q + 2u)], IQ3XXS_GRID[byte_at(q + 3u)],
+                            ksign((aux >> (7u * l + 7u)) & 127u), a2, a3));
+}
+#endif
+
+#ifdef IQ3_S
+const uint BLOCK_ELEMS = 256u;
+const uint BLOCK_BYTES = 110u;
+const uint IQ3S_GRID[512] = uint[512](
+    0x01010101u, 0x01010103u, 0x01010105u, 0x0101010Bu, 0x0101010Fu, 0x01010301u,
+    0x01010303u, 0x01010305u, 0x01010309u, 0x0101030Du, 0x01010501u, 0x01010503u,
+    0x0101050Bu, 0x01010707u, 0x01010901u, 0x01010905u, 0x0101090Bu, 0x0101090Fu,
+    0x01010B03u, 0x01010B07u, 0x01010D01u, 0x01010D05u, 0x01010F03u, 0x01010F09u,
+    0x01010F0Fu, 0x01030101u, 0x01030103u, 0x01030105u, 0x01030109u, 0x01030301u,
+    0x01030303u, 0x0103030Bu, 0x01030501u, 0x01030507u, 0x0103050Fu, 0x01030703u,
+    0x0103070Bu, 0x01030909u, 0x01030D03u, 0x01030D0Bu, 0x01030F05u, 0x01050101u,
+    0x01050103u, 0x0105010Bu, 0x0105010Fu, 0x01050301u, 0x01050307u, 0x0105030Du,
+    0x01050503u, 0x0105050Bu, 0x01050701u, 0x01050709u, 0x01050905u, 0x0105090Bu,
+    0x0105090Fu, 0x01050B03u, 0x01050B07u, 0x01050F01u, 0x01050F07u, 0x01070107u,
+    0x01070303u, 0x0107030Bu, 0x01070501u, 0x01070505u, 0x01070703u, 0x01070707u,
+    0x0107070Du, 0x01070909u, 0x01070B01u, 0x01070B05u, 0x01070D0Fu, 0x01070F03u,
+    0x01070F0Bu, 0x01090101u, 0x01090307u, 0x0109030Fu, 0x01090503u, 0x01090509u,
+    0x01090705u, 0x01090901u, 0x01090907u, 0x01090B03u, 0x01090F01u, 0x010B0105u,
+    0x010B0109u, 0x010B0501u, 0x010B0505u, 0x010B050Du, 0x010B0707u, 0x010B0903u,
+    0x010B090Bu, 0x010B090Fu, 0x010B0D0Du, 0x010B0F07u, 0x010D010Du, 0x010D0303u,
+    0x010D0307u, 0x010D0703u, 0x010D0B05u, 0x010D0F03u, 0x010F0101u, 0x010F0105u,
+    0x010F0109u, 0x010F0501u, 0x010F0505u, 0x010F050Du, 0x010F0707u, 0x010F0B01u,
+    0x010F0B09u, 0x03010101u, 0x03010103u, 0x03010105u, 0x03010109u, 0x03010301u,
+    0x03010303u, 0x03010307u, 0x0301030Bu, 0x0301030Fu, 0x03010501u, 0x03010505u,
+    0x03010703u, 0x03010709u, 0x0301070Du, 0x03010B09u, 0x03010B0Du, 0x03010D03u,
+    0x03010F05u, 0x03030101u, 0x03030103u, 0x03030107u, 0x0303010Du, 0x03030301u,
+    0x03030309u, 0x03030503u, 0x03030701u, 0x03030707u, 0x03030903u, 0x03030B01u,
+    0x03030B05u, 0x03030F01u, 0x03030F0Du, 0x03050101u, 0x03050305u, 0x0305030Bu,
+    0x0305030Fu, 0x03050501u, 0x03050509u, 0x03050705u, 0x03050901u, 0x03050907u,
+    0x03050B0Bu, 0x03050D01u, 0x03050F05u, 0x03070103u, 0x03070109u, 0x0307010Fu,
+    0x03070301u, 0x03070307u, 0x03070503u, 0x0307050Fu, 0x03070701u, 0x03070709u,
+    0x03070903u, 0x03070D05u, 0x03070F01u, 0x03090107u, 0x0309010Bu, 0x03090305u,
+    0x03090309u, 0x03090703u, 0x03090707u, 0x03090905u, 0x0309090Du, 0x03090B01u,
+    0x03090B09u, 0x030B0103u, 0x030B0301u, 0x030B0307u, 0x030B0503u, 0x030B0701u,
+    0x030B0705u, 0x030B0B03u, 0x030D0501u, 0x030D0509u, 0x030D050Fu, 0x030D0909u,
+    0x030D090Du, 0x030F0103u, 0x030F0107u, 0x030F0301u, 0x030F0305u, 0x030F0503u,
+    0x030F070Bu, 0x030F0903u, 0x030F0D05u, 0x030F0F01u, 0x05010101u, 0x05010103u,
+    0x05010107u, 0x0501010Bu, 0x0501010Fu, 0x05010301u, 0x05010305u, 0x05010309u,
+    0x0501030Du, 0x05010503u, 0x05010507u, 0x0501050Fu, 0x05010701u, 0x05010705u,
+    0x05010903u, 0x05010907u, 0x0501090Bu, 0x05010B01u, 0x05010B05u, 0x05010D0Fu,
+    0x05010F01u, 0x05010F07u, 0x05010F0Bu, 0x05030101u, 0x05030105u, 0x05030301u,
+    0x05030307u, 0x0503030Fu, 0x05030505u, 0x0503050Bu, 0x05030703u, 0x05030709u,
+    0x05030905u, 0x05030B03u, 0x05050103u, 0x05050109u, 0x0505010Fu, 0x05050503u,
+    0x05050507u, 0x05050701u, 0x0505070Fu, 0x05050903u, 0x05050B07u, 0x05050B0Fu,
+    0x05050F03u, 0x05050F09u, 0x05070101u, 0x05070105u, 0x0507010Bu, 0x05070303u,
+    0x05070505u, 0x05070509u, 0x05070703u, 0x05070707u, 0x05070905u, 0x05070B01u,
+    0x05070D0Du, 0x05090103u, 0x0509010Fu, 0x05090501u, 0x05090507u, 0x05090705u,
+    0x0509070Bu, 0x05090903u, 0x05090F05u, 0x05090F0Bu, 0x050B0109u, 0x050B0303u,
+    0x050B0505u, 0x050B070Fu, 0x050B0901u, 0x050B0B07u, 0x050B0F01u, 0x050D0101u,
+    0x050D0105u, 0x050D010Fu, 0x050D0503u, 0x050D0B0Bu, 0x050D0D03u, 0x050F010Bu,
+    0x050F0303u, 0x050F050Du, 0x050F0701u, 0x050F0907u, 0x050F0B01u, 0x07010105u,
+    0x07010303u, 0x07010307u, 0x0701030Bu, 0x0701030Fu, 0x07010505u, 0x07010703u,
+    0x07010707u, 0x0701070Bu, 0x07010905u, 0x07010909u, 0x0701090Fu, 0x07010B03u,
+    0x07010D07u, 0x07010F03u, 0x07030103u, 0x07030107u, 0x0703010Bu, 0x07030309u,
+    0x07030503u, 0x07030507u, 0x07030901u, 0x07030D01u, 0x07030F05u, 0x07030F0Du,
+    0x07050101u, 0x07050305u, 0x07050501u, 0x07050705u, 0x07050709u, 0x07050B01u,
+    0x07070103u, 0x07070301u, 0x07070309u, 0x07070503u, 0x07070507u, 0x0707050Fu,
+    0x07070701u, 0x07070903u, 0x07070907u, 0x0707090Fu, 0x07070B0Bu, 0x07070F07u,
+    0x07090107u, 0x07090303u, 0x0709030Du, 0x07090505u, 0x07090703u, 0x07090B05u,
+    0x07090D01u, 0x07090D09u, 0x070B0103u, 0x070B0301u, 0x070B0305u, 0x070B050Bu,
+    0x070B0705u, 0x070B0909u, 0x070B0B0Du, 0x070B0F07u, 0x070D030Du, 0x070D0903u,
+    0x070F0103u, 0x070F0107u, 0x070F0501u, 0x070F0505u, 0x070F070Bu, 0x09010101u,
+    0x09010109u, 0x09010305u, 0x09010501u, 0x09010509u, 0x0901050Fu, 0x09010705u,
+    0x09010903u, 0x09010B01u, 0x09010F01u, 0x09030105u, 0x0903010Fu, 0x09030303u,
+    0x09030307u, 0x09030505u, 0x09030701u, 0x0903070Bu, 0x09030907u, 0x09030B03u,
+    0x09030B0Bu, 0x09050103u, 0x09050107u, 0x09050301u, 0x0905030Bu, 0x09050503u,
+    0x09050707u, 0x09050901u, 0x09050B0Fu, 0x09050D05u, 0x09050F01u, 0x09070109u,
+    0x09070303u, 0x09070307u, 0x09070501u, 0x09070505u, 0x09070703u, 0x0907070Bu,
+    0x09090101u, 0x09090105u, 0x09090509u, 0x0909070Fu, 0x09090901u, 0x09090F03u,
+    0x090B010Bu, 0x090B010Fu, 0x090B0503u, 0x090B0D05u, 0x090D0307u, 0x090D0709u,
+    0x090D0D01u, 0x090F0301u, 0x090F030Bu, 0x090F0701u, 0x090F0907u, 0x090F0B03u,
+    0x0B010105u, 0x0B010301u, 0x0B010309u, 0x0B010505u, 0x0B010901u, 0x0B010909u,
+    0x0B01090Fu, 0x0B010B05u, 0x0B010D0Du, 0x0B010F09u, 0x0B030103u, 0x0B030107u,
+    0x0B03010Bu, 0x0B030305u, 0x0B030503u, 0x0B030705u, 0x0B030F05u, 0x0B050101u,
+    0x0B050303u, 0x0B050507u, 0x0B050701u, 0x0B05070Du, 0x0B050B07u, 0x0B070105u,
+    0x0B07010Fu, 0x0B070301u, 0x0B07050Fu, 0x0B070909u, 0x0B070B03u, 0x0B070D0Bu,
+    0x0B070F07u, 0x0B090103u, 0x0B090109u, 0x0B090501u, 0x0B090705u, 0x0B09090Du,
+    0x0B0B0305u, 0x0B0B050Du, 0x0B0B0B03u, 0x0B0B0B07u, 0x0B0D0905u, 0x0B0F0105u,
+    0x0B0F0109u, 0x0B0F0505u, 0x0D010303u, 0x0D010307u, 0x0D01030Bu, 0x0D010703u,
+    0x0D010707u, 0x0D010D01u, 0x0D030101u, 0x0D030501u, 0x0D03050Fu, 0x0D030D09u,
+    0x0D050305u, 0x0D050709u, 0x0D050905u, 0x0D050B0Bu, 0x0D050D05u, 0x0D050F01u,
+    0x0D070101u, 0x0D070309u, 0x0D070503u, 0x0D070901u, 0x0D09050Bu, 0x0D090907u,
+    0x0D090D05u, 0x0D0B0101u, 0x0D0B0107u, 0x0D0B0709u, 0x0D0B0D01u, 0x0D0D010Bu,
+    0x0D0D0901u, 0x0D0F0303u, 0x0D0F0307u, 0x0F010101u, 0x0F010109u, 0x0F01010Fu,
+    0x0F010501u, 0x0F010505u, 0x0F01070Du, 0x0F010901u, 0x0F010B09u, 0x0F010D05u,
+    0x0F030105u, 0x0F030303u, 0x0F030509u, 0x0F030907u, 0x0F03090Bu, 0x0F050103u,
+    0x0F050109u, 0x0F050301u, 0x0F05030Du, 0x0F050503u, 0x0F050701u, 0x0F050B03u,
+    0x0F070105u, 0x0F070705u, 0x0F07070Bu, 0x0F070B07u, 0x0F090103u, 0x0F09010Bu,
+    0x0F090307u, 0x0F090501u, 0x0F090B01u, 0x0F0B0505u, 0x0F0B0905u, 0x0F0D0105u,
+    0x0F0D0703u, 0x0F0F0101u
+);
+
+float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
+    uint sub = within / 32u;
+    uint l = (within % 32u) / 8u;
+    uint high = byte_at(at + 66u + sub);
+    uint scales = byte_at(at + 106u + sub / 2u);
+    uint scale = sub % 2u == 0u ? (scales & 15u) : (scales >> 4u);
+    float db = half_at(at) * float(1u + 2u * scale);
+    uint q = at + 2u + 8u * sub + 2u * l;
+    uint s = at + 74u + 4u * sub + l;
+    return db * (signed_dot(IQ3S_GRID[byte_at(q)      | (((high >> (2u * l)) & 1u) << 8u)],
+                            IQ3S_GRID[byte_at(q + 1u) | (((high >> (2u * l + 1u)) & 1u) << 8u)],
+                            byte_at(s), a0, a1)
+               + signed_dot(IQ3S_GRID[byte_at(q + 2u) | (((high >> (2u * l + 2u)) & 1u) << 8u)],
+                            IQ3S_GRID[byte_at(q + 3u) | (((high >> (2u * l + 3u)) & 1u) << 8u)],
+                            byte_at(s + 1u), a2, a3));
+}
+#endif
+
+#ifdef IQ1_S
+const uint BLOCK_ELEMS = 256u;
+const uint BLOCK_BYTES = 50u;
 const uint IQ1S_GRID[4096] = uint[4096](
     0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFF01u, 0xFFFFFFFFu, 0xFFFF0000u, 0xFFFFFFFFu,
     0xFFFF01FFu, 0xFFFFFFFFu, 0xFFFF0101u, 0xFFFFFFFFu, 0xFF00FF00u, 0xFFFFFFFFu,
@@ -1683,1335 +1631,931 @@ const uint IQ1S_GRID[4096] = uint[4096](
     0x010101FFu, 0x01010101u, 0x01010101u, 0x01010101u
 );
 
-const uint IQ3XXS_GRID[256] = uint[256](
-    0x04040404u, 0x04040414u, 0x04040424u, 0x04040C0Cu, 0x04040C1Cu, 0x04040C3Eu,
-    0x04041404u, 0x04041414u, 0x04041C0Cu, 0x04042414u, 0x04043E1Cu, 0x04043E2Cu,
-    0x040C040Cu, 0x040C041Cu, 0x040C0C04u, 0x040C0C14u, 0x040C140Cu, 0x040C142Cu,
-    0x040C1C04u, 0x040C1C14u, 0x040C240Cu, 0x040C2C24u, 0x040C3E04u, 0x04140404u,
-    0x04140414u, 0x04140424u, 0x04140C0Cu, 0x04141404u, 0x04141414u, 0x04141C0Cu,
-    0x04141C1Cu, 0x04141C3Eu, 0x04142C0Cu, 0x04142C3Eu, 0x04143E2Cu, 0x041C040Cu,
-    0x041C043Eu, 0x041C0C04u, 0x041C0C14u, 0x041C142Cu, 0x041C3E04u, 0x04240C1Cu,
-    0x04241C3Eu, 0x04242424u, 0x04242C3Eu, 0x04243E1Cu, 0x04243E2Cu, 0x042C040Cu,
-    0x042C043Eu, 0x042C1C14u, 0x042C2C14u, 0x04341C2Cu, 0x04343424u, 0x043E0C04u,
-    0x043E0C24u, 0x043E0C34u, 0x043E241Cu, 0x043E340Cu, 0x0C04040Cu, 0x0C04041Cu,
-    0x0C040C04u, 0x0C040C14u, 0x0C04140Cu, 0x0C04141Cu, 0x0C041C04u, 0x0C041C14u,
-    0x0C041C24u, 0x0C04243Eu, 0x0C042C04u, 0x0C0C0404u, 0x0C0C0414u, 0x0C0C0C0Cu,
-    0x0C0C1404u, 0x0C0C1414u, 0x0C14040Cu, 0x0C14041Cu, 0x0C140C04u, 0x0C140C14u,
-    0x0C14140Cu, 0x0C141C04u, 0x0C143E14u, 0x0C1C0404u, 0x0C1C0414u, 0x0C1C1404u,
-    0x0C1C1C0Cu, 0x0C1C2434u, 0x0C1C3434u, 0x0C24040Cu, 0x0C24042Cu, 0x0C242C04u,
-    0x0C2C1404u, 0x0C2C1424u, 0x0C2C2434u, 0x0C2C3E0Cu, 0x0C34042Cu, 0x0C3E1414u,
-    0x0C3E2404u, 0x14040404u, 0x14040414u, 0x14040C0Cu, 0x14040C1Cu, 0x14041404u,
-    0x14041414u, 0x14041434u, 0x14041C0Cu, 0x14042414u, 0x140C040Cu, 0x140C041Cu,
-    0x140C042Cu, 0x140C0C04u, 0x140C0C14u, 0x140C140Cu, 0x140C1C04u, 0x140C341Cu,
-    0x140C343Eu, 0x140C3E04u, 0x14140404u, 0x14140414u, 0x14140C0Cu, 0x14140C3Eu,
-    0x14141404u, 0x14141414u, 0x14141C3Eu, 0x14142404u, 0x14142C2Cu, 0x141C040Cu,
-    0x141C0C04u, 0x141C0C24u, 0x141C3E04u, 0x141C3E24u, 0x14241C2Cu, 0x14242C1Cu,
-    0x142C041Cu, 0x142C143Eu, 0x142C240Cu, 0x142C3E24u, 0x143E040Cu, 0x143E041Cu,
-    0x143E0C34u, 0x143E242Cu, 0x1C04040Cu, 0x1C040C04u, 0x1C040C14u, 0x1C04140Cu,
-    0x1C04141Cu, 0x1C042C04u, 0x1C04342Cu, 0x1C043E14u, 0x1C0C0404u, 0x1C0C0414u,
-    0x1C0C1404u, 0x1C0C1C0Cu, 0x1C0C2424u, 0x1C0C2434u, 0x1C14040Cu, 0x1C14041Cu,
-    0x1C140C04u, 0x1C14142Cu, 0x1C142C14u, 0x1C143E14u, 0x1C1C0C0Cu, 0x1C1C1C1Cu,
-    0x1C241C04u, 0x1C24243Eu, 0x1C243E14u, 0x1C2C0404u, 0x1C2C0434u, 0x1C2C1414u,
-    0x1C2C2C2Cu, 0x1C340C24u, 0x1C341C34u, 0x1C34341Cu, 0x1C3E1C1Cu, 0x1C3E3404u,
-    0x24040424u, 0x24040C3Eu, 0x24041C2Cu, 0x24041C3Eu, 0x24042C1Cu, 0x24042C3Eu,
-    0x240C3E24u, 0x24141404u, 0x24141C3Eu, 0x24142404u, 0x24143404u, 0x24143434u,
-    0x241C043Eu, 0x241C242Cu, 0x24240424u, 0x24242C0Cu, 0x24243424u, 0x242C142Cu,
-    0x242C241Cu, 0x242C3E04u, 0x243E042Cu, 0x243E0C04u, 0x243E0C14u, 0x243E1C04u,
-    0x2C040C14u, 0x2C04240Cu, 0x2C043E04u, 0x2C0C0404u, 0x2C0C0434u, 0x2C0C1434u,
-    0x2C0C2C2Cu, 0x2C140C24u, 0x2C141C14u, 0x2C143E14u, 0x2C1C0414u, 0x2C1C2C1Cu,
-    0x2C240C04u, 0x2C24141Cu, 0x2C24143Eu, 0x2C243E14u, 0x2C2C0414u, 0x2C2C1C0Cu,
-    0x2C342C04u, 0x2C3E1424u, 0x2C3E2414u, 0x34041424u, 0x34042424u, 0x34042434u,
-    0x34043424u, 0x340C140Cu, 0x340C340Cu, 0x34140C3Eu, 0x34143424u, 0x341C1C04u,
-    0x341C1C34u, 0x34242424u, 0x342C042Cu, 0x342C2C14u, 0x34341C1Cu, 0x343E041Cu,
-    0x343E140Cu, 0x3E04041Cu, 0x3E04042Cu, 0x3E04043Eu, 0x3E040C04u, 0x3E041C14u,
-    0x3E042C14u, 0x3E0C1434u, 0x3E0C2404u, 0x3E140C14u, 0x3E14242Cu, 0x3E142C14u,
-    0x3E1C0404u, 0x3E1C0C2Cu, 0x3E1C1C1Cu, 0x3E1C3404u, 0x3E24140Cu, 0x3E24240Cu,
-    0x3E2C0404u, 0x3E2C0414u, 0x3E2C1424u, 0x3E341C04u
-);
-
-const uint IQ3S_GRID[512] = uint[512](
-    0x01010101u, 0x01010103u, 0x01010105u, 0x0101010Bu, 0x0101010Fu, 0x01010301u,
-    0x01010303u, 0x01010305u, 0x01010309u, 0x0101030Du, 0x01010501u, 0x01010503u,
-    0x0101050Bu, 0x01010707u, 0x01010901u, 0x01010905u, 0x0101090Bu, 0x0101090Fu,
-    0x01010B03u, 0x01010B07u, 0x01010D01u, 0x01010D05u, 0x01010F03u, 0x01010F09u,
-    0x01010F0Fu, 0x01030101u, 0x01030103u, 0x01030105u, 0x01030109u, 0x01030301u,
-    0x01030303u, 0x0103030Bu, 0x01030501u, 0x01030507u, 0x0103050Fu, 0x01030703u,
-    0x0103070Bu, 0x01030909u, 0x01030D03u, 0x01030D0Bu, 0x01030F05u, 0x01050101u,
-    0x01050103u, 0x0105010Bu, 0x0105010Fu, 0x01050301u, 0x01050307u, 0x0105030Du,
-    0x01050503u, 0x0105050Bu, 0x01050701u, 0x01050709u, 0x01050905u, 0x0105090Bu,
-    0x0105090Fu, 0x01050B03u, 0x01050B07u, 0x01050F01u, 0x01050F07u, 0x01070107u,
-    0x01070303u, 0x0107030Bu, 0x01070501u, 0x01070505u, 0x01070703u, 0x01070707u,
-    0x0107070Du, 0x01070909u, 0x01070B01u, 0x01070B05u, 0x01070D0Fu, 0x01070F03u,
-    0x01070F0Bu, 0x01090101u, 0x01090307u, 0x0109030Fu, 0x01090503u, 0x01090509u,
-    0x01090705u, 0x01090901u, 0x01090907u, 0x01090B03u, 0x01090F01u, 0x010B0105u,
-    0x010B0109u, 0x010B0501u, 0x010B0505u, 0x010B050Du, 0x010B0707u, 0x010B0903u,
-    0x010B090Bu, 0x010B090Fu, 0x010B0D0Du, 0x010B0F07u, 0x010D010Du, 0x010D0303u,
-    0x010D0307u, 0x010D0703u, 0x010D0B05u, 0x010D0F03u, 0x010F0101u, 0x010F0105u,
-    0x010F0109u, 0x010F0501u, 0x010F0505u, 0x010F050Du, 0x010F0707u, 0x010F0B01u,
-    0x010F0B09u, 0x03010101u, 0x03010103u, 0x03010105u, 0x03010109u, 0x03010301u,
-    0x03010303u, 0x03010307u, 0x0301030Bu, 0x0301030Fu, 0x03010501u, 0x03010505u,
-    0x03010703u, 0x03010709u, 0x0301070Du, 0x03010B09u, 0x03010B0Du, 0x03010D03u,
-    0x03010F05u, 0x03030101u, 0x03030103u, 0x03030107u, 0x0303010Du, 0x03030301u,
-    0x03030309u, 0x03030503u, 0x03030701u, 0x03030707u, 0x03030903u, 0x03030B01u,
-    0x03030B05u, 0x03030F01u, 0x03030F0Du, 0x03050101u, 0x03050305u, 0x0305030Bu,
-    0x0305030Fu, 0x03050501u, 0x03050509u, 0x03050705u, 0x03050901u, 0x03050907u,
-    0x03050B0Bu, 0x03050D01u, 0x03050F05u, 0x03070103u, 0x03070109u, 0x0307010Fu,
-    0x03070301u, 0x03070307u, 0x03070503u, 0x0307050Fu, 0x03070701u, 0x03070709u,
-    0x03070903u, 0x03070D05u, 0x03070F01u, 0x03090107u, 0x0309010Bu, 0x03090305u,
-    0x03090309u, 0x03090703u, 0x03090707u, 0x03090905u, 0x0309090Du, 0x03090B01u,
-    0x03090B09u, 0x030B0103u, 0x030B0301u, 0x030B0307u, 0x030B0503u, 0x030B0701u,
-    0x030B0705u, 0x030B0B03u, 0x030D0501u, 0x030D0509u, 0x030D050Fu, 0x030D0909u,
-    0x030D090Du, 0x030F0103u, 0x030F0107u, 0x030F0301u, 0x030F0305u, 0x030F0503u,
-    0x030F070Bu, 0x030F0903u, 0x030F0D05u, 0x030F0F01u, 0x05010101u, 0x05010103u,
-    0x05010107u, 0x0501010Bu, 0x0501010Fu, 0x05010301u, 0x05010305u, 0x05010309u,
-    0x0501030Du, 0x05010503u, 0x05010507u, 0x0501050Fu, 0x05010701u, 0x05010705u,
-    0x05010903u, 0x05010907u, 0x0501090Bu, 0x05010B01u, 0x05010B05u, 0x05010D0Fu,
-    0x05010F01u, 0x05010F07u, 0x05010F0Bu, 0x05030101u, 0x05030105u, 0x05030301u,
-    0x05030307u, 0x0503030Fu, 0x05030505u, 0x0503050Bu, 0x05030703u, 0x05030709u,
-    0x05030905u, 0x05030B03u, 0x05050103u, 0x05050109u, 0x0505010Fu, 0x05050503u,
-    0x05050507u, 0x05050701u, 0x0505070Fu, 0x05050903u, 0x05050B07u, 0x05050B0Fu,
-    0x05050F03u, 0x05050F09u, 0x05070101u, 0x05070105u, 0x0507010Bu, 0x05070303u,
-    0x05070505u, 0x05070509u, 0x05070703u, 0x05070707u, 0x05070905u, 0x05070B01u,
-    0x05070D0Du, 0x05090103u, 0x0509010Fu, 0x05090501u, 0x05090507u, 0x05090705u,
-    0x0509070Bu, 0x05090903u, 0x05090F05u, 0x05090F0Bu, 0x050B0109u, 0x050B0303u,
-    0x050B0505u, 0x050B070Fu, 0x050B0901u, 0x050B0B07u, 0x050B0F01u, 0x050D0101u,
-    0x050D0105u, 0x050D010Fu, 0x050D0503u, 0x050D0B0Bu, 0x050D0D03u, 0x050F010Bu,
-    0x050F0303u, 0x050F050Du, 0x050F0701u, 0x050F0907u, 0x050F0B01u, 0x07010105u,
-    0x07010303u, 0x07010307u, 0x0701030Bu, 0x0701030Fu, 0x07010505u, 0x07010703u,
-    0x07010707u, 0x0701070Bu, 0x07010905u, 0x07010909u, 0x0701090Fu, 0x07010B03u,
-    0x07010D07u, 0x07010F03u, 0x07030103u, 0x07030107u, 0x0703010Bu, 0x07030309u,
-    0x07030503u, 0x07030507u, 0x07030901u, 0x07030D01u, 0x07030F05u, 0x07030F0Du,
-    0x07050101u, 0x07050305u, 0x07050501u, 0x07050705u, 0x07050709u, 0x07050B01u,
-    0x07070103u, 0x07070301u, 0x07070309u, 0x07070503u, 0x07070507u, 0x0707050Fu,
-    0x07070701u, 0x07070903u, 0x07070907u, 0x0707090Fu, 0x07070B0Bu, 0x07070F07u,
-    0x07090107u, 0x07090303u, 0x0709030Du, 0x07090505u, 0x07090703u, 0x07090B05u,
-    0x07090D01u, 0x07090D09u, 0x070B0103u, 0x070B0301u, 0x070B0305u, 0x070B050Bu,
-    0x070B0705u, 0x070B0909u, 0x070B0B0Du, 0x070B0F07u, 0x070D030Du, 0x070D0903u,
-    0x070F0103u, 0x070F0107u, 0x070F0501u, 0x070F0505u, 0x070F070Bu, 0x09010101u,
-    0x09010109u, 0x09010305u, 0x09010501u, 0x09010509u, 0x0901050Fu, 0x09010705u,
-    0x09010903u, 0x09010B01u, 0x09010F01u, 0x09030105u, 0x0903010Fu, 0x09030303u,
-    0x09030307u, 0x09030505u, 0x09030701u, 0x0903070Bu, 0x09030907u, 0x09030B03u,
-    0x09030B0Bu, 0x09050103u, 0x09050107u, 0x09050301u, 0x0905030Bu, 0x09050503u,
-    0x09050707u, 0x09050901u, 0x09050B0Fu, 0x09050D05u, 0x09050F01u, 0x09070109u,
-    0x09070303u, 0x09070307u, 0x09070501u, 0x09070505u, 0x09070703u, 0x0907070Bu,
-    0x09090101u, 0x09090105u, 0x09090509u, 0x0909070Fu, 0x09090901u, 0x09090F03u,
-    0x090B010Bu, 0x090B010Fu, 0x090B0503u, 0x090B0D05u, 0x090D0307u, 0x090D0709u,
-    0x090D0D01u, 0x090F0301u, 0x090F030Bu, 0x090F0701u, 0x090F0907u, 0x090F0B03u,
-    0x0B010105u, 0x0B010301u, 0x0B010309u, 0x0B010505u, 0x0B010901u, 0x0B010909u,
-    0x0B01090Fu, 0x0B010B05u, 0x0B010D0Du, 0x0B010F09u, 0x0B030103u, 0x0B030107u,
-    0x0B03010Bu, 0x0B030305u, 0x0B030503u, 0x0B030705u, 0x0B030F05u, 0x0B050101u,
-    0x0B050303u, 0x0B050507u, 0x0B050701u, 0x0B05070Du, 0x0B050B07u, 0x0B070105u,
-    0x0B07010Fu, 0x0B070301u, 0x0B07050Fu, 0x0B070909u, 0x0B070B03u, 0x0B070D0Bu,
-    0x0B070F07u, 0x0B090103u, 0x0B090109u, 0x0B090501u, 0x0B090705u, 0x0B09090Du,
-    0x0B0B0305u, 0x0B0B050Du, 0x0B0B0B03u, 0x0B0B0B07u, 0x0B0D0905u, 0x0B0F0105u,
-    0x0B0F0109u, 0x0B0F0505u, 0x0D010303u, 0x0D010307u, 0x0D01030Bu, 0x0D010703u,
-    0x0D010707u, 0x0D010D01u, 0x0D030101u, 0x0D030501u, 0x0D03050Fu, 0x0D030D09u,
-    0x0D050305u, 0x0D050709u, 0x0D050905u, 0x0D050B0Bu, 0x0D050D05u, 0x0D050F01u,
-    0x0D070101u, 0x0D070309u, 0x0D070503u, 0x0D070901u, 0x0D09050Bu, 0x0D090907u,
-    0x0D090D05u, 0x0D0B0101u, 0x0D0B0107u, 0x0D0B0709u, 0x0D0B0D01u, 0x0D0D010Bu,
-    0x0D0D0901u, 0x0D0F0303u, 0x0D0F0307u, 0x0F010101u, 0x0F010109u, 0x0F01010Fu,
-    0x0F010501u, 0x0F010505u, 0x0F01070Du, 0x0F010901u, 0x0F010B09u, 0x0F010D05u,
-    0x0F030105u, 0x0F030303u, 0x0F030509u, 0x0F030907u, 0x0F03090Bu, 0x0F050103u,
-    0x0F050109u, 0x0F050301u, 0x0F05030Du, 0x0F050503u, 0x0F050701u, 0x0F050B03u,
-    0x0F070105u, 0x0F070705u, 0x0F07070Bu, 0x0F070B07u, 0x0F090103u, 0x0F09010Bu,
-    0x0F090307u, 0x0F090501u, 0x0F090B01u, 0x0F0B0505u, 0x0F0B0905u, 0x0F0D0105u,
-    0x0F0D0703u, 0x0F0F0101u
-);
-
-//  Byte j of a grid entry of eight.
-uint grid_byte(uvec2 entry, uint j) {
-    return ((j < 4u ? entry.x : entry.y) >> (8u * (j & 3u))) & 255u;
-}
-
-//  The same byte read signed, which is what an IQ1 grid holds.
-float grid_signed(uvec2 entry, uint j) {
-    int value = int(grid_byte(entry, j));
-    return float(value > 127 ? value - 256 : value);
-}
-
-//  The sign pattern a seven-bit index names: the seven bits, and an eighth
-//  that makes the count of set bits even. ggml keeps it as a table of 128;
-//  this is what the table holds.
-uint ksign(uint index) {
-    return index | ((bitCount(index) & 1u) << 7u);
-}
-
-//  Minus one when bit j of a sign pattern is set.
-float sign_of(uint signs, uint j) {
-    return ((signs >> j) & 1u) != 0u ? -1.0 : 1.0;
-}
-
-//  A little-endian sixteen- and thirty-two-bit field of the weights.
-uint half_word_at(uint at) {
-    return byte_at(at) | (byte_at(at + 1u) << 8u);
-}
-
-uint word_at(uint at) {
-    return half_word_at(at) | (half_word_at(at + 2u) << 16u);
-}
-
-//  An NVFP4 scale: an unsigned E4M3 float, the top bit unread, nought and
-//  16#7F# zero, halved -- which takes the doubling of FOURS back out.
-float e4m3_at(uint at) {
-    uint code = byte_at(at);
-    uint exponent = (code >> 3u) & 15u;
-    float mantissa = float(code & 7u);
-
-    if (code == 0u || code == 0x7Fu) {
-        return 0.0;
-    }
-    return exponent == 0u
-           ? mantissa * exp2(-10.0)
-           : (1.0 + mantissa / 8.0) * exp2(float(exponent) - 8.0);
-}
-
-//  Bytes one row takes, which is what says where the next row starts.
-uint row_bytes() {
-    switch (shape.format) {
-        case FMT_IQ3_S:   return (shape.columns / 256u) * 110u;
-        case FMT_IQ2_XXS: return (shape.columns / 256u) * 66u;
-        case FMT_IQ2_XS:  return (shape.columns / 256u) * 74u;
-        case FMT_IQ2_S:   return (shape.columns / 256u) * 82u;
-        case FMT_IQ3_XXS: return (shape.columns / 256u) * 98u;
-        case FMT_IQ1_S:   return (shape.columns / 256u) * 50u;
-        case FMT_IQ1_M:   return (shape.columns / 256u) * 56u;
-        case FMT_TQ1_0:   return (shape.columns / 256u) * 54u;
-        case FMT_TQ2_0:   return (shape.columns / 256u) * 66u;
-        case FMT_Q1_0:    return (shape.columns / 128u) * 18u;
-        case FMT_Q2_0:    return (shape.columns / 64u) * 18u;
-        default:          return (shape.columns / 64u) * 36u;
-    }
-}
-#else
-//  Bytes one row takes, which is what says where the next row starts.
-uint row_bytes() {
-    switch (shape.format) {
-        case FMT_F32:  return shape.columns * 4u;
-        case FMT_F16:
-        case FMT_BF16: return shape.columns * 2u;
-
-        case FMT_Q4_0:
-        case FMT_IQ4_NL: return (shape.columns / 32u) * 18u;
-        case FMT_Q4_1:   return (shape.columns / 32u) * 20u;
-        case FMT_Q5_0:   return (shape.columns / 32u) * 22u;
-        case FMT_Q5_1:   return (shape.columns / 32u) * 24u;
-        case FMT_Q8_0:   return (shape.columns / 32u) * 34u;
-
-        case FMT_Q2_K:   return (shape.columns / 256u) * 84u;
-        case FMT_Q3_K:   return (shape.columns / 256u) * 110u;
-        case FMT_Q4_K:   return (shape.columns / 256u) * 144u;
-        case FMT_Q5_K:   return (shape.columns / 256u) * 176u;
-        case FMT_Q6_K:   return (shape.columns / 256u) * 210u;
-        case FMT_MXFP4:  return (shape.columns / 32u) * 17u;
-        default:         return (shape.columns / 256u) * 136u;
-    }
+float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
+    uint sub = within / 32u;
+    uint l = (within % 32u) / 8u;
+    uint high = u16_at(at + 34u + 2u * sub);
+    float dl = half_at(at) * float(2u * ((high >> 12u) & 7u) + 1u);
+    float shift = (high & 0x8000u) != 0u ? -0.125 : 0.125;
+    uint q = at + 2u + 4u * sub + l;
+    uvec2 g0 = uvec2(IQ1S_GRID[2u * (byte_at(q)      | (((high >> (3u * l)) & 7u) << 8u))], IQ1S_GRID[2u * (byte_at(q)      | (((high >> (3u * l)) & 7u) << 8u)) + 1u]);
+    uvec2 g1 = uvec2(IQ1S_GRID[2u * (byte_at(q + 1u) | (((high >> (3u * l + 3u)) & 7u) << 8u))], IQ1S_GRID[2u * (byte_at(q + 1u) | (((high >> (3u * l + 3u)) & 7u) << 8u)) + 1u]);
+    float total = dot(a0 + a1 + a2 + a3, vec4(1.0));
+    return dl * (plain_dot(g0.x, g0.y, a0, a1) + plain_dot(g1.x, g1.y, a2, a3)
+                 + shift * total);
 }
 #endif
 
-//  The six-bit scale and minimum a Q4_K or Q5_K sub-block carries. Twelve
-//  bytes hold sixteen six-bit numbers: the first four pairs whole in a byte
-//  each, the last four split, four bits in one byte and two in the top of
-//  another that a lower sub-block is already using.
-void sub_block_scale(uint at, uint index, out uint factor, out uint lowest) {
-    if (index < 4u) {
-        factor = byte_at(at + index) & 63u;
-        lowest = byte_at(at + index + 4u) & 63u;
-    } else {
-        factor = (byte_at(at + index + 4u) & 15u)
-                 | ((byte_at(at + index - 4u) >> 6u) << 4u);
-        lowest = (byte_at(at + index + 4u) >> 4u)
-                 | ((byte_at(at + index) >> 6u) << 4u);
-    }
+#ifdef IQ1_M
+const uint BLOCK_ELEMS = 256u;
+const uint BLOCK_BYTES = 56u;
+const uint IQ1S_GRID[4096] = uint[4096](
+    0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFF01u, 0xFFFFFFFFu, 0xFFFF0000u, 0xFFFFFFFFu,
+    0xFFFF01FFu, 0xFFFFFFFFu, 0xFFFF0101u, 0xFFFFFFFFu, 0xFF00FF00u, 0xFFFFFFFFu,
+    0xFF000000u, 0xFFFFFFFFu, 0xFF01FFFFu, 0xFFFFFFFFu, 0xFF01FF01u, 0xFFFFFFFFu,
+    0xFF0101FFu, 0xFFFFFFFFu, 0xFF010101u, 0xFFFFFFFFu, 0x00FF0000u, 0xFFFFFFFFu,
+    0x0000FF00u, 0xFFFFFFFFu, 0x000000FFu, 0xFFFFFFFFu, 0x00000001u, 0xFFFFFFFFu,
+    0x00010000u, 0xFFFFFFFFu, 0x01FFFFFFu, 0xFFFFFFFFu, 0x01FFFF01u, 0xFFFFFFFFu,
+    0x01FF01FFu, 0xFFFFFFFFu, 0x01FF0101u, 0xFFFFFFFFu, 0x01000000u, 0xFFFFFFFFu,
+    0x0101FFFFu, 0xFFFFFFFFu, 0x0101FF01u, 0xFFFFFFFFu, 0x010101FFu, 0xFFFFFFFFu,
+    0x01010101u, 0xFFFFFFFFu, 0xFFFF00FFu, 0xFFFFFF00u, 0xFFFF0000u, 0xFFFFFF00u,
+    0xFF00FF00u, 0xFFFFFF00u, 0xFF0000FFu, 0xFFFFFF00u, 0xFF000001u, 0xFFFFFF00u,
+    0xFF000100u, 0xFFFFFF00u, 0xFF000101u, 0xFFFFFF00u, 0xFF010000u, 0xFFFFFF00u,
+    0x00FFFF00u, 0xFFFFFF00u, 0x00FF0001u, 0xFFFFFF00u, 0x00FF0100u, 0xFFFFFF00u,
+    0x0000FF01u, 0xFFFFFF00u, 0x00000000u, 0xFFFFFF00u, 0x00000101u, 0xFFFFFF00u,
+    0x0001FF00u, 0xFFFFFF00u, 0x000100FFu, 0xFFFFFF00u, 0x00010001u, 0xFFFFFF00u,
+    0x000101FFu, 0xFFFFFF00u, 0x01FF0000u, 0xFFFFFF00u, 0x0100FF00u, 0xFFFFFF00u,
+    0x010000FFu, 0xFFFFFF00u, 0x01000001u, 0xFFFFFF00u, 0x01010000u, 0xFFFFFF00u,
+    0xFFFFFFFFu, 0xFFFFFF01u, 0xFFFFFF01u, 0xFFFFFF01u, 0xFFFF01FFu, 0xFFFFFF01u,
+    0xFFFF0101u, 0xFFFFFF01u, 0xFF000000u, 0xFFFFFF01u, 0xFF01FFFFu, 0xFFFFFF01u,
+    0xFF01FF01u, 0xFFFFFF01u, 0xFF0101FFu, 0xFFFFFF01u, 0xFF010101u, 0xFFFFFF01u,
+    0x00FF0000u, 0xFFFFFF01u, 0x0000FF00u, 0xFFFFFF01u, 0x00000100u, 0xFFFFFF01u,
+    0x000100FFu, 0xFFFFFF01u, 0x00010100u, 0xFFFFFF01u, 0x01FFFFFFu, 0xFFFFFF01u,
+    0x01FFFF01u, 0xFFFFFF01u, 0x01FF01FFu, 0xFFFFFF01u, 0x01FF0101u, 0xFFFFFF01u,
+    0x0100FF00u, 0xFFFFFF01u, 0x01000000u, 0xFFFFFF01u, 0x01000100u, 0xFFFFFF01u,
+    0x0101FFFFu, 0xFFFFFF01u, 0x0101FF01u, 0xFFFFFF01u, 0x010101FFu, 0xFFFFFF01u,
+    0x01010101u, 0xFFFFFF01u, 0xFF00FF00u, 0xFFFF00FFu, 0xFF0000FFu, 0xFFFF00FFu,
+    0xFF000001u, 0xFFFF00FFu, 0xFF010000u, 0xFFFF00FFu, 0x00FFFF00u, 0xFFFF00FFu,
+    0x00FF0100u, 0xFFFF00FFu, 0x00000000u, 0xFFFF00FFu, 0x00000101u, 0xFFFF00FFu,
+    0x000100FFu, 0xFFFF00FFu, 0x00010000u, 0xFFFF00FFu, 0x0100FF00u, 0xFFFF00FFu,
+    0x01000100u, 0xFFFF00FFu, 0x01010000u, 0xFFFF00FFu, 0xFFFFFF00u, 0xFFFF0000u,
+    0xFFFF00FFu, 0xFFFF0000u, 0xFFFF0000u, 0xFFFF0000u, 0xFFFF0001u, 0xFFFF0000u,
+    0xFF000000u, 0xFFFF0000u, 0xFF0001FFu, 0xFFFF0000u, 0xFF000101u, 0xFFFF0000u,
+    0xFF010100u, 0xFFFF0000u, 0x00FFFFFFu, 0xFFFF0000u, 0x00FF0000u, 0xFFFF0000u,
+    0x00FF0101u, 0xFFFF0000u, 0x0000FFFFu, 0xFFFF0000u, 0x0000FF00u, 0xFFFF0000u,
+    0x000000FFu, 0xFFFF0000u, 0x00000000u, 0xFFFF0000u, 0x00000001u, 0xFFFF0000u,
+    0x00000100u, 0xFFFF0000u, 0x0001FFFFu, 0xFFFF0000u, 0x0001FF01u, 0xFFFF0000u,
+    0x00010000u, 0xFFFF0000u, 0x000101FFu, 0xFFFF0000u, 0x00010101u, 0xFFFF0000u,
+    0x01FFFF00u, 0xFFFF0000u, 0x0100FF00u, 0xFFFF0000u, 0x01000000u, 0xFFFF0000u,
+    0x010001FFu, 0xFFFF0000u, 0x01000101u, 0xFFFF0000u, 0x0101FF00u, 0xFFFF0000u,
+    0x010100FFu, 0xFFFF0000u, 0x01010000u, 0xFFFF0000u, 0x01010001u, 0xFFFF0000u,
+    0x01010100u, 0xFFFF0000u, 0xFF0000FFu, 0xFFFF0001u, 0xFF000100u, 0xFFFF0001u,
+    0x00FFFF00u, 0xFFFF0001u, 0x00FF00FFu, 0xFFFF0001u, 0x0000FFFFu, 0xFFFF0001u,
+    0x0000FF01u, 0xFFFF0001u, 0x00000000u, 0xFFFF0001u, 0x000001FFu, 0xFFFF0001u,
+    0x0001FFFFu, 0xFFFF0001u, 0x0001FF00u, 0xFFFF0001u, 0x00010001u, 0xFFFF0001u,
+    0x00010100u, 0xFFFF0001u, 0x01FF0000u, 0xFFFF0001u, 0x0100FF00u, 0xFFFF0001u,
+    0x010000FFu, 0xFFFF0001u, 0x01000100u, 0xFFFF0001u, 0xFFFFFFFFu, 0xFFFF01FFu,
+    0xFFFFFF01u, 0xFFFF01FFu, 0xFFFF01FFu, 0xFFFF01FFu, 0xFFFF0101u, 0xFFFF01FFu,
+    0xFF000000u, 0xFFFF01FFu, 0xFF01FFFFu, 0xFFFF01FFu, 0xFF01FF01u, 0xFFFF01FFu,
+    0xFF0101FFu, 0xFFFF01FFu, 0xFF010101u, 0xFFFF01FFu, 0x00FF0000u, 0xFFFF01FFu,
+    0x0000FF00u, 0xFFFF01FFu, 0x00000001u, 0xFFFF01FFu, 0x00010000u, 0xFFFF01FFu,
+    0x01FFFFFFu, 0xFFFF01FFu, 0x01FFFF01u, 0xFFFF01FFu, 0x01FF01FFu, 0xFFFF01FFu,
+    0x01FF0101u, 0xFFFF01FFu, 0x01000000u, 0xFFFF01FFu, 0x0101FFFFu, 0xFFFF01FFu,
+    0x0101FF01u, 0xFFFF01FFu, 0x010101FFu, 0xFFFF01FFu, 0x01010101u, 0xFFFF01FFu,
+    0xFFFF0000u, 0xFFFF0100u, 0xFF00FF00u, 0xFFFF0100u, 0xFF0000FFu, 0xFFFF0100u,
+    0xFF000100u, 0xFFFF0100u, 0xFF0100FFu, 0xFFFF0100u, 0xFF010000u, 0xFFFF0100u,
+    0x00FFFF00u, 0xFFFF0100u, 0x0000FFFFu, 0xFFFF0100u, 0x0000FF00u, 0xFFFF0100u,
+    0x00000000u, 0xFFFF0100u, 0x0001FF00u, 0xFFFF0100u, 0x000100FFu, 0xFFFF0100u,
+    0x00010100u, 0xFFFF0100u, 0x0100FF00u, 0xFFFF0100u, 0x010000FFu, 0xFFFF0100u,
+    0x01000001u, 0xFFFF0100u, 0x01000100u, 0xFFFF0100u, 0x01010000u, 0xFFFF0100u,
+    0xFFFFFFFFu, 0xFFFF0101u, 0xFFFFFF01u, 0xFFFF0101u, 0xFFFF01FFu, 0xFFFF0101u,
+    0xFFFF0101u, 0xFFFF0101u, 0xFF000000u, 0xFFFF0101u, 0xFF01FFFFu, 0xFFFF0101u,
+    0xFF01FF01u, 0xFFFF0101u, 0xFF0101FFu, 0xFFFF0101u, 0xFF010101u, 0xFFFF0101u,
+    0x00FF0000u, 0xFFFF0101u, 0x0000FF00u, 0xFFFF0101u, 0x00000100u, 0xFFFF0101u,
+    0x0001FF00u, 0xFFFF0101u, 0x00010000u, 0xFFFF0101u, 0x01FFFFFFu, 0xFFFF0101u,
+    0x01FFFF01u, 0xFFFF0101u, 0x01FF0000u, 0xFFFF0101u, 0x01FF01FFu, 0xFFFF0101u,
+    0x01FF0101u, 0xFFFF0101u, 0x01000000u, 0xFFFF0101u, 0x0101FFFFu, 0xFFFF0101u,
+    0x0101FF01u, 0xFFFF0101u, 0x010101FFu, 0xFFFF0101u, 0x01010101u, 0xFFFF0101u,
+    0xFF00FFFFu, 0xFF00FFFFu, 0xFF00FF00u, 0xFF00FFFFu, 0xFF0000FFu, 0xFF00FFFFu,
+    0xFF000100u, 0xFF00FFFFu, 0xFF0100FFu, 0xFF00FFFFu, 0xFF010000u, 0xFF00FFFFu,
+    0x00FFFF00u, 0xFF00FFFFu, 0x00FF00FFu, 0xFF00FFFFu, 0x0000FFFFu, 0xFF00FFFFu,
+    0x00000000u, 0xFF00FFFFu, 0x000001FFu, 0xFF00FFFFu, 0x0001FF00u, 0xFF00FFFFu,
+    0x000100FFu, 0xFF00FFFFu, 0x00010000u, 0xFF00FFFFu, 0x00010100u, 0xFF00FFFFu,
+    0x0100FF00u, 0xFF00FFFFu, 0x010000FFu, 0xFF00FFFFu, 0x01000001u, 0xFF00FFFFu,
+    0x0101FF00u, 0xFF00FFFFu, 0x01010000u, 0xFF00FFFFu, 0xFFFFFF00u, 0xFF00FF00u,
+    0xFFFF00FFu, 0xFF00FF00u, 0xFFFF0001u, 0xFF00FF00u, 0xFFFF0100u, 0xFF00FF00u,
+    0xFF00FFFFu, 0xFF00FF00u, 0xFF00FF01u, 0xFF00FF00u, 0xFF000000u, 0xFF00FF00u,
+    0xFF0001FFu, 0xFF00FF00u, 0xFF01FF00u, 0xFF00FF00u, 0xFF0100FFu, 0xFF00FF00u,
+    0xFF010100u, 0xFF00FF00u, 0x00FF0000u, 0xFF00FF00u, 0x00FF0101u, 0xFF00FF00u,
+    0x0000FFFFu, 0xFF00FF00u, 0x0000FF00u, 0xFF00FF00u, 0x0000FF01u, 0xFF00FF00u,
+    0x000000FFu, 0xFF00FF00u, 0x00000000u, 0xFF00FF00u, 0x00000001u, 0xFF00FF00u,
+    0x00000100u, 0xFF00FF00u, 0x0001FFFFu, 0xFF00FF00u, 0x00010000u, 0xFF00FF00u,
+    0x01FF00FFu, 0xFF00FF00u, 0x0100FF01u, 0xFF00FF00u, 0x01000000u, 0xFF00FF00u,
+    0x0101FF00u, 0xFF00FF00u, 0x010100FFu, 0xFF00FF00u, 0xFF00FF00u, 0xFF00FF01u,
+    0xFF0000FFu, 0xFF00FF01u, 0xFF000001u, 0xFF00FF01u, 0xFF010000u, 0xFF00FF01u,
+    0x00FFFFFFu, 0xFF00FF01u, 0x00FF0001u, 0xFF00FF01u, 0x00FF0100u, 0xFF00FF01u,
+    0x0000FF01u, 0xFF00FF01u, 0x00000000u, 0xFF00FF01u, 0x000001FFu, 0xFF00FF01u,
+    0x00000101u, 0xFF00FF01u, 0x000100FFu, 0xFF00FF01u, 0x00010001u, 0xFF00FF01u,
+    0x01FF0000u, 0xFF00FF01u, 0x0100FF00u, 0xFF00FF01u, 0x010000FFu, 0xFF00FF01u,
+    0x01000001u, 0xFF00FF01u, 0x01010000u, 0xFF00FF01u, 0xFFFFFF00u, 0xFF0000FFu,
+    0xFFFF0001u, 0xFF0000FFu, 0xFFFF0100u, 0xFF0000FFu, 0xFF0000FFu, 0xFF0000FFu,
+    0xFF000000u, 0xFF0000FFu, 0xFF0001FFu, 0xFF0000FFu, 0xFF000100u, 0xFF0000FFu,
+    0xFF01FF00u, 0xFF0000FFu, 0xFF010001u, 0xFF0000FFu, 0x00FFFF00u, 0xFF0000FFu,
+    0x00FF0000u, 0xFF0000FFu, 0x00FF0001u, 0xFF0000FFu, 0x00FF01FFu, 0xFF0000FFu,
+    0x00FF0101u, 0xFF0000FFu, 0x0000FF00u, 0xFF0000FFu, 0x000000FFu, 0xFF0000FFu,
+    0x00000000u, 0xFF0000FFu, 0x00000001u, 0xFF0000FFu, 0x00000100u, 0xFF0000FFu,
+    0x0001FF01u, 0xFF0000FFu, 0x00010000u, 0xFF0000FFu, 0x000101FFu, 0xFF0000FFu,
+    0x01FF00FFu, 0xFF0000FFu, 0x01FF0100u, 0xFF0000FFu, 0x0100FFFFu, 0xFF0000FFu,
+    0x010000FFu, 0xFF0000FFu, 0x01000000u, 0xFF0000FFu, 0x010001FFu, 0xFF0000FFu,
+    0x01000100u, 0xFF0000FFu, 0x01000101u, 0xFF0000FFu, 0x0101FF00u, 0xFF0000FFu,
+    0x010100FFu, 0xFF0000FFu, 0x01010000u, 0xFF0000FFu, 0x01010100u, 0xFF0000FFu,
+    0xFFFFFF01u, 0xFF000000u, 0xFFFF0000u, 0xFF000000u, 0xFFFF0101u, 0xFF000000u,
+    0xFF00FF00u, 0xFF000000u, 0xFF0000FFu, 0xFF000000u, 0xFF000000u, 0xFF000000u,
+    0xFF000001u, 0xFF000000u, 0xFF000100u, 0xFF000000u, 0xFF01FFFFu, 0xFF000000u,
+    0xFF01FF01u, 0xFF000000u, 0xFF010000u, 0xFF000000u, 0xFF0101FFu, 0xFF000000u,
+    0xFF010101u, 0xFF000000u, 0x00FFFF00u, 0xFF000000u, 0x00FF00FFu, 0xFF000000u,
+    0x00FF0000u, 0xFF000000u, 0x00FF0001u, 0xFF000000u, 0x0000FF00u, 0xFF000000u,
+    0x0000FF01u, 0xFF000000u, 0x000000FFu, 0xFF000000u, 0x00000000u, 0xFF000000u,
+    0x00000001u, 0xFF000000u, 0x00000100u, 0xFF000000u, 0x00000101u, 0xFF000000u,
+    0x0001FF00u, 0xFF000000u, 0x000100FFu, 0xFF000000u, 0x00010000u, 0xFF000000u,
+    0x00010001u, 0xFF000000u, 0x00010100u, 0xFF000000u, 0x01FFFFFFu, 0xFF000000u,
+    0x01FFFF01u, 0xFF000000u, 0x01FF00FFu, 0xFF000000u, 0x01FF0000u, 0xFF000000u,
+    0x01FF01FFu, 0xFF000000u, 0x01FF0101u, 0xFF000000u, 0x0100FFFFu, 0xFF000000u,
+    0x0100FF00u, 0xFF000000u, 0x010000FFu, 0xFF000000u, 0x01000000u, 0xFF000000u,
+    0x01000001u, 0xFF000000u, 0x01000100u, 0xFF000000u, 0x01000101u, 0xFF000000u,
+    0x0101FFFFu, 0xFF000000u, 0x0101FF01u, 0xFF000000u, 0x01010000u, 0xFF000000u,
+    0xFFFFFF00u, 0xFF000001u, 0xFFFF00FFu, 0xFF000001u, 0xFFFF0000u, 0xFF000001u,
+    0xFFFF0001u, 0xFF000001u, 0xFF000000u, 0xFF000001u, 0xFF000001u, 0xFF000001u,
+    0xFF0001FFu, 0xFF000001u, 0xFF000101u, 0xFF000001u, 0xFF01FF00u, 0xFF000001u,
+    0xFF010001u, 0xFF000001u, 0x00FFFFFFu, 0xFF000001u, 0x00FFFF01u, 0xFF000001u,
+    0x00FF00FFu, 0xFF000001u, 0x00FF0000u, 0xFF000001u, 0x00FF01FFu, 0xFF000001u,
+    0x00FF0101u, 0xFF000001u, 0x0000FF00u, 0xFF000001u, 0x00000000u, 0xFF000001u,
+    0x00000001u, 0xFF000001u, 0x000001FFu, 0xFF000001u, 0x00000100u, 0xFF000001u,
+    0x0001FF00u, 0xFF000001u, 0x000100FFu, 0xFF000001u, 0x00010000u, 0xFF000001u,
+    0x000101FFu, 0xFF000001u, 0x00010100u, 0xFF000001u, 0x00010101u, 0xFF000001u,
+    0x01FF0001u, 0xFF000001u, 0x01FF0101u, 0xFF000001u, 0x0100FF01u, 0xFF000001u,
+    0x01000000u, 0xFF000001u, 0x010100FFu, 0xFF000001u, 0x01010100u, 0xFF000001u,
+    0xFF00FF00u, 0xFF0001FFu, 0xFF000001u, 0xFF0001FFu, 0xFF010000u, 0xFF0001FFu,
+    0x00FFFF00u, 0xFF0001FFu, 0x00FF00FFu, 0xFF0001FFu, 0x00FF0001u, 0xFF0001FFu,
+    0x00FF0100u, 0xFF0001FFu, 0x0000FFFFu, 0xFF0001FFu, 0x00000000u, 0xFF0001FFu,
+    0x000001FFu, 0xFF0001FFu, 0x00000101u, 0xFF0001FFu, 0x0001FFFFu, 0xFF0001FFu,
+    0x0001FF00u, 0xFF0001FFu, 0x000100FFu, 0xFF0001FFu, 0x00010001u, 0xFF0001FFu,
+    0x00010100u, 0xFF0001FFu, 0x01FF0000u, 0xFF0001FFu, 0x0100FF00u, 0xFF0001FFu,
+    0x010000FFu, 0xFF0001FFu, 0x01010000u, 0xFF0001FFu, 0xFF00FFFFu, 0xFF000100u,
+    0xFF00FF01u, 0xFF000100u, 0xFF000000u, 0xFF000100u, 0xFF000101u, 0xFF000100u,
+    0xFF01FF00u, 0xFF000100u, 0xFF010000u, 0xFF000100u, 0x00FFFF01u, 0xFF000100u,
+    0x00FF00FFu, 0xFF000100u, 0x00FF0000u, 0xFF000100u, 0x00FF01FFu, 0xFF000100u,
+    0x0000FF00u, 0xFF000100u, 0x000000FFu, 0xFF000100u, 0x00000000u, 0xFF000100u,
+    0x00000001u, 0xFF000100u, 0x00000100u, 0xFF000100u, 0x00000101u, 0xFF000100u,
+    0x0001FFFFu, 0xFF000100u, 0x00010000u, 0xFF000100u, 0x00010101u, 0xFF000100u,
+    0x01FF0100u, 0xFF000100u, 0x0100FF00u, 0xFF000100u, 0x0100FF01u, 0xFF000100u,
+    0x01000000u, 0xFF000100u, 0x010001FFu, 0xFF000100u, 0x0101FF00u, 0xFF000100u,
+    0x01010001u, 0xFF000100u, 0x01010100u, 0xFF000100u, 0xFFFF0100u, 0xFF000101u,
+    0xFF000001u, 0xFF000101u, 0xFF0100FFu, 0xFF000101u, 0xFF010001u, 0xFF000101u,
+    0x00FF00FFu, 0xFF000101u, 0x00FF0001u, 0xFF000101u, 0x00FF0100u, 0xFF000101u,
+    0x0000FFFFu, 0xFF000101u, 0x0000FF01u, 0xFF000101u, 0x00000000u, 0xFF000101u,
+    0x000001FFu, 0xFF000101u, 0x0001FF00u, 0xFF000101u, 0x00010001u, 0xFF000101u,
+    0x00010100u, 0xFF000101u, 0x01FF0000u, 0xFF000101u, 0x0100FF00u, 0xFF000101u,
+    0x01000001u, 0xFF000101u, 0x01000101u, 0xFF000101u, 0xFFFFFFFFu, 0xFF01FFFFu,
+    0xFFFFFF01u, 0xFF01FFFFu, 0xFFFF01FFu, 0xFF01FFFFu, 0xFFFF0101u, 0xFF01FFFFu,
+    0xFF000000u, 0xFF01FFFFu, 0xFF01FFFFu, 0xFF01FFFFu, 0xFF01FF01u, 0xFF01FFFFu,
+    0xFF010000u, 0xFF01FFFFu, 0xFF0101FFu, 0xFF01FFFFu, 0xFF010101u, 0xFF01FFFFu,
+    0x00FF0000u, 0xFF01FFFFu, 0x0000FF00u, 0xFF01FFFFu, 0x00000100u, 0xFF01FFFFu,
+    0x0001FF00u, 0xFF01FFFFu, 0x00010000u, 0xFF01FFFFu, 0x01FFFFFFu, 0xFF01FFFFu,
+    0x01FFFF01u, 0xFF01FFFFu, 0x01FF01FFu, 0xFF01FFFFu, 0x01FF0101u, 0xFF01FFFFu,
+    0x01000000u, 0xFF01FFFFu, 0x0101FFFFu, 0xFF01FFFFu, 0x0101FF01u, 0xFF01FFFFu,
+    0x01010000u, 0xFF01FFFFu, 0x010101FFu, 0xFF01FFFFu, 0x01010101u, 0xFF01FFFFu,
+    0xFFFF0000u, 0xFF01FF00u, 0xFF00FF00u, 0xFF01FF00u, 0xFF0000FFu, 0xFF01FF00u,
+    0xFF000100u, 0xFF01FF00u, 0xFF010000u, 0xFF01FF00u, 0x00FFFF01u, 0xFF01FF00u,
+    0x00FF00FFu, 0xFF01FF00u, 0x00FF0100u, 0xFF01FF00u, 0x00000000u, 0xFF01FF00u,
+    0x000001FFu, 0xFF01FF00u, 0x00000101u, 0xFF01FF00u, 0x0001FF00u, 0xFF01FF00u,
+    0x000100FFu, 0xFF01FF00u, 0x00010000u, 0xFF01FF00u, 0x00010001u, 0xFF01FF00u,
+    0x01FF0000u, 0xFF01FF00u, 0x0100FFFFu, 0xFF01FF00u, 0x01000001u, 0xFF01FF00u,
+    0x01000100u, 0xFF01FF00u, 0x01010000u, 0xFF01FF00u, 0xFFFFFF00u, 0xFF01FF01u,
+    0xFFFF01FFu, 0xFF01FF01u, 0xFFFF0101u, 0xFF01FF01u, 0xFF00FF00u, 0xFF01FF01u,
+    0xFF000000u, 0xFF01FF01u, 0xFF01FFFFu, 0xFF01FF01u, 0xFF01FF01u, 0xFF01FF01u,
+    0xFF0101FFu, 0xFF01FF01u, 0xFF010101u, 0xFF01FF01u, 0x00FF0000u, 0xFF01FF01u,
+    0x0000FF00u, 0xFF01FF01u, 0x00000001u, 0xFF01FF01u, 0x00000100u, 0xFF01FF01u,
+    0x00010000u, 0xFF01FF01u, 0x01FFFF00u, 0xFF01FF01u, 0x01FF01FFu, 0xFF01FF01u,
+    0x01FF0101u, 0xFF01FF01u, 0x0100FF00u, 0xFF01FF01u, 0x01000000u, 0xFF01FF01u,
+    0x0101FFFFu, 0xFF01FF01u, 0x0101FF01u, 0xFF01FF01u, 0x010101FFu, 0xFF01FF01u,
+    0x01010101u, 0xFF01FF01u, 0xFFFF0000u, 0xFF0100FFu, 0xFF0000FFu, 0xFF0100FFu,
+    0xFF000001u, 0xFF0100FFu, 0xFF000100u, 0xFF0100FFu, 0xFF010000u, 0xFF0100FFu,
+    0x00FF00FFu, 0xFF0100FFu, 0x00FF0000u, 0xFF0100FFu, 0x00FF0001u, 0xFF0100FFu,
+    0x00FF0100u, 0xFF0100FFu, 0x0000FF01u, 0xFF0100FFu, 0x00000000u, 0xFF0100FFu,
+    0x000001FFu, 0xFF0100FFu, 0x00000101u, 0xFF0100FFu, 0x00010001u, 0xFF0100FFu,
+    0x01FF0000u, 0xFF0100FFu, 0x0100FF00u, 0xFF0100FFu, 0x010000FFu, 0xFF0100FFu,
+    0x01000100u, 0xFF0100FFu, 0x0101FF00u, 0xFF0100FFu, 0x01010000u, 0xFF0100FFu,
+    0xFFFF0100u, 0xFF010000u, 0xFF000000u, 0xFF010000u, 0xFF01FF00u, 0xFF010000u,
+    0xFF010100u, 0xFF010000u, 0x00FFFFFFu, 0xFF010000u, 0x00FF0000u, 0xFF010000u,
+    0x00FF01FFu, 0xFF010000u, 0x0000FF00u, 0xFF010000u, 0x000000FFu, 0xFF010000u,
+    0x00000000u, 0xFF010000u, 0x00000100u, 0xFF010000u, 0x0001FF01u, 0xFF010000u,
+    0x00010000u, 0xFF010000u, 0x000101FFu, 0xFF010000u, 0x01FF0100u, 0xFF010000u,
+    0x0100FFFFu, 0xFF010000u, 0x010000FFu, 0xFF010000u, 0x01000000u, 0xFF010000u,
+    0x010001FFu, 0xFF010000u, 0x01000101u, 0xFF010000u, 0x0101FF00u, 0xFF010000u,
+    0x010100FFu, 0xFF010000u, 0x01010001u, 0xFF010000u, 0x01010100u, 0xFF010000u,
+    0xFFFF0000u, 0xFF010001u, 0xFF00FFFFu, 0xFF010001u, 0xFF00FF01u, 0xFF010001u,
+    0xFF000100u, 0xFF010001u, 0xFF010000u, 0xFF010001u, 0x00FFFF00u, 0xFF010001u,
+    0x00FF0100u, 0xFF010001u, 0x00000000u, 0xFF010001u, 0x0001FFFFu, 0xFF010001u,
+    0x0001FF00u, 0xFF010001u, 0x00010100u, 0xFF010001u, 0x01FF00FFu, 0xFF010001u,
+    0x01FF0001u, 0xFF010001u, 0x0100FFFFu, 0xFF010001u, 0x01000101u, 0xFF010001u,
+    0xFFFFFFFFu, 0xFF0101FFu, 0xFFFFFF01u, 0xFF0101FFu, 0xFFFF01FFu, 0xFF0101FFu,
+    0xFFFF0101u, 0xFF0101FFu, 0xFF000000u, 0xFF0101FFu, 0xFF01FFFFu, 0xFF0101FFu,
+    0xFF01FF01u, 0xFF0101FFu, 0xFF0101FFu, 0xFF0101FFu, 0xFF010101u, 0xFF0101FFu,
+    0x00FF0000u, 0xFF0101FFu, 0x0000FF00u, 0xFF0101FFu, 0x000000FFu, 0xFF0101FFu,
+    0x00010000u, 0xFF0101FFu, 0x01FFFFFFu, 0xFF0101FFu, 0x01FFFF01u, 0xFF0101FFu,
+    0x01FF01FFu, 0xFF0101FFu, 0x01FF0101u, 0xFF0101FFu, 0x0101FFFFu, 0xFF0101FFu,
+    0x0101FF01u, 0xFF0101FFu, 0x010101FFu, 0xFF0101FFu, 0x01010101u, 0xFF0101FFu,
+    0xFFFF0100u, 0xFF010100u, 0xFF00FF00u, 0xFF010100u, 0xFF0000FFu, 0xFF010100u,
+    0xFF000100u, 0xFF010100u, 0xFF010000u, 0xFF010100u, 0x00FF0001u, 0xFF010100u,
+    0x00FF0100u, 0xFF010100u, 0x0000FF01u, 0xFF010100u, 0x00000000u, 0xFF010100u,
+    0x0001FF00u, 0xFF010100u, 0x000100FFu, 0xFF010100u, 0x00010001u, 0xFF010100u,
+    0x00010100u, 0xFF010100u, 0x01FF0000u, 0xFF010100u, 0x0100FFFFu, 0xFF010100u,
+    0x01000001u, 0xFF010100u, 0x01000100u, 0xFF010100u, 0x010100FFu, 0xFF010100u,
+    0x01010000u, 0xFF010100u, 0xFFFFFFFFu, 0xFF010101u, 0xFFFFFF01u, 0xFF010101u,
+    0xFFFF01FFu, 0xFF010101u, 0xFFFF0101u, 0xFF010101u, 0xFF01FFFFu, 0xFF010101u,
+    0xFF01FF01u, 0xFF010101u, 0xFF0101FFu, 0xFF010101u, 0xFF010101u, 0xFF010101u,
+    0x00FF0000u, 0xFF010101u, 0x0000FF00u, 0xFF010101u, 0x00000001u, 0xFF010101u,
+    0x00000100u, 0xFF010101u, 0x00010000u, 0xFF010101u, 0x01FFFFFFu, 0xFF010101u,
+    0x01FFFF01u, 0xFF010101u, 0x01FF01FFu, 0xFF010101u, 0x01FF0101u, 0xFF010101u,
+    0x01000000u, 0xFF010101u, 0x0101FFFFu, 0xFF010101u, 0x0101FF01u, 0xFF010101u,
+    0x010101FFu, 0xFF010101u, 0x01010101u, 0xFF010101u, 0xFFFF0000u, 0x00FFFFFFu,
+    0xFF00FF00u, 0x00FFFFFFu, 0xFF000001u, 0x00FFFFFFu, 0xFF010000u, 0x00FFFFFFu,
+    0x00FF0100u, 0x00FFFFFFu, 0x0000FF01u, 0x00FFFFFFu, 0x00000000u, 0x00FFFFFFu,
+    0x000001FFu, 0x00FFFFFFu, 0x00000101u, 0x00FFFFFFu, 0x0001FF00u, 0x00FFFFFFu,
+    0x000100FFu, 0x00FFFFFFu, 0x00010001u, 0x00FFFFFFu, 0x010000FFu, 0x00FFFFFFu,
+    0x01000100u, 0x00FFFFFFu, 0x0101FF00u, 0x00FFFFFFu, 0x01010001u, 0x00FFFFFFu,
+    0xFFFFFFFFu, 0x00FFFF00u, 0xFFFFFF00u, 0x00FFFF00u, 0xFFFF00FFu, 0x00FFFF00u,
+    0xFFFF0001u, 0x00FFFF00u, 0xFFFF0100u, 0x00FFFF00u, 0xFF00FF01u, 0x00FFFF00u,
+    0xFF000000u, 0x00FFFF00u, 0xFF000001u, 0x00FFFF00u, 0xFF0001FFu, 0x00FFFF00u,
+    0xFF000101u, 0x00FFFF00u, 0xFF01FF00u, 0x00FFFF00u, 0xFF010001u, 0x00FFFF00u,
+    0xFF010100u, 0x00FFFF00u, 0x00FF0000u, 0x00FFFF00u, 0x00FF01FFu, 0x00FFFF00u,
+    0x00FF0101u, 0x00FFFF00u, 0x0000FF00u, 0x00FFFF00u, 0x000000FFu, 0x00FFFF00u,
+    0x00000000u, 0x00FFFF00u, 0x00000001u, 0x00FFFF00u, 0x00000100u, 0x00FFFF00u,
+    0x00000101u, 0x00FFFF00u, 0x00010000u, 0x00FFFF00u, 0x000101FFu, 0x00FFFF00u,
+    0x00010101u, 0x00FFFF00u, 0x01FFFF00u, 0x00FFFF00u, 0x01FF00FFu, 0x00FFFF00u,
+    0x01FF0001u, 0x00FFFF00u, 0x0100FFFFu, 0x00FFFF00u, 0x0100FF01u, 0x00FFFF00u,
+    0x01000000u, 0x00FFFF00u, 0x0101FFFFu, 0x00FFFF00u, 0x0101FF00u, 0x00FFFF00u,
+    0x0101FF01u, 0x00FFFF00u, 0xFFFF0000u, 0x00FFFF01u, 0xFF00FF00u, 0x00FFFF01u,
+    0xFF0000FFu, 0x00FFFF01u, 0xFF000001u, 0x00FFFF01u, 0xFF010000u, 0x00FFFF01u,
+    0x00FFFF00u, 0x00FFFF01u, 0x0000FF01u, 0x00FFFF01u, 0x00000000u, 0x00FFFF01u,
+    0x00000101u, 0x00FFFF01u, 0x000100FFu, 0x00FFFF01u, 0x00010100u, 0x00FFFF01u,
+    0x01FF0100u, 0x00FFFF01u, 0x010000FFu, 0x00FFFF01u, 0x01010000u, 0x00FFFF01u,
+    0xFFFFFF00u, 0x00FF00FFu, 0xFF000000u, 0x00FF00FFu, 0xFF000100u, 0x00FF00FFu,
+    0xFF010100u, 0x00FF00FFu, 0x00FF0000u, 0x00FF00FFu, 0x00FF01FFu, 0x00FF00FFu,
+    0x00FF0101u, 0x00FF00FFu, 0x0000FF00u, 0x00FF00FFu, 0x000000FFu, 0x00FF00FFu,
+    0x00000000u, 0x00FF00FFu, 0x00000001u, 0x00FF00FFu, 0x0001FF00u, 0x00FF00FFu,
+    0x0001FF01u, 0x00FF00FFu, 0x00010000u, 0x00FF00FFu, 0x000101FFu, 0x00FF00FFu,
+    0x00010101u, 0x00FF00FFu, 0x01FFFF00u, 0x00FF00FFu, 0x01FF0001u, 0x00FF00FFu,
+    0x01FF0100u, 0x00FF00FFu, 0x0100FFFFu, 0x00FF00FFu, 0x0100FF01u, 0x00FF00FFu,
+    0x01000000u, 0x00FF00FFu, 0x0101FFFFu, 0x00FF00FFu, 0x0101FF00u, 0x00FF00FFu,
+    0x01010100u, 0x00FF00FFu, 0xFFFFFF00u, 0x00FF0000u, 0xFFFFFF01u, 0x00FF0000u,
+    0xFFFF0000u, 0x00FF0000u, 0xFFFF0101u, 0x00FF0000u, 0xFF00FF00u, 0x00FF0000u,
+    0xFF0000FFu, 0x00FF0000u, 0xFF000000u, 0x00FF0000u, 0xFF000001u, 0x00FF0000u,
+    0xFF000100u, 0x00FF0000u, 0xFF01FFFFu, 0x00FF0000u, 0xFF010000u, 0x00FF0000u,
+    0xFF010101u, 0x00FF0000u, 0x00FFFF00u, 0x00FF0000u, 0x00FF00FFu, 0x00FF0000u,
+    0x00FF0000u, 0x00FF0000u, 0x00FF0001u, 0x00FF0000u, 0x00FF0100u, 0x00FF0000u,
+    0x0000FFFFu, 0x00FF0000u, 0x0000FF00u, 0x00FF0000u, 0x000000FFu, 0x00FF0000u,
+    0x00000000u, 0x00FF0000u, 0x00000001u, 0x00FF0000u, 0x000001FFu, 0x00FF0000u,
+    0x00000100u, 0x00FF0000u, 0x0001FF00u, 0x00FF0000u, 0x000100FFu, 0x00FF0000u,
+    0x00010000u, 0x00FF0000u, 0x00010001u, 0x00FF0000u, 0x00010100u, 0x00FF0000u,
+    0x01FFFF01u, 0x00FF0000u, 0x01FF00FFu, 0x00FF0000u, 0x01FF0000u, 0x00FF0000u,
+    0x01FF01FFu, 0x00FF0000u, 0x0100FF00u, 0x00FF0000u, 0x010000FFu, 0x00FF0000u,
+    0x01000000u, 0x00FF0000u, 0x01000001u, 0x00FF0000u, 0x01000100u, 0x00FF0000u,
+    0x01000101u, 0x00FF0000u, 0x01010000u, 0x00FF0000u, 0x010101FFu, 0x00FF0000u,
+    0x01010101u, 0x00FF0000u, 0xFFFFFF00u, 0x00FF0001u, 0xFFFF0000u, 0x00FF0001u,
+    0xFFFF0100u, 0x00FF0001u, 0xFF0000FFu, 0x00FF0001u, 0xFF000000u, 0x00FF0001u,
+    0xFF0001FFu, 0x00FF0001u, 0xFF000101u, 0x00FF0001u, 0xFF01FF00u, 0x00FF0001u,
+    0xFF0100FFu, 0x00FF0001u, 0xFF010100u, 0x00FF0001u, 0x00FFFFFFu, 0x00FF0001u,
+    0x00FFFF01u, 0x00FF0001u, 0x00FF0000u, 0x00FF0001u, 0x00FF01FFu, 0x00FF0001u,
+    0x0000FFFFu, 0x00FF0001u, 0x0000FF00u, 0x00FF0001u, 0x0000FF01u, 0x00FF0001u,
+    0x00000000u, 0x00FF0001u, 0x00000001u, 0x00FF0001u, 0x00000100u, 0x00FF0001u,
+    0x0001FF01u, 0x00FF0001u, 0x00010000u, 0x00FF0001u, 0x000101FFu, 0x00FF0001u,
+    0x01FFFF00u, 0x00FF0001u, 0x01FF0000u, 0x00FF0001u, 0x01FF0101u, 0x00FF0001u,
+    0x010000FFu, 0x00FF0001u, 0x01000000u, 0x00FF0001u, 0x0101FF00u, 0x00FF0001u,
+    0x010100FFu, 0x00FF0001u, 0x01010001u, 0x00FF0001u, 0xFFFF0000u, 0x00FF01FFu,
+    0xFF00FF00u, 0x00FF01FFu, 0xFF000000u, 0x00FF01FFu, 0xFF000101u, 0x00FF01FFu,
+    0xFF010000u, 0x00FF01FFu, 0x00FFFF01u, 0x00FF01FFu, 0x00FF0100u, 0x00FF01FFu,
+    0x0000FFFFu, 0x00FF01FFu, 0x00000000u, 0x00FF01FFu, 0x000001FFu, 0x00FF01FFu,
+    0x0001FF00u, 0x00FF01FFu, 0x000100FFu, 0x00FF01FFu, 0x00010001u, 0x00FF01FFu,
+    0x00010100u, 0x00FF01FFu, 0x01FF0000u, 0x00FF01FFu, 0x0100FF00u, 0x00FF01FFu,
+    0x010000FFu, 0x00FF01FFu, 0x01000001u, 0x00FF01FFu, 0x01000100u, 0x00FF01FFu,
+    0x01010000u, 0x00FF01FFu, 0xFFFFFF00u, 0x00FF0100u, 0xFFFF0000u, 0x00FF0100u,
+    0xFFFF0001u, 0x00FF0100u, 0xFFFF0101u, 0x00FF0100u, 0xFF00FFFFu, 0x00FF0100u,
+    0xFF0000FFu, 0x00FF0100u, 0xFF000000u, 0x00FF0100u, 0xFF0001FFu, 0x00FF0100u,
+    0xFF01FF00u, 0x00FF0100u, 0xFF0100FFu, 0x00FF0100u, 0xFF010001u, 0x00FF0100u,
+    0x00FFFFFFu, 0x00FF0100u, 0x00FF0000u, 0x00FF0100u, 0x00FF0101u, 0x00FF0100u,
+    0x0000FF00u, 0x00FF0100u, 0x0000FF01u, 0x00FF0100u, 0x000000FFu, 0x00FF0100u,
+    0x00000000u, 0x00FF0100u, 0x00000001u, 0x00FF0100u, 0x00000100u, 0x00FF0100u,
+    0x0001FFFFu, 0x00FF0100u, 0x0001FF01u, 0x00FF0100u, 0x00010000u, 0x00FF0100u,
+    0x00010001u, 0x00FF0100u, 0x00010101u, 0x00FF0100u, 0x01FF0001u, 0x00FF0100u,
+    0x01FF0100u, 0x00FF0100u, 0x0100FF01u, 0x00FF0100u, 0x01000000u, 0x00FF0100u,
+    0x01000001u, 0x00FF0100u, 0x010001FFu, 0x00FF0100u, 0x0101FF00u, 0x00FF0100u,
+    0x010100FFu, 0x00FF0100u, 0x01010001u, 0x00FF0100u, 0x01010100u, 0x00FF0100u,
+    0xFF000001u, 0x00FF0101u, 0x00FF00FFu, 0x00FF0101u, 0x00FF0001u, 0x00FF0101u,
+    0x00FF0100u, 0x00FF0101u, 0x00000000u, 0x00FF0101u, 0x000001FFu, 0x00FF0101u,
+    0x00000101u, 0x00FF0101u, 0x000100FFu, 0x00FF0101u, 0x00010100u, 0x00FF0101u,
+    0x010000FFu, 0x00FF0101u, 0x01010000u, 0x00FF0101u, 0xFFFFFF00u, 0x0000FFFFu,
+    0xFFFF00FFu, 0x0000FFFFu, 0xFFFF0000u, 0x0000FFFFu, 0xFFFF0001u, 0x0000FFFFu,
+    0xFFFF0100u, 0x0000FFFFu, 0xFF00FF01u, 0x0000FFFFu, 0xFF000000u, 0x0000FFFFu,
+    0xFF000101u, 0x0000FFFFu, 0xFF01FF00u, 0x0000FFFFu, 0xFF0100FFu, 0x0000FFFFu,
+    0xFF010100u, 0x0000FFFFu, 0x00FFFFFFu, 0x0000FFFFu, 0x00FF0000u, 0x0000FFFFu,
+    0x00FF01FFu, 0x0000FFFFu, 0x0000FF00u, 0x0000FFFFu, 0x000000FFu, 0x0000FFFFu,
+    0x00000000u, 0x0000FFFFu, 0x00000001u, 0x0000FFFFu, 0x00000100u, 0x0000FFFFu,
+    0x00010000u, 0x0000FFFFu, 0x000101FFu, 0x0000FFFFu, 0x01FF0001u, 0x0000FFFFu,
+    0x01FF0100u, 0x0000FFFFu, 0x01000000u, 0x0000FFFFu, 0x010001FFu, 0x0000FFFFu,
+    0x0101FFFFu, 0x0000FFFFu, 0x0101FF00u, 0x0000FFFFu, 0x01010001u, 0x0000FFFFu,
+    0x01010100u, 0x0000FFFFu, 0xFFFF0000u, 0x0000FF00u, 0xFFFF01FFu, 0x0000FF00u,
+    0xFFFF0100u, 0x0000FF00u, 0xFFFF0101u, 0x0000FF00u, 0xFF00FF00u, 0x0000FF00u,
+    0xFF0000FFu, 0x0000FF00u, 0xFF000000u, 0x0000FF00u, 0xFF000001u, 0x0000FF00u,
+    0xFF0001FFu, 0x0000FF00u, 0xFF000100u, 0x0000FF00u, 0xFF01FFFFu, 0x0000FF00u,
+    0xFF010000u, 0x0000FF00u, 0xFF010001u, 0x0000FF00u, 0xFF0101FFu, 0x0000FF00u,
+    0xFF010101u, 0x0000FF00u, 0x00FFFF00u, 0x0000FF00u, 0x00FF00FFu, 0x0000FF00u,
+    0x00FF0000u, 0x0000FF00u, 0x00FF0001u, 0x0000FF00u, 0x00FF0100u, 0x0000FF00u,
+    0x0000FFFFu, 0x0000FF00u, 0x0000FF00u, 0x0000FF00u, 0x0000FF01u, 0x0000FF00u,
+    0x000000FFu, 0x0000FF00u, 0x00000000u, 0x0000FF00u, 0x00000001u, 0x0000FF00u,
+    0x000001FFu, 0x0000FF00u, 0x00000100u, 0x0000FF00u, 0x00000101u, 0x0000FF00u,
+    0x0001FF00u, 0x0000FF00u, 0x000100FFu, 0x0000FF00u, 0x00010000u, 0x0000FF00u,
+    0x00010001u, 0x0000FF00u, 0x00010100u, 0x0000FF00u, 0x01FFFF01u, 0x0000FF00u,
+    0x01FF0000u, 0x0000FF00u, 0x0100FF00u, 0x0000FF00u, 0x010000FFu, 0x0000FF00u,
+    0x01000000u, 0x0000FF00u, 0x01000001u, 0x0000FF00u, 0x01000100u, 0x0000FF00u,
+    0x0101FFFFu, 0x0000FF00u, 0x01010000u, 0x0000FF00u, 0x01010101u, 0x0000FF00u,
+    0xFFFFFF00u, 0x0000FF01u, 0xFFFF0001u, 0x0000FF01u, 0xFF00FF01u, 0x0000FF01u,
+    0xFF000000u, 0x0000FF01u, 0xFF000101u, 0x0000FF01u, 0xFF01FF00u, 0x0000FF01u,
+    0xFF0100FFu, 0x0000FF01u, 0x00FFFF01u, 0x0000FF01u, 0x00FF0000u, 0x0000FF01u,
+    0x00FF0101u, 0x0000FF01u, 0x0000FF00u, 0x0000FF01u, 0x000000FFu, 0x0000FF01u,
+    0x00000000u, 0x0000FF01u, 0x00000001u, 0x0000FF01u, 0x00000100u, 0x0000FF01u,
+    0x0001FF01u, 0x0000FF01u, 0x00010000u, 0x0000FF01u, 0x01FF0000u, 0x0000FF01u,
+    0x0100FFFFu, 0x0000FF01u, 0x0100FF01u, 0x0000FF01u, 0x01000000u, 0x0000FF01u,
+    0x01000100u, 0x0000FF01u, 0x01000101u, 0x0000FF01u, 0x010100FFu, 0x0000FF01u,
+    0xFFFF00FFu, 0x000000FFu, 0xFFFF0000u, 0x000000FFu, 0xFF00FF00u, 0x000000FFu,
+    0xFF0000FFu, 0x000000FFu, 0xFF000000u, 0x000000FFu, 0xFF000001u, 0x000000FFu,
+    0xFF0001FFu, 0x000000FFu, 0xFF000100u, 0x000000FFu, 0xFF01FF00u, 0x000000FFu,
+    0xFF010000u, 0x000000FFu, 0xFF0101FFu, 0x000000FFu, 0xFF010101u, 0x000000FFu,
+    0x00FFFF00u, 0x000000FFu, 0x00FF00FFu, 0x000000FFu, 0x00FF0000u, 0x000000FFu,
+    0x00FF0001u, 0x000000FFu, 0x00FF0100u, 0x000000FFu, 0x00FF0101u, 0x000000FFu,
+    0x0000FFFFu, 0x000000FFu, 0x0000FF00u, 0x000000FFu, 0x000000FFu, 0x000000FFu,
+    0x00000000u, 0x000000FFu, 0x00000001u, 0x000000FFu, 0x000001FFu, 0x000000FFu,
+    0x00000100u, 0x000000FFu, 0x00000101u, 0x000000FFu, 0x0001FF00u, 0x000000FFu,
+    0x0001FF01u, 0x000000FFu, 0x000100FFu, 0x000000FFu, 0x00010000u, 0x000000FFu,
+    0x00010001u, 0x000000FFu, 0x00010100u, 0x000000FFu, 0x01FFFFFFu, 0x000000FFu,
+    0x01FF01FFu, 0x000000FFu, 0x01FF0101u, 0x000000FFu, 0x0100FF00u, 0x000000FFu,
+    0x010000FFu, 0x000000FFu, 0x01000000u, 0x000000FFu, 0x01000001u, 0x000000FFu,
+    0x01000100u, 0x000000FFu, 0x0101FF00u, 0x000000FFu, 0x010100FFu, 0x000000FFu,
+    0x01010000u, 0x000000FFu, 0x01010101u, 0x000000FFu, 0xFFFFFF00u, 0x00000000u,
+    0xFFFFFF01u, 0x00000000u, 0xFFFF00FFu, 0x00000000u, 0xFFFF0000u, 0x00000000u,
+    0xFFFF0001u, 0x00000000u, 0xFFFF0100u, 0x00000000u, 0xFF00FFFFu, 0x00000000u,
+    0xFF00FF00u, 0x00000000u, 0xFF00FF01u, 0x00000000u, 0xFF0000FFu, 0x00000000u,
+    0xFF000000u, 0x00000000u, 0xFF000001u, 0x00000000u, 0xFF000100u, 0x00000000u,
+    0xFF000101u, 0x00000000u, 0xFF01FF00u, 0x00000000u, 0xFF0100FFu, 0x00000000u,
+    0xFF010000u, 0x00000000u, 0xFF010001u, 0x00000000u, 0xFF010100u, 0x00000000u,
+    0x00FFFFFFu, 0x00000000u, 0x00FFFF00u, 0x00000000u, 0x00FFFF01u, 0x00000000u,
+    0x00FF00FFu, 0x00000000u, 0x00FF0000u, 0x00000000u, 0x00FF0001u, 0x00000000u,
+    0x00FF01FFu, 0x00000000u, 0x00FF0100u, 0x00000000u, 0x0000FFFFu, 0x00000000u,
+    0x0000FF00u, 0x00000000u, 0x0000FF01u, 0x00000000u, 0x000000FFu, 0x00000000u,
+    0x00000000u, 0x00000000u, 0x00000001u, 0x00000000u, 0x000001FFu, 0x00000000u,
+    0x00000100u, 0x00000000u, 0x00000101u, 0x00000000u, 0x0001FFFFu, 0x00000000u,
+    0x0001FF00u, 0x00000000u, 0x000100FFu, 0x00000000u, 0x00010000u, 0x00000000u,
+    0x00010001u, 0x00000000u, 0x000101FFu, 0x00000000u, 0x00010100u, 0x00000000u,
+    0x00010101u, 0x00000000u, 0x01FFFF00u, 0x00000000u, 0x01FF00FFu, 0x00000000u,
+    0x01FF0000u, 0x00000000u, 0x01FF0100u, 0x00000000u, 0x01FF0101u, 0x00000000u,
+    0x0100FFFFu, 0x00000000u, 0x0100FF00u, 0x00000000u, 0x010000FFu, 0x00000000u,
+    0x01000000u, 0x00000000u, 0x01000001u, 0x00000000u, 0x010001FFu, 0x00000000u,
+    0x01000100u, 0x00000000u, 0x0101FF00u, 0x00000000u, 0x010100FFu, 0x00000000u,
+    0x01010000u, 0x00000000u, 0x01010001u, 0x00000000u, 0x01010100u, 0x00000000u,
+    0xFFFFFFFFu, 0x00000001u, 0xFFFFFF00u, 0x00000001u, 0xFFFFFF01u, 0x00000001u,
+    0xFFFF00FFu, 0x00000001u, 0xFFFF0001u, 0x00000001u, 0xFFFF01FFu, 0x00000001u,
+    0xFFFF0100u, 0x00000001u, 0xFF00FF00u, 0x00000001u, 0xFF0000FFu, 0x00000001u,
+    0xFF000000u, 0x00000001u, 0xFF0001FFu, 0x00000001u, 0xFF000100u, 0x00000001u,
+    0xFF01FFFFu, 0x00000001u, 0xFF01FF00u, 0x00000001u, 0xFF01FF01u, 0x00000001u,
+    0xFF0100FFu, 0x00000001u, 0xFF010000u, 0x00000001u, 0xFF010001u, 0x00000001u,
+    0xFF0101FFu, 0x00000001u, 0xFF010100u, 0x00000001u, 0x00FFFF00u, 0x00000001u,
+    0x00FF0000u, 0x00000001u, 0x00FF0001u, 0x00000001u, 0x00FF01FFu, 0x00000001u,
+    0x00FF0100u, 0x00000001u, 0x00FF0101u, 0x00000001u, 0x0000FFFFu, 0x00000001u,
+    0x0000FF00u, 0x00000001u, 0x0000FF01u, 0x00000001u, 0x000000FFu, 0x00000001u,
+    0x00000000u, 0x00000001u, 0x00000001u, 0x00000001u, 0x000001FFu, 0x00000001u,
+    0x00000100u, 0x00000001u, 0x00000101u, 0x00000001u, 0x0001FF00u, 0x00000001u,
+    0x000100FFu, 0x00000001u, 0x00010000u, 0x00000001u, 0x00010100u, 0x00000001u,
+    0x01FFFF01u, 0x00000001u, 0x01FF0000u, 0x00000001u, 0x01FF0001u, 0x00000001u,
+    0x01FF01FFu, 0x00000001u, 0x01FF0100u, 0x00000001u, 0x01FF0101u, 0x00000001u,
+    0x0100FF00u, 0x00000001u, 0x01000000u, 0x00000001u, 0x01000101u, 0x00000001u,
+    0x0101FF01u, 0x00000001u, 0x01010000u, 0x00000001u, 0x01010001u, 0x00000001u,
+    0x010101FFu, 0x00000001u, 0x01010100u, 0x00000001u, 0xFFFF00FFu, 0x000001FFu,
+    0xFFFF0000u, 0x000001FFu, 0xFFFF0001u, 0x000001FFu, 0xFFFF0100u, 0x000001FFu,
+    0xFF00FFFFu, 0x000001FFu, 0xFF000000u, 0x000001FFu, 0xFF0001FFu, 0x000001FFu,
+    0xFF01FF00u, 0x000001FFu, 0xFF010101u, 0x000001FFu, 0x00FF0000u, 0x000001FFu,
+    0x00FF01FFu, 0x000001FFu, 0x00FF0101u, 0x000001FFu, 0x0000FF00u, 0x000001FFu,
+    0x000000FFu, 0x000001FFu, 0x00000000u, 0x000001FFu, 0x00000001u, 0x000001FFu,
+    0x000001FFu, 0x000001FFu, 0x00000100u, 0x000001FFu, 0x0001FFFFu, 0x000001FFu,
+    0x0001FF01u, 0x000001FFu, 0x000100FFu, 0x000001FFu, 0x00010000u, 0x000001FFu,
+    0x01FFFF01u, 0x000001FFu, 0x01FF0100u, 0x000001FFu, 0x0100FFFFu, 0x000001FFu,
+    0x0100FF01u, 0x000001FFu, 0x01000000u, 0x000001FFu, 0x010001FFu, 0x000001FFu,
+    0x0101FF00u, 0x000001FFu, 0x01010100u, 0x000001FFu, 0xFFFFFF00u, 0x00000100u,
+    0xFFFFFF01u, 0x00000100u, 0xFFFF0000u, 0x00000100u, 0xFFFF0101u, 0x00000100u,
+    0xFF00FF00u, 0x00000100u, 0xFF0000FFu, 0x00000100u, 0xFF000000u, 0x00000100u,
+    0xFF000001u, 0x00000100u, 0xFF000100u, 0x00000100u, 0xFF010000u, 0x00000100u,
+    0x00FFFF00u, 0x00000100u, 0x00FF00FFu, 0x00000100u, 0x00FF0000u, 0x00000100u,
+    0x00FF0001u, 0x00000100u, 0x00FF0100u, 0x00000100u, 0x0000FFFFu, 0x00000100u,
+    0x0000FF00u, 0x00000100u, 0x0000FF01u, 0x00000100u, 0x000000FFu, 0x00000100u,
+    0x00000000u, 0x00000100u, 0x00000001u, 0x00000100u, 0x000001FFu, 0x00000100u,
+    0x00000100u, 0x00000100u, 0x00000101u, 0x00000100u, 0x0001FF00u, 0x00000100u,
+    0x000100FFu, 0x00000100u, 0x00010000u, 0x00000100u, 0x00010001u, 0x00000100u,
+    0x00010100u, 0x00000100u, 0x01FFFF00u, 0x00000100u, 0x01FF0000u, 0x00000100u,
+    0x01FF0100u, 0x00000100u, 0x0100FF00u, 0x00000100u, 0x010000FFu, 0x00000100u,
+    0x01000000u, 0x00000100u, 0x01000001u, 0x00000100u, 0x010001FFu, 0x00000100u,
+    0x01000100u, 0x00000100u, 0x01010000u, 0x00000100u, 0xFFFF00FFu, 0x00000101u,
+    0xFFFF01FFu, 0x00000101u, 0xFF000000u, 0x00000101u, 0xFF000101u, 0x00000101u,
+    0xFF01FFFFu, 0x00000101u, 0xFF010000u, 0x00000101u, 0xFF010001u, 0x00000101u,
+    0xFF010100u, 0x00000101u, 0x00FF0000u, 0x00000101u, 0x00FF01FFu, 0x00000101u,
+    0x00FF0100u, 0x00000101u, 0x0000FF00u, 0x00000101u, 0x00000000u, 0x00000101u,
+    0x00000001u, 0x00000101u, 0x000001FFu, 0x00000101u, 0x00000100u, 0x00000101u,
+    0x0001FF01u, 0x00000101u, 0x00010000u, 0x00000101u, 0x000101FFu, 0x00000101u,
+    0x00010101u, 0x00000101u, 0x01FFFF00u, 0x00000101u, 0x01FF0101u, 0x00000101u,
+    0x0100FF01u, 0x00000101u, 0x01000000u, 0x00000101u, 0x01000001u, 0x00000101u,
+    0x010001FFu, 0x00000101u, 0x01000101u, 0x00000101u, 0x0101FF00u, 0x00000101u,
+    0xFFFF0000u, 0x0001FFFFu, 0xFF0000FFu, 0x0001FFFFu, 0xFF000001u, 0x0001FFFFu,
+    0xFF000100u, 0x0001FFFFu, 0xFF010000u, 0x0001FFFFu, 0x00FF00FFu, 0x0001FFFFu,
+    0x0000FFFFu, 0x0001FFFFu, 0x00000000u, 0x0001FFFFu, 0x00000001u, 0x0001FFFFu,
+    0x000001FFu, 0x0001FFFFu, 0x00000101u, 0x0001FFFFu, 0x0001FF00u, 0x0001FFFFu,
+    0x000100FFu, 0x0001FFFFu, 0x00010001u, 0x0001FFFFu, 0x00010100u, 0x0001FFFFu,
+    0x01FFFF00u, 0x0001FFFFu, 0x01000001u, 0x0001FFFFu, 0x01010000u, 0x0001FFFFu,
+    0xFFFFFF00u, 0x0001FF00u, 0xFFFF00FFu, 0x0001FF00u, 0xFFFF0001u, 0x0001FF00u,
+    0xFFFF0100u, 0x0001FF00u, 0xFF00FF01u, 0x0001FF00u, 0xFF000000u, 0x0001FF00u,
+    0xFF01FF00u, 0x0001FF00u, 0xFF01FF01u, 0x0001FF00u, 0xFF010001u, 0x0001FF00u,
+    0xFF010100u, 0x0001FF00u, 0x00FF0000u, 0x0001FF00u, 0x00FF0100u, 0x0001FF00u,
+    0x0000FF00u, 0x0001FF00u, 0x00000000u, 0x0001FF00u, 0x00000001u, 0x0001FF00u,
+    0x00000100u, 0x0001FF00u, 0x00010000u, 0x0001FF00u, 0x00010001u, 0x0001FF00u,
+    0x00010101u, 0x0001FF00u, 0x01FF00FFu, 0x0001FF00u, 0x01FF0101u, 0x0001FF00u,
+    0x0100FF01u, 0x0001FF00u, 0x01000000u, 0x0001FF00u, 0x0101FF00u, 0x0001FF00u,
+    0x01010001u, 0x0001FF00u, 0x01010100u, 0x0001FF00u, 0xFF00FF00u, 0x0001FF01u,
+    0xFF000001u, 0x0001FF01u, 0xFF000100u, 0x0001FF01u, 0x00FFFFFFu, 0x0001FF01u,
+    0x00FFFF00u, 0x0001FF01u, 0x00FF0001u, 0x0001FF01u, 0x00000000u, 0x0001FF01u,
+    0x00000001u, 0x0001FF01u, 0x000001FFu, 0x0001FF01u, 0x0001FFFFu, 0x0001FF01u,
+    0x01FF0000u, 0x0001FF01u, 0x0100FF00u, 0x0001FF01u, 0x01000001u, 0x0001FF01u,
+    0x01010000u, 0x0001FF01u, 0xFF00FF00u, 0x000100FFu, 0xFF00FF01u, 0x000100FFu,
+    0xFF000000u, 0x000100FFu, 0xFF000001u, 0x000100FFu, 0xFF000101u, 0x000100FFu,
+    0xFF01FF00u, 0x000100FFu, 0xFF010001u, 0x000100FFu, 0xFF010100u, 0x000100FFu,
+    0x00FFFFFFu, 0x000100FFu, 0x00FFFF01u, 0x000100FFu, 0x00FF0000u, 0x000100FFu,
+    0x00FF01FFu, 0x000100FFu, 0x00FF0101u, 0x000100FFu, 0x0000FF00u, 0x000100FFu,
+    0x000000FFu, 0x000100FFu, 0x00000000u, 0x000100FFu, 0x00000001u, 0x000100FFu,
+    0x00000100u, 0x000100FFu, 0x00000101u, 0x000100FFu, 0x0001FFFFu, 0x000100FFu,
+    0x0001FF01u, 0x000100FFu, 0x00010000u, 0x000100FFu, 0x01FF00FFu, 0x000100FFu,
+    0x01FF0000u, 0x000100FFu, 0x01FF0100u, 0x000100FFu, 0x0100FFFFu, 0x000100FFu,
+    0x0100FF01u, 0x000100FFu, 0x010000FFu, 0x000100FFu, 0x01000000u, 0x000100FFu,
+    0x01000001u, 0x000100FFu, 0x010001FFu, 0x000100FFu, 0x01000101u, 0x000100FFu,
+    0x0101FF00u, 0x000100FFu, 0x010100FFu, 0x000100FFu, 0x01010100u, 0x000100FFu,
+    0xFFFF0000u, 0x00010000u, 0xFFFF01FFu, 0x00010000u, 0xFFFF0101u, 0x00010000u,
+    0xFF00FF00u, 0x00010000u, 0xFF000000u, 0x00010000u, 0xFF000001u, 0x00010000u,
+    0xFF000100u, 0x00010000u, 0x00FF00FFu, 0x00010000u, 0x00FF0000u, 0x00010000u,
+    0x00FF0001u, 0x00010000u, 0x00FF0100u, 0x00010000u, 0x0000FFFFu, 0x00010000u,
+    0x0000FF00u, 0x00010000u, 0x000000FFu, 0x00010000u, 0x00000000u, 0x00010000u,
+    0x00000001u, 0x00010000u, 0x00000100u, 0x00010000u, 0x0001FF00u, 0x00010000u,
+    0x000100FFu, 0x00010000u, 0x00010000u, 0x00010000u, 0x00010001u, 0x00010000u,
+    0x00010100u, 0x00010000u, 0x01FF0001u, 0x00010000u, 0x01FF0100u, 0x00010000u,
+    0x01FF0101u, 0x00010000u, 0x0100FF00u, 0x00010000u, 0x01000000u, 0x00010000u,
+    0x01000001u, 0x00010000u, 0x01000100u, 0x00010000u, 0x01000101u, 0x00010000u,
+    0x0101FF01u, 0x00010000u, 0x01010000u, 0x00010000u, 0x01010001u, 0x00010000u,
+    0x010101FFu, 0x00010000u, 0xFFFFFF01u, 0x00010001u, 0xFFFF0100u, 0x00010001u,
+    0xFF000000u, 0x00010001u, 0xFF01FFFFu, 0x00010001u, 0xFF010001u, 0x00010001u,
+    0xFF0101FFu, 0x00010001u, 0xFF010100u, 0x00010001u, 0x00FFFFFFu, 0x00010001u,
+    0x00FF0000u, 0x00010001u, 0x00FF01FFu, 0x00010001u, 0x00FF0101u, 0x00010001u,
+    0x0000FF00u, 0x00010001u, 0x000000FFu, 0x00010001u, 0x00000000u, 0x00010001u,
+    0x00000001u, 0x00010001u, 0x000001FFu, 0x00010001u, 0x00000101u, 0x00010001u,
+    0x0001FFFFu, 0x00010001u, 0x00010000u, 0x00010001u, 0x000101FFu, 0x00010001u,
+    0x01FFFFFFu, 0x00010001u, 0x01FFFF01u, 0x00010001u, 0x01FF0000u, 0x00010001u,
+    0x01FF0101u, 0x00010001u, 0x010000FFu, 0x00010001u, 0x01000001u, 0x00010001u,
+    0x010001FFu, 0x00010001u, 0x01000100u, 0x00010001u, 0x0101FFFFu, 0x00010001u,
+    0x010100FFu, 0x00010001u, 0x01010001u, 0x00010001u, 0x01010101u, 0x00010001u,
+    0xFF000001u, 0x000101FFu, 0xFF000100u, 0x000101FFu, 0xFF010000u, 0x000101FFu,
+    0x00FFFF00u, 0x000101FFu, 0x0000FF01u, 0x000101FFu, 0x00000000u, 0x000101FFu,
+    0x00000101u, 0x000101FFu, 0x0001FF00u, 0x000101FFu, 0x00010100u, 0x000101FFu,
+    0x01FF0000u, 0x000101FFu, 0x0100FF00u, 0x000101FFu, 0x010001FFu, 0x000101FFu,
+    0x01010001u, 0x000101FFu, 0xFFFFFF00u, 0x00010100u, 0xFFFF00FFu, 0x00010100u,
+    0xFF00FFFFu, 0x00010100u, 0xFF000000u, 0x00010100u, 0xFF01FF00u, 0x00010100u,
+    0xFF0100FFu, 0x00010100u, 0xFF010001u, 0x00010100u, 0xFF010100u, 0x00010100u,
+    0x00FFFFFFu, 0x00010100u, 0x00FFFF00u, 0x00010100u, 0x00FF0000u, 0x00010100u,
+    0x00FF0001u, 0x00010100u, 0x00FF01FFu, 0x00010100u, 0x0000FF00u, 0x00010100u,
+    0x000000FFu, 0x00010100u, 0x00000000u, 0x00010100u, 0x00000001u, 0x00010100u,
+    0x00000100u, 0x00010100u, 0x0001FFFFu, 0x00010100u, 0x00010000u, 0x00010100u,
+    0x00010101u, 0x00010100u, 0x01FFFF01u, 0x00010100u, 0x01FF00FFu, 0x00010100u,
+    0x01FF0101u, 0x00010100u, 0x01000000u, 0x00010100u, 0x0101FF00u, 0x00010100u,
+    0x010100FFu, 0x00010100u, 0x01010000u, 0x00010100u, 0x01010100u, 0x00010100u,
+    0xFF00FF00u, 0x00010101u, 0xFF000001u, 0x00010101u, 0xFF0001FFu, 0x00010101u,
+    0x00FFFF00u, 0x00010101u, 0x00FF00FFu, 0x00010101u, 0x00FF0100u, 0x00010101u,
+    0x0000FFFFu, 0x00010101u, 0x00000000u, 0x00010101u, 0x000001FFu, 0x00010101u,
+    0x00000101u, 0x00010101u, 0x000100FFu, 0x00010101u, 0x00010000u, 0x00010101u,
+    0x00010100u, 0x00010101u, 0x01FF0001u, 0x00010101u, 0x010000FFu, 0x00010101u,
+    0x010001FFu, 0x00010101u, 0x01000101u, 0x00010101u, 0x01010001u, 0x00010101u,
+    0xFFFFFFFFu, 0x01FFFFFFu, 0xFFFFFF01u, 0x01FFFFFFu, 0xFFFF01FFu, 0x01FFFFFFu,
+    0xFFFF0101u, 0x01FFFFFFu, 0xFF01FFFFu, 0x01FFFFFFu, 0xFF01FF01u, 0x01FFFFFFu,
+    0xFF0101FFu, 0x01FFFFFFu, 0xFF010101u, 0x01FFFFFFu, 0x00FF0000u, 0x01FFFFFFu,
+    0x0000FFFFu, 0x01FFFFFFu, 0x0000FF00u, 0x01FFFFFFu, 0x000000FFu, 0x01FFFFFFu,
+    0x00000001u, 0x01FFFFFFu, 0x00000100u, 0x01FFFFFFu, 0x00010000u, 0x01FFFFFFu,
+    0x01FFFFFFu, 0x01FFFFFFu, 0x01FFFF01u, 0x01FFFFFFu, 0x01FF01FFu, 0x01FFFFFFu,
+    0x01FF0101u, 0x01FFFFFFu, 0x01000000u, 0x01FFFFFFu, 0x0101FFFFu, 0x01FFFFFFu,
+    0x0101FF01u, 0x01FFFFFFu, 0x010101FFu, 0x01FFFFFFu, 0x01010101u, 0x01FFFFFFu,
+    0xFFFF0000u, 0x01FFFF00u, 0xFF00FF00u, 0x01FFFF00u, 0xFF0000FFu, 0x01FFFF00u,
+    0xFF000001u, 0x01FFFF00u, 0xFF000100u, 0x01FFFF00u, 0xFF010000u, 0x01FFFF00u,
+    0x00FFFF00u, 0x01FFFF00u, 0x00FF00FFu, 0x01FFFF00u, 0x00FF0100u, 0x01FFFF00u,
+    0x0000FFFFu, 0x01FFFF00u, 0x0000FF01u, 0x01FFFF00u, 0x00000000u, 0x01FFFF00u,
+    0x00000001u, 0x01FFFF00u, 0x000001FFu, 0x01FFFF00u, 0x00000100u, 0x01FFFF00u,
+    0x000100FFu, 0x01FFFF00u, 0x00010001u, 0x01FFFF00u, 0x00010100u, 0x01FFFF00u,
+    0x01FF0000u, 0x01FFFF00u, 0x01FF0100u, 0x01FFFF00u, 0x010000FFu, 0x01FFFF00u,
+    0x01000001u, 0x01FFFF00u, 0x01000100u, 0x01FFFF00u, 0x01010000u, 0x01FFFF00u,
+    0xFFFFFFFFu, 0x01FFFF01u, 0xFFFFFF01u, 0x01FFFF01u, 0xFFFF01FFu, 0x01FFFF01u,
+    0xFFFF0101u, 0x01FFFF01u, 0xFF000000u, 0x01FFFF01u, 0xFF01FFFFu, 0x01FFFF01u,
+    0xFF01FF01u, 0x01FFFF01u, 0xFF0101FFu, 0x01FFFF01u, 0xFF010101u, 0x01FFFF01u,
+    0x0000FF00u, 0x01FFFF01u, 0x000000FFu, 0x01FFFF01u, 0x00000100u, 0x01FFFF01u,
+    0x00010000u, 0x01FFFF01u, 0x01FFFFFFu, 0x01FFFF01u, 0x01FFFF01u, 0x01FFFF01u,
+    0x01FF01FFu, 0x01FFFF01u, 0x01FF0101u, 0x01FFFF01u, 0x01000000u, 0x01FFFF01u,
+    0x0101FFFFu, 0x01FFFF01u, 0x0101FF01u, 0x01FFFF01u, 0x010101FFu, 0x01FFFF01u,
+    0x01010101u, 0x01FFFF01u, 0xFF0000FFu, 0x01FF00FFu, 0xFF000100u, 0x01FF00FFu,
+    0x00FFFF00u, 0x01FF00FFu, 0x00FF00FFu, 0x01FF00FFu, 0x0000FF00u, 0x01FF00FFu,
+    0x00000000u, 0x01FF00FFu, 0x00000101u, 0x01FF00FFu, 0x0001FF00u, 0x01FF00FFu,
+    0x000100FFu, 0x01FF00FFu, 0x00010100u, 0x01FF00FFu, 0x010000FFu, 0x01FF00FFu,
+    0x01000100u, 0x01FF00FFu, 0xFFFFFF00u, 0x01FF0000u, 0xFFFF0100u, 0x01FF0000u,
+    0xFF00FF01u, 0x01FF0000u, 0xFF000000u, 0x01FF0000u, 0xFF000101u, 0x01FF0000u,
+    0xFF010001u, 0x01FF0000u, 0xFF010100u, 0x01FF0000u, 0x00FFFFFFu, 0x01FF0000u,
+    0x00FFFF00u, 0x01FF0000u, 0x00FF0000u, 0x01FF0000u, 0x00FF01FFu, 0x01FF0000u,
+    0x0000FF00u, 0x01FF0000u, 0x000000FFu, 0x01FF0000u, 0x00000000u, 0x01FF0000u,
+    0x00000001u, 0x01FF0000u, 0x00000100u, 0x01FF0000u, 0x00000101u, 0x01FF0000u,
+    0x00010000u, 0x01FF0000u, 0x00010001u, 0x01FF0000u, 0x000101FFu, 0x01FF0000u,
+    0x00010101u, 0x01FF0000u, 0x01FFFF00u, 0x01FF0000u, 0x01FF00FFu, 0x01FF0000u,
+    0x01FF0001u, 0x01FF0000u, 0x01FF0100u, 0x01FF0000u, 0x0100FFFFu, 0x01FF0000u,
+    0x0100FF01u, 0x01FF0000u, 0x01000000u, 0x01FF0000u, 0x010001FFu, 0x01FF0000u,
+    0x01010001u, 0x01FF0000u, 0xFF00FF00u, 0x01FF0001u, 0xFF000001u, 0x01FF0001u,
+    0xFF000100u, 0x01FF0001u, 0xFF010000u, 0x01FF0001u, 0x00FFFF00u, 0x01FF0001u,
+    0x00FF00FFu, 0x01FF0001u, 0x00FF0100u, 0x01FF0001u, 0x00FF0101u, 0x01FF0001u,
+    0x0000FFFFu, 0x01FF0001u, 0x00000000u, 0x01FF0001u, 0x00000100u, 0x01FF0001u,
+    0x00000101u, 0x01FF0001u, 0x0001FF00u, 0x01FF0001u, 0x00010001u, 0x01FF0001u,
+    0x00010101u, 0x01FF0001u, 0x01FF0000u, 0x01FF0001u, 0x0100FF00u, 0x01FF0001u,
+    0x01000101u, 0x01FF0001u, 0x010100FFu, 0x01FF0001u, 0xFFFFFFFFu, 0x01FF01FFu,
+    0xFFFFFF01u, 0x01FF01FFu, 0xFFFF01FFu, 0x01FF01FFu, 0xFFFF0101u, 0x01FF01FFu,
+    0xFF000000u, 0x01FF01FFu, 0xFF01FFFFu, 0x01FF01FFu, 0xFF01FF01u, 0x01FF01FFu,
+    0xFF0101FFu, 0x01FF01FFu, 0xFF010101u, 0x01FF01FFu, 0x00FFFF00u, 0x01FF01FFu,
+    0x00FF0000u, 0x01FF01FFu, 0x0000FF00u, 0x01FF01FFu, 0x000000FFu, 0x01FF01FFu,
+    0x00000100u, 0x01FF01FFu, 0x00010000u, 0x01FF01FFu, 0x00010100u, 0x01FF01FFu,
+    0x01FFFFFFu, 0x01FF01FFu, 0x01FFFF01u, 0x01FF01FFu, 0x01FF01FFu, 0x01FF01FFu,
+    0x01FF0101u, 0x01FF01FFu, 0x01000000u, 0x01FF01FFu, 0x0101FFFFu, 0x01FF01FFu,
+    0x0101FF01u, 0x01FF01FFu, 0x010101FFu, 0x01FF01FFu, 0x01010101u, 0x01FF01FFu,
+    0xFFFF0000u, 0x01FF0100u, 0xFFFF0001u, 0x01FF0100u, 0xFF00FF00u, 0x01FF0100u,
+    0xFF0000FFu, 0x01FF0100u, 0xFF000001u, 0x01FF0100u, 0xFF010000u, 0x01FF0100u,
+    0x00FFFF00u, 0x01FF0100u, 0x00FF00FFu, 0x01FF0100u, 0x00FF0001u, 0x01FF0100u,
+    0x00FF0100u, 0x01FF0100u, 0x0000FFFFu, 0x01FF0100u, 0x0000FF01u, 0x01FF0100u,
+    0x00000000u, 0x01FF0100u, 0x00000101u, 0x01FF0100u, 0x0001FF00u, 0x01FF0100u,
+    0x000100FFu, 0x01FF0100u, 0x01FF0000u, 0x01FF0100u, 0x01000001u, 0x01FF0100u,
+    0x01000100u, 0x01FF0100u, 0x01010000u, 0x01FF0100u, 0xFFFFFFFFu, 0x01FF0101u,
+    0xFFFFFF01u, 0x01FF0101u, 0xFFFF01FFu, 0x01FF0101u, 0xFFFF0101u, 0x01FF0101u,
+    0xFF000000u, 0x01FF0101u, 0xFF01FFFFu, 0x01FF0101u, 0xFF01FF01u, 0x01FF0101u,
+    0xFF0101FFu, 0x01FF0101u, 0xFF010101u, 0x01FF0101u, 0x00FF0000u, 0x01FF0101u,
+    0x0000FF00u, 0x01FF0101u, 0x000000FFu, 0x01FF0101u, 0x00000001u, 0x01FF0101u,
+    0x01FFFFFFu, 0x01FF0101u, 0x01FFFF01u, 0x01FF0101u, 0x01FF01FFu, 0x01FF0101u,
+    0x01FF0101u, 0x01FF0101u, 0x01000000u, 0x01FF0101u, 0x0101FFFFu, 0x01FF0101u,
+    0x0101FF01u, 0x01FF0101u, 0x010101FFu, 0x01FF0101u, 0x01010101u, 0x01FF0101u,
+    0xFFFF0000u, 0x0100FFFFu, 0xFF00FF00u, 0x0100FFFFu, 0xFF000001u, 0x0100FFFFu,
+    0xFF0001FFu, 0x0100FFFFu, 0xFF000100u, 0x0100FFFFu, 0xFF010000u, 0x0100FFFFu,
+    0x00FFFF00u, 0x0100FFFFu, 0x00FF0001u, 0x0100FFFFu, 0x00FF0100u, 0x0100FFFFu,
+    0x00000000u, 0x0100FFFFu, 0x000001FFu, 0x0100FFFFu, 0x00000101u, 0x0100FFFFu,
+    0x00010100u, 0x0100FFFFu, 0x00010101u, 0x0100FFFFu, 0x01FF0000u, 0x0100FFFFu,
+    0x0100FF00u, 0x0100FFFFu, 0x010000FFu, 0x0100FFFFu, 0x01000001u, 0x0100FFFFu,
+    0x01000100u, 0x0100FFFFu, 0x01010000u, 0x0100FFFFu, 0xFFFFFF00u, 0x0100FF00u,
+    0xFFFF00FFu, 0x0100FF00u, 0xFFFF0001u, 0x0100FF00u, 0xFFFF0100u, 0x0100FF00u,
+    0xFF00FFFFu, 0x0100FF00u, 0xFF000000u, 0x0100FF00u, 0xFF0001FFu, 0x0100FF00u,
+    0xFF000101u, 0x0100FF00u, 0xFF01FF00u, 0x0100FF00u, 0xFF0100FFu, 0x0100FF00u,
+    0xFF010001u, 0x0100FF00u, 0xFF010100u, 0x0100FF00u, 0x00FFFFFFu, 0x0100FF00u,
+    0x00FF0000u, 0x0100FF00u, 0x0000FFFFu, 0x0100FF00u, 0x0000FF00u, 0x0100FF00u,
+    0x000000FFu, 0x0100FF00u, 0x00000000u, 0x0100FF00u, 0x00000001u, 0x0100FF00u,
+    0x00000100u, 0x0100FF00u, 0x0001FF01u, 0x0100FF00u, 0x00010000u, 0x0100FF00u,
+    0x01FF00FFu, 0x0100FF00u, 0x01FF0001u, 0x0100FF00u, 0x0100FF01u, 0x0100FF00u,
+    0x01000000u, 0x0100FF00u, 0x010001FFu, 0x0100FF00u, 0x0101FF00u, 0x0100FF00u,
+    0x010100FFu, 0x0100FF00u, 0x01010001u, 0x0100FF00u, 0x01010100u, 0x0100FF00u,
+    0xFFFF0000u, 0x0100FF01u, 0xFF00FF00u, 0x0100FF01u, 0xFF0000FFu, 0x0100FF01u,
+    0xFF000100u, 0x0100FF01u, 0xFF010000u, 0x0100FF01u, 0x00FF00FFu, 0x0100FF01u,
+    0x00FF0001u, 0x0100FF01u, 0x00FF0100u, 0x0100FF01u, 0x0000FFFFu, 0x0100FF01u,
+    0x0000FF01u, 0x0100FF01u, 0x00000000u, 0x0100FF01u, 0x000001FFu, 0x0100FF01u,
+    0x00010001u, 0x0100FF01u, 0x00010100u, 0x0100FF01u, 0x01FF0000u, 0x0100FF01u,
+    0x010000FFu, 0x0100FF01u, 0x01000001u, 0x0100FF01u, 0x01010100u, 0x0100FF01u,
+    0xFFFFFF00u, 0x010000FFu, 0xFFFF00FFu, 0x010000FFu, 0xFFFF0001u, 0x010000FFu,
+    0xFF00FFFFu, 0x010000FFu, 0xFF000000u, 0x010000FFu, 0xFF0001FFu, 0x010000FFu,
+    0xFF010001u, 0x010000FFu, 0x00FFFFFFu, 0x010000FFu, 0x00FF0101u, 0x010000FFu,
+    0x0000FF00u, 0x010000FFu, 0x000000FFu, 0x010000FFu, 0x00000000u, 0x010000FFu,
+    0x00000001u, 0x010000FFu, 0x000001FFu, 0x010000FFu, 0x00000100u, 0x010000FFu,
+    0x0001FFFFu, 0x010000FFu, 0x0001FF00u, 0x010000FFu, 0x0001FF01u, 0x010000FFu,
+    0x00010000u, 0x010000FFu, 0x01FF00FFu, 0x010000FFu, 0x01FF0001u, 0x010000FFu,
+    0x0100FF01u, 0x010000FFu, 0x010000FFu, 0x010000FFu, 0x01000000u, 0x010000FFu,
+    0x010001FFu, 0x010000FFu, 0x0101FF00u, 0x010000FFu, 0x01010100u, 0x010000FFu,
+    0xFFFFFFFFu, 0x01000000u, 0xFFFF0000u, 0x01000000u, 0xFFFF01FFu, 0x01000000u,
+    0xFFFF0101u, 0x01000000u, 0xFF00FFFFu, 0x01000000u, 0xFF00FF00u, 0x01000000u,
+    0xFF0000FFu, 0x01000000u, 0xFF000000u, 0x01000000u, 0xFF000001u, 0x01000000u,
+    0xFF000100u, 0x01000000u, 0xFF01FF00u, 0x01000000u, 0xFF010000u, 0x01000000u,
+    0xFF010100u, 0x01000000u, 0xFF010101u, 0x01000000u, 0x00FFFF00u, 0x01000000u,
+    0x00FF00FFu, 0x01000000u, 0x00FF0000u, 0x01000000u, 0x00FF0001u, 0x01000000u,
+    0x00FF0100u, 0x01000000u, 0x0000FFFFu, 0x01000000u, 0x0000FF00u, 0x01000000u,
+    0x0000FF01u, 0x01000000u, 0x000000FFu, 0x01000000u, 0x00000000u, 0x01000000u,
+    0x00000001u, 0x01000000u, 0x000001FFu, 0x01000000u, 0x00000100u, 0x01000000u,
+    0x00000101u, 0x01000000u, 0x0001FF00u, 0x01000000u, 0x000100FFu, 0x01000000u,
+    0x00010000u, 0x01000000u, 0x00010001u, 0x01000000u, 0x00010100u, 0x01000000u,
+    0x01FFFF00u, 0x01000000u, 0x01FF0000u, 0x01000000u, 0x01FF01FFu, 0x01000000u,
+    0x0100FF00u, 0x01000000u, 0x0100FF01u, 0x01000000u, 0x010000FFu, 0x01000000u,
+    0x01000000u, 0x01000000u, 0x01000001u, 0x01000000u, 0x01000100u, 0x01000000u,
+    0x01000101u, 0x01000000u, 0x0101FFFFu, 0x01000000u, 0x0101FF01u, 0x01000000u,
+    0x01010000u, 0x01000000u, 0x010101FFu, 0x01000000u, 0x01010101u, 0x01000000u,
+    0xFFFFFF00u, 0x01000001u, 0xFFFF00FFu, 0x01000001u, 0xFF00FFFFu, 0x01000001u,
+    0xFF000000u, 0x01000001u, 0xFF000100u, 0x01000001u, 0xFF01FFFFu, 0x01000001u,
+    0xFF010001u, 0x01000001u, 0xFF010100u, 0x01000001u, 0x00FF0000u, 0x01000001u,
+    0x00FF01FFu, 0x01000001u, 0x00FF0100u, 0x01000001u, 0x0000FF00u, 0x01000001u,
+    0x0000FF01u, 0x01000001u, 0x00000000u, 0x01000001u, 0x00000001u, 0x01000001u,
+    0x00000100u, 0x01000001u, 0x00010000u, 0x01000001u, 0x000101FFu, 0x01000001u,
+    0x01FFFF01u, 0x01000001u, 0x01FF00FFu, 0x01000001u, 0x01FF0100u, 0x01000001u,
+    0x01FF0101u, 0x01000001u, 0x0100FF01u, 0x01000001u, 0x010000FFu, 0x01000001u,
+    0x01000000u, 0x01000001u, 0x010100FFu, 0x01000001u, 0x01010001u, 0x01000001u,
+    0x01010100u, 0x01000001u, 0xFFFF0000u, 0x010001FFu, 0xFF000001u, 0x010001FFu,
+    0xFF000100u, 0x010001FFu, 0xFF010000u, 0x010001FFu, 0x00FFFF00u, 0x010001FFu,
+    0x00FF0001u, 0x010001FFu, 0x0000FFFFu, 0x010001FFu, 0x0000FF01u, 0x010001FFu,
+    0x00000000u, 0x010001FFu, 0x00000001u, 0x010001FFu, 0x00000101u, 0x010001FFu,
+    0x000100FFu, 0x010001FFu, 0x00010000u, 0x010001FFu, 0x01FF0000u, 0x010001FFu,
+    0x0100FF00u, 0x010001FFu, 0x01000001u, 0x010001FFu, 0x01000100u, 0x010001FFu,
+    0x01010000u, 0x010001FFu, 0xFFFF00FFu, 0x01000100u, 0xFFFF0001u, 0x01000100u,
+    0xFFFF0100u, 0x01000100u, 0xFF00FFFFu, 0x01000100u, 0xFF00FF01u, 0x01000100u,
+    0xFF000000u, 0x01000100u, 0xFF0001FFu, 0x01000100u, 0xFF000101u, 0x01000100u,
+    0xFF01FFFFu, 0x01000100u, 0xFF01FF00u, 0x01000100u, 0xFF0100FFu, 0x01000100u,
+    0xFF010001u, 0x01000100u, 0x00FFFFFFu, 0x01000100u, 0x00FFFF01u, 0x01000100u,
+    0x00FF0000u, 0x01000100u, 0x00FF01FFu, 0x01000100u, 0x00FF0101u, 0x01000100u,
+    0x0000FF00u, 0x01000100u, 0x000000FFu, 0x01000100u, 0x00000000u, 0x01000100u,
+    0x00000001u, 0x01000100u, 0x00000100u, 0x01000100u, 0x0001FF01u, 0x01000100u,
+    0x00010000u, 0x01000100u, 0x00010001u, 0x01000100u, 0x00010101u, 0x01000100u,
+    0x01FFFF00u, 0x01000100u, 0x01FF00FFu, 0x01000100u, 0x0100FFFFu, 0x01000100u,
+    0x0100FF01u, 0x01000100u, 0x01000000u, 0x01000100u, 0x01000101u, 0x01000100u,
+    0x0101FF00u, 0x01000100u, 0x01010001u, 0x01000100u, 0xFFFF0000u, 0x01000101u,
+    0xFF000000u, 0x01000101u, 0xFF010000u, 0x01000101u, 0x00FF00FFu, 0x01000101u,
+    0x00FF0001u, 0x01000101u, 0x00FF0100u, 0x01000101u, 0x0000FFFFu, 0x01000101u,
+    0x00000000u, 0x01000101u, 0x000001FFu, 0x01000101u, 0x0001FF00u, 0x01000101u,
+    0x01FF0000u, 0x01000101u, 0x0100FF00u, 0x01000101u, 0x010000FFu, 0x01000101u,
+    0x01000000u, 0x01000101u, 0x01000001u, 0x01000101u, 0xFFFFFFFFu, 0x0101FFFFu,
+    0xFFFFFF01u, 0x0101FFFFu, 0xFFFF01FFu, 0x0101FFFFu, 0xFFFF0101u, 0x0101FFFFu,
+    0xFF000000u, 0x0101FFFFu, 0xFF01FFFFu, 0x0101FFFFu, 0xFF01FF01u, 0x0101FFFFu,
+    0xFF0101FFu, 0x0101FFFFu, 0xFF010101u, 0x0101FFFFu, 0x00FF0000u, 0x0101FFFFu,
+    0x0000FF00u, 0x0101FFFFu, 0x000000FFu, 0x0101FFFFu, 0x00000001u, 0x0101FFFFu,
+    0x00000100u, 0x0101FFFFu, 0x01FFFFFFu, 0x0101FFFFu, 0x01FFFF01u, 0x0101FFFFu,
+    0x01FF01FFu, 0x0101FFFFu, 0x01FF0101u, 0x0101FFFFu, 0x01000000u, 0x0101FFFFu,
+    0x0101FFFFu, 0x0101FFFFu, 0x0101FF01u, 0x0101FFFFu, 0x010101FFu, 0x0101FFFFu,
+    0x01010101u, 0x0101FFFFu, 0xFFFF0000u, 0x0101FF00u, 0xFFFF0100u, 0x0101FF00u,
+    0xFF00FF00u, 0x0101FF00u, 0xFF0000FFu, 0x0101FF00u, 0xFF000001u, 0x0101FF00u,
+    0xFF000100u, 0x0101FF00u, 0xFF000101u, 0x0101FF00u, 0x00FF0001u, 0x0101FF00u,
+    0x00FF0100u, 0x0101FF00u, 0x0000FF00u, 0x0101FF00u, 0x00000000u, 0x0101FF00u,
+    0x000001FFu, 0x0101FF00u, 0x00000101u, 0x0101FF00u, 0x0001FF00u, 0x0101FF00u,
+    0x000100FFu, 0x0101FF00u, 0x01FF0000u, 0x0101FF00u, 0x0100FFFFu, 0x0101FF00u,
+    0x0100FF01u, 0x0101FF00u, 0x01000001u, 0x0101FF00u, 0x01000100u, 0x0101FF00u,
+    0xFFFFFF01u, 0x0101FF01u, 0xFFFF01FFu, 0x0101FF01u, 0xFFFF0101u, 0x0101FF01u,
+    0xFF00FFFFu, 0x0101FF01u, 0xFF000100u, 0x0101FF01u, 0xFF01FF01u, 0x0101FF01u,
+    0xFF0101FFu, 0x0101FF01u, 0xFF010101u, 0x0101FF01u, 0x00FF0000u, 0x0101FF01u,
+    0x0000FF00u, 0x0101FF01u, 0x00000001u, 0x0101FF01u, 0x00000100u, 0x0101FF01u,
+    0x00010000u, 0x0101FF01u, 0x01FFFFFFu, 0x0101FF01u, 0x01FFFF01u, 0x0101FF01u,
+    0x01FF01FFu, 0x0101FF01u, 0x01FF0101u, 0x0101FF01u, 0x01000000u, 0x0101FF01u,
+    0x0101FFFFu, 0x0101FF01u, 0x0101FF01u, 0x0101FF01u, 0x010101FFu, 0x0101FF01u,
+    0x01010101u, 0x0101FF01u, 0xFF000100u, 0x010100FFu, 0xFF010000u, 0x010100FFu,
+    0x00FFFF00u, 0x010100FFu, 0x00FF00FFu, 0x010100FFu, 0x0000FFFFu, 0x010100FFu,
+    0x000000FFu, 0x010100FFu, 0x00000000u, 0x010100FFu, 0x000001FFu, 0x010100FFu,
+    0x00000101u, 0x010100FFu, 0x0001FF00u, 0x010100FFu, 0x00010000u, 0x010100FFu,
+    0x00010001u, 0x010100FFu, 0x000101FFu, 0x010100FFu, 0x00010100u, 0x010100FFu,
+    0x01FF0000u, 0x010100FFu, 0xFFFF0001u, 0x01010000u, 0xFFFF0100u, 0x01010000u,
+    0xFF00FFFFu, 0x01010000u, 0xFF00FF01u, 0x01010000u, 0xFF000000u, 0x01010000u,
+    0xFF0001FFu, 0x01010000u, 0xFF010001u, 0x01010000u, 0xFF010100u, 0x01010000u,
+    0x00FFFF01u, 0x01010000u, 0x00FF0000u, 0x01010000u, 0x0000FF00u, 0x01010000u,
+    0x000000FFu, 0x01010000u, 0x00000000u, 0x01010000u, 0x00000001u, 0x01010000u,
+    0x00000100u, 0x01010000u, 0x00010000u, 0x01010000u, 0x00010101u, 0x01010000u,
+    0x01FFFF00u, 0x01010000u, 0x01FF00FFu, 0x01010000u, 0x01FF0000u, 0x01010000u,
+    0x01FF0001u, 0x01010000u, 0x01FF0100u, 0x01010000u, 0x0100FF01u, 0x01010000u,
+    0x01000000u, 0x01010000u, 0x010001FFu, 0x01010000u, 0xFFFF0000u, 0x01010001u,
+    0xFF00FF00u, 0x01010001u, 0xFF000001u, 0x01010001u, 0xFF000101u, 0x01010001u,
+    0xFF01FF00u, 0x01010001u, 0xFF010000u, 0x01010001u, 0x00FF00FFu, 0x01010001u,
+    0x00FF0001u, 0x01010001u, 0x00FF0101u, 0x01010001u, 0x0000FF01u, 0x01010001u,
+    0x00000000u, 0x01010001u, 0x00000001u, 0x01010001u, 0x000001FFu, 0x01010001u,
+    0x0001FFFFu, 0x01010001u, 0x0001FF01u, 0x01010001u, 0x01FF0001u, 0x01010001u,
+    0x0100FFFFu, 0x01010001u, 0x01000000u, 0x01010001u, 0x01000001u, 0x01010001u,
+    0x01000100u, 0x01010001u, 0x0101FF00u, 0x01010001u, 0x010100FFu, 0x01010001u,
+    0x01010001u, 0x01010001u, 0xFFFFFFFFu, 0x010101FFu, 0xFFFFFF01u, 0x010101FFu,
+    0xFFFF01FFu, 0x010101FFu, 0xFFFF0101u, 0x010101FFu, 0xFF01FFFFu, 0x010101FFu,
+    0xFF01FF01u, 0x010101FFu, 0xFF0101FFu, 0x010101FFu, 0xFF010101u, 0x010101FFu,
+    0x0000FF00u, 0x010101FFu, 0x000000FFu, 0x010101FFu, 0x00000001u, 0x010101FFu,
+    0x00000100u, 0x010101FFu, 0x01FFFFFFu, 0x010101FFu, 0x01FFFF01u, 0x010101FFu,
+    0x01FF01FFu, 0x010101FFu, 0x01FF0101u, 0x010101FFu, 0x01000000u, 0x010101FFu,
+    0x0101FFFFu, 0x010101FFu, 0x0101FF01u, 0x010101FFu, 0x010101FFu, 0x010101FFu,
+    0x01010101u, 0x010101FFu, 0xFFFF0000u, 0x01010100u, 0xFF0000FFu, 0x01010100u,
+    0xFF000100u, 0x01010100u, 0xFF01FF00u, 0x01010100u, 0xFF010000u, 0x01010100u,
+    0x00FFFF00u, 0x01010100u, 0x0000FFFFu, 0x01010100u, 0x00000000u, 0x01010100u,
+    0x00000101u, 0x01010100u, 0x0001FF00u, 0x01010100u, 0x00010001u, 0x01010100u,
+    0x00010100u, 0x01010100u, 0x0100FFFFu, 0x01010100u, 0x01000001u, 0x01010100u,
+    0xFFFFFFFFu, 0x01010101u, 0xFFFFFF01u, 0x01010101u, 0xFFFF01FFu, 0x01010101u,
+    0xFFFF0101u, 0x01010101u, 0xFF01FFFFu, 0x01010101u, 0xFF01FF01u, 0x01010101u,
+    0xFF0101FFu, 0x01010101u, 0xFF010101u, 0x01010101u, 0x0000FF00u, 0x01010101u,
+    0x000000FFu, 0x01010101u, 0x00000001u, 0x01010101u, 0x01FFFFFFu, 0x01010101u,
+    0x01FFFF01u, 0x01010101u, 0x01FF01FFu, 0x01010101u, 0x01FF0101u, 0x01010101u,
+    0x01000000u, 0x01010101u, 0x0101FFFFu, 0x01010101u, 0x0101FF01u, 0x01010101u,
+    0x010101FFu, 0x01010101u, 0x01010101u, 0x01010101u
+);
+
+float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
+    uint sub = within / 32u;
+    uint l = (within % 32u) / 8u;
+    uint s0 = u16_at(at + 48u);
+    uint s1 = u16_at(at + 50u);
+    uint s2 = u16_at(at + 52u);
+    uint s3 = u16_at(at + 54u);
+    float d = unpackHalf2x16((s0 >> 12u) | ((s1 >> 8u) & 0x00F0u)
+                             | ((s2 >> 4u) & 0x0F00u) | (s3 & 0xF000u)).x;
+    uint word = u16_at(at + 48u + 2u * (sub / 2u));
+    uint scale = (word >> (6u * (sub % 2u) + 3u * (l / 2u))) & 7u;
+    float dl = d * float(2u * scale + 1u);
+    uint nibbles = byte_at(at + 32u + 2u * sub + l / 2u);
+    uint n0 = nibbles & 15u;
+    uint n1 = nibbles >> 4u;
+    uint q = at + 4u * sub + l;
+    uvec2 g0 = uvec2(IQ1S_GRID[2u * (byte_at(q)      | ((n0 & 7u) << 8u))], IQ1S_GRID[2u * (byte_at(q)      | ((n0 & 7u) << 8u)) + 1u]);
+    uvec2 g1 = uvec2(IQ1S_GRID[2u * (byte_at(q + 1u) | ((n1 & 7u) << 8u))], IQ1S_GRID[2u * (byte_at(q + 1u) | ((n1 & 7u) << 8u)) + 1u]);
+    float shift0 = (n0 & 8u) != 0u ? -0.125 : 0.125;
+    float shift1 = (n1 & 8u) != 0u ? -0.125 : 0.125;
+    return dl * (plain_dot(g0.x, g0.y, a0, a1) + plain_dot(g1.x, g1.y, a2, a3)
+                 + shift0 * dot(a0 + a1, vec4(1.0))
+                 + shift1 * dot(a2 + a3, vec4(1.0)));
+}
+#endif
+
+#ifdef TQ2_0
+const uint BLOCK_ELEMS = 256u;
+const uint BLOCK_BYTES = 66u;
+
+float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
+    //  Sixteen elements one after another share a run and a field: element
+    //  e is byte 32 (e / 128) + e % 32, field (e % 128) / 32 -- so sixteen
+    //  bytes in a row, read four at a time.
+    uint byte0 = at + 32u * (within / 128u) + within % 32u;
+    uint shift = 2u * ((within % 128u) / 32u);
+    float sum = dot(a0, vec4((unpack8(quad_at(byte0))       >> shift) & 3u))
+              + dot(a1, vec4((unpack8(quad_at(byte0 + 4u))  >> shift) & 3u))
+              + dot(a2, vec4((unpack8(quad_at(byte0 + 8u))  >> shift) & 3u))
+              + dot(a3, vec4((unpack8(quad_at(byte0 + 12u)) >> shift) & 3u));
+    float total = dot(a0 + a1 + a2 + a3, vec4(1.0));
+    return half_at(at + 64u) * (sum - total);
+}
+#endif
+
+#ifdef TQ1_0
+const uint BLOCK_ELEMS = 256u;
+const uint BLOCK_BYTES = 54u;
+
+const uint POW3[5] = uint[5](1u, 3u, 9u, 27u, 81u);
+
+//  Digit place of four packed bytes, as numbers nought to two: the byte
+//  times three to the place, wrapped at the byte, times three, its top.
+vec4 trits4(uint bytes, uint pow3) {
+    uvec4 b = uvec4(unpack8(bytes));
+    return vec4((((b * pow3) & 255u) * 3u) >> 8u);
 }
 
-//  The twelve scale bytes read as the three words they are rather than a
-//  word load a byte. A super-block's header is at a word boundary -- the
-//  backend aligns a tensor to a multiple of four -- so d and dmin are one
-//  word and the scales are the three after it. byte_at would fetch the same
-//  word once a byte and cost a load each; sharing the three words across the
-//  block's decode is a dozen loads a block turned into three, all of them
-//  the L1 hits they always were but a third the instructions to issue.
-uint sbyte(uvec3 sc, uint i) {
-    uint word = i < 4u ? sc.x : (i < 8u ? sc.y : sc.z);
-    return (word >> ((i & 3u) * 8u)) & 255u;
+float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
+    float sum;
+
+    if (within < 240u) {
+        //  Sixteen bytes in a row at one digit place: the first hundred and
+        //  sixty elements are digit e / 32 of byte e % 32, the next eighty
+        //  digit (e - 160) / 16 of byte 32 + (e - 160) % 16.
+        uint byte0 = within < 160u ? at + within % 32u : at + 32u;
+        uint pow3 = POW3[within < 160u ? within / 32u : (within - 160u) / 16u];
+        sum = dot(a0, trits4(quad_at(byte0), pow3))
+            + dot(a1, trits4(quad_at(byte0 + 4u), pow3))
+            + dot(a2, trits4(quad_at(byte0 + 8u), pow3))
+            + dot(a3, trits4(quad_at(byte0 + 12u), pow3));
+    } else {
+        //  The last sixteen: four bytes, digit (e - 240) / 4 of byte
+        //  48 + (e - 240) % 4 -- each run of four one place across the four.
+        uint bytes = quad_at(at + 48u);
+        sum = dot(a0, trits4(bytes, 1u)) + dot(a1, trits4(bytes, 3u))
+            + dot(a2, trits4(bytes, 9u)) + dot(a3, trits4(bytes, 27u));
+    }
+
+    float total = dot(a0 + a1 + a2 + a3, vec4(1.0));
+    return half_at(at + 52u) * (sum - total);
+}
+#endif
+
+#ifdef Q1_0
+const uint BLOCK_ELEMS = 128u;
+const uint BLOCK_BYTES = 18u;
+
+
+float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
+    uint bits = byte_at(at + 2u + within / 8u)
+              | (byte_at(at + 3u + within / 8u) << 8u);
+    vec4 a[4] = vec4[4](a0, a1, a2, a3);
+    float sum = 0.0;
+    for (uint e = 0u; e < 16u; ++e) {
+        float v = a[e / 4u][e % 4u];
+        sum += ((bits >> e) & 1u) != 0u ? v : -v;
+    }
+    return half_at(at) * sum;
+}
+#endif
+
+#ifdef Q2_0
+const uint BLOCK_ELEMS = 64u;
+const uint BLOCK_BYTES = 18u;
+
+
+float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
+    uint q = at + 2u + within / 4u;
+    float sum = dot(a0, fields4(byte_at(q)))
+              + dot(a1, fields4(byte_at(q + 1u)))
+              + dot(a2, fields4(byte_at(q + 2u)))
+              + dot(a3, fields4(byte_at(q + 3u)));
+    float total = dot(a0 + a1 + a2 + a3, vec4(1.0));
+    return half_at(at) * (sum - total);
+}
+#endif
+
+#ifdef NVFP4
+const uint BLOCK_ELEMS = 64u;
+const uint BLOCK_BYTES = 36u;
+
+
+const float FOURS[16] = float[16](0.0, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0,
+                                  0.0, -1.0, -2.0, -3.0, -4.0, -6.0, -8.0, -12.0);
+
+//  An unsigned E4M3 scale, halved as ggml reads it.
+float e4m3(uint code) {
+    uint exponent = (code >> 3u) & 15u;
+    float mantissa = float(code & 7u);
+    if (code == 0u || code == 0x7Fu) {
+        return 0.0;
+    }
+    return exponent == 0u ? mantissa * exp2(-10.0)
+                          : (1.0 + mantissa / 8.0) * exp2(float(exponent) - 8.0);
 }
 
-void sub_block_scale3(uvec3 sc, uint index, out uint factor, out uint lowest) {
-    if (index < 4u) {
-        factor = sbyte(sc, index) & 63u;
-        lowest = sbyte(sc, index + 4u) & 63u;
-    } else {
-        factor = (sbyte(sc, index + 4u) & 15u)
-                 | ((sbyte(sc, index - 4u) >> 6u) << 4u);
-        lowest = (sbyte(sc, index + 4u) >> 4u)
-                 | ((sbyte(sc, index) >> 6u) << 4u);
+float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
+    //  Sixteen elements are one run: its scale, and eight bytes whose low
+    //  nibbles are elements 0 to 7 and high nibbles 8 to 15.
+    uint run = within / 16u;
+    uint q = at + 4u + 8u * run;
+    vec4 lo0, lo1, hi0, hi1;
+    for (uint j = 0u; j < 4u; ++j) {
+        uint b0 = byte_at(q + j);
+        uint b1 = byte_at(q + 4u + j);
+        lo0[j] = FOURS[b0 & 15u];
+        hi0[j] = FOURS[b0 >> 4u];
+        lo1[j] = FOURS[b1 & 15u];
+        hi1[j] = FOURS[b1 >> 4u];
     }
+    return e4m3(byte_at(at + run))
+           * (dot(a0, lo0) + dot(a1, lo1) + dot(a2, hi0) + dot(a3, hi1));
 }
+#endif
 
 void main() {
-    //  Every lane of a cluster takes the same row, so what follows is
-    //  uniform across a cluster.
-    //
-    //  The lanes past the last row are clamped onto it rather than sent
-    //  home, and that is not tidiness: there is a barrier at the end of this
-    //  and a workgroup some of whose invocations returned before reaching it
-    //  is undefined. They compute a row that is already being computed and
-    //  the write below drops it.
-    uint wanted = gl_GlobalInvocationID.x / LANES;
-    uint row = min(wanted, shape.rows - 1u);
-    uint part = gl_GlobalInvocationID.x % LANES;
+    uint tid = gl_LocalInvocationID.x;
+    uint itid = tid & 15u;
+    uint ix = tid >> 4u;
 
-    //  The ones past the end of the batch read the last real vector rather
-    //  than reading nothing: the loops below have to have a constant trip
-    //  count to unroll, and a result nobody writes out is cheaper than a
-    //  branch every element.
-    //  Which member of a gather this workgroup computes, and the slice
-    //  and the vector that member reads. Zero, and nothing, for a plain
-    //  product.
     uint member = gl_WorkGroupID.z;
     bool listed = shape.routed >= LISTED_BY_POSITION;
     uint which = listed ? member
                : shape.routed != 0u ? route[member] : shape.members[member];
     uint slice = which * shape.stride;
-
-    //  A listed expert's run: how many positions and where they begin.
-    //  An expert nobody chose has nothing to do, and every lane of its
-    //  workgroup leaves together, which keeps the barrier below legal.
     uint experts = shape.members[0];
-    uint run_count = listed ? route[member]
-                            : min(GROUP, shape.count - shape.first);
     uint run_at = listed ? route[experts + member] : 0u;
+    uint run_count = listed ? route[member]
+                            : min(1u, shape.count - shape.first);
     uint list_at = 2u * experts;
 
     if (run_count == 0u) {
         return;
     }
 
-    uint base = shape.base + slice + row * row_bytes();
+    uint from_base = listed
+          ? (shape.routed == LISTED_BY_POSITION
+               ? route[list_at + run_at] : run_at) * shape.columns
+          : min(shape.first, shape.count - 1u) * shape.columns
+            + member * shape.apart;
 
-    //  A plain product is one group of vectors; a listed run is as many
-    //  groups as it takes, the row read again for each. The body of this
-    //  loop is the whole of the kernel below and is not indented for it.
-    for (uint chunk = 0u; chunk < run_count; chunk += GROUP) {
+    uint first_row = NUM_ROWS * gl_WorkGroupID.x;
+    uint groups = (shape.columns + 255u) / 256u;
+    uint span = (shape.columns / BLOCK_ELEMS) * BLOCK_BYTES;
 
-    for (uint k = 0u; k < GROUP; ++k) {
-        if (listed) {
-            uint slot = run_at + min(chunk + k, run_count - 1u);
-            from[k] = (shape.routed == LISTED_BY_POSITION
-                       ? route[list_at + slot] : slot) * shape.columns;
-        } else {
-            from[k] = min(shape.first + k, shape.count - 1u) * shape.columns
-                      + member * shape.apart;
-        }
-        sum[k] = 0.0;
+    float temp[NUM_ROWS];
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        temp[r] = 0.0;
     }
 
-#ifdef LOW_BITS
-    //  Each lane of a row takes whole blocks, a stride of LANES apart, and
-    //  decodes every element of the ones it takes -- the way IQ4_XS is read
-    //  in the other compilation. The layouts and the arithmetic are ggml's
-    //  dequantizers', element for element, as the processor's are.
-    if (shape.format == FMT_IQ2_XXS) {
-        //  Sixty-six bytes: the scale, then a sub-block of thirty-two in two
-        //  words -- four grid indices, then four seven-bit sign indices and
-        //  a four-bit scale in the top.
-        uint blocks = shape.columns / 256u;
-
-        for (uint b = part; b < blocks; b += LANES) {
-            uint at = base + b * 66u;
-            float d = half_at(at);
-
-            for (uint sub = 0u; sub < 8u; ++sub) {
-                uint q = at + 2u + sub * 8u;
-                uint aux = word_at(q + 4u);
-                float db = d * (0.5 + float(aux >> 28u)) * 0.25;
-                uint into = b * 256u + sub * 32u;
-
-                for (uint l = 0u; l < 4u; ++l) {
-                    uvec2 grid = uvec2(IQ2XXS_GRID[2u * (byte_at(q + l))], IQ2XXS_GRID[2u * (byte_at(q + l)) + 1u]);
-                    uint signs = ksign((aux >> (7u * l)) & 127u);
-
-                    for (uint j = 0u; j < 8u; ++j) {
-                        accumulate(into + l * 8u + j,
-                                   db * float(grid_byte(grid, j))
-                                      * sign_of(signs, j));
-                    }
-                }
-            }
-        }
-    } else if (shape.format == FMT_IQ2_XS) {
-        //  Seventy-four bytes: the scale, thirty-two sixteen-bit lane words
-        //  -- nine bits of grid index, seven of sign index -- then a byte of
-        //  two four-bit scales a sub-block, the low one for lanes 0 and 1.
-        uint blocks = shape.columns / 256u;
-
-        for (uint b = part; b < blocks; b += LANES) {
-            uint at = base + b * 74u;
-            float d = half_at(at);
-
-            for (uint sub = 0u; sub < 8u; ++sub) {
-                uint scales = byte_at(at + 66u + sub);
-                uint into = b * 256u + sub * 32u;
-
-                for (uint l = 0u; l < 4u; ++l) {
-                    uint lane = half_word_at(at + 2u + 2u * (4u * sub + l));
-                    uint scale = l < 2u ? (scales & 15u) : (scales >> 4u);
-                    float db = d * (0.5 + float(scale)) * 0.25;
-                    uvec2 grid = uvec2(IQ2XS_GRID[2u * (lane & 511u)], IQ2XS_GRID[2u * (lane & 511u) + 1u]);
-                    uint signs = ksign(lane >> 9u);
-
-                    for (uint j = 0u; j < 8u; ++j) {
-                        accumulate(into + l * 8u + j,
-                                   db * float(grid_byte(grid, j))
-                                      * sign_of(signs, j));
-                    }
-                }
-            }
-        }
-    } else if (shape.format == FMT_IQ2_S) {
-        //  Eighty-two bytes: the scale, thirty-two bytes of grid index low
-        //  bits, thirty-two whole sign bytes, eight bytes of two-bit index
-        //  tops -- the first lane lowest -- and eight scale bytes as IQ2_XS.
-        uint blocks = shape.columns / 256u;
-
-        for (uint b = part; b < blocks; b += LANES) {
-            uint at = base + b * 82u;
-            float d = half_at(at);
-
-            for (uint sub = 0u; sub < 8u; ++sub) {
-                uint tops = byte_at(at + 66u + sub);
-                uint scales = byte_at(at + 74u + sub);
-                uint into = b * 256u + sub * 32u;
-
-                for (uint l = 0u; l < 4u; ++l) {
-                    uint index = byte_at(at + 2u + 4u * sub + l)
-                                 | (((tops >> (2u * l)) & 3u) << 8u);
-                    uint signs = byte_at(at + 34u + 4u * sub + l);
-                    uint scale = l < 2u ? (scales & 15u) : (scales >> 4u);
-                    float db = d * (0.5 + float(scale)) * 0.25;
-                    uvec2 grid = uvec2(IQ2S_GRID[2u * (index)], IQ2S_GRID[2u * (index) + 1u]);
-
-                    for (uint j = 0u; j < 8u; ++j) {
-                        accumulate(into + l * 8u + j,
-                                   db * float(grid_byte(grid, j))
-                                      * sign_of(signs, j));
-                    }
-                }
-            }
-        }
-    } else if (shape.format == FMT_IQ3_XXS) {
-        //  Ninety-eight bytes: the scale, sixty-four bytes of grid index --
-        //  two a lane, four magnitudes each -- then a word a sub-block of
-        //  four seven-bit sign indices and a four-bit scale in the top.
-        uint blocks = shape.columns / 256u;
-
-        for (uint b = part; b < blocks; b += LANES) {
-            uint at = base + b * 98u;
-            float d = half_at(at);
-
-            for (uint sub = 0u; sub < 8u; ++sub) {
-                uint aux = word_at(at + 66u + 4u * sub);
-                float db = d * (0.5 + float(aux >> 28u)) * 0.5;
-                uint into = b * 256u + sub * 32u;
-
-                for (uint l = 0u; l < 4u; ++l) {
-                    uint signs = ksign((aux >> (7u * l)) & 127u);
-                    uint first = IQ3XXS_GRID[byte_at(at + 2u + 8u * sub + 2u * l)];
-                    uint second =
-                        IQ3XXS_GRID[byte_at(at + 3u + 8u * sub + 2u * l)];
-
-                    for (uint j = 0u; j < 4u; ++j) {
-                        accumulate(into + l * 8u + j,
-                                   db * float((first >> (8u * j)) & 255u)
-                                      * sign_of(signs, j));
-                        accumulate(into + l * 8u + j + 4u,
-                                   db * float((second >> (8u * j)) & 255u)
-                                      * sign_of(signs, j + 4u));
-                    }
-                }
-            }
-        }
-    } else if (shape.format == FMT_IQ3_S) {
-        //  A hundred and ten bytes: the scale, sixty-four bytes of grid index
-        //  low bits, eight bytes of ninth bits -- one a sub-block, two a lane
-        //  -- thirty-two whole sign bytes, and four bytes of two four-bit
-        //  scales, a step of d (1 + 2 s).
-        uint blocks = shape.columns / 256u;
-
-        for (uint b = part; b < blocks; b += LANES) {
-            uint at = base + b * 110u;
-            float d = half_at(at);
-
-            for (uint sub = 0u; sub < 8u; ++sub) {
-                uint high = byte_at(at + 66u + sub);
-                uint scales = byte_at(at + 106u + sub / 2u);
-                uint scale = sub % 2u == 0u ? (scales & 15u) : (scales >> 4u);
-                float db = d * float(1u + 2u * scale);
-                uint into = b * 256u + sub * 32u;
-
-                for (uint l = 0u; l < 4u; ++l) {
-                    uint first = IQ3S_GRID[byte_at(at + 2u + 8u * sub + 2u * l)
-                                           | (((high >> (2u * l)) & 1u) << 8u)];
-                    uint second =
-                        IQ3S_GRID[byte_at(at + 3u + 8u * sub + 2u * l)
-                                  | (((high >> (2u * l + 1u)) & 1u) << 8u)];
-                    uint signs = byte_at(at + 74u + 4u * sub + l);
-
-                    for (uint j = 0u; j < 4u; ++j) {
-                        accumulate(into + l * 8u + j,
-                                   db * float((first >> (8u * j)) & 255u)
-                                      * sign_of(signs, j));
-                        accumulate(into + l * 8u + j + 4u,
-                                   db * float((second >> (8u * j)) & 255u)
-                                      * sign_of(signs, j + 4u));
-                    }
-                }
-            }
-        }
-    } else if (shape.format == FMT_IQ1_S) {
-        //  Fifty bytes: the scale, thirty-two bytes of grid index low bits,
-        //  and a sixteen-bit word a sub-block -- three index bits a lane, a
-        //  three-bit scale at twelve and the sign of an eighth's shift on
-        //  top.
-        uint blocks = shape.columns / 256u;
-
-        for (uint b = part; b < blocks; b += LANES) {
-            uint at = base + b * 50u;
-            float d = half_at(at);
-
-            for (uint sub = 0u; sub < 8u; ++sub) {
-                uint high = half_word_at(at + 34u + 2u * sub);
-                float dl = d * float(2u * ((high >> 12u) & 7u) + 1u);
-                float shift = (high & 0x8000u) != 0u ? -0.125 : 0.125;
-                uint into = b * 256u + sub * 32u;
-
-                for (uint l = 0u; l < 4u; ++l) {
-                    uvec2 grid = uvec2(IQ1S_GRID[2u * (byte_at(at + 2u + 4u * sub + l)
-                                           | (((high >> (3u * l)) & 7u) << 8u))], IQ1S_GRID[2u * (byte_at(at + 2u + 4u * sub + l)
-                                           | (((high >> (3u * l)) & 7u) << 8u)) + 1u]);
-
-                    for (uint j = 0u; j < 8u; ++j) {
-                        accumulate(into + l * 8u + j,
-                                   dl * (grid_signed(grid, j) + shift));
-                    }
-                }
-            }
-        }
-    } else if (shape.format == FMT_IQ1_M) {
-        //  Fifty-six bytes and no scale field: thirty-two bytes of grid index
-        //  low bits, sixteen of a nibble a lane -- three index bits and the
-        //  shift's sign -- and four sixteen-bit words of three-bit scales,
-        //  whose top nibbles together are the block's half.
-        uint blocks = shape.columns / 256u;
-
-        for (uint b = part; b < blocks; b += LANES) {
-            uint at = base + b * 56u;
-            uint s0 = half_word_at(at + 48u);
-            uint s1 = half_word_at(at + 50u);
-            uint s2 = half_word_at(at + 52u);
-            uint s3 = half_word_at(at + 54u);
-            float d = unpackHalf2x16((s0 >> 12u) | ((s1 >> 8u) & 0x00F0u)
-                                     | ((s2 >> 4u) & 0x0F00u)
-                                     | (s3 & 0xF000u)).x;
-
-            for (uint sub = 0u; sub < 8u; ++sub) {
-                uint word = half_word_at(at + 48u + 2u * (sub / 2u));
-                uint shift_by = 6u * (sub % 2u);
-                uint into = b * 256u + sub * 32u;
-
-                for (uint l = 0u; l < 4u; ++l) {
-                    uint scale = (word >> (shift_by + 3u * (l / 2u))) & 7u;
-                    uint nibble = (byte_at(at + 32u + 2u * sub + l / 2u)
-                                   >> (4u * (l % 2u))) & 15u;
-                    uvec2 grid = uvec2(IQ1S_GRID[2u * (byte_at(at + 4u * sub + l)
-                                           | ((nibble & 7u) << 8u))], IQ1S_GRID[2u * (byte_at(at + 4u * sub + l)
-                                           | ((nibble & 7u) << 8u)) + 1u]);
-                    float dl = d * float(2u * scale + 1u);
-                    float shift = (nibble & 8u) != 0u ? -0.125 : 0.125;
-
-                    for (uint j = 0u; j < 8u; ++j) {
-                        accumulate(into + l * 8u + j,
-                                   dl * (grid_signed(grid, j) + shift));
-                    }
-                }
-            }
-        }
-    } else if (shape.format == FMT_TQ1_0) {
-        //  Fifty-four bytes of ternary weights, the scale last: forty-eight
-        //  bytes of five base-three digits, four of four. Digit n of a byte
-        //  is the top of the byte times three to the n, wrapped, times three.
-        uint blocks = shape.columns / 256u;
-        const uint POW3[5] = uint[5](1u, 3u, 9u, 27u, 81u);
-
-        for (uint b = part; b < blocks; b += LANES) {
-            uint at = base + b * 54u;
-            float d = half_at(at + 52u);
-            uint col0 = b * 256u;
-
-            for (uint m = 0u; m < 48u; ++m) {
-                uint byte = byte_at(at + m);
-                uint first = m < 32u ? m : 160u + (m - 32u);
-                uint width = m < 32u ? 32u : 16u;
-
-                for (uint n = 0u; n < 5u; ++n) {
-                    uint trit = (((byte * POW3[n]) & 255u) * 3u) >> 8u;
-                    accumulate(col0 + first + n * width,
-                               (float(trit) - 1.0) * d);
-                }
-            }
-            for (uint j = 0u; j < 4u; ++j) {
-                uint byte = byte_at(at + 48u + j);
-
-                for (uint n = 0u; n < 4u; ++n) {
-                    uint trit = (((byte * POW3[n]) & 255u) * 3u) >> 8u;
-                    accumulate(col0 + 240u + n * 4u + j,
-                               (float(trit) - 1.0) * d);
-                }
-            }
-        }
-    } else if (shape.format == FMT_TQ2_0) {
-        //  Sixty-six bytes of ternary weights, two bits each, the scale last;
-        //  a run of thirty-two bytes is a hundred and twenty-eight elements,
-        //  every byte's lowest field first.
-        uint blocks = shape.columns / 256u;
-
-        for (uint b = part; b < blocks; b += LANES) {
-            uint at = base + b * 66u;
-            float d = half_at(at + 64u);
-            uint col0 = b * 256u;
-
-            for (uint m = 0u; m < 64u; ++m) {
-                uint byte = byte_at(at + m);
-                uint first = (m / 32u) * 128u + m % 32u;
-
-                for (uint l = 0u; l < 4u; ++l) {
-                    accumulate(col0 + first + l * 32u,
-                               (float((byte >> (2u * l)) & 3u) - 1.0) * d);
-                }
-            }
-        }
-    } else if (shape.format == FMT_Q1_0) {
-        //  Eighteen bytes for a hundred and twenty-eight: the scale, then a
-        //  sign bit an element, lowest first.
-        uint blocks = shape.columns / 128u;
-
-        for (uint b = part; b < blocks; b += LANES) {
-            uint at = base + b * 18u;
-            float d = half_at(at);
-
-            for (uint i = 0u; i < 16u; ++i) {
-                uint byte = byte_at(at + 2u + i);
-
-                for (uint bit = 0u; bit < 8u; ++bit) {
-                    accumulate(b * 128u + i * 8u + bit,
-                               ((byte >> bit) & 1u) != 0u ? d : -d);
-                }
-            }
-        }
-    } else if (shape.format == FMT_Q2_0) {
-        //  Eighteen bytes for sixty-four: the scale, then two bits an
-        //  element, lowest first, for minus one to two steps.
-        uint blocks = shape.columns / 64u;
-
-        for (uint b = part; b < blocks; b += LANES) {
-            uint at = base + b * 18u;
-            float d = half_at(at);
-
-            for (uint i = 0u; i < 16u; ++i) {
-                uint byte = byte_at(at + 2u + i);
-
-                for (uint f = 0u; f < 4u; ++f) {
-                    accumulate(b * 64u + i * 4u + f,
-                               (float((byte >> (2u * f)) & 3u) - 1.0) * d);
-                }
-            }
-        }
-    } else {
-        //  NVFP4: thirty-six bytes for sixty-four, four runs of sixteen --
-        //  four E4M3 scale bytes, then eight bytes of nibbles a run, the low
-        //  nibble element j of the run and the high one element j + 8.
-        uint blocks = shape.columns / 64u;
-
-        for (uint b = part; b < blocks; b += LANES) {
-            uint at = base + b * 36u;
-
-            for (uint run = 0u; run < 4u; ++run) {
-                float d = e4m3_at(at + run);
-                uint into = b * 64u + run * 16u;
-
-                for (uint j = 0u; j < 8u; ++j) {
-                    uint packed = byte_at(at + 4u + run * 8u + j);
-                    accumulate(into + j, d * float(FOURS[packed & 15u]));
-                    accumulate(into + j + 8u, d * float(FOURS[packed >> 4u]));
-                }
-            }
-        }
-    }
-#else
-    if (shape.format == FMT_F32) {
-        //  Words rather than bytes, which the base allows because both the
-        //  alignment a device asks of a host pointer and the alignment this
-        //  backend asks of a tensor are multiples of four.
-        uint at = base >> 2u;
-
-        for (uint col = part; col < shape.columns; col += LANES) {
-            accumulate(col, uintBitsToFloat(w[at + col]));
-        }
-    } else if (shape.format == FMT_F16) {
-        for (uint col = part; col < shape.columns; col += LANES) {
-            accumulate(col, half_at(base + col * 2u));
-        }
-    } else if (shape.format == FMT_BF16) {
-        //  The top half of a binary32: the same sign and the same eight
-        //  exponent bits, with the mantissa cut to seven. Widening it is a
-        //  shift and nothing else -- no exponent to rebias, and no case for
-        //  infinity or not-a-number, because those patterns are already
-        //  where binary32 keeps them.
-        for (uint col = part; col < shape.columns; col += LANES) {
-            uint at = base + col * 2u;
-            uint bits = (byte_at(at) | (byte_at(at + 1u) << 8u)) << 16u;
-            accumulate(col, uintBitsToFloat(bits));
-        }
-    } else if (shape.format == FMT_Q8_0) {
-        //  Thirty-two signed bytes behind one scale.
-        uint blocks = shape.columns / 32u;
-
-        for (uint b = part; b < blocks; b += LANES) {
-            uint at = base + b * 34u;
-            float scale = half_at(at);
-            uint col = b * 32u;
-
-            //  Where this block's quants begin, as a word and an offset
-            //  into it. A block is thirty-four bytes, so consecutive blocks
-            //  alternate between starting on a word and starting two bytes
-            //  into one; that is the only case there is, and it is decided
-            //  once a block rather than once an element.
-            uint q = at + 2u;
-            uint at_word = q >> 2u;
-
-            //  Two bytes in or none, chosen once and applied by shifting
-            //  rather than by branching in the loop.
-            uint low = (q & 3u) * 8u;
-
-            for (uint g = 0u; g < 8u; ++g) {
-                uint first = w[at_word + g];
-                uint word = low == 0u
-                          ? first
-                          : (first >> low)
-                            | (w[at_word + g + 1u] << (32u - low));
-
-                accumulate(col + g * 4u,      scale * float(int(word << 24) >> 24));
-                accumulate(col + g * 4u + 1u, scale * float(int(word << 16) >> 24));
-                accumulate(col + g * 4u + 2u, scale * float(int(word <<  8) >> 24));
-                accumulate(col + g * 4u + 3u, scale * float(int(word) >> 24));
-            }
-        }
-    } else if (shape.format == FMT_Q4_0) {
-        //  Thirty-two nibbles behind one scale, the low half of each byte
-        //  belonging to element j and the high half to element j + 16, and
-        //  centred by taking eight away.
-        uint blocks = shape.columns / 32u;
-
-        for (uint b = part; b < blocks; b += LANES) {
-            uint at = base + b * 18u;
-            float scale = half_at(at);
-            uint col = b * 32u;
-
-            for (uint j = 0u; j < 16u; ++j) {
-                uint packed = byte_at(at + 2u + j);
-                accumulate(col + j, scale * (float(packed & 15u) - 8.0));
-                accumulate(col + j + 16u, scale * (float(packed >> 4u) - 8.0));
-            }
-        }
-    } else if (shape.format == FMT_Q4_1) {
-        //  As Q4_0, with a minimum of its own instead of a fixed bias of
-        //  eight: a nibble is scaled and then lifted rather than centred.
-        uint blocks = shape.columns / 32u;
-
-        for (uint b = part; b < blocks; b += LANES) {
-            uint at = base + b * 20u;
-            float scale = half_at(at);
-            float lowest = half_at(at + 2u);
-            uint col = b * 32u;
-
-            for (uint j = 0u; j < 16u; ++j) {
-                uint packed = byte_at(at + 4u + j);
-                accumulate(col + j, scale * float(packed & 15u) + lowest);
-                accumulate(col + j + 16u,
-                           scale * float(packed >> 4u) + lowest);
-            }
-        }
-    } else if (shape.format == FMT_Q5_0 || shape.format == FMT_Q5_1) {
-        //  A fifth bit for each element, held apart from the nibbles in four
-        //  bytes read as one number: bit j belongs to element j and bit
-        //  j + 16 to element j + 16. The two formats differ only in what
-        //  happens once it is restored -- Q5_0 centres the result by taking
-        //  sixteen away, as Q4_0 takes eight, and Q5_1 carries a minimum
-        //  instead, as Q4_1 does.
-        bool centred = shape.format == FMT_Q5_0;
-        uint stride = centred ? 22u : 24u;
-        uint fifths_at = centred ? 2u : 4u;
-        uint quants_at = centred ? 6u : 8u;
-        float bias = centred ? 16.0 : 0.0;
-
-        uint blocks = shape.columns / 32u;
-
-        for (uint b = part; b < blocks; b += LANES) {
-            uint at = base + b * stride;
-            float scale = half_at(at);
-            float lowest = centred ? 0.0 : half_at(at + 2u);
-            uint col = b * 32u;
-
-            uint fifths = byte_at(at + fifths_at)
-                          | (byte_at(at + fifths_at + 1u) << 8u)
-                          | (byte_at(at + fifths_at + 2u) << 16u)
-                          | (byte_at(at + fifths_at + 3u) << 24u);
-
-            for (uint j = 0u; j < 16u; ++j) {
-                uint packed = byte_at(at + quants_at + j);
-                float low = float((packed & 15u) + ((fifths >> j) & 1u) * 16u);
-                float high = float((packed >> 4u)
-                                   + ((fifths >> (j + 16u)) & 1u) * 16u);
-
-                accumulate(col + j, scale * (low - bias) + lowest);
-                accumulate(col + j + 16u, scale * (high - bias) + lowest);
-            }
-        }
-    } else if (shape.format == FMT_IQ4_NL) {
-        //  Laid out exactly as Q4_0 lays its nibbles. What differs is what a
-        //  nibble means: an index into the level table rather than a number
-        //  to centre on eight.
-        uint blocks = shape.columns / 32u;
-
-        for (uint b = part; b < blocks; b += LANES) {
-            uint at = base + b * 18u;
-            float scale = half_at(at);
-            uint col = b * 32u;
-
-            for (uint j = 0u; j < 16u; ++j) {
-                uint packed = byte_at(at + 2u + j);
-                accumulate(col + j, scale * float(LEVELS[packed & 15u]));
-                accumulate(col + j + 16u, scale * float(LEVELS[packed >> 4u]));
-            }
-        }
-    } else if (shape.format == FMT_MXFP4) {
-        //  Thirty-two elements in seventeen bytes: one exponent byte, then
-        //  sixteen of nibbles laid out as Q4_0 lays them. A nibble is an
-        //  index into the table of fours, as IQ4_NL's is into its levels,
-        //  and the scale is a power of two rather than a half.
-        uint blocks = shape.columns / 32u;
-
-        for (uint b = part; b < blocks; b += LANES) {
-            uint at = base + b * 17u;
-            float scale = e8m0_at(at);
-            uint col = b * 32u;
-
-            for (uint j = 0u; j < 16u; ++j) {
-                uint packed = byte_at(at + 1u + j);
-                accumulate(col + j, scale * float(FOURS[packed & 15u]));
-                accumulate(col + j + 16u, scale * float(FOURS[packed >> 4u]));
-            }
-        }
-    } else if (shape.format == FMT_Q2_K) {
-        //  Sixteen bytes of packed scales, then sixty-four bytes of quants at
-        //  two bits each, then the two half-precision factors. Every element
-        //  is one of four levels, so the format leans harder on its scales
-        //  than any other: sixteen sub-blocks of sixteen elements, each with
-        //  a four-bit scale and a four-bit minimum sharing one byte.
-        uint blocks = shape.columns / 256u;
-
-        //  A slice of the same super-block to every lane, and the quant
-        //  bytes read once for the four groups that share them.
-        //
-        //  at_byte does not depend on the group -- the four groups are four
-        //  two-bit fields of the same sixteen bytes -- so reading inside the
-        //  group loop read them four times over. Eight lanes divide the four
-        //  side-and-half pairs in two, so a lane holds two words and takes
-        //  four groups out of them.
-        uint pair = part >> 1u;
-        uint side = pair >> 1u;
-        uint upper = pair & 1u;
-        uint whole = part & 1u;
-
-        for (uint b = 0u; b < blocks; ++b) {
-            uint at = base + b * 84u;
-            uint quants = at + 16u;
-            uint col0 = b * 256u;
-
-            //  Five loads a block where there were ten. The two factors
-            //  are one word, unpacked as the pair of halves they are; the
-            //  four scale bytes this lane reads lie within eight bytes,
-            //  two words; the quants were two words already. Reading a
-            //  byte through byte_at is a word load each, and on this part
-            //  the eight-bit and the two-bit format both ran at about the
-            //  same loads a second -- which for the eight-bit one was the
-            //  memory's rate and for this one was half of it.
-            uint dm_at = at + 80u;
-            vec2 dm = unpackHalf2x16(word_of(dm_at >> 2u, (dm_at & 3u) * 8u));
-            float d = dm.x;
-            float dmin = dm.y;
-
-            uint scales_at = at + side * 8u + upper;
-            uint scales_shift = (scales_at & 3u) * 8u;
-            uint s0 = word_of(scales_at >> 2u, scales_shift);
-            uint s1 = word_of((scales_at >> 2u) + 1u, scales_shift);
-
-            uint at_byte = quants + side * 32u + upper * 16u + whole * 8u;
-            uint shift_at = (at_byte & 3u) * 8u;
-
-            uint w0 = word_of((at_byte >> 2u), shift_at);
-            uint w1 = word_of((at_byte >> 2u) + 1u, shift_at);
-
-            for (uint group = 0u; group < 4u; ++group) {
-                //  The scales are consumed in the order the sub-blocks are
-                //  written: this lane's four are two bytes apart, at
-                //  side * 8 + upper and after.
-                uint packed = group < 2u
-                              ? (s0 >> (16u * group)) & 255u
-                              : (s1 >> (16u * (group - 2u))) & 255u;
-
-                float factor = d * float(packed & 15u);
-                float lowest = dmin * float(packed >> 4u);
-
-                uint into = col0 + side * 128u + group * 32u + upper * 16u
-                            + whole * 8u;
-                uint shift = 2u * group;
-
-                //  The minimum factored out of the sum, and four quants
-                //  taken out of a word at once.
-                //
-                //  Every weight of a sub-block is factor * q - lowest, so
-                //  its eight terms against the activation are
-                //  factor * (sum of q * x) - lowest * (sum of x): one
-                //  multiply-add a weight for the first sum and one add for
-                //  the second, and the two factors applied once for the
-                //  eight. Applied a weight at a time it was a multiply, a
-                //  subtract and a multiply-add each, and the quant itself
-                //  was two shifts, a mask and a convert; unpack8 turns the
-                //  four bytes of a masked word into four numbers in one
-                //  step. This format decodes a byte into four weights, so
-                //  the decode is what a two-bit product spends its time on
-                //  -- it streamed at half the eight-bit format's rate on
-                //  this part -- and llama.cpp's own kernel factors the same
-                //  way for the same reason.
-                //
-                //  The association differs from a weight at a time, so the
-                //  last bits differ; nothing holds this kernel to the bit
-                //  against anything but itself.
-                vec4 q0 = vec4(unpack8((w0 >> shift) & 0x03030303u));
-                vec4 q1 = vec4(unpack8((w1 >> shift) & 0x03030303u));
-
-                for (uint k = 0u; k < GROUP; ++k) {
-                    uint at_x = (from[k] + into) >> 2u;
-                    vec4 x0 = x4[at_x];
-                    vec4 x1 = x4[at_x + 1u];
-
-                    float quants_x = dot(q0, x0) + dot(q1, x1);
-                    float all_x = dot(x0, vec4(1.0)) + dot(x1, vec4(1.0));
-
-                    sum[k] += factor * quants_x - lowest * all_x;
-                }
-            }
-        }
-    } else if (shape.format == FMT_Q3_K) {
-        //  Three bits an element, in two pieces. The low two are packed four
-        //  to a byte as in the two-bit format; the third lives in a mask of
-        //  thirty-two bytes shared by the whole block, and it is the bit's
-        //  absence that lowers the value: set leaves the two low bits alone,
-        //  clear takes four away, which is what makes the range minus four
-        //  to three rather than zero to seven.
-        //
-        //  The lanes are dealt as the two-bit format deals them: a lane
-        //  holds two words of quants and the two words of the mask that
-        //  go with them -- eight bytes each, bytes side * 32 + upper * 16
-        //  + whole * 8 of the quants and upper * 16 + whole * 8 of the
-        //  mask -- and takes four groups out of them, four loads a block
-        //  where a byte at a time was eighty. It was dealt a half and a
-        //  group a lane before that, eight words of quants and eight of
-        //  mask a lane, the four lanes of a half reading the same words:
-        //  twenty word loads a block a lane for what four hold, and the
-        //  device's clock read this format at 45-52 GB/s where the
-        //  two-bit format reads 58-70. The scales are three words a
-        //  block, read once.
-        //
-        //  The weight is factor * (q + 4 * lifted - 4), formed four at a
-        //  time out of a quant word and a mask word by unpack8; the
-        //  association differs from a weight at a time, and nothing holds
-        //  this kernel to the bit against anything but itself.
-        uint blocks = shape.columns / 256u;
-
-        uint pair = part >> 1u;
-        uint side = pair >> 1u;
-        uint upper = pair & 1u;
-        uint whole = part & 1u;
-
-        for (uint b = 0u; b < blocks; ++b) {
-            uint at = base + b * 110u;
-            uint col0 = b * 256u;
-
-            //  A hundred and ten bytes is not a whole number of words, so
-            //  every other block begins half way into one; word_of takes
-            //  the shift once a run.
-            uint d_at = at + 108u;
-            float d = unpackHalf2x16(word_of(d_at >> 2u, (d_at & 3u) * 8u)).x;
-
-            uint scales_at = at + 96u;
-            uint scales_shift = (scales_at & 3u) * 8u;
-            uint sw0 = word_of(scales_at >> 2u, scales_shift);
-            uint sw1 = word_of((scales_at >> 2u) + 1u, scales_shift);
-            uint sw2 = word_of((scales_at >> 2u) + 2u, scales_shift);
-
-            uint q_byte = at + 32u + side * 32u + upper * 16u + whole * 8u;
-            uint q_shift = (q_byte & 3u) * 8u;
-            uint w0 = word_of(q_byte >> 2u, q_shift);
-            uint w1 = word_of((q_byte >> 2u) + 1u, q_shift);
-
-            uint m_byte = at + upper * 16u + whole * 8u;
-            uint m_shift = (m_byte & 3u) * 8u;
-            uint m0 = word_of(m_byte >> 2u, m_shift);
-            uint m1 = word_of((m_byte >> 2u) + 1u, m_shift);
-
-            for (uint group = 0u; group < 4u; ++group) {
-                //  This sub-block's scale: four low bits in one of the
-                //  first eight bytes and two high bits in one of the last
-                //  four, made signed by subtracting thirty-two, out of
-                //  the three words above.
-                uint sub = side * 8u + group * 2u + upper;
-                uint s_group = sub >> 2u;
-                uint place = sub & 3u;
-                uint low_index = (s_group & 1u) == 0u ? place : place + 4u;
-                uint low_byte = low_index < 4u
-                                ? (sw0 >> (8u * low_index)) & 255u
-                                : (sw1 >> (8u * (low_index - 4u))) & 255u;
-                uint low = s_group < 2u ? (low_byte & 15u) : (low_byte >> 4u);
-                uint top = ((sw2 >> (8u * place)) >> (2u * s_group)) & 3u;
-                float factor = d * float(int(low) + 16 * int(top) - 32);
-
-                uint into = col0 + side * 128u + group * 32u + upper * 16u
-                            + whole * 8u;
-                uint shift = 2u * group;
-                uint bit = side * 4u + group;
-
-                vec4 q0 = vec4(unpack8((w0 >> shift) & 0x03030303u))
-                          + 4.0 * vec4(unpack8((m0 >> bit) & 0x01010101u))
-                          - 4.0;
-                vec4 q1 = vec4(unpack8((w1 >> shift) & 0x03030303u))
-                          + 4.0 * vec4(unpack8((m1 >> bit) & 0x01010101u))
-                          - 4.0;
-
-                for (uint k = 0u; k < GROUP; ++k) {
-                    uint at_x = (from[k] + into) >> 2u;
-                    sum[k] += factor * (dot(q0, x4[at_x])
-                                        + dot(q1, x4[at_x + 1u]));
-                }
-            }
-        }
-    } else if (shape.format == FMT_Q4_K) {
-        //  Eight sub-blocks of thirty-two elements, processed in pairs that
-        //  share the same thirty-two packed bytes: the low nibbles form the
-        //  first sub-block and the high nibbles the second.
-        uint blocks = shape.columns / 256u;
-
-        //  Every lane of the row takes a slice of the same super-block
-        //  rather than a super-block of its own.
-        //
-        //  A super-block is a hundred and forty-four bytes, so a lane a
-        //  block meant that the eight lanes sharing a row fetched from
-        //  eight addresses a hundred and forty-four bytes apart -- eight
-        //  cache lines to read thirty-two bytes, and again for the next
-        //  word. Sharing the block, the eight lanes read thirty-two
-        //  consecutive words. An ablation put the weight loads at
-        //  twenty-seven per cent of this format's generating time, which is
-        //  what made the arrangement worth changing rather than the
-        //  arithmetic inside it.
-        //
-        //  Eight lanes divide a super-block as four groups of two halves,
-        //  which needs LANES to be eight; it is, and the reduction at the
-        //  end of this shader is written for the same eight.
-        uint group = part >> 1u;
-        uint upper = part & 1u;
-
-        for (uint b = 0u; b < blocks; ++b) {
-            uint at = base + b * 144u;
-            uint head = at >> 2u;
-
-            //  d and dmin are the two halves of one word, and the twelve
-            //  scale bytes are the three words after it: four loads for the
-            //  header where a byte at a time was a dozen and more.
-            vec2 dm = unpackHalf2x16(w[head]);
-            float d = dm.x;
-            float dmin = dm.y;
-            uvec3 sc = uvec3(w[head + 1u], w[head + 2u], w[head + 3u]);
-
-            uint quants = at + 16u;
-            uint col0 = b * 256u;
-
-            //  A hundred and forty-four bytes is a whole number of words,
-            //  so every run of quants in this row begins the same distance
-            //  into a word and the shift is worked out once.
-            uint shift = (quants & 3u) * 8u;
-
-            uint sub = group * 2u;
-
-            uint f1, m1, f2, m2;
-            sub_block_scale3(sc, sub, f1, m1);
-            sub_block_scale3(sc, sub + 1u, f2, m2);
-
-            //  A sub-block's scale and offset are the same for all
-            //  thirty-two of its elements, so they are formed once here
-            //  rather than in the loop.
-            float scale_1 = d * float(f1);
-            float scale_2 = d * float(f2);
-            float offset_1 = dmin * float(m1);
-            float offset_2 = dmin * float(m2);
-
-            uint at_word = (quants + group * 32u + upper * 16u) >> 2u;
-            uint into = col0 + group * 64u;
-
-            for (uint g = 0u; g < 4u; ++g) {
-                uint word = word_of(at_word + g, shift);
-
-                //  The word's four low nibbles and its four high ones,
-                //  each set turned into four numbers in one go.
-                vec4 low_4 = vec4 (unpack8 (word & 0x0F0F0F0Fu));
-                vec4 high_4 = vec4 (unpack8 ((word >> 4u) & 0x0F0F0F0Fu));
-
-                uint at_low = into + upper * 16u + g * 4u;
-
-                for (uint n = 0u; n < 4u; ++n) {
-                    accumulate (at_low + n, scale_1 * low_4[n] - offset_1);
-                    accumulate (at_low + 32u + n,
-                                scale_2 * high_4[n] - offset_2);
-                }
-            }
-        }
-    } else if (shape.format == FMT_Q5_K) {
-        //  As Q4_K plus thirty-two bytes carrying the fifth bit of each
-        //  quant, two bits of each byte serving one pair of sub-blocks.
-        uint blocks = shape.columns / 256u;
-
-        //  A slice of the same super-block to every lane, as Q4_K above
-        //  and for the same reason: a lane a block put the eight lanes of a
-        //  row a hundred and seventy-six bytes apart.
-        uint group = part >> 1u;
-        uint upper = part & 1u;
-
-        uint mask_low = 1u << (2u * group);
-        uint mask_high = 2u << (2u * group);
-
-        for (uint b = 0u; b < blocks; ++b) {
-            uint at = base + b * 176u;
-            float d = half_at(at);
-            float dmin = half_at(at + 2u);
-            uint scales = at + 4u;
-            uint high = at + 16u;
-            uint quants = at + 48u;
-            uint col0 = b * 256u;
-
-            //  A hundred and seventy-six bytes is a whole number of words,
-            //  so the offset within a word is the row's, and the fifth-bit
-            //  run begins a whole number of words from the quants.
-            uint shift = (quants & 3u) * 8u;
-
-            uint sub = group * 2u;
-
-            uint f1, m1, f2, m2;
-            sub_block_scale(scales, sub, f1, m1);
-            sub_block_scale(scales, sub + 1u, f2, m2);
-
-            float scale_1 = d * float(f1);
-            float scale_2 = d * float(f2);
-            float offset_1 = dmin * float(m1);
-            float offset_2 = dmin * float(m2);
-
-            uint at_word = (quants + group * 32u + upper * 16u) >> 2u;
-            uint high_word = (high + upper * 16u) >> 2u;
-            uint into = col0 + group * 64u;
-
-            //  Two runs of four words: the quants and the bytes carrying
-            //  their fifth bit. A lane reads only the sixteen of each that
-            //  its own sixteen elements need, so what was read four times
-            //  over for four groups is read once.
-            for (uint g = 0u; g < 4u; ++g) {
-                uint word  = word_of(at_word + g, shift);
-                uint fifth = word_of(high_word + g, shift);
-
-                for (uint n = 0u; n < 4u; ++n) {
-                    uint packed = (word >> (n * 8u)) & 255u;
-                    uint bits = (fifth >> (n * 8u)) & 255u;
-                    uint L = upper * 16u + g * 4u + n;
-
-                    float low = float((packed & 15u)
-                                      + ((bits & mask_low) != 0u
-                                         ? 16u : 0u));
-                    float up = float((packed >> 4u)
-                                     + ((bits & mask_high) != 0u
-                                        ? 16u : 0u));
-
-                    accumulate(into + L, scale_1 * low - offset_1);
-                    accumulate(into + 32u + L, scale_2 * up - offset_2);
-                }
-            }
-        }
-    } else if (shape.format == FMT_Q6_K) {
-        //  Two halves of 128 elements. Within a half, each of the thirty-two
-        //  positions contributes four elements whose two high bits come from
-        //  one byte of the high-bit array, and each of the four has a signed
-        //  sub-block scale of its own.
-        uint blocks = shape.columns / 256u;
-
-        //  A slice of the same super-block to every lane, as the two
-        //  k-quants above. Two hundred and ten bytes a block put the eight
-        //  lanes of a row that far apart when each took a block of its own.
-        //
-        //  The eight divide as four units -- two sides of two sub-runs --
-        //  and each unit's sixteen positions in half.
-        uint unit = part >> 1u;
-        uint upper = part & 1u;
-        uint side = unit >> 1u;
-        uint sub = unit & 1u;
-
-        for (uint b = 0u; b < blocks; ++b) {
-            uint at = base + b * 210u;
-            float d = half_at(at + 208u);
-            uint col0 = b * 256u;
-
-            uint low_half = at + side * 64u;
-            uint high_half = at + 128u + side * 32u;
-            uint scale_half = at + 192u + side * 8u;
-            uint out_half = col0 + side * 128u;
-
-            uint low_run = low_half + sub * 16u;
-            uint high_run = high_half + sub * 16u;
-            uint out_run = out_half + sub * 16u;
-
-            float scale_1 = d * float(signed_at(scale_half + sub));
-            float scale_2 = d * float(signed_at(scale_half + sub + 2u));
-            float scale_3 = d * float(signed_at(scale_half + sub + 4u));
-            float scale_4 = d * float(signed_at(scale_half + sub + 6u));
-
-            //  Three runs of two words: the low nibbles of two sub-runs and
-            //  the byte carrying the pairs of high bits. Two hundred and
-            //  ten is not a multiple of four, so consecutive blocks begin
-            //  at different offsets within a word and each run's shift is
-            //  worked out here rather than once for the row.
-            uint at_first = low_run + upper * 8u;
-            uint at_second = low_run + 32u + upper * 8u;
-            uint at_top = high_run + upper * 8u;
-
-            uint shift_first = (at_first & 3u) * 8u;
-            uint shift_second = (at_second & 3u) * 8u;
-            uint shift_top = (at_top & 3u) * 8u;
-
-            for (uint g = 0u; g < 2u; ++g) {
-                uint w_first = word_of((at_first >> 2u) + g, shift_first);
-                uint w_second = word_of((at_second >> 2u) + g, shift_second);
-                uint w_top = word_of((at_top >> 2u) + g, shift_top);
-
-                //  Four at a time, as the two above: three runs of bytes
-                //  become three sets of four numbers in three unpacks.
-                uvec4 first_4 = uvec4 (unpack8 (w_first));
-                uvec4 second_4 = uvec4 (unpack8 (w_second));
-                uvec4 top_4 = uvec4 (unpack8 (w_top));
-
-                uint at_run = out_run + upper * 8u + g * 4u;
-
-                for (uint n = 0u; n < 4u; ++n) {
-                    uint first = first_4[n];
-                    uint second = second_4[n];
-                    uint top = top_4[n];
-
-                    accumulate(at_run + n,
-                               scale_1 * (float((first & 15u)
-                                                + 16u * (top & 3u))
-                                          - 32.0));
-                    accumulate(at_run + 32u + n,
-                               scale_2 * (float((second & 15u)
-                                                + 16u * ((top >> 2u) & 3u))
-                                          - 32.0));
-                    accumulate(at_run + 64u + n,
-                               scale_3 * (float((first >> 4u)
-                                                + 16u * ((top >> 4u) & 3u))
-                                          - 32.0));
-                    accumulate(at_run + 96u + n,
-                               scale_4 * (float((second >> 4u)
-                                                + 16u * ((top >> 6u) & 3u))
-                                          - 32.0));
-                }
-            }
-        }
-    } else {
-        //  IQ4_XS: the non-linear levels over a super-block. Eight
-        //  sub-blocks of thirty-two, one half-precision scale for the whole
-        //  block and a six-bit scale for each sub-block -- four bits in a
-        //  nibble of the scale bytes and two in the shared word, signed by
-        //  taking thirty-two away.
-        uint blocks = shape.columns / 256u;
-
-        for (uint b = part; b < blocks; b += LANES) {
-            uint at = base + b * 136u;
-            float d = half_at(at);
-            uint high = byte_at(at + 2u) | (byte_at(at + 3u) << 8u);
-            uint low = at + 4u;
-            uint quants = at + 8u;
-            uint col0 = b * 256u;
-
-            for (uint sub = 0u; sub < 8u; ++sub) {
-                uint nibble = sub % 2u == 0u
-                              ? (byte_at(low + sub / 2u) & 15u)
-                              : (byte_at(low + sub / 2u) >> 4u);
-                uint upper = (high >> (2u * sub)) & 3u;
-                float step = d * (float(nibble + 16u * upper) - 32.0);
-
-                uint at_byte = quants + sub * 16u;
-                uint into = col0 + sub * 32u;
-
-                for (uint j = 0u; j < 16u; ++j) {
-                    uint packed = byte_at(at_byte + j);
-                    accumulate(into + j, step * float(LEVELS[packed & 15u]));
-                    accumulate(into + j + 16u,
-                               step * float(LEVELS[packed >> 4u]));
-                }
+    for (uint i = ix; i < groups; i += 2u) {
+        uint col = i * 256u + itid * 16u;
+
+        if (col < shape.columns) {
+            uint xb = (from_base + col) >> 2u;
+            vec4 a0 = x4[xb];
+            vec4 a1 = x4[xb + 1u];
+            vec4 a2 = x4[xb + 2u];
+            vec4 a3 = x4[xb + 3u];
+            uint block = col / BLOCK_ELEMS;
+            uint within = col % BLOCK_ELEMS;
+
+            for (uint r = 0u; r < NUM_ROWS; ++r) {
+                uint row = min(first_row + r, shape.rows - 1u);
+                uint at = shape.base + slice + row * span + block * BLOCK_BYTES;
+                temp[r] += lane_dot(at, within, a0, a1, a2, a3);
             }
         }
     }
 
-#endif
-    //  Only the vectors this dispatch was given. The rest are the padding
-    //  above and belong to nobody.
-    //  What this lane holds is its eighth of the row. The add is outside
-    //  the test below because every lane of the cluster has to reach it.
-    uint taken = min(GROUP, run_count - chunk);
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        float whole = subgroupAdd(temp[r]);
+        uint row = first_row + r;
 
-    for (uint k = 0u; k < GROUP; ++k) {
-        shares[gl_LocalInvocationID.x * GROUP + k] = sum[k];
-    }
-
-    barrier();
-
-    //  One lane of each cluster adds its row up and writes it. The others
-    //  have nothing left to do for this group, and reached the barrier
-    //  before the one below, which keeps the next group's shares from
-    //  landing on what this one is still reading.
-    if (part == 0u && wanted < shape.rows) {
-        for (uint k = 0u; k < GROUP; ++k) {
-            if (k < taken) {
-                float whole = 0.0;
-                for (uint lane = 0u; lane < LANES; ++lane) {
-                    whole += shares[(gl_LocalInvocationID.x + lane) * GROUP
-                                    + k];
-                }
-                uint out_at = listed
-                              ? (run_at + chunk + k) * shape.rows + row
-                              : member * shape.rows * shape.count
-                                + (shape.first + k) * shape.rows + row;
-
-                y[out_at] = shape.joins != 0u ? whole + rj[out_at] : whole;
-            }
+        if (tid == 0u && row < shape.rows) {
+            uint out_at = listed
+                          ? run_at * shape.rows + row
+                          : member * shape.rows * shape.count
+                            + shape.first * shape.rows + row;
+            y[out_at] = shape.joins != 0u ? whole + rj[out_at] : whole;
         }
-    }
-
-    barrier();
-
     }
 }

@@ -1329,9 +1329,15 @@ package body Tests.Backend_Cases is
          Tiled : Boolean;
       end record;
 
-      Shapes : constant array (1 .. 2) of Shape :=
+      --  And a third, one vector over an odd count of rows: a generated
+      --  token, which is the only product the subgroup kernels answer --
+      --  the k-quants' and the two-bit codebooks' -- so without it this
+      --  asked nothing of them. The odd count leaves a band of two rows
+      --  with one row in it.
+      Shapes : constant array (1 .. 3) of Shape :=
         [(Tall => 12, Batch => 10, Tiled => False),
-         (Tall => 64, Batch => 40, Tiled => True)];
+         (Tall => 64, Batch => 40, Tiled => True),
+         (Tall => 13, Batch => 1, Tiled => False)];
 
       --  How far the device and the processor may differ.
       --
