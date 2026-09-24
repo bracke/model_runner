@@ -22294,3 +22294,23 @@ panels 726493CFA1914020 src/library/model_runner-quantization-interleave.ads src
 #   device AB802A6F39FC005A -> 90AF20C81DA475E4,
 #   turns  50759909B61009A2 -> 32ECF3EB34F4331A,
 #   outside AB802A6F39FC005A -> 90AF20C81DA475E4.
+
+# 2026-09-24: a long prompt on the device, against llama.cpp at the same length.
+# One run each, not load gated; llama.cpp at 95b8e33e1.
+#
+#   Qwen3-8B Q4_K_M, 13503 prompt tokens, one generated, context 16384, batch
+#   512, the cache in half precision:
+#     model_runner run --backend device --kv-cache f16 --context-size 16384
+#         --batch-size 512 --max-tokens 1     88.527 s   152.53 t/s
+#     llama-bench -ngl 99 -p 13503 -n 0 -b 512 -ub 512   pp13503 155.27 t/s
+#
+#   Which is 1.02 behind. The fall from about 1960 a second at 1801 tokens
+#   to 152 here is the attention's, and llama.cpp falls the same way.
+#
+#   WHAT DID NOT RUN. The same prompt with the binary32 cache fails on the
+#   device ("radv: Not enough memory for command submission"): the part maps
+#   at most 15.6 GB of the machine's memory, and the model, the cache and its
+#   half-precision copy do not fit in it. A context of 40960 does not fit in
+#   the machine at all, even with the half-precision cache.
+#
+# model: Qwen3-8B Q4_K_M
