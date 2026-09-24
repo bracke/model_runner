@@ -441,9 +441,14 @@ package body Model_Runner.Platform.Device.Products is
    function Keeps_Copy (Item : Engine) return Boolean
    is (Wants_Copy (Item));
 
+   --  A copy-only session forces this too: it has no binary32 cache for a
+   --  token's kernel to read, so the token reads the half-precision copy
+   --  where the device offers the kernel that does -- the same one a
+   --  half-precision cache uses. Where it does not, the token falls to the
+   --  host, as it did before.
    function Attends_By_Halves
      (Item : Engine; Rounding : Boolean) return Boolean
-   is ((Rounding or else Item.Halves)
+   is ((Rounding or else Item.Halves or else Item.Copy_Only)
        and then Item.Halved_Line /= Null_Handle);
 
    --  Whether the kernel Attend_Kernel binds for these positions reads
@@ -7351,7 +7356,6 @@ package body Model_Runner.Platform.Device.Products is
       --  A batch of none is not an error and not work either.
       Slots : constant Natural := Natural'Max (Positions, 1);
 
-      Kept_Bytes  : constant Interfaces.Unsigned_64 := Item.Cache_Bytes;
       Query_Bytes : constant Interfaces.Unsigned_64 :=
         Interfaces.Unsigned_64 (Query'Length) * 4;
       Blend_Bytes : constant Interfaces.Unsigned_64 :=
@@ -7371,7 +7375,11 @@ package body Model_Runner.Platform.Device.Products is
         or else Value_Size > Attention_Room
         or else Group_Size = 0
         or else Last < First
-        or else Item.Cache_Buffer = Null_Handle
+        --  A copy-only session's cache proper is null; its token attends
+        --  out of the copy, so the copy standing in is enough.
+        or else (Item.Cache_Buffer = Null_Handle
+                 and then not (Item.Copy_Only
+                               and then Item.Copy_Buffer /= Null_Handle))
         or else Query'Length
                   < Model_Runner.Numerics.Element_Count (Slots)
                     * Model_Runner.Numerics.Element_Count (Heads)
@@ -7443,7 +7451,7 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
-         Told (1) := (Item.Cache_Buffer, 0, Kept_Bytes);
+         Told (1) := Cache_Descriptor (Item);
          Told (2) := (Item.Vector_Buffer, 0, Query_Bytes);
          Told (3) := (Item.Result_Buffer, 0, Blend_Bytes);
          Told (4) := Half_Descriptor (Item);
