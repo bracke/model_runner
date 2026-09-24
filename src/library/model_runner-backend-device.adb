@@ -738,6 +738,30 @@ package body Model_Runner.Backend.Device is
 
          when Model_Runner.GGUF.Type_MXFP4   =>
             Packing := Products.Packed_MXFP4;
+         when Model_Runner.GGUF.Type_IQ3_S =>
+            Packing := Products.Packed_IQ3_S;
+         when Model_Runner.GGUF.Type_IQ2_XXS =>
+            Packing := Products.Packed_IQ2_XXS;
+         when Model_Runner.GGUF.Type_IQ2_XS =>
+            Packing := Products.Packed_IQ2_XS;
+         when Model_Runner.GGUF.Type_IQ2_S =>
+            Packing := Products.Packed_IQ2_S;
+         when Model_Runner.GGUF.Type_IQ3_XXS =>
+            Packing := Products.Packed_IQ3_XXS;
+         when Model_Runner.GGUF.Type_IQ1_S =>
+            Packing := Products.Packed_IQ1_S;
+         when Model_Runner.GGUF.Type_IQ1_M =>
+            Packing := Products.Packed_IQ1_M;
+         when Model_Runner.GGUF.Type_TQ1_0 =>
+            Packing := Products.Packed_TQ1_0;
+         when Model_Runner.GGUF.Type_TQ2_0 =>
+            Packing := Products.Packed_TQ2_0;
+         when Model_Runner.GGUF.Type_Q1_0 =>
+            Packing := Products.Packed_Q1_0;
+         when Model_Runner.GGUF.Type_Q2_0 =>
+            Packing := Products.Packed_Q2_0;
+         when Model_Runner.GGUF.Type_NVFP4 =>
+            Packing := Products.Packed_NVFP4;
 
          when others =>
             Known := False;

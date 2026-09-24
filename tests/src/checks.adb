@@ -5539,6 +5539,11 @@ package body Checks is
             Fail ("src/shaders/row_product.comp has changed since it was "
                   & "compiled; compile it and run 'tests shader "
                   & "src/shaders/row_product.comp OUT.spv' again");
+         elsif Digest /= Model_Runner.Shaders.Row_Product_Low_Digest then
+            Fail ("the LOW_BITS compilation of src/shaders/row_product.comp "
+                  & "is older than the source; run ./compile-shaders.sh, "
+                  & "which compiles it with -DLOW_BITS to "
+                  & "row_product_low.spv");
          end if;
 
       end;

@@ -1012,7 +1012,7 @@ package body Device_Bench is
          --  Binary32 is here as the floor: it decodes to nothing at all, so
          --  whatever it reaches is what this device does with a row product
          --  when the decode is free.
-         Table : constant array (1 .. 16) of Shape :=
+         Table : constant array (1 .. 28) of Shape :=
            [(Products.Values_F32,   "f32   ",   1,   4),
             (Products.Values_F16,   "f16   ",   1,   2),
             (Products.Values_BF16,  "bf16  ",   1,   2),
@@ -1028,7 +1028,19 @@ package body Device_Bench is
             (Products.Packed_Q5_K,  "q5_k  ", 256, 176),
             (Products.Packed_Q6_K,  "q6_k  ", 256, 210),
             (Products.Packed_IQ4_XS, "iq4xs ", 256, 136),
-            (Products.Packed_MXFP4, "mxfp4 ",  32,  17)];
+            (Products.Packed_MXFP4, "mxfp4 ",  32,  17),
+            (Products.Packed_IQ3_S,   "iq3s  ", 256, 110),
+            (Products.Packed_IQ2_XXS, "iq2xxs", 256,  66),
+            (Products.Packed_IQ2_XS,  "iq2xs ", 256,  74),
+            (Products.Packed_IQ2_S,   "iq2s  ", 256,  82),
+            (Products.Packed_IQ3_XXS, "iq3xxs", 256,  98),
+            (Products.Packed_IQ1_S,   "iq1s  ", 256,  50),
+            (Products.Packed_IQ1_M,   "iq1m  ", 256,  56),
+            (Products.Packed_TQ1_0,   "tq1_0 ", 256,  54),
+            (Products.Packed_TQ2_0,   "tq2_0 ", 256,  66),
+            (Products.Packed_Q1_0,    "q1_0  ", 128,  18),
+            (Products.Packed_Q2_0,    "q2_0  ",  64,  18),
+            (Products.Packed_NVFP4,   "nvfp4 ",  64,  36)];
 
          Asked : constant Values :=
            new N.Real_Array (0 .. N.Element_Count (Columns) - 1);

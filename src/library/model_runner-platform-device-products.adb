@@ -813,7 +813,14 @@ package body Model_Runner.Platform.Device.Products is
      (Item    : Engine;
       Count   : Natural;
       Packing : Weight_Packing := Values_F32) return Address
-   is (if Waved (Item, Packing, Count)
+   is (if Packing in Low_Packing
+       then (if Count in Row_Line_Array'Range
+               and then Item.Low_Row_Lines (Count) /= Null_Handle
+             then Item.Low_Row_Lines (Count)
+             elsif Count > Batch_Group and then Item.Low_Wide_Line /= Null_Handle
+             then Item.Low_Wide_Line
+             else Item.Low_Pipeline)
+       elsif Waved (Item, Packing, Count)
        then (if Packing = Packed_Q5_K then Item.Wave_Line5
              elsif Packing = Packed_Q6_K then Item.Wave_Line6
              else Item.Wave_Line)
@@ -2077,6 +2084,28 @@ package body Model_Runner.Platform.Device.Products is
          Item.Shader := Made;
       end;
 
+      --  The same kernel's LOW_BITS compilation, which decodes the twelve
+      --  low-bit formats and nothing else. It asks nothing of the device the
+      --  first does not, so a device that took the first takes this.
+      declare
+         Create : constant Create_Call := To_Create (Point ("vkCreateShaderModule"));
+         Words  : aliased constant Model_Runner.Shaders.Word_Array :=
+           Model_Runner.Shaders.Row_Product_Low;
+         Request : aliased Shader_Create_Info;
+      begin
+         Request.Size := Interfaces.C.size_t (Words'Length * 4);
+         Request.Code := Words'Address;
+
+         if Create (Item.Logical, Request'Address, Null_Handle, Made'Access)
+            /= 0
+         then
+            Close (Item);
+            return;
+         end if;
+
+         Item.Low_Shader := Made;
+      end;
+
       --  The super-block row product's module, made only where the device
       --  offers a subgroup to reduce across and the setting of its width to
       --  thirty-two. A refusal leaves Wave_Shader null and the engine binds
@@ -2835,6 +2864,24 @@ package body Model_Runner.Platform.Device.Products is
 
          Line (Half_Group, 1, Item.Half_Group_Line);
          Line (Group_Size, Wide_Group, Item.Wide_Line);
+
+         --  And the low-bit compilation's, one for each of those but the
+         --  narrowed one, which is a sixteen-format tuning.
+         Request.Stage.Module := Item.Low_Shader;
+         Line (Group_Size, Batch_Group, Item.Low_Pipeline);
+
+         for Count in Row_Line_Array'Range loop
+            Line (Group_Size, C.unsigned (Count), Item.Low_Row_Lines (Count));
+         end loop;
+
+         Line (Group_Size, Wide_Group, Item.Low_Wide_Line);
+         Request.Stage.Module := Item.Shader;
+
+         if Item.Low_Pipeline = Null_Handle then
+            C.Strings.Free (Name);
+            Close (Item);
+            return;
+         end if;
 
          --  The super-block row product, from its module, at a workgroup of
          --  thirty-two pinned to a subgroup of thirty-two -- one subgroup a
@@ -3833,6 +3880,11 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Wave_Line, "vkDestroyPipeline");
       Give_Back (Item.Wave_Line5, "vkDestroyPipeline");
       Give_Back (Item.Wave_Line6, "vkDestroyPipeline");
+      Give_Back (Item.Low_Pipeline, "vkDestroyPipeline");
+      Give_Back (Item.Low_Wide_Line, "vkDestroyPipeline");
+      for Count in Item.Low_Row_Lines'Range loop
+         Give_Back (Item.Low_Row_Lines (Count), "vkDestroyPipeline");
+      end loop;
       Give_Back (Item.Wide_Line, "vkDestroyPipeline");
       Give_Back (Item.Extra_Line, "vkDestroyPipeline");
       Give_Back (Item.Halved_Line, "vkDestroyPipeline");
@@ -3909,6 +3961,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Shader, "vkDestroyShaderModule");
       Give_Back (Item.Wave_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Wave_Shader5, "vkDestroyShaderModule");
+      Give_Back (Item.Low_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Wave_Shader6, "vkDestroyShaderModule");
       Item.Matrices := False;
 
@@ -4560,12 +4613,27 @@ package body Model_Runner.Platform.Device.Products is
          Packed_Q5_K   => 176,
          Packed_Q6_K   => 210,
          Packed_IQ4_XS => 136,
-         Packed_MXFP4  => 17];
+         Packed_MXFP4  => 17,
+         Packed_IQ3_S   => 110,
+         Packed_IQ2_XXS => 66,
+         Packed_IQ2_XS  => 74,
+         Packed_IQ2_S   => 82,
+         Packed_IQ3_XXS => 98,
+         Packed_IQ1_S   => 50,
+         Packed_IQ1_M   => 56,
+         Packed_TQ1_0   => 54,
+         Packed_TQ2_0   => 66,
+         Packed_Q1_0    => 18,
+         Packed_Q2_0    => 18,
+         Packed_NVFP4   => 36];
 
       Per : constant Natural :=
         (case Packing is
             when Values_F32 | Values_F16 | Values_BF16 => 1,
             when Super_Packing                         => 256,
+            when Packed_IQ3_S .. Packed_TQ2_0          => 256,
+            when Packed_Q1_0                           => 128,
+            when Packed_Q2_0 | Packed_NVFP4            => 64,
             when others                                => 32);
    begin
       --  A row is a whole number of blocks. A width that is not says the

@@ -1080,6 +1080,10 @@ package body Tests.Backend_Cases is
                     | G.Type_Q2_K | G.Type_Q3_K | G.Type_Q4_K
                     | G.Type_Q5_K | G.Type_Q6_K | G.Type_IQ4_XS
                     | G.Type_MXFP4
+                    | G.Type_IQ3_S | G.Type_IQ2_XXS | G.Type_IQ2_XS
+                    | G.Type_IQ2_S | G.Type_IQ3_XXS | G.Type_IQ1_S
+                    | G.Type_IQ1_M | G.Type_TQ1_0 | G.Type_TQ2_0
+                    | G.Type_Q1_0 | G.Type_Q2_0 | G.Type_NVFP4
          then
             Assert (Model_Runner.Backend.Supports (Said, Format),
                     "the device backend disclaims " & G.Type_Name (Format)
@@ -1361,7 +1365,10 @@ package body Tests.Backend_Cases is
                          Kind_Q4_0, Kind_Q4_1, Kind_Q5_0, Kind_Q5_1,
                          Kind_Q8_0, Kind_IQ4_NL,
                          Kind_Q2_K, Kind_Q3_K, Kind_Q4_K, Kind_Q5_K,
-                         Kind_Q6_K, Kind_IQ4_XS);
+                         Kind_Q6_K, Kind_IQ4_XS,
+                         Kind_MXFP4, Kind_IQ3_S, Kind_IQ2_XXS, Kind_IQ2_XS, Kind_IQ2_S,
+                         Kind_IQ3_XXS, Kind_IQ1_S, Kind_IQ1_M, Kind_TQ1_0, Kind_TQ2_0,
+                         Kind_Q1_0, Kind_Q2_0, Kind_NVFP4);
 
       function Format_Of (Which : Case_Kind) return G.Tensor_Type
       is (case Which is
@@ -1379,7 +1386,20 @@ package body Tests.Backend_Cases is
              when Kind_Q4_K   => G.Type_Q4_K,
              when Kind_Q5_K   => G.Type_Q5_K,
              when Kind_Q6_K   => G.Type_Q6_K,
-             when Kind_IQ4_XS => G.Type_IQ4_XS);
+             when Kind_IQ4_XS => G.Type_IQ4_XS,
+             when Kind_MXFP4 => G.Type_MXFP4,
+             when Kind_IQ3_S => G.Type_IQ3_S,
+             when Kind_IQ2_XXS => G.Type_IQ2_XXS,
+             when Kind_IQ2_XS => G.Type_IQ2_XS,
+             when Kind_IQ2_S => G.Type_IQ2_S,
+             when Kind_IQ3_XXS => G.Type_IQ3_XXS,
+             when Kind_IQ1_S => G.Type_IQ1_S,
+             when Kind_IQ1_M => G.Type_IQ1_M,
+             when Kind_TQ1_0 => G.Type_TQ1_0,
+             when Kind_TQ2_0 => G.Type_TQ2_0,
+             when Kind_Q1_0 => G.Type_Q1_0,
+             when Kind_Q2_0 => G.Type_Q2_0,
+             when Kind_NVFP4 => G.Type_NVFP4);
 
       function Encoded (Which : Case_Kind; Values : N.Real_Array)
                         return B.Byte_Array
@@ -1398,7 +1418,20 @@ package body Tests.Backend_Cases is
              when Kind_Q4_K   => Fixtures.Encode_Q4_K (Values),
              when Kind_Q5_K   => Fixtures.Encode_Q5_K (Values),
              when Kind_Q6_K   => Fixtures.Encode_Q6_K (Values),
-             when Kind_IQ4_XS => Fixtures.Encode_IQ4_XS (Values));
+             when Kind_IQ4_XS => Fixtures.Encode_IQ4_XS (Values),
+             when Kind_MXFP4 => Fixtures.Encode_MXFP4 (Values),
+             when Kind_IQ3_S => Fixtures.Encode_IQ3_S (Values),
+             when Kind_IQ2_XXS => Fixtures.Encode_IQ2_XXS (Values),
+             when Kind_IQ2_XS => Fixtures.Encode_IQ2_XS (Values),
+             when Kind_IQ2_S => Fixtures.Encode_IQ2_S (Values),
+             when Kind_IQ3_XXS => Fixtures.Encode_IQ3_XXS (Values),
+             when Kind_IQ1_S => Fixtures.Encode_IQ1_S (Values),
+             when Kind_IQ1_M => Fixtures.Encode_IQ1_M (Values),
+             when Kind_TQ1_0 => Fixtures.Encode_TQ1_0 (Values),
+             when Kind_TQ2_0 => Fixtures.Encode_TQ2_0 (Values),
+             when Kind_Q1_0 => Fixtures.Encode_Q1_0 (Values),
+             when Kind_Q2_0 => Fixtures.Encode_Q2_0 (Values),
+             when Kind_NVFP4 => Fixtures.Encode_NVFP4 (Values));
    begin
       CPU.Use_Integer_Activations (False);
       Model_Runner.Backend.Device.Close;

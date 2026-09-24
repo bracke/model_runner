@@ -163,7 +163,17 @@ package Model_Runner.Platform.Device.Products is
       Packed_IQ4_NL,
       Packed_Q2_K, Packed_Q3_K, Packed_Q4_K, Packed_Q5_K, Packed_Q6_K,
       Packed_IQ4_XS,
-      Packed_MXFP4);
+      Packed_MXFP4,
+      Packed_IQ3_S, Packed_IQ2_XXS, Packed_IQ2_XS, Packed_IQ2_S,
+      Packed_IQ3_XXS, Packed_IQ1_S, Packed_IQ1_M,
+      Packed_TQ1_0, Packed_TQ2_0, Packed_Q1_0, Packed_Q2_0, Packed_NVFP4);
+
+   --  The low-bit packings, which the row product decodes in a compilation
+   --  of their own (row_product.comp built with LOW_BITS): a branch costs
+   --  every format beside it registers whether taken or not, so the sixteen
+   --  above keep their words and these twelve take a pipeline apart. None
+   --  has a tile; a batch in one goes to the row product.
+   subtype Low_Packing is Weight_Packing range Packed_IQ3_S .. Packed_NVFP4;
 
    --  The packings whose blocks hold two hundred and fifty-six elements
    --  rather than thirty-two. A row in one of these is a whole number of
@@ -2705,6 +2715,16 @@ private
       Wave_Line6   : System.Address := System.Null_Address;
 
       Wide_Line   : System.Address := System.Null_Address;
+
+      --  The row product's LOW_BITS compilation and its pipelines, one for
+      --  each the first compilation has -- the plain one, one a count, and
+      --  the wide one -- so a low-bit product binds the same shape of
+      --  kernel a sixteen-format one would.
+      Low_Shader    : System.Address := System.Null_Address;
+      Low_Pipeline  : System.Address := System.Null_Address;
+      Low_Row_Lines : Row_Line_Array := [others => System.Null_Address];
+      Low_Wide_Line : System.Address := System.Null_Address;
+
       Group_Line  : System.Address := System.Null_Address;
       Tile_Line   : System.Address := System.Null_Address;
       Matrix_Attend : System.Address := System.Null_Address;

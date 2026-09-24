@@ -16,7 +16,8 @@ with Model_Runner.Tensors;
 --  approximating it.
 --
 --  Every format, decoded where the weights lie. The shader has a branch for
---  each of the sixteen formats this program reads and decodes the file's own
+--  each of the twenty-eight formats this program reads -- the twelve
+--  low-bit ones in a compilation of their own -- and decodes the file's own
 --  bytes, so nothing has to be repacked to reach a device. It was three --
 --  binary32, Q8_0 and Q4_0 -- and the other twelve arrived through
 --  `--repack f32`: a pass over the whole model at load and four bytes a

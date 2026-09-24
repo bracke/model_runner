@@ -19,8 +19,8 @@ Done, each crossed against the independent reference over every format and path
 - **Phase 2:** #10 **complete** -- every weight format ggml defines is read:
   the whole IQ family (IQ3_S, IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, IQ1_S, IQ1_M),
   the ternary TQ1_0 and TQ2_0, Q1_0, Q2_0 and NVFP4, each checked against
-  ggml's own dequantizer. None has a device shader branch; the device backend
-  refuses them by name.
+  ggml's own dequantizer. On the device all twelve low-bit ones are decoded
+  by the row product's LOW_BITS compilation; none has a tile yet.
 - **Phase 3:** #12 reranker head; #11 Granite, OLMo2, GLM4, Starcoder2,
   GraniteMoE, StableLM, GPT-NeoX, InternLM2, Baichuan (7B and 13B), MPT,
   ChatGLM and Command-R/Command-R+ — the config-mostly batch is **complete**.

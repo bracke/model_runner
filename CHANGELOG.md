@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The twelve low-bit formats on the device.** IQ3_S, IQ2_XXS, IQ2_XS,
+  IQ2_S, IQ3_XXS, IQ1_S, IQ1_M, TQ1_0, TQ2_0, Q1_0, Q2_0 and NVFP4 were refused
+  by the device backend; they are now decoded by the row product, in a second
+  compilation of `row_product.comp` built with `LOW_BITS` and bound through
+  pipelines of its own. A branch costs every format beside it registers
+  whether taken or not, so the first compilation's sixteen formats keep their
+  words byte for byte. The IQ codebooks are constant arrays in the shader,
+  taken from ggml-common.h; the sign table is computed rather than carried.
+  Each format's device product agrees with the processor's within the row
+  product's thousandth, at both shapes the per-format test multiplies, and a
+  TinyLlama quantized by llama.cpp into each runs every layer on the device.
+  None has a tile yet, so a prompt batch in one goes through the row product;
+  a generating product reads at 0.18 to 0.32 ms for 2048 by 4096 on the 780M,
+  beside 0.16 for Q4_K.
+
 - **The last five weight formats ggml defines.** TQ1_0 and TQ2_0, the ternary
   pair TriLM and BitNet b1.58 conversions use -- every weight minus one, nought
   or one times the block's scale, five to a byte as a base-three number or four
@@ -17,9 +32,9 @@ Keep a Changelog and the project uses semantic versioning.
   dequantizer on fixed blocks, NVFP4's scale edge cases among them; the four
   `llama-quantize` writes load from a TinyLlama it quantized and start their
   greedy answers as llama.cpp does. The independent reference transformer reads
-  each, so the conformance sweep crosses them. The device backend has no
-  shader branch for them and refuses a model carrying one by name, as it does
-  the IQ formats -- which the documentation had said fell back to the host.
+  each, so the conformance sweep crosses them. On the device see the entry
+  above; until it, the device refused them by name as it did the IQ formats,
+  which the documentation had said fell back to the host.
 
 - **K-quant generation on a subgroup of thirty-two.** The generating
   matrix-vector product has a row kernel for Q4_K, Q5_K and Q6_K that decodes a
