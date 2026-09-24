@@ -22519,3 +22519,39 @@ panels 82FC45A89339FDD8 src/library/model_runner-quantization-interleave.ads src
 #   GROUPS. device 60554F73144AED5D -> 79831437630B2B12,
 #   outside 60554F73144AED5D -> 79831437630B2B12.
 # model: TinyLlama-1.1B-Chat, requantized by llama-quantize from Q8_0
+
+# 2026-09-24 (late, corrected): the low-bit formats against llama.cpp, warm.
+# The two tables above were taken with `run --show-stats`, one cold run a
+# row, and llama-bench is not cold: it warms up and repeats. On a prompt this
+# short a cold run never lifts the part off its lowest clock -- 800 MHz, fed a
+# fifth of the run -- and the same Q4_K prompt that read 645 cold reads 1392
+# warm. (--device-timeline is no help here: it waits on every layer to read
+# the stamps, which starves the part further; the prompt path itself submits
+# a layer without waiting, the activation carried on the device.) So both
+# sides warm: tests speed --repeats 3 median, --anyway, --context-size 512,
+# the 110-token speed-prompt.txt with --max-tokens 0 for the prompt and
+# speed-prompt-short.txt with --max-tokens 64 for generation; llama-bench
+# -p 110 -n 64 -ngl 99 -r 3. TinyLlama as above, a cool part, same sitting.
+# IQ1_M's scale words are read as two words here, its block being a whole
+# number of words.
+#
+#            prompt, tokens/s             generation, tokens/s
+#   format   ours   llama.cpp  ratio      ours   llama.cpp  ratio
+#   Q4_K     1392     1553     0.90       90.1      91      0.99
+#   IQ3_S    1774     1529     1.16      102.1     113      0.90
+#   IQ3_XXS  1774     1573     1.13      111.1     117      0.95
+#   IQ2_XXS  1930     1802     1.07      131.7     147      0.90
+#   IQ2_XS   1864     1738     1.07      125.2     141      0.89
+#   IQ2_S    1803     1706     1.06      120.3     136      0.88
+#   IQ1_S    1964     1830     1.07      144.1     156      0.92
+#   IQ1_M    1930     1773     1.09      133.2     152      0.88
+#   TQ1_0    1528      214     7.14       73.3      42      1.75
+#   TQ2_0    1864     1646     1.13      150.2     147      1.02
+#   Q1_0     1864     1912     0.97      184.4     162      1.14
+#   Q2_0     1833     1818     1.01      141.6     141      1.00
+#
+# The low-bit prompts are level with llama.cpp or ahead of it; their
+# generation is 0.88 to 0.95 for the IQ formats and level or ahead for the
+# rest. The IQ2_XXS grid in shared memory, tried again at the wave of
+# sixty-four and eight rows, moved nothing (131.7 either way).
+# model: TinyLlama-1.1B-Chat, requantized by llama-quantize from Q8_0

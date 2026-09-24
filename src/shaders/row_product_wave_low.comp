@@ -1356,10 +1356,14 @@ float lifted_dot(uint entry, vec4 a, vec4 b) {
 float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
     uint sub = within / 32u;
     uint l = (within % 32u) / 8u;
-    uint s0 = u16_at(at + 48u);
-    uint s1 = u16_at(at + 50u);
-    uint s2 = u16_at(at + 52u);
-    uint s3 = u16_at(at + 54u);
+    //  A block is fifty-six bytes, so every block of a row starts on a word:
+    //  the four scale words are two loads.
+    uint sa = w[(at + 48u) >> 2u];
+    uint sb = w[(at + 52u) >> 2u];
+    uint s0 = sa & 0xFFFFu;
+    uint s1 = sa >> 16u;
+    uint s2 = sb & 0xFFFFu;
+    uint s3 = sb >> 16u;
     float d = unpackHalf2x16((s0 >> 12u) | ((s1 >> 8u) & 0x00F0u)
                              | ((s2 >> 4u) & 0x0F00u) | (s3 & 0xF000u)).x;
     //  The sub-block's scale word is one of the four already read.

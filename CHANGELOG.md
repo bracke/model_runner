@@ -15,7 +15,12 @@ Keep a Changelog and the project uses semantic versioning.
   half-precision tile by the format's own arithmetic. On a 110-token prompt
   over a TinyLlama: IQ3_S 169 -> 815 tokens a second, IQ2_XXS 181 -> 963,
   IQ1_S 178 -> 939, TQ2_0 100 -> 901, Q1_0 212 -> 979 -- each past Q4_K's own
-  tile at 645. The first two compilations keep their words.
+  tile at 645 -- cold single runs, where the part never leaves its lowest
+  clock. Warm against llama-bench, which is warm, the low-bit prompts are
+  level with llama.cpp or ahead (IQ2_XXS 1930 against 1802, TQ2_0 1864
+  against 1646). The first two compilations keep their words. IQ1_M reads its
+  scale words as two words, its block being a whole number of them: 122 ->
+  133 tokens a second generating.
 
 - **The low-bit formats generate on their own subgroup kernel.** A generated
   token in any of the twelve goes to `row_product_wave_low.comp`, compiled
