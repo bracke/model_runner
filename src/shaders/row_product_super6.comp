@@ -1,0 +1,170 @@
+#version 450
+
+//  A Q6_K row against a batch of one, decoded a super-block at a time as the
+//  Q4_K and Q5_K super kernels are, and as llama.cpp's own Q6_K matrix-vector
+//  kernel does it. Six bits an element in two pieces -- four low in ql, two
+//  high in qh -- joined and centred by taking thirty-two away; sixteen
+//  sub-blocks of sixteen, each with a signed eight-bit scale. A lane takes a
+//  whole super-block region, sixteen weights, and reads its four sub-block
+//  scales straight from the block rather than through the shared cache and
+//  barrier llama.cpp uses -- this kernel keeps to the subgroup, no barrier.
+//
+//  Sixteen lanes share a super-block, a workgroup of thirty-two takes two,
+//  and the subgroup adds the partials. One workgroup is one subgroup of
+//  thirty-two, which is what lets the device run it at that width.
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+#ifndef NUM_ROWS
+#define NUM_ROWS 2u
+#endif
+
+layout(local_size_x = 32) in;
+
+layout(std430, binding = 0) readonly  buffer Weights  { uint  w[]; };
+layout(std430, binding = 1) readonly  buffer Vectors  { float x[]; };
+layout(std430, binding = 1) readonly  buffer Vectors4 { vec4  x4[]; };
+layout(std430, binding = 2) writeonly buffer Result   { float y[]; };
+layout(std430, binding = 3) readonly  buffer Routing  { uint  route[]; };
+layout(std430, binding = 4) readonly  buffer Residual { float rj[]; };
+
+const uint LISTED_BY_POSITION = 2u;
+
+layout(push_constant) uniform Shape {
+    uint rows;
+    uint columns;
+    uint count;
+    uint first;
+    uint format;
+    uint base;
+    uint joins;
+    uint table;
+    uint members[16];
+    uint stride;
+    uint apart;
+    uint routed;
+} shape;
+
+//  A sixteen-bit field at a byte position, which for Q6_K is only two-byte
+//  aligned -- a block is two hundred and ten bytes, so every other one begins
+//  two bytes into a word. Index counts sixteen-bit fields from the base byte.
+uint u16 (uint base_byte, uint index) {
+    uint at = base_byte + index * 2u;
+    return (w[at >> 2u] >> ((at & 2u) * 8u)) & 0xFFFFu;
+}
+
+//  A signed eight-bit scale, the sub-block's, out of the weight words.
+float scale_at (uint at_byte) {
+    uint b = (w[at_byte >> 2u] >> ((at_byte & 3u) * 8u)) & 255u;
+    return float (b >= 128u ? int (b) - 256 : int (b));
+}
+
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+    uint itid = tid & 15u;
+    uint ix = tid >> 4u;
+
+    uint v_im = itid >> 3u;              // 0 or 1
+    uint v_in = itid & 7u;               // 0..7
+    uint l0 = 4u * v_in;                 // 0,4,...,28
+    uint is = v_in >> 2u;                // 0 or 1
+    uint ql_offset = 64u * v_im + l0;
+    uint qh_offset = 32u * v_im + l0;
+    uint s_offset  = 8u * v_im + is;     // first of this lane's four scales
+    uint y_offset  = 128u * v_im + l0;
+
+    uint member = gl_WorkGroupID.z;
+    bool listed = shape.routed >= LISTED_BY_POSITION;
+    uint which = listed ? member
+               : shape.routed != 0u ? route[member] : shape.members[member];
+    uint slice = which * shape.stride;
+
+    uint experts = shape.members[0];
+    uint run_at = listed ? route[experts + member] : 0u;
+    uint run_count = listed ? route[member]
+                            : min(1u, shape.count - shape.first);
+    uint list_at = 2u * experts;
+
+    if (run_count == 0u) {
+        return;
+    }
+
+    uint from_base = listed
+          ? (shape.routed == LISTED_BY_POSITION
+               ? route[list_at + run_at] : run_at) * shape.columns
+          : min(shape.first, shape.count - 1u) * shape.columns
+            + member * shape.apart;
+
+    uint first_row = NUM_ROWS * gl_WorkGroupID.x;
+    uint blocks = shape.columns / 256u;
+    uint span = blocks * 210u;            // bytes a Q6_K row takes
+
+    float temp[NUM_ROWS];
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        temp[r] = 0.0;
+    }
+
+    for (uint i = ix; i < blocks; i += 2u) {
+        uint yi = from_base + i * 256u + y_offset;
+        uint xb = yi >> 2u;
+        vec4 by0  = x4[xb];
+        vec4 by32 = x4[xb + 8u];
+        vec4 by64 = x4[xb + 16u];
+        vec4 by96 = x4[xb + 24u];
+
+        for (uint r = 0u; r < NUM_ROWS; ++r) {
+            uint row = first_row + r;
+            uint at = shape.base + slice + row * span + i * 210u;
+
+            uint qlb = at;                   // ql at byte 0
+            uint qhb = at + 128u;            // qh at byte 128
+            uint sb  = at + 192u;            // scales at byte 192
+            uint dp  = at + 208u;            // d at byte 208
+            float d = unpackHalf2x16 (w[dp >> 2u] >> ((dp & 2u) * 8u)).x;
+
+            uint ql0  = u16 (qlb, ql_offset / 2u)
+                      | (u16 (qlb, ql_offset / 2u + 1u) << 16u);
+            uint ql32 = u16 (qlb, ql_offset / 2u + 16u)
+                      | (u16 (qlb, ql_offset / 2u + 17u) << 16u);
+            uint qh   = u16 (qhb, qh_offset / 2u)
+                      | (u16 (qhb, qh_offset / 2u + 1u) << 16u);
+
+            uint q0u = (ql0 & 0x0F0F0F0Fu)         | ((qh & 0x03030303u) << 4u);
+            uint q1u = (ql32 & 0x0F0F0F0Fu)        | ((qh & 0x0C0C0C0Cu) << 2u);
+            uint q2u = ((ql0 >> 4u) & 0x0F0F0F0Fu) |  (qh & 0x30303030u);
+            uint q3u = ((ql32 >> 4u) & 0x0F0F0F0Fu)| ((qh & 0xC0C0C0C0u) >> 2u);
+
+            vec4 q0 = vec4 (unpack8 (q0u)) - 32.0;
+            vec4 q1 = vec4 (unpack8 (q1u)) - 32.0;
+            vec4 q2 = vec4 (unpack8 (q2u)) - 32.0;
+            vec4 q3 = vec4 (unpack8 (q3u)) - 32.0;
+
+            float sc0 = scale_at (sb + s_offset);
+            float sc1 = scale_at (sb + s_offset + 2u);
+            float sc2 = scale_at (sb + s_offset + 4u);
+            float sc3 = scale_at (sb + s_offset + 6u);
+
+            float s0 = dot (by0,  q0);
+            float s1 = dot (by32, q1);
+            float s2 = dot (by64, q2);
+            float s3 = dot (by96, q3);
+
+            temp[r] += d * (s0 * sc0 + s1 * sc1 + s2 * sc2 + s3 * sc3);
+        }
+    }
+
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        float whole = subgroupAdd (temp[r]);
+        uint row = first_row + r;
+
+        if (tid == 0u && row < shape.rows) {
+            uint out_at = listed
+                          ? run_at * shape.rows + row
+                          : member * shape.rows * shape.count
+                            + shape.first * shape.rows + row;
+
+            y[out_at] = shape.joins != 0u ? whole + rj[out_at] : whole;
+        }
+    }
+}

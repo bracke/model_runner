@@ -2686,6 +2686,10 @@ private
       Wave_Shader5 : System.Address := System.Null_Address;
       Wave_Line5   : System.Address := System.Null_Address;
 
+      --  And for Q6_K, six bits an element and a signed scale a sub-block.
+      Wave_Shader6 : System.Address := System.Null_Address;
+      Wave_Line6   : System.Address := System.Null_Address;
+
       Wide_Line   : System.Address := System.Null_Address;
       Group_Line  : System.Address := System.Null_Address;
       Tile_Line   : System.Address := System.Null_Address;

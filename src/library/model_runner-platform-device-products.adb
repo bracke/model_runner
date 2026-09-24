@@ -766,7 +766,10 @@ package body Model_Runner.Platform.Device.Products is
        and then ((Packing = Packed_Q4_K and then Item.Wave_Line /= Null_Handle)
                  or else
                  (Packing = Packed_Q5_K
-                  and then Item.Wave_Line5 /= Null_Handle)));
+                  and then Item.Wave_Line5 /= Null_Handle)
+                 or else
+                 (Packing = Packed_Q6_K
+                  and then Item.Wave_Line6 /= Null_Handle)));
 
    --  Invocations a workgroup of the bound row kernel has. The super-block
    --  kernel's workgroup is a single subgroup of thirty-two; the half-group
@@ -800,7 +803,9 @@ package body Model_Runner.Platform.Device.Products is
       Count   : Natural;
       Packing : Weight_Packing := Values_F32) return Address
    is (if Waved (Item, Packing, Count)
-       then (if Packing = Packed_Q5_K then Item.Wave_Line5 else Item.Wave_Line)
+       then (if Packing = Packed_Q5_K then Item.Wave_Line5
+             elsif Packing = Packed_Q6_K then Item.Wave_Line6
+             else Item.Wave_Line)
        elsif Half_Grouped (Item, Packing, Count)
        then Item.Half_Group_Line
        elsif Count in Row_Line_Array'Range
@@ -2077,6 +2082,25 @@ package body Model_Runner.Platform.Device.Products is
                end if;
             end if;
          end;
+
+         declare
+            Create : constant Create_Call :=
+              To_Create (Point ("vkCreateShaderModule"));
+            Words  : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Row_Product_Super6;
+            Request : aliased Shader_Create_Info;
+         begin
+            if Create /= null then
+               Request.Size := Interfaces.C.size_t (Words'Length * 4);
+               Request.Code := Words'Address;
+
+               if Create (Item.Logical, Request'Address, Null_Handle,
+                          Made'Access) = 0
+               then
+                  Item.Wave_Shader6 := Made;
+               end if;
+            end if;
+         end;
       end if;
 
       --  The second kernel's module.
@@ -2793,6 +2817,11 @@ package body Model_Runner.Platform.Device.Products is
                if Item.Wave_Shader5 /= Null_Handle then
                   Request.Stage.Module := Item.Wave_Shader5;
                   Line (Wave_Lanes, 1, Item.Wave_Line5);
+               end if;
+
+               if Item.Wave_Shader6 /= Null_Handle then
+                  Request.Stage.Module := Item.Wave_Shader6;
+                  Line (Wave_Lanes, 1, Item.Wave_Line6);
                end if;
 
                Request.Stage.Module := Item.Shader;
@@ -3755,6 +3784,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Half_Group_Line, "vkDestroyPipeline");
       Give_Back (Item.Wave_Line, "vkDestroyPipeline");
       Give_Back (Item.Wave_Line5, "vkDestroyPipeline");
+      Give_Back (Item.Wave_Line6, "vkDestroyPipeline");
       Give_Back (Item.Wide_Line, "vkDestroyPipeline");
       Give_Back (Item.Extra_Line, "vkDestroyPipeline");
       Give_Back (Item.Halved_Line, "vkDestroyPipeline");
@@ -3831,6 +3861,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Shader, "vkDestroyShaderModule");
       Give_Back (Item.Wave_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Wave_Shader5, "vkDestroyShaderModule");
+      Give_Back (Item.Wave_Shader6, "vkDestroyShaderModule");
       Item.Matrices := False;
 
       Item.Logical := Null_Handle;
