@@ -83,7 +83,8 @@ package body Tiny_Model is
       --  formats want 256, and the 64- and 128-element ones fit it too.
       Deep      : constant Boolean :=
         Format in Q2_K | Q3_K | Q4_K | Q5_K | Q6_K | IQ4_XS | IQ3_S
-                | IQ2_XXS | TQ1_0 | TQ2_0 | Q1_0 | Q2_0 | NVFP4;
+                | IQ2_XXS | IQ2_XS | IQ2_S | IQ3_XXS | IQ1_S | IQ1_M
+                | TQ1_0 | TQ2_0 | Q1_0 | Q2_0 | NVFP4;
 
       --  The quantized fixture is wider because a Q8_0 row must be a whole
       --  number of thirty-two element blocks. Everything else matches.
