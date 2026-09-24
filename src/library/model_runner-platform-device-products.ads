@@ -1686,11 +1686,20 @@ package Model_Runner.Platform.Device.Products is
    --    says one storage buffer may hold, which Byte_Limit reports: a
    --    descriptor naming a range past that bound reads undefined
    --    values rather than being refused by the driver.
+   --  @param Allow_Copy_Only Where the cache proper alone would not fit one
+   --    storage buffer but its half-precision copy would, keep only the
+   --    copy: the caller states this where nothing reads the cache proper
+   --    -- a model with no sinks, whose attention is the matrix kernel and
+   --    reads only the copy. The copy is two bytes an element to the
+   --    cache's four, so a context past what six bytes fits is held where
+   --    two do, and the kernels that write the cache proper are told to
+   --    skip it. False keeps the old both-or-neither rule.
    procedure Reserve
-     (Item      : in out Engine;
-      Elements  : Model_Runner.Numerics.Element_Count;
-      Copy_Upto : Model_Runner.Numerics.Element_Count;
-      Ok        : out Boolean);
+     (Item            : in out Engine;
+      Elements        : Model_Runner.Numerics.Element_Count;
+      Copy_Upto       : Model_Runner.Numerics.Element_Count;
+      Ok              : out Boolean;
+      Allow_Copy_Only : Boolean := False);
 
    --  Write bytes into that cache, as they are.
    --
@@ -2954,6 +2963,16 @@ private
       --  How many binary32 elements the cache proper holds, which is how
       --  many halves the copy holds.
       Cache_Elements : Interfaces.Unsigned_64 := 0;
+
+      --  The cache proper was not kept: only the half-precision copy is,
+      --  which the matrix kernel attends out of. A sinkless model whose
+      --  binary32 cache would not fit one storage buffer keeps just the
+      --  copy -- two bytes an element rather than six -- and the kernels
+      --  that would write the cache proper skip it, told so by a copy-only
+      --  code in their push block. Nothing here reads the cache proper for
+      --  such a model: the matrix kernel reads the copy, and only a sink
+      --  or a round reads the binary32, neither of which this holds.
+      Copy_Only : Boolean := False;
 
       --  The cache mapped once and left mapped. A position is written every
       --  layer of every token -- hundreds of writes a run, at a millisecond

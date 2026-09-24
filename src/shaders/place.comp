@@ -115,7 +115,13 @@ void main() {
     for (uint c = lane; c < shape.width; c += LANES) {
         float value = x[from + c];
 
-        kv[into + c] = value;
+        //  The binary32 cache, except where halves is two: that says the
+        //  device keeps only the half-precision copy (a sinkless model at a
+        //  context whose binary32 cache would not fit one storage buffer),
+        //  so the copy below is written and this is not.
+        if (shape.halves != 2u) {
+            kv[into + c] = value;
+        }
 
         if (shape.halves != 0u) {
             kvh[shape.half_base + into + c] = float16_t (value);

@@ -455,9 +455,10 @@ package Model_Runner.Backend.Device is
    --    is taken at all.
    --  @param Ok True when the room is there.
    procedure Reserve_Cache
-     (Elements  : Model_Runner.Numerics.Element_Count;
-      Copy_Upto : Model_Runner.Numerics.Element_Count;
-      Ok        : out Boolean);
+     (Elements        : Model_Runner.Numerics.Element_Count;
+      Copy_Upto       : Model_Runner.Numerics.Element_Count;
+      Ok              : out Boolean;
+      Allow_Copy_Only : Boolean := False);
 
    --  How many bytes one storage buffer may hold here, which is what
    --  bounds a session's context: the cache is one buffer, binary32 with

@@ -1,3 +1,4 @@
+with Ada.Environment_Variables;
 with Ada.Unchecked_Conversion;
 
 with Interfaces.C;
@@ -901,6 +902,19 @@ package body Model_Runner.Platform.Device.Products is
        else (Buffer => Item.Vector_Buffer,
              Offset => 0,
              Extent => Item.Vector_Bytes));
+
+   --  The cache proper, or a stand-in where only the copy is kept. A set
+   --  is written whole, so the binding a copy-only session would name for
+   --  the binary32 cache is given something valid: that session is
+   --  sinkless, so the attend kernel never reads it, and the heads and
+   --  place kernels are told to skip the write, so what is there is never
+   --  touched. The copy serves.
+   function Cache_Descriptor (Item : Engine) return Buffer_Info
+   is (if Item.Cache_Buffer /= Null_Handle
+       then (Buffer => Item.Cache_Buffer,
+             Offset => 0,
+             Extent => Item.Cache_Bytes)
+       else Copy_Descriptor (Item));
 
    type Write_Descriptor is record
       Kind        : C.unsigned := Structure_Write_Descriptor;
@@ -5684,10 +5698,11 @@ package body Model_Runner.Platform.Device.Products is
    -------------
 
    procedure Reserve
-     (Item      : in out Engine;
-      Elements  : Model_Runner.Numerics.Element_Count;
-      Copy_Upto : Model_Runner.Numerics.Element_Count;
-      Ok        : out Boolean)
+     (Item            : in out Engine;
+      Elements        : Model_Runner.Numerics.Element_Count;
+      Copy_Upto       : Model_Runner.Numerics.Element_Count;
+      Ok              : out Boolean;
+      Allow_Copy_Only : Boolean := False)
    is
       Ignored : constant Boolean := Set_Asking (Item);
 
@@ -5719,6 +5734,23 @@ package body Model_Runner.Platform.Device.Products is
       Copy_Wanted : constant Interfaces.Unsigned_64 :=
         Interfaces.Unsigned_64 (Copy_Upto) * 2;
 
+      --  Keep only the copy where the caller allows it and the cache
+      --  proper would not fit one storage buffer but the copy would --
+      --  the copy is two bytes an element to the cache's four, so it
+      --  reaches a context the cache does not. The environment variable
+      --  forces it at a context where both would fit, which is how the
+      --  copy-only path is checked against the both-buffers one: for a
+      --  sinkless model the cache proper is written and never read, so
+      --  the two must answer identically.
+      Copy_Only : constant Boolean :=
+        Allow_Copy_Only
+        and then Wants_Copy (Item)
+        and then Copy_Wanted > 0
+        and then not Over_Limit (Item, Copy_Wanted)
+        and then
+          (Ada.Environment_Variables.Exists ("MR_FORCE_COPY_ONLY")
+           or else Over_Limit (Item, Wanted));
+
       --  What the buffers being replaced held, kept until the new ones
       --  have been made and mapped.
       Carry_Over     : Boolean := False;
@@ -5746,7 +5778,7 @@ package body Model_Runner.Platform.Device.Products is
       --  first token. Refused, the session keeps its context on the host
       --  and attends there, as one the device has no room for does; a
       --  packed cache is a quarter of the size and fits.
-      if Over_Limit (Item, Wanted)
+      if (not Copy_Only and then Over_Limit (Item, Wanted))
         or else (Wants_Copy (Item) and then Copy_Wanted > 0
                  and then Over_Limit (Item, Copy_Wanted))
       then
@@ -5754,10 +5786,14 @@ package body Model_Runner.Platform.Device.Products is
       end if;
 
       --  Already large enough is already done, so a caller may say this
-      --  every layer without paying for it after the first.
-      if Item.Cache_Bytes >= Wanted
+      --  every layer without paying for it after the first. A change of
+      --  mode -- the cache proper kept or not -- is not already done,
+      --  however large what is there, because the kernels are told which
+      --  to write by what this reserved.
+      if (Copy_Only or else Item.Cache_Bytes >= Wanted)
         and then (Item.Copy_Bytes >= Copy_Wanted
                   or else not Wants_Copy (Item))
+        and then Item.Copy_Only = Copy_Only
       then
          Ok := True;
          return;
@@ -5805,6 +5841,7 @@ package body Model_Runner.Platform.Device.Products is
             Item.Cache_Bytes := 0;
             Item.Copy_Bytes := 0;
             Item.Cache_Elements := 0;
+            Item.Copy_Only := False;
          end Give_Both_Back;
       begin
          Item.Cache_Buffer := Null_Handle;
@@ -5814,10 +5851,13 @@ package body Model_Runner.Platform.Device.Products is
          Item.Copy_Memory := Null_Handle;
          Item.Copy_At := Null_Handle;
 
-         Take (Item, Wanted, Item.Cache_Buffer, Item.Cache_Memory, Ok);
-         if not Ok then
-            Give_Both_Back;
-            return;
+         --  The cache proper, unless only the copy is kept.
+         if not Copy_Only then
+            Take (Item, Wanted, Item.Cache_Buffer, Item.Cache_Memory, Ok);
+            if not Ok then
+               Give_Both_Back;
+               return;
+            end if;
          end if;
 
          --  The copy only where something on this device would read it,
@@ -5850,17 +5890,25 @@ package body Model_Runner.Platform.Device.Products is
          Map   : constant Map_Call := To_Map (Point ("vkMapMemory"));
          Where : aliased Address := Null_Handle;
       begin
-         if Map = null
-           or else Map (Item.Logical, Item.Cache_Memory, 0, Wanted, 0,
-                        Where'Access) /= 0
-         then
+         if Map = null then
             Ok := False;
             Item.Cache_Bytes := 0;
             Item.Copy_Bytes := 0;
             return;
          end if;
 
-         Item.Cache_At := Where;
+         if not Copy_Only then
+            if Map (Item.Logical, Item.Cache_Memory, 0, Wanted, 0,
+                    Where'Access) /= 0
+            then
+               Ok := False;
+               Item.Cache_Bytes := 0;
+               Item.Copy_Bytes := 0;
+               return;
+            end if;
+
+            Item.Cache_At := Where;
+         end if;
 
          if Item.Copy_Buffer /= Null_Handle then
             if Map (Item.Logical, Item.Copy_Memory, 0, Copy_Wanted, 0,
@@ -5930,7 +5978,9 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
-         Fill (Item.Buffer, Item.Cache_Buffer, 0, Wanted, 0);
+         if Item.Cache_Buffer /= Null_Handle then
+            Fill (Item.Buffer, Item.Cache_Buffer, 0, Wanted, 0);
+         end if;
 
          if Item.Copy_Buffer /= Null_Handle then
             Fill (Item.Buffer, Item.Copy_Buffer, 0, Copy_Wanted, 0);
@@ -5966,8 +6016,12 @@ package body Model_Runner.Platform.Device.Products is
                         Pipeline_Stage_Transfer, 0, 1, Wall'Address,
                         0, Null_Handle, 0, Null_Handle);
 
-               Copy_Buffer (Item.Buffer, Carried_Buffer, Item.Cache_Buffer,
-                            1, Values'Address);
+               if Item.Cache_Buffer /= Null_Handle
+                 and then Carried_Buffer /= Null_Handle
+               then
+                  Copy_Buffer (Item.Buffer, Carried_Buffer, Item.Cache_Buffer,
+                               1, Values'Address);
+               end if;
 
                if Item.Copy_Buffer /= Null_Handle
                  and then Copy_Carried_Buffer /= Null_Handle
@@ -6015,10 +6069,11 @@ package body Model_Runner.Platform.Device.Products is
          Give_Back_Buffer (Item, Copy_Carried_Buffer, Copy_Carried_Memory);
       end if;
 
-      Item.Cache_Bytes := Wanted;
+      Item.Cache_Bytes := (if Copy_Only then 0 else Wanted);
       Item.Copy_Bytes :=
         (if Item.Copy_Buffer /= Null_Handle then Copy_Wanted else 0);
       Item.Cache_Elements := Interfaces.Unsigned_64 (Elements);
+      Item.Copy_Only := Copy_Only;
    end Reserve;
 
    -------------------
@@ -6064,6 +6119,7 @@ package body Model_Runner.Platform.Device.Products is
       Item.Cache_Bytes := 0;
       Item.Copy_Bytes := 0;
       Item.Cache_Elements := 0;
+      Item.Copy_Only := False;
    end Release_Cache;
 
    ---------------
@@ -6088,25 +6144,30 @@ package body Model_Runner.Platform.Device.Products is
       Ok := False;
 
       if not Is_Ready (Item)
-        or else Item.Cache_At = Null_Handle
         or else Values'Length = 0
-        or else At_Byte + Span > Item.Cache_Bytes
+        or else (Item.Cache_At = Null_Handle
+                 and then Item.Copy_At = Null_Handle)
+        or else (Item.Cache_At /= Null_Handle
+                 and then At_Byte + Span > Item.Cache_Bytes)
       then
          return;
       end if;
 
       --  Straight into the standing mapping: a copy and no call to the
-      --  driver at all.
-      declare
-         Room : Model_Runner.Numerics.Real_Array (Values'Range)
-           with Import,
-                Address =>
-                  System.Storage_Elements.To_Address
-                    (System.Storage_Elements.To_Integer (Item.Cache_At)
-                     + System.Storage_Elements.Integer_Address (At_Byte));
-      begin
-         Room := Values;
-      end;
+      --  driver at all. Only where the cache proper is kept -- a copy-only
+      --  session has just the half-precision copy below.
+      if Item.Cache_At /= Null_Handle then
+         declare
+            Room : Model_Runner.Numerics.Real_Array (Values'Range)
+              with Import,
+                   Address =>
+                     System.Storage_Elements.To_Address
+                       (System.Storage_Elements.To_Integer (Item.Cache_At)
+                        + System.Storage_Elements.Integer_Address (At_Byte));
+         begin
+            Room := Values;
+         end;
+      end if;
 
       --  And the half-precision copy beside it, so that a cache the host
       --  seeded reads the same to the matrix kernel as one the device
@@ -9126,7 +9187,10 @@ package body Model_Runner.Platform.Device.Products is
                --  writes what a step before it made into the cache, so what
                --  it needs is a cache to write into.
                if This.Rows = 0
-                 or else Item.Cache_Buffer = Null_Handle
+                 or else (Item.Cache_Buffer = Null_Handle
+                          and then not (Item.Copy_Only
+                                        and then Item.Copy_Buffer
+                                                 /= Null_Handle))
                  or else (This.Reads = 0 and then not This.Unpacks)
                  or else This.Reads > Steps.Held
                  --  And the kernel that packs, for a packed row, or the
@@ -9209,8 +9273,14 @@ package body Model_Runner.Platform.Device.Products is
                --  checks below cannot say is that the cache is there: a
                --  sequence recorded against a cache the engine does not
                --  hold would dispatch against whatever the binding last
-               --  named, which is an answer and a wrong one.
-               if Item.Cache_Buffer = Null_Handle then
+               --  named, which is an answer and a wrong one. Where only the
+               --  copy is kept the cache proper is null, but the matrix
+               --  kernel reads the copy and a copy-only session has one --
+               --  and it is sinkless, so nothing here reads the binary32.
+               if Item.Cache_Buffer = Null_Handle
+                 and then not (Item.Copy_Only
+                               and then Item.Copy_Buffer /= Null_Handle)
+               then
                   Item.Refused := Cache_Refused;
                   return;
                end if;
@@ -9250,7 +9320,10 @@ package body Model_Runner.Platform.Device.Products is
                  or else (This.Reads_Two /= 0
                           and then This.Reads_Two not in 1 .. Index - 1)
                  or else (This.Into_Cache
-                          and then Item.Cache_Buffer = Null_Handle)
+                          and then Item.Cache_Buffer = Null_Handle
+                          and then not (Item.Copy_Only
+                                        and then Item.Copy_Buffer
+                                                 /= Null_Handle))
                  or else Item.Heads_Line = Null_Handle
                  or else This.Turn_Table = System.Null_Address
                  or else (This.Base /= System.Null_Address
@@ -9818,10 +9891,7 @@ package body Model_Runner.Platform.Device.Products is
                --  activation was written, and this step's own share of the
                --  result: the same three the single call binds, in the same
                --  order, because they are the same kernel.
-               Told (1) :=
-                 (Buffer => Item.Cache_Buffer,
-                  Offset => 0,
-                  Extent => Item.Cache_Bytes);
+               Told (1) := Cache_Descriptor (Item);
                --  The queries: where the activation was written, or --
                --  for a chained attention -- what the step before it wrote,
                --  which never left the device.
@@ -9848,13 +9918,9 @@ package body Model_Runner.Platform.Device.Products is
             if Steps.Items (Index).Places then
                --  What it writes, and the cache it writes into -- which is
                --  bound where every other step binds its own room out.
-               Told (1) :=
-                 (Buffer => Item.Cache_Buffer, Offset => 0,
-                  Extent => Item.Cache_Bytes);
+               Told (1) := Cache_Descriptor (Item);
                Told (2) := Source_Of (Index, Steps.Items (Index).Reads);
-               Told (3) :=
-                 (Buffer => Item.Cache_Buffer, Offset => 0,
-                  Extent => Item.Cache_Bytes);
+               Told (3) := Cache_Descriptor (Item);
                Told (4) := Half_Descriptor (Item);
                Told (5) := Told (3);
 
@@ -9902,8 +9968,7 @@ package body Model_Runner.Platform.Device.Products is
                --  angle table where a product binds its residual.
                Told (3) :=
                  (if Steps.Items (Index).Into_Cache
-                  then (Buffer => Item.Cache_Buffer, Offset => 0,
-                        Extent => Item.Cache_Bytes)
+                  then Cache_Descriptor (Item)
                   else (Buffer => Item.Result_Buffer,
                         Offset => Places (Index).At_Byte,
                         Extent => Places (Index).Bytes));
@@ -9925,8 +9990,7 @@ package body Model_Runner.Platform.Device.Products is
                Told (4) :=
                  (if Steps.Items (Index).Into_Cache
                      and then Steps.Items (Index).Page_Shift /= 0
-                  then (Buffer => Item.Cache_Buffer, Offset => 0,
-                        Extent => Item.Cache_Bytes)
+                  then Cache_Descriptor (Item)
                   else Half_Descriptor (Item));
                Told (5) :=
                  (Buffer => Item.Turn_Buffer, Offset => 0,
@@ -11032,9 +11096,13 @@ package body Model_Runner.Platform.Device.Products is
                         First   => C.unsigned (This.At_First),
                         --  One where there is a copy of the cache to
                         --  write and nought where there is not, which is
-                        --  a device that would never read one.
+                        --  a device that would never read one. Two where
+                        --  only the copy is kept: write it and skip the
+                        --  cache proper, whose binding is a stand-in.
                         Packing =>
-                          (if Item.Copy_Buffer /= Null_Handle then 1 else 0),
+                          (if Item.Copy_Buffer /= Null_Handle
+                           then (if Item.Copy_Only then 2 else 1)
+                           else 0),
 
                         --  Where the half-precision copy of the cache
                         --  begins, in halves of its own buffer, which is
@@ -11146,11 +11214,15 @@ package body Model_Runner.Platform.Device.Products is
                         --  Into the cache, and a copy of it to write:
                         --  a device that would never read one has none,
                         --  and what is at that binding instead is not
-                        --  this kernel's to write.
+                        --  this kernel's to write. Two where only the copy
+                        --  is kept: write the copy and skip the cache
+                        --  proper, whose binding is a stand-in the kernel
+                        --  must not write past.
                         Halves    =>
                           (if This.Into_Cache
                              and then Item.Copy_Buffer /= Null_Handle
-                           then 1 else 0),
+                           then (if Item.Copy_Only then 2 else 1)
+                           else 0),
                         V_From    =>
                           (if This.Reads_Two /= 0
                            then C.unsigned

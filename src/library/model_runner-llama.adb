@@ -7642,8 +7642,16 @@ package body Model_Runner.Llama is
                end if;
             end loop;
 
+            --  Where the model learned no sinks, the cache proper is only
+            --  ever written on the device and never read -- the matrix
+            --  kernel attends out of the half-precision copy -- so a
+            --  context whose binary32 cache would not fit one storage
+            --  buffer may keep just the copy and still attend on the
+            --  device. A model with sinks reads the binary32, and a round
+            --  reads it too, so neither takes this.
             Model_Runner.Backend.Device.Reserve_Cache
-              (Wanted, Copy_Upto, Ok);
+              (Wanted, Copy_Upto, Ok,
+               Allow_Copy_Only => Sink_Footprint (Item.Owner.Settings) = 0);
             if not Ok then
                return;
             end if;
