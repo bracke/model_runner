@@ -3823,4 +3823,264 @@ package body Fixtures is
       return Result;
    end Encode_IQ1_M;
 
+   --  The ternary digit a value takes against a scale: minus one, nought or
+   --  one, lifted to nought, one or two as the formats store it.
+   function Trit_Of (Value, Scale : N.Real) return Natural is
+     (if Scale = 0.0 then 1
+      else Natural (Integer'Max (-1, Integer'Min (1, Integer (N.Real'Rounding
+                                                        (Value / Scale)))) + 1));
+
+   --  The largest magnitude of a run, which both ternary formats take as
+   --  their scale.
+   function Extreme_Of (Values : N.Real_Array) return N.Real is
+      Largest : N.Real := 0.0;
+   begin
+      for Value of Values loop
+         Largest := N.Real'Max (Largest, abs Value);
+      end loop;
+      return Largest;
+   end Extreme_Of;
+
+   function Encode_TQ1_0 (Values : N.Real_Array) return B.Byte_Array is
+      Blocks : constant N.Element_Count := Values'Length / 256;
+      Result : B.Byte_Array (0 .. B.Byte_Count (Blocks) * 54 - 1) :=
+        [others => 0];
+   begin
+      for Block in 0 .. Blocks - 1 loop
+         declare
+            First   : constant N.Element_Count := Values'First + Block * 256;
+            At_Byte : constant B.Byte_Count := B.Byte_Count (Block) * 54;
+            Scale   : constant N.Real :=
+              Extreme_Of (Values (First .. First + 255));
+
+            --  Digits first-most-significant, then scaled up to fill the
+            --  byte by a ceiling division by three to the fifth, which is
+            --  what lets the decoder read a digit off the top.
+            function Packed (Trits : Natural) return B.Byte is
+              (B.Byte ((Trits * 256 + 242) / 243));
+
+            --  One run of bytes: byte m holds, most significant first, the
+            --  elements m, m plus the run's width, and so on, one a digit.
+            procedure Run
+              (Element : N.Element_Count; Byte : B.Byte_Count;
+               Width : Natural; Places : Natural)
+            is
+            begin
+               for M in 0 .. Width - 1 loop
+                  declare
+                     Q : Natural := 0;
+                  begin
+                     for Place in 0 .. Places - 1 loop
+                        Q := Q * 3
+                          + Trit_Of
+                              (Values (Element + N.Element_Count
+                                                   (M + Place * Width)),
+                               Scale);
+                     end loop;
+                     for Pad in Places .. 4 loop
+                        Q := Q * 3;
+                     end loop;
+                     Result (At_Byte + Byte + B.Byte_Count (M)) := Packed (Q);
+                  end;
+               end loop;
+            end Run;
+         begin
+            Run (First, 0, 32, 5);
+            Run (First + 160, 32, 16, 5);
+            Run (First + 240, 48, 4, 4);
+            Result (At_Byte + 52 .. At_Byte + 53) := Encode_F16 ([1 => Scale]);
+         end;
+      end loop;
+
+      return Result;
+   end Encode_TQ1_0;
+
+   function Encode_TQ2_0 (Values : N.Real_Array) return B.Byte_Array is
+      Blocks : constant N.Element_Count := Values'Length / 256;
+      Result : B.Byte_Array (0 .. B.Byte_Count (Blocks) * 66 - 1) :=
+        [others => 0];
+   begin
+      for Block in 0 .. Blocks - 1 loop
+         declare
+            First   : constant N.Element_Count := Values'First + Block * 256;
+            At_Byte : constant B.Byte_Count := B.Byte_Count (Block) * 66;
+            Scale   : constant N.Real :=
+              Extreme_Of (Values (First .. First + 255));
+         begin
+            --  Byte m of a run of thirty-two holds elements m, m plus
+            --  thirty-two, sixty-four and ninety-six of the run's hundred
+            --  and twenty-eight, the first in the lowest two bits.
+            for Half in 0 .. 1 loop
+               for M in 0 .. 31 loop
+                  declare
+                     Byte : Natural := 0;
+                  begin
+                     for Field in 0 .. 3 loop
+                        Byte := Byte + Trit_Of
+                          (Values (First + N.Element_Count
+                                             (Half * 128 + Field * 32 + M)),
+                           Scale) * 4 ** Field;
+                     end loop;
+                     Result (At_Byte + B.Byte_Count (Half * 32 + M)) :=
+                       B.Byte (Byte);
+                  end;
+               end loop;
+            end loop;
+            Result (At_Byte + 64 .. At_Byte + 65) := Encode_F16 ([1 => Scale]);
+         end;
+      end loop;
+
+      return Result;
+   end Encode_TQ2_0;
+
+   function Encode_Q1_0 (Values : N.Real_Array) return B.Byte_Array is
+      use type Interfaces.Unsigned_8;
+
+      Blocks : constant N.Element_Count := Values'Length / 128;
+      Result : B.Byte_Array (0 .. B.Byte_Count (Blocks) * 18 - 1) :=
+        [others => 0];
+   begin
+      for Block in 0 .. Blocks - 1 loop
+         declare
+            First   : constant N.Element_Count := Values'First + Block * 128;
+            At_Byte : constant B.Byte_Count := B.Byte_Count (Block) * 18;
+            Sum     : N.Real := 0.0;
+         begin
+            --  Every element is the scale or its negation, so the scale
+            --  that lands nearest on average is the mean magnitude.
+            for J in 0 .. 127 loop
+               Sum := Sum + abs Values (First + N.Element_Count (J));
+            end loop;
+            Result (At_Byte .. At_Byte + 1) := Encode_F16 ([1 => Sum / 128.0]);
+
+            for J in 0 .. 127 loop
+               if Values (First + N.Element_Count (J)) >= 0.0 then
+                  Result (At_Byte + 2 + B.Byte_Count (J / 8)) :=
+                    Result (At_Byte + 2 + B.Byte_Count (J / 8))
+                    + B.Byte (2 ** (J mod 8));
+               end if;
+            end loop;
+         end;
+      end loop;
+
+      return Result;
+   end Encode_Q1_0;
+
+   function Encode_Q2_0 (Values : N.Real_Array) return B.Byte_Array is
+      use type Interfaces.Unsigned_8;
+
+      Blocks : constant N.Element_Count := Values'Length / 64;
+      Result : B.Byte_Array (0 .. B.Byte_Count (Blocks) * 18 - 1) :=
+        [others => 0];
+   begin
+      for Block in 0 .. Blocks - 1 loop
+         declare
+            First   : constant N.Element_Count := Values'First + Block * 64;
+            At_Byte : constant B.Byte_Count := B.Byte_Count (Block) * 18;
+            Top     : N.Real := 0.0;
+            Bottom  : N.Real := 0.0;
+            Scale   : N.Real;
+         begin
+            --  The levels are minus one to two steps, so the step is what
+            --  reaches both the most negative value at one and the most
+            --  positive at two.
+            for J in 0 .. 63 loop
+               Top := N.Real'Max (Top, Values (First + N.Element_Count (J)));
+               Bottom :=
+                 N.Real'Min (Bottom, Values (First + N.Element_Count (J)));
+            end loop;
+            Scale := N.Real'Max (Top / 2.0, -Bottom);
+            Result (At_Byte .. At_Byte + 1) := Encode_F16 ([1 => Scale]);
+
+            for J in 0 .. 63 loop
+               declare
+                  Level : constant Integer :=
+                    (if Scale = 0.0 then 0
+                     else Integer'Max
+                            (-1, Integer'Min
+                                   (2, Integer (N.Real'Rounding
+                                                  (Values (First
+                                                           + N.Element_Count (J))
+                                                   / Scale)))));
+               begin
+                  Result (At_Byte + 2 + B.Byte_Count (J / 4)) :=
+                    Result (At_Byte + 2 + B.Byte_Count (J / 4))
+                    + B.Byte ((Level + 1) * 4 ** (J mod 4));
+               end;
+            end loop;
+         end;
+      end loop;
+
+      return Result;
+   end Encode_Q2_0;
+
+   --  An unsigned E4M3 scale read as the engine reads it: four bits of
+   --  exponent biased by seven, three of mantissa, halved.
+   function E4M3_Value (Byte : Natural) return N.Real is
+      Exponent : constant Natural := (Byte / 8) mod 16;
+      Mantissa : constant Natural := Byte mod 8;
+   begin
+      if Byte = 0 or else Byte = 16#7F# then
+         return 0.0;
+      elsif Exponent = 0 then
+         return N.Real (Mantissa) * 2.0 ** (-10);
+      else
+         return (1.0 + N.Real (Mantissa) / 8.0) * 2.0 ** (Exponent - 8);
+      end if;
+   end E4M3_Value;
+
+   function Encode_NVFP4 (Values : N.Real_Array) return B.Byte_Array is
+      use type Interfaces.Unsigned_8;
+
+      Blocks : constant N.Element_Count := Values'Length / 64;
+      Result : B.Byte_Array (0 .. B.Byte_Count (Blocks) * 36 - 1) :=
+        [others => 0];
+   begin
+      for Block in 0 .. Blocks - 1 loop
+         for Run in 0 .. 3 loop
+            declare
+               First   : constant N.Element_Count :=
+                 Values'First + Block * 64 + N.Element_Count (Run) * 16;
+               At_Byte : constant B.Byte_Count := B.Byte_Count (Block) * 36;
+               Wanted  : constant N.Real :=
+                 Extreme_Of (Values (First .. First + 15)) / 12.0;
+               Chosen  : Natural := 0;
+            begin
+               --  The smallest scale whose top level, twelve of the doubled
+               --  table, reaches the run's largest magnitude.
+               if Wanted > 0.0 then
+                  Chosen := 16#7E#;
+                  for Byte in 1 .. 16#7E# loop
+                     if E4M3_Value (Byte) >= Wanted then
+                        Chosen := Byte;
+                        exit;
+                     end if;
+                  end loop;
+               end if;
+               Result (At_Byte + B.Byte_Count (Run)) := B.Byte (Chosen);
+
+               for J in 0 .. 7 loop
+                  declare
+                     Step  : constant N.Real := E4M3_Value (Chosen);
+                     Lower : constant Interfaces.Unsigned_8 :=
+                       (if Step = 0.0 then 0
+                        else Nearest_Four
+                               (Values (First + N.Element_Count (J)) / Step));
+                     Upper : constant Interfaces.Unsigned_8 :=
+                       (if Step = 0.0 then 0
+                        else Nearest_Four
+                               (Values (First + N.Element_Count (J) + 8)
+                                / Step));
+                  begin
+                     Result (At_Byte + 4 + B.Byte_Count (Run * 8 + J)) :=
+                       B.Byte (Lower or Interfaces.Shift_Left (Upper, 4));
+                  end;
+               end loop;
+            end;
+         end loop;
+      end loop;
+
+      return Result;
+   end Encode_NVFP4;
+
 end Fixtures;

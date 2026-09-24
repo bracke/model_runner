@@ -2517,6 +2517,189 @@ package body Model_Runner.Quantization.Decoders is
                Ok := True;
             end;
 
+         when G.Type_TQ1_0 =>
+            --  Two hundred and fifty-six ternary weights in fifty-four
+            --  bytes: forty-eight holding five apiece, four holding four,
+            --  then the half-precision scale. A byte is a base-three number
+            --  scaled up to fill the byte, so its n-th digit is read by
+            --  multiplying by three to the n -- wrapping at the byte, which
+            --  drops the digits above -- and taking the top of the product
+            --  by three. The elements run a digit at a time across a run of
+            --  bytes: thirty-two bytes, then sixteen, then the four.
+            declare
+               pragma Suppress (Index_Check);
+               pragma Suppress (Range_Check);
+               pragma Suppress (Overflow_Check);
+
+               D : constant Real := Scale (Data, Offset + 52);
+
+               Powers : constant array (0 .. 4) of Interfaces.Unsigned_8 :=
+                 [1, 3, 9, 27, 81];
+
+               Slot : Element_Count := Target'First;
+
+               procedure Digits_Of
+                 (First : B.Byte_Count; Bytes : Natural; Places : Natural)
+               is
+               begin
+                  for Place in 0 .. Places - 1 loop
+                     for M in 0 .. Bytes - 1 loop
+                        declare
+                           Q : constant Interfaces.Unsigned_8 :=
+                             Raw (Data, Offset + First + B.Byte_Count (M))
+                             * Powers (Place);
+                           Trit : constant Integer :=
+                             Integer
+                               (Interfaces.Shift_Right
+                                  (Interfaces.Unsigned_16 (Q) * 3, 8));
+                        begin
+                           Target (Slot) := Real (Trit - 1) * D;
+                           Slot := Slot + 1;
+                        end;
+                     end loop;
+                  end loop;
+               end Digits_Of;
+            begin
+               Digits_Of (0, 32, 5);
+               Digits_Of (32, 16, 5);
+               Digits_Of (48, 4, 4);
+               Ok := True;
+            end;
+
+         when G.Type_TQ2_0 =>
+            --  Two hundred and fifty-six ternary weights in sixty-six bytes:
+            --  sixty-four of two-bit fields, then the scale. Each run of
+            --  thirty-two bytes gives a hundred and twenty-eight elements,
+            --  the lowest field of every byte first, then the next.
+            declare
+               pragma Suppress (Index_Check);
+               pragma Suppress (Range_Check);
+               pragma Suppress (Overflow_Check);
+
+               D : constant Real := Scale (Data, Offset + 64);
+            begin
+               for Run in 0 .. 1 loop
+                  for Field in 0 .. 3 loop
+                     for M in 0 .. 31 loop
+                        declare
+                           Q : constant Integer :=
+                             Integer
+                               (Interfaces.Shift_Right
+                                  (Raw (Data,
+                                        Offset + B.Byte_Count (Run * 32 + M)),
+                                   2 * Field)
+                                and 3);
+                        begin
+                           Target (Target'First
+                                   + Element_Count (Run * 128 + Field * 32
+                                                    + M)) :=
+                             Real (Q - 1) * D;
+                        end;
+                     end loop;
+                  end loop;
+               end loop;
+               Ok := True;
+            end;
+
+         when G.Type_Q1_0 =>
+            --  A hundred and twenty-eight elements, one bit each after the
+            --  scale, the lowest bit of a byte first: a set bit is the
+            --  scale and a clear one its negation.
+            declare
+               pragma Suppress (Index_Check);
+               pragma Suppress (Range_Check);
+               pragma Suppress (Overflow_Check);
+
+               D : constant Real := Scale (Data, Offset);
+            begin
+               for J in 0 .. 127 loop
+                  Target (Target'First + Element_Count (J)) :=
+                    (if (Interfaces.Shift_Right
+                           (Raw (Data, Offset + 2 + B.Byte_Count (J / 8)),
+                            J mod 8) and 1) = 1
+                     then D else -D);
+               end loop;
+               Ok := True;
+            end;
+
+         when G.Type_Q2_0 =>
+            --  Sixty-four elements, two bits each after the scale, the
+            --  lowest field of a byte first, standing for minus one, nought,
+            --  one and two.
+            declare
+               pragma Suppress (Index_Check);
+               pragma Suppress (Range_Check);
+               pragma Suppress (Overflow_Check);
+
+               D : constant Real := Scale (Data, Offset);
+            begin
+               for J in 0 .. 63 loop
+                  Target (Target'First + Element_Count (J)) :=
+                    Real (Integer
+                            (Interfaces.Shift_Right
+                               (Raw (Data, Offset + 2 + B.Byte_Count (J / 4)),
+                                2 * (J mod 4))
+                             and 3) - 1) * D;
+               end loop;
+               Ok := True;
+            end;
+
+         when G.Type_NVFP4 =>
+            --  Sixty-four elements as four runs of sixteen: four scale
+            --  bytes, then thirty-two of nibbles, eight to a run, the low
+            --  nibble of byte j element j of its run and the high nibble
+            --  element j plus eight. The values are MXFP4's, doubled as the
+            --  table holds them; a scale is an unsigned E4M3 float -- four
+            --  bits of exponent biased by seven, three of mantissa, the top
+            --  bit unread, nought and 16#7F# meaning zero -- and halved,
+            --  which takes the doubling back out.
+            declare
+               pragma Suppress (Index_Check);
+               pragma Suppress (Range_Check);
+               pragma Suppress (Overflow_Check);
+
+               function Run_Scale (Byte : Interfaces.Unsigned_8) return Real
+               is
+                  Exponent : constant Integer :=
+                    Integer (Interfaces.Shift_Right (Byte, 3) and 16#0F#);
+                  Mantissa : constant Integer := Integer (Byte and 7);
+               begin
+                  if Byte = 0 or else Byte = 16#7F# then
+                     return 0.0;
+                  elsif Exponent = 0 then
+                     return Real (Mantissa) * 2.0 ** (-9) * 0.5;
+                  else
+                     return (1.0 + Real (Mantissa) / 8.0)
+                            * 2.0 ** (Exponent - 7) * 0.5;
+                  end if;
+               end Run_Scale;
+            begin
+               for Run in 0 .. 3 loop
+                  declare
+                     D : constant Real :=
+                       Run_Scale (Raw (Data, Offset + B.Byte_Count (Run)));
+                  begin
+                     for J in 0 .. 7 loop
+                        declare
+                           Packed : constant Interfaces.Unsigned_8 :=
+                             Raw (Data,
+                                  Offset + 4 + B.Byte_Count (Run * 8 + J));
+                           Slot : constant Element_Count :=
+                             Target'First + Element_Count (Run * 16 + J);
+                        begin
+                           Target (Slot) :=
+                             Real (Fours (Integer (Packed and 16#0F#))) * D;
+                           Target (Slot + 8) :=
+                             Real (Fours (Integer
+                                            (Interfaces.Shift_Right
+                                               (Packed, 4)))) * D;
+                        end;
+                     end loop;
+                  end;
+               end loop;
+               Ok := True;
+            end;
+
          when others =>
             Ok := False;
       end case;

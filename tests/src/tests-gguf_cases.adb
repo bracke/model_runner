@@ -2518,8 +2518,8 @@ package body Tests.GGUF_Cases is
       end;
    end Decoders_Produce_The_Documented_Values;
 
-   --  The five low-bit IQ formats decode a block byte-for-byte as llama.cpp's
-   --  own dequantizer does. The reference is one fixed block per format,
+   --  The low-bit formats decode a block byte-for-byte as llama.cpp's own
+   --  dequantizer does. The reference is 256 elements of fixed blocks a format,
    --  dequantized by ggml itself and carried in IQ_Reference; a spec error the
    --  self-consistent sweep cannot see -- a grid read a lane out, a sign or a
    --  scale nibble misplaced -- shows here as a row that disagrees with the C
@@ -2542,7 +2542,10 @@ package body Tests.GGUF_Cases is
       begin
          B.Allocate (Block'Length, Data);
          Data.all := Block;
-         Q.Decode_Blocks (Format, Data.all, 0, 1, Decoded, Ok);
+         Q.Decode_Blocks
+           (Format, Data.all, 0,
+            N.Element_Count (256 / Model_Runner.GGUF.Block_Elements (Format)),
+            Decoded, Ok);
          Assert (Ok, "decode failed for " & Name);
          for I in Decoded'Range loop
             declare
@@ -2570,6 +2573,16 @@ package body Tests.GGUF_Cases is
            IQ_Reference.Block_IQ1_S, IQ_Reference.Expected_IQ1_S);
       One ("IQ1_M", Model_Runner.GGUF.Type_IQ1_M,
            IQ_Reference.Block_IQ1_M, IQ_Reference.Expected_IQ1_M);
+      One ("TQ1_0", Model_Runner.GGUF.Type_TQ1_0,
+           IQ_Reference.Block_TQ1_0, IQ_Reference.Expected_TQ1_0);
+      One ("TQ2_0", Model_Runner.GGUF.Type_TQ2_0,
+           IQ_Reference.Block_TQ2_0, IQ_Reference.Expected_TQ2_0);
+      One ("Q1_0", Model_Runner.GGUF.Type_Q1_0,
+           IQ_Reference.Block_Q1_0, IQ_Reference.Expected_Q1_0);
+      One ("Q2_0", Model_Runner.GGUF.Type_Q2_0,
+           IQ_Reference.Block_Q2_0, IQ_Reference.Expected_Q2_0);
+      One ("NVFP4", Model_Runner.GGUF.Type_NVFP4,
+           IQ_Reference.Block_NVFP4, IQ_Reference.Expected_NVFP4);
    end Low_Bit_IQ_Formats_Match_The_Reference;
 
    --  The fixture encoder for each low-bit IQ format tracks what it was given:
@@ -2598,7 +2611,10 @@ package body Tests.GGUF_Cases is
       begin
          B.Allocate (Encoded'Length, Data);
          Data.all := Encoded;
-         Q.Decode_Blocks (Format, Data.all, 0, 1, Decoded, Ok);
+         Q.Decode_Blocks
+           (Format, Data.all, 0,
+            N.Element_Count (256 / Model_Runner.GGUF.Block_Elements (Format)),
+            Decoded, Ok);
          Assert (Ok, "encoded " & Name & " did not decode");
          for I in Values'Range loop
             Sum := Sum + (Decoded (I) - Values (I)) * (Decoded (I) - Values (I));
@@ -2629,6 +2645,19 @@ package body Tests.GGUF_Cases is
            Fixtures.Encode_IQ1_S (Values), 0.45);
       One ("IQ1_M", Model_Runner.GGUF.Type_IQ1_M,
            Fixtures.Encode_IQ1_M (Values), 0.45);
+
+      --  Three levels, then two: the ternary pair and Q1_0 are as coarse as
+      --  the one-bit IQ formats, Q2_0's four levels and NVFP4's floats finer.
+      One ("TQ1_0", Model_Runner.GGUF.Type_TQ1_0,
+           Fixtures.Encode_TQ1_0 (Values), 0.45);
+      One ("TQ2_0", Model_Runner.GGUF.Type_TQ2_0,
+           Fixtures.Encode_TQ2_0 (Values), 0.45);
+      One ("Q1_0", Model_Runner.GGUF.Type_Q1_0,
+           Fixtures.Encode_Q1_0 (Values), 0.45);
+      One ("Q2_0", Model_Runner.GGUF.Type_Q2_0,
+           Fixtures.Encode_Q2_0 (Values), 0.35);
+      One ("NVFP4", Model_Runner.GGUF.Type_NVFP4,
+           Fixtures.Encode_NVFP4 (Values), 0.15);
    end Low_Bit_IQ_Encoders_Track_The_Values;
 
    --  Metadata is shown with its type and value, and an array is described
@@ -7413,10 +7442,10 @@ package body Tests.GGUF_Cases is
          "each decoder produces the values its layout documents");
       Register_Routine
         (T, Low_Bit_IQ_Formats_Match_The_Reference'Access,
-         "the low-bit IQ formats decode as llama.cpp's dequantizer does");
+         "the low-bit formats decode as llama.cpp's dequantizer does");
       Register_Routine
         (T, Low_Bit_IQ_Encoders_Track_The_Values'Access,
-         "each low-bit IQ fixture encoder tracks the values it was given");
+         "each low-bit fixture encoder tracks the values it was given");
       Register_Routine
         (T, Packing_In_Pieces_Is_Packing_Whole'Access,
          "a run of activations packed in pieces is the run packed whole, "

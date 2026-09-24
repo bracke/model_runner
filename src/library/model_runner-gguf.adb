@@ -46,10 +46,26 @@ package body Model_Runner.GGUF is
       Type_IQ1_S   => (19, Super_Block,  50,  True),
       Type_IQ1_M   => (29, Super_Block,  56,  True),
 
+      --  The ternary pair: every weight is minus one, nought or one times
+      --  the block's scale. TQ1_0 packs five to a byte as a base-three
+      --  number, TQ2_0 four to a byte in two bits each.
+      Type_TQ1_0   => (34, Super_Block,  54,  True),
+      Type_TQ2_0   => (35, Super_Block,  66,  True),
+
+      --  One bit an element over a hundred and twenty-eight, and two over
+      --  sixty-four: a half-precision scale, then the bits.
+      Type_Q1_0    => (41, 128,          18,  True),
+      Type_Q2_0    => (42, 64,           18,  True),
+
       --  Thirty-two elements in seventeen bytes: one exponent byte and
       --  sixteen of packed nibbles. The scale is a power of two rather than
       --  a half, which is what the format is named for.
       Type_MXFP4   => (39, Legacy_Block, 17,  True),
+
+      --  MXFP4's values over sixty-four elements, but four scales of their
+      --  own, one to each sixteen, and each an unsigned E4M3 float rather
+      --  than a power of two.
+      Type_NVFP4   => (40, 64,           36,  True),
       Type_BF16    => (30, 1,            2,   True),
       Type_Unknown => (U32'Last, 0,      0,   False)];
 
@@ -159,6 +175,11 @@ package body Model_Runner.GGUF is
          when Type_IQ3_XXS => return "IQ3_XXS";
          when Type_IQ1_S   => return "IQ1_S";
          when Type_IQ1_M   => return "IQ1_M";
+         when Type_TQ1_0   => return "TQ1_0";
+         when Type_TQ2_0   => return "TQ2_0";
+         when Type_Q1_0    => return "Q1_0";
+         when Type_Q2_0    => return "Q2_0";
+         when Type_NVFP4   => return "NVFP4";
          when Type_BF16    => return "BF16";
          when Type_Unknown => return "unknown";
       end case;

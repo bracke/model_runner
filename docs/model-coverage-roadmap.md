@@ -16,8 +16,11 @@ Done, each crossed against the independent reference over every format and path
   in them, so there is nothing to decode. Phase 0 is complete but for #6, which
   is ongoing onboarding rather than a task.
 - **Phase 1:** #7 shared experts, #8 sigmoid gating, #9 wide-mixture gather spill — Phase 1 is complete.
-- **Phase 2:** #10 IQ3_S (the first sub-4-bit grid quant; the rest of the IQ
-  family remains, on demand).
+- **Phase 2:** #10 **complete** -- every weight format ggml defines is read:
+  the whole IQ family (IQ3_S, IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, IQ1_S, IQ1_M),
+  the ternary TQ1_0 and TQ2_0, Q1_0, Q2_0 and NVFP4, each checked against
+  ggml's own dequantizer. None has a device shader branch; the device backend
+  refuses them by name.
 - **Phase 3:** #12 reranker head; #11 Granite, OLMo2, GLM4, Starcoder2,
   GraniteMoE, StableLM, GPT-NeoX, InternLM2, Baichuan (7B and 13B), MPT,
   ChatGLM and Command-R/Command-R+ — the config-mostly batch is **complete**.
@@ -28,8 +31,8 @@ Done, each crossed against the independent reference over every format and path
   each crossed against the independent reference over every format and path:
   Mamba, Mamba2, RWKV6 (Finch) and Jamba (the Mamba/attention/mixture hybrid).
 
-Phase 0 is closed (bar #6, ongoing onboarding). Still open: #10 (other
-quants) and Phase 6's #16 (vision projectors). Phase 4 (#13 DeepSeek MLA) is
+Phase 0 is closed (bar #6, ongoing onboarding). Still open: Phase 6's #16
+(vision projectors). Phase 4 (#13 DeepSeek MLA) is
 read in its naive form; #17, the device sink-room depth cap, is done.
 (#11, the config-mostly arch batch, and #12 the reranker head are complete;
 Phase 5 — #14 the delta-rule device shader and #15 the state-space families —

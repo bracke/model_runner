@@ -76,10 +76,14 @@ package body Tiny_Model is
       Quantized : constant Boolean :=
         Format in Q4_0 | Q4_1 | Q5_0 | Q5_1 | Q8_0
                 | Q2_K | Q3_K | Q4_K | Q5_K | Q6_K
-                | IQ4_NL | IQ4_XS | IQ3_S | IQ2_XXS | MXFP4;
+                | IQ4_NL | IQ4_XS | IQ3_S | IQ2_XXS | MXFP4
+                | IQ2_XS | IQ2_S | IQ3_XXS | IQ1_S | IQ1_M
+                | TQ1_0 | TQ2_0 | Q1_0 | Q2_0 | NVFP4;
+      --  Wide enough for a whole block in every row: the super-block
+      --  formats want 256, and the 64- and 128-element ones fit it too.
       Deep      : constant Boolean :=
         Format in Q2_K | Q3_K | Q4_K | Q5_K | Q6_K | IQ4_XS | IQ3_S
-                | IQ2_XXS;
+                | IQ2_XXS | TQ1_0 | TQ2_0 | Q1_0 | Q2_0 | NVFP4;
 
       --  The quantized fixture is wider because a Q8_0 row must be a whole
       --  number of thirty-two element blocks. Everything else matches.
@@ -326,6 +330,26 @@ package body Tiny_Model is
                Fixtures.Add_Tensor
                  (Builder, Name, Dimensions, G.Type_IQ1_M,
                   Fixtures.Encode_IQ1_M (Values));
+            elsif Format = TQ1_0 and then Total mod 256 = 0 then
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_TQ1_0,
+                  Fixtures.Encode_TQ1_0 (Values));
+            elsif Format = TQ2_0 and then Total mod 256 = 0 then
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_TQ2_0,
+                  Fixtures.Encode_TQ2_0 (Values));
+            elsif Format = Q1_0 and then Total mod 128 = 0 then
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_Q1_0,
+                  Fixtures.Encode_Q1_0 (Values));
+            elsif Format = Q2_0 and then Total mod 64 = 0 then
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_Q2_0,
+                  Fixtures.Encode_Q2_0 (Values));
+            elsif Format = NVFP4 and then Total mod 64 = 0 then
+               Fixtures.Add_Tensor
+                 (Builder, Name, Dimensions, G.Type_NVFP4,
+                  Fixtures.Encode_NVFP4 (Values));
             elsif Format = MXFP4 and then Total mod 32 = 0 then
                Fixtures.Add_Tensor
                  (Builder, Name, Dimensions, G.Type_MXFP4,

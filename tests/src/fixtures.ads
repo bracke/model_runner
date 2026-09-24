@@ -373,6 +373,42 @@ package Fixtures is
    --  @return The encoded bytes.
    function Encode_IQ1_M (Values : N.Real_Array) return B.Byte_Array;
 
+   --  Encode values as TQ1_0: blocks of 256 ternary weights in 54 bytes --
+   --  forty-eight bytes of five base-three digits each, four of four, then
+   --  the half-precision scale, which is the block's largest magnitude.
+   --
+   --  @param Values Values to encode; a whole number of 256-element blocks.
+   --  @return The encoded bytes.
+   function Encode_TQ1_0 (Values : N.Real_Array) return B.Byte_Array;
+
+   --  Encode values as TQ2_0: blocks of 256 ternary weights in 66 bytes --
+   --  sixty-four bytes of two-bit fields, then the scale.
+   --
+   --  @param Values Values to encode; a whole number of 256-element blocks.
+   --  @return The encoded bytes.
+   function Encode_TQ2_0 (Values : N.Real_Array) return B.Byte_Array;
+
+   --  Encode values as Q1_0: blocks of 128 in 18 bytes -- a half-precision
+   --  scale, the mean magnitude, then one sign bit an element.
+   --
+   --  @param Values Values to encode; a whole number of 128-element blocks.
+   --  @return The encoded bytes.
+   function Encode_Q1_0 (Values : N.Real_Array) return B.Byte_Array;
+
+   --  Encode values as Q2_0: blocks of 64 in 18 bytes -- a half-precision
+   --  scale, then two bits an element standing for minus one to two steps.
+   --
+   --  @param Values Values to encode; a whole number of 64-element blocks.
+   --  @return The encoded bytes.
+   function Encode_Q2_0 (Values : N.Real_Array) return B.Byte_Array;
+
+   --  Encode values as NVFP4: blocks of 64 in 36 bytes -- four unsigned
+   --  E4M3 scales, one to each run of sixteen, then MXFP4's nibbles.
+   --
+   --  @param Values Values to encode; a whole number of 64-element blocks.
+   --  @return The encoded bytes.
+   function Encode_NVFP4 (Values : N.Real_Array) return B.Byte_Array;
+
    --  Encode values as Q5_K: as Q4_K with a fifth bit for every element,
    --  kept in thirty-two bytes of their own, in 176 bytes.
    --

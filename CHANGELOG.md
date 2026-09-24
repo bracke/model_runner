@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The last five weight formats ggml defines.** TQ1_0 and TQ2_0, the ternary
+  pair TriLM and BitNet b1.58 conversions use -- every weight minus one, nought
+  or one times the block's scale, five to a byte as a base-three number or four
+  to a byte in two bits; Q1_0, one sign bit an element over blocks of 128;
+  Q2_0, two bits over blocks of 64; and NVFP4, MXFP4's values over runs of
+  sixteen with an unsigned E4M3 scale each. Each decodes on the processor and
+  the reference backend and is checked element for element against ggml's own
+  dequantizer on fixed blocks, NVFP4's scale edge cases among them; the four
+  `llama-quantize` writes load from a TinyLlama it quantized and start their
+  greedy answers as llama.cpp does. The independent reference transformer reads
+  each, so the conformance sweep crosses them. The device backend has no
+  shader branch for them and refuses a model carrying one by name, as it does
+  the IQ formats -- which the documentation had said fell back to the host.
+
 - **K-quant generation on a subgroup of thirty-two.** The generating
   matrix-vector product has a row kernel for Q4_K, Q5_K and Q6_K that decodes a
   super-block the way llama.cpp's own kernel does: the sub-block scales unpacked

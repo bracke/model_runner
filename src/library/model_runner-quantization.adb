@@ -475,7 +475,8 @@ package body Model_Runner.Quantization is
                 | G.Type_IQ4_NL | G.Type_IQ4_XS | G.Type_IQ3_S
                 | G.Type_IQ2_XXS | G.Type_IQ2_XS | G.Type_IQ2_S
                 | G.Type_IQ3_XXS | G.Type_IQ1_S | G.Type_IQ1_M
-                | G.Type_MXFP4);
+                | G.Type_TQ1_0 | G.Type_TQ2_0 | G.Type_Q1_0 | G.Type_Q2_0
+                | G.Type_MXFP4 | G.Type_NVFP4);
 
    -------------------
    -- Decode_Block --

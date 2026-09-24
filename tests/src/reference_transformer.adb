@@ -851,6 +851,168 @@ package body Reference_Transformer is
       return Scale * Long_Float (MX_Levels (Level));
    end Decode_MXFP4;
 
+   --  One element of a TQ1_0 super-block: two hundred and fifty-six ternary
+   --  weights in fifty-four bytes. Element e lives in byte e mod 32 as digit
+   --  e / 32 for the first hundred and sixty, in byte thirty-two plus
+   --  (e - 160) mod 16 as digit (e - 160) / 16 for the next eighty, and in
+   --  byte forty-eight plus (e - 240) mod 4 as digit (e - 240) / 4 for the
+   --  last sixteen. A byte is its base-three number times 256 / 243 rounded
+   --  up, so digit n is the leading digit of what is left once the top n are
+   --  multiplied off the end of the byte.
+   function Decode_TQ1_0
+     (Image : Model_Runner.Bytes.Byte_Array;
+      Base  : Interfaces.Unsigned_64;
+      Index : Natural) return Long_Float
+   is
+      Block  : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Index / 256);
+      Within : constant Natural := Index mod 256;
+
+      At_Block : constant Interfaces.Unsigned_64 := Base + Block * 54;
+
+      function Byte_At (Offset : Interfaces.Unsigned_64) return Natural
+      is (Natural
+            (Image (Image'First + Model_Runner.Bytes.Byte_Count (Offset))));
+
+      Byte  : Natural;
+      Digit : Natural;
+   begin
+      if Within < 160 then
+         Byte := Within mod 32;
+         Digit := Within / 32;
+      elsif Within < 240 then
+         Byte := 32 + (Within - 160) mod 16;
+         Digit := (Within - 160) / 16;
+      else
+         Byte := 48 + (Within - 240) mod 4;
+         Digit := (Within - 240) / 4;
+      end if;
+
+      declare
+         Shifted : constant Natural :=
+           (Byte_At (At_Block + Interfaces.Unsigned_64 (Byte)) * 3 ** Digit)
+           mod 256;
+         Trit    : constant Integer := Shifted * 3 / 256;
+      begin
+         return Long_Float (Trit - 1) * Decode_Half (Image, At_Block + 52);
+      end;
+   end Decode_TQ1_0;
+
+   --  One element of a TQ2_0 super-block: sixty-four bytes of two-bit fields
+   --  and a half-precision scale after them. Element e is in byte
+   --  32 * (e / 128) + e mod 32, field (e mod 128) / 32 counted from the low
+   --  end, and the field less one is the weight in steps.
+   function Decode_TQ2_0
+     (Image : Model_Runner.Bytes.Byte_Array;
+      Base  : Interfaces.Unsigned_64;
+      Index : Natural) return Long_Float
+   is
+      Block  : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Index / 256);
+      Within : constant Natural := Index mod 256;
+
+      At_Block : constant Interfaces.Unsigned_64 := Base + Block * 66;
+
+      function Byte_At (Offset : Interfaces.Unsigned_64) return Natural
+      is (Natural
+            (Image (Image'First + Model_Runner.Bytes.Byte_Count (Offset))));
+
+      Packed : constant Natural :=
+        Byte_At (At_Block
+                 + Interfaces.Unsigned_64 (32 * (Within / 128) + Within mod 32));
+      Field  : constant Natural := (Packed / 4 ** ((Within mod 128) / 32)) mod 4;
+   begin
+      return Long_Float (Field - 1) * Decode_Half (Image, At_Block + 64);
+   end Decode_TQ2_0;
+
+   --  One element of a Q1_0 block: a hundred and twenty-eight elements in
+   --  eighteen bytes, the scale and then a bit each, lowest first. A set bit
+   --  is the scale, a clear one the scale negated.
+   function Decode_Q1_0
+     (Image : Model_Runner.Bytes.Byte_Array;
+      Base  : Interfaces.Unsigned_64;
+      Index : Natural) return Long_Float
+   is
+      At_Block : constant Interfaces.Unsigned_64 :=
+        Base + Interfaces.Unsigned_64 (Index / 128) * 18;
+      Within   : constant Natural := Index mod 128;
+
+      function Byte_At (Offset : Interfaces.Unsigned_64) return Natural
+      is (Natural
+            (Image (Image'First + Model_Runner.Bytes.Byte_Count (Offset))));
+
+      Scale : constant Long_Float := Decode_Half (Image, At_Block);
+      Bit   : constant Natural :=
+        (Byte_At (At_Block + 2 + Interfaces.Unsigned_64 (Within / 8))
+         / 2 ** (Within mod 8)) mod 2;
+   begin
+      return (if Bit = 1 then Scale else -Scale);
+   end Decode_Q1_0;
+
+   --  One element of a Q2_0 block: sixty-four elements in eighteen bytes,
+   --  the scale and then two bits each, lowest first, meaning minus one,
+   --  nought, one and two steps.
+   function Decode_Q2_0
+     (Image : Model_Runner.Bytes.Byte_Array;
+      Base  : Interfaces.Unsigned_64;
+      Index : Natural) return Long_Float
+   is
+      At_Block : constant Interfaces.Unsigned_64 :=
+        Base + Interfaces.Unsigned_64 (Index / 64) * 18;
+      Within   : constant Natural := Index mod 64;
+
+      function Byte_At (Offset : Interfaces.Unsigned_64) return Natural
+      is (Natural
+            (Image (Image'First + Model_Runner.Bytes.Byte_Count (Offset))));
+
+      Field : constant Natural :=
+        (Byte_At (At_Block + 2 + Interfaces.Unsigned_64 (Within / 4))
+         / 4 ** (Within mod 4)) mod 4;
+   begin
+      return Long_Float (Integer (Field) - 1) * Decode_Half (Image, At_Block);
+   end Decode_Q2_0;
+
+   --  One element of an NVFP4 block: sixty-four elements in thirty-six
+   --  bytes, four scale bytes for the four runs of sixteen and then the
+   --  nibbles, eight bytes a run, the low nibble of a run's byte j its
+   --  element j and the high nibble its element j + 8. The levels are
+   --  MXFP4's, twice their size as above. A scale byte is an unsigned E4M3
+   --  float -- its top bit unread, then four bits of exponent biased by
+   --  seven and three of mantissa, 16#7F# and nought standing for zero --
+   --  and is halved, which undoes the doubling.
+   function Decode_NVFP4
+     (Image : Model_Runner.Bytes.Byte_Array;
+      Base  : Interfaces.Unsigned_64;
+      Index : Natural) return Long_Float
+   is
+      At_Block : constant Interfaces.Unsigned_64 :=
+        Base + Interfaces.Unsigned_64 (Index / 64) * 36;
+      Within   : constant Natural := Index mod 64;
+      Run      : constant Natural := Within / 16;
+      In_Run   : constant Natural := Within mod 16;
+
+      function Byte_At (Offset : Interfaces.Unsigned_64) return Natural
+      is (Natural
+            (Image (Image'First + Model_Runner.Bytes.Byte_Count (Offset))));
+
+      Code     : constant Natural :=
+        Byte_At (At_Block + Interfaces.Unsigned_64 (Run));
+      Exponent : constant Natural := (Code / 8) mod 16;
+      Mantissa : constant Natural := Code mod 8;
+      Scale    : constant Long_Float :=
+        (if Code = 0 or else Code = 16#7F# then 0.0
+         elsif Exponent = 0 then Long_Float (Mantissa) / 512.0 / 2.0
+         else (8.0 + Long_Float (Mantissa)) / 8.0
+              * 2.0 ** (Exponent - 7) / 2.0);
+      Packed   : constant Natural :=
+        Byte_At (At_Block + 4
+                 + Interfaces.Unsigned_64 (Run * 8 + In_Run mod 8));
+      Level    : constant Natural :=
+        (if In_Run < 8 then Packed mod 16 else Packed / 16);
+   begin
+      return Scale * Long_Float (MX_Levels (Level));
+   end Decode_NVFP4;
+
    --  One element of an IQ4_XS super-block: two hundred and fifty-six
    --  elements in eight sub-blocks of thirty-two, one half-precision scale
    --  for the block and six bits of scale for each sub-block, four of them
@@ -1356,6 +1518,11 @@ package body Reference_Transformer is
                         | Model_Runner.GGUF.Type_IQ3_S
                         | Model_Runner.GGUF.Type_IQ2_XXS
                         | Model_Runner.GGUF.Type_MXFP4
+                        | Model_Runner.GGUF.Type_TQ1_0
+                        | Model_Runner.GGUF.Type_TQ2_0
+                        | Model_Runner.GGUF.Type_Q1_0
+                        | Model_Runner.GGUF.Type_Q2_0
+                        | Model_Runner.GGUF.Type_NVFP4
          then
             return null;
          end if;
@@ -1532,6 +1699,56 @@ package body Reference_Transformer is
                           Offset
                           + Interfaces.Unsigned_64 (Row) * 66
                             * Interfaces.Unsigned_64 (Columns / 256),
+                          Column);
+                  elsif Containers.Tensor_Format (Source, Index)
+                          = Model_Runner.GGUF.Type_TQ1_0
+                  then
+                     Result (Row, Column) :=
+                       Decode_TQ1_0
+                         (Image,
+                          Offset
+                          + Interfaces.Unsigned_64 (Row) * 54
+                            * Interfaces.Unsigned_64 (Columns / 256),
+                          Column);
+                  elsif Containers.Tensor_Format (Source, Index)
+                          = Model_Runner.GGUF.Type_TQ2_0
+                  then
+                     Result (Row, Column) :=
+                       Decode_TQ2_0
+                         (Image,
+                          Offset
+                          + Interfaces.Unsigned_64 (Row) * 66
+                            * Interfaces.Unsigned_64 (Columns / 256),
+                          Column);
+                  elsif Containers.Tensor_Format (Source, Index)
+                          = Model_Runner.GGUF.Type_Q1_0
+                  then
+                     Result (Row, Column) :=
+                       Decode_Q1_0
+                         (Image,
+                          Offset
+                          + Interfaces.Unsigned_64 (Row) * 18
+                            * Interfaces.Unsigned_64 (Columns / 128),
+                          Column);
+                  elsif Containers.Tensor_Format (Source, Index)
+                          = Model_Runner.GGUF.Type_Q2_0
+                  then
+                     Result (Row, Column) :=
+                       Decode_Q2_0
+                         (Image,
+                          Offset
+                          + Interfaces.Unsigned_64 (Row) * 18
+                            * Interfaces.Unsigned_64 (Columns / 64),
+                          Column);
+                  elsif Containers.Tensor_Format (Source, Index)
+                          = Model_Runner.GGUF.Type_NVFP4
+                  then
+                     Result (Row, Column) :=
+                       Decode_NVFP4
+                         (Image,
+                          Offset
+                          + Interfaces.Unsigned_64 (Row) * 36
+                            * Interfaces.Unsigned_64 (Columns / 64),
                           Column);
                   elsif Containers.Tensor_Format (Source, Index)
                           = Model_Runner.GGUF.Type_MXFP4
