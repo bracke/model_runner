@@ -1445,13 +1445,20 @@ package body Model_Runner.Platform.Device is
       function To_Destroy is
         new Ada.Unchecked_Conversion (System.Address, Destroy_Device_Call);
    begin
-      if Item.Logical /= System.Null_Address and then Find /= null then
+      --  Looked up through the instance the device came from. Asked of no
+      --  instance, the loader answers only for its global commands and
+      --  gives nothing for this one, so the device was never destroyed --
+      --  the validation layer reported it alive when the instance went.
+      if Item.Logical /= System.Null_Address
+        and then Item.Instance /= System.Null_Address
+        and then Find /= null
+      then
          declare
             Room : C.Strings.chars_ptr :=
               C.Strings.New_String ("vkDestroyDevice");
 
             Destroy : constant Destroy_Device_Call :=
-              To_Destroy (Find (System.Null_Address, Room));
+              To_Destroy (Find (Item.Instance, Room));
          begin
             C.Strings.Free (Room);
 

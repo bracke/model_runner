@@ -231,6 +231,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A closed device is destroyed.** `vkDestroyDevice` was looked up with no
+  instance, which the loader answers only for its global commands, so the
+  lookup came back empty and the device outlived every close -- each open in
+  a process that opened the device more than once left the last one's device
+  behind, and the validation layer reported it alive when the instance went.
+  It is looked up through the instance it came from, and a run on the device
+  now validates clean.
+
 - **The device's synchronization, checked with the validation layer.** Its
   synchronization validation reported some two hundred read-after-write
   hazards a short run. Each was traced to its steps: none is a race. Every
