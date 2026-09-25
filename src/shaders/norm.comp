@@ -90,7 +90,15 @@ layout(push_constant) uniform Shape {
     //  Where the weight begins in the buffer the device kept it in, in
     //  elements: a kept weight shares its buffer with others.
     uint base;
+
+    //  Whether the residual at binding four is added to what this makes,
+    //  which is a join folded into the normalization before it: Gemma
+    //  normalizes what attention and the feed-forward made before each is
+    //  added back, and the join's own pass over both stops existing.
+    uint joins;
 } shape;
+
+layout(std430, binding = 4) readonly buffer Residual { float rj[]; };
 
 shared float partial[LANES];
 
@@ -187,6 +195,10 @@ void main() {
         float made = scaled * g[shape.base + c]
                      + (shape.centered != 0u
                         ? g[shape.base + shape.width + c] : 0.0);
+
+        if (shape.joins != 0u) {
+            made += rj[at + c];
+        }
 
         if (halved) {
             h[at + c] = float16_t (made);

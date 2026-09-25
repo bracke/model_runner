@@ -8466,7 +8466,8 @@ package body Model_Runner.Platform.Device.Products is
          This : Step renames Steps.Items (Index);
       begin
          if This.Norms then
-            return "norm " & Shape (1, This.Rows);
+            return "norm " & Shape (1, This.Rows)
+              & (if This.Joins then " +join" else "");
          elsif This.Rotates then
             return "rotate";
          elsif This.Places then
@@ -9208,7 +9209,10 @@ package body Model_Runner.Platform.Device.Products is
         and then Other = Steps.Held
         and then not Steps.Items (Other).Kept
         and then not Steps.Items (Other).Joins
-        and then not Steps.Items (Other).Norms
+        --  A normalization of whole positions adds the residual in its
+        --  own store as a product does; one of heads does not.
+        and then (not Steps.Items (Other).Norms
+                  or else Steps.Items (Other).Groups = 1)
         and then not Steps.Items (Other).Blends
         and then not Steps.Items (Other).Attends
         and then not Steps.Items (Other).Places
@@ -10892,7 +10896,14 @@ package body Model_Runner.Platform.Device.Products is
                   Offset => Places (Index).At_Byte,
                   Extent => Places (Index).Bytes);
                Told (4) := Half_Descriptor (Item);
-               Told (5) := Told (3);
+
+               --  And the residual, where a join was folded into it.
+               Told (5) :=
+                 (if Steps.Items (Index).Joins
+                  then Source_Of
+                         (Steps.Items (Index).Joined,
+                          Steps.Items (Steps.Items (Index).Joined).Reads)
+                  else Told (3));
 
                Told (6) := Copy_Descriptor (Item);
 
@@ -12371,7 +12382,8 @@ package body Model_Runner.Platform.Device.Products is
                         --  rather than bytes because this one reads floats.
                         Base    =>
                           C.unsigned (Places (Index).Base / 4),
-                          Joins   => 0, Table => 0, others => <>);
+                          Joins   => (if This.Joins then 1 else 0),
+                          Table   => 0, others => <>);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);

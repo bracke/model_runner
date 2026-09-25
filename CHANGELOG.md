@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A join folds into the normalization before it.** Gemma normalizes what
+  attention and the feed-forward made before each is added back, and the
+  join was a pass of its own over both. The normalization now adds the
+  residual in its store and the join is not dispatched: 404 -> 263 us a
+  layer at 421 positions, gemma-3-4b's prompt 596 -> 611 tokens a second,
+  the same output.
+
 - **A gated feed-forward's projection up makes the combination.** Over a
   batch, the two arms of a gated feed-forward were written as halves and a
   combining step read them back to apply the unit and multiply. The
