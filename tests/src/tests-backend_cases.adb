@@ -1334,10 +1334,16 @@ package body Tests.Backend_Cases is
       --  the k-quants' and the two-bit codebooks' -- so without it this
       --  asked nothing of them. The odd count leaves a band of two rows
       --  with one row in it.
-      Shapes : constant array (1 .. 3) of Shape :=
+      --
+      --  And a fourth, ninety-six rows over the same batch: the tile is
+      --  sixty-four rows tall, so a matrix a multiple of thirty-two and not
+      --  of sixty-four ends in half a tile, whose rows past the end are
+      --  decoded from the last row and never stored.
+      Shapes : constant array (1 .. 4) of Shape :=
         [(Tall => 12, Batch => 10, Tiled => False),
          (Tall => 64, Batch => 40, Tiled => True),
-         (Tall => 13, Batch => 1, Tiled => False)];
+         (Tall => 13, Batch => 1, Tiled => False),
+         (Tall => 96, Batch => 40, Tiled => True)];
 
       --  How far the device and the processor may differ.
       --

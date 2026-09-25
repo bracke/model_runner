@@ -164,7 +164,11 @@ package body Model_Runner.Platform.Device.Products is
    --  vectors of it. The shader states both and this has to agree: the
    --  first says how many workgroups a matrix needs, the second says how
    --  far the batch is rounded up before it is handed over.
-   Tile_Rows    : constant := 32;
+   Tile_Rows    : constant := 64;
+
+   --  What a matrix's rows must divide by to be tiled: half a tile, the
+   --  last tile of such a matrix covering the half it has.
+   Tile_Grain   : constant := 32;
    Tile_Vectors : constant := 128;
 
    --  And the tile a listed product's runs are cut into -- thirty-two
@@ -933,7 +937,7 @@ package body Model_Runner.Platform.Device.Products is
       Count   : Natural) return Boolean
    is (Item.Matrices
        and then Item.Matrix_Line /= Null_Handle
-       and then Rows mod Tile_Rows = 0
+       and then Rows mod Tile_Grain = 0
        and then Count >= Tile_Least
 
        --  The tile this width and this format has to exist, not merely
@@ -5683,7 +5687,7 @@ package body Model_Runner.Platform.Device.Products is
                Product_Bytes, Shape'Address);
          Dispatch
            (Item.Buffer,
-            C.unsigned (Rows / Tile_Rows),
+            C.unsigned ((Rows + Tile_Rows - 1) / Tile_Rows),
             C.unsigned (Room / Tile_Width (Count)), 1);
       end;
 

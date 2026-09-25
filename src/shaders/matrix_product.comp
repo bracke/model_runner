@@ -74,6 +74,7 @@
 #extension GL_KHR_memory_scope_semantics : enable
 #extension GL_KHR_cooperative_matrix : enable
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 
 //  One subgroup, and the host has established that a subgroup here is
 //  sixty-four invocations. The instruction is at subgroup scope, so a
@@ -167,10 +168,20 @@ layout(push_constant) uniform Shape {
 //  the columns it takes at a time. The step is one Q8_0 block deep, which
 //  is what makes the decode below a whole number of blocks; sixty-four and
 //  a hundred and twenty-eight were measured and are slower.
+//  Sixty-four rows, for the plain tiles as for the listed one: a tile reads
+//  its vectors straight from memory once for every tile of rows, so at
+//  thirty-two a qwen3-8b gate of 12288 rows read its batch of 434 vectors
+//  384 times over -- over a gigabyte, against twenty megabytes of weights.
+//  Sixty-four halved that and read gemma-3-4b's 421-token prompt at 604
+//  tokens a second against 557, qwen3-8b's at 322 against 289; a hundred
+//  and twenty-eight read 551 and 316, the accumulators past what fits. A
+//  matrix whose rows are a multiple of thirty-two and not of sixty-four
+//  ends in half a tile, whose rows past the end decode the last row and
+//  are never stored.
 #ifdef LISTED
 const uint TILE_R = 64u;
 #else
-const uint TILE_R = 32u;
+const uint TILE_R = 64u;
 #endif
 
 //  A tile is as wide as it is whether the batch filling it is a hundred and
@@ -1623,7 +1634,8 @@ void main() {
             uint r       = rr + ((gl_LocalInvocationID.x & 63u) >> 1u);
             uint into    = chunk * TILE_R * WT_STRIDE
                            + r * WT_STRIDE + half_of * 16u;
-            uint row     = shape.base + slice + (row0 + r) * rb;
+            uint row     = shape.base + slice
+                           + min(row0 + r, shape.rows - 1u) * rb;
 
 #if defined(LOW_BITS)
             {
@@ -2172,54 +2184,33 @@ void main() {
                 uint nib = (run >> 1u) * 4u;
                 uint top = run * 2u;
 
-                wt[into +  0u] = float16_t(step * (float(
-                    ((l0 >> (nib)) & 15u)
-                    | (((h0 >> (top)) & 3u) << 4u)) - 32.0));
-                wt[into +  1u] = float16_t(step * (float(
-                    ((l0 >> (nib +  8u)) & 15u)
-                    | (((h0 >> (top +  8u)) & 3u) << 4u)) - 32.0));
-                wt[into +  2u] = float16_t(step * (float(
-                    ((l0 >> (nib + 16u)) & 15u)
-                    | (((h0 >> (top + 16u)) & 3u) << 4u)) - 32.0));
-                wt[into +  3u] = float16_t(step * (float(
-                    ((l0 >> (nib + 24u)) & 15u)
-                    | (((h0 >> (top + 24u)) & 3u) << 4u)) - 32.0));
-                wt[into +  4u] = float16_t(step * (float(
-                    ((l1 >> (nib)) & 15u)
-                    | (((h1 >> (top)) & 3u) << 4u)) - 32.0));
-                wt[into +  5u] = float16_t(step * (float(
-                    ((l1 >> (nib +  8u)) & 15u)
-                    | (((h1 >> (top +  8u)) & 3u) << 4u)) - 32.0));
-                wt[into +  6u] = float16_t(step * (float(
-                    ((l1 >> (nib + 16u)) & 15u)
-                    | (((h1 >> (top + 16u)) & 3u) << 4u)) - 32.0));
-                wt[into +  7u] = float16_t(step * (float(
-                    ((l1 >> (nib + 24u)) & 15u)
-                    | (((h1 >> (top + 24u)) & 3u) << 4u)) - 32.0));
-                wt[into +  8u] = float16_t(step * (float(
-                    ((l2 >> (nib)) & 15u)
-                    | (((h2 >> (top)) & 3u) << 4u)) - 32.0));
-                wt[into +  9u] = float16_t(step * (float(
-                    ((l2 >> (nib +  8u)) & 15u)
-                    | (((h2 >> (top +  8u)) & 3u) << 4u)) - 32.0));
-                wt[into + 10u] = float16_t(step * (float(
-                    ((l2 >> (nib + 16u)) & 15u)
-                    | (((h2 >> (top + 16u)) & 3u) << 4u)) - 32.0));
-                wt[into + 11u] = float16_t(step * (float(
-                    ((l2 >> (nib + 24u)) & 15u)
-                    | (((h2 >> (top + 24u)) & 3u) << 4u)) - 32.0));
-                wt[into + 12u] = float16_t(step * (float(
-                    ((l3 >> (nib)) & 15u)
-                    | (((h3 >> (top)) & 3u) << 4u)) - 32.0));
-                wt[into + 13u] = float16_t(step * (float(
-                    ((l3 >> (nib +  8u)) & 15u)
-                    | (((h3 >> (top +  8u)) & 3u) << 4u)) - 32.0));
-                wt[into + 14u] = float16_t(step * (float(
-                    ((l3 >> (nib + 16u)) & 15u)
-                    | (((h3 >> (top + 16u)) & 3u) << 4u)) - 32.0));
-                wt[into + 15u] = float16_t(step * (float(
-                    ((l3 >> (nib + 24u)) & 15u)
-                    | (((h3 >> (top + 24u)) & 3u) << 4u)) - 32.0));
+                //  Four values a word: each byte's nibble and its pair of
+                //  high bits masked together, the four bytes unpacked at
+                //  once, and the offset and scale applied as a vector --
+                //  a quarter of the shifts and masks one value at a time
+                //  took, which is what this format's staging was bound by.
+                uint q0 = ((l0 >> nib) & 0x0F0F0F0Fu)
+                          | (((h0 >> top) & 0x03030303u) << 4u);
+                uint q1 = ((l1 >> nib) & 0x0F0F0F0Fu)
+                          | (((h1 >> top) & 0x03030303u) << 4u);
+                uint q2 = ((l2 >> nib) & 0x0F0F0F0Fu)
+                          | (((h2 >> top) & 0x03030303u) << 4u);
+                uint q3 = ((l3 >> nib) & 0x0F0F0F0Fu)
+                          | (((h3 >> top) & 0x03030303u) << 4u);
+
+                f16vec4 v0 = f16vec4((vec4(unpack8(q0)) - 32.0) * step);
+                f16vec4 v1 = f16vec4((vec4(unpack8(q1)) - 32.0) * step);
+                f16vec4 v2 = f16vec4((vec4(unpack8(q2)) - 32.0) * step);
+                f16vec4 v3 = f16vec4((vec4(unpack8(q3)) - 32.0) * step);
+
+                wt[into +  0u] = v0.x; wt[into +  1u] = v0.y;
+                wt[into +  2u] = v0.z; wt[into +  3u] = v0.w;
+                wt[into +  4u] = v1.x; wt[into +  5u] = v1.y;
+                wt[into +  6u] = v1.z; wt[into +  7u] = v1.w;
+                wt[into +  8u] = v2.x; wt[into +  9u] = v2.y;
+                wt[into + 10u] = v2.z; wt[into + 11u] = v2.w;
+                wt[into + 12u] = v3.x; wt[into + 13u] = v3.y;
+                wt[into + 14u] = v3.z; wt[into + 15u] = v3.w;
             }
 #endif
         }
@@ -2269,8 +2260,10 @@ void main() {
                          + row0 + i * 16u;
 
             //  A block of sixteen vectors past this expert's run is the
-            //  next expert's, and is left to it.
-            if (listed && vec0 + j * 16u >= run_at + run_count) {
+            //  next expert's, and is left to it; and a block of rows past
+            //  the matrix's is nobody's.
+            if ((listed && vec0 + j * 16u >= run_at + run_count)
+                || row0 + i * 16u >= shape.rows) {
                 continue;
             }
 

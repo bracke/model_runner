@@ -5988,16 +5988,17 @@ package body Checks is
             --  The rows are staged thirty-two at a time, as many times as
             --  the tile is tall, so a taller tile has to be a whole number
             --  of thirty-two.
-            if Rows_Said /= 32 or else Step_Said /= 32
+            if Rows_Said mod 32 /= 0 or else Step_Said /= 32
               or else Listed_Rows_Said mod 32 /= 0
             then
                Fail ("src/shaders/matrix_product.comp states TILE_R"
                      & Natural'Image (Rows_Said) & " and"
                      & Natural'Image (Listed_Rows_Said) & " under LISTED and"
                      & " KCH" & Natural'Image (Step_Said)
-                     & "; its staging loop is written by hand for thirty-two"
-                     & " of each and computes from the wrong place at any"
-                     & " other shape, without failing to compile or to run");
+                     & "; its staging loop is written by hand for a step of"
+                     & " thirty-two and rows a whole number of thirty-two, and"
+                     & " computes from the wrong place at any other shape,"
+                     & " without failing to compile or to run");
             end if;
          end;
 

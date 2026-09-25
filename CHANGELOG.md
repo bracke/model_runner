@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The tile is sixty-four rows tall.** A prompt's products read their
+  vectors straight from memory once for every tile of rows, so at thirty-two
+  rows qwen3-8b's gate read its batch of 434 vectors 384 times -- over a
+  gigabyte a product against twenty megabytes of weights -- and the tile
+  slowed as the rows grew. At sixty-four, a prompt of about 430 tokens on
+  the device: gemma-3-4b 557 -> 583 tokens a second, qwen3-8b 289 -> 321
+  (llama.cpp 303), Qwen3-Coder-30B 429 -> 440; a hundred and twenty-eight
+  was slower. A matrix a multiple of thirty-two rows and not of sixty-four
+  ends in half a tile, and the per-format test now has such a shape. Q6_K's
+  staging works a word at a time: the down projection 6611 -> 6529 us.
+
 - **A dense model drafts out of its own context unasked.** Where nothing
   else drafts, a dense model whose token reads at least 2 GiB proposes what
   followed the current phrase the last time it was said, and the check keeps

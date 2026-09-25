@@ -1949,15 +1949,18 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.347 s | **0.244 s** |
-| -- evaluating the prompt | 0.042 s | 0.035 s |
-| -- generating | 0.302 s | **0.208 s** |
-| -- processor time | 1.82 s | **0.12 s** |
-| 110-token prompt, one token | 0.327 s | **0.091 s** |
-| -- evaluating the prompt | 0.326 s | **0.090 s** |
-| -- processor time | 2.51 s | **0.01 s** |
+| 6-token prompt, 12 generated | 0.347 s | **0.234 s** |
+| -- evaluating the prompt | 0.042 s | 0.024 s |
+| -- generating | 0.302 s | **0.209 s** |
+| -- processor time | 1.82 s | **0.13 s** |
+| 110-token prompt, one token | 0.327 s | **0.104 s** |
+| -- evaluating the prompt | 0.326 s | **0.085 s** |
+| -- processor time | 2.51 s | **0.02 s** |
 
-The device's first four cells were taken again on 2026-09-25, when Q8_0 was
+The device's cells were taken again on 2026-09-25 when the tile went to
+sixty-four rows: the 110-token prompt's evaluation 0.090 -> 0.085 s, the
+wall 0.091 -> 0.104 with a generated token's head in it, the rest within the
+spread. Before that, its first four cells were taken again when Q8_0 was
 given a subgroup kernel for a generated token -- 0.245 s generating became
 0.208 -- and its prompt rows read what they read (0.096 s for the 110
 tokens). The rest were taken in one sitting on 2026-09-18, back to back, at the
