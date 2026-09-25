@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A gated feed-forward's projection up makes the combination.** Over a
+  batch, the two arms of a gated feed-forward were written as halves and a
+  combining step read them back to apply the unit and multiply. The
+  projection up now reads the gate arm at its own store, applies the unit
+  and writes the combination into its region, and the projection down reads
+  its operand there: one dispatch fewer a layer. A 434-token prompt,
+  qwen3-8b 333 -> 342 tokens a second, qwen3.5-4b 485 -> 490, gemma-3-4b
+  588 -> 591, the same outputs.
+
 - **Gemma's heads of 256 attend through the matrix instruction.** The
   matrix attention kernel had compilations for heads of sixty-four and a
   hundred and twenty-eight, and a wider head attended through the scalar

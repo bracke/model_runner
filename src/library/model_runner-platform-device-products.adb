@@ -5726,7 +5726,18 @@ package body Model_Runner.Platform.Device.Products is
       --  Whether a join was folded into this product, so that what it
       --  stores is its answer plus the residual bound beside it.
       Joins   : Boolean;
-      Good    : out Boolean)
+      Good    : out Boolean;
+
+      --  Where the operand begins in the half-precision buffer, in halves:
+      --  the front but for a projection down whose gated middle the
+      --  projection up wrote into its own region.
+      From    : Interfaces.Unsigned_64 := 0;
+
+      --  And for that projection up, where the gate arm is, in halves and
+      --  plus one, and which unit goes on it: its answer is then the gated
+      --  middle rather than the up arm. Zero for every other product.
+      Gate_At : Interfaces.Unsigned_64 := 0;
+      Unit    : Natural := 0)
    is
       Bind_Pipeline : constant Bind_Pipeline_Call :=
         To_Bind_Pipeline (Point ("vkCmdBindPipeline"));
@@ -5791,7 +5802,11 @@ package body Model_Runner.Platform.Device.Products is
             First   => C.unsigned (Into),
             Packing => C.unsigned (Weight_Packing'Pos (Packing)),
             Base    => C.unsigned (Base),
-            Joins   => (if Joins then 1 else 0), Table => 0, others => <>);
+            Joins   => (if Joins then 1 else 0),
+            Table   => C.unsigned (Unit),
+            Stride  => C.unsigned (From),
+            Apart   => C.unsigned (Gate_At),
+            others  => <>);
       begin
          Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                Product_Bytes, Shape'Address);
@@ -11106,6 +11121,16 @@ package body Model_Runner.Platform.Device.Products is
          --  alive at once: the normalization both arms read, and the arms.
          Region    : array (1 .. Sequence_Limit) of Natural :=
            [others => 0];
+
+         --  The combining steps of gated feed-forwards whose projection up
+         --  makes the combination itself, in its own store: such a step is
+         --  not dispatched, and its answer sits where the projection up
+         --  wrote. Gated names, for that projection up, the gate arm's
+         --  step.
+         Merged    : array (1 .. Sequence_Limit) of Boolean :=
+           [others => False];
+         Gated     : array (1 .. Sequence_Limit) of Natural :=
+           [others => 0];
       begin
          if Reset_Buffer = null or else Start = null or else Stop = null
            or else Bind_Pipeline = null or else Bind_Sets = null
@@ -11328,6 +11353,34 @@ package body Model_Runner.Platform.Device.Products is
                   end;
                end if;
             end loop;
+
+            --  A combination of two halved arms by the plain units, the
+            --  gate two steps back and the up arm one, is made by the
+            --  projection up: it reads the gate arm at its store and
+            --  stores the combination where its own arm would have gone.
+            --  The projection down then reads its operand there.
+            for Which in 3 .. Steps.Held loop
+               declare
+                  That : Step renames Steps.Items (Which);
+               begin
+                  if That.Blends
+                    and then Halved (Which)
+                    and then That.Unit in 0 | 1
+                    and then That.Reads in 0 | Which - 2
+                    and then That.Reads_Two in 0 | Which - 1
+                    and then Halved (Which - 2)
+                    and then Halved (Which - 1)
+                    and then Tiled (Which - 1)
+                    and then not Steps.Items (Which - 1).Joins
+                    and then Region (Which - 2) /= 0
+                    and then Region (Which - 1) /= 0
+                  then
+                     Merged (Which) := True;
+                     Gated (Which - 1) := Which - 2;
+                     Region (Which) := Region (Which - 1);
+                  end if;
+               end;
+            end loop;
          end;
 
          for Index in 1 .. Steps.Held loop
@@ -11353,6 +11406,14 @@ package body Model_Runner.Platform.Device.Products is
                --  store. Nothing is bound, nothing is pushed, and the
                --  half-precision copy is left as the product left it.
                if This.Folded then
+                  goto Next_Dispatch;
+               end if;
+
+               --  Nor a merged combination, whose answer the projection up
+               --  stored; the copy now holds it, in that product's region.
+               if Merged (Index) then
+                  Half_From := Index;
+                  Half_Wide := This.Rows;
                   goto Next_Dispatch;
                end if;
 
@@ -11444,9 +11505,11 @@ package body Model_Runner.Platform.Device.Products is
                                     or else Was_Wide /= This.Columns));
 
                   Wanted : constant Natural :=
-                    (if Writes_Copy then Index - 1
-                     elsif This.Attends then Natural'Max (Source, Cached)
-                     else Source);
+                    Natural'Max
+                      (Gated (Index),
+                       (if Writes_Copy then Index - 1
+                        elsif This.Attends then Natural'Max (Source, Cached)
+                        else Source));
                begin
                   Reading := Source;
                   if Wanted > Fenced then
@@ -12441,7 +12504,22 @@ package body Model_Runner.Platform.Device.Products is
                                 * (Item.Half_Region / 2) + 1
                            else 0),
                         Joins => This.Joins,
-                        Good => Done);
+                        Good => Done,
+                        From =>
+                          (if Again and then Reading in Merged'Range
+                                and then Merged (Reading)
+                           then Interfaces.Unsigned_64 (Region (Reading))
+                                * (Item.Half_Region / 2)
+                           else 0),
+                        Gate_At =>
+                          (if Gated (Index) /= 0
+                           then Interfaces.Unsigned_64
+                                  (Region (Gated (Index)))
+                                * (Item.Half_Region / 2) + 1
+                           else 0),
+                        Unit =>
+                          (if Gated (Index) /= 0
+                           then Steps.Items (Index + 1).Unit else 0));
 
                      if not Done then
                         Release_All;

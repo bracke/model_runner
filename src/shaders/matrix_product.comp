@@ -182,6 +182,28 @@ layout(push_constant) uniform Shape {
     uint routed;
 } shape;
 
+#ifndef LISTED
+//  Three of the listed words, read otherwise by a plain tile. Stride is
+//  where its operand begins in the half-precision buffer, in halves: the
+//  front, as it always was, but for the projection down of a gated
+//  feed-forward whose middle the projection up wrote into its own region.
+//  Apart is where the gate arm is, in halves and plus one, for that
+//  projection up: its answer is the gated middle, the unit table names
+//  applied to the gate and multiplied by what this product made, and the
+//  step that used to combine the two arms does not run. Zero for every
+//  other product.
+float logistic_weighted(float v) {
+    return v / (1.0 + exp(-clamp(v, -60.0, 60.0)));
+}
+
+float gaussian_tanh(float v) {
+    const float root = 0.7978845608028654;
+    const float bend = 0.044715;
+    float inner = root * (v + bend * v * v * v);
+    return 0.5 * v * (1.0 + tanh(clamp(inner, -60.0, 60.0)));
+}
+#endif
+
 //  Rows and vectors of the answer one workgroup computes, and how much of
 //  the columns it takes at a time. The step is one Q8_0 block deep, which
 //  is what makes the decode below a whole number of blocks; sixty-four and
@@ -2229,6 +2251,9 @@ void main() {
             //  is where the batch already keeps it.
             for (uint j = 0u; j < AV; ++j) {
                 coopMatLoad(b[j], x,
+#ifndef LISTED
+                            shape.stride +
+#endif
                             (vec0 + j * 16u) * shape.columns + kb + step,
                             shape.columns,
                             gl_CooperativeMatrixLayoutColumnMajor);
@@ -2256,6 +2281,32 @@ void main() {
                 || row0 + i * 16u >= shape.rows) {
                 continue;
             }
+
+#ifndef LISTED
+            if (shape.apart > 0u) {
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
+                        gl_MatrixUseAccumulator> gate;
+
+                coopMatLoad(gate, x, shape.apart - 1u + where, shape.rows,
+                            gl_CooperativeMatrixLayoutColumnMajor);
+
+                coopmat<float, gl_ScopeSubgroup, 16, 16,
+                        gl_MatrixUseAccumulator> both = acc[i][j];
+
+                for (int e = 0; e < both.length(); ++e) {
+                    float g = float (gate[e]);
+                    both[e] *= shape.table == 1u ? gaussian_tanh(g)
+                                                 : logistic_weighted(g);
+                }
+
+                coopMatStore
+                  (coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
+                           gl_MatrixUseAccumulator> (both),
+                   made, shape.first - 1u + where, shape.rows,
+                   gl_CooperativeMatrixLayoutColumnMajor);
+                continue;
+            }
+#endif
 
             if (shape.first > 0u) {
                 coopMatStore
