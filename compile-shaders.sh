@@ -83,6 +83,9 @@ compile matrix_listed_extra          matrix_product.comp   vulkan1.3 MORE_FORMAT
 compile matrix_low                   matrix_product.comp   vulkan1.3 LOW_BITS
 compile matrix_narrow_low            matrix_product.comp   vulkan1.3 LOW_BITS NARROW
 compile matrix_listed_low            matrix_product.comp   vulkan1.3 LOW_BITS LISTED
+compile matrix_wider                 matrix_product.comp   vulkan1.3 WIDER
+compile matrix_wider_extra           matrix_product.comp   vulkan1.3 MORE_FORMATS WIDER
+compile matrix_wider_low             matrix_product.comp   vulkan1.3 LOW_BITS WIDER
 compile attention_matrix             attention_matrix.comp vulkan1.3
 compile attention_matrix_wide        attention_matrix.comp vulkan1.3 WIDE_HEAD
 compile norm                         norm.comp             vulkan1.0

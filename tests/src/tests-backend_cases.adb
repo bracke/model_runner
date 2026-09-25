@@ -1339,11 +1339,16 @@ package body Tests.Backend_Cases is
       --  sixty-four rows tall, so a matrix a multiple of thirty-two and not
       --  of sixty-four ends in half a tile, whose rows past the end are
       --  decoded from the last row and never stored.
-      Shapes : constant array (1 .. 4) of Shape :=
+      --
+      --  And a fifth, a batch past a hundred and twenty-eight: the wider
+      --  tile of two hundred and fifty-six vectors, its eight subgroups two
+      --  to a chunk of columns.
+      Shapes : constant array (1 .. 5) of Shape :=
         [(Tall => 12, Batch => 10, Tiled => False),
          (Tall => 64, Batch => 40, Tiled => True),
          (Tall => 13, Batch => 1, Tiled => False),
-         (Tall => 96, Batch => 40, Tiled => True)];
+         (Tall => 96, Batch => 40, Tiled => True),
+         (Tall => 64, Batch => 140, Tiled => True)];
 
       --  How far the device and the processor may differ.
       --

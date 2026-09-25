@@ -7,6 +7,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A wider tile for a batch past a hundred and twenty-eight.** Every
+  weight is decoded once for each tile of vectors, and the decode is where
+  a tile's time goes; a batch of more than a hundred and twenty-eight now
+  takes a tile of two hundred and fifty-six vectors, eight subgroups each
+  decoding a chunk of a step of two hundred and fifty-six columns. At about
+  430 tokens on the device, against the tile of a hundred and twenty-eight
+  in the same sitting: qwen3-8b 316 -> 336-341 tokens a second, qwen3.5-4b
+  459 -> 478-485, gemma-3-4b level; a prompt of 1300 in batches of 512
+  level. A batch of a hundred keeps the narrower tile, which the wider one
+  would pad to twice its length (gemma 305 against 523). Its step was also
+  tried at a hundred and twenty-eight, eight subgroups as four chunks of two
+  row halves: slower than the narrower tile. A matrix whose width is not a
+  whole number of 256 takes the row product in such a batch. The integer
+  dot product llama.cpp's matrix kernel can use is not in either compiler
+  here, and llama.cpp's own build on this machine reports it off.
+
 - **The tile's Q4_K and Q8_0 staging, a word at a time.** Four values a
   word masked, unpacked and scaled together instead of one at a time, the
   same answers: gemma-3-4b's prompt 583 -> 595 tokens a second, qwen3-8b

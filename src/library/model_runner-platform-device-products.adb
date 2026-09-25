@@ -200,8 +200,22 @@ package body Model_Runner.Platform.Device.Products is
    function Narrowed (Count : Natural) return Boolean
    is (Count <= Narrow_Limit);
 
+   --  Whether the device made all three wider tiles, so that a long batch
+   --  can be rounded to them. One engine is open at a time, and the room a
+   --  batch is rounded to is asked in places that know only its length.
+   Wider_Ready : Boolean := False;
+
+   --  Past this many vectors a batch takes the wider tile.
+   Wider_Least : constant := 128;
+   Wider_Vectors : constant := 256;
+
+   function Widened (Count : Natural) return Boolean
+   is (Wider_Ready and then Count > Wider_Least);
+
    function Tile_Width (Count : Natural) return Positive
-   is (if Narrowed (Count) then Narrow_Vectors else Tile_Vectors);
+   is (if Narrowed (Count) then Narrow_Vectors
+       elsif Widened (Count) then Wider_Vectors
+       else Tile_Vectors);
 
    --  The batch, rounded up to a whole tile. The shader has no test for a
    --  tile that is not full, on purpose and at a fifth of its speed if it
@@ -212,7 +226,9 @@ package body Model_Runner.Platform.Device.Products is
    Wide_Step : constant := 128;
 
    function Tile_Step (Count : Natural) return Positive
-   is (if Narrowed (Count) then 32 else Wide_Step);
+   is (if Narrowed (Count) then 32
+       elsif Widened (Count) then 2 * Wide_Step
+       else Wide_Step);
 
    function Whole_Tiles (Count : Natural) return Natural
    is ((Count + Tile_Width (Count) - 1) / Tile_Width (Count)
@@ -914,10 +930,14 @@ package body Model_Runner.Platform.Device.Products is
       Count   : Natural) return Address
    is (if Packing in Low_Packing
        then (if Narrowed (Count) then Item.Narrow_Low_Line
+             elsif Widened (Count) then Item.Wider_Low_Line
              else Item.Low_Tile_Line)
        elsif Narrowed (Count)
        then (if On_Extra (Packing)
              then Item.Narrow_More_Line else Item.Narrow_Line)
+       elsif Widened (Count)
+       then (if On_Extra (Packing)
+             then Item.Wider_More_Line else Item.Wider_Line)
        else (if On_Extra (Packing)
              then Item.Extra_Line else Item.Matrix_Line));
 
@@ -2930,6 +2950,33 @@ package body Model_Runner.Platform.Device.Products is
                      end if;
                   end;
 
+                  --  And the wider tile's three, all or none in use.
+                  declare
+                     procedure Module
+                       (Words : Model_Runner.Shaders.Word_Array;
+                        Into  : out Address)
+                     is
+                        Held : aliased constant Model_Runner.Shaders.Word_Array
+                          := Words;
+                     begin
+                        Into := Null_Handle;
+                        Request.Size := Interfaces.C.size_t (Held'Length * 4);
+                        Request.Code := Held'Address;
+
+                        if Create (Item.Logical, Request'Address, Null_Handle,
+                                   Made'Access) = 0
+                        then
+                           Into := Made;
+                        end if;
+                     end Module;
+                  begin
+                     Module (Model_Runner.Shaders.Matrix_Wider, Item.Wider);
+                     Module (Model_Runner.Shaders.Matrix_Wider_Extra,
+                             Item.Wider_More);
+                     Module (Model_Runner.Shaders.Low.Matrix_Wider_Low,
+                             Item.Wider_Low);
+                  end;
+
                   declare
                      Words : aliased constant Model_Runner.Shaders.Word_Array :=
                        Model_Runner.Shaders.Low.Matrix_Narrow_Low;
@@ -3653,6 +3700,31 @@ package body Model_Runner.Platform.Device.Products is
                      end if;
                   end if;
 
+                  --  The wider tile's three, and whether all three came.
+                  declare
+                     procedure Line (Module : Address; Into : out Address) is
+                     begin
+                        Into := Null_Handle;
+                        if Module /= Null_Handle then
+                           Request.Stage.Module := Module;
+                           if Create (Item.Logical, Null_Handle, 1,
+                                      Request'Address, Null_Handle,
+                                      Made'Access) = 0
+                           then
+                              Into := Made;
+                           end if;
+                        end if;
+                     end Line;
+                  begin
+                     Line (Item.Wider, Item.Wider_Line);
+                     Line (Item.Wider_More, Item.Wider_More_Line);
+                     Line (Item.Wider_Low, Item.Wider_Low_Line);
+                     Wider_Ready :=
+                       Item.Wider_Line /= Null_Handle
+                       and then Item.Wider_More_Line /= Null_Handle
+                       and then Item.Wider_Low_Line /= Null_Handle;
+                  end;
+
                   if Item.Narrow_Low /= Null_Handle then
                      Request.Stage.Module := Item.Narrow_Low;
 
@@ -4164,6 +4236,10 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Listed_Line, "vkDestroyPipeline");
       Give_Back (Item.Listed_More_Line, "vkDestroyPipeline");
       Give_Back (Item.Low_Tile_Line, "vkDestroyPipeline");
+      Give_Back (Item.Wider_Line, "vkDestroyPipeline");
+      Give_Back (Item.Wider_More_Line, "vkDestroyPipeline");
+      Give_Back (Item.Wider_Low_Line, "vkDestroyPipeline");
+      Wider_Ready := False;
       Give_Back (Item.Narrow_Low_Line, "vkDestroyPipeline");
       Give_Back (Item.Listed_Low_Line, "vkDestroyPipeline");
       Give_Back (Item.Halve_Line, "vkDestroyPipeline");
@@ -4191,6 +4267,9 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Listed_Tile, "vkDestroyShaderModule");
       Give_Back (Item.Listed_Tile_More, "vkDestroyShaderModule");
       Give_Back (Item.Low_Tile, "vkDestroyShaderModule");
+      Give_Back (Item.Wider, "vkDestroyShaderModule");
+      Give_Back (Item.Wider_More, "vkDestroyShaderModule");
+      Give_Back (Item.Wider_Low, "vkDestroyShaderModule");
       Give_Back (Item.Narrow_Low, "vkDestroyShaderModule");
       Give_Back (Item.Listed_Tile_Low, "vkDestroyShaderModule");
       Give_Back (Item.Halver, "vkDestroyShaderModule");

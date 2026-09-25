@@ -100,10 +100,28 @@ const uint SUBS = 1u;
 #elif defined(LISTED)
 layout(local_size_x = 128) in;
 const uint SUBS = 2u;
+#elif defined(WIDER)
+//  The wide tile over a long batch: eight subgroups, two hundred and
+//  fifty-six vectors. Every weight is decoded once for each tile of
+//  vectors, and the decode is where a tile's time goes, so a batch past
+//  a hundred and twenty-eight decodes half as often -- a qwen3-8b prompt
+//  of 434 tokens 325 -> 346 tokens a second. Below that it would pad a
+//  hundred to two hundred and fifty-six, and a batch that short takes the
+//  tile below.
+layout(local_size_x = 512) in;
+const uint SUBS = 8u;
 #else
 layout(local_size_x = 256) in;
 const uint SUBS = 4u;
 #endif
+
+//  Column chunks a step decodes, one a lane group: the wider tile's eight
+//  make its step two hundred and fifty-six columns. Its eight groups were
+//  tried as four chunks of two row halves each, to keep the step at a
+//  hundred and twenty-eight: twice the steps and their barriers, and
+//  slower than the tile below it (gemma-3-4b 536 against 587).
+const uint CHUNKS = SUBS;
+const uint ROW_GROUPS = 1u;
 
 layout(std430, binding = 0) readonly  buffer Weights { uint      w[]; };
 layout(std430, binding = 2) writeonly buffer Result  { float     y[]; };
@@ -205,8 +223,10 @@ const uint TILE_R = 64u;
 const uint TILE_V = 32u;
 #elif defined(LISTED)
 const uint TILE_V = 32u;
-#else
+#elif !defined(WIDER)
 const uint TILE_V = 128u;
+#else
+const uint TILE_V = 256u;
 #endif
 
 const uint KCH    = 32u;
@@ -240,7 +260,7 @@ const uint WT_STRIDE = KCH + WT_PAD;
 //  thirty-two columns, and then all four read the whole of what the four
 //  wrote: the decode keeps its shape -- sixteen values to a lane, four
 //  bytes to a word -- and stops being a quarter of the invocations' work.
-shared float16_t wt[SUBS * TILE_R * WT_STRIDE];
+shared float16_t wt[CHUNKS * TILE_R * WT_STRIDE];
 
 //  The two formats this decodes, numbered as Weight_Packing'Pos numbers
 //  them, which is the same numbering row_product.comp is given.
@@ -1618,18 +1638,19 @@ void main() {
                  : (shape.columns / 256u) * block);
 #endif
 
-    for (uint kb = 0u; kb < shape.columns; kb += KCH * SUBS) {
+    for (uint kb = 0u; kb < shape.columns; kb += KCH * CHUNKS) {
         barrier();
 
-        uint k0 = kb + (gl_LocalInvocationID.x >> 6u) * KCH;
+        uint k0 = kb + ((gl_LocalInvocationID.x >> 6u) % CHUNKS) * KCH;
 
         //  Sixty-four invocations decode thirty-two rows of the step,
         //  half a row each: sixteen values apiece, taken four bytes to a
         //  word -- and the next thirty-two rows after, where the tile is
         //  taller.
-        for (uint rr = 0u; rr < TILE_R; rr += 32u)
+        for (uint rr = ((gl_LocalInvocationID.x >> 6u) / CHUNKS) * 32u;
+             rr < TILE_R; rr += 32u * ROW_GROUPS)
         {
-            uint chunk   = gl_LocalInvocationID.x >> 6u;
+            uint chunk   = (gl_LocalInvocationID.x >> 6u) % CHUNKS;
             uint half_of = gl_LocalInvocationID.x & 1u;
             uint r       = rr + ((gl_LocalInvocationID.x & 63u) >> 1u);
             uint into    = chunk * TILE_R * WT_STRIDE
@@ -2186,7 +2207,7 @@ void main() {
 
         barrier();
 
-        for (uint step = 0u; step < KCH * SUBS; step += 16u) {
+        for (uint step = 0u; step < KCH * CHUNKS; step += 16u) {
             uint chunk = step / KCH;
             uint kk    = step - chunk * KCH;
 

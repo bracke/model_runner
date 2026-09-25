@@ -6417,6 +6417,25 @@ package body Checks is
                   & "with every shader named");
          end if;
 
+         --  And the three wider tiles, the same source with WIDER beside
+         --  nothing, MORE_FORMATS and LOW_BITS.
+         for Which in 1 .. 3 loop
+            Result.Performed := Result.Performed + 1;
+
+            if Found
+              and then Digest
+                       /= (case Which is
+                             when 1 => Model_Runner.Shaders.Matrix_Wider_Digest,
+                             when 2 =>
+                               Model_Runner.Shaders.Matrix_Wider_Extra_Digest,
+                             when others =>
+                               Model_Runner.Shaders.Low.Matrix_Wider_Low_Digest)
+            then
+               Fail ("a wider compilation of src/shaders/matrix_product.comp"
+                     & " is older than the source; run ./compile-shaders.sh");
+            end if;
+         end loop;
+
          --  And the two listed tiles, the same source again with LISTED
          --  and with LISTED beside MORE_FORMATS.
          Result.Performed := Result.Performed + 1;

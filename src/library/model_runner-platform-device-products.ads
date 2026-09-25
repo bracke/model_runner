@@ -2624,6 +2624,15 @@ private
       Exact_Bundled_Attend : System.Address := System.Null_Address;
 
       Narrow     : System.Address := System.Null_Address;
+
+      --  And the wider tile's three, for a batch past a hundred and
+      --  twenty-eight vectors: two hundred and fifty-six a tile.
+      Wider       : System.Address := System.Null_Address;
+      Wider_More  : System.Address := System.Null_Address;
+      Wider_Low   : System.Address := System.Null_Address;
+      Wider_Line      : System.Address := System.Null_Address;
+      Wider_More_Line : System.Address := System.Null_Address;
+      Wider_Low_Line  : System.Address := System.Null_Address;
       Narrow_More : System.Address := System.Null_Address;
       Listed_Tile : System.Address := System.Null_Address;
       Listed_Tile_More : System.Address := System.Null_Address;
