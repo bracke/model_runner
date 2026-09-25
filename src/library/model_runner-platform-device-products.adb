@@ -48,7 +48,6 @@ package body Model_Runner.Platform.Device.Products is
    Structure_Submit            : constant := 4;
    Structure_Memory_Allocate   : constant := 5;
    Structure_Fence_Create      : constant := 8;
-   Structure_Semaphore_Create  : constant := 9;
    Structure_Buffer_Create     : constant := 12;
    Structure_Shader_Create     : constant := 16;
    Structure_Stage_Create      : constant := 18;
@@ -1085,9 +1084,14 @@ package body Model_Runner.Platform.Device.Products is
      with Convention => C;
 
    --  A stage flag and a chained structure that pin a compute shader's
-   --  subgroup to a width: full subgroups, and the width itself.
+   --  subgroup to a width: full subgroups, and the width itself. The
+   --  structure was typed as the subgroup-size features, 1000225002, which
+   --  a driver skips as a structure it does not expect there: the width
+   --  was never asked for, and the validation layer said so at every
+   --  pipeline. RADV's own width for compute is sixty-four, which is the
+   --  width asked, so nothing measured moved.
    Require_Full_Subgroups  : constant := 16#0000_0002#;
-   Structure_Required_Size : constant := 1000225002;
+   Structure_Required_Size : constant := 1000225001;
 
    type Required_Size_Info is record
       Kind     : C.unsigned := Structure_Required_Size;
@@ -3832,32 +3836,6 @@ package body Model_Runner.Platform.Device.Products is
          Item.Fence_Two := Made;
       end;
 
-      --  And what one submission signals for the next to wait on. Two
-      --  submissions to one queue are not ordered against each other
-      --  unless they are made to be, and the second reads what the first
-      --  left at the front of the result buffer.
-      declare
-         Create : constant Create_Call :=
-           To_Create (Point ("vkCreateSemaphore"));
-
-         Request : aliased Fence_Create_Info :=
-           (Kind => Structure_Semaphore_Create, others => <>);
-      begin
-         if Create = null then
-            Close (Item);
-            return;
-         end if;
-
-         if Create (Item.Logical, Request'Address, Null_Handle, Made'Access)
-            /= 0
-         then
-            Close (Item);
-            return;
-         end if;
-
-         Item.Signal := Made;
-      end;
-
       Item.Slice := Slice;
       Item.Patience := Patience;
       Ready := True;
@@ -3927,9 +3905,9 @@ package body Model_Runner.Platform.Device.Products is
    begin
       Instance_Of := Item.Instance;
 
-      --  Nothing may be in flight: what follows destroys the fences and the
-      --  semaphore a submission is still holding, and gives back the memory
-      --  it is still reading.
+      --  Nothing may be in flight: what follows destroys the fences a
+      --  submission is still holding, and gives back the memory it is still
+      --  reading.
       declare
          Settled : Boolean;
       begin
@@ -4073,17 +4051,12 @@ package body Model_Runner.Platform.Device.Products is
       Item.Buffer := Null_Handle;
       Item.Buffer_Two := Null_Handle;
 
-      --  Nothing is in flight and nothing has signalled: an engine opened
-      --  after this one gets a fresh semaphore, and a submission that
-      --  waited on it because this engine had armed the old one would wait
-      --  for something that will never be signalled.
+      --  Nothing is in flight.
       Item.Pending := False;
       Item.Pending_Two := False;
-      Item.Armed := False;
       Item.Sets_Two := [others => Null_Handle];
       Give_Back (Item.Commands, "vkDestroyCommandPool");
       Item.Descriptor := Null_Handle;
-      Give_Back (Item.Signal, "vkDestroySemaphore");
       Give_Back (Item.Fence_Two, "vkDestroyFence");
       Give_Back (Item.Queries, "vkDestroyQueryPool");
       Give_Back (Item.Queries_Two, "vkDestroyQueryPool");
@@ -5176,6 +5149,52 @@ package body Model_Runner.Platform.Device.Products is
    --  against each other unless they are made to be -- and the sequence
    --  after this one reads what this one leaves at the front of the result
    --  buffer.
+   --  Begin recording into a command buffer, ordered after everything
+   --  submitted to the queue before it.
+   --
+   --  A submission used to wait on a semaphore the one before it signalled.
+   --  That ordered them, and it also made the kernel's scheduler hold each
+   --  submission until the one before had finished -- a round trip through
+   --  the scheduler with the device idle, at every layer of every token:
+   --  thirty-seven of them a qwen3-8b token, some two milliseconds of its
+   --  seventy-three. A barrier at the head of the buffer orders it the same
+   --  way from inside the queue -- its first scope is every command
+   --  submitted earlier -- so the scheduler has nothing to wait for and the
+   --  next submission is on the ring before the last one ends.
+   function Opened
+     (Buffer : Address;
+      Start  : Begin_Call;
+      Info   : Address) return C.int
+   is
+      use type C.unsigned;
+
+      Answer : constant C.int := Start (Buffer, Info);
+   begin
+      if Answer = 0 then
+         declare
+            Barrier : constant Barrier_Call :=
+              To_Barrier (Point ("vkCmdPipelineBarrier"));
+            Wall : aliased Memory_Barrier :=
+              (Wrote => Access_Shader_Write + Access_Transfer_Write,
+               Reads => Access_Shader_Read + Access_Shader_Write
+                        + Access_Transfer_Read + Access_Transfer_Write,
+               others => <>);
+         begin
+            if Barrier = null then
+               return -1;
+            end if;
+
+            Barrier
+              (Buffer,
+               Pipeline_Stage_Compute + Pipeline_Stage_Transfer,
+               Pipeline_Stage_Compute + Pipeline_Stage_Transfer,
+               0, 1, Wall'Address, 0, Null_Handle, 0, Null_Handle);
+         end;
+      end if;
+
+      return Answer;
+   end Opened;
+
    procedure Hand_Over (Item : in out Engine; Ok : out Boolean) is
       Submit : constant Submit_Call := To_Submit (Point ("vkQueueSubmit"));
       Reset  : constant Reset_Fences_Call :=
@@ -5183,9 +5202,6 @@ package body Model_Runner.Platform.Device.Products is
 
       Buffer_Handle : aliased Address := Item.Buffer;
       Fence_Handle  : aliased Address := Item.Fence;
-      Wait_Handle   : aliased Address := Item.Signal;
-      Signal_Handle : aliased Address := Item.Signal;
-      Stage         : aliased C.unsigned := Pipeline_Stage_Compute;
       Request       : aliased Submit_Info;
    begin
       Ok := False;
@@ -5196,15 +5212,8 @@ package body Model_Runner.Platform.Device.Products is
 
       Request.Buffers := Buffer_Handle'Address;
 
-      --  Only where something has signalled it and nothing has waited yet.
-      if Item.Armed then
-         Request.Wait_Count := 1;
-         Request.Waits := Wait_Handle'Address;
-         Request.Wait_Stages := Stage'Address;
-      end if;
-
-      Request.Signal_Count := 1;
-      Request.Signals := Signal_Handle'Address;
+      --  No semaphore: the barrier Opened put at the head of the buffer
+      --  orders it after what came before, inside the queue.
 
       if Reset (Item.Logical, 1, Fence_Handle'Address) /= 0
         or else Submit (Item.Queue, 1, Request'Address, Item.Fence) /= 0
@@ -5213,7 +5222,6 @@ package body Model_Runner.Platform.Device.Products is
       end if;
 
       Item.Pending := True;
-      Item.Armed := True;
       Ok := True;
    end Hand_Over;
 
@@ -5911,7 +5919,7 @@ package body Model_Runner.Platform.Device.Products is
          end;
 
          if Reset_Buffer (Item.Buffer, 0) /= 0
-           or else Start (Item.Buffer, Began'Address) /= 0
+           or else Opened (Item.Buffer, Start, Began'Address) /= 0
          then
             Release_Borrowed;
             return;
@@ -6393,7 +6401,7 @@ package body Model_Runner.Platform.Device.Products is
            or else Fill = null or else Copy_Buffer = null
            or else Barrier = null
            or else Reset_Buffer (Item.Buffer, 0) /= 0
-           or else Start (Item.Buffer, Began'Address) /= 0
+           or else Opened (Item.Buffer, Start, Began'Address) /= 0
          then
             Ok := False;
             Item.Cache_Bytes := 0;
@@ -7061,7 +7069,7 @@ package body Model_Runner.Platform.Device.Products is
          end;
 
          if Reset_Buffer (Item.Buffer, 0) /= 0
-           or else Start (Item.Buffer, Began'Address) /= 0
+           or else Opened (Item.Buffer, Start, Began'Address) /= 0
          then
             return;
          end if;
@@ -7313,7 +7321,7 @@ package body Model_Runner.Platform.Device.Products is
            or else Stop = null or else Fill = null
            or else Copy_Buffer = null or else Barrier = null
            or else Reset_Buffer (Item.Buffer, 0) /= 0
-           or else Start (Item.Buffer, Began'Address) /= 0
+           or else Opened (Item.Buffer, Start, Began'Address) /= 0
          then
             Ok := False;
             Item.State_Bytes := 0;
@@ -7472,7 +7480,7 @@ package body Model_Runner.Platform.Device.Products is
 
       if not Good
         or else Reset_Buffer (Item.Buffer, 0) /= 0
-        or else Start (Item.Buffer, Began'Address) /= 0
+        or else Opened (Item.Buffer, Start, Began'Address) /= 0
       then
          return;
       end if;
@@ -7556,7 +7564,7 @@ package body Model_Runner.Platform.Device.Products is
 
       if not Good
         or else Reset_Buffer (Item.Buffer, 0) /= 0
-        or else Start (Item.Buffer, Began'Address) /= 0
+        or else Opened (Item.Buffer, Start, Began'Address) /= 0
       then
          return;
       end if;
@@ -7612,7 +7620,7 @@ package body Model_Runner.Platform.Device.Products is
 
       if not Good
         or else Reset_Buffer (Item.Buffer, 0) /= 0
-        or else Start (Item.Buffer, Began'Address) /= 0
+        or else Opened (Item.Buffer, Start, Began'Address) /= 0
       then
          return;
       end if;
@@ -8018,7 +8026,7 @@ package body Model_Runner.Platform.Device.Products is
          end;
 
          if Reset_Buffer (Item.Buffer, 0) /= 0
-           or else Start (Item.Buffer, Began'Address) /= 0
+           or else Opened (Item.Buffer, Start, Began'Address) /= 0
          then
             return;
          end if;
@@ -10910,7 +10918,7 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          if Reset_Buffer (Item.Buffer, 0) /= 0
-           or else Start (Item.Buffer, Began'Address) /= 0
+           or else Opened (Item.Buffer, Start, Began'Address) /= 0
          then
             Release_All;
             return;

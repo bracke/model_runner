@@ -231,6 +231,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Pipelines ask for their subgroup width, and submissions are ordered by
+  a barrier.** The structure that pins a kernel's subgroup to sixty-four
+  lanes was typed as the subgroup-size features structure, which a driver
+  skips: the width was never asked for, and the validation layer reported it
+  at every pipeline. RADV's own compute width is sixty-four, so nothing
+  measured moved. And a submission no longer waits on a semaphore the one
+  before it signalled -- which held each layer's submission in the kernel's
+  scheduler until the one before had finished -- but opens with a barrier
+  that orders it inside the queue. qwen3-8b and gemma-3-4b generate as they
+  did, within the spread (13.7 and 23.3 tokens a second against llama.cpp's
+  14.05 and 23.8); the generating kernels read at llama.cpp's rate (Q4_K
+  65.8 GB/s against 65.1), and what is left between the two is the small
+  steps of a layer.
+
 - **`tests speed` pages a device session, as `run` does.** It accepted
   `--paged` and dropped it, so every device figure it took was unpaged, and
   a context past one storage buffer ran its attention on the processor:

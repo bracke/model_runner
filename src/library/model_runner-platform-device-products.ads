@@ -2788,10 +2788,9 @@ private
       --
       --  Two command buffers because one may not be re-recorded while it
       --  executes; two sets of descriptors because they may not be written
-      --  while a submission reads them; two fences to tell the two apart;
-      --  and two semaphores because two submissions to one queue are not
-      --  ordered against each other unless they are made to be, and the
-      --  second reads what the first wrote.
+      --  while a submission reads them; and two fences to tell the two
+      --  apart. The second reads what the first wrote, which the barrier
+      --  at the head of its command buffer orders.
       Sets_Two   : Set_Array := [others => System.Null_Address];
       Commands   : System.Address := System.Null_Address;
       Buffer     : System.Address := System.Null_Address;
@@ -2811,18 +2810,9 @@ private
       Began     : Interfaces.Unsigned_64 := 0;
       Began_Two : Interfaces.Unsigned_64 := 0;
 
-      --  What a submission signals, and what the one after it waits on.
-      --
-      --  One of them rather than two, and every submission both waits on it
-      --  and signals it again. A binary semaphore may not be signalled
-      --  while it is already signalled, and a signal nothing waits for --
-      --  the last sequence of a batch, say -- would leave it that way; the
-      --  wait and the signal in the same submission keep it balanced
-      --  whatever the sequence before it did.
-      Signal     : System.Address := System.Null_Address;
-
-      --  Whether it has been signalled by something and not yet waited for.
-      Armed      : Boolean := False;
+      --  What says each slot's submission has finished. What orders one
+      --  submission after the one before is a barrier at the head of its
+      --  command buffer, not a semaphore between them.
       Fence      : System.Address := System.Null_Address;
       Fence_Two  : System.Address := System.Null_Address;
 
