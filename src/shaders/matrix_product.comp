@@ -1960,25 +1960,21 @@ void main() {
                 uint p0, p1, p2, p3;
                 four_words (q, p0, p1, p2, p3);
 
-                int q0 = int(p0), q1 = int(p1);
-                int q2 = int(p2), q3 = int(p3);
+                //  Four signed bytes a word, unpacked together and scaled in
+                //  half precision, as they were one at a time.
+                f16vec4 v0 = f16vec4(unpack8(int(p0))) * d;
+                f16vec4 v1 = f16vec4(unpack8(int(p1))) * d;
+                f16vec4 v2 = f16vec4(unpack8(int(p2))) * d;
+                f16vec4 v3 = f16vec4(unpack8(int(p3))) * d;
 
-                wt[into +  0u] = d * float16_t(bitfieldExtract(q0,  0, 8));
-                wt[into +  1u] = d * float16_t(bitfieldExtract(q0,  8, 8));
-                wt[into +  2u] = d * float16_t(bitfieldExtract(q0, 16, 8));
-                wt[into +  3u] = d * float16_t(bitfieldExtract(q0, 24, 8));
-                wt[into +  4u] = d * float16_t(bitfieldExtract(q1,  0, 8));
-                wt[into +  5u] = d * float16_t(bitfieldExtract(q1,  8, 8));
-                wt[into +  6u] = d * float16_t(bitfieldExtract(q1, 16, 8));
-                wt[into +  7u] = d * float16_t(bitfieldExtract(q1, 24, 8));
-                wt[into +  8u] = d * float16_t(bitfieldExtract(q2,  0, 8));
-                wt[into +  9u] = d * float16_t(bitfieldExtract(q2,  8, 8));
-                wt[into + 10u] = d * float16_t(bitfieldExtract(q2, 16, 8));
-                wt[into + 11u] = d * float16_t(bitfieldExtract(q2, 24, 8));
-                wt[into + 12u] = d * float16_t(bitfieldExtract(q3,  0, 8));
-                wt[into + 13u] = d * float16_t(bitfieldExtract(q3,  8, 8));
-                wt[into + 14u] = d * float16_t(bitfieldExtract(q3, 16, 8));
-                wt[into + 15u] = d * float16_t(bitfieldExtract(q3, 24, 8));
+                wt[into +  0u] = v0.x; wt[into +  1u] = v0.y;
+                wt[into +  2u] = v0.z; wt[into +  3u] = v0.w;
+                wt[into +  4u] = v1.x; wt[into +  5u] = v1.y;
+                wt[into +  6u] = v1.z; wt[into +  7u] = v1.w;
+                wt[into +  8u] = v2.x; wt[into +  9u] = v2.y;
+                wt[into + 10u] = v2.z; wt[into + 11u] = v2.w;
+                wt[into + 12u] = v3.x; wt[into + 13u] = v3.y;
+                wt[into + 14u] = v3.z; wt[into + 15u] = v3.w;
             } else if (shape.format == FMT_Q4_K) {
                 //  Q4_K. A super-block is two hundred and fifty-six
                 //  elements in a hundred and forty-four bytes, and a step
@@ -2019,54 +2015,27 @@ void main() {
                 four_words (q, p0, p1, p2, p3);
                 uint turn = (sub & 1u) * 4u;
 
-                wt[into +  0u] = float16_t(
-                    scale * float((p0 >> (turn)) & 15u)
-                    - offset);
-                wt[into +  1u] = float16_t(
-                    scale * float((p0 >> (turn +  8u)) & 15u)
-                    - offset);
-                wt[into +  2u] = float16_t(
-                    scale * float((p0 >> (turn + 16u)) & 15u)
-                    - offset);
-                wt[into +  3u] = float16_t(
-                    scale * float((p0 >> (turn + 24u)) & 15u)
-                    - offset);
-                wt[into +  4u] = float16_t(
-                    scale * float((p1 >> (turn)) & 15u)
-                    - offset);
-                wt[into +  5u] = float16_t(
-                    scale * float((p1 >> (turn +  8u)) & 15u)
-                    - offset);
-                wt[into +  6u] = float16_t(
-                    scale * float((p1 >> (turn + 16u)) & 15u)
-                    - offset);
-                wt[into +  7u] = float16_t(
-                    scale * float((p1 >> (turn + 24u)) & 15u)
-                    - offset);
-                wt[into +  8u] = float16_t(
-                    scale * float((p2 >> (turn)) & 15u)
-                    - offset);
-                wt[into +  9u] = float16_t(
-                    scale * float((p2 >> (turn +  8u)) & 15u)
-                    - offset);
-                wt[into + 10u] = float16_t(
-                    scale * float((p2 >> (turn + 16u)) & 15u)
-                    - offset);
-                wt[into + 11u] = float16_t(
-                    scale * float((p2 >> (turn + 24u)) & 15u)
-                    - offset);
-                wt[into + 12u] = float16_t(
-                    scale * float((p3 >> (turn)) & 15u)
-                    - offset);
-                wt[into + 13u] = float16_t(
-                    scale * float((p3 >> (turn +  8u)) & 15u)
-                    - offset);
-                wt[into + 14u] = float16_t(
-                    scale * float((p3 >> (turn + 16u)) & 15u)
-                    - offset);
-                wt[into + 15u] = float16_t(
-                    scale * float((p3 >> (turn + 24u)) & 15u)
-                    - offset);
+                //  Four values a word: the nibble of every byte masked at
+                //  once, the four bytes unpacked together, and the scale
+                //  and the minimum applied as a vector in binary32 before
+                //  the one rounding to half.
+                f16vec4 v0 = f16vec4(scale * vec4(unpack8((p0 >> turn)
+                                                  & 0x0F0F0F0Fu)) - offset);
+                f16vec4 v1 = f16vec4(scale * vec4(unpack8((p1 >> turn)
+                                                  & 0x0F0F0F0Fu)) - offset);
+                f16vec4 v2 = f16vec4(scale * vec4(unpack8((p2 >> turn)
+                                                  & 0x0F0F0F0Fu)) - offset);
+                f16vec4 v3 = f16vec4(scale * vec4(unpack8((p3 >> turn)
+                                                  & 0x0F0F0F0Fu)) - offset);
+
+                wt[into +  0u] = v0.x; wt[into +  1u] = v0.y;
+                wt[into +  2u] = v0.z; wt[into +  3u] = v0.w;
+                wt[into +  4u] = v1.x; wt[into +  5u] = v1.y;
+                wt[into +  6u] = v1.z; wt[into +  7u] = v1.w;
+                wt[into +  8u] = v2.x; wt[into +  9u] = v2.y;
+                wt[into + 10u] = v2.z; wt[into + 11u] = v2.w;
+                wt[into + 12u] = v3.x; wt[into + 13u] = v3.y;
+                wt[into + 14u] = v3.z; wt[into + 15u] = v3.w;
             } else if (shape.format == FMT_Q5_K) {
                 //  Q5_K. The four-bit k-quant with a bit taken out of every
                 //  quant and kept apart: the same two scales and the same

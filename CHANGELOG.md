@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The tile's Q4_K and Q8_0 staging, a word at a time.** Four values a
+  word masked, unpacked and scaled together instead of one at a time, the
+  same answers: gemma-3-4b's prompt 583 -> 595 tokens a second, qwen3-8b
+  321 -> 325, qwen3.5-4b 462 -> 467. A tile a hundred and twenty-eight rows
+  by sixty-four vectors, the subgroups split two by two, was tried and read
+  471, 266 and 391: each weight is decoded once for every tile of vectors,
+  and the decode is where the tile's time is.
+
 - **The tile is sixty-four rows tall.** A prompt's products read their
   vectors straight from memory once for every tile of rows, so at thirty-two
   rows qwen3-8b's gate read its batch of 434 vectors 384 times -- over a
