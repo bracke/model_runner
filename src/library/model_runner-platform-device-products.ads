@@ -2736,6 +2736,13 @@ private
       Q8_Wave_Shader : System.Address := System.Null_Address;
       Q8_Wave_Line   : System.Address := System.Null_Address;
 
+      --  And the two IQ4 formats, the same way: each read through its table
+      --  of sixteen values, IQ4_XS with its sub-block scales beside.
+      NL_Wave_Shader : System.Address := System.Null_Address;
+      NL_Wave_Line   : System.Address := System.Null_Address;
+      XS_Wave_Shader : System.Address := System.Null_Address;
+      XS_Wave_Line   : System.Address := System.Null_Address;
+
       Wide_Line   : System.Address := System.Null_Address;
 
       --  The row product's LOW_BITS compilation and its pipelines, one for

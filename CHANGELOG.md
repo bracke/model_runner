@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **IQ4_NL and IQ4_XS generate on the subgroup kernel.** Both went through
+  the eight-lane row kernel; each now has its compilation of
+  `row_product_wave_low.comp`, the sixteen-value table in shared memory and
+  two lanes a block of thirty-two, each taking eight bytes and both nibbles
+  of every one, so a byte is read once. TinyLlama on the device against
+  llama.cpp on the same files: IQ4_XS 38.9 -> 95.5 tokens a second (93.3),
+  IQ4_NL 83.4 -> 90.0 (97.3), the same output.
+
 - **A draft reads a slice of the head.** The block past the stack scores
   only the first 65,536 tokens when it proposes; the check still reads the
   whole vocabulary, so the text is the same. Qwen3.5-4B: 22.0 -> 25.3 tokens

@@ -1524,6 +1524,90 @@ float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
 }
 #endif
 
+#if defined(IQ4_NL) || defined(IQ4_XS)
+//  The sixteen values an IQ4 nibble names, ggml's kvalues_iq4nl.
+const float KV4[16] = float[16](
+    -127.0, -104.0, -83.0, -65.0, -49.0, -35.0, -22.0, -10.0,
+       1.0,   13.0,  25.0,  38.0,  53.0,  69.0,  89.0, 113.0);
+
+//  The four bytes of a word, each through the table: their low nibbles
+//  where shift is nought, their high ones where it is four.
+//  Read out of shared memory, where the workgroup puts it first: a constant
+//  array indexed by a nibble the compiler cannot see is a lookup it does the
+//  slow way.
+shared float kv4[16];
+
+vec4 nl4(uint word, uint shift) {
+    return vec4(kv4[(word >> shift) & 15u],
+                kv4[(word >> (shift + 8u)) & 15u],
+                kv4[(word >> (shift + 16u)) & 15u],
+                kv4[(word >> (shift + 24u)) & 15u]);
+}
+#endif
+
+#ifdef IQ4_NL
+const uint BLOCK_ELEMS = 256u;
+const uint BLOCK_BYTES = 144u;
+
+//  IQ4_NL reads its activations itself: a group of 256 is eight blocks of a
+//  half-precision scale and sixteen bytes of nibbles, element j of a block
+//  byte j's low nibble and element j + 16 its high one. Two lanes a block,
+//  each taking eight of its bytes and both nibbles of every one -- so every
+//  byte is read once, where a lane taking sixteen elements in a row read
+//  all sixteen bytes and threw half of each away, and its partner read
+//  them again. A lane's sixteen activations are two runs of eight, sixteen
+//  apart. A group a row ends inside has its blocks past the end left out.
+#define OWN_ACTIVATIONS
+
+float lane_dot_own(uint at, uint lane, uint xg, out float total) {
+    uint block = lane / 2u;
+    uint half_of = lane % 2u;
+    total = 0.0;
+
+    uint b = at + block * 18u;
+    uint q0 = quad_at(b + 2u + half_of * 8u);
+    uint q1 = quad_at(b + 6u + half_of * 8u);
+    uint xb = xg + block * 8u + half_of * 2u;
+
+    return half_at(b)
+           * (dot(x4[xb],      nl4(q0, 0u)) + dot(x4[xb + 1u], nl4(q1, 0u))
+            + dot(x4[xb + 4u], nl4(q0, 4u)) + dot(x4[xb + 5u], nl4(q1, 4u)));
+}
+#endif
+
+#ifdef IQ4_XS
+const uint BLOCK_ELEMS = 256u;
+const uint BLOCK_BYTES = 136u;
+
+//  A super-block of eight sub-blocks of thirty-two: a half-precision scale,
+//  the six-bit sub-block scales as a sixteen-bit word of high pairs and
+//  four bytes of low nibbles, and a hundred and twenty-eight bytes of
+//  nibbles laid out as IQ4_NL's, sixteen bytes a sub-block. Two lanes a
+//  sub-block, each taking eight of its bytes and both nibbles of each, as
+//  IQ4_NL's lanes do -- so its activations are its own, two runs of eight.
+#define OWN_ACTIVATIONS
+
+float lane_dot_own(uint at, uint lane, uint xg, out float total) {
+    uint ib = lane / 2u;
+    uint half_of = lane % 2u;
+    total = 0.0;
+
+    uint low = (byte_at(at + 4u + (ib >> 1u)) >> (4u * (ib & 1u))) & 15u;
+    uint high = (u16_at(at + 2u) >> (2u * ib)) & 3u;
+    float dl = half_at(at) * float(int(low | (high << 4u)) - 32);
+
+    //  A block is a whole number of words, so these are words.
+    uint q = (at + 8u + 16u * ib + half_of * 8u) >> 2u;
+    uint q0 = w[q];
+    uint q1 = w[q + 1u];
+    uint xb = xg + ib * 8u + half_of * 2u;
+
+    return dl
+           * (dot(x4[xb],      nl4(q0, 0u)) + dot(x4[xb + 1u], nl4(q1, 0u))
+            + dot(x4[xb + 4u], nl4(q0, 4u)) + dot(x4[xb + 5u], nl4(q1, 4u)));
+}
+#endif
+
 #ifdef Q8_0
 const uint BLOCK_ELEMS = 32u;
 const uint BLOCK_BYTES = 34u;
@@ -1543,6 +1627,13 @@ float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
 
 void main() {
     uint tid = gl_LocalInvocationID.x;
+
+#if defined(IQ4_NL) || defined(IQ4_XS)
+    if (tid < 16u) {
+        kv4[tid] = KV4[tid];
+    }
+    barrier();
+#endif
     uint itid = tid & 15u;
     uint ix = tid >> 4u;            // which of the four groups in flight
 
@@ -1569,7 +1660,12 @@ void main() {
 
     uint first_row = NUM_ROWS * gl_WorkGroupID.x;
     uint groups = (shape.columns + 255u) / 256u;
+#ifdef IQ4_NL
+    //  Its row is whole blocks of thirty-two, not whole groups.
+    uint span = (shape.columns / 32u) * 18u;
+#else
     uint span = (shape.columns / BLOCK_ELEMS) * BLOCK_BYTES;
+#endif
 
     float temp[NUM_ROWS];
     for (uint r = 0u; r < NUM_ROWS; ++r) {
@@ -1580,7 +1676,10 @@ void main() {
         uint col = i * 256u + itid * 16u;
 
 #ifdef OWN_ACTIVATIONS
-        if (i * 256u < shape.columns) {
+        //  And the lane's own thirty-two within it, for a row that ends
+        //  inside a group: always so for the formats whose block is the
+        //  whole group, whose rows are whole groups.
+        if (i * 256u + (itid / 2u) * 32u < shape.columns) {
             uint xg = (from_base + i * 256u) >> 2u;
 
             for (uint r = 0u; r < NUM_ROWS; ++r) {
