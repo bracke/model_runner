@@ -19899,6 +19899,24 @@ more (131,072: 24.0). A model whose token reads under 2 GiB no longer drafts
 unasked whatever its share: the 0.8B's share with the slice is a ninth, and
 it still reads 49 -> 39 at one proposal, its token being its fixed costs.
 
+### Drafting from the context, unasked
+
+A dense model with no block to draft from now drafts out of its own context
+where nothing else was asked: what followed the phrase it has just said, the
+last time it was said. A phrase not said before proposes nothing and costs
+nothing; the check keeps what the model would have said. `run` at its
+defaults, `--seed 7`, tokens a second, without and with:
+
+| model | prose | editing a function |
+| --- | --- | --- |
+| gemma-3-4b Q4_K_M | 20.8 -> 20.3 | **20.8 -> 31.8** |
+| qwen3-8b Q4_K_M | 13.1 -> 13.5 | 12.7 -> 13.9 (700 tokens) |
+| Qwen3-Coder-30B-A3B Q2_K | 30.1 -> 27.4 | 32.6 -> 27.6 |
+
+A mixture is left out -- its check of several positions reads several
+positions' experts -- and so is a model whose token reads under 2 GiB, as for
+the block. A draft model, `--draft-lookup` or `--draft-tokens` named decides.
+
 ### The rule over a chunk, and its front shared out
 
 The claim was memory -- three passes over eighteen megabytes of state a

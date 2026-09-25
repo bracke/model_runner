@@ -22820,3 +22820,16 @@ panels 2ABB752CCB4EDDE7 src/library/model_runner-quantization-interleave.ads src
 #   device A6B2A81D14E8D900 -> D08DF4BAB575FD4A,
 #   outside A6B2A81D14E8D900 -> D08DF4BAB575FD4A.
 # model: as named
+
+# 2026-09-25: a dense model of 2 GiB a token or more drafts from its context
+# unasked. run --seed 7 on the device, sampled at the defaults, tokens a
+# second without and with --draft-lookup (kept proposals):
+#
+#   gemma-3-4b Q4_K_M, story 400      20.77 -> 20.26 (8)
+#   gemma-3-4b Q4_K_M, code 400       20.83 -> 31.76 (36)
+#   qwen3-8b Q4_K_M, story 200        13.07 -> 13.53 (14)
+#   qwen3-8b Q4_K_M, code 700         12.71 -> 13.90 (123)
+#   Qwen3-Coder-30B Q2_K, story 400   30.09 -> 27.35 (4)    left out: mixture
+#   Qwen3-Coder-30B Q2_K, code 400    32.63 -> 27.59 (35)
+#
+# Re-fingerprinted.

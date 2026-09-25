@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A dense model drafts out of its own context unasked.** Where nothing
+  else drafts, a dense model whose token reads at least 2 GiB proposes what
+  followed the current phrase the last time it was said, and the check keeps
+  what the model would have said. A reply that repeats its context is where
+  it pays: gemma-3-4b editing a function 20.8 -> 31.8 tokens a second,
+  qwen3-8b 12.7 -> 13.9 over 700 tokens; prose within a few per cent. Not a
+  mixture, whose check reads more experts: Qwen3-Coder-30B lost 9-15 per
+  cent. A draft model, `--draft-lookup` or `--draft-tokens` named decides.
+
 - **IQ4_NL and IQ4_XS generate on the subgroup kernel.** Both went through
   the eight-lane row kernel; each now has its compilation of
   `row_product_wave_low.comp`, the sixteen-value table in shared memory and

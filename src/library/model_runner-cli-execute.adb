@@ -4074,6 +4074,30 @@ package body Model_Runner.CLI.Execute is
                   Request.Draft_From_Context :=
                     Item.Draft_Lookup and then not Draft_Ready;
 
+                  --  And where nothing drafts, a dense model large enough
+                  --  that a round pays drafts out of its own context: what
+                  --  followed this phrase the last time it was said. A
+                  --  phrase not said before proposes nothing and costs
+                  --  nothing, and a reply that repeats its context -- an
+                  --  edit to code, a summary, a quotation -- is where it
+                  --  pays: gemma-3-4b editing a function 20.8 -> 31.8
+                  --  tokens a second, qwen3-8b 12.7 -> 13.9, and prose
+                  --  within a few per cent either way. Not a mixture: its
+                  --  check of several positions reads several tokens'
+                  --  experts, and Qwen3-Coder-30B lost 9 and 15 per cent.
+                  --  A draft named, or a --draft-tokens, decides instead.
+                  if not Request.Draft_From_Context
+                    and then not Request.Draft_From_Next
+                    and then not Draft_Ready
+                    and then not Item.Draft_Tokens_Set
+                    and then Item.Draft_Tokens > 0
+                    and then L.Config (Prepared).Experts = 0
+                    and then L.Token_Bytes (Prepared) >= Next_Draft_Bytes
+                  then
+                     Request.Draft_From_Context := True;
+                     Request.Draft_Tokens := Item.Draft_Tokens;
+                  end if;
+
                   Request.Sampling := Item.Sampling;
                   Request.Seed := Item.Seed;
                   Request.Has_Seed := Item.Has_Seed;
