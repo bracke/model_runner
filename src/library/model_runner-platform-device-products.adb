@@ -4395,21 +4395,29 @@ package body Model_Runner.Platform.Device.Products is
    --  place would stop at the hole and be called absent. Every entry after
    --  it whose own start is at or before the hole moves back into it, which
    --  is the standard deletion and the reason this is not three lines.
-   procedure Index_Drop (Item : in out Engine; Key : Address) is
+   --
+   --  The entry is the one pointing at Where, not the first with the key:
+   --  two matrices may share a key -- the output head and the slice of it
+   --  a draft reads, which begin at the same byte -- and dropping the
+   --  other's entry would leave the evicted one's pointing at a slot that
+   --  holds something else.
+   procedure Index_Drop
+     (Item  : in out Engine;
+      Key   : Address;
+      Where : Natural)
+   is
       Hole  : Natural := Start_At (Key);
       Steps : Natural := 0;
    begin
       while Item.Index_Of (Hole) /= 0
-        and then Item.Kept (Item.Index_Of (Hole)).Key /= Key
+        and then Item.Index_Of (Hole) /= Where
       loop
          Hole := (Hole + 1) mod Index_Slots;
          Steps := Steps + 1;
          exit when Steps > Index_Slots;
       end loop;
 
-      if Item.Index_Of (Hole) = 0
-        or else Item.Kept (Item.Index_Of (Hole)).Key /= Key
-      then
+      if Item.Index_Of (Hole) /= Where or else Where = 0 then
          return;
       end if;
 
@@ -4732,7 +4740,7 @@ package body Model_Runner.Platform.Device.Products is
       --  for one that is indexed: the index would name a slot holding
       --  somebody else.
       Unlink (Item, Oldest);
-      Index_Drop (Item, Item.Kept (Oldest).Key);
+      Index_Drop (Item, Item.Kept (Oldest).Key, Oldest);
       Free_Slot (Item, Oldest);
       Item.Used := Item.Used - 1;
 

@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A draft reads a slice of the head.** The block past the stack scores
+  only the first 65,536 tokens when it proposes; the check still reads the
+  whole vocabulary, so the text is the same. Qwen3.5-4B: 22.0 -> 25.3 tokens
+  a second greedy, 17.5 -> 20.1 sampled at the defaults. A model whose token
+  reads under 2 GiB no longer drafts unasked (the 0.8B loses at any length).
+  The device's resident index now drops the entry of the slot it evicts,
+  not the first with its key: the head and its slice share one.
+
 - **A draft from the block is taken where it pays.** With no
   `--draft-tokens`, the block past the stack drafts only where it and the
   output head are at most a quarter of a token's bytes, and three proposals

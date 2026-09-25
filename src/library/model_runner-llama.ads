@@ -1985,6 +1985,17 @@ package Model_Runner.Llama is
    --  @return The share, or 1.0 where the model has no block past it.
    function Draft_Share (Item : Model) return Float;
 
+   --  The bytes of weights a token reads: the stack and the output head, a
+   --  mixture's experts at the share a token uses. What a draft saves is
+   --  passes over these, and a small model's token is its fixed costs more
+   --  than its bytes -- Qwen3.5-0.8B's draft loses at every length even with
+   --  its share a ninth -- so a draft is worth asking for unasked only past
+   --  a size.
+   --
+   --  @param Item A prepared model.
+   --  @return Bytes, or zero for a model with no layers.
+   function Token_Bytes (Item : Model) return Float;
+
    --  The final state of the last position this session evaluated, as
    --  the output head read it: what the block past the stack takes in
    --  beside the next token's embedding.

@@ -16080,79 +16080,112 @@ package body Model_Runner.Llama is
       end loop;
    end Gate_Heads;
 
+   --  Rows of the output head a draft from the block past the stack reads.
+   --  See Draft_Next.
+   Draft_Vocabulary : constant := 65_536;
+
+   -----------------
+   -- Layer_Bytes --
+   -----------------
+
+   --  The bytes a layer's matrices read for a token: every projection,
+   --  and a mixture's stacks at the share of experts a token chooses.
+   function Layer_Bytes (Item : Model; L : Layer) return Float is
+      Total : Float := 0.0;
+
+      procedure Add (View : T.View; Share : Float := 1.0) is
+      begin
+         if T.Is_Present (View) then
+            Total := Total
+              + Float (View.Rows) * Float (T.Row_Bytes (View)) * Share;
+         end if;
+      end Add;
+
+      Used : constant Float :=
+        (if Item.Settings.Experts > 0
+         then Float (Item.Settings.Experts_Used)
+              / Float (Item.Settings.Experts)
+         else 1.0);
+   begin
+      Add (L.Query);
+      Add (L.Q_A);
+      Add (L.Q_B);
+      Add (L.KV_A_MQA);
+      Add (L.KV_B);
+      Add (L.Key);
+      Add (L.Value);
+      Add (L.Attention_Out);
+      Add (L.Gate);
+      Add (L.Up);
+      Add (L.Down);
+      Add (L.Router);
+      Add (L.Mix);
+      Add (L.Z_Gate);
+      Add (L.Alpha);
+      Add (L.Beta);
+      Add (L.Ssm_In);
+      Add (L.Ssm_X);
+      Add (L.Ssm_Dt);
+      Add (L.Shared_Gate);
+      Add (L.Shared_Up);
+      Add (L.Shared_Down);
+      Add (L.Gate_Stack, Used);
+      Add (L.Up_Stack, Used);
+      Add (L.Down_Stack, Used);
+      return Total;
+   end Layer_Bytes;
+
+   --  The output head: the output projection, or the embedding table where
+   --  the two are tied.
+   function Head_Of (Item : Model) return T.View
+   is (if T.Is_Present (Item.Output) then Item.Output else Item.Embeddings);
+
+   -----------------
+   -- Token_Bytes --
+   -----------------
+
+   function Token_Bytes (Item : Model) return Float is
+      Shared : constant T.View := Head_Of (Item);
+      Total  : Float :=
+        (if T.Is_Present (Shared)
+         then Float (Shared.Rows) * Float (T.Row_Bytes (Shared))
+         else 0.0);
+   begin
+      if Item.Layers = null then
+         return 0.0;
+      end if;
+
+      for L of Item.Layers.all loop
+         Total := Total + Layer_Bytes (Item, L);
+      end loop;
+
+      return Total;
+   end Token_Bytes;
+
    -----------------
    -- Draft_Share --
    -----------------
 
    function Draft_Share (Item : Model) return Float is
-      --  The bytes a layer's matrices read for a token: every projection,
-      --  and a mixture's stacks at the share of experts a token chooses.
-      function Layer_Bytes (L : Layer) return Float is
-         Total : Float := 0.0;
 
-         procedure Add (View : T.View; Share : Float := 1.0) is
-         begin
-            if T.Is_Present (View) then
-               Total := Total
-                 + Float (View.Rows) * Float (T.Row_Bytes (View)) * Share;
-            end if;
-         end Add;
+      Shared : constant T.View := Head_Of (Item);
 
-         Used : constant Float :=
-           (if Item.Settings.Experts > 0
-            then Float (Item.Settings.Experts_Used)
-                 / Float (Item.Settings.Experts)
-            else 1.0);
-      begin
-         Add (L.Query);
-         Add (L.Q_A);
-         Add (L.Q_B);
-         Add (L.KV_A_MQA);
-         Add (L.KV_B);
-         Add (L.Key);
-         Add (L.Value);
-         Add (L.Attention_Out);
-         Add (L.Gate);
-         Add (L.Up);
-         Add (L.Down);
-         Add (L.Router);
-         Add (L.Mix);
-         Add (L.Z_Gate);
-         Add (L.Alpha);
-         Add (L.Beta);
-         Add (L.Ssm_In);
-         Add (L.Ssm_X);
-         Add (L.Ssm_Dt);
-         Add (L.Shared_Gate);
-         Add (L.Shared_Up);
-         Add (L.Shared_Down);
-         Add (L.Gate_Stack, Used);
-         Add (L.Up_Stack, Used);
-         Add (L.Down_Stack, Used);
-         return Total;
-      end Layer_Bytes;
-
-      Head : constant Float :=
-        (if T.Is_Present (Item.Output)
-         then Float (Item.Output.Rows) * Float (T.Row_Bytes (Item.Output))
-         elsif T.Is_Present (Item.Embeddings)
-         then Float (Item.Embeddings.Rows)
-              * Float (T.Row_Bytes (Item.Embeddings))
+      --  The part of the head a draft reads.
+      Drafted : constant Float :=
+        (if T.Is_Present (Shared)
+         then Float (Element_Count'Min (Shared.Rows, Draft_Vocabulary))
+              * Float (T.Row_Bytes (Shared))
          else 0.0);
 
-      Stack : Float := Head;
-      Block : Float := Head;
+      Stack : constant Float := Token_Bytes (Item);
+      Block : Float := Drafted;
    begin
       if Item.Next = null or else Item.Layers = null then
          return 1.0;
       end if;
 
-      for L of Item.Layers.all loop
-         Stack := Stack + Layer_Bytes (L);
-      end loop;
-
       for L of Item.Next.all loop
-         Block := Block + Layer_Bytes (L);
+         Block := Block + Layer_Bytes (Item, L);
       end loop;
 
       return (if Stack > 0.0 then Block / Stack else 1.0);
@@ -16370,14 +16403,38 @@ package body Model_Runner.Llama is
             return;
          end if;
 
-         Product
-           (Item, Source.Output, Item.Normalized, Item.Logit_Row, Status);
-         if E.Is_Error (Status) then
-            return;
-         end if;
+         --  Over the first rows of the head only: a proposal is a token a
+         --  draft thinks likely, and a vocabulary's first tokens are its
+         --  commonest -- a byte-pair vocabulary is numbered in the order
+         --  its merges were learned. The check is against the model's own
+         --  distribution over every token, so what the draft cannot
+         --  propose costs a refusal and never a wrong answer. On Qwen3.5-4B
+         --  the head is 675 MB of the block's 800; its first 65,536 rows
+         --  read 23.1 -> 25.3 tokens a second greedy against the whole, with
+         --  86 of 129 proposals kept against 88 of 123, and 17.5 -> 20.1
+         --  sampled. Fewer rows lose proposals faster than they save bytes:
+         --  32,768 read 23.1 and 8,192 20.5.
+         declare
+            Rows : constant Element_Count :=
+              Element_Count'Min (Source.Output.Rows, Draft_Vocabulary);
+            Head : T.View := Source.Output;
+         begin
+            Head.Rows := Rows;
+            Head.Length :=
+              Model_Runner.Bytes.Byte_Count (Rows) * T.Row_Bytes (Source.Output);
+            Product (Item, Head, Item.Normalized, Item.Logit_Row, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
 
-         Logits := Item.Logit_Row.all;
-         Finish_Logits (Source, Logits);
+            --  What the draft cannot say, it gives no chance at all.
+            Logits := [others => -1.0e30];
+            Logits (Logits'First .. Logits'First + Rows - 1) :=
+              Item.Logit_Row.all
+                (Item.Logit_Row.all'First
+                 .. Item.Logit_Row.all'First + Rows - 1);
+            Finish_Logits (Source, Logits);
+         end;
       end;
    end Draft_Next;
 

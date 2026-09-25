@@ -19887,6 +19887,18 @@ default of four read 37 -- and it proposes three a round, not four: 17.4
 against 15.5 on the 4B, the fourth proposal kept too rarely to pay for the
 block's pass. A `--draft-tokens` named is taken as asked.
 
+And a draft reads only the first 65,536 rows of the output head. A
+proposal is a token the block thinks likely, a byte-pair vocabulary's first
+tokens are its commonest, and the check is against the model's own
+distribution over all of them -- so what the draft cannot propose costs a
+refusal, never a wrong answer. On Qwen3.5-4B the head is 675 MB of the
+block's 800: greedy, **22.0 -> 25.3 tokens a second** (14.0 without a draft),
+the same output; sampled at the defaults, 17.5 -> 20.1. Fewer rows lose more
+proposals than they save bytes (32,768: 23.1; 8,192: 20.5); more keep no
+more (131,072: 24.0). A model whose token reads under 2 GiB no longer drafts
+unasked whatever its share: the 0.8B's share with the slice is a ninth, and
+it still reads 49 -> 39 at one proposal, its token being its fixed costs.
+
 ### The rule over a chunk, and its front shared out
 
 The claim was memory -- three passes over eighteen megabytes of state a

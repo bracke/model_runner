@@ -2499,6 +2499,7 @@ package body Model_Runner.CLI.Execute is
    --  and still be taken without being asked for, and how many proposals a
    --  round it makes then. See where a run's request is made.
    Next_Draft_Share  : constant Float := 0.25;
+   Next_Draft_Bytes  : constant Float := 2.0 * 1024.0 ** 3;
    Next_Draft_Tokens : constant := 3;
 
    ---------------------
@@ -4044,7 +4045,11 @@ package body Model_Runner.CLI.Execute is
                   --  is 0.19 on Qwen3.5-4B, where three proposals a round
                   --  read 13.3 -> 17.4 tokens a second sampling, and 0.38
                   --  on the 0.8B, whose head is a third of the file and
-                  --  where one proposal a round already reads 57 -> 52. A
+                  --  where one proposal a round already reads 57 -> 52 --
+                  --  and a model whose token reads less than Next_Draft_
+                  --  Bytes, whose token is its fixed costs: with its draft
+                  --  reading a slice of the head the 0.8B's share is a
+                  --  ninth, and it still reads 49 -> 39 at one proposal. A
                   --  --draft-tokens named is taken as asked. Three a round
                   --  unless named: four read 15.5 on the 4B and six 14.0,
                   --  the proposals past the third kept too rarely to pay
@@ -4055,8 +4060,10 @@ package body Model_Runner.CLI.Execute is
                     and then not Item.Draft_Lookup
                     and then L.Drafts_Next (Session)
                     and then (Item.Draft_Tokens_Set
-                              or else L.Draft_Share (Prepared)
-                                      <= Next_Draft_Share);
+                              or else (L.Draft_Share (Prepared)
+                                         <= Next_Draft_Share
+                                       and then L.Token_Bytes (Prepared)
+                                                >= Next_Draft_Bytes));
                   Request.Draft_Tokens :=
                     (if Request.Draft_From_Next
                        and then not Item.Draft_Tokens_Set
