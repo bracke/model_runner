@@ -90,6 +90,12 @@ package Model_Runner.Platform.Device.Products is
    --  rather than twice.
    Wide_Bundle : constant := 8;
 
+   --  And the narrowest, a pair, for a group of two or of any even size
+   --  the others do not take -- Gemma's, whose heads of 256 are past what
+   --  the four-at-a-time path lays out. It reads a word at a time, so it
+   --  asks nothing of the bases and widths.
+   Pair_Bundle : constant := 2;
+
    --  And the fewest cached positions the exact bundle is bound over: a
    --  short cache is a few workgroups doing little each, and a head a
    --  workgroup is more workgroups.
@@ -2631,6 +2637,7 @@ private
       --  third of a layer at thirteen hundred positions. A bundle reads
       --  it twice, in the precision the token's answer is published in.
       Exact_Bundled_Attend : System.Address := System.Null_Address;
+      Exact_Paired_Attend  : System.Address := System.Null_Address;
 
       Narrow     : System.Address := System.Null_Address;
 
@@ -2695,6 +2702,7 @@ private
       Bundle_Line : System.Address := System.Null_Address;
       Exact_Bundle_Line : System.Address := System.Null_Address;
       Eight_Bundle_Line : System.Address := System.Null_Address;
+      Pair_Bundle_Line  : System.Address := System.Null_Address;
 
       --  The half-precision bundle at eight heads, for a token attending
       --  out of the copy, and whether a token does.

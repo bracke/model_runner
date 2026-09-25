@@ -290,12 +290,75 @@ package body Shader_Generation is
                     and then Name (Name'Last - 3 .. Name'Last) = "_Low");
       end Is_Low;
 
-      Low_Target : constant String :=
-        Root & "/src/library/model_runner-shaders-low.ads";
+      --  And the attention kernels to another, for the same reason: with
+      --  them the parent was past that size too.
+      function Is_Attend (Pair : Shader_Pair) return Boolean is
+         Name : constant String := Ada_Name (Pair.Compiled.all);
+      begin
+         return not Is_Low (Pair)
+           and then Ada.Strings.Fixed.Index (Name, "Attention") = Name'First;
+      end Is_Attend;
 
-      Low    : Ada.Text_IO.File_Type;
+      function In_Parent (Pair : Shader_Pair) return Boolean
+      is (not Is_Low (Pair) and then not Is_Attend (Pair));
+
+      --  One child package: every shader Belongs says is its, under the
+      --  heading About, where there is any.
+      procedure Write_Child
+        (Target  : String;
+         Name    : String;
+         About   : String;
+         Belongs : not null access function (Pair : Shader_Pair)
+                                               return Boolean;
+         Ok      : out Boolean)
+      is
+         Child : Ada.Text_IO.File_Type;
+         Any   : Boolean := False;
+         Start : Boolean := True;
+      begin
+         Ok := True;
+
+         for Index in Shaders'Range loop
+            Any := Any or else Belongs (Shaders (Index));
+         end loop;
+
+         if not Any then
+            return;
+         end if;
+
+         Ada.Text_IO.Create (Child, Ada.Text_IO.Out_File, Target);
+         Ada.Text_IO.Put_Line (Child, "with Interfaces;");
+         Ada.Text_IO.New_Line (Child);
+         Ada.Text_IO.Put_Line (Child, "--  " & About & " compiled shaders, generated with");
+         Ada.Text_IO.Put_Line
+           (Child, "--  the parent package by `tests shader`: do not edit.");
+         Ada.Text_IO.Put_Line (Child, "--");
+         Ada.Text_IO.Put_Line
+           (Child, "--  Task safety: constants, readable from any task.");
+         Ada.Text_IO.Put_Line (Child, "package " & Name & " is");
+         Ada.Text_IO.New_Line (Child);
+
+         for Index in Shaders'Range loop
+            if Belongs (Shaders (Index)) then
+               if not Start then
+                  Ada.Text_IO.New_Line (Child);
+               end if;
+               Start := False;
+
+               Emit (Shaders (Index), Child, Ok);
+               if not Ok then
+                  Ada.Text_IO.Close (Child);
+                  return;
+               end if;
+            end if;
+         end loop;
+
+         Ada.Text_IO.New_Line (Child);
+         Ada.Text_IO.Put_Line (Child, "end " & Name & ";");
+         Ada.Text_IO.Close (Child);
+      end Write_Child;
+
       First  : Boolean := True;
-      Any_Low : Boolean := False;
    begin
       Written := False;
 
@@ -327,9 +390,7 @@ package body Shader_Generation is
       Ada.Text_IO.New_Line (Handle);
 
       for Index in Shaders'Range loop
-         if Is_Low (Shaders (Index)) then
-            Any_Low := True;
-         else
+         if In_Parent (Shaders (Index)) then
             if not First then
                Ada.Text_IO.New_Line (Handle);
             end if;
@@ -347,39 +408,20 @@ package body Shader_Generation is
       Ada.Text_IO.Put_Line (Handle, "end Model_Runner.Shaders;");
       Ada.Text_IO.Close (Handle);
 
-      if Any_Low then
-         Ada.Text_IO.Create (Low, Ada.Text_IO.Out_File, Low_Target);
-         Ada.Text_IO.Put_Line (Low, "with Interfaces;");
-         Ada.Text_IO.New_Line (Low);
-         Ada.Text_IO.Put_Line
-           (Low, "--  The low-bit kernels' compiled shaders, generated with");
-         Ada.Text_IO.Put_Line
-           (Low, "--  the parent package by `tests shader`: do not edit.");
-         Ada.Text_IO.Put_Line (Low, "--");
-         Ada.Text_IO.Put_Line
-           (Low, "--  Task safety: constants, readable from any task.");
-         Ada.Text_IO.Put_Line (Low, "package Model_Runner.Shaders.Low is");
-         Ada.Text_IO.New_Line (Low);
-         First := True;
+      Write_Child
+        (Root & "/src/library/model_runner-shaders-low.ads",
+         "Model_Runner.Shaders.Low", "The low-bit kernels'",
+         Is_Low'Access, Good);
+      if not Good then
+         return;
+      end if;
 
-         for Index in Shaders'Range loop
-            if Is_Low (Shaders (Index)) then
-               if not First then
-                  Ada.Text_IO.New_Line (Low);
-               end if;
-               First := False;
-
-               Emit (Shaders (Index), Low, Good);
-               if not Good then
-                  Ada.Text_IO.Close (Low);
-                  return;
-               end if;
-            end if;
-         end loop;
-
-         Ada.Text_IO.New_Line (Low);
-         Ada.Text_IO.Put_Line (Low, "end Model_Runner.Shaders.Low;");
-         Ada.Text_IO.Close (Low);
+      Write_Child
+        (Root & "/src/library/model_runner-shaders-attend.ads",
+         "Model_Runner.Shaders.Attend", "The attention kernels'",
+         Is_Attend'Access, Good);
+      if not Good then
+         return;
       end if;
 
       Written := True;

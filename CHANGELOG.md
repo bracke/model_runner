@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Gemma's generated tokens attend two heads a workgroup.** A token over
+  the exact cache went a head a workgroup where the four-at-a-time bundles
+  could not take the heads -- Gemma's are 256 wide, in groups of two -- so
+  each group's keys and values were read twice. A seventh compilation of
+  attention.comp bundles a pair, and the word-at-a-time value loop asks
+  for every fold of eight positions at once. gemma-3-4b after a 421-token
+  prompt, 20.75 -> 21.37 tokens a second, attention 147 -> 126 us a layer,
+  the same output. The attention compilations are generated into a child
+  package, Model_Runner.Shaders.Attend: the parent had passed the size the
+  repository allows a committed file.
+
 - **The delta rule holds its state in registers.** A hybrid's linear layer
   read each head's state from memory twice a chunk and wrote it once, a
   load a lane at a time and each waited for. A second compilation of the

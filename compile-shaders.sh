@@ -52,6 +52,7 @@ compile attention_tiled              attention.comp        vulkan1.1 SUBGROUPS Q
 compile attention_halved             attention.comp        vulkan1.1 SUBGROUPS HALVED WIDE
 compile attention_bundled            attention.comp        vulkan1.1 SUBGROUPS HALVED WIDE GROUPED
 compile attention_bundle_exact       attention.comp        vulkan1.1 SUBGROUPS WIDE FOURS GROUPED
+compile attention_grouped_exact      attention.comp        vulkan1.1 SUBGROUPS WIDE GROUPED
 compile combine                      combine.comp          vulkan1.0
 compile row_product                  row_product.comp      vulkan1.0
 compile row_product_low              row_product.comp      vulkan1.0 LOW_BITS

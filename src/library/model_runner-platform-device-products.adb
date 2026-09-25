@@ -8,6 +8,7 @@ with System.Storage_Elements;
 
 with Model_Runner.Shaders;
 with Model_Runner.Shaders.Low;
+with Model_Runner.Shaders.Attend;
 
 --  Products on a device, through the same interface the parent opened it
 --  with.
@@ -560,6 +561,21 @@ package body Model_Runner.Platform.Device.Products is
    --  How wide that bundle is: eight where the group divides by eight and
    --  the eight-wide pipeline was made, four where it divides by four,
    --  and nought for no bundle at all.
+   function Fours_Fit
+     (Head_Size  : Natural;
+      Value_Size : Natural;
+      K_Base     : Model_Runner.Numerics.Element_Count;
+      V_Base     : Model_Runner.Numerics.Element_Count;
+      KV_Width   : Natural;
+      V_Width    : Natural) return Boolean
+   is (Head_Size mod 4 = 0
+       and then Value_Size mod 4 = 0
+       and then Value_Size <= 128
+       and then K_Base mod 4 = 0
+       and then V_Base mod 4 = 0
+       and then KV_Width mod 4 = 0
+       and then V_Width mod 4 = 0);
+
    function Exact_Bundle
      (Item       : Engine;
       Positions  : Natural;
@@ -578,23 +594,23 @@ package body Model_Runner.Platform.Device.Products is
          --  head a workgroup is more of them: the bundle pays where
          --  there is enough cache to read.
          or else Span < Bundle_Least
-         --  The bundled compilation reads four at a time and nothing
-         --  else, on the engine's word that every base and width allows
-         --  it; a cache that does not is attended a word at a time.
-         or else Head_Size mod 4 /= 0
-         or else Value_Size mod 4 /= 0
-         or else Value_Size > 128
-         or else K_Base mod 4 /= 0
-         or else V_Base mod 4 /= 0
-         or else KV_Width mod 4 /= 0
-         or else V_Width mod 4 /= 0
        then 0
-       elsif Item.Eight_Bundle_Line /= Null_Handle
+       --  The bundles of four and eight read four at a time and nothing
+       --  else, on the engine's word that every base and width allows
+       --  it; a cache that does not goes to the pair, a word at a time.
+       elsif Fours_Fit (Head_Size, Value_Size, K_Base, V_Base,
+                        KV_Width, V_Width)
+         and then Item.Eight_Bundle_Line /= Null_Handle
          and then Group_Size mod Wide_Bundle = 0
        then Wide_Bundle
-       elsif Item.Exact_Bundle_Line /= Null_Handle
+       elsif Fours_Fit (Head_Size, Value_Size, K_Base, V_Base,
+                        KV_Width, V_Width)
+         and then Item.Exact_Bundle_Line /= Null_Handle
          and then Group_Size mod Head_Bundle = 0
        then Head_Bundle
+       elsif Item.Pair_Bundle_Line /= Null_Handle
+         and then Group_Size mod Pair_Bundle = 0
+       then Pair_Bundle
        else 0);
 
    function Bundles_Exact
@@ -644,6 +660,12 @@ package body Model_Runner.Platform.Device.Products is
                      K_Base, V_Base, KV_Width, V_Width, Span)
                   = Wide_Bundle
        then Item.Eight_Bundle_Line
+       elsif not Rounding
+         and then Exact_Bundle
+                    (Item, Positions, Head_Size, Value_Size, Group_Size,
+                     K_Base, V_Base, KV_Width, V_Width, Span)
+                  = Pair_Bundle
+       then Item.Pair_Bundle_Line
        elsif not Rounding
          and then Bundles_Exact
                     (Item, Positions, Head_Size, Value_Size, Group_Size,
@@ -2599,7 +2621,7 @@ package body Model_Runner.Platform.Device.Products is
       declare
          Create : constant Create_Call := To_Create (Point ("vkCreateShaderModule"));
          Words  : aliased constant Model_Runner.Shaders.Word_Array :=
-           Model_Runner.Shaders.Attention;
+           Model_Runner.Shaders.Attend.Attention;
          Request : aliased Shader_Create_Info;
       begin
          if Create = null then
@@ -2627,9 +2649,9 @@ package body Model_Runner.Platform.Device.Products is
          --  session on the host.
          declare
             Plain  : aliased constant Model_Runner.Shaders.Word_Array :=
-              Model_Runner.Shaders.Attention_Packed;
+              Model_Runner.Shaders.Attend.Attention_Packed;
             Packed : aliased constant Model_Runner.Shaders.Word_Array :=
-              Model_Runner.Shaders.Attention_Packed_Subgroups;
+              Model_Runner.Shaders.Attend.Attention_Packed_Subgroups;
          begin
             Request.Size := Interfaces.C.size_t (Plain'Length * 4);
             Request.Code := Plain'Address;
@@ -2705,7 +2727,7 @@ package body Model_Runner.Platform.Device.Products is
          if Has_Subgroup_Arithmetic (On) then
             declare
                Grouped : aliased constant Model_Runner.Shaders.Word_Array :=
-                 Model_Runner.Shaders.Attention_Subgroups;
+                 Model_Runner.Shaders.Attend.Attention_Subgroups;
             begin
                Request.Size := Interfaces.C.size_t (Grouped'Length * 4);
                Request.Code := Grouped'Address;
@@ -2724,7 +2746,7 @@ package body Model_Runner.Platform.Device.Products is
                declare
                   Blocked : aliased constant
                     Model_Runner.Shaders.Word_Array :=
-                      Model_Runner.Shaders.Attention_Tiled;
+                      Model_Runner.Shaders.Attend.Attention_Tiled;
                begin
                   Request.Size :=
                     Interfaces.C.size_t (Blocked'Length * 4);
@@ -2745,7 +2767,7 @@ package body Model_Runner.Platform.Device.Products is
                declare
                   Halved : aliased constant
                     Model_Runner.Shaders.Word_Array :=
-                      Model_Runner.Shaders.Attention_Halved;
+                      Model_Runner.Shaders.Attend.Attention_Halved;
                begin
                   Request.Size :=
                     Interfaces.C.size_t (Halved'Length * 4);
@@ -2766,7 +2788,7 @@ package body Model_Runner.Platform.Device.Products is
                   declare
                      Bundled : aliased constant
                        Model_Runner.Shaders.Word_Array :=
-                         Model_Runner.Shaders.Attention_Bundled;
+                         Model_Runner.Shaders.Attend.Attention_Bundled;
                   begin
                      Request.Size :=
                        Interfaces.C.size_t (Bundled'Length * 4);
@@ -2785,7 +2807,7 @@ package body Model_Runner.Platform.Device.Products is
                declare
                   Bundled : aliased constant
                     Model_Runner.Shaders.Word_Array :=
-                      Model_Runner.Shaders.Attention_Bundle_Exact;
+                      Model_Runner.Shaders.Attend.Attention_Bundle_Exact;
                begin
                   Request.Size := Interfaces.C.size_t (Bundled'Length * 4);
                   Request.Code := Bundled'Address;
@@ -2794,6 +2816,23 @@ package body Model_Runner.Platform.Device.Products is
                              Made'Access) = 0
                   then
                      Item.Exact_Bundled_Attend := Made;
+                  end if;
+               end;
+
+               --  And a seventh, GROUPED over the cache proper a word at
+               --  a time, for the pair.
+               declare
+                  Paired : aliased constant
+                    Model_Runner.Shaders.Word_Array :=
+                      Model_Runner.Shaders.Attend.Attention_Grouped_Exact;
+               begin
+                  Request.Size := Interfaces.C.size_t (Paired'Length * 4);
+                  Request.Code := Paired'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Exact_Paired_Attend := Made;
                   end if;
                end;
             end if;
@@ -2817,7 +2856,7 @@ package body Model_Runner.Platform.Device.Products is
             Create  : constant Create_Call :=
               To_Create (Point ("vkCreateShaderModule"));
             Attends : aliased constant Model_Runner.Shaders.Word_Array :=
-              Model_Runner.Shaders.Attention_Matrix;
+              Model_Runner.Shaders.Attend.Attention_Matrix;
             Request : aliased Shader_Create_Info;
          begin
             if Create /= null then
@@ -2833,7 +2872,7 @@ package body Model_Runner.Platform.Device.Products is
                --  And the same words staging a head twice as wide.
                declare
                   Wide : aliased constant Model_Runner.Shaders.Word_Array :=
-                    Model_Runner.Shaders.Attention_Matrix_Wide;
+                    Model_Runner.Shaders.Attend.Attention_Matrix_Wide;
                begin
                   Request.Size := Interfaces.C.size_t (Wide'Length * 4);
                   Request.Code := Wide'Address;
@@ -2848,7 +2887,7 @@ package body Model_Runner.Platform.Device.Products is
                --  And twice as wide again.
                declare
                   Wider : aliased constant Model_Runner.Shaders.Word_Array :=
-                    Model_Runner.Shaders.Attention_Matrix_Wider;
+                    Model_Runner.Shaders.Attend.Attention_Matrix_Wider;
                begin
                   Request.Size := Interfaces.C.size_t (Wider'Length * 4);
                   Request.Code := Wider'Address;
@@ -3595,6 +3634,33 @@ package body Model_Runner.Platform.Device.Products is
             end;
          end if;
 
+         if Item.Group_Line /= Null_Handle
+           and then Item.Exact_Paired_Attend /= Null_Handle
+         then
+            Request.Stage.Module := Item.Exact_Paired_Attend;
+
+            declare
+               Which  : aliased Specialization_Entry :=
+                 (Which => 1, At_Was => 0, Span => 4);
+               Value  : aliased C.unsigned := Pair_Bundle;
+               Told   : aliased Specialization_Info;
+            begin
+               Told.Count := 1;
+               Told.Entries := Which'Address;
+               Told.Span := 4;
+               Told.Values := Value'Address;
+               Request.Stage.Specialized := Told'Address;
+
+               if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                          Null_Handle, Made'Access) = 0
+               then
+                  Item.Pair_Bundle_Line := Made;
+               end if;
+
+               Request.Stage.Specialized := Null_Handle;
+            end;
+         end if;
+
          if Item.Attend_Matrix /= Null_Handle then
             Request.Stage.Module := Item.Attend_Matrix;
 
@@ -4277,6 +4343,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Bundle_Line, "vkDestroyPipeline");
       Give_Back (Item.Exact_Bundle_Line, "vkDestroyPipeline");
       Give_Back (Item.Eight_Bundle_Line, "vkDestroyPipeline");
+      Give_Back (Item.Pair_Bundle_Line, "vkDestroyPipeline");
       Give_Back (Item.Eight_Halved_Line, "vkDestroyPipeline");
       Give_Back (Item.Merge_Line, "vkDestroyPipeline");
       Give_Back (Item.Thin_Line, "vkDestroyPipeline");
@@ -4309,6 +4376,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Unpacker, "vkDestroyShaderModule");
       Give_Back (Item.Bundled_Attend, "vkDestroyShaderModule");
       Give_Back (Item.Exact_Bundled_Attend, "vkDestroyShaderModule");
+      Give_Back (Item.Exact_Paired_Attend, "vkDestroyShaderModule");
       Give_Back (Item.Merger, "vkDestroyShaderModule");
       Give_Back (Item.Thinner, "vkDestroyShaderModule");
       Give_Back (Item.Inverter, "vkDestroyShaderModule");

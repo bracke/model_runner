@@ -24,6 +24,7 @@ with Tiny_Model;
 with Model_Runner.Platform.Device.Products;
 with Model_Runner.Shaders;
 with Model_Runner.Shaders.Low;
+with Model_Runner.Shaders.Attend;
 with Shader_Generation;
 with Tool_Commands;
 
@@ -5763,7 +5764,7 @@ package body Checks is
          if not Found then
             Fail ("src/shaders/attention.comp is missing, and the words "
                   & "compiled from it are committed");
-         elsif Digest /= Model_Runner.Shaders.Attention_Digest then
+         elsif Digest /= Model_Runner.Shaders.Attend.Attention_Digest then
             Fail ("src/shaders/attention.comp has changed since it was "
                   & "compiled; compile it and run 'tests shader' again with "
                   & "every shader named");
@@ -5776,7 +5777,7 @@ package body Checks is
 
          if Found
            and then Digest
-                      /= Model_Runner.Shaders.Attention_Subgroups_Digest
+                      /= Model_Runner.Shaders.Attend.Attention_Subgroups_Digest
          then
             Fail ("the second compilation of src/shaders/attention.comp is "
                   & "older than the source; compile it twice, the second "
@@ -6006,7 +6007,7 @@ package body Checks is
          Result.Performed := Result.Performed + 1;
 
          if Found
-           and then Digest /= Model_Runner.Shaders.Attention_Tiled_Digest
+           and then Digest /= Model_Runner.Shaders.Attend.Attention_Tiled_Digest
          then
             Fail ("the third compilation of src/shaders/attention.comp is "
                   & "older than the source; compile it with --target-env "
@@ -6019,7 +6020,7 @@ package body Checks is
          Result.Performed := Result.Performed + 1;
 
          if Found
-           and then Digest /= Model_Runner.Shaders.Attention_Halved_Digest
+           and then Digest /= Model_Runner.Shaders.Attend.Attention_Halved_Digest
          then
             Fail ("the fourth compilation of src/shaders/attention.comp is "
                   & "older than the source; compile it with --target-env "
@@ -6033,7 +6034,7 @@ package body Checks is
          Result.Performed := Result.Performed + 1;
 
          if Found
-           and then Digest /= Model_Runner.Shaders.Attention_Bundled_Digest
+           and then Digest /= Model_Runner.Shaders.Attend.Attention_Bundled_Digest
          then
             Fail ("the fifth compilation of src/shaders/attention.comp is "
                   & "older than the source; compile it with --target-env "
@@ -6048,12 +6049,27 @@ package body Checks is
 
          if Found
            and then Digest
-                    /= Model_Runner.Shaders.Attention_Bundle_Exact_Digest
+                    /= Model_Runner.Shaders.Attend.Attention_Bundle_Exact_Digest
          then
             Fail ("the sixth compilation of src/shaders/attention.comp is "
                   & "older than the source; compile it with --target-env "
                   & "vulkan1.1 -DSUBGROUPS -DWIDE -DGROUPED -DFOURS to "
                   & "attention_bundle_exact.spv, and run 'tests shader' "
+                  & "again with every shader named");
+         end if;
+
+         --  And the seventh, GROUPED over the cache proper a word at a
+         --  time: the pair a group of two binds.
+         Result.Performed := Result.Performed + 1;
+
+         if Found
+           and then Digest
+                    /= Model_Runner.Shaders.Attend.Attention_Grouped_Exact_Digest
+         then
+            Fail ("the seventh compilation of src/shaders/attention.comp is "
+                  & "older than the source; compile it with --target-env "
+                  & "vulkan1.1 -DSUBGROUPS -DWIDE -DGROUPED to "
+                  & "attention_grouped_exact.spv, and run 'tests shader' "
                   & "again with every shader named");
          end if;
       end;
@@ -6071,7 +6087,7 @@ package body Checks is
          if not Found then
             Fail ("src/shaders/attention_packed.comp is missing, and the "
                   & "words compiled from it are committed");
-         elsif Digest /= Model_Runner.Shaders.Attention_Packed_Digest then
+         elsif Digest /= Model_Runner.Shaders.Attend.Attention_Packed_Digest then
             Fail ("src/shaders/attention_packed.comp has changed since it "
                   & "was compiled; compile it and run 'tests shader' again "
                   & "with every shader named");
@@ -6082,7 +6098,7 @@ package body Checks is
 
          if Found
            and then Digest
-                    /= Model_Runner.Shaders.Attention_Packed_Subgroups_Digest
+                    /= Model_Runner.Shaders.Attend.Attention_Packed_Subgroups_Digest
          then
             Fail ("the second compilation of "
                   & "src/shaders/attention_packed.comp is older than the "
@@ -6484,7 +6500,7 @@ package body Checks is
          if not Found then
             Fail ("src/shaders/attention_matrix.comp is missing, and the "
                   & "words compiled from it are committed");
-         elsif Digest /= Model_Runner.Shaders.Attention_Matrix_Digest then
+         elsif Digest /= Model_Runner.Shaders.Attend.Attention_Matrix_Digest then
             Fail ("src/shaders/attention_matrix.comp has changed since it "
                   & "was compiled; compile it with --target-env vulkan1.3 "
                   & "and run 'tests shader' again with every shader named");
@@ -6494,7 +6510,7 @@ package body Checks is
          Result.Performed := Result.Performed + 1;
 
          if Found
-           and then Digest /= Model_Runner.Shaders.Attention_Matrix_Wide_Digest
+           and then Digest /= Model_Runner.Shaders.Attend.Attention_Matrix_Wide_Digest
          then
             Fail ("the wide compilation of src/shaders/attention_matrix.comp"
                   & " is older than the source; compile it with "
@@ -6508,7 +6524,7 @@ package body Checks is
 
          if Found
            and then Digest
-                    /= Model_Runner.Shaders.Attention_Matrix_Wider_Digest
+                    /= Model_Runner.Shaders.Attend.Attention_Matrix_Wider_Digest
          then
             Fail ("the wider compilation of src/shaders/attention_matrix.comp"
                   & " is older than the source; run ./compile-shaders.sh");

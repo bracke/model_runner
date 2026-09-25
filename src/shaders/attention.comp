@@ -1050,6 +1050,83 @@ void main() {
 #endif
 
 #ifndef FOURS
+#if !defined(QUERY_TILE) && !defined(HALVED)
+        //  Every fold's values of eight positions asked for at once: a
+        //  token's attention is a few workgroups each waiting for its
+        //  loads, and a fold at a time was eight loads in flight a lane
+        //  where there can be thirty-two. The sums are the ones below,
+        //  in the same order.
+        {
+            float got[QUERIES][HEADS][room / 64];
+            bool live[room / 64];
+
+            for (uint k = 0; k < room / 64; k++) {
+                live[k] = comp + k * 64u < shape.value_size;
+                for (uint i = 0u; i < QUERIES; i++) {
+                    for (uint h = 0u; h < HEADS; h++) {
+                        got[i][h][k] = 0.0;
+                    }
+                }
+            }
+
+            uint v_head = group * shape.value_size + comp;
+            uint run = lo + ((hi - lo) & ~7u);
+
+            for (uint j = lo; j < run; j += 8u) {
+                float v[room / 64][8];
+
+                for (uint e = 0u; e < 8u; e++) {
+                    uint row = place_of (held_of[0], base + j + e,
+                                         shape.v_base, shape.v_width)
+                               + v_head;
+
+                    for (uint k = 0; k < room / 64; k++) {
+                        v[k][e] = live[k] ? held_at (row + k * 64u) : 0.0;
+                    }
+                }
+
+                for (uint i = 0u; i < QUERIES; i++) {
+                    for (uint h = 0u; h < HEADS; h++) {
+                        uint at = (i * HEADS + h) * LANES + j;
+
+                        for (uint k = 0; k < room / 64; k++) {
+                            for (uint e = 0u; e < 8u; e++) {
+                                got[i][h][k] += tile[at + e] * v[k][e];
+                            }
+                        }
+                    }
+                }
+            }
+
+            for (uint j = run; j < hi; j++) {
+                uint row = place_of (held_of[0], base + j,
+                                     shape.v_base, shape.v_width)
+                           + v_head;
+
+                for (uint k = 0; k < room / 64; k++) {
+                    float v = live[k] ? held_at (row + k * 64u) : 0.0;
+
+                    for (uint i = 0u; i < QUERIES; i++) {
+                        for (uint h = 0u; h < HEADS; h++) {
+                            got[i][h][k] +=
+                              tile[(i * HEADS + h) * LANES + j] * v;
+                        }
+                    }
+                }
+            }
+
+            for (uint k = 0; k < room / 64; k++) {
+                if (live[k]) {
+                    for (uint i = 0u; i < QUERIES; i++) {
+                        for (uint h = 0u; h < HEADS; h++) {
+                            held[i][h][k] =
+                              held[i][h][k] * carry[i][h] + got[i][h][k];
+                        }
+                    }
+                }
+            }
+        }
+#else
         for (uint k = 0; k < room / 64; k++) {
             uint c = comp + k * 64;
             if (c >= shape.value_size) {
@@ -1118,6 +1195,8 @@ void main() {
                 }
             }
         }
+
+#endif
 
         barrier();
 #endif
