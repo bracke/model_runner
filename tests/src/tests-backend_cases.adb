@@ -5176,9 +5176,14 @@ package body Tests.Backend_Cases is
 
       procedure Narrow is new Check (Head => 4, Count => 5);
       procedure Wide is new Check (Head => 128, Count => 21);
+
+      --  And one position at that width, a generated token, which the
+      --  device takes through the compilation made for single positions.
+      procedure Single is new Check (Head => 128, Count => 1);
    begin
       Narrow;
       Wide;
+      Single;
    end The_Linear_Layer_On_The_Device_Says_What_The_Host_Says;
 
    -----------------------------------------------

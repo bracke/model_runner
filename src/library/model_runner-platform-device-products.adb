@@ -2538,6 +2538,8 @@ package body Model_Runner.Platform.Device.Products is
               Model_Runner.Shaders.Rule;
             Held   : aliased constant Model_Runner.Shaders.Word_Array :=
               Model_Runner.Shaders.Rule_Held;
+            Single : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Rule_Held_Single;
          begin
             Request.Size := Interfaces.C.size_t (Routed'Length * 4);
             Request.Code := Routed'Address;
@@ -2600,6 +2602,15 @@ package body Model_Runner.Platform.Device.Products is
                        Made'Access) = 0
             then
                Item.Held_Ruler := Made;
+            end if;
+
+            Request.Size := Interfaces.C.size_t (Single'Length * 4);
+            Request.Code := Single'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Single_Ruler := Made;
             end if;
          end;
 
@@ -3526,6 +3537,16 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Held_Rule_Line := Made;
+            end if;
+         end if;
+
+         if Item.Single_Ruler /= Null_Handle then
+            Request.Stage.Module := Item.Single_Ruler;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Single_Rule_Line := Made;
             end if;
          end if;
 
@@ -4506,6 +4527,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Conv_Line, "vkDestroyPipeline");
       Give_Back (Item.Rule_Line, "vkDestroyPipeline");
       Give_Back (Item.Held_Rule_Line, "vkDestroyPipeline");
+      Give_Back (Item.Single_Rule_Line, "vkDestroyPipeline");
       Give_Back (Item.Heads_Line, "vkDestroyPipeline");
       Give_Back (Item.Turn_Line, "vkDestroyPipeline");
       Give_Back (Item.Place_Line, "vkDestroyPipeline");
@@ -4517,6 +4539,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Conver, "vkDestroyShaderModule");
       Give_Back (Item.Ruler, "vkDestroyShaderModule");
       Give_Back (Item.Held_Ruler, "vkDestroyShaderModule");
+      Give_Back (Item.Single_Ruler, "vkDestroyShaderModule");
       Give_Back (Item.Header, "vkDestroyShaderModule");
       Give_Back (Item.Turner, "vkDestroyShaderModule");
       Give_Back (Item.Placer, "vkDestroyShaderModule");
@@ -12418,6 +12441,10 @@ package body Model_Runner.Platform.Device.Products is
                   Bind_Pipeline
                     (Item.Buffer, Bind_Point_Compute,
                      (if This.Linear.Head = Held_Rule_Head
+                        and then Count = 1
+                        and then Item.Single_Rule_Line /= Null_Handle
+                      then Item.Single_Rule_Line
+                      elsif This.Linear.Head = Held_Rule_Head
                         and then Item.Held_Rule_Line /= Null_Handle
                       then Item.Held_Rule_Line else Item.Rule_Line));
 

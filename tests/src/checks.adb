@@ -6161,10 +6161,11 @@ package body Checks is
          end if;
       end;
 
-      --  And the three of a hybrid's linear layer: the convolution over
+      --  And the four of a hybrid's linear layer: the convolution over
       --  the memory the ring keeps, and the rule over the state it keeps,
-      --  in both its compilations.
-      for Which in 1 .. 3 loop
+      --  in its three compilations -- the chunk's, the one that holds the
+      --  state, and that one again for single positions.
+      for Which in 1 .. 4 loop
          declare
             Name : constant String :=
               (case Which is
@@ -6180,7 +6181,9 @@ package body Checks is
               (case Which is
                   when 1 => Model_Runner.Shaders.Conv_Digest,
                   when 2 => Model_Runner.Shaders.Rule_Digest,
-                  when others => Model_Runner.Shaders.Rule_Held_Digest);
+                  when 3 => Model_Runner.Shaders.Rule_Held_Digest,
+                  when others =>
+                     Model_Runner.Shaders.Rule_Held_Single_Digest);
          begin
             Result.Performed := Result.Performed + 1;
 

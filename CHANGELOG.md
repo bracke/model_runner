@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A generated token's delta rule has a compilation of its own.** The
+  rule that holds its state in registers was built for chunks of eight and
+  gave a single position the same two groups of rows. A second compilation
+  runs the one-position chunk alone, in four groups over twice the waves:
+  the rule a token, qwen3.5-4b 76 -> 63 us a layer, qwen3.6-35b 107 -> 84;
+  generation qwen3.6-35b 14.30 -> 14.50 tokens a second, qwen3.5-0.8b
+  64.9 -> 66.2, qwen3.5-4b 14.15 -> 14.24. The device test of the linear
+  layer now runs a single position at a head of 128 as well.
+
 - **The output head follows the last layer on the device.** A generated
   token's last layer sent its answer home, the host normalized it, and the
   output head went to the device as a submission of its own -- two fences

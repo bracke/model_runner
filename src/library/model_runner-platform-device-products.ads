@@ -2673,6 +2673,7 @@ private
       Conver     : System.Address := System.Null_Address;
       Ruler      : System.Address := System.Null_Address;
       Held_Ruler : System.Address := System.Null_Address;
+      Single_Ruler : System.Address := System.Null_Address;
 
       --  The heads of a layer's queries or keys made ready in one step --
       --  normalized where the architecture says, turned, and the keys and
@@ -2802,6 +2803,7 @@ private
       Conv_Line   : System.Address := System.Null_Address;
       Rule_Line   : System.Address := System.Null_Address;
       Held_Rule_Line : System.Address := System.Null_Address;
+      Single_Rule_Line : System.Address := System.Null_Address;
       Merge_Line  : System.Address := System.Null_Address;
       Invert_Line : System.Address := System.Null_Address;
       Thin_Line   : System.Address := System.Null_Address;

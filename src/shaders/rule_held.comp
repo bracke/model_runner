@@ -23,7 +23,15 @@
 //  difference.
 
 const uint HEAD = 128u;
+//  SINGLE is the compilation for a batch of single positions -- a
+//  generated token -- which runs the one-position chunk alone: nothing of
+//  the longer chunks is compiled, so the registers they took are free,
+//  and the rows go in four groups of thirty-two over twice the waves.
+#ifdef SINGLE
+const uint PARTS = 4u;
+#else
 const uint PARTS = 2u;
+#endif
 const uint HELD = HEAD / PARTS;
 const uint LANES = HEAD * PARTS;
 const uint CHUNK = 8u;
@@ -346,6 +354,12 @@ void main() {
 
     uint done = 0u;
 
+#ifdef SINGLE
+    while (done < run_count) {
+        chunk(1u, done);
+        done += 1u;
+    }
+#else
     while (done < run_count) {
         uint left = run_count - done;
         uint n;
@@ -369,4 +383,5 @@ void main() {
 
         done += n;
     }
+#endif
 }
