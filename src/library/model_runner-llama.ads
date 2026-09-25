@@ -1974,6 +1974,17 @@ package Model_Runner.Llama is
    --  @return True where Draft_Next may be called.
    function Drafts_Next (Item : Session) return Boolean;
 
+   --  What a draft from the block past the stack costs against a token:
+   --  the bytes the block and the output head read, over the bytes the
+   --  stack and the head read -- a mixture's experts counted at the share
+   --  a token uses. A draft is worth a round only where this is small: on
+   --  Qwen3.5-4B it is a sixth and drafting gains a third; on the 0.8B the
+   --  head is a third of the file, and drafting at any length loses.
+   --
+   --  @param Item A prepared model.
+   --  @return The share, or 1.0 where the model has no block past it.
+   function Draft_Share (Item : Model) return Float;
+
    --  The final state of the last position this session evaluated, as
    --  the output head read it: what the block past the stack takes in
    --  beside the next token's embedding.

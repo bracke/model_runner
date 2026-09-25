@@ -16080,6 +16080,84 @@ package body Model_Runner.Llama is
       end loop;
    end Gate_Heads;
 
+   -----------------
+   -- Draft_Share --
+   -----------------
+
+   function Draft_Share (Item : Model) return Float is
+      --  The bytes a layer's matrices read for a token: every projection,
+      --  and a mixture's stacks at the share of experts a token chooses.
+      function Layer_Bytes (L : Layer) return Float is
+         Total : Float := 0.0;
+
+         procedure Add (View : T.View; Share : Float := 1.0) is
+         begin
+            if T.Is_Present (View) then
+               Total := Total
+                 + Float (View.Rows) * Float (T.Row_Bytes (View)) * Share;
+            end if;
+         end Add;
+
+         Used : constant Float :=
+           (if Item.Settings.Experts > 0
+            then Float (Item.Settings.Experts_Used)
+                 / Float (Item.Settings.Experts)
+            else 1.0);
+      begin
+         Add (L.Query);
+         Add (L.Q_A);
+         Add (L.Q_B);
+         Add (L.KV_A_MQA);
+         Add (L.KV_B);
+         Add (L.Key);
+         Add (L.Value);
+         Add (L.Attention_Out);
+         Add (L.Gate);
+         Add (L.Up);
+         Add (L.Down);
+         Add (L.Router);
+         Add (L.Mix);
+         Add (L.Z_Gate);
+         Add (L.Alpha);
+         Add (L.Beta);
+         Add (L.Ssm_In);
+         Add (L.Ssm_X);
+         Add (L.Ssm_Dt);
+         Add (L.Shared_Gate);
+         Add (L.Shared_Up);
+         Add (L.Shared_Down);
+         Add (L.Gate_Stack, Used);
+         Add (L.Up_Stack, Used);
+         Add (L.Down_Stack, Used);
+         return Total;
+      end Layer_Bytes;
+
+      Head : constant Float :=
+        (if T.Is_Present (Item.Output)
+         then Float (Item.Output.Rows) * Float (T.Row_Bytes (Item.Output))
+         elsif T.Is_Present (Item.Embeddings)
+         then Float (Item.Embeddings.Rows)
+              * Float (T.Row_Bytes (Item.Embeddings))
+         else 0.0);
+
+      Stack : Float := Head;
+      Block : Float := Head;
+   begin
+      if Item.Next = null or else Item.Layers = null then
+         return 1.0;
+      end if;
+
+      for L of Item.Layers.all loop
+         Stack := Stack + Layer_Bytes (L);
+      end loop;
+
+      for L of Item.Next.all loop
+         Block := Block + Layer_Bytes (L);
+      end loop;
+
+      return (if Stack > 0.0 then Block / Stack else 1.0);
+   end Draft_Share;
+
    function Drafts_Next (Item : Session) return Boolean
    is (Item.Current not in Closed | Failed
        and then Item.Owner /= null

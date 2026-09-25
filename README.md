@@ -19878,6 +19878,15 @@ mixture gains little -- qwen3.6-35b-a3b 13.7 -> 13.6 to 14.4 -- because a
 batch of five positions reads up to five times the experts on the
 processor, and the experts are most of its token.
 
+What a round costs decides whether it is taken. With no `--draft-tokens`
+named, the block drafts only where the block and the output head are at most
+a quarter of what the stack and the head read -- 0.19 on the 4B, 0.20 on
+qwen3.6, and 0.38 on the 0.8B, whose head is a third of the file and where
+one proposal a round already reads 57 -> 52 tokens a second and the old
+default of four read 37 -- and it proposes three a round, not four: 17.4
+against 15.5 on the 4B, the fourth proposal kept too rarely to pay for the
+block's pass. A `--draft-tokens` named is taken as asked.
+
 ### The rule over a chunk, and its front shared out
 
 The claim was memory -- three passes over eighteen megabytes of state a

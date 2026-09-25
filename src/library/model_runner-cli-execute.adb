@@ -2495,6 +2495,12 @@ package body Model_Runner.CLI.Execute is
    --  run
    ---------------------------------------------------------------------------
 
+   --  The most of a token a draft from the block past the stack may cost
+   --  and still be taken without being asked for, and how many proposals a
+   --  round it makes then. See where a run's request is made.
+   Next_Draft_Share  : constant Float := 0.25;
+   Next_Draft_Tokens : constant := 3;
+
    ---------------------
    -- Resolved_Backend --
    ---------------------
@@ -4032,13 +4038,30 @@ package body Model_Runner.CLI.Execute is
                   --  a caller turns it off; generation itself leaves it
                   --  unused where it cannot apply, which is any sampling
                   --  but greedy and any run under a grammar.
+                  --
+                  --  Unless a draft costs too much of a token to pay: the
+                  --  block and the head over the stack and the head, which
+                  --  is 0.19 on Qwen3.5-4B, where three proposals a round
+                  --  read 13.3 -> 17.4 tokens a second sampling, and 0.38
+                  --  on the 0.8B, whose head is a third of the file and
+                  --  where one proposal a round already reads 57 -> 52. A
+                  --  --draft-tokens named is taken as asked. Three a round
+                  --  unless named: four read 15.5 on the 4B and six 14.0,
+                  --  the proposals past the third kept too rarely to pay
+                  --  for the block's pass.
                   Request.Draft_From_Next :=
                     Item.Draft_Tokens > 0
                     and then not Draft_Ready
                     and then not Item.Draft_Lookup
-                    and then L.Drafts_Next (Session);
+                    and then L.Drafts_Next (Session)
+                    and then (Item.Draft_Tokens_Set
+                              or else L.Draft_Share (Prepared)
+                                      <= Next_Draft_Share);
                   Request.Draft_Tokens :=
-                    (if Draft_Ready or else Item.Draft_Lookup
+                    (if Request.Draft_From_Next
+                       and then not Item.Draft_Tokens_Set
+                     then Next_Draft_Tokens
+                     elsif Draft_Ready or else Item.Draft_Lookup
                        or else Request.Draft_From_Next
                      then Item.Draft_Tokens else 0);
                   Request.Draft_From_Context :=

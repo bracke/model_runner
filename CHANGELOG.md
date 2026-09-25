@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A draft from the block is taken where it pays.** With no
+  `--draft-tokens`, the block past the stack drafts only where it and the
+  output head are at most a quarter of a token's bytes, and three proposals
+  a round rather than four. Qwen3.5-0.8B (0.38) no longer drafts, which lost
+  at every length -- 57 -> 37 tokens a second at the old default; Qwen3.5-4B
+  (0.19) drafts three, 17.4 against 15.5 at four.
+
 - **The block past the stack drafts while sampling.** A file carrying a
   next-token block (the MTP files) drafted from it only for greedy output,
   and `run` samples at 0.4 by default, so an ordinary run never used it. A
