@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The delta rule holds its state in registers.** A hybrid's linear layer
+  read each head's state from memory twice a chunk and wrote it once, a
+  load a lane at a time and each waited for. A second compilation of the
+  rule, for heads of 128, keeps the state in registers for the whole run --
+  two groups of 64 rows a column, chunks of eight -- and writes only the
+  states the host keeps and the run's last. The rule over a 434-token
+  prompt of qwen3.5-4b, 9.7 -> 5.2 ms a layer; prompts qwen3.5-4b 494 ->
+  526 tokens a second, qwen3.5-0.8b 2117 -> 2284, generation unchanged,
+  the same outputs. The device-against-host test of the linear layer now
+  runs at a head of 128 as well.
+
 - **Prompt attention keeps its answer in the matrix accumulators.** The
   matrix attention kernel made each tile's weighted values a product of
   their own and added them into registers through shared memory, since a

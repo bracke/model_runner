@@ -107,6 +107,7 @@ compile pack_subgroups               pack.comp             vulkan1.1 SUBGROUPS
 compile pick                         pick.comp             vulkan1.0
 compile conv                         conv.comp             vulkan1.0
 compile rule                         rule.comp             vulkan1.0
+compile rule_held                    rule_held.comp        vulkan1.1
 
 # shellcheck disable=SC2086
 (cd "$ROOT/tests" && "$TESTS" shader $PAIRS)

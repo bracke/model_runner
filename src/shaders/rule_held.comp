@@ -1,0 +1,372 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+
+//  The gated delta rule of rule.comp, for heads of a hundred and
+//  twenty-eight, with the state held in registers for the whole run.
+//
+//  rule.comp reads a head's state from memory twice a chunk and writes it
+//  once: sixty-four kilobytes a head, a load a lane at a time, each waited
+//  for, and on a prompt of qwen3.5-4b the rule was a fifth of the time.
+//  Here a workgroup is four groups of a hundred and twenty-eight lanes, a
+//  column of the state to a lane and thirty-two of its rows to a group, and
+//  the rows stay where they are: read once when the run begins, and written
+//  only for the positions the host keeps and the run's last. Each group's
+//  share of a chunk's projections goes through shared memory to be added;
+//  the corrections are solved in every group alike, and the answers made in
+//  the first.
+//
+//  The arithmetic is rule.comp's, which has the equations; the order in
+//  which a projection's thirty-two-row shares are added is the only
+//  difference.
+
+const uint HEAD = 128u;
+const uint PARTS = 2u;
+const uint HELD = HEAD / PARTS;
+const uint LANES = HEAD * PARTS;
+const uint CHUNK = 8u;
+const uint NOWHERE = 0xFFFFFFFFu;
+
+layout(local_size_x = LANES) in;
+
+layout(std430, binding = 0) readonly  buffer Weight { float w[]; };
+layout(std430, binding = 1) readonly  buffer Source { float x[]; };
+layout(std430, binding = 2) writeonly buffer Target { float y[]; };
+layout(std430, binding = 3) readonly  buffer Rooms  { float r[]; };
+layout(std430, binding = 4) buffer State { float s[]; };
+layout(std430, binding = 4) readonly buffer Table { uint tab[]; };
+
+layout(push_constant) uniform Shape {
+    uint mix;
+    uint head;
+    uint count;
+    uint table_at;
+    uint key_heads;
+    uint key_width;
+    uint base;
+    uint value_heads;
+    uint state_at;
+    uint every;
+    uint runs;
+    uint z_at;
+    uint alpha_at;
+    uint beta_at;
+    uint scale;
+    uint epsilon;
+    uint unused[8];
+} shape;
+
+//  A chunk's keys and queries, padded a vector a row so that the triangles'
+//  lanes, reading different rows, do not meet in a bank.
+const uint STRIDE = HEAD / 4u + 1u;
+
+shared float decay[CHUNK];
+shared float rate[CHUNK];
+shared float between[CHUNK * CHUNK];
+shared float gram[CHUNK * CHUNK];
+shared float cross[CHUNK * CHUNK];
+shared uint written[CHUNK];
+shared float root[CHUNK];
+shared vec4 keys[CHUNK * STRIDE];
+shared vec4 queries[CHUNK * STRIDE];
+
+//  The groups' shares of a projection, and in its last quarter, once the
+//  queries' shares are read, the answers' squares.
+shared float swap[PARTS * CHUNK * HEAD];
+
+//  Each subgroup's sum of the answers' squares, for as many subgroups as
+//  the first group can be cut into.
+shared float squares[HEAD / 8u * CHUNK];
+
+float logistic(float v) {
+    return 1.0 / (1.0 + exp(-clamp(v, -60.0, 60.0)));
+}
+
+float softplus(float v) {
+    return v > 20.0 ? v : log(1.0 + exp(v));
+}
+
+uint lane;
+uint part;
+uint cl;
+uint h;
+uint first;
+uint run_count;
+uint row0;
+uint slots;
+uint key_of;
+uint query_of;
+uint value_of;
+uint answer;
+uint head_at;
+uint kept_from;
+float a_log;
+float dt_bias;
+
+//  This lane's rows of the state.
+float st[HELD];
+
+#define ROW(t) ((row0 + done + (t)) * shape.mix)
+#define OUT(t) ((row0 + done + (t)) * answer + h * HEAD)
+
+void chunk(const uint n, uint done) {
+    if (lane < CHUNK) {
+        uint t = lane;
+
+        if (t < n) {
+            uint p = row0 + done + t;
+            float alpha = r[shape.alpha_at + p * shape.value_heads + h];
+            float beta = r[shape.beta_at + p * shape.value_heads + h];
+
+            decay[t] = exp(a_log * softplus(alpha + dt_bias));
+            rate[t] = logistic(beta);
+
+            //  The positions the host keeps, and the run's last, which
+            //  the next batch begins from.
+            uint slot = (first + done + t + 1u) % slots;
+            bool keep = done + t >= kept_from || done + t + 1u == run_count;
+            written[t] = keep ? head_at + slot * shape.every : NOWHERE;
+        } else {
+            decay[t] = 1.0;
+            rate[t] = 0.0;
+            written[t] = NOWHERE;
+        }
+    }
+
+    //  The keys and the queries, every lane a few.
+    for (uint at = lane; at < n * HEAD; at += LANES) {
+        uint t = at / HEAD;
+        uint i = at % HEAD;
+
+        keys[t * STRIDE + i / 4u][i % 4u] = x[ROW(t) + key_of + i];
+        queries[t * STRIDE + i / 4u][i % 4u] = x[ROW(t) + query_of + i];
+    }
+
+    barrier();
+
+    if (lane < CHUNK) {
+        uint sfrom = lane;
+        float product = 1.0;
+
+        between[sfrom * CHUNK + sfrom] = 1.0;
+        for (uint t = sfrom + 1u; t < CHUNK; t++) {
+            product *= decay[t];
+            between[sfrom * CHUNK + t] = product;
+        }
+    }
+
+    //  The triangles, an entry a lane.
+    if (lane < CHUNK * CHUNK) {
+        uint a = lane / CHUNK;
+        uint b = lane % CHUNK;
+        float kk = 0.0;
+        float kq = 0.0;
+
+        if (a <= b && b < n) {
+            for (uint c = 0u; c < HEAD / 4u; c++) {
+                vec4 key = keys[a * STRIDE + c];
+                kk += dot(key, keys[b * STRIDE + c]);
+                kq += dot(key, queries[b * STRIDE + c]);
+            }
+        }
+
+        gram[lane] = kk;
+        cross[lane] = kq;
+    }
+
+    //  This group's rows' share of every key's and query's projection.
+    float of_key[CHUNK];
+    float of_query[CHUNK];
+    float fix[CHUNK];
+
+    [[unroll]] for (uint t = 0u; t < n; t++) {
+        of_key[t] = 0.0;
+        of_query[t] = 0.0;
+
+        [[unroll]] for (uint v = 0u; v < HELD / 4u; v++) {
+            vec4 key = keys[t * STRIDE + part * (HELD / 4u) + v];
+            vec4 query = queries[t * STRIDE + part * (HELD / 4u) + v];
+
+            [[unroll]] for (uint k = 0u; k < 4u; k++) {
+                of_key[t] += st[v * 4u + k] * key[k];
+                of_query[t] += st[v * 4u + k] * query[k];
+            }
+        }
+    }
+
+    //  The keys' shares added, in every group.
+    [[unroll]] for (uint t = 0u; t < n; t++) {
+        swap[(part * CHUNK + t) * HEAD + cl] = of_key[t];
+    }
+    barrier();
+    [[unroll]] for (uint t = 0u; t < n; t++) {
+        float sum = 0.0;
+
+        [[unroll]] for (uint q = 0u; q < PARTS; q++) {
+            sum += swap[(q * CHUNK + t) * HEAD + cl];
+        }
+        of_key[t] = sum;
+    }
+    barrier();
+
+    //  And the queries', in the first group, which makes the answers.
+    if (part > 0u) {
+        [[unroll]] for (uint t = 0u; t < n; t++) {
+            swap[((part - 1u) * CHUNK + t) * HEAD + cl] = of_query[t];
+        }
+    }
+    barrier();
+    if (part == 0u) {
+        [[unroll]] for (uint t = 0u; t < n; t++) {
+            [[unroll]] for (uint q = 0u; q < PARTS - 1u; q++) {
+                of_query[t] += swap[(q * CHUNK + t) * HEAD + cl];
+            }
+        }
+    }
+
+    //  The corrections, as rule.comp takes them.
+    [[unroll]] for (uint t = 0u; t < n; t++) {
+        fix[t] = 0.0;
+    }
+
+    [[unroll]] for (uint t = 0u; t < n; t++) {
+        float g_t = between[t] * decay[0];
+        float u = x[ROW(t) + value_of + cl] - g_t * of_key[t];
+
+        [[unroll]] for (uint q = 0u; q < n; q++) {
+            float weight = q < t ? between[q * CHUNK + t] * gram[q * CHUNK + t] : 0.0;
+            u -= weight * fix[q];
+        }
+        fix[t] = u * rate[t];
+    }
+
+    if (part == 0u) {
+        [[unroll]] for (uint t = 0u; t < n; t++) {
+            float o = between[t] * decay[0] * of_query[t];
+
+            [[unroll]] for (uint q = 0u; q < n; q++) {
+                float weight = q <= t ? between[q * CHUNK + t] * cross[q * CHUNK + t] : 0.0;
+                o += weight * fix[q];
+            }
+            o *= uintBitsToFloat(shape.scale);
+            of_query[t] = o;
+            float sum = subgroupAdd(o * o);
+
+            if (subgroupElect()) {
+                squares[gl_SubgroupID * CHUNK + t] = sum;
+            }
+        }
+    }
+
+    //  The states the chunk leaves, this group's rows of each.
+    [[unroll]] for (uint t = 0u; t < n; t++) {
+        [[unroll]] for (uint v = 0u; v < HELD / 4u; v++) {
+            vec4 key = keys[t * STRIDE + part * (HELD / 4u) + v];
+
+            [[unroll]] for (uint k = 0u; k < 4u; k++) {
+                st[v * 4u + k] = st[v * 4u + k] * decay[t] + key[k] * fix[t];
+            }
+        }
+
+        uint to = written[t];
+
+        if (to != NOWHERE) {
+            [[unroll]] for (uint e = 0u; e < HELD; e++) {
+                s[to + (part * HELD + e) * HEAD + cl] = st[e];
+            }
+        }
+    }
+
+    barrier();
+
+    //  Each answer's mean square, from its subgroups' sums.
+    if (lane < n) {
+        float sum = 0.0;
+
+        for (uint g = 0u; g < HEAD / gl_SubgroupSize; g++) {
+            sum += squares[g * CHUNK + lane];
+        }
+        root[lane] = 1.0 / sqrt(sum / float(HEAD)
+                                + uintBitsToFloat(shape.epsilon));
+    }
+
+    barrier();
+
+    //  Normalized, by the gain, and gated.
+    if (part == 0u) {
+        float gain = w[shape.base + 2u * shape.value_heads + cl];
+
+        [[unroll]] for (uint t = 0u; t < n; t++) {
+            float z = r[shape.z_at + (row0 + done + t) * answer + h * HEAD + cl];
+            y[OUT(t) + cl] = of_query[t] * root[t] * gain * logistic(z) * z;
+        }
+    }
+
+    //  The shared numbers are read out before the next chunk writes them.
+    barrier();
+}
+
+void main() {
+    h = gl_WorkGroupID.x;
+    uint run = gl_WorkGroupID.y;
+    lane = gl_LocalInvocationID.x;
+    part = lane / HEAD;
+    cl = lane % HEAD;
+
+    if (h >= shape.value_heads || run >= shape.runs) {
+        return;
+    }
+
+    uint at = shape.table_at + run * 5u;
+    uint base = tab[at];
+    first = tab[at + 1u];
+    run_count = tab[at + 2u];
+    row0 = tab[at + 3u];
+    slots = tab[at + 4u];
+
+    uint kh = h % shape.key_heads;
+    query_of = kh * HEAD;
+    key_of = shape.key_width + kh * HEAD;
+    value_of = 2u * shape.key_width + h * HEAD;
+    answer = shape.value_heads * HEAD;
+    a_log = w[shape.base + h];
+    dt_bias = w[shape.base + shape.value_heads + h];
+
+    head_at = base + shape.state_at + h * HEAD * HEAD;
+    kept_from = run_count > slots ? run_count - slots : 0u;
+
+    //  The state the run begins from, once.
+    uint read_at = head_at + (first % slots) * shape.every;
+
+    [[unroll]] for (uint e = 0u; e < HELD; e++) {
+        st[e] = s[read_at + (part * HELD + e) * HEAD + cl];
+    }
+
+    uint done = 0u;
+
+    while (done < run_count) {
+        uint left = run_count - done;
+        uint n;
+
+        if (left >= CHUNK) {
+            n = CHUNK;
+            chunk(CHUNK, done);
+        } else if (left >= CHUNK / 2u) {
+            n = CHUNK / 2u;
+            chunk(CHUNK / 2u, done);
+        } else if (left >= CHUNK / 4u) {
+            n = CHUNK / 4u;
+            chunk(CHUNK / 4u, done);
+        } else if (left >= CHUNK / 8u) {
+            n = CHUNK / 8u;
+            chunk(CHUNK / 8u, done);
+        } else {
+            n = 1u;
+            chunk(1u, done);
+        }
+
+        done += n;
+    }
+}

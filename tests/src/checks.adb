@@ -6145,20 +6145,26 @@ package body Checks is
          end if;
       end;
 
-      --  And the two of a hybrid's linear layer: the convolution over the
-      --  memory the ring keeps, and the rule over the state it keeps.
-      for Which in 1 .. 2 loop
+      --  And the three of a hybrid's linear layer: the convolution over
+      --  the memory the ring keeps, and the rule over the state it keeps,
+      --  in both its compilations.
+      for Which in 1 .. 3 loop
          declare
             Name : constant String :=
-              (if Which = 1 then "conv" else "rule");
+              (case Which is
+                  when 1 => "conv",
+                  when 2 => "rule",
+                  when others => "rule_held");
             Found : Boolean;
 
             Digest : constant Interfaces.Unsigned_64 :=
               Shader_Generation.Source_Digest
                 (Root & "/src/shaders/" & Name & ".comp", Found);
             Known : constant Interfaces.Unsigned_64 :=
-              (if Which = 1 then Model_Runner.Shaders.Conv_Digest
-               else Model_Runner.Shaders.Rule_Digest);
+              (case Which is
+                  when 1 => Model_Runner.Shaders.Conv_Digest,
+                  when 2 => Model_Runner.Shaders.Rule_Digest,
+                  when others => Model_Runner.Shaders.Rule_Held_Digest);
          begin
             Result.Performed := Result.Performed + 1;
 

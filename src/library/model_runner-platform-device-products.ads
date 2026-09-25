@@ -145,6 +145,11 @@ package Model_Runner.Platform.Device.Products is
    --  And the third compilation's, Gemma's width.
    Matrix_Wider_Head : constant := 256;
 
+   --  The one head width the delta rule's register-held compilation takes;
+   --  every other width goes through the one that reads the state a chunk
+   --  at a time.
+   Held_Rule_Head : constant := 128;
+
    --  How a matrix's bytes are packed. The device decodes every one of these
    --  itself, which is every format this program reads: nothing has to be
    --  repacked to reach a device any more, and repacking is what it always
@@ -2660,6 +2665,7 @@ private
       Picker     : System.Address := System.Null_Address;
       Conver     : System.Address := System.Null_Address;
       Ruler      : System.Address := System.Null_Address;
+      Held_Ruler : System.Address := System.Null_Address;
 
       --  The heads of a layer's queries or keys made ready in one step --
       --  normalized where the architecture says, turned, and the keys and
@@ -2781,6 +2787,7 @@ private
       Pick_Line   : System.Address := System.Null_Address;
       Conv_Line   : System.Address := System.Null_Address;
       Rule_Line   : System.Address := System.Null_Address;
+      Held_Rule_Line : System.Address := System.Null_Address;
       Merge_Line  : System.Address := System.Null_Address;
       Invert_Line : System.Address := System.Null_Address;
       Thin_Line   : System.Address := System.Null_Address;
