@@ -19851,6 +19851,33 @@ and the block's drafting from a loss to a gain there -- **43.3 -> 52.3 tokens
 a second** against 49.4 plain -- and on Qwen3.5-4B from 14.47 to **16.17** on
 the processor and 16.52 to **18.80** on the device.
 
+### The block past the stack drafts while sampling
+
+It drafted only for greedy output, and `run` samples at 0.4 by default -- so
+a file carrying the block drafted from it only when asked for temperature
+zero, and every ordinary run left it idle. The reason given was that a
+residual token replacing a refused proposal did not fit the block's state:
+the round chained the next one to the stack's state at the last position of
+its batch, which is the state over the proposal, and a residual stands where
+the proposal did. A refused round now starts the next from the session's own
+state, which evaluating the residual left; the block's distribution for each
+proposal is kept for the check, as a draft model's is; and the block drafts
+at any temperature. The check is the one a draft model is checked by --
+keep a proposal with the chance its probability allows against the block's,
+and draw a refused one again from what is left -- so the run says what it
+would have said without the block, in distribution. Held by a test that
+draws two tokens four thousand times each way on the hybrid fixture: 0.016
+to 0.026 apart over three ranges of seeds, where accepting five times too
+readily reads 0.12.
+
+Qwen3.5-4B Q8_0 on the device, `run` at its defaults (temperature 0.4, four
+proposals a round), two hundred and fifty-six tokens: **13.4 -> 17.2 tokens
+a second**, 145 of 219 proposals kept. Greedy, where it already drafted,
+reads 14.1 -> 21.9 (`tests speed --draft-next --draft-tokens 3`). A split
+mixture gains little -- qwen3.6-35b-a3b 13.7 -> 13.6 to 14.4 -- because a
+batch of five positions reads up to five times the experts on the
+processor, and the experts are most of its token.
+
 ### The rule over a chunk, and its front shared out
 
 The claim was memory -- three passes over eighteen megabytes of state a

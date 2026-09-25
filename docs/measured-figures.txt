@@ -7784,7 +7784,7 @@ device 6B5C3A3096ECB2BC src/shaders/row_product.comp src/shaders/matrix_product.
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-drafting F6F5E6210BCDDEB2 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+drafting 1389E50E32275413 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14
@@ -22748,4 +22748,18 @@ panels 845E2DD3ECD65560 src/library/model_runner-quantization-interleave.ads src
 # unchanged. Re-fingerprinted.
 #   device 070D36C687370FB9 -> 6B5C3A3096ECB2BC,
 #   outside 070D36C687370FB9 -> 6B5C3A3096ECB2BC.
+# model: as named
+
+# 2026-09-25: the block past the stack drafts while sampling. model_runner
+# run on the device, --max-tokens 256, --seed 7, the lighthouse prompt, two
+# runs each, tokens a second:
+#
+#   model                          --draft-tokens 0    default (4)
+#   qwen3.5-4b-mtp Q8_0            13.48, 13.27        17.27, 17.17  (145/219 kept)
+#   qwen3.6-35b-a3b-mtp Q4_K_S     13.77, 13.69        13.88 (4), 13.64/14.41 (2)
+#
+# Greedy on the 4B, tests speed --repeats 3 --max-tokens 128 --prompt-file
+# speed-prompt.txt: 14.12 plain, 20.85 --draft-next, 21.00 at 2, 21.89 at 3,
+# the same output digest c28d97f7ce4c6246 throughout. Re-fingerprinted.
+#   drafting F6F5E6210BCDDEB2 -> 1389E50E32275413.
 # model: as named

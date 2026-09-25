@@ -1295,6 +1295,129 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Hybrid_Drafts_From_Its_Next_Block;
 
+   --  And drafting from the block while sampling keeps the model's own
+   --  distribution. Above temperature zero a proposal is kept with the
+   --  chance its own probability allows against the block's, and a refused
+   --  one is replaced by a draw from what is left -- which is exact only if
+   --  the block's distribution the test reads is the one the proposal came
+   --  from, and only if the round after a refusal starts from the state of
+   --  the token that replaced it. Two tokens a run, the second being the
+   --  one a round decides; four thousand seeds with the block and four
+   --  thousand without, and the last byte's distribution the same within
+   --  what that many draws can tell apart -- and some proposals refused, or
+   --  the replacing half of the round was never run. Measured: 0.016 to
+   --  0.026 apart over three ranges of seeds; accepting five times too
+   --  readily reads 0.12 and fails.
+   procedure A_Hybrid_Drafts_From_Its_Next_Block_When_Sampling
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Gen renames Model_Runner.Generation;
+
+      Room  : constant := 32;
+      Runs  : constant := 4000;
+      Image : B.Byte_Array_Access;
+
+      type Histogram is array (0 .. 255) of Natural;
+   begin
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Qwen35, Room => Room);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : aliased Harness (Held'Access);
+
+         procedure Count
+           (From_Next : Boolean;
+            Seen      : out Histogram;
+            Proposed  : out Natural;
+            Accepted  : out Natural)
+         is
+         begin
+            Seen := [others => 0];
+            Proposed := 0;
+            Accepted := 0;
+
+            for Seed in 1 .. Runs loop
+               declare
+                  Live    : L.Session;
+                  Request : Gen.Request;
+                  Stop    : Model_Runner.Stops.Set;
+                  Outcome : Gen.Result;
+                  Local   : E.Error_Info;
+               begin
+                  L.Open (Live, Under.Ready, Context => Room, Status => Local);
+                  Assert (E.Is_Ok (Local), "the session did not open");
+
+                  Model_Runner.Stops.Open (Stop);
+                  Request.Max_Tokens := 2;
+                  Request.Sampling.Temperature := 1.0;
+                  Request.Sampling.Repeat_Penalty := 1.0;
+                  Request.Seed := Gen.Seed_Value (Seed);
+                  Request.Has_Seed := True;
+                  Request.Add_Beginning := True;
+                  Request.Retain_Text := True;
+                  Request.Draft_Tokens := (if From_Next then 3 else 0);
+                  Request.Draft_From_Next := From_Next;
+
+                  Gen.Generate
+                    (Under.Ready, Live, "abab", Request, Stop, null, null,
+                     null, null, null, null, Outcome => Outcome);
+                  Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                          "a sampled run failed: "
+                          & E.Error_Code'Image (Outcome.Error.Code));
+
+                  if Outcome.Text_Length > 0 then
+                     declare
+                        Last : constant Natural := Natural
+                          (Outcome.Text.all
+                             (B.Byte_Index (Outcome.Text_Length)));
+                     begin
+                        Seen (Last) := Seen (Last) + 1;
+                     end;
+                  end if;
+
+                  Proposed := Proposed + Outcome.Drafted;
+                  Accepted := Accepted + Outcome.Accepted;
+
+                  B.Free (Outcome.Text);
+                  Model_Runner.Stops.Close (Stop);
+                  L.Close (Live);
+               end;
+            end loop;
+         end Count;
+
+         Plain, Drafted       : Histogram;
+         Ignored_P, Ignored_A : Natural;
+         Proposed, Accepted   : Natural;
+         Apart                : Float := 0.0;
+      begin
+         Start (Under);
+
+         Count (False, Plain, Ignored_P, Ignored_A);
+         Count (True, Drafted, Proposed, Accepted);
+
+         Assert (Proposed > 0,
+                 "the sampled runs proposed nothing from the block");
+         Assert (Accepted < Proposed,
+                 "every one of" & Natural'Image (Proposed)
+                 & " proposals was kept, so no refusal was ever replaced");
+
+         for Byte in Histogram'Range loop
+            Apart := Apart
+              + abs (Float (Plain (Byte)) - Float (Drafted (Byte)))
+                / Float (Runs);
+         end loop;
+         Apart := Apart / 2.0;
+
+         Assert (Apart <= 0.05,
+                 "the last byte's distribution moved by"
+                 & Float'Image (Apart) & " with the block drafting");
+      end;
+
+      B.Free (Image);
+   end A_Hybrid_Drafts_From_Its_Next_Block_When_Sampling;
+
    --  The same token sequence produces bit-identical logits on every run.
    procedure Evaluation_Is_Deterministic
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -12546,6 +12669,10 @@ package body Tests.Inference_Cases is
          "the block past a hybrid's stack drafts, chains on its draft, "
          & "refuses a wrong width, and a run drafting from it says the "
          & "same text");
+      Register_Routine
+        (T, A_Hybrid_Drafts_From_Its_Next_Block_When_Sampling'Access,
+         "a run drafting from a hybrid's next block while sampling keeps "
+         & "the model's own distribution");
       Register_Routine
         (T, Batch_Matches_Sequence'Access,
          "a batch produces the same bits as the tokens evaluated one by one");

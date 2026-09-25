@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The block past the stack drafts while sampling.** A file carrying a
+  next-token block (the MTP files) drafted from it only for greedy output,
+  and `run` samples at 0.4 by default, so an ordinary run never used it. A
+  refused proposal's residual now restarts the block's chain from the
+  session's own state, the block's distribution is kept for the check, and
+  the round verifies by speculative sampling as a draft model's does.
+  Qwen3.5-4B Q8_0 on the device at the defaults: 13.4 -> 17.2 tokens a
+  second. A test holds the distribution: two tokens drawn four thousand
+  times each way, 0.016 to 0.026 apart, where a biased check reads 0.12.
+
 - **A context nobody named fits the machine, and costs what it holds.**
   With no `--context-size`, a session takes the model's declared context
   where the memory bound holds it and the largest halving of it that fits

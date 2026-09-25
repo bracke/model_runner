@@ -464,17 +464,21 @@ package body Model_Runner.Generation is
         not By_Model and then Item.Draft_From_Next
         and then L.Drafts_Next (Session);
 
-      --  Drafting runs greedily on any source, and above temperature zero on
-      --  a draft model or the context -- there it verifies by speculative
-      --  sampling, which keeps the target's own distribution. The self-draft
-      --  block stays greedy: its state cache and a residual token replacing a
-      --  rejected one do not yet fit together. Grammar is greedy-only either
-      --  way, the verify pass carrying no grammar mask.
+      --  Drafting runs greedily on any source, and above temperature zero it
+      --  verifies by speculative sampling, which keeps the target's own
+      --  distribution. The self-draft block did not, for a year: a residual
+      --  token replacing a rejected proposal left the next round chained to
+      --  the stack's state over the proposal, not over the residual. A
+      --  rejected round now starts the next from the session's own state,
+      --  which evaluating the residual left, and the block drafts at any
+      --  temperature -- which is how `run` samples by default, so a file
+      --  carrying the block drafted from it only when asked for greedy
+      --  output. Grammar is greedy-only either way, the verify pass carrying
+      --  no grammar mask.
       Drafting : constant Boolean :=
         (By_Model or else By_Next or else Item.Draft_From_Context)
         and then Item.Draft_Tokens > 0
-        and then Rules = null
-        and then (S.Is_Greedy (Item.Sampling) or else not By_Next);
+        and then Rules = null;
 
       --  Whether this run's drafting verifies by speculative sampling rather
       --  than by matching the target's own greedy choice.
@@ -1194,8 +1198,8 @@ package body Model_Runner.Generation is
                --  With every position's state where the next block will
                --  be run over the prompt behind it -- which is only where
                --  a draft will be asked of it: the block's chain is made
-               --  for a drafting run, and a run that samples, or asked for
-               --  no draft, has no chain to hand the block.
+               --  for a drafting run, and a run under a grammar, or asked
+               --  for no draft, has no chain to hand the block.
                if By_Next and then Drafting then
                   declare
                      Rows : T.Real_Array_Access := null;
@@ -1417,11 +1421,27 @@ package body Model_Runner.Generation is
                      return;
                   end if;
 
-                  S.Sample (Sampler, Aside.all, Guess, Local, Sharing);
+                  S.Sample
+                    (Sampler, Aside.all, Guess, Local, Sharing,
+                     Probs => (if Sampled_Draft then Tgt_Dist else null));
                   if E.Is_Error (Local) then
                      Conclude (Runtime_Error, Local);
                      Failed := True;
                      return;
+                  end if;
+
+                  --  The block's distribution q for this proposal, which
+                  --  the verify pass reads to accept or reject it.
+                  if Sampled_Draft then
+                     declare
+                        Vocab : constant N.Element_Count :=
+                          N.Element_Count (Settings.Vocabulary);
+                        Base  : constant N.Element_Count :=
+                          N.Element_Count (Count - 1) * Vocab;
+                     begin
+                        Draft_Dist.all (Base .. Base + Vocab - 1) :=
+                          Tgt_Dist.all;
+                     end;
                   end if;
 
                   Count := Count + 1;
@@ -1828,13 +1848,17 @@ package body Model_Runner.Generation is
                      end;
                   end loop;
 
+                  --  The last position's state, unless a residual replaced
+                  --  the proposal there: the batch's state for that position
+                  --  is over the proposal, and the next round takes the
+                  --  session's own, which evaluating the residual left.
                   declare
                      At_Row : constant N.Element_Count :=
                        N.Element_Count (Verified_Count - 1) * Width;
                   begin
                      Next_In.all :=
                        Next_States.all (At_Row .. At_Row + Width - 1);
-                     Next_Chained := True;
+                     Next_Chained := not Rejected;
                   end;
                end;
             elsif By_Next then
