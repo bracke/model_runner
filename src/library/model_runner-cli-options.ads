@@ -440,6 +440,14 @@ package Model_Runner.CLI.Options is
       Backend      : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
 
+      --  Whether --backend was given. Unnamed, a run takes the device where
+      --  one opens and the model fits what it holds, and the processor
+      --  otherwise: the device reads a prompt seven to forty times faster
+      --  and generates up to eight times faster on the models this was
+      --  measured on, and a model larger than it holds runs faster on the
+      --  processor. Named, the named backend runs, as it always did.
+      Backend_Set  : Boolean := False;
+
       Sampling : Model_Runner.Sampling.Configuration;
       Seed     : Interfaces.Unsigned_64 := 0;
       Has_Seed : Boolean := False;

@@ -10388,6 +10388,8 @@ package body Tests.CLI_Cases is
       begin
          Add (Source, "run");
          Add (Source, Model);
+         Add (Source, "--backend");
+         Add (Source, "cpu");
          Add (Source, "--raw");
          Add (Source, "--prompt-file");
          Add (Source, Prompt);
@@ -10733,6 +10735,8 @@ package body Tests.CLI_Cases is
       begin
          Add (Source, "run");
          Add (Source, Model);
+         Add (Source, "--backend");
+         Add (Source, "cpu");
          Add (Source, "--raw");
          Add (Source, "--prompt");
          Add (Source, Prompt);

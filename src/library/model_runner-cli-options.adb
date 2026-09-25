@@ -1862,6 +1862,7 @@ package body Model_Runner.CLI.Options is
                              = Model_Runner.Text.To_String (Chosen)
                            then
                               Result.Backend := Kind;
+                              Result.Backend_Set := True;
                               Found := True;
                            end if;
                         end loop;

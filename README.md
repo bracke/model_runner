@@ -1919,6 +1919,19 @@ the kernel the pool runs, and the reference declines the pool.
 
 ### The device backend
 
+**With no `--backend` named, a run takes the device** where one opens and the
+model file is no larger than what the device holds, and the processor
+otherwise, saying why in a note. The difference is the whole of what this
+section measures: on the models on this machine, warm, the device reads a
+prompt seven to forty times faster than the processor (qwen3-8b 287 tokens a
+second against 41, Qwen3-Coder-30B-A3B 365 against 9) and generates 1.3 to 8.5
+times faster (13.8 against 9.2; 35.6 against 4.2). A model larger than the
+device holds -- qwen3.6-35b-a3b, 21 GB against 12.7 -- generates at 13.9 on the
+processor and 2.9 on the device, so it goes to the processor. Naming a device
+option (`--device-memory`, `--device`, `--device-patience`) says the device is
+wanted and takes it; `--backend cpu` or `--backend device` still decides
+outright.
+
 `--backend device` runs the products on a compute device. On this machine --
 an integrated Radeon sharing a fifteen-watt budget with the processor it
 would otherwise be helping -- against the same TinyLlama-1.1B Q8_0 as

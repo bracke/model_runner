@@ -2494,6 +2494,83 @@ package body Model_Runner.CLI.Execute is
    --  run
    ---------------------------------------------------------------------------
 
+   ---------------------
+   -- Resolved_Backend --
+   ---------------------
+
+   --  The backend a run takes when none is named: the device where one
+   --  opens and the model's weights fit the device's budget, the processor
+   --  otherwise. A device option named without --backend (--device-memory,
+   --  --device, --device-patience) says the caller wants the device, and
+   --  gets it. The device is left open when it is chosen, opened as the run
+   --  will ask for it, so the run's own Open finds it ready rather than
+   --  building its pipelines a second time; it is closed when it is not.
+   function Resolved_Backend
+     (Item   : Opt.Command;
+      Screen : in out Pres.Console) return Opt.Command
+   is
+      Result : Opt.Command := Item;
+      Ready  : Boolean;
+   begin
+      if Item.Backend_Set then
+         return Result;
+      end if;
+
+      if Item.Device_Memory_Set
+        or else Item.Device_Index_Set
+        or else Item.Device_Patience_Set
+      then
+         Result.Backend := Model_Runner.Backend.Backend_Device;
+         return Result;
+      end if;
+
+      Model_Runner.Backend.Device.Open
+        (Ready, Item.Device_Memory, Item.Device_Share,
+         Patience => Item.Device_Patience,
+         Which => Item.Device_Index);
+
+      if not Ready then
+         return Result;
+      end if;
+
+      declare
+         Path : constant String :=
+           Model_Runner.Platform.Resolve_Model_Path
+             (T.To_String (Item.Model_Path));
+
+         Weights : constant Interfaces.Unsigned_64 :=
+           (if Ada.Directories.Exists (Path)
+            then Interfaces.Unsigned_64 (Ada.Directories.Size (Path))
+            else 0);
+
+         Holds : constant Interfaces.Unsigned_64 :=
+           Model_Runner.Backend.Device.Describe.Memory_Bytes;
+      begin
+         if Weights > 0 and then Holds > 0 and then Weights <= Holds then
+            Result.Backend := Model_Runner.Backend.Backend_Device;
+         else
+            Model_Runner.Backend.Device.Close;
+
+            if Weights > Holds and then Holds > 0 then
+               Screen.Put_Message
+                 ("cli.note.backend_auto_cpu",
+                  [Loc.Named
+                     ("requested",
+                      Model_Runner.Text.Image (Long_Long_Integer (Weights))),
+                   Loc.Named
+                     ("limit",
+                      Model_Runner.Text.Image (Long_Long_Integer (Holds)))]);
+            end if;
+         end if;
+      end;
+
+      return Result;
+   exception
+      when others =>
+         Model_Runner.Backend.Device.Close;
+         return Item;
+   end Resolved_Backend;
+
    procedure Do_Run
      (Item    : Opt.Command;
       Screen  : in out Pres.Console;
@@ -4218,7 +4295,7 @@ package body Model_Runner.CLI.Execute is
             --  actually opened. The engine uses one queue; whether the
             --  family has more is a fact worth printing rather than a
             --  number only a test ever reads.
-            if Ready then
+            if Ready and then Item.Show_Stats then
                Screen.Put_Message
                  ("cli.note.device_queues",
                   [Loc.Named
@@ -5305,14 +5382,16 @@ package body Model_Runner.CLI.Execute is
                begin
                   Choose_Model (Screen, Chosen.Model_Path, Picked);
                   if Picked then
-                     Do_Run (Chosen, Screen, Catalog, Status);
+                     Do_Run (Resolved_Backend (Chosen, Screen), Screen,
+                             Catalog, Status);
                   else
                      Pres.Report (Screen, E.Make (E.CLI_Missing_Model_Path));
                      Status := E.Exit_Usage;
                   end if;
                end;
             else
-               Do_Run (Item, Screen, Catalog, Status);
+               Do_Run (Resolved_Backend (Item, Screen), Screen, Catalog,
+                       Status);
             end if;
 
          when Opt.Command_Embed =>

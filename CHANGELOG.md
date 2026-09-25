@@ -260,6 +260,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A run takes the device by default.** With no `--backend` named, `run`
+  uses the device where one opens and the model file fits what it holds, and
+  the processor otherwise, with a note saying so; a device option named
+  (`--device-memory`, `--device`, `--device-patience`) takes the device. On
+  this machine's models the device reads a prompt seven to forty times faster
+  and generates 1.3 to 8.5 times faster than the processor. The device's
+  queue-family note is now said only with `--show-stats`, since every run
+  would otherwise print it. `--backend cpu` still selects the processor.
+
 - **The device budget takes the second heap by default,** as far as leaves six
   gigabytes of the host's memory available when the device opens. A mixture
   whose expert stacks outgrew the first heap's share ran none of its layers
