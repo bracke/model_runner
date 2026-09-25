@@ -270,10 +270,6 @@ uint place_of (uint row, uint pos, uint offset, uint width) {
 //  a hundred and twenty-eight costs what it cost at a room of that.
 const uint room = 256;
 
-//  And the widest the path four at a time takes, which lays its parts out
-//  by this stride: a wider head goes a word at a time.
-const uint vroom = 128;
-
 //  How many query positions a workgroup answers.
 #ifdef QUERY_TILE
 const uint QUERIES = 8u;
@@ -637,8 +633,18 @@ void main() {
     //  position a wave; this is a kilobyte of two, and a quarter of the
     //  instructions for the same bytes -- the value loads were a third of
     //  a generated token's attention at thirteen hundred positions.
-    uint v_comp = lane & 31u;
-    uint v_part = lane >> 5u;
+    //
+    //  Sixty-four lanes a position where the head is wider than a
+    //  hundred and twenty-eight -- Gemma's 256 -- which went a word a lane
+    //  until then: a quarter of the loads for the same bytes, and a third
+    //  of a token's attention at four hundred and twenty positions.
+#ifdef FOURS
+    const uint vl = 32u;
+#else
+    uint vl = shape.value_size > 128u ? 64u : 32u;
+#endif
+    uint v_comp = lane % vl;
+    uint v_part = lane / vl;
 #ifdef FOURS
     //  Promised by the engine, which binds this compilation only where
     //  every base and width is a multiple of four, so the paths a word
@@ -654,7 +660,7 @@ void main() {
                      == 0u
                      && (shape.v_width & 3u) == 0u
                      && (shape.value_size & 3u) == 0u
-                     && shape.value_size <= 128u;
+                     && shape.value_size <= 256u;
 #endif
 
     vec4 heldv[QUERIES][HEADS];
@@ -685,7 +691,7 @@ void main() {
         }
     }
 
-#if defined(SUBGROUPS) && defined(FOURS)
+#if defined(SUBGROUPS) && !defined(HALVED)
     //  The keys read across the lanes rather than down them.
     //
     //  A lane a key reads a row on its own, so every load of a wave is
@@ -709,6 +715,17 @@ void main() {
                   && (pieces == 16u || pieces == 32u || pieces == 64u)
                   && pieces <= gl_SubgroupSize;
 
+#ifndef FOURS
+    //  Without the engine's promise of alignment, asked here: the keys'
+    //  base and row width, and the query, each on a word of four. A page
+    //  begins on a line, so in pages only the layer's offset says.
+    across = across
+             && ((shape.k_base
+                  + (shape.page_shift == 0u ? held_of[0] : 0u)) & 3u) == 0u
+             && (shape.kv_width & 3u) == 0u
+             && (q_of[0] & 3u) == 0u;
+#endif
+
     uint piece = gl_SubgroupInvocationID % pieces;
     vec4 qv[HEADS];
 
@@ -722,10 +739,10 @@ void main() {
 //  Four rounds' keys asked for before any is used, so four loads are in
 //  flight a lane rather than one: a round's cluster adds wait on its
 //  load, and thirty-two waits in a row are what a tile costs otherwise.
-#define ACROSS_ROUNDS(WIDTH) \
-    for (uint r = 0u; r < WIDTH; r += 4u) { \
-        vec4 kk[4]; \
-        for (uint e = 0u; e < 4u; e++) { \
+#define ACROSS_ROUNDS(WIDTH, DEPTH) \
+    for (uint r = 0u; r < WIDTH; r += DEPTH) { \
+        vec4 kk[DEPTH]; \
+        for (uint e = 0u; e < DEPTH; e++) { \
             uint at_tile = mine_at + (r + e) * (gl_SubgroupSize / WIDTH) \
                            + which; \
             uint pos = min (base + at_tile, last_max); \
@@ -734,7 +751,7 @@ void main() {
                         + group * shape.head_size; \
             kk[e] = kv4[(k_at >> 2u) + piece]; \
         } \
-        for (uint e = 0u; e < 4u; e++) { \
+        for (uint e = 0u; e < DEPTH; e++) { \
             uint at_tile = mine_at + (r + e) * (gl_SubgroupSize / WIDTH) \
                            + which; \
             for (uint h = 0u; h < HEADS; h++) { \
@@ -752,7 +769,7 @@ void main() {
          base += LANES) {
         uint step = base + lane;
 
-#if defined(SUBGROUPS) && defined(FOURS)
+#if defined(SUBGROUPS) && !defined(HALVED)
         if (across) {
             //  This subgroup's positions of the tile, a few keys a round.
             //  A cluster's width has to be a constant the compiler sees,
@@ -761,11 +778,11 @@ void main() {
             uint which = gl_SubgroupInvocationID / pieces;
 
             if (pieces == 32u) {
-                ACROSS_ROUNDS(32u)
+                ACROSS_ROUNDS(32u, 4u)
             } else if (pieces == 16u) {
-                ACROSS_ROUNDS(16u)
+                ACROSS_ROUNDS(16u, 4u)
             } else {
-                ACROSS_ROUNDS(64u)
+                ACROSS_ROUNDS(64u, 16u)
             }
         }
         barrier ();
@@ -783,7 +800,7 @@ void main() {
             }
         }
 
-#if defined(SUBGROUPS) && defined(FOURS)
+#if defined(SUBGROUPS) && !defined(HALVED)
         if (across) {
             if (step <= last_max) {
                 for (uint h = 0u; h < HEADS; h++) {
@@ -984,8 +1001,8 @@ void main() {
 
 #ifndef HALVED
         if (v_aligned) {
-            uint vlo = min (v_part * 32u, span);
-            uint vhi = min (vlo + 32u, span);
+            uint vlo = min (v_part * vl, span);
+            uint vhi = min (vlo + vl, span);
             uint c4 = v_comp * 4u;
 
             if (c4 < shape.value_size) {
@@ -1239,7 +1256,7 @@ void main() {
                 barrier ();
 
                 for (uint hh = 0u; hh < 2u && from + hh < HEADS; hh++) {
-                    uint at = (hh * (LANES / 32u) + v_part) * vroom
+                    uint at = (hh * (LANES / vl) + v_part) * (vl * 4u)
                               + v_comp * 4u;
                     vec4 mine = heldv[i][from + hh];
                     parts[at]      = mine.x;
@@ -1250,15 +1267,17 @@ void main() {
 
                 barrier ();
 
-                for (uint slot = lane; slot < 2u * vroom; slot += LANES) {
-                    uint hh = slot / vroom;
-                    uint c = slot % vroom;
+                for (uint slot = lane; slot < 2u * vl * 4u;
+                     slot += LANES) {
+                    uint hh = slot / (vl * 4u);
+                    uint c = slot % (vl * 4u);
 
                     if (from + hh < HEADS && c < shape.value_size) {
                         float total = 0.0;
 
-                        for (uint pp = 0u; pp < LANES / 32u; pp++) {
-                            total += parts[(hh * (LANES / 32u) + pp) * vroom
+                        for (uint pp = 0u; pp < LANES / vl; pp++) {
+                            total += parts[(hh * (LANES / vl) + pp)
+                                           * (vl * 4u)
                                            + c];
                         }
 

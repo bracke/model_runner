@@ -7165,7 +7165,6 @@ package body Tests.Backend_Cases is
 
       Heads     : constant := 4;
       Groups    : constant := 2;
-      Positions : constant := 200;
       Batch     : constant := 32;
 
       Held   : Devices.Inventory;
@@ -7179,7 +7178,8 @@ package body Tests.Backend_Cases is
       Near  : constant N.Real := 4.0e-3;
       Exact : constant N.Real := 1.0e-4;
 
-      procedure Compare (Head_Size : Positive) is
+      procedure Compare (Head_Size : Positive; Positions : Positive := 200)
+      is
          Span    : constant N.Element_Count :=
            N.Element_Count (Heads * Head_Size);
          KV_Span : constant N.Element_Count :=
@@ -7290,7 +7290,7 @@ package body Tests.Backend_Cases is
               [2.0, 0.5, -1.0, 3.0];
             Sinks_At : constant N.Element_Count := Room * 2;
             Wanted : N.Real_Array (0 .. Span * Batch - 1) := [others => 0.0];
-            Scores : N.Real_Array (0 .. Positions + Batch - 1);
+            Scores : N.Real_Array (0 .. N.Element_Count (Positions + Batch) - 1);
          begin
             Products.Reserve (Engine, Cache'Length + Heads, Cache'Length + Heads, Ok);
             Assert (Ok, "the cache would not be widened for the sinks");
@@ -7412,6 +7412,10 @@ package body Tests.Backend_Cases is
       --  width, held to the queries one at a time and, with a sink a
       --  head, to the softmax worked out here.
       Compare (Head_Size => 256);
+
+      --  And over a cache long enough for the heads to go in pairs, their
+      --  values sixty-four lanes a position.
+      Compare (Head_Size => 256, Positions => 300);
 
       Products.Close (Engine);
       Devices.Close (Opened);

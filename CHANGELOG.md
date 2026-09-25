@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A wide head's token attention reads its cache in whole lines.** Over
+  the exact cache, a head wider than 128 read its values a word a lane --
+  the four-at-a-time path laid out rows of 128 at most -- and its keys a
+  row a lane, sixty-four rows four kilobytes apart in every load. Values
+  now go sixty-four lanes a position, four at a time, and the keys across
+  the lanes with sixteen rows in flight. gemma-3-4b after a 421-token
+  prompt: attention 125 -> 100 us a layer, 21.37 -> 21.76 tokens a second,
+  the same output. The wide-head test now also runs at a head of 256 over
+  a cache long enough for the pairs.
+
 - **Gemma's generated tokens attend two heads a workgroup.** A token over
   the exact cache went a head a workgroup where the four-at-a-time bundles
   could not take the heads -- Gemma's are 256 wide, in groups of two -- so
