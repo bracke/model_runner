@@ -26,6 +26,8 @@
 #extension GL_ARB_gpu_shader_fp64 : enable
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
 #extension GL_EXT_shader_16bit_storage : require
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_KHR_shader_subgroup_arithmetic : enable
 
 const uint LANES = 256u;
 layout(local_size_x = LANES) in;
@@ -130,6 +132,28 @@ uint placed_at (uint pos, uint offset, uint stride) {
 shared float row[LANES];
 shared float partial[LANES];
 
+//  Every lane's value added, as norm.comp adds it -- in each subgroup and
+//  then the subgroups' sums in order -- so that the fused step and the
+//  normalization it stands for say the same to the bit.
+float whole_sum (float v) {
+    float mine = subgroupAdd (v);
+
+    if (subgroupElect ()) {
+        partial[gl_SubgroupID] = mine;
+    }
+
+    barrier ();
+
+    float total = 0.0;
+
+    for (uint g = 0u; g < gl_NumSubgroups; g++) {
+        total += partial[g];
+    }
+
+    barrier ();
+    return total;
+}
+
 void main() {
     uint group = gl_WorkGroupID.x;
     uint lane  = gl_LocalInvocationID.x;
@@ -185,18 +209,10 @@ void main() {
 
     if (shape.normed != 0u) {
         float v = lane < shape.head_size ? row[lane] : 0.0;
-        partial[lane] = v * v;
-
-        for (uint reach = LANES / 2u; reach > 0u; reach >>= 1u) {
-            barrier();
-            if (lane < reach) {
-                partial[lane] += partial[lane + reach];
-            }
-        }
-        barrier();
+        float squares = whole_sum (v * v);
 
         float gain =
-          sqrt (partial[0] / float (shape.head_size)
+          sqrt (squares / float (shape.head_size)
                 + uintBitsToFloat (shape.epsilon));
 
         if (gain == 0.0 || isinf (gain) || isnan (gain)) {

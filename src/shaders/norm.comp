@@ -41,6 +41,9 @@
 
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable
 #extension GL_EXT_shader_16bit_storage : require
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_KHR_shader_subgroup_arithmetic : enable
 
 const uint LANES = 256u;
 
@@ -102,6 +105,34 @@ layout(std430, binding = 4) readonly buffer Residual { float rj[]; };
 
 shared float partial[LANES];
 
+//  The row this lane reads, held from the first pass to the last: a
+//  stride a lane, sixteen of them, which is a width of four thousand and
+//  ninety-six. A wider row reads the rest again.
+const uint HELD = 16u;
+
+//  Every lane's value added: in each subgroup, and then the subgroups'
+//  sums through shared memory -- one barrier where the fold took eight,
+//  and a normalization of a generated token is a workgroup alone, its
+//  barriers the whole of its time.
+float whole_sum (float v) {
+    float mine = subgroupAdd (v);
+
+    if (subgroupElect ()) {
+        partial[gl_SubgroupID] = mine;
+    }
+
+    barrier ();
+
+    float total = 0.0;
+
+    for (uint g = 0u; g < gl_NumSubgroups; g++) {
+        total += partial[g];
+    }
+
+    barrier ();
+    return total;
+}
+
 void main() {
     uint slot = gl_WorkGroupID.x;
     uint lane = gl_LocalInvocationID.x;
@@ -126,55 +157,59 @@ void main() {
         return;
     }
 
-    //  The mean first, for the centred one: the same fold, over the
-    //  values rather than their squares.
+    float row[HELD];
+
+    //  And the gain and the residual with it, asked for before the sums
+    //  rather than after them: nothing about them waits on the root, and
+    //  a load issued after the barriers is a load whose latency nothing
+    //  hides.
+    float gain_of[HELD];
+    float join_of[HELD];
+
+    [[unroll]] for (uint k = 0u; k < HELD; k++) {
+        uint c = lane + k * LANES;
+        bool inside = c < shape.width;
+
+        row[k] = inside ? x[at + c] : 0.0;
+        gain_of[k] = inside ? g[shape.base + c] : 0.0;
+        join_of[k] = inside && shape.joins != 0u ? rj[at + c] : 0.0;
+    }
+
+    //  The mean first, for the centred one, over the values rather than
+    //  their squares.
     float mean = 0.0;
 
     if (shape.centered != 0u) {
         float total = 0.0;
 
-        for (uint c = lane; c < shape.width; c += LANES) {
+        [[unroll]] for (uint k = 0u; k < HELD; k++) {
+            total += row[k];
+        }
+        for (uint c = lane + HELD * LANES; c < shape.width; c += LANES) {
             total += x[at + c];
         }
 
-        partial[lane] = total;
-
-        for (uint reach = LANES / 2u; reach > 0u; reach >>= 1u) {
-            barrier();
-
-            if (lane < reach) {
-                partial[lane] += partial[lane + reach];
-            }
-        }
-
-        barrier();
-        mean = partial[0] / float (shape.width);
-        barrier();
+        mean = whole_sum (total) / float (shape.width);
     }
 
     //  A stride a lane, so that the lanes of a turn read neighbours.
     float mine = 0.0;
 
-    for (uint c = lane; c < shape.width; c += LANES) {
+    [[unroll]] for (uint k = 0u; k < HELD; k++) {
+        if (lane + k * LANES < shape.width) {
+            float v = row[k] - mean;
+            mine += v * v;
+        }
+    }
+    for (uint c = lane + HELD * LANES; c < shape.width; c += LANES) {
         float v = x[at + c] - mean;
         mine += v * v;
     }
 
-    partial[lane] = mine;
-
-    //  And fold, halving the live lanes each turn.
-    for (uint reach = LANES / 2u; reach > 0u; reach >>= 1u) {
-        barrier();
-
-        if (lane < reach) {
-            partial[lane] += partial[lane + reach];
-        }
-    }
-
-    barrier();
+    float squares = whole_sum (mine);
 
     float gain =
-      sqrt (partial[0] / float (shape.width)
+      sqrt (squares / float (shape.width)
             + uintBitsToFloat (shape.epsilon));
 
     //  A zero or non-finite scale means the input was degenerate. A unit
@@ -190,14 +225,16 @@ void main() {
 
     //  And out, every lane at once: nothing here is serial either.
     for (uint c = lane; c < shape.width; c += LANES) {
-        float scaled = (x[at + c] - mean) * gain;
+        uint k = (c - lane) / LANES;
+        bool held = k < HELD;
+        float scaled = ((held ? row[k] : x[at + c]) - mean) * gain;
 
-        float made = scaled * g[shape.base + c]
+        float made = scaled * (held ? gain_of[k] : g[shape.base + c])
                      + (shape.centered != 0u
                         ? g[shape.base + shape.width + c] : 0.0);
 
         if (shape.joins != 0u) {
-            made += rj[at + c];
+            made += held ? join_of[k] : rj[at + c];
         }
 
         if (halved) {

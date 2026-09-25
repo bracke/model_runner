@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A normalization reads its row once and waits once.** A generated
+  token's normalization is one workgroup alone, and its time was its
+  barriers and its loads: eight folding barriers for each sum, the row
+  read twice, and the gain and the residual asked for only after the root.
+  The row, the gain and the residual are now read together up front and
+  held, and each sum goes through subgroups and one barrier; the fused
+  heads step adds the same way, so it still agrees to the bit. gemma-3-4b's
+  four norms a token, 44 -> 28 us a layer; generation gemma-3-4b 22.83 ->
+  23.08 tokens a second, qwen3-8b 13.52 -> 13.65, prompts level, the same
+  outputs.
+
 - **A wide head's token attention reads its cache in whole lines.** Over
   the exact cache, a head wider than 128 read its values a word a lane --
   the four-at-a-time path laid out rows of 128 at most -- and its keys a
