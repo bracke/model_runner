@@ -5186,6 +5186,149 @@ package body Tests.Backend_Cases is
       Single;
    end The_Linear_Layer_On_The_Device_Says_What_The_Host_Says;
 
+   ----------------------------------------------------
+   -- The_Shared_Expert_On_The_Device_Says_What_The_Host_Says --
+   ----------------------------------------------------
+
+   --  A mixture's shared expert, sent over after a layer's front half and
+   --  fetched when the chosen experts are summed, against the same block
+   --  worked out here: the normalization, the gated block, and the answer
+   --  scaled by the logistic of the router's row against the normalized
+   --  input. A model's logits are a poor judge of it -- a fixture's shared
+   --  expert moves them by less than the tolerance a device is held to --
+   --  so this holds the answer itself.
+   procedure The_Shared_Expert_On_The_Device_Says_What_The_Host_Says
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Width : constant N.Element_Count := 64;
+      Feed  : constant N.Element_Count := 32;
+      Epsilon : constant N.Real := 1.0E-6;
+
+      Ready, Ok : Boolean;
+      Status    : E.Error_Info;
+
+      function View_Of
+        (Rows, Columns : N.Element_Count; Seed : Interfaces.Unsigned_64;
+         Storage : out B.Byte_Array_Access) return T.View
+      is
+         Values : constant N.Real_Array :=
+           Fixtures.Sequence (Rows * Columns, Seed, 0.2);
+         Bytes  : constant B.Byte_Array := Fixtures.Encode_F32 (Values);
+         Made   : T.View;
+      begin
+         B.Allocate (Bytes'Length, Storage);
+         Storage.all := Bytes;
+         T.Make (G.Type_F32, Rows, Columns, Storage, 0, Made, Status);
+         Assert (E.Is_Ok (Status), "a weight view could not be built");
+         return Made;
+      end View_Of;
+
+      Gate_Bytes, Up_Bytes, Down_Bytes : B.Byte_Array_Access;
+      Gate : constant T.View := View_Of (Feed, Width, 11, Gate_Bytes);
+      Up   : constant T.View := View_Of (Feed, Width, 12, Up_Bytes);
+      Down : constant T.View := View_Of (Width, Feed, 13, Down_Bytes);
+
+      Residual, Norm, Router, Answer : T.Real_Array_Access;
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready);
+      if not Ready then
+         B.Free (Gate_Bytes);
+         B.Free (Up_Bytes);
+         B.Free (Down_Bytes);
+         return;
+      end if;
+
+      T.Allocate (Width, Residual);
+      T.Allocate (Width, Norm);
+      T.Allocate (Width, Router);
+      T.Allocate (Width, Answer);
+      Residual.all := Fixtures.Sequence (Width, 21, 1.0);
+      Norm.all := Fixtures.Sequence (Width, 22, 0.5);
+      for C in Norm.all'Range loop
+         Norm.all (C) := Norm.all (C) + 1.0;
+      end loop;
+      Router.all := Fixtures.Sequence (Width, 23, 0.3);
+
+      Model_Runner.Backend.Device.Start_Shared
+        (Residual, Norm, Epsilon, Gate, Up, Down, Router, Ok);
+      Assert (Ok, "the device would not start the shared expert");
+      Model_Runner.Backend.Device.Finish_Shared (Answer, Ok);
+      Assert (Ok, "the device's shared expert could not be fetched");
+
+      declare
+         Normed : N.Real_Array (0 .. Width - 1);
+         Middle : N.Real_Array (0 .. Feed - 1);
+         Sum    : N.Real := 0.0;
+         Score  : N.Real := 0.0;
+         Worst  : N.Real := 0.0;
+
+         --  The weights as the views hold them.
+         Gate_W : constant N.Real_Array :=
+           Fixtures.Sequence (Feed * Width, 11, 0.2);
+         Up_W   : constant N.Real_Array :=
+           Fixtures.Sequence (Feed * Width, 12, 0.2);
+         Down_W : constant N.Real_Array :=
+           Fixtures.Sequence (Width * Feed, 13, 0.2);
+      begin
+         for C in 0 .. Width - 1 loop
+            Sum := Sum + Residual.all (C) * Residual.all (C);
+         end loop;
+         for C in 0 .. Width - 1 loop
+            Normed (C) :=
+              Residual.all (C)
+              / N.Real (Ada.Numerics.Elementary_Functions.Sqrt
+                          (Float (Sum / N.Real (Width) + Epsilon)))
+              * Norm.all (C);
+            Score := Score + Normed (C) * Router.all (C);
+         end loop;
+
+         for R in 0 .. Feed - 1 loop
+            declare
+               G_Sum, U_Sum : N.Real := 0.0;
+            begin
+               for C in 0 .. Width - 1 loop
+                  G_Sum := G_Sum + Gate_W (R * Width + C) * Normed (C);
+                  U_Sum := U_Sum + Up_W (R * Width + C) * Normed (C);
+               end loop;
+               Middle (R) :=
+                 G_Sum / (1.0 + N.Real (Ada.Numerics.Elementary_Functions.Exp
+                                          (Float (-G_Sum))))
+                 * U_Sum;
+            end;
+         end loop;
+
+         for R in 0 .. Width - 1 loop
+            declare
+               D_Sum : N.Real := 0.0;
+               Want  : N.Real;
+            begin
+               for C in 0 .. Feed - 1 loop
+                  D_Sum := D_Sum + Down_W (R * Feed + C) * Middle (C);
+               end loop;
+               Want :=
+                 D_Sum / (1.0 + N.Real (Ada.Numerics.Elementary_Functions.Exp
+                                          (Float (-Score))));
+               Worst := N.Real'Max (Worst, abs (Want - Answer.all (R)));
+            end;
+         end loop;
+
+         Assert (Worst <= 1.0E-4,
+                 "the device's shared expert differs from the host's by "
+                 & N.Real'Image (Worst));
+      end;
+
+      T.Free (Residual);
+      T.Free (Norm);
+      T.Free (Router);
+      T.Free (Answer);
+      B.Free (Gate_Bytes);
+      B.Free (Up_Bytes);
+      B.Free (Down_Bytes);
+   end The_Shared_Expert_On_The_Device_Says_What_The_Host_Says;
+
    -----------------------------------------------
    -- A_Cache_Past_The_Storage_Bound_Is_Refused --
    -----------------------------------------------
@@ -8354,6 +8497,10 @@ package body Tests.Backend_Cases is
          "the convolution over the memory a ring keeps and the gated delta "
          & "rule over the state it keeps -- a hybrid's linear layer on the "
          & "device -- say what the host's own say, the ring included");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, The_Shared_Expert_On_The_Device_Says_What_The_Host_Says'Access,
+         "a mixture's shared expert sent over after the front half and "
+         & "fetched later says what the host's own block says");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, A_Cache_Past_The_Storage_Bound_Is_Refused'Access,
          "a cache past what the device says one storage buffer may hold "

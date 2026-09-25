@@ -8179,6 +8179,9 @@ package body Model_Runner.Platform.Device.Products is
       Ok := True;
    end Get_State;
 
+   function Submissions (Item : Engine) return Interfaces.Unsigned_64
+   is (Item.Clock);
+
    function Runs_Linear (Item : Engine) return Boolean
    is (Item.Conv_Line /= Null_Handle and then Item.Rule_Line /= Null_Handle);
 

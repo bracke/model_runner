@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A split mixture's shared expert runs on the device beside the pool.**
+  Where a mixture too big for the device runs each layer's front half there
+  and its experts on the processor's pool, a generated token's eight chosen
+  experts and the shared one were nine jobs for the pool's eight hands,
+  while the device waited. The shared expert now goes to the device after
+  the front half and is fetched when the chosen experts are summed:
+  qwen3.6-35b-a3b generation 14.88 -> 15.55 tokens a second. A new device
+  test holds the shared expert's answer against the host's own block.
+
 - **A generated token's delta rule has a compilation of its own.** The
   rule that holds its state in registers was built for chunks of eight and
   gave a single position the same two groups of rows. A second compilation

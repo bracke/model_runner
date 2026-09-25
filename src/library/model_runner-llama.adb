@@ -10528,6 +10528,15 @@ package body Model_Runner.Llama is
 
       Wide   : constant Element_Count := Count * Width;
 
+      --  Whether the device made the shared expert's answer for this one
+      --  position after the layer's front half; asked once, and cleared.
+      Given_Shared : constant Boolean :=
+        Item.Shared_Ready
+        and then Count = 1
+        and then T.Is_Present (Current.Shared_Gate)
+        and then Item.Shared_Given /= null
+        and then Item.Shared_Given.all'Length >= Width;
+
       --  Whether the experts are dealt to the pool's workers below, an
       --  expert to a worker -- in which case the shared expert goes with
       --  them, as chunks of the same job, rather than as three products
@@ -10576,6 +10585,7 @@ package body Model_Runner.Llama is
 
       Usable : Boolean;
    begin
+      Item.Shared_Ready := False;
       Ok := False;
       Status := E.Success;
 
@@ -10600,10 +10610,23 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      --  The shared expert's answer as the device made it after the
+      --  front half, scaled already: a gate of one, and nothing for the
+      --  pool to deal.
+      if Given_Shared then
+         Ensure (Item.Shared_Rows_A, Count * Element_Count (Settings.Shared_Feed));
+         Ensure (Item.Shared_Rows_B, Count * Element_Count (Settings.Shared_Feed));
+         Ensure (Item.Shared_Rows_Out, Wide + Count);
+         if Item.Shared_Rows_Out = null or else Item.Shared_Rows_A = null
+           or else Item.Shared_Rows_B = null
+         then
+            return;
+         end if;
+
       --  The shared expert over the whole batch, while the rows are still
       --  the input: its answer and its gate a row, added in at the end
       --  once the chosen experts have been summed into the rows.
-      if T.Is_Present (Current.Shared_Gate) then
+      elsif T.Is_Present (Current.Shared_Gate) then
          declare
             Shared : constant Element_Count :=
               Element_Count (Settings.Shared_Feed);
@@ -10861,7 +10884,7 @@ package body Model_Runner.Llama is
             --  And the shared expert's, one for every Chunk_Size rows of
             --  the batch, its number being Many: the expert past the last.
             Dealing_Shared : constant Boolean :=
-              T.Is_Present (Current.Shared_Gate);
+              T.Is_Present (Current.Shared_Gate) and then not Given_Shared;
 
             Most_Chunks : constant Natural :=
               Natural (Count) * Used + Many + Natural (Count);
@@ -11642,6 +11665,62 @@ package body Model_Runner.Llama is
       end loop;
 
       <<Summed>>
+
+      --  The shared expert the device was making meanwhile, at a gate of
+      --  one since its answer is scaled already; or, where it was not
+      --  made after all, the host's own, from the rows the mixture read.
+      if Given_Shared then
+         declare
+            Fetched : Boolean;
+            Shared  : constant Element_Count :=
+              Element_Count (Settings.Shared_Feed);
+         begin
+            Model_Runner.Backend.Device.Finish_Shared
+              (Item.Shared_Given, Fetched);
+
+            if Fetched then
+               Item.Shared_Rows_Out.all (0 .. Width - 1) :=
+                 Item.Shared_Given.all
+                   (Item.Shared_Given.all'First
+                    .. Item.Shared_Given.all'First + Width - 1);
+               Item.Shared_Rows_Out.all (Wide) := 1.0;
+            else
+               declare
+                  Gate : N.Wide_Real := 0.0;
+               begin
+                  for C in 0 .. Width - 1 loop
+                     Gate := Gate
+                       + N.Wide_Real (Rows.all (Rows.all'First + C))
+                         * N.Wide_Real (Current.Shared_Router.all (C));
+                  end loop;
+                  Item.Shared_Rows_Out.all (Wide) := Sigmoid (Real (Gate));
+               end;
+
+               Product_Batch
+                 (Item, Current.Shared_Gate, Rows, 1, Item.Shared_Rows_A,
+                  Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+               Product_Batch
+                 (Item, Current.Shared_Up, Rows, 1, Item.Shared_Rows_B,
+                  Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+               K.SiLU (Item.Shared_Rows_A.all (0 .. Shared - 1));
+               K.Multiply
+                 (Item.Shared_Rows_A.all (0 .. Shared - 1),
+                  Item.Shared_Rows_B.all (0 .. Shared - 1));
+               Product_Batch
+                 (Item, Current.Shared_Down, Item.Shared_Rows_A, 1,
+                  Item.Shared_Rows_Out, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+         end;
+      end if;
 
       --  And the sums, a position at a time and best expert first, which is
       --  the order one position's mixture adds them in and the reason the
@@ -14137,6 +14216,7 @@ package body Model_Runner.Llama is
       T.Free (Item.Shared_Rows_A);
       T.Free (Item.Shared_Rows_B);
       T.Free (Item.Shared_Rows_Out);
+      T.Free (Item.Shared_Given);
       Release_State_Room (Item'Unchecked_Access);
       T.Free (Item.Conv_State);
       T.Free (Item.Delta_State);
@@ -16652,6 +16732,42 @@ package body Model_Runner.Llama is
           then Layer_Fits (Source.Layers.all (Index + 1), Index + 1)
           else Head_Follows);
 
+      --  Room for the shared expert's answer where the device makes it
+      --  after a front half, and none where the layer has no shared one.
+      --  The shared expert of a layer whose front half the device ran,
+      --  sent over while the host's pool runs the chosen experts; the
+      --  mixture fetches it when it sums, or makes it itself.
+      procedure Start_Shared (L : Layer; Front : Boolean) is
+      begin
+         Item.Shared_Ready := False;
+
+         if not Front
+           or else not T.Is_Present (L.Shared_Gate)
+           or else L.Feed_Norm = null
+           or else L.Feed_Norm_Pair /= null
+           or else Centres (Source, L.Feed_Norm_Bias)
+           or else Settings.Parallel_Residual
+         then
+            return;
+         end if;
+
+         if Item.Shared_Given = null
+           or else Item.Shared_Given.all'Length
+                   /= Element_Count (Settings.Embedding)
+         then
+            T.Free (Item.Shared_Given);
+            T.Allocate (Element_Count (Settings.Embedding), Item.Shared_Given);
+            if Item.Shared_Given = null then
+               return;
+            end if;
+         end if;
+
+         Model_Runner.Backend.Device.Start_Shared
+           (Item.Activation, L.Feed_Norm, Settings.Epsilon,
+            L.Shared_Gate, L.Shared_Up, L.Shared_Down, L.Shared_Router,
+            Item.Shared_Ready);
+      end Start_Shared;
+
       --  A layer whose front half goes to the device and whose feed-forward
       --  the processor runs: a mixture the device does not hold, in a model
       --  whose everything else it does (Split_Feed), arranged the plain way
@@ -17209,6 +17325,7 @@ package body Model_Runner.Llama is
                            Linear_State_At =>
                              Linear_State_At (Item, Natural (Index)),
                            No_Feed   => Half);
+                        Start_Shared (Current, Half and then Fused);
                         Half_Done := Half and then Fused;
                         Went_Whole := Fused and then not Half;
                      end if;
@@ -17497,6 +17614,7 @@ package body Model_Runner.Llama is
                         Shared_Down   => Current.Shared_Down,
                         Shared_Router => Current.Shared_Router,
                         No_Feed       => Half);
+                     Start_Shared (Current, Half and then Fused);
                      Half_Done := Half and then Fused;
                      Went_Whole := Fused and then not Half;
                   end if;

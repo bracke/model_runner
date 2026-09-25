@@ -2115,6 +2115,14 @@ package Model_Runner.Platform.Device.Products is
    --  @return True where a hybrid's linear layer may go whole.
    function Runs_Linear (Item : Engine) return Boolean;
 
+   --  How many submissions the engine has recorded: a caller that leaves
+   --  an answer on the device to fetch later asks whether anything went
+   --  over since, which would have written where the answer lies.
+   --
+   --  @param Item Engine.
+   --  @return A count that grows by one a submission.
+   function Submissions (Item : Engine) return Interfaces.Unsigned_64;
+
    --  Why the last sequence was refused, where it was: its shape is not
    --  one the steps take; an attention step's packed block is not a
    --  shape the packed kernel reads -- a row, a head or a scale run that

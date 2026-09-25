@@ -1081,6 +1081,43 @@ package Model_Runner.Backend.Device is
       Cancel      : Model_Runner.Cancellation.Token_Reference := null;
       Carry_In    : Boolean := False);
 
+   --  A mixture's shared expert for one position, sent over and not waited
+   --  for: the normalization the feed-forward reads, the gated block, and
+   --  its scaling by the logistic of its router's score, over Residual.
+   --  The answer stays on the device for Finish_Shared, and the host runs
+   --  the chosen experts meanwhile -- a token's eight of them and the
+   --  shared one were nine jobs for the pool's eight hands, and the device
+   --  stood idle while they ran.
+   --
+   --  @param Residual The residual after attention, one position.
+   --  @param Feed_Norm The normalization's weight.
+   --  @param Epsilon Its floor.
+   --  @param Gate The shared expert's gate.
+   --  @param Up Its projection up.
+   --  @param Down Its projection down.
+   --  @param Router Its router's row.
+   --  @param Ok False where nothing was sent; the host makes it then.
+   procedure Start_Shared
+     (Residual  : Model_Runner.Tensors.Real_Array_Access;
+      Feed_Norm : Model_Runner.Tensors.Real_Array_Access;
+      Epsilon   : Model_Runner.Numerics.Real;
+      Gate      : Model_Runner.Tensors.View;
+      Up        : Model_Runner.Tensors.View;
+      Down      : Model_Runner.Tensors.View;
+      Router    : Model_Runner.Tensors.Real_Array_Access;
+      Ok        : out Boolean);
+
+   --  What Start_Shared left on the device, scaled by its gate, one
+   --  position of it. Ok is False where nothing is there to fetch -- none
+   --  was started, or something else went over since and wrote where it
+   --  lay -- and the host makes it itself.
+   --
+   --  @param Into Receives the answer, one position wide.
+   --  @param Ok True where the answer was fetched.
+   procedure Finish_Shared
+     (Into : Model_Runner.Tensors.Real_Array_Access;
+      Ok   : out Boolean);
+
    --  A whole layer, in one submission.
    --
    --  `Attend_And_Feed` takes its second half and `Normalize_And_Project`

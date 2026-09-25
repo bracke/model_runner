@@ -2099,6 +2099,207 @@ package body Model_Runner.Backend.Device is
       Ok := True;
    end Normalize_And_Project;
 
+   ------------------
+   -- Start_Shared --
+   ------------------
+
+   --  The submission count Start_Shared left its answer at, and whether
+   --  one is waiting.
+   Shared_Started : Boolean := False;
+   Shared_At      : Interfaces.Unsigned_64 := 0;
+   Shared_Width   : Model_Runner.Numerics.Element_Count := 0;
+
+   procedure Start_Shared
+     (Residual  : T.Real_Array_Access;
+      Feed_Norm : T.Real_Array_Access;
+      Epsilon   : Model_Runner.Numerics.Real;
+      Gate      : T.View;
+      Up        : T.View;
+      Down      : T.View;
+      Router    : T.Real_Array_Access;
+      Ok        : out Boolean)
+   is
+      Steps  : Products.Sequence;
+      Added  : Boolean;
+      Ran    : Boolean;
+      Cancelled : Boolean := False;
+      Wanted : Model_Runner.Numerics.Element_Count := 0;
+      Width  : Model_Runner.Numerics.Element_Count := 0;
+
+      Gate_P, Up_P, Down_P : Products.Weight_Packing;
+      Known : Boolean;
+   begin
+      Ok := False;
+      Shared_Started := False;
+
+      if not Ready_Now
+        or else Residual = null
+        or else Feed_Norm = null
+        or else Router = null
+        or else not T.Is_Present (Gate)
+        or else not T.Is_Present (Up)
+        or else not T.Is_Present (Down)
+      then
+         return;
+      end if;
+
+      Width := Model_Runner.Numerics.Element_Count (Feed_Norm'Length);
+
+      if Residual.all'Length < Width
+        or else Router.all'Length /= Width
+        or else Gate.Columns /= Width
+        or else Up.Columns /= Width
+        or else Up.Rows /= Gate.Rows
+        or else Down.Rows /= Width
+        or else Down.Columns /= Gate.Rows
+      then
+         return;
+      end if;
+
+      Packing_Of (Gate.Format, Gate_P, Known);
+      if not Known then
+         return;
+      end if;
+      Packing_Of (Up.Format, Up_P, Known);
+      if not Known then
+         return;
+      end if;
+      Packing_Of (Down.Format, Down_P, Known);
+      if not Known then
+         return;
+      end if;
+
+      Products.Open_Sequence (Steps);
+
+      declare
+         At_Feed : constant System.Address :=
+           Feed_Norm.all (Feed_Norm.all'First)'Address;
+      begin
+         Products.Add_Norm
+           (Steps, At_Feed,
+            Model_Runner.Bytes.Byte_Count (Feed_Norm.all'Length) * 4, 0,
+            Natural (Width), Epsilon, Added, Key => At_Feed, Kept => False);
+      end;
+      if not Added then
+         return;
+      end if;
+      Wanted := Wanted + Width;
+
+      Products.Add_Chained_Product
+        (Steps, Gate.Base, Gate.Span, Gate.Offset, Gate_P,
+         Natural (Gate.Rows), Natural (Gate.Columns), Added,
+         Key => At_Offset (Gate.Base, Gate.Offset), Kept => False,
+         From_Step => 1);
+      if not Added then
+         return;
+      end if;
+      Wanted := Wanted + Gate.Rows;
+
+      Products.Add_Chained_Product
+        (Steps, Up.Base, Up.Span, Up.Offset, Up_P,
+         Natural (Up.Rows), Natural (Up.Columns), Added,
+         Key => At_Offset (Up.Base, Up.Offset), Kept => False,
+         From_Step => 1);
+      if not Added then
+         return;
+      end if;
+      Wanted := Wanted + Up.Rows;
+
+      Products.Add_Combination (Steps, 0, Added, Kept => False);
+      if not Added then
+         return;
+      end if;
+      Wanted := Wanted + Gate.Rows;
+
+      Products.Add_Chained_Product
+        (Steps, Down.Base, Down.Span, Down.Offset, Down_P,
+         Natural (Down.Rows), Natural (Down.Columns), Added,
+         Key => At_Offset (Down.Base, Down.Offset), Kept => False);
+      if not Added then
+         return;
+      end if;
+      Wanted := Wanted + Width;
+
+      declare
+         Step_Down : constant Natural := Products.Length (Steps);
+
+         At_Row : constant System.Address :=
+           Router.all (Router.all'First)'Address;
+      begin
+         Products.Add_Chained_Product
+           (Steps, At_Row,
+            Model_Runner.Bytes.Byte_Count (Router.all'Length) * 4,
+            0, Products.Values_F32, 1, Natural (Width), Added,
+            Key => At_Row, Kept => False, From_Step => 1);
+         if not Added then
+            return;
+         end if;
+         Wanted := Wanted + 1;
+
+         --  Last, so that carried out it lands where Finish_Shared reads.
+         Products.Add_Combination
+           (Steps, 7, Added, Kept => False,
+            From_Step => Step_Down,
+            Other_Step => Products.Length (Steps));
+         if not Added then
+            return;
+         end if;
+         Wanted := Wanted + Width;
+      end;
+
+      if Landing = null or else Landing.all'Length < Wanted then
+         T.Free (Landing);
+         T.Allocate (Wanted, Landing);
+         if Landing = null then
+            return;
+         end if;
+      end if;
+
+      Products.Run
+        (Engine, Steps,
+         Residual.all (Residual.all'First .. Residual.all'First + Width - 1),
+         1, Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
+         Ran, Cancelled, null, Carry_In => False, Carry_Out => True);
+
+      if Cancelled or else not Ran then
+         return;
+      end if;
+
+      Note_Timeline (Steps, 1);
+
+      Shared_Started := True;
+      Shared_At := Products.Submissions (Engine);
+      Shared_Width := Width;
+      Ok := True;
+   end Start_Shared;
+
+   -------------------
+   -- Finish_Shared --
+   -------------------
+
+   procedure Finish_Shared
+     (Into : T.Real_Array_Access;
+      Ok   : out Boolean)
+   is
+   begin
+      Ok := False;
+
+      if not Shared_Started
+        or else not Ready_Now
+        or else Into = null
+        or else Into.all'Length < Shared_Width
+        or else Products.Submissions (Engine) /= Shared_At
+      then
+         Shared_Started := False;
+         return;
+      end if;
+
+      Shared_Started := False;
+      Products.Fetch_Carried
+        (Engine,
+         Into.all (Into.all'First .. Into.all'First + Shared_Width - 1), Ok);
+   end Finish_Shared;
+
    -----------------
    -- Whole_Layer --
    -----------------

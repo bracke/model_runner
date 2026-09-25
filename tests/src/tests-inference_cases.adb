@@ -23,6 +23,7 @@ with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Kernels;
 with Interfaces;
 with Model_Runner.Backend;
+with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
 with Model_Runner.Llama;
 with Model_Runner.Tensors;
@@ -2345,7 +2346,8 @@ package body Tests.Inference_Cases is
          Chunk   : Positive;
          Answer  : out N.Real_Array;
          Refusal : out E.Error_Code;
-         Cache   : L.Cache_Precision := L.Exact)
+         Cache   : L.Cache_Precision := L.Exact;
+         Team    : Model_Runner.Backend.CPU.Pool_Reference := null)
       is
          Held    : aliased constant B.Byte_Array := Image.all;
          Source  : Model_Runner.Byte_Sources.Memory.Buffer_Source
@@ -2370,7 +2372,7 @@ package body Tests.Inference_Cases is
          end if;
 
          L.Open (Session, Model, Context => Room, Cache => Cache,
-                 Status => Status);
+                 Workers => Team, Status => Status);
          Assert (E.Is_Ok (Status),
                  "a session did not open on "
                  & Model_Runner.Backend.Backend_Name (Backend) & ": "
@@ -2577,11 +2579,16 @@ package body Tests.Inference_Cases is
       --  hybrid's states, and short of the stacks by that quarter -- and
       --  the report's count of split layers says the split ran,
       --  rather than the whole model going back to the processor, which
-      --  would agree with it just as well.
+      --  would agree with it just as well. On a pool, as a run has one:
+      --  a position at a time the pool deals the chosen experts while the
+      --  device makes the shared one, which only a pool's mixture asks of
+      --  it.
       declare
          Kinds : constant array (1 .. 2) of Tiny_Model.Fixture_Architecture :=
            [Tiny_Model.Qwen3, Tiny_Model.Qwen35];
+         Team  : aliased Model_Runner.Backend.CPU.Pool (3);
       begin
+         Model_Runner.Backend.CPU.Open (Team);
          for Kind of Kinds loop
             declare
                Image   : B.Byte_Array_Access;
@@ -2621,7 +2628,8 @@ package body Tests.Inference_Cases is
                end;
 
                Logits_On
-                 (Image, Model_Runner.Backend.Backend_CPU, Length, Host, Why);
+                 (Image, Model_Runner.Backend.Backend_CPU, Length, Host, Why,
+                  Team => Team'Unchecked_Access);
                Assert (Why = E.No_Error,
                        "the processor refused " & Name & ": "
                        & E.Error_Code'Image (Why));
@@ -2633,7 +2641,8 @@ package body Tests.Inference_Cases is
                   Assert (Awake, "the device did not reopen for " & Name);
                   Logits_On
                     (Image, Model_Runner.Backend.Backend_Device,
-                     (if Chunk = 2 then Length else 1), Device, Why);
+                     (if Chunk = 2 then Length else 1), Device, Why,
+                     Team => Team'Unchecked_Access);
                   Assert (Why = E.No_Error,
                           "the device refused " & Name & ": "
                           & E.Error_Code'Image (Why));
@@ -2658,6 +2667,7 @@ package body Tests.Inference_Cases is
                B.Free (Image);
             end;
          end loop;
+         Model_Runner.Backend.CPU.Close (Team);
          Model_Runner.Backend.Device.Close;
          Model_Runner.Backend.Device.Open (Awake);
       end;

@@ -2879,6 +2879,12 @@ private
       Shared_Rows_B   : Model_Runner.Tensors.Real_Array_Access := null;
       Shared_Rows_Out : Model_Runner.Tensors.Real_Array_Access := null;
 
+      --  The shared expert's answer for a generated token, scaled, where
+      --  the device made it after the layer's front half; and whether it
+      --  is there for the mixture about to run.
+      Shared_Given : Model_Runner.Tensors.Real_Array_Access := null;
+      Shared_Ready : Boolean := False;
+
       --  The last evaluated position's final state, and room for the
       --  next block's input: the two normalized halves side by side.
       Last_Final : Model_Runner.Tensors.Real_Array_Access := null;
