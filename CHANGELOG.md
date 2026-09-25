@@ -231,6 +231,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **The device's synchronization, checked with the validation layer.** Its
+  synchronization validation reported some two hundred read-after-write
+  hazards a short run. Each was traced to its steps: none is a race. Every
+  one is a binding wider than what the kernel reads, which the layer must
+  take as read whole -- a step readying heads bound the whole result buffer
+  where it reads the two steps it names, and a row product or an unpaged
+  head step bound the whole half-precision batch at a binding it reads only
+  when routed or paged. Those are now bound to what they read (the heads
+  step's offsets counted from the stretch it is given; a word of the host's
+  vectors where nothing is read), and a generated token validates clean.
+  What remains is a prompt's tiled products, three a layer: the tile kernel
+  declares its half-precision binding both read and written, and writes it
+  only when asked, so the layer counts every tile as writing the whole
+  batch. The answers are the same to the bit (qwen3-8b and gemma-3-4b on
+  the device, and the suite).
+
 - **Pipelines ask for their subgroup width, and submissions are ordered by
   a barrier.** The structure that pins a kernel's subgroup to sixty-four
   lanes was typed as the subgroup-size features structure, which a driver

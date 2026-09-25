@@ -9535,6 +9535,30 @@ package body Model_Runner.Platform.Device.Products is
                       Steps.Items (Which).Rows,
                       Steps.Items (Which).Columns, Count));
 
+      --  The stretch of the result buffer a step that readies heads reads:
+      --  from the first byte of the steps it names to the last. It is bound
+      --  as that and not as the whole buffer, and the offsets it is told are
+      --  counted from its front. Bound whole, the validation layer took the
+      --  step as reading everything any step before it had written, and
+      --  reported the keys' step reading the queries' step unfenced at every
+      --  layer -- which it does not read, and which its own sources are
+      --  fenced from.
+      function Heads_Floor (Which : Positive) return Interfaces.Unsigned_64
+      is (if Steps.Items (Which).Reads_Two /= 0
+          then Interfaces.Unsigned_64'Min
+                 (Places (Steps.Items (Which).Reads).At_Byte,
+                  Places (Steps.Items (Which).Reads_Two).At_Byte)
+          else Places (Steps.Items (Which).Reads).At_Byte);
+
+      function Heads_Ceiling (Which : Positive) return Interfaces.Unsigned_64
+      is (Interfaces.Unsigned_64'Max
+            (Places (Steps.Items (Which).Reads).At_Byte
+             + Places (Steps.Items (Which).Reads).Bytes,
+             (if Steps.Items (Which).Reads_Two /= 0
+              then Places (Steps.Items (Which).Reads_Two).At_Byte
+                   + Places (Steps.Items (Which).Reads_Two).Bytes
+              else 0)));
+
       --  Bytes one member's slice of a gathered step takes, and where a
       --  gather of one begins: the tile kernel and the single-member row
       --  product both read that slice as a matrix of its own.
@@ -10481,19 +10505,24 @@ package body Model_Runner.Platform.Device.Products is
                         Extent =>
                           Places (Index).Base + Places (Index).Weight));
                Told (2) :=
-                 (Buffer => Item.Result_Buffer, Offset => 0,
-                  Extent => Result_Bytes);
+                 (Buffer => Item.Result_Buffer,
+                  Offset => Heads_Floor (Index),
+                  Extent => Heads_Ceiling (Index) - Heads_Floor (Index));
                --  Binding three is the cache read-only where a head step
                --  places into a paged cache -- it reads the page table
                --  there -- and the half batch otherwise. The one buffer
                --  cannot be bound both writeonly and readonly at the same
                --  binding without a driver dropping the writes, so the
                --  readable view is here.
+               --  Unpaged, the step reads nothing there and is given a
+               --  word of the vectors the host writes, not the half batch
+               --  a normalization before it may just have written.
                Told (4) :=
                  (if Steps.Items (Index).Into_Cache
                      and then Steps.Items (Index).Page_Shift /= 0
                   then Cache_Descriptor (Item)
-                  else Half_Descriptor (Item));
+                  else (Buffer => Item.Vector_Buffer, Offset => 0,
+                        Extent => 4));
                Told (5) :=
                  (Buffer => Item.Turn_Buffer, Offset => 0,
                   Extent => Item.Turn_Bytes);
@@ -10771,13 +10800,21 @@ package body Model_Runner.Platform.Device.Products is
             --  A listed product on the matrix kernel reads the runs'
             --  half-precision copy here and its lists at the residual's
             --  binding; on the row kernel it reads the lists here.
+            --  A row product that is not routed reads nothing here, and is
+            --  given a word of the vectors the host writes rather than the
+            --  whole half-precision copy: bound whole, the validation layer
+            --  took every row product after a normalization as reading the
+            --  halves that normalization had just written.
             Told (4) :=
               (if Steps.Items (Index).Routed /= 0
                  and then not Listed_Tiled (Index)
                then (Buffer => Item.Result_Buffer,
                      Offset => Places (Steps.Items (Index).Routed).At_Byte,
                      Extent => Places (Steps.Items (Index).Routed).Bytes)
-               else Half_Descriptor (Item));
+               elsif Tiled (Index) or else Listed_Tiled (Index)
+               then Half_Descriptor (Item)
+               else (Buffer => Item.Vector_Buffer, Offset => 0,
+                     Extent => 4));
 
             --  And the residual, where a join was folded into this product:
             --  what the join would have read as its first arm, bound where
@@ -11706,7 +11743,9 @@ package body Model_Runner.Platform.Device.Products is
                         Base      => C.unsigned (Places (Index).Base / 4),
                         From      =>
                           C.unsigned
-                            (Natural (Places (This.Reads).At_Byte / 4)
+                            (Natural
+                               ((Places (This.Reads).At_Byte
+                                 - Heads_Floor (Index)) / 4)
                              + This.Reads_At),
                         Into      =>
                           (if This.Into_Cache then C.unsigned (This.At_First)
@@ -11738,7 +11777,8 @@ package body Model_Runner.Platform.Device.Products is
                           (if This.Reads_Two /= 0
                            then C.unsigned
                                   (Natural
-                                     (Places (This.Reads_Two).At_Byte / 4)
+                                     ((Places (This.Reads_Two).At_Byte
+                                       - Heads_Floor (Index)) / 4)
                                    + This.V_Reads_At)
                            else 0),
                         V_Width   => C.unsigned (This.V_Rows),
