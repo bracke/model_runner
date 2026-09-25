@@ -1304,10 +1304,6 @@ package body Tests.Backend_Cases is
 
       Ready : Boolean;
 
-      --  A whole number of super-blocks, which the k-quants need and the
-      --  thirty-two element formats are happy with.
-      Wide : constant N.Element_Count := 256;
-
       --  Two shapes, and the second is the reason this loop now runs
       --  twice.
       --
@@ -1324,10 +1320,14 @@ package body Tests.Backend_Cases is
       --  The second is sixty-four rows and a batch of forty: the six
       --  formats that have a tile go through it, and the other nine go
       --  through the row product at a larger shape than they had.
+      --  Every shape's rows are a whole number of super-blocks wide, which
+      --  the k-quants need and the thirty-two element formats are happy
+      --  with.
       type Shape is record
-         Tall  : N.Element_Count;
-         Batch : Positive;
-         Tiled : Boolean;
+         Tall   : N.Element_Count;
+         Batch  : Positive;
+         Tiled  : Boolean;
+         Across : N.Element_Count := 256;
       end record;
 
       --  And a third, one vector over an odd count of rows: a generated
@@ -1344,12 +1344,17 @@ package body Tests.Backend_Cases is
       --  And a fifth, a batch past a hundred and twenty-eight: the wider
       --  tile of two hundred and fifty-six vectors, its eight subgroups two
       --  to a chunk of columns.
-      Shapes : constant array (1 .. 5) of Shape :=
-        [(Tall => 12, Batch => 10, Tiled => False),
-         (Tall => 64, Batch => 40, Tiled => True),
-         (Tall => 13, Batch => 1, Tiled => False),
-         (Tall => 96, Batch => 40, Tiled => True),
-         (Tall => 64, Batch => 140, Tiled => True)];
+      --
+      --  And a sixth, one vector over rows of 8192: the k-quants' subgroup
+      --  kernels give a row that long two waves' lanes and add the two
+      --  waves' sums at the end, which no shorter row reaches.
+      Shapes : constant array (1 .. 6) of Shape :=
+        [(Tall => 12, Batch => 10, Tiled => False, others => <>),
+         (Tall => 64, Batch => 40, Tiled => True, others => <>),
+         (Tall => 13, Batch => 1, Tiled => False, others => <>),
+         (Tall => 96, Batch => 40, Tiled => True, others => <>),
+         (Tall => 64, Batch => 140, Tiled => True, others => <>),
+         (Tall => 5, Batch => 1, Tiled => False, Across => 8192)];
 
       --  How far the device and the processor may differ.
       --
@@ -1466,6 +1471,7 @@ package body Tests.Backend_Cases is
          declare
             Tall  : constant N.Element_Count := Chosen.Tall;
             Batch : constant Positive := Chosen.Batch;
+            Wide  : constant N.Element_Count := Chosen.Across;
          begin
             for Which in Case_Kind loop
                declare

@@ -156,6 +156,15 @@ package body Model_Runner.Platform.Device.Products is
    --  Q8_0's band on the same kernel: fewer rows a workgroup, more
    --  workgroups, which a format that is read rather than decoded wants.
    Q8_Wave_Rows   : constant := 2;
+   Q6_Wave_Rows   : constant := 2;
+
+   --  The row length past which a Q6_K row goes to the compilation that
+   --  gives each row two waves' lanes: a projection down reads rows of
+   --  ten or twelve thousand columns, a dozen blocks a lane in a row,
+   --  and qwen3-8b's read at 63 GB/s where its output head's rows of four
+   --  thousand read at 70 -- 649 -> 596 us with the row shared. The head
+   --  itself went the other way, 7.3 -> 7.9 ms, and stays where it was.
+   Long_Row_Columns : constant := 8192;
 
    --  And the IQ4 formats', their shader's NUM_ROWS.
    IQ4_Wave_Rows  : constant := 2;
@@ -893,6 +902,7 @@ package body Model_Runner.Platform.Device.Products is
    is (if Packing in Low_Packing then Low_Wave_Rows
        elsif Packing in Packed_IQ4_NL | Packed_IQ4_XS then IQ4_Wave_Rows
        elsif Packing = Packed_Q8_0 then Q8_Wave_Rows
+       elsif Packing = Packed_Q6_K then Q6_Wave_Rows
        else Wave_Rows);
 
    --  Rows the dispatch reckons in: the super-block kernel's workgroup lands
@@ -907,7 +917,8 @@ package body Model_Runner.Platform.Device.Products is
    function Row_Line
      (Item    : Engine;
       Count   : Natural;
-      Packing : Weight_Packing := Values_F32) return Address
+      Packing : Weight_Packing := Values_F32;
+      Columns : Natural := 0) return Address
    is (if Packing in Low_Packing and then Waved (Item, Packing, Count)
        then Item.Low_Wave_Lines (Packing)
        elsif Packing = Packed_Q8_0 and then Waved (Item, Packing, Count)
@@ -924,8 +935,19 @@ package body Model_Runner.Platform.Device.Products is
              then Item.Low_Wide_Line
              else Item.Low_Pipeline)
        elsif Waved (Item, Packing, Count)
-       then (if Packing = Packed_Q5_K then Item.Wave_Line5
+       then (if Packing = Packed_Q5_K
+               and then Columns >= Long_Row_Columns
+               and then Item.Long_Line5 /= Null_Handle
+             then Item.Long_Line5
+             elsif Packing = Packed_Q5_K then Item.Wave_Line5
+             elsif Packing = Packed_Q6_K
+               and then Columns >= Long_Row_Columns
+               and then Item.Long_Line6 /= Null_Handle
+             then Item.Long_Line6
              elsif Packing = Packed_Q6_K then Item.Wave_Line6
+             elsif Columns >= Long_Row_Columns
+               and then Item.Long_Line /= Null_Handle
+             then Item.Long_Line
              else Item.Wave_Line)
        elsif Half_Grouped (Item, Packing, Count)
        then Item.Half_Group_Line
@@ -2306,6 +2328,63 @@ package body Model_Runner.Platform.Device.Products is
             end if;
          end;
 
+         declare
+            Create : constant Create_Call :=
+              To_Create (Point ("vkCreateShaderModule"));
+            Words  : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Row_Product_Super6_Long;
+            Request : aliased Shader_Create_Info;
+         begin
+            if Create /= null then
+               Request.Size := Interfaces.C.size_t (Words'Length * 4);
+               Request.Code := Words'Address;
+
+               if Create (Item.Logical, Request'Address, Null_Handle,
+                          Made'Access) = 0
+               then
+                  Item.Long_Shader6 := Made;
+               end if;
+            end if;
+         end;
+
+         declare
+            Create : constant Create_Call :=
+              To_Create (Point ("vkCreateShaderModule"));
+            Words  : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Row_Product_Super_Long;
+            Request : aliased Shader_Create_Info;
+         begin
+            if Create /= null then
+               Request.Size := Interfaces.C.size_t (Words'Length * 4);
+               Request.Code := Words'Address;
+
+               if Create (Item.Logical, Request'Address, Null_Handle,
+                          Made'Access) = 0
+               then
+                  Item.Long_Shader := Made;
+               end if;
+            end if;
+         end;
+
+         declare
+            Create : constant Create_Call :=
+              To_Create (Point ("vkCreateShaderModule"));
+            Words  : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Row_Product_Super5_Long;
+            Request : aliased Shader_Create_Info;
+         begin
+            if Create /= null then
+               Request.Size := Interfaces.C.size_t (Words'Length * 4);
+               Request.Code := Words'Address;
+
+               if Create (Item.Logical, Request'Address, Null_Handle,
+                          Made'Access) = 0
+               then
+                  Item.Long_Shader5 := Made;
+               end if;
+            end if;
+         end;
+
          for Packing in Low_Packing loop
             declare
                Create : constant Create_Call :=
@@ -3249,6 +3328,21 @@ package body Model_Runner.Platform.Device.Products is
                if Item.Wave_Shader6 /= Null_Handle then
                   Request.Stage.Module := Item.Wave_Shader6;
                   Line (Wave_Lanes, 1, Item.Wave_Line6);
+               end if;
+
+               if Item.Long_Shader6 /= Null_Handle then
+                  Request.Stage.Module := Item.Long_Shader6;
+                  Line (Wave_Lanes, 1, Item.Long_Line6);
+               end if;
+
+               if Item.Long_Shader /= Null_Handle then
+                  Request.Stage.Module := Item.Long_Shader;
+                  Line (Wave_Lanes, 1, Item.Long_Line);
+               end if;
+
+               if Item.Long_Shader5 /= Null_Handle then
+                  Request.Stage.Module := Item.Long_Shader5;
+                  Line (Wave_Lanes, 1, Item.Long_Line5);
                end if;
 
                Reqsize.Required := Low_Wave_Lanes;
@@ -4321,6 +4415,9 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Wave_Line, "vkDestroyPipeline");
       Give_Back (Item.Wave_Line5, "vkDestroyPipeline");
       Give_Back (Item.Wave_Line6, "vkDestroyPipeline");
+      Give_Back (Item.Long_Line6, "vkDestroyPipeline");
+      Give_Back (Item.Long_Line, "vkDestroyPipeline");
+      Give_Back (Item.Long_Line5, "vkDestroyPipeline");
       for Packing in Low_Packing loop
          Give_Back (Item.Low_Wave_Lines (Packing), "vkDestroyPipeline");
       end loop;
@@ -4435,6 +4532,9 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.XS_Wave_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Low_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Wave_Shader6, "vkDestroyShaderModule");
+      Give_Back (Item.Long_Shader6, "vkDestroyShaderModule");
+      Give_Back (Item.Long_Shader, "vkDestroyShaderModule");
+      Give_Back (Item.Long_Shader5, "vkDestroyShaderModule");
       Item.Matrices := False;
 
       Item.Logical := Null_Handle;
@@ -6255,7 +6355,7 @@ package body Model_Runner.Platform.Device.Products is
             begin
                Bind_Pipeline
                  (Item.Buffer, Bind_Point_Compute,
-                  Row_Line (Item, Count, Packing));
+                  Row_Line (Item, Count, Packing, Columns));
 
                while First < Count loop
                   declare
@@ -12678,7 +12778,7 @@ package body Model_Runner.Platform.Device.Products is
                --  format.
                Bind_Pipeline
                  (Item.Buffer, Bind_Point_Compute,
-                  Row_Line (Item, Count, This.Packing));
+                  Row_Line (Item, Count, This.Packing, This.Columns));
 
                --  A listed product on the matrix kernel: the runs'
                --  vectors laid out by slot in half precision first, then
@@ -12745,7 +12845,7 @@ package body Model_Runner.Platform.Device.Products is
 
                      Bind_Pipeline
                        (Item.Buffer, Bind_Point_Compute,
-                        Row_Line (Item, Count, This.Packing));
+                        Row_Line (Item, Count, This.Packing, This.Columns));
                   end;
 
                   goto Next_Dispatch;

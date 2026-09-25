@@ -6302,13 +6302,15 @@ package body Checks is
       end loop;
 
       --  And the three that generate a K-quant row on a subgroup of
-      --  thirty-two, one per format, asked the same way.
-      for Which in 1 .. 3 loop
+      --  thirty-two, one per format, asked the same way -- each twice,
+      --  the second time as the compilation that gives a long row two
+      --  waves.
+      for Which in 1 .. 6 loop
          declare
             Name : constant String :=
-              (case Which is
-                  when 1 => "row_product_super",
-                  when 2 => "row_product_super5",
+              (case (Which - 1) mod 3 is
+                  when 0 => "row_product_super",
+                  when 1 => "row_product_super5",
                   when others => "row_product_super6");
 
             Found : Boolean;
@@ -6321,8 +6323,13 @@ package body Checks is
               (case Which is
                   when 1 => Model_Runner.Shaders.Row_Product_Super_Digest,
                   when 2 => Model_Runner.Shaders.Row_Product_Super5_Digest,
+                  when 3 => Model_Runner.Shaders.Row_Product_Super6_Digest,
+                  when 4 =>
+                     Model_Runner.Shaders.Row_Product_Super_Long_Digest,
+                  when 5 =>
+                     Model_Runner.Shaders.Row_Product_Super5_Long_Digest,
                   when others =>
-                     Model_Runner.Shaders.Row_Product_Super6_Digest);
+                     Model_Runner.Shaders.Row_Product_Super6_Long_Digest);
          begin
             Result.Performed := Result.Performed + 1;
 

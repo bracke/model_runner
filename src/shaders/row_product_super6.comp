@@ -15,14 +15,23 @@
 
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 
 #ifndef NUM_ROWS
 #define NUM_ROWS 2u
 #endif
 
-layout(local_size_x = 64) in;
+#ifndef KSPLIT
+#define KSPLIT 1u
+#endif
+layout(local_size_x = 64 * KSPLIT) in;
+
+shared float wave_sums[KSPLIT * NUM_ROWS];
 
 layout(std430, binding = 0) readonly  buffer Weights  { uint  w[]; };
+layout(std430, binding = 0) readonly  buffer Weights16 { uint16_t w16[]; };
 layout(std430, binding = 1) readonly  buffer Vectors  { float x[]; };
 layout(std430, binding = 1) readonly  buffer Vectors4 { vec4  x4[]; };
 layout(std430, binding = 2) writeonly buffer Result   { float y[]; };
@@ -50,8 +59,7 @@ layout(push_constant) uniform Shape {
 //  aligned -- a block is two hundred and ten bytes, so every other one begins
 //  two bytes into a word. Index counts sixteen-bit fields from the base byte.
 uint u16 (uint base_byte, uint index) {
-    uint at = base_byte + index * 2u;
-    return (w[at >> 2u] >> ((at & 2u) * 8u)) & 0xFFFFu;
+    return uint (w16[(base_byte >> 1u) + index]);
 }
 
 //  A signed eight-bit scale, the sub-block's, out of the weight words.
@@ -105,7 +113,7 @@ void main() {
         temp[r] = 0.0;
     }
 
-    for (uint i = ix; i < blocks; i += 4u) {
+    for (uint i = ix; i < blocks; i += 4u * KSPLIT) {
         uint yi = from_base + i * 256u + y_offset;
         uint xb = yi >> 2u;
         vec4 by0  = x4[xb];
@@ -155,15 +163,35 @@ void main() {
     }
 
     for (uint r = 0u; r < NUM_ROWS; ++r) {
-        float whole = subgroupAdd (temp[r]);
-        uint row = first_row + r;
+        float part = subgroupAdd (temp[r]);
 
+        if (KSPLIT > 1u) {
+            if (subgroupElect ()) {
+                wave_sums[gl_SubgroupID * NUM_ROWS + r] = part;
+            }
+        }
+    }
+
+    if (KSPLIT > 1u) {
+        barrier ();
+    }
+
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        float whole = subgroupAdd (temp[r]);
+
+        if (KSPLIT > 1u) {
+            whole = 0.0;
+            for (uint g = 0u; g < gl_NumSubgroups; ++g) {
+                whole += wave_sums[g * NUM_ROWS + r];
+            }
+        }
+
+        uint row = first_row + r;
         if (tid == 0u && row < shape.rows) {
             uint out_at = listed
                           ? run_at * shape.rows + row
                           : member * shape.rows * shape.count
                             + shape.first * shape.rows + row;
-
             y[out_at] = shape.joins != 0u ? whole + rj[out_at] : whole;
         }
     }

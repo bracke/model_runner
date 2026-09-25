@@ -19,12 +19,20 @@
 
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_basic : require
 
 #ifndef NUM_ROWS
 #define NUM_ROWS 2u
 #endif
 
-layout(local_size_x = 64) in;
+//  KSPLIT waves a row band where the rows are long: see
+//  row_product_super6.comp, which the same was measured on first.
+#ifndef KSPLIT
+#define KSPLIT 1u
+#endif
+layout(local_size_x = 64 * KSPLIT) in;
+
+shared float wave_sums[KSPLIT * NUM_ROWS];
 
 layout(std430, binding = 0) readonly  buffer Weights  { uint  w[]; };
 layout(std430, binding = 1) readonly  buffer Vectors  { float x[]; };
@@ -95,7 +103,7 @@ void main() {
     }
 
     //  This lane's two super-blocks stride the row, ix and ix + 2, ix + 4 ...
-    for (uint i = ix; i < blocks; i += 4u) {
+    for (uint i = ix; i < blocks; i += 4u * KSPLIT) {
         //  The activation of the two regions this lane's half owns, four
         //  vectors of four: the near sixteen and the far sixteen.
         uint y1 = i * 256u + y_off;
@@ -158,8 +166,27 @@ void main() {
         }
     }
 
+    if (KSPLIT > 1u) {
+        for (uint r = 0u; r < NUM_ROWS; ++r) {
+            float part = subgroupAdd (temp[r]);
+
+            if (subgroupElect ()) {
+                wave_sums[gl_SubgroupID * NUM_ROWS + r] = part;
+            }
+        }
+
+        barrier ();
+    }
+
     for (uint r = 0u; r < NUM_ROWS; ++r) {
         float whole = subgroupAdd (temp[r]);
+
+        if (KSPLIT > 1u) {
+            whole = 0.0;
+            for (uint g = 0u; g < gl_NumSubgroups; ++g) {
+                whole += wave_sums[g * NUM_ROWS + r];
+            }
+        }
         uint row = first_row + r;
 
         if (tid == 0u && row < shape.rows) {

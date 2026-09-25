@@ -57,8 +57,11 @@ compile combine                      combine.comp          vulkan1.0
 compile row_product                  row_product.comp      vulkan1.0
 compile row_product_low              row_product.comp      vulkan1.0 LOW_BITS
 compile row_product_super            row_product_super.comp vulkan1.1 NUM_ROWS=2u
+compile row_product_super_long       row_product_super.comp vulkan1.1 NUM_ROWS=2u KSPLIT=2u
 compile row_product_super5           row_product_super5.comp vulkan1.1 NUM_ROWS=2u
+compile row_product_super5_long      row_product_super5.comp vulkan1.1 NUM_ROWS=2u KSPLIT=2u
 compile row_product_super6           row_product_super6.comp vulkan1.1 NUM_ROWS=2u
+compile row_product_super6_long      row_product_super6.comp vulkan1.1 NUM_ROWS=2u KSPLIT=2u
 compile row_product_wave_iq3_s       row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u IQ3_S
 compile row_product_wave_iq2_xxs     row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u IQ2_XXS
 compile row_product_wave_iq2_xs      row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u IQ2_XS

@@ -2753,6 +2753,12 @@ private
       --  And for Q6_K, six bits an element and a signed scale a sub-block.
       Wave_Shader6 : System.Address := System.Null_Address;
       Wave_Line6   : System.Address := System.Null_Address;
+      Long_Shader6 : System.Address := System.Null_Address;
+      Long_Line6   : System.Address := System.Null_Address;
+      Long_Shader  : System.Address := System.Null_Address;
+      Long_Line    : System.Address := System.Null_Address;
+      Long_Shader5 : System.Address := System.Null_Address;
+      Long_Line5   : System.Address := System.Null_Address;
 
       --  And the twelve low-bit formats: one source, row_product_wave_low,
       --  compiled once a format, each with its decode and codebook alone.

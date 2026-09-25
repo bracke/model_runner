@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A long K-quant row gets two waves.** The subgroup kernels that
+  generate a token's K-quant products gave each band of two rows one wave,
+  which walked a projection down's twelve thousand columns a dozen blocks
+  a lane; qwen3-8b's Q6_K down read at 63 GB/s where its output head read
+  at 70. A second compilation of each gives a band two waves and meets
+  their sums in shared memory, bound for rows of 8192 columns and more:
+  Q6_K down 652 -> 596 us, Q4_K down 428 -> 410. Q6_K's fields are read as
+  sixteen-bit words. Generation gemma-3-4b 23.21 -> 23.7 tokens a second,
+  qwen3-8b 13.66 -> 13.90, the same outputs. The per-format device test
+  gains a row of 8192, which catches a lost wave.
+
 - **A wide head's values are read eight positions a round.** The
   four-at-a-time value loop of a token's attention asked for four
   positions and waited; outside the bundles of four and eight it now asks
