@@ -210,6 +210,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A hybrid's layer after a refused linear layer read a stale activation.**
+  On a generated token, a gated delta-rule layer the device refused was
+  computed on the host, but the flag saying the device held the activation
+  was left set, so the next layer on the device carried in the front it held
+  from before. The attention path cleared it after every layer; the linear
+  path now does too.
+
 - **`--max-tokens 0` reads the prompt and stops.** The README's way of saving a
   document's cache -- `run --prompt-file document.txt --max-tokens 0
   --save-session` -- was refused as out of range, and the library refused a

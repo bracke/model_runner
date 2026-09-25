@@ -16915,6 +16915,13 @@ package body Model_Runner.Llama is
                      Charge (Item, Fusing, Mark);
                      goto Layer_Done;
                   end if;
+
+                  --  Refused: the host computes this layer, so what the
+                  --  device holds at its front is no longer the activation.
+                  --  The attention path clears this after every layer; the
+                  --  linear one only set it, and a layer refused here left
+                  --  the next one to carry in the stale front.
+                  Carried := False;
                end if;
 
                Normalize
