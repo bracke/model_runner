@@ -19373,10 +19373,19 @@ MR-MEM-0001: kv_cache needs 16510291801 bytes, above the limit of 16407179264
 ```
 
 The same model on the processor at the same context is 8.5 GB of 16 and
-runs. `--context-size` keeps its default, the model's own, so nothing about
-the option changed; what changed is that a session that would take most of
-the machine is refused with both numbers, and the answer is a decision --
-`--context-size` or `--memory-limit` -- rather than an accident.
+runs. A context that was named is held to: a session that would take most
+of the machine is refused with both numbers, and the answer is a decision --
+`--context-size` or `--memory-limit` -- rather than an accident. A context
+nobody named is the model's own where the bound holds it, and the largest
+halving of it that does otherwise: qwen3-8b declares 40,960 positions, and
+`run` with no `--context-size` on the device opens at 20,480 rather than
+being refused.
+
+The cache costs what it holds, not what it could. The engine's arrays come
+zeroed from `calloc` rather than being written zero, so the kernel's untouched
+pages stand in for a cache's empty positions until one lands there: qwen3-8b
+at 32,768 positions started in 2.75 s against 6.49, and held 4.7 GB against
+14.2, for the same eight generated tokens.
 
 ### The heads of a layer made ready in one step, and what a dispatch costs
 

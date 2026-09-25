@@ -4,6 +4,7 @@ with Model_Runner.Errors;
 with Model_Runner.GGUF;
 with Model_Runner.Numerics;
 with Model_Runner.Quantization.Integers;
+with Model_Runner.Zeroed_Storage;
 
 --  Read-only tensor views over model bytes.
 --
@@ -92,7 +93,8 @@ package Model_Runner.Tensors is
    --
    --  Declared here rather than in Model_Runner.Numerics so that the numeric
    --  package stays free of allocation.
-   type Real_Array_Access is access Real_Array;
+   type Real_Array_Access is access Real_Array
+     with Storage_Pool => Model_Runner.Zeroed_Storage.Arrays;
 
    --  Several matrices, and somewhere to put what each produces.
    --
@@ -115,7 +117,8 @@ package Model_Runner.Tensors is
    type Group_Room_Access is access Group_Room;
 
    subtype Half_Array is Model_Runner.Numerics.Half_Array;
-   type Half_Array_Access is access Half_Array;
+   type Half_Array_Access is access Half_Array
+     with Storage_Pool => Model_Runner.Zeroed_Storage.Arrays;
 
    --  Allocate a zero-filled vector.
    --

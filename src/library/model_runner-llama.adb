@@ -13356,6 +13356,36 @@ package body Model_Runner.Llama is
       Mem.Finalize_Session_Plan (Plan, Status);
    end Plan_For;
 
+   --  The fewest positions a context nobody named is cut down to.
+   Least_Context : constant := 1024;
+
+   --  What a session planned so holds, counting the cache twice on a
+   --  device: the device keeps its own copy of the cache beside the
+   --  host's, and the host's memory is what both come out of on an
+   --  integrated part.
+   --
+   --  Where the model learned no sinks the device keeps only the
+   --  half-precision copy, not the cache proper, so its half of the count
+   --  is halved -- which is what lets a sinkless model hold a context whose
+   --  two full copies would not fit, the copy split across buffers so no
+   --  one of them is too large.
+   function Session_Needs
+     (Source : Model'Class;
+      Plan   : Mem.Session_Plan) return Interfaces.Unsigned_64
+   is
+      Sinkless : constant Boolean := Sink_Footprint (Source.Settings) = 0;
+
+      Device_Cache : constant Interfaces.Unsigned_64 :=
+        (if Model_Runner.Backend."="
+              (Source.Able.Kind, Model_Runner.Backend.Backend_Device)
+         then (if Sinkless
+               then Plan.KV_Cache_Bytes / 2
+               else Plan.KV_Cache_Bytes)
+         else 0);
+   begin
+      return Plan.Total_Resident + Device_Cache;
+   end Session_Needs;
+
    ----------
    -- Open --
    ----------
@@ -13407,6 +13437,27 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      --  A context nobody named is the model's own where the session can
+      --  hold it, and otherwise the largest halving of it that fits. A
+      --  declared context is a training fact and not a sizing one: qwen3-8b
+      --  declares 40,960 positions, eighteen gigabytes of cache on a device,
+      --  and a run that named none was refused where it could have run.
+      --  A context that was named is held to, and refused as it was.
+      if Context = 0 and then Session_Bounds.Max_Session_Bytes /= 0 then
+         loop
+            Plan_Session (Model (Source), Capacity, Item.Plan, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+
+            exit when Session_Needs (Source, Item.Plan)
+                        <= Session_Bounds.Max_Session_Bytes
+              or else Capacity <= Least_Context;
+
+            Capacity := Natural'Max (Least_Context, Capacity / 2);
+         end loop;
+      end if;
+
       Plan_Session (Model (Source), Capacity, Item.Plan, Status);
       if E.Is_Error (Status) then
          return;
@@ -13434,29 +13485,10 @@ package body Model_Runner.Llama is
         (Item.Accounting, Mem.Template_Buffers,
          Item.Plan.Rendering_Bytes + Item.Plan.Stop_Bytes);
 
-      --  What the session holds, counting the cache twice on a device:
-      --  the device keeps its own copy of the cache beside the host's,
-      --  and the host's memory is what both come out of on an integrated
-      --  part.
-      --
-      --  Where the model learned no sinks the device keeps only the
-      --  half-precision copy, not the cache proper, so its half of the
-      --  count is halved -- which is what lets a sinkless model hold a
-      --  context whose two full copies would not fit, the copy split
-      --  across buffers so no one of them is too large.
+      --  What the session holds, against what it may.
       declare
-         Sinkless : constant Boolean := Sink_Footprint (Settings) = 0;
-
-         Device_Cache : constant Interfaces.Unsigned_64 :=
-           (if Model_Runner.Backend."="
-                 (Source.Able.Kind, Model_Runner.Backend.Backend_Device)
-            then (if Sinkless
-                  then Item.Plan.KV_Cache_Bytes / 2
-                  else Item.Plan.KV_Cache_Bytes)
-            else 0);
-
          Needed : constant Interfaces.Unsigned_64 :=
-           Item.Plan.Total_Resident + Device_Cache;
+           Session_Needs (Source, Item.Plan);
       begin
          if Session_Bounds.Max_Session_Bytes /= 0
            and then Needed > Session_Bounds.Max_Session_Bytes

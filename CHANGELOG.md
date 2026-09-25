@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A context nobody named fits the machine, and costs what it holds.**
+  With no `--context-size`, a session takes the model's declared context
+  where the memory bound holds it and the largest halving of it that fits
+  otherwise; `run` on qwen3-8b, which declares 40,960 positions, was refused
+  with no context named and now runs at 20,480. The engine's arrays come
+  zeroed from `calloc` instead of being written zero, so a cache's pages cost
+  memory only as positions land on them: qwen3-8b at 32,768 positions started
+  in 2.75 s against 6.49 and held 4.7 GB against 14.2. A named context is held
+  to and refused past the bound as before.
+
 - **A mixture too large for the device is split between it and the
   processor.** Where the experts do not fit the device and everything else
   does, the device runs each layer's front half -- attention, or a hybrid's
@@ -220,6 +230,14 @@ Keep a Changelog and the project uses semantic versioning.
   IQ3_S and IQ2_XXS.
 
 ### Fixed
+
+- **`tests speed` pages a device session, as `run` does.** It accepted
+  `--paged` and dropped it, so every device figure it took was unpaged, and
+  a context past one storage buffer ran its attention on the processor:
+  qwen3-8b at its own context generated at 11.4 tokens a second there and
+  13.6 now. `--paged` and `--no-paged` decide it; `--no-reuse`,
+  `--page-size` and `--kv-values`, which it also accepted and ignored, are
+  refused as unknown.
 
 - **A hybrid's layer after a refused linear layer read a stale activation.**
   On a generated token, a gated delta-rule layer the device refused was

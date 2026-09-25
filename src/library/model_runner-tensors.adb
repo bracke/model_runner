@@ -55,8 +55,9 @@ package body Model_Runner.Tensors is
 
    procedure Allocate (Length : Element_Count; Result : out Real_Array_Access) is
    begin
+      --  Zero already: the pool is calloc's, and a large block is pages
+      --  nothing has touched yet, which writing zeros into would touch.
       Result := new Real_Array (0 .. Length - 1);
-      Result.all := [others => 0.0];
    exception
       when Storage_Error =>
          Result := null;
@@ -78,7 +79,6 @@ package body Model_Runner.Tensors is
    is
    begin
       Result := new Half_Array (0 .. Length - 1);
-      Result.all := [others => 0];
    exception
       when Storage_Error =>
          Result := null;

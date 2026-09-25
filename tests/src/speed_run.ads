@@ -164,6 +164,8 @@ package Speed_Run is
    --    share. Named for the same model: its stacks are eleven gigabytes,
    --    the share is less, and whether they fit decides which path a
    --    mixture takes on the device.
+   --  @param Paged Whether the session keeps its context in pages, which
+   --    the command does on a device and nowhere else unless told.
    --  @param Result What it measured.
    procedure Run
      (Path        : String;
@@ -186,6 +188,7 @@ package Speed_Run is
       Timeline    : Boolean := False;
       Context     : Natural := 0;
       Device_Bytes : Interfaces.Unsigned_64 := 0;
+      Paged       : Boolean := False;
       Result      : out Report);
 
    --  The digest this tool prints, over any text.

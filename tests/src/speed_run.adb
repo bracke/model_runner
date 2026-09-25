@@ -144,6 +144,7 @@ package body Speed_Run is
       Timeline    : Boolean := False;
       Context     : Natural := 0;
       Device_Bytes : Interfaces.Unsigned_64 := 0;
+      Paged       : Boolean := False;
       Result      : out Report)
    is
       use type Model_Runner.Backend.Backend_Kind;
@@ -364,7 +365,8 @@ package body Speed_Run is
                   Local   : E.Error_Info;
                begin
                   L.Open (Session, Engine, Context => Context,
-                          Workers => Where, Cache => Cache, Status => Local);
+                          Workers => Where, Cache => Cache, Status => Local,
+                          Paged => Paged);
                   exit when E.Is_Error (Local);
 
                   --  After Open, so that what a budget reports is this run

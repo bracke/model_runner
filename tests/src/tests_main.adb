@@ -2765,6 +2765,17 @@ begin
             Timeline    => Given ("--device-timeline"),
             Context     => Whole ("--context-size"),
             Device_Bytes => Bytes ("--device-memory"),
+
+            --  Paged where the command pages: on a device, unless told
+            --  otherwise. The tool took --paged and dropped it, and opened
+            --  every session unpaged -- which on a device holds a context
+            --  past one storage buffer off the device, so qwen3-8b at its
+            --  own 40,960 positions generated at 11.4 tokens a second here
+            --  and 13.5 under the command.
+            Paged       =>
+              not Given ("--no-paged")
+              and then (Given ("--paged")
+                        or else Option ("--backend", "cpu") = "device"),
             Result      => Result);
 
          Ada.Text_IO.Put_Line

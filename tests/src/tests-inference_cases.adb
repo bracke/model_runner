@@ -9954,6 +9954,55 @@ package body Tests.Inference_Cases is
    --  weights, no repacking, so the two run the same arithmetic and may
    --  differ only by summation order. The sweep in Conformance covers the
    --  mixture across every format, backend, repack mode and evaluation path.
+   --  A context nobody named is the model's own where the session can
+   --  hold it and the largest halving of it that fits otherwise; a context
+   --  that was named is held to and refused as it was. The fixture declares
+   --  8192 positions, the limit holds exactly what 2048 plan to take, so
+   --  the session opens at 2048 unnamed and is refused at 8192 named.
+   procedure Unnamed_Context_Fits_The_Session_Bound
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image, Room => 8192);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Plan   : Model_Runner.Memory.Session_Plan;
+         Status : E.Error_Info;
+         Bounds : Model_Runner.Limits.Session_Limits;
+      begin
+         Start (Under);
+
+         L.Plan_Session (Under.Ready, 2048, Plan, Status);
+         Assert (E.Is_Ok (Status), "the plan for 2048 positions failed");
+         Bounds.Max_Session_Bytes := Plan.Total_Resident;
+
+         L.Open (Live, Under.Ready, Session_Bounds => Bounds,
+                 Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "a session naming no context was refused: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (L.Capacity (Live) = 2048,
+                 "a session naming no context holds"
+                 & Natural'Image (L.Capacity (Live))
+                 & " positions where 2048 fit");
+         L.Close (Live);
+
+         L.Open (Live, Under.Ready, Context => 8192,
+                 Session_Bounds => Bounds, Status => Status);
+         Assert (Status.Code = E.Memory_Limit_Exceeded,
+                 "a named context past the bound was not refused: "
+                 & E.Error_Code'Image (Status.Code));
+         L.Close (Live);
+      end;
+
+      B.Free (Image);
+   end Unnamed_Context_Fits_The_Session_Bound;
+
    procedure Mixture_Of_Experts_Routes_Each_Position
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -12455,6 +12504,10 @@ package body Tests.Inference_Cases is
         (T, Rotary_Scaling_Changes_The_Rotation'Access,
          "each way of stretching the rotation changes the answer, and to "
          & "the one written from the description");
+      Register_Routine
+        (T, Unnamed_Context_Fits_The_Session_Bound'Access,
+         "a context nobody named is cut to what the session may hold, and "
+         & "a named one past it is refused");
       Register_Routine
         (T, Mixture_Of_Experts_Routes_Each_Position'Access,
          "a mixture of experts routes each position and mixes what it "
