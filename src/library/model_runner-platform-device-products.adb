@@ -453,6 +453,9 @@ package body Model_Runner.Platform.Device.Products is
        elsif Head_Size <= Matrix_Wide_Head
          and then Value_Size <= Matrix_Wide_Head
        then Item.Matrix_Wide_Attend
+       elsif Head_Size <= Matrix_Wider_Head
+         and then Value_Size <= Matrix_Wider_Head
+       then Item.Matrix_Wider_Attend
        else Null_Handle);
 
    function Attends_By_Matrix
@@ -481,6 +484,7 @@ package body Model_Runner.Platform.Device.Products is
    function Wants_Copy (Item : Engine) return Boolean
    is (Item.Attend_Matrix /= Null_Handle
        or else Item.Attend_Matrix_Wide /= Null_Handle
+       or else Item.Attend_Matrix_Wider /= Null_Handle
        or else Item.Halved_Line /= Null_Handle);
 
    function Keeps_Copy (Item : Engine) return Boolean
@@ -2829,6 +2833,21 @@ package body Model_Runner.Platform.Device.Products is
                      Item.Attend_Matrix_Wide := Made;
                   end if;
                end;
+
+               --  And twice as wide again.
+               declare
+                  Wider : aliased constant Model_Runner.Shaders.Word_Array :=
+                    Model_Runner.Shaders.Attention_Matrix_Wider;
+               begin
+                  Request.Size := Interfaces.C.size_t (Wider'Length * 4);
+                  Request.Code := Wider'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Attend_Matrix_Wider := Made;
+                  end if;
+               end;
             end if;
          end;
       end if;
@@ -3575,6 +3594,16 @@ package body Model_Runner.Platform.Device.Products is
             end if;
          end if;
 
+         if Item.Attend_Matrix_Wider /= Null_Handle then
+            Request.Stage.Module := Item.Attend_Matrix_Wider;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Matrix_Wider_Attend := Made;
+            end if;
+         end if;
+
          --  And the unpacking of a packed layer into the copy that
          --  kernel reads, which is worth having only where it is.
          if Item.Unpacker /= Null_Handle
@@ -4276,8 +4305,10 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Matrix, "vkDestroyShaderModule");
       Give_Back (Item.Matrix_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Wide_Attend, "vkDestroyPipeline");
+      Give_Back (Item.Matrix_Wider_Attend, "vkDestroyPipeline");
       Give_Back (Item.Attend_Matrix, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Matrix_Wide, "vkDestroyShaderModule");
+      Give_Back (Item.Attend_Matrix_Wider, "vkDestroyShaderModule");
       Give_Back (Item.Query_Tile, "vkDestroyShaderModule");
       Give_Back (Item.Grouped, "vkDestroyShaderModule");
       Give_Back (Item.Attender, "vkDestroyShaderModule");

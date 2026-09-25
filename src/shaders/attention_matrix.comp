@@ -164,7 +164,13 @@ uint place_of (uint pos, uint offset, uint width) {
 //  instruction's sixteen.
 const uint BR = 16u;
 const uint BC = 64u;
-#ifdef WIDE_HEAD
+#ifdef WIDER_HEAD
+//  And a third, for Gemma's heads of two hundred and fifty-six, which
+//  attended through attention.comp's scalar tile: twenty-eight kilobytes
+//  of shared memory a workgroup and twice the registers a lane of the
+//  second, for a kernel that computes where the other one did not.
+const uint DM = 256u;
+#elif defined(WIDE_HEAD)
 const uint DM = 128u;
 #else
 const uint DM = 64u;

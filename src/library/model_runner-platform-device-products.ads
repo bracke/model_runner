@@ -142,6 +142,9 @@ package Model_Runner.Platform.Device.Products is
    Matrix_Head : constant := 64;
    Matrix_Wide_Head : constant := 128;
 
+   --  And the third compilation's, Gemma's width.
+   Matrix_Wider_Head : constant := 256;
+
    --  How a matrix's bytes are packed. The device decodes every one of these
    --  itself, which is every format this program reads: nothing has to be
    --  repacked to reach a device any more, and repacking is what it always
@@ -2561,6 +2564,7 @@ private
       --  offers it. Null on a device that does not.
       Attend_Matrix : System.Address := System.Null_Address;
       Attend_Matrix_Wide : System.Address := System.Null_Address;
+      Attend_Matrix_Wider : System.Address := System.Null_Address;
 
       --  The fourth and fifth kernels, which go together and are made only
       --  where the device offers the matrix instruction: a tile of the
@@ -2767,6 +2771,7 @@ private
       Tile_Line   : System.Address := System.Null_Address;
       Matrix_Attend : System.Address := System.Null_Address;
       Matrix_Wide_Attend : System.Address := System.Null_Address;
+      Matrix_Wider_Attend : System.Address := System.Null_Address;
       Norm_Line   : System.Address := System.Null_Address;
       Turn_Line   : System.Address := System.Null_Address;
       Place_Line  : System.Address := System.Null_Address;

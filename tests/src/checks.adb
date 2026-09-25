@@ -6496,6 +6496,17 @@ package body Checks is
                   & "attention_matrix_wide.spv, and run 'tests shader' again "
                   & "with every shader named");
          end if;
+
+         --  And its third, twice as wide again.
+         Result.Performed := Result.Performed + 1;
+
+         if Found
+           and then Digest
+                    /= Model_Runner.Shaders.Attention_Matrix_Wider_Digest
+         then
+            Fail ("the wider compilation of src/shaders/attention_matrix.comp"
+                  & " is older than the source; run ./compile-shaders.sh");
+         end if;
       end;
 
       --  And the fifth, which goes with it.

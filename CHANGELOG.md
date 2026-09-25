@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Gemma's heads of 256 attend through the matrix instruction.** The
+  matrix attention kernel had compilations for heads of sixty-four and a
+  hundred and twenty-eight, and a wider head attended through the scalar
+  tile. A third compilation stages two hundred and fifty-six: gemma-3-4b's
+  attention over a prompt of 421, 1.78 -> 1.41 ms a layer, the prompt 585
+  -> 601 tokens a second, the same output. The wide-head test already
+  compared a head of 256 a batch against one query at a time, and now does
+  so through this compilation.
+
 - **A wider tile for a batch past a hundred and twenty-eight.** Every
   weight is decoded once for each tile of vectors, and the decode is where
   a tile's time goes; a batch of more than a hundred and twenty-eight now
