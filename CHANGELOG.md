@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Prompt attention keeps its answer in the matrix accumulators.** The
+  matrix attention kernel made each tile's weighted values a product of
+  their own and added them into registers through shared memory, since a
+  lane does not know which rows its accumulator elements hold. It now asks
+  once -- a matrix of element indices, stored -- and rescales the
+  accumulator in place, which frees the room that held a head of 256 at two
+  workgroups a compute unit. gemma-3-4b's attention 2.42 -> 1.30 ms a layer
+  at 421 positions; prompts gemma-3-4b 611 -> 624 tokens a second (1328
+  tokens 554 -> 623), qwen3-8b 342 -> 349, qwen3.5-4b 490 -> 501, the same
+  outputs. Heads of 64 keep the old way, which was faster for them.
+
 - **A join folds into the normalization before it.** Gemma normalizes what
   attention and the feed-forward made before each is added back, and the
   join was a pass of its own over both. The normalization now adds the

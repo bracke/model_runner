@@ -36,12 +36,14 @@
 //  all.
 //
 //  And the running softmax rescales everything accumulated so far whenever
-//  a tile raises the largest score, which cannot be done to a cooperative
-//  matrix -- an accumulator's elements belong to lanes in an order the
-//  hardware chooses and no lane knows which row it holds. So the
-//  accumulator is not one: each tile's weighted values are a product of
-//  their own, stored to shared memory and added into ordinary registers,
-//  where a rescale is a multiply like any other.
+//  a tile raises the largest score. An accumulator's elements belong to
+//  lanes in an order the hardware chooses, so the kernel asks it once --
+//  a matrix of its own element indices, stored, says which row each lane's
+//  elements are -- and rescales the accumulator in place. It used to be a
+//  fresh product each tile, stored to shared memory and added into
+//  ordinary registers; the room that took held a head of 256 at two
+//  workgroups a compute unit, and gemma-3-4b's attention over 421
+//  positions went 2.42 -> 1.30 ms a layer without it.
 //
 //  Sixty-four is the widest head the first compilation takes: the queries
 //  are the one thing still staged, because they arrive in binary32 and
@@ -166,15 +168,23 @@ const uint BR = 16u;
 const uint BC = 64u;
 #ifdef WIDER_HEAD
 //  And a third, for Gemma's heads of two hundred and fifty-six, which
-//  attended through attention.comp's scalar tile: twenty-eight kilobytes
-//  of shared memory a workgroup and twice the registers a lane of the
-//  second, for a kernel that computes where the other one did not.
+//  attended through attention.comp's scalar tile: twice the registers a
+//  lane of the second, for a kernel that computes where the other one did
+//  not.
+#define IN_PLACE
 const uint DM = 256u;
 #elif defined(WIDE_HEAD)
+#define IN_PLACE
 const uint DM = 128u;
 #else
 const uint DM = 64u;
 #endif
+
+//  IN_PLACE keeps the answer in the instruction's accumulators across the
+//  tiles, rescaled where it sits; see the head of the file. The heads of
+//  sixty-four keep the older way, a product a tile added into registers:
+//  their room never bounded them, and TinyLlama's 1419-token prompt read
+//  1949 tokens a second that way against 1903 in place.
 
 //  The keys and the values, as the instruction reads them: the cache's
 //  half-precision copy, in a buffer of its own so that neither it nor
@@ -197,9 +207,13 @@ layout(std430, binding = 0) readonly buffer Floats { float kvf[]; };
 shared float16_t qs[BR * DM];
 
 //  The scores of a tile, and at the very end the answer on its way out of
-//  the cooperative matrices. The answer is the wider of the two, which is
-//  what this is sized for.
-shared float ss[BR * (DM > BC ? DM : BC)];
+//  the cooperative matrices, sixteen components at a time.
+shared float ss[BR * BC];
+
+//  Each row's rescale for the tile, and at the end its reciprocal total;
+//  and which row each element of an accumulator is, found once.
+shared float rowscale[BR];
+shared uint rowmap[256];
 
 //  The weights, in what the instruction reads.
 shared float16_t ps[BR * BC];
@@ -324,6 +338,48 @@ void main() {
         carry[i] = 1.0;
     }
 
+#ifdef IN_PLACE
+    //  The answer, accumulated in the instruction's own matrices across
+    //  every tile. The running softmax rescales it row by row, and a lane
+    //  does not know which rows its elements hold -- so it asks, once: a
+    //  matrix whose every element is its own index, stored, says where
+    //  each landed. The order is the same for every matrix of the type.
+    //  It used to be a fresh product each tile, stored to shared memory
+    //  and added into registers: twenty-eight kilobytes of shared memory a
+    //  workgroup at a head of 256, two workgroups to a compute unit, and
+    //  attention at a fraction of the rate the products run at.
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>
+        pacc[BR / 16u][DM / 16u];
+
+    [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+        [[unroll]] for (uint t = 0u; t < DM / 16u; t++) {
+            pacc[m][t] =
+                coopmat<float, gl_ScopeSubgroup, 16, 16,
+                        gl_MatrixUseAccumulator>(0.0);
+        }
+    }
+
+    uint mine_rows[8];
+    {
+        coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>
+            probe;
+        uint many = uint (probe.length());
+
+        for (int e = 0; e < probe.length(); ++e) {
+            probe[e] = float (lane * many + uint (e));
+        }
+        coopMatStore (probe, ss, 0u, 16u,
+                      gl_CooperativeMatrixLayoutRowMajor);
+        barrier();
+        for (uint at = lane; at < 256u; at += 64u) {
+            rowmap[uint (ss[at])] = at / 16u;
+        }
+        barrier();
+        for (uint e = 0u; e < 8u; ++e) {
+            mine_rows[e] = e < many ? rowmap[lane * many + e] : 0u;
+        }
+    }
+#else
     //  What this invocation carries out: one column of each of sixteen
     //  rows, in each chunk of thirty-two columns.
     float held[DM / 32u][BR / 2u];
@@ -333,6 +389,7 @@ void main() {
             held[ch][i] = 0.0;
         }
     }
+#endif
 
     for (uint base = first_min; base <= last_max; base += BC) {
         barrier();
@@ -455,10 +512,122 @@ void main() {
 
             total[i] = total[i] * carry[i] + subgroupClusteredAdd (run, 32u);
             top[i]   = raised;
+
+#ifdef IN_PLACE
+            if (col == 0u) {
+                rowscale[r] = carry[i];
+            }
+#endif
         }
 
         barrier();
 
+#ifdef IN_PLACE
+        //  What this tile weighs, every component at once, added into
+        //  the answer after the answer is rescaled.
+        {
+            float scale_of[8];
+
+            for (uint e = 0u; e < 8u; ++e) {
+                scale_of[e] = rowscale[mine_rows[e]];
+            }
+
+            [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+                [[unroll]] for (uint t = 0u; t < DM / 16u; t++) {
+                    if (t * 16u < dv) {
+                        for (int e = 0; e < pacc[m][t].length(); ++e) {
+                            pacc[m][t][e] *= scale_of[e];
+                        }
+                    }
+                }
+            }
+
+            [[unroll]] for (uint n0 = 0u; n0 < BC; n0 += 16u) {
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
+                        gl_MatrixUseA> pm[BR / 16u];
+
+                [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+                    coopMatLoad (pm[m], ps, m * 16u * BC + n0, BC,
+                                 gl_CooperativeMatrixLayoutRowMajor);
+                }
+
+                [[unroll]] for (uint t = 0u; t < DM / 16u; t++) {
+                    if (t * 16u < dv) {
+                        coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
+                                gl_MatrixUseB> vm;
+
+                        coopMatLoad (vm, vh,
+                                     place_of (base + n0, shape.v_base,
+                                               shape.v_width)
+                                     + v_at + t * 16u,
+                                     shape.v_width,
+                                     gl_CooperativeMatrixLayoutRowMajor);
+
+                        [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+                            pacc[m][t] = coopMatMulAdd (pm[m], vm, pacc[m][t]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    //  Each row by its total, and the rows the block invented by nothing.
+    barrier();
+    [[unroll]] for (uint i = 0u; i < BR / 2u; i++) {
+        uint r = (lane >> 5u) + 2u * i;
+
+        if (col == 0u) {
+            rowscale[r] = block * BR + r < shape.positions
+                          ? 1.0 / total[i] : 0.0;
+        }
+    }
+    barrier();
+
+    float final_of[8];
+
+    for (uint e = 0u; e < 8u; ++e) {
+        final_of[e] = rowscale[mine_rows[e]];
+    }
+
+    //  And out sixteen components at a time, through the scores' room,
+    //  dropping the rows the block invented and the components a narrower
+    //  head does not have.
+    [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+        [[unroll]] for (uint t = 0u; t < DM / 16u; t++) {
+            if (t * 16u < dv) {
+                for (int e = 0; e < pacc[m][t].length(); ++e) {
+                    pacc[m][t][e] *= final_of[e];
+                }
+
+                coopMatStore (pacc[m][t], ss, 0u, 16u,
+                              gl_CooperativeMatrixLayoutRowMajor);
+                barrier();
+
+                for (uint at = lane; at < 256u; at += 64u) {
+                    uint r    = m * 16u + at / 16u;
+                    uint c    = t * 16u + at % 16u;
+                    uint slot = block * BR + r;
+
+                    if (c < dv) {
+                        uint where = slot * shape.heads * dv + head * dv + c;
+
+                        if (slot >= shape.positions) {
+                            if (halved) {
+                                hb[where] = float16_t (0.0);
+                            }
+                        } else if (halved) {
+                            hb[where] = float16_t (ss[at]);
+                        } else {
+                            y[where] = ss[at];
+                        }
+                    }
+                }
+                barrier();
+            }
+        }
+    }
+#else
         //  What this tile weighs, every component at once: a product of
         //  its own, read straight out of the cache, stored where the
         //  scores were -- which is sized for the whole answer -- and added
@@ -556,4 +725,5 @@ void main() {
             }
         }
     }
+#endif
 }
