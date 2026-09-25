@@ -2428,6 +2428,12 @@ private
       --  only the slices a token touches, and a stack would be all of them.
       Stacked     : Boolean := False;
 
+      --  Whether the device runs only the front half of each layer -- its
+      --  normalization, attention or delta rule, projection out and join --
+      --  and the processor the feed-forward: a mixture whose stacks do not
+      --  fit the device while everything but its experts does.
+      Split_Feed : Boolean := False;
+
       --  What has been merged into those weights, as a digest of every
       --  adapter and the scale it was applied at. Zero for a model as its
       --  file describes it.
@@ -2727,6 +2733,12 @@ private
       Gathered   : Choice_Access := null;
       Plan       : Model_Runner.Memory.Session_Plan;
       Team       : Model_Runner.Backend.CPU.Pool_Reference := null;
+
+      --  Whether this session's products go to the processor's pool
+      --  whatever the model's backend: set while a mixture's feed-forward
+      --  runs for a model whose experts the device does not hold, and
+      --  whose layers the device runs the front half of (Split_Feed).
+      Host_Feed  : Boolean := False;
       Logit_Row  : Model_Runner.Tensors.Real_Array_Access := null;
 
       --  How the cache is cut up, one entry a layer.

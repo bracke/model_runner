@@ -32,6 +32,7 @@ package body Model_Runner.Backend.Device is
    --  The layers' outcomes, as Note_Layer counts them.
    Whole_Count  : Natural := 0;
    Handed_Count : Natural := 0;
+   Split_Count  : Natural := 0;
    Handed_First : Handing := Not_Handed;
 
    --  And how often one was moved to close a gap below it.
@@ -519,6 +520,7 @@ package body Model_Runner.Backend.Device is
       Named_Last := 0;
       Whole_Count := 0;
       Handed_Count := 0;
+      Split_Count := 0;
       Handed_First := Not_Handed;
       Moved_Blocks := 0;
       Moved_Rings := 0;
@@ -574,8 +576,14 @@ package body Model_Runner.Backend.Device is
      (Whole : Boolean;
       Asked : Boolean := False;
       Cache : Boolean := False;
-      Held  : Boolean := False) is
+      Held  : Boolean := False;
+      Split : Boolean := False) is
    begin
+      if Split then
+         Split_Count := Split_Count + 1;
+         return;
+      end if;
+
       if Whole then
          Whole_Count := Whole_Count + 1;
          return;
@@ -604,6 +612,8 @@ package body Model_Runner.Backend.Device is
    function Layers_Whole return Natural is (Whole_Count);
 
    function Layers_Handed return Natural is (Handed_Count);
+
+   function Layers_Split return Natural is (Split_Count);
 
    function First_Handing return Handing is (Handed_First);
 
@@ -2189,7 +2199,8 @@ package body Model_Runner.Backend.Device is
       Linear_State_At : Natural := 0;
       Pages_At       : Natural := 0;
       Page_Shift     : Natural := 0;
-      First_Position : Natural := 0)
+      First_Position : Natural := 0;
+      No_Feed        : Boolean := False)
    is
       --  Whether this is a hybrid's linear layer rather than attention.
       Linear_Layer : constant Boolean := T.Is_Present (Linear_Mix);
@@ -2215,7 +2226,7 @@ package body Model_Runner.Backend.Device is
          --  move when the head normalizations and the mixture are in: the
          --  recipe below used to be seventeen fixed steps and is now counted
          --  as it goes.
-         Mixed : constant Boolean := T.Is_Present (Router);
+         Mixed : constant Boolean := not No_Feed and then T.Is_Present (Router);
 
          --  Whether the feed-forward has a gate, or is the one projection
          --  up with a unit on it that Falcon, Phi-2, GPT-2 and Bert state.
@@ -2236,7 +2247,8 @@ package body Model_Runner.Backend.Device is
          Biasless_Fused : Boolean := False;
 
          --  Whether the mixture has a shared expert beside the chosen ones.
-         Shared : constant Boolean := T.Is_Present (Shared_Gate);
+         Shared : constant Boolean :=
+           not No_Feed and then T.Is_Present (Shared_Gate);
 
          --  The query rows the heads take: the projection's, or half of them
          --  where the other half are the gates beside the heads.
@@ -2491,7 +2503,13 @@ package body Model_Runner.Backend.Device is
                               or else Post_Feed_Norm = null))
            --  A feed-forward without a gate takes a unit alone on its one
            --  arm, and a mixture is gated by its stacks.
-           or else (not Gated and then not Mixed and then Unit not in 0 | 1)
+           or else (not No_Feed
+                    and then not Gated and then not Mixed
+                    and then Unit not in 0 | 1)
+           --  The front half alone: its answer is the host's to go on
+           --  from, so it is never carried out, and Bert's layout, whose
+           --  feed-forward reads a normalization of the sum, is not one.
+           or else (No_Feed and then (Carry_Out or else After))
            --  A gate beside each head is elementwise over the blend, so
            --  the value heads are as wide as the query heads; the query
            --  rows are then two a head, and the heads are a whole number.
@@ -2528,12 +2546,14 @@ package body Model_Runner.Backend.Device is
            --  the one after the sum is Bert's, which the mix leaves for it.
            or else (Post_Attention_Norm /= null
                     and then Post_Attention_Norm.all'Length /= Norm_Span)
-           or else (Post_Feed_Norm /= null
+           or else (not No_Feed
+                    and then Post_Feed_Norm /= null
                     and then (Post_Feed_Norm.all'Length /= Norm_Span
                               or else (Experts > 0 and then not After)))
            --  The expert biases are a mixture's; a plain feed-forward's
            --  are the one slice each on its two projections.
-           or else (not Mixed
+           or else (not No_Feed
+                    and then not Mixed
                     and then (Gate_Bias /= null
                               or else (Up_Bias /= null
                                        and then (Gated
@@ -2581,7 +2601,11 @@ package body Model_Runner.Backend.Device is
             return;
          end if;
 
-         if Mixed then
+         if No_Feed then
+            --  The front half alone reads none of the feed-forward's
+            --  weights, so none of their formats is asked about.
+            null;
+         elsif Mixed then
             --  The router and the stacks, and the shape they have to hold
             --  together in: one slice of each stack a member, over the
             --  width the layer has.
@@ -3297,12 +3321,23 @@ package body Model_Runner.Backend.Device is
             end if;
          end if;
 
-         Products.Add_Join (Steps, Added, From_Step => Step_Out, Kept => False);
+         Products.Add_Join
+           (Steps, Added, From_Step => Step_Out, Kept => No_Feed);
          if not Added then
             return;
          end if;
          Step_Join := Products.Length (Steps);
+
+         --  The front half alone ends here: the residual after attention is
+         --  the answer, kept so that it comes home, and the feed-forward is
+         --  the host's.
+         if No_Feed then
+            At_Out := Wanted;
+         end if;
          Step_Room (Width);
+         if No_Feed then
+            goto Built;
+         end if;
 
          --  And the normalization Bert puts on the sum, which is then what
          --  the feed-forward reads and what its join adds to.
@@ -3708,6 +3743,7 @@ package body Model_Runner.Backend.Device is
             end;
          end if;
 
+      <<Built>>
          if Landing = null or else Landing.all'Length < Wanted then
             T.Free (Landing);
             T.Allocate (Wanted, Landing);

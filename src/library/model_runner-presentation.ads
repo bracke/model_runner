@@ -322,6 +322,8 @@ package Model_Runner.Presentation is
    --    handed back runs with the device idle and a fetch a token, and
    --    the run reported the same device and the same context whether
    --    every layer went over or none did.
+   --  @param Layers_Split How many ran their front half on the device and
+   --    their mixture of experts on the processor.
    --  @param Handed_Why The message key naming why the first of those was
    --    handed back, or the empty string where none were.
    --  @param Blocks_Moved How often a block was moved to close a gap
@@ -345,6 +347,7 @@ package Model_Runner.Presentation is
       State_Bytes    : Interfaces.Unsigned_64 := 0;
       Layers_Whole   : Natural := 0;
       Layers_Handed  : Natural := 0;
+      Layers_Split   : Natural := 0;
       Handed_Why     : String := "";
       Blocks_Moved   : Natural := 0;
       Rings_Moved    : Natural := 0);

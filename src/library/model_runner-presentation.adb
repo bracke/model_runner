@@ -530,6 +530,7 @@ package body Model_Runner.Presentation is
       State_Bytes    : Interfaces.Unsigned_64 := 0;
       Layers_Whole   : Natural := 0;
       Layers_Handed  : Natural := 0;
+      Layers_Split   : Natural := 0;
       Handed_Why     : String := "";
       Blocks_Moved   : Natural := 0;
       Rings_Moved    : Natural := 0)
@@ -650,12 +651,20 @@ package body Model_Runner.Presentation is
          --  The reason is the first refused layer's, which is every one
          --  of them in practice: the shapes of a model's layers do not
          --  differ from token to token.
-         if Layers_Whole + Layers_Handed > 0 then
+         if Layers_Whole + Layers_Handed + Layers_Split > 0 then
             Put_Field
               (Item, "statistics.layers_whole",
                T.Image (Long_Long_Integer (Layers_Whole)) & " of "
-               & T.Image (Long_Long_Integer (Layers_Whole + Layers_Handed)),
+               & T.Image
+                   (Long_Long_Integer
+                      (Layers_Whole + Layers_Handed + Layers_Split)),
                Diagnostic);
+
+            if Layers_Split > 0 then
+               Put_Field
+                 (Item, "statistics.layers_split",
+                  T.Image (Long_Long_Integer (Layers_Split)), Diagnostic);
+            end if;
 
             if Layers_Handed > 0 and then Handed_Why /= "" then
                Put_Field

@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A mixture too large for the device is split between it and the
+  processor.** Where the experts do not fit the device and everything else
+  does, the device runs each layer's front half -- attention, or a hybrid's
+  linear block, joined into the residual -- and the processor's pool the
+  router, the experts and the shared expert. `run` with no `--backend` now
+  takes the device for such a model, weighing the budget against the file
+  less its `*_exps` tensors, and `--show-stats` counts the layers split.
+  qwen3.6-35b-a3b Q4_K_S (21 GB, the device holding 12.7), warm: a prompt
+  71.1 -> 91.9 tokens a second, generating 13.9 -> 15.1, against the processor
+  alone.
+
 - **The k-quant generating kernels run at the wave of sixty-four,** four
   super-blocks in flight: qwen3-8b Q4_K_M 13.6 -> 13.8 tokens a second,
   gemma-3-4b 23.3 -> 23.6, a TinyLlama 89.3 -> 90.9.

@@ -1,3 +1,4 @@
+with Ada.Strings.Fixed;
 with Ada.Text_IO;
 
 with AUnit.Assertions;
@@ -2443,6 +2444,99 @@ package body Tests.Inference_Cases is
                B.Free (Image);
             end;
          end loop;
+      end;
+
+      --  And a mixture whose experts do not fit the device while the
+      --  rest of it does: the device runs each layer's front half and the
+      --  processor's pool the mixture, which is how a 21 GB mixture runs
+      --  here on a device holding 12.7. The budget is the fixture's bytes
+      --  less a quarter of its experts' -- room for the context and a
+      --  hybrid's states, and short of the stacks by that quarter -- and
+      --  the report's count of split layers says the split ran,
+      --  rather than the whole model going back to the processor, which
+      --  would agree with it just as well.
+      declare
+         Kinds : constant array (1 .. 2) of Tiny_Model.Fixture_Architecture :=
+           [Tiny_Model.Qwen3, Tiny_Model.Qwen35];
+      begin
+         for Kind of Kinds loop
+            declare
+               Image   : B.Byte_Array_Access;
+               Host    : N.Real_Array (0 .. Tiny_Model.Vocabulary - 1);
+               Device  : N.Real_Array (0 .. Tiny_Model.Vocabulary - 1);
+               Why     : E.Error_Code;
+               Worst   : N.Real := 0.0;
+               All_Of  : Interfaces.Unsigned_64 := 0;
+               Experts : Interfaces.Unsigned_64 := 0;
+               Name    : constant String :=
+                 Tiny_Model.Fixture_Architecture'Image (Kind)
+                 & " split between the device and the processor";
+               use type Interfaces.Unsigned_64;
+            begin
+               Tiny_Model.Build
+                 (Image, Tiny_Model.Q8_0, Room => Room, Kind => Kind,
+                  Experts => 20, Experts_Used => 4);
+               declare
+                  Held   : aliased constant B.Byte_Array := Image.all;
+                  Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+                    (Held'Access);
+                  Item   : Containers.Container;
+                  Status : E.Error_Info;
+               begin
+                  Containers.Reader.Parse (Item, Source, Status => Status);
+                  for Index in 1 .. Containers.Tensor_Count (Item) loop
+                     All_Of := All_Of + Containers.Tensor_Bytes (Item, Index);
+                     if Ada.Strings.Fixed.Index
+                          (Containers.Tensor_Name (Item, Index), "_exps.")
+                        > 0
+                     then
+                        Experts :=
+                          Experts + Containers.Tensor_Bytes (Item, Index);
+                     end if;
+                  end loop;
+                  Containers.Close (Item);
+               end;
+
+               Logits_On
+                 (Image, Model_Runner.Backend.Backend_CPU, Length, Host, Why);
+               Assert (Why = E.No_Error,
+                       "the processor refused " & Name & ": "
+                       & E.Error_Code'Image (Why));
+
+               for Chunk in reverse 1 .. 2 loop
+                  Model_Runner.Backend.Device.Close;
+                  Model_Runner.Backend.Device.Open
+                    (Awake, Budget => All_Of - Experts / 4);
+                  Assert (Awake, "the device did not reopen for " & Name);
+                  Logits_On
+                    (Image, Model_Runner.Backend.Backend_Device,
+                     (if Chunk = 2 then Length else 1), Device, Why);
+                  Assert (Why = E.No_Error,
+                          "the device refused " & Name & ": "
+                          & E.Error_Code'Image (Why));
+                  Assert (Model_Runner.Backend.Device.Layers_Split > 0,
+                          "no layer of " & Name & " ran split, of"
+                          & Model_Runner.Backend.Device.Layers_Whole'Image
+                          & " whole and"
+                          & Model_Runner.Backend.Device.Layers_Handed'Image
+                          & " handed back");
+                  Worst := 0.0;
+                  for Index in Host'Range loop
+                     Worst :=
+                       N.Real'Max (Worst, abs (Host (Index) - Device (Index)));
+                  end loop;
+                  Assert (Worst <= Tolerance,
+                          "on " & Name
+                          & (if Chunk = 2 then " in one batch"
+                             else " a position at a time")
+                          & " the device's logits differ from the "
+                          & "processor's by " & N.Real'Image (Worst));
+               end loop;
+               B.Free (Image);
+            end;
+         end loop;
+         Model_Runner.Backend.Device.Close;
+         Model_Runner.Backend.Device.Open (Awake);
       end;
 
       --  And a packed cache over the tile, on a model too shallow for a

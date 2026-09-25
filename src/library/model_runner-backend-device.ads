@@ -234,17 +234,25 @@ package Model_Runner.Backend.Device is
    --    that is one the device could have taken had it been asked sooner,
    --    which is a different thing from a context it will not hold at
    --    all, and the report said the same for both.
+   --  @param Split True where the device ran the layer's front half and
+   --    the processor its mixture of experts: the model's experts do not
+   --    fit the device, the rest of it does.
    procedure Note_Layer
      (Whole : Boolean;
       Asked : Boolean := False;
       Cache : Boolean := False;
-      Held  : Boolean := False);
+      Held  : Boolean := False;
+      Split : Boolean := False);
 
    --  @return Layers noted whole since the device was opened.
    function Layers_Whole return Natural;
 
    --  @return Layers noted not whole since then.
    function Layers_Handed return Natural;
+
+   --  @return Layers noted split since then: the front half on the
+   --    device, the mixture on the processor.
+   function Layers_Split return Natural;
 
    --  @return Why the first of those was, or Not_Handed for none.
    function First_Handing return Handing;
@@ -1280,6 +1288,11 @@ package Model_Runner.Backend.Device is
    --  @param First_Position Which position of its session the batch's
    --    first row is, for a cache in pages: where the step that places
    --    puts it, At_Key and At_Value being offsets inside a page.
+   --  @param No_Feed The front half alone: the normalization, attention or
+   --    the delta rule, the projection out and the join, and no feed-forward
+   --    -- the residual after attention lands in Into for the host to run
+   --    the feed-forward on. For a mixture too large for the device, whose
+   --    experts the processor runs. Refused with Carry_Out and with After.
    procedure Whole_Layer
      (Residual       : Model_Runner.Tensors.Real_Array;
       Attention_Norm : Model_Runner.Tensors.Real_Array_Access;
@@ -1377,7 +1390,8 @@ package Model_Runner.Backend.Device is
       Linear_State_At : Natural := 0;
       Pages_At       : Natural := 0;
       Page_Shift     : Natural := 0;
-      First_Position : Natural := 0);
+      First_Position : Natural := 0;
+      No_Feed        : Boolean := False);
 
    --  A gated feed-forward block, whole, in one submission.
    --

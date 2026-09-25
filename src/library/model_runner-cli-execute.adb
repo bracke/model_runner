@@ -2,6 +2,7 @@ with Ada.Calendar;
 with Ada.Directories;
 with Ada.IO_Exceptions;
 with Ada.Streams.Stream_IO;
+with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 with Ada.Unchecked_Deallocation;
@@ -2505,12 +2506,49 @@ package body Model_Runner.CLI.Execute is
    --  gets it. The device is left open when it is chosen, opened as the run
    --  will ask for it, so the run's own Open finds it ready rather than
    --  building its pipelines a second time; it is closed when it is not.
+   --  A mixture of experts whose experts do not fit the device still
+   --  goes there when the rest of it does: the device runs each layer's
+   --  front half and the processor the experts. What the budget is weighed
+   --  against is then the model's bytes less its experts' -- the tensors
+   --  named *_exps -- or the whole file where it has none, or cannot be
+   --  read as a model here (the run reports that itself).
    function Resolved_Backend
      (Item   : Opt.Command;
       Screen : in out Pres.Console) return Opt.Command
    is
       Result : Opt.Command := Item;
       Ready  : Boolean;
+
+      function Expert_Bytes (Path : String) return Interfaces.Unsigned_64 is
+         From      : Files.File_Source;
+         Parsed    : Containers.Container;
+         Condition : E.Error_Info;
+         Total     : Interfaces.Unsigned_64 := 0;
+      begin
+         Files.Open (From, Path, Status => Condition);
+         if E.Is_Error (Condition) then
+            return 0;
+         end if;
+
+         Containers.Reader.Parse (Parsed, From, Status => Condition);
+         if not E.Is_Error (Condition) then
+            for Index in 1 .. Containers.Tensor_Count (Parsed) loop
+               if Ada.Strings.Fixed.Index
+                    (Containers.Tensor_Name (Parsed, Index), "_exps.") > 0
+               then
+                  Total := Total + Containers.Tensor_Bytes (Parsed, Index);
+               end if;
+            end loop;
+         end if;
+
+         Containers.Close (Parsed);
+         Files.Close (From);
+         return Total;
+      exception
+         when others =>
+            Files.Close (From);
+            return 0;
+      end Expert_Bytes;
    begin
       if Item.Backend_Set then
          return Result;
@@ -2546,7 +2584,11 @@ package body Model_Runner.CLI.Execute is
          Holds : constant Interfaces.Unsigned_64 :=
            Model_Runner.Backend.Device.Describe.Memory_Bytes;
       begin
-         if Weights > 0 and then Holds > 0 and then Weights <= Holds then
+         if Weights > 0
+           and then Holds > 0
+           and then (Weights <= Holds
+                     or else Weights - Expert_Bytes (Path) <= Holds)
+         then
             Result.Backend := Model_Runner.Backend.Backend_Device;
          else
             Model_Runner.Backend.Device.Close;
@@ -4221,6 +4263,8 @@ package body Model_Runner.CLI.Execute is
                        Model_Runner.Backend.Device.Layers_Whole,
                      Layers_Handed  =>
                        Model_Runner.Backend.Device.Layers_Handed,
+                     Layers_Split   =>
+                       Model_Runner.Backend.Device.Layers_Split,
                      Handed_Why     => Handed_Key,
                      Blocks_Moved   =>
                        Model_Runner.Backend.Device.Blocks_Moved,

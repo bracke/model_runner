@@ -5487,6 +5487,7 @@ package body Model_Runner.Llama is
       --  the residency, and a model whose stacks do not all fit would give
       --  back and upload again a whole stack where it gave back a slice.
       Item.Stacked := False;
+      Item.Split_Feed := False;
 
       if Item.Settings.Experts > 0
         and then Item.Settings.Experts_Used > 0
@@ -5524,6 +5525,47 @@ package body Model_Runner.Llama is
             end loop;
 
             Item.Stacked := Total <= Item.Able.Memory_Bytes;
+
+            --  Where the stacks do not fit, the device may still hold
+            --  everything else: the feed-forward -- the stacks, the router
+            --  and the shared expert, which the host's mixture reads -- goes
+            --  to the processor's pool, and the device runs each layer's
+            --  front half. A 21 GB mixture here holds 12.7: streamed, its
+            --  experts read at 2.9 tokens a second on the device against
+            --  13.9 on the processor alone.
+            if not Item.Stacked and then Item.Layers /= null then
+               declare
+                  Feed_Bytes : Interfaces.Unsigned_64 := 0;
+
+                  procedure Count (View : T.View) is
+                  begin
+                     if T.Is_Present (View) then
+                        Feed_Bytes := Feed_Bytes
+                          + Interfaces.Unsigned_64 (View.Rows)
+                            * Interfaces.Unsigned_64 (T.Row_Bytes (View));
+                     end if;
+                  end Count;
+               begin
+                  for Index in Item.Layers.all'Range loop
+                     declare
+                        L : Layer renames Item.Layers.all (Index);
+                     begin
+                        Count (L.Gate_Stack);
+                        Count (L.Up_Stack);
+                        Count (L.Down_Stack);
+                        Count (L.Router);
+                        Count (L.Shared_Gate);
+                        Count (L.Shared_Up);
+                        Count (L.Shared_Down);
+                     end;
+                  end loop;
+
+                  Item.Split_Feed :=
+                    Feed_Bytes > 0
+                    and then Feed_Bytes < Total
+                    and then Total - Feed_Bytes <= Item.Able.Memory_Bytes;
+               end;
+            end if;
          end;
 
          --  And the stacks put on the device now, where they fit, rather
@@ -5616,7 +5658,9 @@ package body Model_Runner.Llama is
          end;
       end if;
 
-      case Item.Owner.Able.Kind is
+      case (if Item.Host_Feed then Model_Runner.Backend.Backend_CPU
+            else Item.Owner.Able.Kind)
+      is
          when Model_Runner.Backend.Backend_CPU =>
             Workers_CPU.Dispatch (Item.Team, Weight, Vector, Target, Status);
          when Model_Runner.Backend.Backend_Reference =>
@@ -5673,7 +5717,9 @@ package body Model_Runner.Llama is
          end loop;
       end if;
 
-      if Item.Owner.Able.Kind = Model_Runner.Backend.Backend_Device then
+      if not Item.Host_Feed
+        and then Item.Owner.Able.Kind = Model_Runner.Backend.Backend_Device
+      then
          Model_Runner.Backend.Device.Dispatch_Group
            (Weights, Vector, Into, Status, Item.Stopping, Apart);
          return;
@@ -5685,7 +5731,8 @@ package body Model_Runner.Llama is
       --  a group laid end to end goes the long way below -- which costs the
       --  processor nothing, because what a group saves there is a wake and
       --  the pool is already awake.
-      if Item.Owner.Able.Kind = Model_Runner.Backend.Backend_CPU
+      if (Item.Host_Feed
+          or else Item.Owner.Able.Kind = Model_Runner.Backend.Backend_CPU)
         and then Apart = 0
       then
          Workers_CPU.Dispatch_Group (Item.Team, Weights, Vector, Into, Status);
@@ -5824,7 +5871,9 @@ package body Model_Runner.Llama is
          end;
       end if;
 
-      case Item.Owner.Able.Kind is
+      case (if Item.Host_Feed then Model_Runner.Backend.Backend_CPU
+            else Item.Owner.Able.Kind)
+      is
          when Model_Runner.Backend.Backend_CPU =>
             Workers_CPU.Dispatch_Batch
               (Item.Team, Weight, Vectors, Count, Target, Status);
@@ -9892,7 +9941,7 @@ package body Model_Runner.Llama is
       Ok      : out Boolean;
       Status  : out E.Error_Info);
 
-   procedure Mixture
+   procedure Mixture_Body
      (Item    : in out Session;
       Current : Layer;
       Input   : T.Real_Array_Access;
@@ -9940,8 +9989,9 @@ package body Model_Runner.Llama is
       --  bound by the memory again. The same kernels on the same rows in
       --  the same order, so the bits are the bits; and the sum is still
       --  best expert first, which is what Mixture_Batch keeps Ranked for.
-      if Model_Runner.Backend."="
-           (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_CPU)
+      if (Item.Host_Feed
+          or else Model_Runner.Backend."="
+                    (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_CPU))
         and then Workers_CPU."/=" (Item.Team, null)
         and then Input /= Result
         and then Result.all'Length = Input.all'Length
@@ -10202,7 +10252,7 @@ package body Model_Runner.Llama is
       --  Every round writes its arms to the same per-expert rooms the sum
       --  below reads, indexed by the true slot, so the spill changes the
       --  number of submissions and nothing else.
-      if T."/=" (Item.Expert_Arms, null) then
+      if not Item.Host_Feed and then T."/=" (Item.Expert_Arms, null) then
          declare
             Done : Natural := 0;
          begin
@@ -10243,10 +10293,10 @@ package body Model_Runner.Llama is
             --  This expert's two arms, out of what the group wrote, or the
             --  session's single pair where there is no group.
             Gate_Room : constant T.Real_Array_Access :=
-              (if T."/=" (Item.Expert_Arms, null)
+              (if not Item.Host_Feed and then T."/=" (Item.Expert_Arms, null)
                then Item.Expert_Arms.all (2 * Slot + 1) else Item.Gate);
             Up_Room   : constant T.Real_Array_Access :=
-              (if T."/=" (Item.Expert_Arms, null)
+              (if not Item.Host_Feed and then T."/=" (Item.Expert_Arms, null)
                then Item.Expert_Arms.all (2 * Slot + 2) else Item.Up);
 
             Expert_Feed : constant Element_Count :=
@@ -10259,7 +10309,7 @@ package body Model_Runner.Llama is
               Element_Count (Chosen (Slot))
               * Element_Count (Item.Owner.all.Settings.Embedding);
          begin
-            if T."=" (Item.Expert_Arms, null) then
+            if Item.Host_Feed or else T."=" (Item.Expert_Arms, null) then
                Product (Item, Which.Gate, Input, Gate_Room, Status);
                if E.Is_Error (Status) then
                   return;
@@ -10308,7 +10358,7 @@ package body Model_Runner.Llama is
 
             --  Grouped, the gated vector is laid into the one activation
             --  the group reads and the products follow together below.
-            if T."/=" (Item.Expert_Outs, null) then
+            if not Item.Host_Feed and then T."/=" (Item.Expert_Outs, null) then
                Item.Expert_Feeds.all
                  (Item.Expert_Feeds.all'First
                     + Element_Count (Slot) * Expert_Feed
@@ -10356,7 +10406,7 @@ package body Model_Runner.Llama is
       --
       --  The bias, the share and the sum stay where they were and in the
       --  order they were in: the products are the same products, batched.
-      if T."/=" (Item.Expert_Outs, null) then
+      if not Item.Host_Feed and then T."/=" (Item.Expert_Outs, null) then
          declare
             Downs : T.View_Group (1 .. Used);
             Rooms : T.Target_Group (1 .. Used);
@@ -10405,6 +10455,26 @@ package body Model_Runner.Llama is
       if T.Is_Present (Current.Shared_Gate) then
          Shared_Expert (Item, Current, Input, Result.all, Status);
       end if;
+   end Mixture_Body;
+
+   --  The mixture, on the processor's pool where the device runs only the
+   --  layers' front halves; as it always was otherwise.
+   procedure Mixture
+     (Item    : in out Session;
+      Current : Layer;
+      Input   : T.Real_Array_Access;
+      Result  : T.Real_Array_Access;
+      Status  : out E.Error_Info)
+   is
+      Was : constant Boolean := Item.Host_Feed;
+   begin
+      Item.Host_Feed := Was or else Item.Owner.all.Split_Feed;
+      Mixture_Body (Item, Current, Input, Result, Status);
+      Item.Host_Feed := Was;
+   exception
+      when others =>
+         Item.Host_Feed := Was;
+         raise;
    end Mixture;
 
    -------------------
@@ -10440,7 +10510,7 @@ package body Model_Runner.Llama is
    --  @param Ok False where the batch could not be gathered, which leaves
    --    the caller to run the positions one at a time as it did before.
    --  @param Status Success, or the first refusal.
-   procedure Mixture_Batch
+   procedure Mixture_Batch_Body
      (Item    : in out Session;
       Current : Layer;
       Rows    : T.Real_Array_Access;
@@ -10466,8 +10536,9 @@ package body Model_Runner.Llama is
       --  and 0.14 ms a layer of a four-row batch where the bytes were
       --  0.09 -- and on a token, the same three dispatches for one row.
       On_Pool : constant Boolean :=
-        Model_Runner.Backend."="
-          (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_CPU)
+        (Item.Host_Feed
+         or else Model_Runner.Backend."="
+                   (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_CPU))
         and then Workers_CPU."/=" (Item.Team, null);
 
       --  The shared expert's feed width, where there is one; the experts'
@@ -11619,6 +11690,25 @@ package body Model_Runner.Llama is
       end loop;
 
       Ok := True;
+   end Mixture_Batch_Body;
+
+   procedure Mixture_Batch
+     (Item    : in out Session;
+      Current : Layer;
+      Rows    : T.Real_Array_Access;
+      Count   : Element_Count;
+      Ok      : out Boolean;
+      Status  : out E.Error_Info)
+   is
+      Was : constant Boolean := Item.Host_Feed;
+   begin
+      Item.Host_Feed := Was or else Item.Owner.all.Split_Feed;
+      Mixture_Batch_Body (Item, Current, Rows, Count, Ok, Status);
+      Item.Host_Feed := Was;
+   exception
+      when others =>
+         Item.Host_Feed := Was;
+         raise;
    end Mixture_Batch;
 
    -----------
@@ -16251,7 +16341,7 @@ package body Model_Runner.Llama is
       --  A hybrid's linear layer goes whole where the device has the
       --  rule and the convolution, the session a ring that is over, and
       --  the feed-forward behind it is a shape the sequence takes.
-      function Linear_Layer_Fits (L : Layer) return Boolean
+      function Linear_Front_Fits (L : Layer) return Boolean
       is (Linear_Ready
           and then Item.Delta_State /= null
           and then Item.Conv_State /= null
@@ -16266,15 +16356,18 @@ package body Model_Runner.Llama is
           and then L.Attention_Norm /= null
           and then L.Feed_Norm /= null
           and then Norms_Agree (L)
+          and then True);
+
+      function Linear_Layer_Fits (L : Layer) return Boolean
+      is (Linear_Front_Fits (L)
           and then (if Settings.Experts > 0 then Mixture_Whole (L)
                     else T.Is_Present (L.Up)));
 
       --  A dense layer goes whole gated or not -- the one projection up
       --  with a unit alone on it is a shape the sequence takes -- and a
       --  mixture where the device holds its stacks.
-      function Whole_Layer_Fits (L : Layer; Index : Natural) return Boolean
-      is ((if Settings.Experts > 0 then Mixture_Whole (L)
-           else T.Is_Present (L.Up))
+      function Front_Fits (L : Layer; Index : Natural) return Boolean
+      is (True
 
           --  A hybrid's linear layers keep a state on the host and are
           --  not attention; its attention layers go whole, the gate
@@ -16327,11 +16420,6 @@ package body Model_Runner.Llama is
 
           --  A dense feed-forward's two biases are steps of the
           --  sequence; a mixture's are its experts', named apart.
-          and then (Settings.Experts = 0
-                    or else (L.Up_Bias = null and then L.Down_Bias = null))
-          and then (L.Post_Feed_Norm = null
-                    or else Settings.Experts = 0
-                    or else Normalizes_After (Settings.Kind))
 
           --  The code variant's three normalizations more -- over the
           --  whole of the queries and the keys, and the attention
@@ -16355,11 +16443,38 @@ package body Model_Runner.Llama is
           and then L.Second_Attention_Norm = null
           and then L.Query_Whole_Norm = null);
 
+      --  A layer goes whole where its front half does and the device takes
+      --  its feed-forward too: a mixture whose stacks it holds, or a dense
+      --  feed-forward, whose biases -- and a mixture's post-norm -- are
+      --  steps of the sequence.
+      function Whole_Layer_Fits (L : Layer; Index : Natural) return Boolean
+      is ((if Settings.Experts > 0 then Mixture_Whole (L)
+           else T.Is_Present (L.Up))
+          and then Front_Fits (L, Index)
+          and then (Settings.Experts = 0
+                    or else (L.Up_Bias = null and then L.Down_Bias = null))
+          and then (L.Post_Feed_Norm = null
+                    or else Settings.Experts = 0
+                    or else Normalizes_After (Settings.Kind)));
+
       --  Whichever of the two a layer is: what the carry from the layer
       --  before asks of the layer after.
       function Layer_Fits (L : Layer; Index : Natural) return Boolean
       is (if Linear (Settings, Index) then Linear_Layer_Fits (L)
           else Whole_Layer_Fits (L, Index));
+
+      --  A layer whose front half goes to the device and whose feed-forward
+      --  the processor runs: a mixture the device does not hold, in a model
+      --  whose everything else it does (Split_Feed), arranged the plain way
+      --  -- a normalization before the feed-forward, joined after it.
+      function Split_Here (L : Layer) return Boolean
+      is (Source.Split_Feed
+          and then L.Experts /= null
+          and then not Mixture_Whole (L)
+          and then L.Feed_Norm /= null
+          and then not Normalizes_After (Settings.Kind)
+          and then not Settings.Parallel_Residual
+          and then L.Second_Attention_Norm = null);
 
       --  A slice of a token's work, for the pool.
       --
@@ -16776,6 +16891,12 @@ package body Model_Runner.Llama is
             --  projection down included, so that the common tail does not
             --  project it a second time.
             Whole_Block : Boolean := False;
+
+            --  Whether this layer goes to the device as its front half
+            --  alone, the feed-forward the processor's (Split_Here), and
+            --  whether the device took it.
+            Half      : Boolean := False;
+            Half_Done : Boolean := False;
             --  The angles this position turns by, where the whole layer
             --  goes over as one: the table is what the device is handed
             --  instead of the architecture. Two numbers a pair.
@@ -16804,8 +16925,12 @@ package body Model_Runner.Llama is
                if Model_Runner.Backend."="
                     (Item.Owner.Able.Kind,
                      Model_Runner.Backend.Backend_Device)
-                 and then Linear_Layer_Fits (Current)
+                 and then (Linear_Layer_Fits (Current)
+                           or else (Split_Here (Current)
+                                    and then Linear_Front_Fits (Current)))
                then
+                  Half := not Linear_Layer_Fits (Current);
+
                   declare
                      Sent : constant Boolean := Linear_Ready;
                      Back : Boolean;
@@ -16847,7 +16972,8 @@ package body Model_Runner.Llama is
                            Fused,
                            Carry_In  => Carried,
                            Carry_Out =>
-                             Chaining
+                             not Half
+                             and then Chaining
                              and then Index < Source.Layers.all'Last
                              and then Layer_Fits
                                         (Source.Layers.all (Index + 1),
@@ -16895,10 +17021,27 @@ package body Model_Runner.Llama is
                            Linear        =>
                              Linear_Shape_Of (Item, Natural (Index), 1),
                            Linear_State_At =>
-                             Linear_State_At (Item, Natural (Index)));
-                        Went_Whole := Fused;
+                             Linear_State_At (Item, Natural (Index)),
+                           No_Feed   => Half);
+                        Half_Done := Half and then Fused;
+                        Went_Whole := Fused and then not Half;
                      end if;
                   end;
+
+                  if Half_Done then
+                     --  The front half only: the ring moved on the device
+                     --  as a whole layer's does, and the feed-forward is
+                     --  the host's, after the host's own linear block.
+                     Item.Kept_Newest :=
+                       Natural'Max (Item.Kept_Newest, Natural (Reserved) + 1);
+                     Carried := False;
+                     if Chaining then
+                        Deferred (Index) := True;
+                     end if;
+                     Fused := False;
+                     Charge (Item, Attending, Mark);
+                     goto Front_Done;
+                  end if;
 
                   if Fused then
                      Item.Kept_Newest :=
@@ -16984,12 +17127,21 @@ package body Model_Runner.Llama is
                --  sequence has no turning step.
                if Item.Held in Exact | Eighth | Fourth
                  and then Element_Count (Settings.Rotary) <= Head_Size
-                 and then (Settings.Experts = 0 or else Mixture_Whole (Current))
-                 and then Whole_Layer_Fits (Current, Natural (Index))
+                 and then (((Settings.Experts = 0
+                             or else Mixture_Whole (Current))
+                            and then Whole_Layer_Fits (Current, Natural (Index)))
+                           or else (Split_Here (Current)
+                                    and then Front_Fits
+                                               (Current, Natural (Index))))
                  and then Model_Runner.Backend."="
                             (Item.Owner.Able.Kind,
                              Model_Runner.Backend.Backend_Device)
                then
+                  Half := not ((Settings.Experts = 0
+                                or else Mixture_Whole (Current))
+                               and then Whole_Layer_Fits
+                                          (Current, Natural (Index)));
+
                   if Item.Paged then
                      --  Up to the one position this token writes: it needs
                      --  the pages its own cell reaches and no more, and its
@@ -17064,7 +17216,8 @@ package body Model_Runner.Llama is
                         --  and each of them waited on its own fence.
                         Carry_In  => Carried,
                         Carry_Out =>
-                          Chaining
+                          not Half
+                          and then Chaining
                           and then Index < Source.Layers.all'Last
                           and then Layer_Fits
                                      (Source.Layers.all (Index + 1),
@@ -17162,14 +17315,17 @@ package body Model_Runner.Llama is
                         Shared_Gate   => Current.Shared_Gate,
                         Shared_Up     => Current.Shared_Up,
                         Shared_Down   => Current.Shared_Down,
-                        Shared_Router => Current.Shared_Router);
-                     Went_Whole := Fused;
+                        Shared_Router => Current.Shared_Router,
+                        No_Feed       => Half);
+                     Half_Done := Half and then Fused;
+                     Went_Whole := Fused and then not Half;
                   end if;
                end if;
 
                Carried :=
                  Chaining
                  and then Fused
+                 and then not Half_Done
                  and then Index < Source.Layers.all'Last
                  and then Layer_Fits
                             (Source.Layers.all (Index + 1),
@@ -17209,6 +17365,14 @@ package body Model_Runner.Llama is
                   --  between the normalization at its front and the join at
                   --  its back came back to the host, so this one reading is
                   --  all there is and it is charged where it belongs.
+                  --  The front half only: the cache is the device's as a
+                  --  whole layer's is, and the feed-forward the host's.
+                  if Half_Done then
+                     Fused := False;
+                     Charge (Item, Attending, Mark);
+                     goto Front_Done;
+                  end if;
+
                   Charge (Item, Fusing, Mark);
                   goto Layer_Done;
                end if;
@@ -17528,10 +17692,12 @@ package body Model_Runner.Llama is
             --  Every step of this is a step of the sequence where the
             --  layer's second half went over as one, so there is nothing
             --  left here to do.
+         <<Front_Done>>
             if not Fused then
                --  Done already where the pair went over together, and
-               --  where the layer is linear and joined its answer above.
-               if not Is_Linear then
+               --  where the layer is linear and joined its answer above
+               --  -- or where the device ran the front half and joined it.
+               if not Is_Linear and then not Half_Done then
                   if not Projected then
                               --  Each head's blend through the sigmoid of its gate
                      --  first, where the query projection carried one.
@@ -17722,7 +17888,8 @@ package body Model_Runner.Llama is
             then
                Model_Runner.Backend.Device.Note_Layer
                  (Went_Whole, Asked, Cache => No_Block,
-                  Held => No_Block and then Blocks_Were_Held);
+                  Held => No_Block and then Blocks_Were_Held,
+                  Split => Half_Done);
             end if;
          end;
       end loop;
@@ -18059,7 +18226,7 @@ package body Model_Runner.Llama is
           and then not Settings.Sigmoid_Gate);
 
       --  As the token's.
-      function Linear_Layer_Fits (L : Layer) return Boolean
+      function Linear_Front_Fits (L : Layer) return Boolean
       is (Linear_Ready
           and then Item.Delta_State /= null
           and then Item.Conv_State /= null
@@ -18074,6 +18241,10 @@ package body Model_Runner.Llama is
           and then L.Attention_Norm /= null
           and then L.Feed_Norm /= null
           and then Norms_Agree (L)
+          and then True);
+
+      function Linear_Layer_Fits (L : Layer) return Boolean
+      is (Linear_Front_Fits (L)
           and then (if Settings.Experts > 0 then Mixture_Whole (L)
                     else T.Is_Present (L.Up)));
 
@@ -18081,9 +18252,8 @@ package body Model_Runner.Llama is
       --  device holds its stacks, the normalizations as the architecture
       --  arranges them and centred all or none, and a hybrid's attention
       --  layers but not its linear ones.
-      function Whole_Layer_Fits (L : Layer; Index : Natural) return Boolean
-      is ((if Settings.Experts > 0 then Mixture_Whole (L)
-           else T.Is_Present (L.Up))
+      function Front_Fits (L : Layer; Index : Natural) return Boolean
+      is (True
           and then not Linear (Settings, Index)
           and then (not Hybrid (Settings.Kind)
                     or else (Settings.Value_Size = Settings.Head_Size
@@ -18099,11 +18269,6 @@ package body Model_Runner.Llama is
                     or else (L.Post_Attention_Norm /= null
                              and then L.Post_Feed_Norm /= null))
           and then Norms_Agree (L)
-          and then (Settings.Experts = 0
-                    or else (L.Up_Bias = null and then L.Down_Bias = null))
-          and then (L.Post_Feed_Norm = null
-                    or else Settings.Experts = 0
-                    or else Normalizes_After (Settings.Kind))
           --  The device sequence has no step that scales a sublayer's
           --  output before it joins the residual, which Granite does; such
           --  a layer runs on the host under the device backend, the way a
@@ -18133,11 +18298,38 @@ package body Model_Runner.Llama is
           --  as the token's whole layer takes them.
           and then (L.Query_Norm = null) = (L.Key_Norm = null));
 
+      --  A layer goes whole where its front half does and the device takes
+      --  its feed-forward too: a mixture whose stacks it holds, or a dense
+      --  feed-forward, whose biases -- and a mixture's post-norm -- are
+      --  steps of the sequence.
+      function Whole_Layer_Fits (L : Layer; Index : Natural) return Boolean
+      is ((if Settings.Experts > 0 then Mixture_Whole (L)
+           else T.Is_Present (L.Up))
+          and then Front_Fits (L, Index)
+          and then (Settings.Experts = 0
+                    or else (L.Up_Bias = null and then L.Down_Bias = null))
+          and then (L.Post_Feed_Norm = null
+                    or else Settings.Experts = 0
+                    or else Normalizes_After (Settings.Kind)));
+
       --  Whichever of the two a layer is: what the carry from the layer
       --  before asks of the layer after.
       function Layer_Fits (L : Layer; Index : Natural) return Boolean
       is (if Linear (Settings, Index) then Linear_Layer_Fits (L)
           else Whole_Layer_Fits (L, Index));
+
+      --  A layer whose front half goes to the device and whose feed-forward
+      --  the processor runs: a mixture the device does not hold, in a model
+      --  whose everything else it does (Split_Feed), arranged the plain way
+      --  -- a normalization before the feed-forward, joined after it.
+      function Split_Here (L : Layer) return Boolean
+      is (Source.Split_Feed
+          and then L.Experts /= null
+          and then not Mixture_Whole (L)
+          and then L.Feed_Norm /= null
+          and then not Normalizes_After (Settings.Kind)
+          and then not Settings.Parallel_Residual
+          and then L.Second_Attention_Norm = null);
 
       --  Whether the session holds a block of the device's cache, taking
       --  one where it may: what the whole layer writes its keys and
@@ -18590,6 +18782,11 @@ package body Model_Runner.Llama is
             --  And whether the whole layer went over as one sequence, which
             --  is the two halves and everything the host did between them.
             Whole_Layer_Done : Boolean := False;
+
+            --  Whether the device takes this layer's front half alone, the
+            --  feed-forward the processor's (Split_Here), and whether it did.
+            Half      : Boolean := False;
+            Half_Done : Boolean := False;
             Cached           : Boolean := False;
 
             --  And whether the whole of the layer's second half went over
@@ -18901,8 +19098,12 @@ package body Model_Runner.Llama is
                  (Item.Owner.Able.Kind,
                   Model_Runner.Backend.Backend_Device)
               and then Is_Linear
-              and then Linear_Layer_Fits (Current)
+              and then (Linear_Layer_Fits (Current)
+                        or else (Split_Here (Current)
+                                 and then Linear_Front_Fits (Current)))
             then
+               Half := not Linear_Layer_Fits (Current);
+
                declare
                   Sent : constant Boolean := Linear_Ready;
                   Back : Boolean;
@@ -18944,7 +19145,8 @@ package body Model_Runner.Llama is
                         Carry_In  => Carried,
                         Mirror    => False,
                         Carry_Out =>
-                          Carrying
+                          not Half
+                          and then Carrying
                           and then Index < Source.Layers.all'Last
                           and then Layer_Fits
                                      (Source.Layers.all (Index + 1),
@@ -18990,12 +19192,31 @@ package body Model_Runner.Llama is
                           Linear_Shape_Of (Item, Natural (Index),
                                            Linear_Runs),
                         Linear_State_At =>
-                          Linear_State_At (Item, Natural (Index)));
+                          Linear_State_At (Item, Natural (Index)),
+                        No_Feed   => Half);
+                     Half_Done := Half and then Whole_Layer_Done;
+                     if Half_Done then
+                        Whole_Layer_Done := False;
+                     end if;
                      Went_Whole := Whole_Layer_Done;
                   end if;
                end;
 
-               Deferred (Index) := Deferring and then Whole_Layer_Done;
+               Deferred (Index) :=
+                 Deferring and then (Whole_Layer_Done or else Half_Done);
+
+               if Half_Done then
+                  --  The front half only: each member's ring reached the
+                  --  end of its rows on the device, and the host runs the
+                  --  feed-forward.
+                  for Which in 0 .. Count - 1 loop
+                     Item'Unchecked_Access.Kept_Newest :=
+                       Natural'Max (Item'Unchecked_Access.Kept_Newest,
+                                    Natural (Sits_At (Which)) + 1);
+                  end loop;
+                  Carried := False;
+                  goto Front_Done_Batch;
+               end if;
 
                Carried :=
                  Carrying
@@ -19031,8 +19252,12 @@ package body Model_Runner.Llama is
                          and then Source.Settings.Kind not in Falcon | Phi2 | Mpt | Command_R
                          and then Source.Settings.Max_Bias = 0.0)
                         or else (Item.Held in Exact | Eighth | Fourth
-                                 and then Whole_Layer_Fits
-                                            (Current, Natural (Index))
+                                 and then (Whole_Layer_Fits
+                                             (Current, Natural (Index))
+                                           or else (Split_Here (Current)
+                                                    and then Front_Fits
+                                                      (Current,
+                                                       Natural (Index))))
                                  --  A batch with its block, or a paged
                                  --  batch whose pages the road takes
                                  --  itself below.
@@ -19162,11 +19387,19 @@ package body Model_Runner.Llama is
                   if (Turnable or else Settings.Rotary = 0)
                     and then Resident
                     and then Item.Held in Exact | Eighth | Fourth
-                    and then (Settings.Experts = 0
-                              or else Mixture_Whole (Current))
-                    and then Whole_Layer_Fits (Current, Natural (Index))
+                    and then (((Settings.Experts = 0
+                                or else Mixture_Whole (Current))
+                               and then Whole_Layer_Fits
+                                          (Current, Natural (Index)))
+                              or else (Split_Here (Current)
+                                       and then Front_Fits
+                                                  (Current, Natural (Index))))
                     and then not Has_Runs
                   then
+                     Half := not ((Settings.Experts = 0
+                                   or else Mixture_Whole (Current))
+                                  and then Whole_Layer_Fits
+                                             (Current, Natural (Index)));
                      Asked := True;
                      Model_Runner.Backend.Device.Whole_Layer
                        (Acts.all (0 .. Count * Width - 1),
@@ -19257,7 +19490,8 @@ package body Model_Runner.Llama is
                         --  as a block session does; a round still mirrors.
                         Mirror    => not Deferring,
                         Carry_Out =>
-                          Carrying
+                          not Half
+                          and then Carrying
                           and then Index < Source.Layers.all'Last
                           and then Layer_Fits
                                      (Source.Layers.all (Index + 1),
@@ -19347,11 +19581,25 @@ package body Model_Runner.Llama is
                         Shared_Gate   => Current.Shared_Gate,
                         Shared_Up     => Current.Shared_Up,
                         Shared_Down   => Current.Shared_Down,
-                        Shared_Router => Current.Shared_Router);
+                        Shared_Router => Current.Shared_Router,
+                        No_Feed       => Half);
+                     Half_Done := Half and then Whole_Layer_Done;
+                     if Half_Done then
+                        Whole_Layer_Done := False;
+                     end if;
                      Went_Whole := Whole_Layer_Done;
                   end if;
 
-                  Deferred (Index) := Deferring and then Whole_Layer_Done;
+                  Deferred (Index) :=
+                    Deferring and then (Whole_Layer_Done or else Half_Done);
+
+                  --  The front half only: the keys and values are the
+                  --  device's as a whole layer's are, and the feed-forward
+                  --  the host's.
+                  if Half_Done then
+                     Carried := False;
+                     goto Front_Done_Batch;
+                  end if;
 
                   Carried :=
                     Carrying
@@ -20128,52 +20376,69 @@ package body Model_Runner.Llama is
             --  Every step of the rest is a step of the sequence where the
             --  layer's second half went over as one, so there is nothing
             --  left here to do.
+         <<Front_Done_Batch>>
             if not Fused then
 
-               --  A linear layer's answer is in Norm already.
-               if not Is_Linear then
-                        --  Each head's blend through the sigmoid of its gate,
-                  --  where the projection carried one.
-                  if Hybrid (Settings.Kind) then
-                     for C in 0 .. Count * Blend - 1 loop
-                        Attend.all (C) :=
-                          Attend.all (C) * Sigmoid (Gates.all (C));
-                     end loop;
-                  end if;
-
-                  Product_Batch
-                    (Item, Current.Attention_Out, Attend, Count, Norm, Status);
-                  exit when E.Is_Error (Status);
-               end if;
-               Charge (Item, Projecting, Mark);
-
-               if Current.Out_Bias /= null then
+               if Half_Done then
+                  --  The device ran the front half and joined it into the
+                  --  rows; what the feed-forward reads is their normalization.
                   for Which in 0 .. Count - 1 loop
                      declare
                         Origin : constant Element_Count := Slot (Which, Width);
                      begin
-                        K.Add (Norm.all (Origin .. Origin + Width - 1),
-                               Current.Out_Bias.all);
+                        Normalize
+                          (Source, Acts.all (Origin .. Origin + Width - 1),
+                           Current.Feed_Norm.all, Current.Feed_Norm_Bias,
+                           Norm.all (Origin .. Origin + Width - 1));
                      end;
                   end loop;
-               end if;
+                  Charge (Item, Normalizing, Mark);
+               else
+                  --  A linear layer's answer is in Norm already.
+                  if not Is_Linear then
+                     --  Each head's blend through the sigmoid of its gate,
+                     --  where the projection carried one.
+                     if Hybrid (Settings.Kind) then
+                        for C in 0 .. Count * Blend - 1 loop
+                           Attend.all (C) :=
+                             Attend.all (C) * Sigmoid (Gates.all (C));
+                        end loop;
+                     end if;
 
-               declare
-                  Share  : aliased Join_Share;
-                  Shared : E.Error_Info;
-               begin
-                  Workers_CPU.Dispatch_Shares
-                    (Team, Count, Share'Unchecked_Access, Shared);
-
-                  if not Share.Ok or else E.Is_Error (Shared) then
-                     Release;
-                     Item.Current := Failed;
-                     Status := E.Make (E.Memory_Allocation_Failed);
-                     return;
+                     Product_Batch
+                       (Item, Current.Attention_Out, Attend, Count, Norm, Status);
+                     exit when E.Is_Error (Status);
                   end if;
-               end;
+                  Charge (Item, Projecting, Mark);
 
-               Charge (Item, Joining, Mark);
+                  if Current.Out_Bias /= null then
+                     for Which in 0 .. Count - 1 loop
+                        declare
+                           Origin : constant Element_Count := Slot (Which, Width);
+                        begin
+                           K.Add (Norm.all (Origin .. Origin + Width - 1),
+                                  Current.Out_Bias.all);
+                        end;
+                     end loop;
+                  end if;
+
+                  declare
+                     Share  : aliased Join_Share;
+                     Shared : E.Error_Info;
+                  begin
+                     Workers_CPU.Dispatch_Shares
+                       (Team, Count, Share'Unchecked_Access, Shared);
+
+                     if not Share.Ok or else E.Is_Error (Shared) then
+                        Release;
+                        Item.Current := Failed;
+                        Status := E.Make (E.Memory_Allocation_Failed);
+                        return;
+                     end if;
+                  end;
+
+                  Charge (Item, Joining, Mark);
+               end if;
 
                --  Mamba's layer is its block and no feed-forward, so once
                --  the block has joined the residual the layer is done; and
@@ -20348,7 +20613,8 @@ package body Model_Runner.Llama is
                  (Went_Whole, Asked, Cache => No_Block or else Blockless,
                   Held =>
                     (No_Block or else Blockless)
-                    and then Blocks_Were_Held);
+                    and then Blocks_Were_Held,
+                  Split => Half_Done);
             end if;
          end;
       end loop;
