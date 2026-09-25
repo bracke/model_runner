@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A wide head's values are read eight positions a round.** The
+  four-at-a-time value loop of a token's attention asked for four
+  positions and waited; outside the bundles of four and eight it now asks
+  for eight. gemma-3-4b's attention after a 421-token prompt 100 -> 92 us
+  a layer, generation 22.05 -> 22.13 tokens a second there and 23.08 ->
+  23.22 after a short prompt, the same outputs.
+
 - **A normalization reads its row once and waits once.** A generated
   token's normalization is one workgroup alone, and its time was its
   barriers and its loads: eight folding barriers for each sum, the row

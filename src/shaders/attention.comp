@@ -270,6 +270,13 @@ uint place_of (uint row, uint pos, uint offset, uint width) {
 //  a hundred and twenty-eight costs what it cost at a room of that.
 const uint room = 256;
 
+//  Positions' values a lane asks for at once in the four-at-a-time path.
+#ifdef FOURS
+const uint VROUND = 4u;
+#else
+const uint VROUND = 8u;
+#endif
+
 //  How many query positions a workgroup answers.
 #ifdef QUERY_TILE
 const uint QUERIES = 8u;
@@ -1029,12 +1036,12 @@ void main() {
                     }
                 }
 
-                uint run = vlo + ((vhi - vlo) & ~3u);
+                uint run = vlo + ((vhi - vlo) & ~(VROUND - 1u));
 
-                for (uint j = vlo; j < run; j += 4u) {
-                    vec4 v[4];
+                for (uint j = vlo; j < run; j += VROUND) {
+                    vec4 v[VROUND];
 
-                    for (uint e = 0u; e < 4u; e++) {
+                    for (uint e = 0u; e < VROUND; e++) {
                         v[e] = kv4[V4_AT (base + j + e)];
                     }
 
@@ -1042,7 +1049,7 @@ void main() {
                         for (uint h = 0u; h < HEADS; h++) {
                             uint at = (i * HEADS + h) * LANES + j;
 
-                            for (uint e = 0u; e < 4u; e++) {
+                            for (uint e = 0u; e < VROUND; e++) {
                                 heldv[i][h] += tile[at + e] * v[e];
                             }
                         }
