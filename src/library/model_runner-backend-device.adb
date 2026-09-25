@@ -1889,7 +1889,8 @@ package body Model_Runner.Backend.Device is
       Head_Size   : Natural := 0;
       Rotary      : Natural := 0;
       Split       : Boolean := False;
-      Cancel      : Model_Runner.Cancellation.Token_Reference := null)
+      Cancel      : Model_Runner.Cancellation.Token_Reference := null;
+      Carry_In    : Boolean := False)
    is
 
       Slots : constant Model_Runner.Numerics.Element_Count :=
@@ -2048,7 +2049,7 @@ package body Model_Runner.Backend.Device is
                                     .. Vector.all'First + Slots * Width - 1),
          Positive (Slots),
          Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
-         Ran, Cancelled, Cancel);
+         Ran, Cancelled, Cancel, Carry_In => Carry_In);
 
       if Cancelled or else not Ran then
          return;

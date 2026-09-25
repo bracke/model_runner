@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The output head follows the last layer on the device.** A generated
+  token's last layer sent its answer home, the host normalized it, and the
+  output head went to the device as a submission of its own -- two fences
+  a token. The last layer now leaves its answer on the device like the
+  others, and the final normalization and the head run after it as one
+  submission that reads it there. qwen3-8b generation 13.92 -> 13.98 tokens
+  a second, gemma-3-4b level, the same outputs.
+
 - **A long K-quant row gets two waves.** The subgroup kernels that
   generate a token's K-quant products gave each band of two rows one wave,
   which walked a projection down's twelve thousand columns a dozen blocks

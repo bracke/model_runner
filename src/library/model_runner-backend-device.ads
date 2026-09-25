@@ -1062,6 +1062,9 @@ package Model_Runner.Backend.Device is
    --  @param Rotary How many components of a head turn.
    --  @param Split True where a head's pairs are a component and the one
    --    half a rotary further on, false where they are neighbours.
+   --  @param Carry_In True where the input is what the sequence before
+   --    left on the device rather than Vector, which then says only how
+   --    long it is: a token's output head after its last layer.
    procedure Normalize_And_Project
      (Weights     : Model_Runner.Tensors.View_Group;
       Vector      : Model_Runner.Tensors.Real_Array_Access;
@@ -1075,7 +1078,8 @@ package Model_Runner.Backend.Device is
       Head_Size   : Natural := 0;
       Rotary      : Natural := 0;
       Split       : Boolean := False;
-      Cancel      : Model_Runner.Cancellation.Token_Reference := null);
+      Cancel      : Model_Runner.Cancellation.Token_Reference := null;
+      Carry_In    : Boolean := False);
 
    --  A whole layer, in one submission.
    --

@@ -16630,6 +16630,28 @@ package body Model_Runner.Llama is
       is (if Linear (Settings, Index) then Linear_Layer_Fits (L)
           else Whole_Layer_Fits (L, Index));
 
+      --  Whether the final normalization and the output head follow the
+      --  last layer on the device, reading what it left there: one
+      --  submission waited for at the end of a token rather than two, and
+      --  the last layer's answer never comes home. Not for a centred
+      --  normalization, which the device's takes with a shift this does
+      --  not pass, nor where the final state is kept for the block past
+      --  the stack.
+      Head_Follows : constant Boolean :=
+        Model_Runner.Backend."="
+          (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_Device)
+        and then Source.Output_Norm /= null
+        and then not Centres (Source, Source.Output_Norm_Bias)
+        and then Item.Last_Final = null;
+
+      --  Whether a layer leaves its answer on the device: for the next
+      --  layer where that one goes to the device too, and after the last
+      --  for the head.
+      function Carries_On (Index : Natural) return Boolean
+      is (if Index < Source.Layers.all'Last
+          then Layer_Fits (Source.Layers.all (Index + 1), Index + 1)
+          else Head_Follows);
+
       --  A layer whose front half goes to the device and whose feed-forward
       --  the processor runs: a mixture the device does not hold, in a model
       --  whose everything else it does (Split_Feed), arranged the plain way
@@ -17141,10 +17163,7 @@ package body Model_Runner.Llama is
                            Carry_Out =>
                              not Half
                              and then Chaining
-                             and then Index < Source.Layers.all'Last
-                             and then Layer_Fits
-                                        (Source.Layers.all (Index + 1),
-                                         Natural (Index) + 1),
+                             and then Carries_On (Index),
                            Mirror    => False,
                            Cancel    => Item.Stopping,
                            Router     =>
@@ -17215,10 +17234,7 @@ package body Model_Runner.Llama is
                        Natural'Max (Item.Kept_Newest, Natural (Reserved) + 1);
                      Carried :=
                        Chaining
-                       and then Index < Source.Layers.all'Last
-                       and then Layer_Fits
-                                  (Source.Layers.all (Index + 1),
-                                   Natural (Index) + 1);
+                       and then Carries_On (Index);
                      if Chaining then
                         Deferred (Index) := True;
                      end if;
@@ -17385,10 +17401,7 @@ package body Model_Runner.Llama is
                         Carry_Out =>
                           not Half
                           and then Chaining
-                          and then Index < Source.Layers.all'Last
-                          and then Layer_Fits
-                                     (Source.Layers.all (Index + 1),
-                                      Natural (Index) + 1),
+                          and then Carries_On (Index),
                         --  A paged session places its keys and values by
                         --  the chained head step as a block session does: the
                         --  head step reads the page table out of the cache it
@@ -17493,10 +17506,7 @@ package body Model_Runner.Llama is
                  Chaining
                  and then Fused
                  and then not Half_Done
-                 and then Index < Source.Layers.all'Last
-                 and then Layer_Fits
-                            (Source.Layers.all (Index + 1),
-                             Natural (Index) + 1);
+                 and then Carries_On (Index);
 
                if Fused then
                   --  The host keeps its own copy of the cache -- the
@@ -18135,6 +18145,34 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      --  The last layer's answer still on the device, for the head to
+      --  read there. Where the device will not take the head after all,
+      --  the answer comes home and the host goes on as it always did.
+      if Carried then
+         declare
+            Done : Boolean;
+            Back : Boolean;
+         begin
+            Model_Runner.Backend.Device.Normalize_And_Project
+              ([Source.Output], Item.Activation, Source.Output_Norm.all,
+               Settings.Epsilon, [Item.Logit_Row], Done,
+               Cancel => Item.Stopping, Carry_In => True);
+
+            if Done then
+               Charge (Item, Reading_Out, Mark);
+               goto Logits_Made;
+            end if;
+
+            Model_Runner.Backend.Device.Fetch_Carried
+              (Item.Activation.all, Back);
+            if not Back then
+               Item.Current := Failed;
+               Status := E.Make (E.Backend_Device_Refused);
+               return;
+            end if;
+         end;
+      end if;
+
       Final_State (Source, Item.Activation.all, Item.Normalized.all);
 
       --  Kept for the block past the stack, where there is one.
@@ -18154,6 +18192,8 @@ package body Model_Runner.Llama is
       end if;
 
       Charge (Item, Reading_Out, Mark);
+
+      <<Logits_Made>>
 
       Logits := Item.Logit_Row.all;
       Finish_Logits (Source, Logits);
