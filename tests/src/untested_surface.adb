@@ -26,6 +26,13 @@ package body Untested_Surface is
    --  watcher; a test that names them would need a model that calls a
    --  tool, and no fixture here does -- the campaign that exercises them
    --  runs against published models, behind the gate rather than in it.
+   --
+   --  A split mixture's token path. Rouse and Take_Front_Route are what a
+   --  token of a model whose experts stay on the processor goes through
+   --  every layer -- the device's front half routes and the pool is kept
+   --  awake for the experts -- and the split fixture's position-at-a-time
+   --  arm runs exactly that against the processor's logits; it is named
+   --  there by what it compares, not by these.
    function Is_Untested (Name : String) return Boolean is
    begin
       return Name in
@@ -80,6 +87,7 @@ package body Untested_Surface is
          | "Recovery_Hint"
          | "Repack_Names"
          | "Role_Name"
+         | "Rouse"
          | "Row_Bytes"
          | "Scalar_Size"
          | "Sequence_Length"
@@ -87,6 +95,7 @@ package body Untested_Surface is
          | "Severity_Label"
          | "Storage_Bytes"
          | "Styles_Diagnostics"
+         | "Take_Front_Route"
          | "Template_Condition"
          | "Template_Ready"
          | "Tensor_Data_Bytes"
@@ -101,6 +110,6 @@ package body Untested_Surface is
    -- Count --
    -----------
 
-   function Count return Natural is (64);
+   function Count return Natural is (66);
 
 end Untested_Surface;

@@ -106,6 +106,20 @@ package Model_Runner.Backend.CPU is
    --  @param Item Pool to close.
    procedure Close (Item : in out Pool);
 
+   --  Keep the workers looking for work rather than asleep, until Rest:
+   --  for a caller that knows a job is coming after a wait of its own
+   --  longer than the workers spin -- a split mixture's experts, after the
+   --  device's front half of the layer. A worker woken from sleep came to
+   --  it a fifth of a millisecond late, and a token has forty of them.
+   --
+   --  @param Item Pool to rouse.
+   procedure Rouse (Item : in out Pool);
+
+   --  Let the workers sleep again once they have spun their usual while.
+   --
+   --  @param Item Pool to let rest.
+   procedure Rest (Item : in out Pool);
+
    --  Compute a matrix-vector product across the workers.
    --
    --  Every row of Weight is computed exactly once, by exactly one worker,
@@ -535,6 +549,10 @@ private
       --  costs nothing; one that asked a protected function instead took a
       --  lock for every job it waited through.
       Shut   : aliased Chunk_Counter := 0;
+
+      --  Set while a caller has roused the pool: a worker spins on past
+      --  its budget rather than sleeping.
+      Hold   : aliased Chunk_Counter := 0;
 
       --  The job itself, written before the ticket that publishes it.
       Held   : Job;

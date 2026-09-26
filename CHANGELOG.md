@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A split mixture's token routes on the device, and the pool waits
+  awake for its experts.** The device's front half of a token's layer now
+  normalizes, runs the router and chooses the experts before it comes home,
+  where the host used to route with a pool dispatch of its own; and the
+  host keeps its pool awake while the device works -- waiting on the job's
+  word with MONITORX/MWAITX where the processor has it -- instead of letting
+  the workers sleep and come to the experts a fifth of a millisecond late.
+  qwen3.6-35b-a3b generates 15.6 -> 16.0 tokens a second. The device's
+  softmax chooses as the whole device layer does, so the text may differ in
+  the last bits of a share.
+
 - **A split mixture's streamed experts are copied by two copiers.** One
   copier moved qwen3.6-35b-a3b's 18 GB of expert stacks a prompt at one
   core's 6.5 GB/s, 70 ms a layer against the device's 80, close enough to

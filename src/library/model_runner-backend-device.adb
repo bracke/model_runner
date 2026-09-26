@@ -2141,6 +2141,14 @@ package body Model_Runner.Backend.Device is
    --  The submission count Start_Shared left its answer at, and whether
    --  one is waiting.
    Shared_Started : Boolean := False;
+
+   --  What the last front half routed, where it routed: the router it
+   --  used, and the experts and shares in the route step's words.
+   Front_Routed : Boolean := False;
+   Front_Router : System.Address := System.Null_Address;
+   Front_Used   : Natural := 0;
+   Front_Words  : Model_Runner.Numerics.Real_Array (0 .. 2 * 32 - 1) :=
+     [others => 0.0];
    Shared_At      : Interfaces.Unsigned_64 := 0;
    Shared_Width   : Model_Runner.Numerics.Element_Count := 0;
 
@@ -2508,6 +2516,10 @@ package body Model_Runner.Backend.Device is
          At_Keys   : Model_Runner.Numerics.Element_Count := 0;
          At_Out    : Model_Runner.Numerics.Element_Count := 0;
          Wanted    : Model_Runner.Numerics.Element_Count := 0;
+
+         --  Where a front half's choice lands, where it routes.
+         At_Route     : Model_Runner.Numerics.Element_Count := 0;
+         Routes_Front : Boolean := False;
 
          Packing : Products.Weight_Packing;
          Gate_P  : Products.Weight_Packing;
@@ -3573,6 +3585,74 @@ package body Model_Runner.Backend.Device is
          end if;
          Step_Room (Width);
          if No_Feed then
+            --  A token's front half routes too, where it was handed the
+            --  router: the normalization before the feed-forward, the
+            --  router's product and the choosing, the choice coming home
+            --  with the residual. The host routed with a pool of its own,
+            --  a sixth of its experts' time.
+            if Slots = 1
+              and then T.Is_Present (Router)
+              and then Feed_Norm /= null
+              and then not Parallel
+              and then Used in 1 .. Products.Max_Route
+              and then 2 * Used <= Front_Words'Length
+              and then Natural (Router.Rows) = Experts
+              and then Router.Columns = Width
+            then
+               Packing_Of (Router.Format, Router_P, Known);
+               if not Known then
+                  return;
+               end if;
+
+               declare
+                  At_Feed : constant System.Address :=
+                    Feed_Norm.all (Feed_Norm.all'First)'Address;
+               begin
+                  Products.Add_Norm
+                    (Steps, At_Feed,
+                     Model_Runner.Bytes.Byte_Count (Feed_Norm.all'Length) * 4,
+                     0, Natural (Width), Epsilon, Added,
+                     From_Step => Step_Join, Key => At_Feed,
+                     Kept => False, Shift => Shifted);
+               end;
+               if not Added then
+                  return;
+               end if;
+               Step_Norm_Feed := Products.Length (Steps);
+               Step_Room (Width);
+
+               Products.Add_Chained_Product
+                 (Steps, Router.Base, Router.Span, Router.Offset, Router_P,
+                  Natural (Router.Rows), Natural (Router.Columns), Added,
+                  Key => At_Offset (Router.Base, Router.Offset),
+                  Kept => False, From_Step => Step_Norm_Feed);
+               if not Added then
+                  return;
+               end if;
+               Step_Router := Products.Length (Steps);
+               Step_Room (Router.Rows);
+
+               if Router_Bias = null then
+                  Products.Add_Route
+                    (Steps, Experts, Used, Added, From_Step => Step_Router,
+                     Kept => True);
+               else
+                  Products.Add_Route
+                    (Steps, Experts, Used, Added, From_Step => Step_Router,
+                     Kept => True,
+                     Bias => Router_Bias.all (Router_Bias.all'First)'Address,
+                     Bias_Span =>
+                       Model_Runner.Bytes.Byte_Count
+                         (Router_Bias.all'Length) * 4,
+                     Bias_At => 0);
+               end if;
+               if not Added then
+                  return;
+               end if;
+               At_Route := Wanted;
+               Routes_Front := True;
+               Step_Room (Model_Runner.Numerics.Element_Count (2 * Used));
+            end if;
             goto Built;
          end if;
 
@@ -4043,9 +4123,23 @@ package body Model_Runner.Backend.Device is
                            .. Landing.all'First + At_Out + Slots * Width - 1);
          end if;
 
+         if Routes_Front then
+            Front_Words
+              (0 .. Model_Runner.Numerics.Element_Count (2 * Used) - 1) :=
+              Landing.all (Landing.all'First + At_Route
+                           .. Landing.all'First + At_Route
+                              + Model_Runner.Numerics.Element_Count (2 * Used)
+                              - 1);
+            Front_Router := At_Offset (Router.Base, Router.Offset);
+            Front_Used := Used;
+            Front_Routed := True;
+         end if;
+
          Ok := True;
       end Attempt;
    begin
+      Front_Routed := False;
+
       --  What this layer asks for that the device will not do, before the
       --  sequence is built: the packed block's shape, which is the one
       --  refusal a reader can act on -- a cache asked for in a shape this
@@ -4777,6 +4871,49 @@ package body Model_Runner.Backend.Device is
          end loop;
       end loop;
    end Dispatch_Route;
+
+   ----------------------
+   -- Take_Front_Route --
+   ----------------------
+
+   procedure Take_Front_Route
+     (Router : T.View;
+      Used   : Natural;
+      Choice : out Choice_Array;
+      Shares : out Model_Runner.Numerics.Real_Array;
+      Found  : out Boolean)
+   is
+      use type Interfaces.Unsigned_32;
+
+      function Bits is new Ada.Unchecked_Conversion
+        (Model_Runner.Numerics.Real, Interfaces.Unsigned_32);
+      function Value is new Ada.Unchecked_Conversion
+        (Interfaces.Unsigned_32, Model_Runner.Numerics.Real);
+   begin
+      Choice := [others => 0];
+      Shares := [others => 0.0];
+      Found := False;
+
+      if not Front_Routed
+        or else Used /= Front_Used
+        or else Choice'Length /= Used
+        or else Natural (Shares'Length) /= Used
+        or else Front_Router /= At_Offset (Router.Base, Router.Offset)
+      then
+         return;
+      end if;
+      Front_Routed := False;
+
+      for Slot in 0 .. Used - 1 loop
+         Choice (Choice'First + Slot) :=
+           Natural (Bits (Front_Words
+                            (Model_Runner.Numerics.Element_Count (Slot))));
+         Shares (Shares'First + Model_Runner.Numerics.Element_Count (Slot)) :=
+           Value (Bits (Front_Words
+                          (Model_Runner.Numerics.Element_Count (Used + Slot))));
+      end loop;
+      Found := True;
+   end Take_Front_Route;
 
    ----------------------
    -- Dispatch_Mixture --

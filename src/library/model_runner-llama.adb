@@ -10758,6 +10758,33 @@ package body Model_Runner.Llama is
          end;
       end if;
 
+      --  A token whose front half the device ran chose there too, where
+      --  it was handed the router: taken rather than routed again.
+      if Count = 1
+        and then Item.Owner.all.Split_Feed
+        and then Model_Runner.Backend."="
+                   (Item.Owner.Able.Kind,
+                    Model_Runner.Backend.Backend_Device)
+      then
+         declare
+            Choice : Model_Runner.Backend.Device.Choice_Array (0 .. Used - 1);
+            Found  : Boolean;
+         begin
+            Model_Runner.Backend.Device.Take_Front_Route
+              (Current.Router, Used, Choice,
+               Item.Pick_Share.all
+                 (Item.Pick_Share.all'First
+                  .. Item.Pick_Share.all'First + Element_Count (Used) - 1),
+               Found);
+            if Found then
+               for Index in Choice'Range loop
+                  Item.Pick_Which.all (Index) := Choice (Index);
+               end loop;
+               goto Chosen;
+            end if;
+         end;
+      end if;
+
       --  Every position's router scores at once, which is one product where
       --  it was one a position.
       Product_Batch
@@ -17267,6 +17294,11 @@ package body Model_Runner.Llama is
 
                      if Sent then
                         Asked := True;
+                        if Half and then Source.Split_Feed
+                          and then Workers_CPU."/=" (Item.Team, null)
+                        then
+                           Workers_CPU.Rouse (Item.Team.all);
+                        end if;
                         Model_Runner.Backend.Device.Whole_Layer
                           (Item.Activation.all,
                            Device_Norm (Current.Attention_Norm,
@@ -17486,6 +17518,11 @@ package body Model_Runner.Llama is
                      end if;
 
                      Asked := True;
+                     if Half and then Source.Split_Feed
+                       and then Workers_CPU."/=" (Item.Team, null)
+                     then
+                        Workers_CPU.Rouse (Item.Team.all);
+                     end if;
                      Model_Runner.Backend.Device.Whole_Layer
                        (Item.Activation.all,
                         Device_Norm (Current.Attention_Norm,
@@ -18082,6 +18119,12 @@ package body Model_Runner.Llama is
                if Current.Experts /= null then
                   Mixture
                     (Item, Current, Item.Normalized, Item.Mixture, Status);
+
+                  --  The pool roused for this layer's experts may sleep
+                  --  again; the next layer's front half rouses it anew.
+                  if Workers_CPU."/=" (Item.Team, null) then
+                     Workers_CPU.Rest (Item.Team.all);
+                  end if;
                   exit when E.Is_Error (Status);
                   Joined
                     (Item.Mixture, Current.Post_Feed_Norm,

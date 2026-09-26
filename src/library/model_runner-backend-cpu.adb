@@ -1,3 +1,4 @@
+with Interfaces;
 with Ada.Unchecked_Deallocation;
 
 with System.Atomic_Operations.Integer_Arithmetic;
@@ -75,14 +76,45 @@ package body Model_Runner.Backend.CPU is
          return;
       end if;
 
-      for Turn in 1 .. Spin_Budget loop
-         exit when Waking.Ticket /= Mine;
+      declare
+         Turn : Natural := 0;
+      begin
+         loop
+            exit when Waking.Ticket /= Mine;
+            Turn := Turn + 1;
+            if Turn > Spin_Budget then
+               exit when Waking.Hold = 0 or else Waking.Shut /= 0;
 
-         --  The instruction that tells the processor this is a spin: it
-         --  frees the pipeline for the other thread on the core and takes
-         --  the memory-order penalty out of the loop's exit.
-         System.Machine_Code.Asm ("pause", Volatile => True);
-      end loop;
+               --  Held: watch the ticket's line and wait on it at low
+               --  power, a write to it or a few microseconds ending the
+               --  wait, rather than spinning a core hot while the device
+               --  works -- which took the device's clock with it.
+               System.Machine_Code.Asm
+                 ("monitorx",
+                  Inputs =>
+                    [System.Address'Asm_Input
+                       ("a", Waking.Ticket'Address),
+                     Interfaces.Unsigned_32'Asm_Input ("c", 0),
+                     Interfaces.Unsigned_32'Asm_Input ("d", 0)],
+                  Volatile => True);
+               if Waking.Ticket = Mine then
+                  System.Machine_Code.Asm
+                    ("mwaitx",
+                     Inputs =>
+                       [Interfaces.Unsigned_32'Asm_Input ("a", 0),
+                        Interfaces.Unsigned_32'Asm_Input ("c", 2),
+                        Interfaces.Unsigned_32'Asm_Input ("b", 20_000)],
+                     Volatile => True);
+               end if;
+            else
+               --  The instruction that tells the processor this is a spin:
+               --  it frees the pipeline for the other thread on the core
+               --  and takes the memory-order penalty out of the loop's
+               --  exit.
+               System.Machine_Code.Asm ("pause", Volatile => True);
+            end if;
+         end loop;
+      end;
 
       --  Nothing came, so sleep -- and say so first. A poster reads that
       --  announcement after it has raised the ticket, and this re-reads the
@@ -1198,8 +1230,35 @@ package body Model_Runner.Backend.CPU is
    -- Close --
    -----------
 
+   -----------
+   -- Rouse --
+   -----------
+
+   procedure Rouse (Item : in out Pool) is
+   begin
+      Item.Waking.Hold := 1;
+
+      --  And up, whoever is asleep: a worker woken with no job looks
+      --  again, and now spins.
+      for Index in 1 .. Item.Workers loop
+         if Item.Waking.Sleeping (Index) /= 0 then
+            Ada.Synchronous_Task_Control.Set_True (Item.Waking.Gate (Index));
+         end if;
+      end loop;
+   end Rouse;
+
+   ----------
+   -- Rest --
+   ----------
+
+   procedure Rest (Item : in out Pool) is
+   begin
+      Item.Waking.Hold := 0;
+   end Rest;
+
    procedure Close (Item : in out Pool) is
    begin
+      Item.Waking.Hold := 0;
       Item.Control.Shut_Down;
 
       --  Say so where a worker will see it without a lock, and then open
