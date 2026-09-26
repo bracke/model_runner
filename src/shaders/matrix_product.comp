@@ -1489,6 +1489,70 @@ void sub_block_scale(uint at, uint index, out uint factor, out uint lowest) {
     }
 }
 
+#if !defined(LOW_BITS) && !defined(MORE_FORMATS)
+//  Q4_K's words for one invocation's half of a row in one step, read a
+//  step ahead: the block's head -- the two half-precision scales and the
+//  twelve bytes of sub-block scales -- and the sixteen bytes of nibbles.
+//  Read where they are decoded, every load of a step waited out its
+//  latency with nothing else to do between the two barriers; read before
+//  the products of the step before, they arrive while those run.
+void q4k_fetch (uint row, uint k0, uint half_of, out uvec4 h, out uvec4 q)
+{
+    uint at  = row + (k0 / 256u) * 144u;
+    uint sub = (k0 / 32u) & 7u;
+    uint i   = at >> 2u;
+    uint j   = (at + 16u + (sub >> 1u) * 32u + half_of * 16u) >> 2u;
+
+    h = uvec4 (w[i], w[i + 1u], w[i + 2u], w[i + 3u]);
+    q = uvec4 (w[j], w[j + 1u], w[j + 2u], w[j + 3u]);
+}
+
+uint head_byte (uvec4 h, uint at) {
+    uint word = at < 4u ? h.y : (at < 8u ? h.z : h.w);
+    return (word >> ((at & 3u) * 8u)) & 255u;
+}
+
+//  And what the decode below does with them, as it does with the bytes.
+void q4k_place (uvec4 h, uvec4 q, uint k0, uint into)
+{
+    uint sub = (k0 / 32u) & 7u;
+    vec2 two = unpackHalf2x16 (h.x);
+
+    uint factor, lowest;
+    if (sub < 4u) {
+        factor = head_byte (h, sub) & 63u;
+        lowest = head_byte (h, sub + 4u) & 63u;
+    } else {
+        factor = (head_byte (h, sub + 4u) & 15u)
+                 | ((head_byte (h, sub - 4u) >> 6u) << 4u);
+        lowest = (head_byte (h, sub + 4u) >> 4u)
+                 | ((head_byte (h, sub) >> 6u) << 4u);
+    }
+
+    float scale  = two.x * float (factor);
+    float offset = two.y * float (lowest);
+    uint  turn   = (sub & 1u) * 4u;
+
+    f16vec4 v0 = f16vec4 (scale * vec4 (unpack8 ((q.x >> turn)
+                                        & 0x0F0F0F0Fu)) - offset);
+    f16vec4 v1 = f16vec4 (scale * vec4 (unpack8 ((q.y >> turn)
+                                        & 0x0F0F0F0Fu)) - offset);
+    f16vec4 v2 = f16vec4 (scale * vec4 (unpack8 ((q.z >> turn)
+                                        & 0x0F0F0F0Fu)) - offset);
+    f16vec4 v3 = f16vec4 (scale * vec4 (unpack8 ((q.w >> turn)
+                                        & 0x0F0F0F0Fu)) - offset);
+
+    wt[into +  0u] = v0.x; wt[into +  1u] = v0.y;
+    wt[into +  2u] = v0.z; wt[into +  3u] = v0.w;
+    wt[into +  4u] = v1.x; wt[into +  5u] = v1.y;
+    wt[into +  6u] = v1.z; wt[into +  7u] = v1.w;
+    wt[into +  8u] = v2.x; wt[into +  9u] = v2.y;
+    wt[into + 10u] = v2.z; wt[into + 11u] = v2.w;
+    wt[into + 12u] = v3.x; wt[into + 13u] = v3.y;
+    wt[into + 14u] = v3.z; wt[into + 15u] = v3.w;
+}
+#endif
+
 #ifdef MORE_FORMATS
 
 const uint FMT_Q4_0   =  3u;
@@ -1658,6 +1722,35 @@ void main() {
               : (shape.format == FMT_Q8_0
                  ? (shape.columns / 32u) * 34u
                  : (shape.columns / 256u) * block);
+
+    //  Q4_K a step ahead; see q4k_fetch. Two rows an invocation, the two
+    //  the loop below gives it.
+    //  Only the listed tile: the plain ones, with twice and four times
+    //  the vectors to hide a load behind, read qwen3-8b's prompt of 1289
+    //  at 293 tokens a second this way against 314 without, the sixteen
+    //  more registers costing them waves.
+#ifdef LISTED
+    bool q4k = shape.format == FMT_Q4_K;
+#else
+    const bool q4k = false;
+#endif
+    uvec4 ahead_h[TILE_R / 32u];
+    uvec4 ahead_q[TILE_R / 32u];
+    uint  q4k_rows[TILE_R / 32u];
+
+    for (uint it = 0u; it < TILE_R / 32u; ++it) {
+        uint r = it * 32u + ((gl_LocalInvocationID.x & 63u) >> 1u);
+        q4k_rows[it] = shape.base + slice
+                       + min(row0 + r, shape.rows - 1u) * rb;
+    }
+
+    if (q4k) {
+        uint k0 = ((gl_LocalInvocationID.x >> 6u) % CHUNKS) * KCH;
+        for (uint it = 0u; it < TILE_R / 32u; ++it) {
+            q4k_fetch (q4k_rows[it], k0, gl_LocalInvocationID.x & 1u,
+                       ahead_h[it], ahead_q[it]);
+        }
+    }
 #endif
 
     for (uint kb = 0u; kb < shape.columns; kb += KCH * CHUNKS) {
@@ -1665,6 +1758,19 @@ void main() {
 
         uint k0 = kb + ((gl_LocalInvocationID.x >> 6u) % CHUNKS) * KCH;
 
+#if !defined(LOW_BITS) && !defined(MORE_FORMATS)
+        if (q4k) {
+            uint chunk   = (gl_LocalInvocationID.x >> 6u) % CHUNKS;
+            uint half_of = gl_LocalInvocationID.x & 1u;
+
+            for (uint it = 0u; it < TILE_R / 32u; ++it) {
+                uint r = it * 32u + ((gl_LocalInvocationID.x & 63u) >> 1u);
+                q4k_place (ahead_h[it], ahead_q[it], k0,
+                           chunk * TILE_R * WT_STRIDE + r * WT_STRIDE
+                           + half_of * 16u);
+            }
+        } else
+#endif
         //  Sixty-four invocations decode thirty-two rows of the step,
         //  half a row each: sixteen values apiece, taken four bytes to a
         //  word -- and the next thirty-two rows after, where the tile is
@@ -2228,6 +2334,16 @@ void main() {
         }
 
         barrier();
+
+#if !defined(LOW_BITS) && !defined(MORE_FORMATS)
+        if (q4k && kb + KCH * CHUNKS < shape.columns) {
+            uint k1 = k0 + KCH * CHUNKS;
+            for (uint it = 0u; it < TILE_R / 32u; ++it) {
+                q4k_fetch (q4k_rows[it], k1, gl_LocalInvocationID.x & 1u,
+                           ahead_h[it], ahead_q[it]);
+            }
+        }
+#endif
 
         for (uint step = 0u; step < KCH * CHUNKS; step += 16u) {
             uint chunk = step / KCH;

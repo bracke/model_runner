@@ -5855,8 +5855,9 @@ package body Tests.Backend_Cases is
 
       Experts : constant := 4;
       Used    : constant := 2;
-      Width   : constant := 128;
-      Feed    : constant := 128;
+      --  A whole Q4_K super-block of columns either way round.
+      Width   : constant := 256;
+      Feed    : constant := 256;
       Count   : constant := 40;
 
       Held   : Devices.Inventory;
@@ -5870,9 +5871,14 @@ package body Tests.Backend_Cases is
       Halted : Boolean;
 
       Router : N.Real_Array (0 .. Experts * Width - 1);
-      Gates  : N.Real_Array (0 .. Experts * Feed * Width - 1);
-      Ups    : N.Real_Array (0 .. Experts * Feed * Width - 1);
-      Downs  : N.Real_Array (0 .. Experts * Width * Feed - 1);
+      --  On the heap, with the words encoded from them: a megabyte each
+      --  at these widths, and the stack does not hold them all.
+      Gates  : constant T.Real_Array_Access :=
+        new N.Real_Array (0 .. Experts * Feed * Width - 1);
+      Ups    : constant T.Real_Array_Access :=
+        new N.Real_Array (0 .. Experts * Feed * Width - 1);
+      Downs  : constant T.Real_Array_Access :=
+        new N.Real_Array (0 .. Experts * Width * Feed - 1);
       Inputs : N.Real_Array (0 .. Count * Width - 1);
 
       --  What the batch's sequence leaves: the router's scores, the
@@ -5891,21 +5897,32 @@ package body Tests.Backend_Cases is
 
       --  Run the batch and the positions one at a time over stacks in
       --  one packing, and say how far apart the mixes are.
+      type Byte_Access is access B.Byte_Array;
+
       procedure Both (Packing : Products.Weight_Packing; Worst : out N.Real)
       is
          use type Products.Weight_Packing;
 
          Plain : constant Boolean := Packing = Products.Values_F32;
 
-         G_Bytes : constant B.Byte_Array :=
-           (if Plain then Fixtures.Encode_F32 (Gates)
-            else Fixtures.Encode_Q8_0 (Gates));
-         U_Bytes : constant B.Byte_Array :=
-           (if Plain then Fixtures.Encode_F32 (Ups)
-            else Fixtures.Encode_Q8_0 (Ups));
-         D_Bytes : constant B.Byte_Array :=
-           (if Plain then Fixtures.Encode_F32 (Downs)
-            else Fixtures.Encode_Q8_0 (Downs));
+         G_Bytes : constant Byte_Access :=
+           new B.Byte_Array'
+             (if Plain then Fixtures.Encode_F32 (Gates.all)
+              elsif Packing = Products.Packed_Q4_K
+              then Fixtures.Encode_Q4_K (Gates.all)
+              else Fixtures.Encode_Q8_0 (Gates.all));
+         U_Bytes : constant Byte_Access :=
+           new B.Byte_Array'
+             (if Plain then Fixtures.Encode_F32 (Ups.all)
+              elsif Packing = Products.Packed_Q4_K
+              then Fixtures.Encode_Q4_K (Ups.all)
+              else Fixtures.Encode_Q8_0 (Ups.all));
+         D_Bytes : constant Byte_Access :=
+           new B.Byte_Array'
+             (if Plain then Fixtures.Encode_F32 (Downs.all)
+              elsif Packing = Products.Packed_Q4_K
+              then Fixtures.Encode_Q4_K (Downs.all)
+              else Fixtures.Encode_Q8_0 (Downs.all));
 
          Steps : Products.Sequence;
 
@@ -6044,6 +6061,15 @@ package body Tests.Backend_Cases is
       Both (Products.Packed_Q8_0, Worst);
       Assert (Worst < 2.0E-2,
               "the listed mixture over Q8_0 stacks answers"
+              & N.Real'Image (Worst)
+              & " away from the positions gathered one at a time");
+
+      --  And Q4_K, which the listed tile decodes a step ahead of its
+      --  products rather than where it stages them.
+      --  2.8E-04 here, and 0.24 with the nibble of the wrong half read.
+      Both (Products.Packed_Q4_K, Worst);
+      Assert (Worst < 5.0E-3,
+              "the listed mixture over Q4_K stacks answers"
               & N.Real'Image (Worst)
               & " away from the positions gathered one at a time");
 
