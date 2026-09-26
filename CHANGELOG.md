@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A mixture's expert tile reads Q4_K a step ahead.** The listed tile
+  waited out every weight load between its barriers -- about 40 per cent
+  of its time, at 30 GB/s. It now loads the next step's Q4_K words before
+  this step's products and decodes them after: qwen3.6-35b-a3b's experts
+  over a prompt of 1302, 10.5/9.6/9.0 -> 9.0/8.6/8.4 ms a stack, the
+  prompt 402 -> 412 tokens a second, the same output.
+
 - **Binary32 products over a batch have a tile of their own.** The matrix
   instruction takes half precision only, so a binary32 matrix -- a
   mixture's router -- went to the row kernel, which reads the matrix again
