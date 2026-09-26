@@ -5910,18 +5910,24 @@ package body Tests.Backend_Cases is
              (if Plain then Fixtures.Encode_F32 (Gates.all)
               elsif Packing = Products.Packed_Q4_K
               then Fixtures.Encode_Q4_K (Gates.all)
+              elsif Packing = Products.Packed_Q6_K
+              then Fixtures.Encode_Q6_K (Gates.all)
               else Fixtures.Encode_Q8_0 (Gates.all));
          U_Bytes : constant Byte_Access :=
            new B.Byte_Array'
              (if Plain then Fixtures.Encode_F32 (Ups.all)
               elsif Packing = Products.Packed_Q4_K
               then Fixtures.Encode_Q4_K (Ups.all)
+              elsif Packing = Products.Packed_Q6_K
+              then Fixtures.Encode_Q6_K (Ups.all)
               else Fixtures.Encode_Q8_0 (Ups.all));
          D_Bytes : constant Byte_Access :=
            new B.Byte_Array'
              (if Plain then Fixtures.Encode_F32 (Downs.all)
               elsif Packing = Products.Packed_Q4_K
               then Fixtures.Encode_Q4_K (Downs.all)
+              elsif Packing = Products.Packed_Q6_K
+              then Fixtures.Encode_Q6_K (Downs.all)
               else Fixtures.Encode_Q8_0 (Downs.all));
 
          Steps : Products.Sequence;
@@ -6070,6 +6076,14 @@ package body Tests.Backend_Cases is
       Both (Products.Packed_Q4_K, Worst);
       Assert (Worst < 5.0E-3,
               "the listed mixture over Q4_K stacks answers"
+              & N.Real'Image (Worst)
+              & " away from the positions gathered one at a time");
+
+      --  And Q6_K, whose blocks begin two bytes into a word every other
+      --  time: 5.0E-05 here, and 0.32 with the odd blocks read unshifted.
+      Both (Products.Packed_Q6_K, Worst);
+      Assert (Worst < 5.0E-3,
+              "the listed mixture over Q6_K stacks answers"
               & N.Real'Image (Worst)
               & " away from the positions gathered one at a time");
 
