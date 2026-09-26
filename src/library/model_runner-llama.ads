@@ -1594,6 +1594,21 @@ package Model_Runner.Llama is
    --  5632-wide feed-forward and eleven megabytes.
    Max_Batch : constant := 512;
 
+   --  And the most a model whose mixture is split between the device and
+   --  the processor takes at once. A long batch of it streams every layer's
+   --  expert stacks to the device, once a batch -- a batch of five hundred
+   --  and twelve copied qwen3.6-35b-a3b's eighteen gigabytes three times
+   --  over for a prompt of 1302 -- and the experts see more positions each,
+   --  which is what their tiles are slow for the want of.
+   Streamed_Batch : constant := 2048;
+
+   --  The most one batched call evaluates for this model: Streamed_Batch
+   --  where its mixture is split, Max_Batch otherwise.
+   --
+   --  @param Item Loaded model.
+   --  @return Positions one call takes at most.
+   function Batch_Limit (Item : Model'Class) return Positive;
+
    --  Evaluate several consecutive tokens in one pass.
    --
    --  This is how a prompt is consumed. Every token in the batch shares one

@@ -1124,8 +1124,15 @@ package body Model_Runner.Generation is
          --  A batch is bounded by what the engine will evaluate at once as
          --  well as by the requested size, so a large --batch-size cannot
          --  turn into an unbounded working set.
+         --  A split mixture's batch is its own longer bound unless the
+         --  caller asked for a size of their own.
          Span : constant Natural :=
-           Natural'Max (1, Natural'Min (Item.Batch_Size, L.Max_Batch));
+           Natural'Max
+             (1,
+              Natural'Min
+                ((if Item.Batch_Size = L.Max_Batch
+                  then L.Batch_Limit (Source) else Item.Batch_Size),
+                 L.Batch_Limit (Source)));
          Index : Natural := First_Token;
 
          --  The picture rows a batch starting at From reads: the soft

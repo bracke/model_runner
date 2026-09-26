@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A split mixture takes its prompt in batches of 2048.** A streamed batch
+  copies every layer's expert stacks to the device once, so batches of 512
+  copied qwen3.6-35b-a3b's eighteen gigabytes three times over for a
+  prompt of 1302 -- and its experts saw a third of the positions each. A
+  model whose mixture is split now takes up to 2048 positions a batch
+  (every other model keeps 512): that prompt 206 -> 397 tokens a second,
+  the same first token.
+
 - **A split mixture's long batch runs its experts on the device.** A
   mixture too big for the device ran every prompt's experts on the
   processor's pool, which a long prompt keeps busy with nearly every expert

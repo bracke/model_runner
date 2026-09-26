@@ -18,6 +18,9 @@ package body Model_Runner.Llama is
    --  See Set_Stream_Least.
    Stream_Least : Positive := Stream_Least_Default;
 
+   function Batch_Limit (Item : Model'Class) return Positive
+   is (if Item.Split_Feed then Streamed_Batch else Max_Batch);
+
    procedure Set_Stream_Least (Positions : Positive) is
    begin
       Stream_Least := Positions;
@@ -18763,7 +18766,7 @@ package body Model_Runner.Llama is
       declare
          Limit : constant Element_Count :=
            (if Settings.Causal
-            then Max_Batch
+            then Element_Count (Batch_Limit (Source))
             else Element_Count (Settings.Context_Length));
       begin
          --  A causal model handed more than the batch bound is a caller
