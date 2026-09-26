@@ -23344,7 +23344,7 @@ panels D85D95C82847DFA3 src/library/model_runner-quantization-interleave.ads src
 # 2026-09-26: Q4_K over two to four vectors, two at a time. A drafted
 # round's check gives the processor's experts one to four positions each;
 # their products went a vector at a time through the one-vector kernel
-# (dcd5.. above), reading each weight once a vector. Rows_Duo_Q4K is that
+# (b62842a), reading each weight once a vector. Rows_Duo_Q4K is that
 # kernel with each weight unpacked once and multiplied into two vectors,
 # each vector's sums kept in the one-vector kernel's order, so a vector's
 # answer is the bits it had alone. Counted first, release build, the
