@@ -2694,6 +2694,15 @@ package body Tests.Inference_Cases is
          Model_Runner.Backend.CPU.Close (Team);
          Model_Runner.Backend.Device.Close;
          Model_Runner.Backend.Device.Open (Awake);
+      exception
+         --  A failed assertion leaves by here, and a pool left open waits
+         --  at the end of its scope for workers that never finish: the
+         --  test would hang where it should report.
+         when others =>
+            Model_Runner.Backend.CPU.Close (Team);
+            Model_Runner.Backend.Device.Close;
+            Model_Runner.Backend.Device.Open (Awake);
+            raise;
       end;
 
       --  And a packed cache over the tile, on a model too shallow for a

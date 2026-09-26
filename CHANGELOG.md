@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A split mixture's streamed experts are copied by two copiers.** One
+  copier moved qwen3.6-35b-a3b's 18 GB of expert stacks a prompt at one
+  core's 6.5 GB/s, 70 ms a layer against the device's 80, close enough to
+  hold the prompt back. Two, each half of every stack: that model's prompt
+  of 1302 402 -> 426 tokens a second, the same output. Four and eight were
+  slower than two.
+
 - **A Q8_0 block's scale is one load.** The matrix tile read a block's
   half-precision scale as two bytes, two loads, where it always lies in one
   word. qwen3.5-4b's prompt of 1302 about 1 per cent faster, the same
@@ -469,6 +476,12 @@ Keep a Changelog and the project uses semantic versioning.
   IQ3_S and IQ2_XXS.
 
 ### Fixed
+
+- **A device test that failed no longer hangs.** A failed assertion in
+  the long-prompt agreement test left its processor pool open, and the
+  pool's scope waited for its workers for ever. A sequence stopped between
+  setting up the next layer's copies and starting them no longer leaves its
+  engine's close waiting for copies that never land.
 
 - **A closed device is destroyed.** `vkDestroyDevice` was looked up with no
   instance, which the loader answers only for its global commands, so the

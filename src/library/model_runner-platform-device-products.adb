@@ -5365,42 +5365,55 @@ package body Model_Runner.Platform.Device.Products is
 
    type Landing_Flags is array (Prefetch_Index) of Boolean;
 
-   --  Which slots' copies have landed.
+   --  The copiers, each taking its share of every copy: one ran at 6.5
+   --  GB/s, one core's copy rather than what the memory moves, and a layer
+   --  of qwen3.6-35b-a3b's experts took it 70 ms against the device's 80
+   --  for the layer before -- close behind, and moving its bytes all the
+   --  while the device read its own. Two read that model's prompt of 1302
+   --  at 426 tokens a second, four at 419, eight at 408, one at 402: past
+   --  two the copies take more of the memory than they give back.
+   Copier_Count : constant := 2;
+
+   subtype Copier_Index is Positive range 1 .. Copier_Count;
+
+   type Landing_Counts is array (Prefetch_Index) of Natural;
+
+   --  Which slots' copies have landed: every copier's share of them.
    protected Landed is
       procedure Clear (Slot : Prefetch_Index);
       procedure Mark (Slot : Prefetch_Index; Good : Boolean);
       entry Wait (Prefetch_Index);
       function Copied (Slot : Prefetch_Index) return Boolean;
    private
-      Done : Landing_Flags := [others => True];
+      Left : Landing_Counts := [others => 0];
       Fine : Landing_Flags := [others => True];
    end Landed;
 
    protected body Landed is
       procedure Clear (Slot : Prefetch_Index) is
       begin
-         Done (Slot) := False;
-         Fine (Slot) := False;
+         Left (Slot) := Copier_Count;
+         Fine (Slot) := True;
       end Clear;
 
       procedure Mark (Slot : Prefetch_Index; Good : Boolean) is
       begin
-         Done (Slot) := True;
-         Fine (Slot) := Good;
+         Left (Slot) := Left (Slot) - 1;
+         Fine (Slot) := Fine (Slot) and then Good;
       end Mark;
 
       function Copied (Slot : Prefetch_Index) return Boolean
-      is (Done (Slot) and then Fine (Slot));
+      is (Left (Slot) = 0 and then Fine (Slot));
 
-      entry Wait (for Slot in Prefetch_Index) when Done (Slot) is
+      entry Wait (for Slot in Prefetch_Index) when Left (Slot) = 0 is
       begin
          null;
       end Wait;
    end Landed;
 
-   --  The one copier: handed a layer's worth of copies at a time, it runs
-   --  them in order and marks each as it lands.
-   task Copier is
+   --  The copiers: handed a layer's worth of copies at a time, each runs
+   --  its share of them in order and marks each share as it lands.
+   task type Copier (Share : Copier_Index) is
       entry Start (Jobs : Copy_Jobs; Count : Natural);
    end Copier;
 
@@ -5423,7 +5436,26 @@ package body Model_Runner.Platform.Device.Products is
                Good : Boolean := True;
             begin
                declare
-                  Job : Copy_Job renames Held (Index);
+                  Whole : Copy_Job renames Held (Index);
+
+                  --  This copier's share, in whole pages; the last takes
+                  --  what the division leaves.
+                  Piece : constant Interfaces.Unsigned_64 :=
+                    Whole.Bytes / Copier_Count / 4096 * 4096;
+                  First : constant Interfaces.Unsigned_64 :=
+                    Piece * Interfaces.Unsigned_64 (Share - 1);
+                  Job   : constant Copy_Job :=
+                    (Into  => System.Storage_Elements."+"
+                                (Whole.Into,
+                                 System.Storage_Elements.Storage_Offset
+                                   (First)),
+                     From  => System.Storage_Elements."+"
+                                (Whole.From,
+                                 System.Storage_Elements.Storage_Offset
+                                   (First)),
+                     Bytes => (if Share = Copier_Count
+                               then Whole.Bytes - First else Piece),
+                     Slot  => Whole.Slot);
 
                   subtype Room is Model_Runner.Bytes.Byte_Array
                     (1 .. Model_Runner.Bytes.Byte_Count (Job.Bytes));
@@ -5443,8 +5475,20 @@ package body Model_Runner.Platform.Device.Products is
       end loop;
    end Copier;
 
+   Copier_1 : Copier (1);
+   Copier_2 : Copier (2);
+
    procedure Drop_Prefetches (Item : in out Engine) is
    begin
+      --  Copies set up and never handed to the copiers -- a sequence that
+      --  stopped between naming the next layer's stacks and starting it --
+      --  will never land, and waiting for them below never ends: they are
+      --  marked landed and wrong instead, every copier's share.
+      for Index in 1 .. Waiting_Held loop
+         for Share in Copier_Index loop
+            Landed.Mark (Waiting (Index).Slot, False);
+         end loop;
+      end loop;
       Waiting_Held := 0;
       for Slot in Prefetch_Index loop
          if Prefetches (Slot).Used then
@@ -5901,7 +5945,9 @@ package body Model_Runner.Platform.Device.Products is
       pragma Unreferenced (Item);
    begin
       if Waiting_Held > 0 then
-         Copier.Start (Waiting, Waiting_Held);
+         Copier_1.Start (Waiting, Waiting_Held);
+         Copier_2.Start (Waiting, Waiting_Held);
+
          Waiting_Held := 0;
       end if;
    end Prefetch_Go;
