@@ -30,6 +30,11 @@ package body Model_Runner.Quantization.Integers is
    -- Use_Deep_Rows --
    --------------------
 
+   function Takes_Few_Together
+     (Format : Model_Runner.GGUF.Tensor_Type) return Boolean
+   is (Deeper
+       and then Model_Runner.GGUF."=" (Format, Model_Runner.GGUF.Type_Q4_K));
+
    procedure Use_Deep_Rows (Allowed : Boolean) is
    begin
       Deeper := Allowed;

@@ -7,6 +7,12 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Q4_K over two to four vectors reads each weight once for a pair.** A
+  drafted round's check gives the processor's experts a few positions each;
+  a kernel of its own now unpacks each weight once for two of them, each
+  vector's answer the bits it had alone. qwen3.6-35b-a3b under `run`'s
+  defaults about 2 per cent faster.
+
 - **Sampling a large vocabulary is cheaper again.** The blocked top-k pass
   skips a token below its block's worst kept one with a single comparison,
   applies the default repeat penalty in the loop, and checks for

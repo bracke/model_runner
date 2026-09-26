@@ -142,6 +142,29 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Sums      : in out Model_Runner.Numerics.Wide_Real_Array;
       Taken     : out Boolean);
 
+   --  Two vectors against a tile of rows, for the four-bit k-quant: the
+   --  kernel above with each weight unpacked once and multiplied into
+   --  both, each vector's sums in the order the kernel above keeps them,
+   --  so a vector's answer is the bits it would have had alone. Its
+   --  answers go to Sums at Row * Count + At_Vector and, where Pair, the
+   --  next.
+   procedure Rows_Duo_Q4K
+     (Data      : Model_Runner.Bytes.Byte_Array;
+      Offset    : Model_Runner.Bytes.Byte_Count;
+      Row_Bytes : Model_Runner.Bytes.Byte_Count;
+      Rows      : Element_Count;
+      Blocks    : Element_Count;
+      Values    : Signed_Array;
+      Scales    : Model_Runner.Numerics.Real_Array;
+      Totals    : Sum_Array;
+      First     : Element_Count;
+      First_B   : Element_Count;
+      Count     : Element_Count;
+      At_Vector : Element_Count;
+      Pair      : Boolean;
+      Sums      : in out Model_Runner.Numerics.Wide_Real_Array;
+      Taken     : out Boolean);
+
    --  One vector against a tile of rows, for the six-bit k-quant.
    procedure Rows_Singly_Q6K
      (Data      : Model_Runner.Bytes.Byte_Array;
@@ -16823,6 +16846,390 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Taken := True;
    end Rows_Singly_Q4K;
 
+   procedure Rows_Duo_Q4K
+     (Data      : Model_Runner.Bytes.Byte_Array;
+      Offset    : Model_Runner.Bytes.Byte_Count;
+      Row_Bytes : Model_Runner.Bytes.Byte_Count;
+      Rows      : Element_Count;
+      Blocks    : Element_Count;
+      Values    : Signed_Array;
+      Scales    : Model_Runner.Numerics.Real_Array;
+      Totals    : Sum_Array;
+      First     : Element_Count;
+      First_B   : Element_Count;
+      Count     : Element_Count;
+      At_Vector : Element_Count;
+      Pair      : Boolean;
+      Sums      : in out Model_Runner.Numerics.Wide_Real_Array;
+      Taken     : out Boolean)
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      LF : constant Character := ASCII.LF;
+
+      Deep       : constant := 8;
+      Scale_Room : constant := 1024;
+
+      --  The sub-block's own six-bit factor, as a whole number and held
+      --  twice in the thirty-two bits so that the insertion reads it as the
+      --  broadcast operand of a sixteen-bit multiply. It never becomes a
+      --  floating-point number: the insertion multiplies the integer dot
+      --  product by it and keeps the running sum a whole number, which is
+      --  what llama.cpp does and what takes the accumulator's dependency
+      --  from four cycles a sub-block to one.
+      --  Not initialised: every entry the insertion reads is written by
+      --  the prologue below before it is read, and this is four kilobytes
+      --  zeroed on every call otherwise -- which a profile finds as a
+      --  string store at the top of the kernel.
+      Row_Factor : array (0 .. Scale_Room - 1) of Interfaces.Integer_32;
+
+      --  And the two scales a whole super-block shares, one number a
+      --  block, applied once when its eight sub-blocks have been summed.
+      --  Both vectors' block scales, the second's a table's length past
+      --  the first's, which is where the loop below reads it.
+      Row_Both : array (0 .. 2 * (Scale_Room / Deep) - 1) of N.Real;
+
+      type Landed_Pair is array (0 .. 1) of Lanes_8;
+      Landed : Landed_Pair := [others => [others => 0.0]];
+
+   begin
+      Taken := False;
+
+      if Blocks * Deep > Scale_Room then
+         return;
+      end if;
+
+      for Row in 0 .. Rows - 1 loop
+         declare
+            Base : constant B.Byte_Index :=
+              Data'First + Offset + Row_Bytes * B.Byte_Count (Row);
+
+            --  The minimum's term, summed over the row rather than added
+            --  back on every sub-block.
+            Undo   : N.Wide_Real := 0.0;
+            Undo_B : N.Wide_Real := 0.0;
+         begin
+            --  Every block's scales, in one insertion rather than one a
+            --  block.
+            --
+            --  What is here was already vector code -- the twelve packed
+            --  bytes taken apart in lanes, the minimum's term as an integer
+            --  dot product -- but it was reached from an Ada loop that ran
+            --  once for each of a row's blocks. That loop is not free, and a
+            --  profile made it visible: its counter, its bound and the six
+            --  operand addresses it works out for an insertion it may not
+            --  hoist across came to about an eighth of everything this
+            --  kernel executed. The dot product below has always walked a
+            --  whole row inside one insertion with two pointer increments;
+            --  this now does the same.
+            --
+            --  Three cursors are what the four tables want: a hundred and
+            --  forty-four bytes a block through the weights, thirty-two
+            --  through the activation's sums and scales and the factor
+            --  table they fill, and four through the one number a block
+            --  that carries both scales multiplied together.
+            --
+            --  The minimum's term is summed here as well, in binary64 and
+            --  block by block, which is the order it was summed in before.
+            --  Everything this computes it computed already and in the same
+            --  order, so no answer moves.
+            System.Machine_Code.Asm
+              ("vpxor %%xmm12, %%xmm12, %%xmm12" & LF &
+               "xorq %%rcx, %%rcx" & LF &
+               "xorq %%rdx, %%rdx" & LF &
+               "xorq %%rsi, %%rsi" & LF &
+               "movq %6, %%rax" & LF &
+               "2:" & LF &
+               "vmovdqu 4(%1,%%rcx,1), %%xmm0" & LF &
+               "vpsrldq $4, %%xmm0, %%xmm1" & LF &
+               "vpsrldq $8, %%xmm0, %%xmm2" & LF &
+               "vpbroadcastd 0(%5), %%xmm3" & LF &
+               "vpbroadcastd 4(%5), %%xmm4" & LF &
+               "vpbroadcastd 8(%5), %%xmm5" & LF &
+               "vpand %%xmm3, %%xmm0, %%xmm6" & LF &
+               "vpand %%xmm3, %%xmm1, %%xmm7" & LF &
+               "vpsrld $2, %%xmm0, %%xmm8" & LF &
+               "vpand %%xmm5, %%xmm8, %%xmm8" & LF &
+               "vpand %%xmm4, %%xmm2, %%xmm9" & LF &
+               "vpor %%xmm8, %%xmm9, %%xmm9" & LF &
+               "vpsrld $2, %%xmm1, %%xmm8" & LF &
+               "vpand %%xmm5, %%xmm8, %%xmm8" & LF &
+               "vpsrld $4, %%xmm2, %%xmm10" & LF &
+               "vpand %%xmm4, %%xmm10, %%xmm10" & LF &
+               "vpor %%xmm8, %%xmm10, %%xmm10" & LF &
+               "vpmovzxbd %%xmm6, %%xmm6" & LF &
+               "vpmovzxbd %%xmm9, %%xmm9" & LF &
+               "vinserti128 $1, %%xmm9, %%ymm6, %%ymm6" & LF &
+               "vpmovzxbd %%xmm7, %%xmm7" & LF &
+               "vpmovzxbd %%xmm10, %%xmm10" & LF &
+               "vinserti128 $1, %%xmm10, %%ymm7, %%ymm7" & LF &
+               "vpmulld (%2,%%rdx,1), %%ymm7, %%ymm7" & LF &
+               "vextracti128 $1, %%ymm7, %%xmm8" & LF &
+               "vpaddd %%xmm8, %%xmm7, %%xmm7" & LF &
+               "vpshufd $0x4e, %%xmm7, %%xmm8" & LF &
+               "vpaddd %%xmm8, %%xmm7, %%xmm7" & LF &
+               "vpshufd $0xb1, %%xmm7, %%xmm8" & LF &
+               "vpaddd %%xmm8, %%xmm7, %%xmm7" & LF &
+               "vpbroadcastw (%1,%%rcx,1), %%xmm11" & LF &
+               "vcvtph2ps %%xmm11, %%xmm11" & LF &
+               "vpbroadcastw 2(%1,%%rcx,1), %%xmm13" & LF &
+               "vcvtph2ps %%xmm13, %%xmm13" & LF &
+               "vmulss (%4,%%rdx,1), %%xmm11, %%xmm11" & LF &
+               "vmulss (%4,%%rdx,1), %%xmm13, %%xmm13" & LF &
+               "vmovss %%xmm11, (%3,%%rsi,1)" & LF &
+               "vcvtdq2pd %%xmm7, %%xmm7" & LF &
+               "vcvtss2sd %%xmm13, %%xmm13, %%xmm13" & LF &
+               "vmulsd %%xmm13, %%xmm7, %%xmm7" & LF &
+               "vaddsd %%xmm7, %%xmm12, %%xmm12" & LF &
+               "vpslld $16, %%ymm6, %%ymm9" & LF &
+               "vpor %%ymm9, %%ymm6, %%ymm6" & LF &
+               "vmovups %%ymm6, (%0,%%rdx,1)" & LF &
+               "addq $144, %%rcx" & LF &
+               "addq $32, %%rdx" & LF &
+               "addq $4, %%rsi" & LF &
+               "decq %%rax" & LF &
+               "jnz 2b" & LF &
+               "vmovsd %%xmm12, (%7)",
+               Inputs   =>
+                 [System.Address'Asm_Input ("r", Row_Factor (0)'Address),
+                  System.Address'Asm_Input ("r", Data (Base)'Address),
+                  System.Address'Asm_Input
+                    ("r",
+                     Totals
+                       (Totals'First + First / Activation_Block)'Address),
+                  System.Address'Asm_Input ("r", Row_Both (0)'Address),
+                  System.Address'Asm_Input
+                    ("r",
+                     Scales
+                       (Scales'First + First / Activation_Block)'Address),
+                  System.Address'Asm_Input
+                    ("r", Unpack_Masks (0)'Address),
+                  Element_Count'Asm_Input ("r", Blocks),
+                  System.Address'Asm_Input ("r", Undo'Address)],
+               Clobber  =>
+                 "rax,rcx,rdx,rsi,xmm0,xmm1,xmm2,xmm3,xmm4,xmm5,xmm6,"
+                 & "xmm7,xmm8,xmm9,xmm10,xmm11,xmm12,xmm13,ymm6,ymm7,"
+                 & "ymm9,memory",
+               Volatile => True);
+
+            --  And the second vector's scales and correction; the factors
+            --  it writes again are the same weights' and the same numbers.
+            System.Machine_Code.Asm
+              ("vpxor %%xmm12, %%xmm12, %%xmm12" & LF &
+               "xorq %%rcx, %%rcx" & LF &
+               "xorq %%rdx, %%rdx" & LF &
+               "xorq %%rsi, %%rsi" & LF &
+               "movq %6, %%rax" & LF &
+               "2:" & LF &
+               "vmovdqu 4(%1,%%rcx,1), %%xmm0" & LF &
+               "vpsrldq $4, %%xmm0, %%xmm1" & LF &
+               "vpsrldq $8, %%xmm0, %%xmm2" & LF &
+               "vpbroadcastd 0(%5), %%xmm3" & LF &
+               "vpbroadcastd 4(%5), %%xmm4" & LF &
+               "vpbroadcastd 8(%5), %%xmm5" & LF &
+               "vpand %%xmm3, %%xmm0, %%xmm6" & LF &
+               "vpand %%xmm3, %%xmm1, %%xmm7" & LF &
+               "vpsrld $2, %%xmm0, %%xmm8" & LF &
+               "vpand %%xmm5, %%xmm8, %%xmm8" & LF &
+               "vpand %%xmm4, %%xmm2, %%xmm9" & LF &
+               "vpor %%xmm8, %%xmm9, %%xmm9" & LF &
+               "vpsrld $2, %%xmm1, %%xmm8" & LF &
+               "vpand %%xmm5, %%xmm8, %%xmm8" & LF &
+               "vpsrld $4, %%xmm2, %%xmm10" & LF &
+               "vpand %%xmm4, %%xmm10, %%xmm10" & LF &
+               "vpor %%xmm8, %%xmm10, %%xmm10" & LF &
+               "vpmovzxbd %%xmm6, %%xmm6" & LF &
+               "vpmovzxbd %%xmm9, %%xmm9" & LF &
+               "vinserti128 $1, %%xmm9, %%ymm6, %%ymm6" & LF &
+               "vpmovzxbd %%xmm7, %%xmm7" & LF &
+               "vpmovzxbd %%xmm10, %%xmm10" & LF &
+               "vinserti128 $1, %%xmm10, %%ymm7, %%ymm7" & LF &
+               "vpmulld (%2,%%rdx,1), %%ymm7, %%ymm7" & LF &
+               "vextracti128 $1, %%ymm7, %%xmm8" & LF &
+               "vpaddd %%xmm8, %%xmm7, %%xmm7" & LF &
+               "vpshufd $0x4e, %%xmm7, %%xmm8" & LF &
+               "vpaddd %%xmm8, %%xmm7, %%xmm7" & LF &
+               "vpshufd $0xb1, %%xmm7, %%xmm8" & LF &
+               "vpaddd %%xmm8, %%xmm7, %%xmm7" & LF &
+               "vpbroadcastw (%1,%%rcx,1), %%xmm11" & LF &
+               "vcvtph2ps %%xmm11, %%xmm11" & LF &
+               "vpbroadcastw 2(%1,%%rcx,1), %%xmm13" & LF &
+               "vcvtph2ps %%xmm13, %%xmm13" & LF &
+               "vmulss (%4,%%rdx,1), %%xmm11, %%xmm11" & LF &
+               "vmulss (%4,%%rdx,1), %%xmm13, %%xmm13" & LF &
+               "vmovss %%xmm11, (%3,%%rsi,1)" & LF &
+               "vcvtdq2pd %%xmm7, %%xmm7" & LF &
+               "vcvtss2sd %%xmm13, %%xmm13, %%xmm13" & LF &
+               "vmulsd %%xmm13, %%xmm7, %%xmm7" & LF &
+               "vaddsd %%xmm7, %%xmm12, %%xmm12" & LF &
+               "vpslld $16, %%ymm6, %%ymm9" & LF &
+               "vpor %%ymm9, %%ymm6, %%ymm6" & LF &
+               "vmovups %%ymm6, (%0,%%rdx,1)" & LF &
+               "addq $144, %%rcx" & LF &
+               "addq $32, %%rdx" & LF &
+               "addq $4, %%rsi" & LF &
+               "decq %%rax" & LF &
+               "jnz 2b" & LF &
+               "vmovsd %%xmm12, (%7)",
+               Inputs   =>
+                 [System.Address'Asm_Input ("r", Row_Factor (0)'Address),
+                  System.Address'Asm_Input ("r", Data (Base)'Address),
+                  System.Address'Asm_Input
+                    ("r",
+                     Totals
+                       (Totals'First + First_B / Activation_Block)'Address),
+                  System.Address'Asm_Input ("r", Row_Both (Scale_Room / Deep)'Address),
+                  System.Address'Asm_Input
+                    ("r",
+                     Scales
+                       (Scales'First + First_B / Activation_Block)'Address),
+                  System.Address'Asm_Input
+                    ("r", Unpack_Masks (0)'Address),
+                  Element_Count'Asm_Input ("r", Blocks),
+                  System.Address'Asm_Input ("r", Undo_B'Address)],
+               Clobber  =>
+                 "rax,rcx,rdx,rsi,xmm0,xmm1,xmm2,xmm3,xmm4,xmm5,xmm6,"
+                 & "xmm7,xmm8,xmm9,xmm10,xmm11,xmm12,xmm13,ymm6,ymm7,"
+                 & "ymm9,memory",
+               Volatile => True);
+
+            Landed := [others => [others => 0.0]];
+
+            System.Machine_Code.Asm
+              ("vpxor %%ymm6, %%ymm6, %%ymm6" & LF &
+               "vpxor %%ymm3, %%ymm3, %%ymm3" & LF &
+               "movl $0x0F0F0F0F, %%eax" & LF &
+               "vmovd %%eax, %%xmm7" & LF &
+               "vpbroadcastd %%xmm7, %%ymm7" & LF &
+               "xorq %%rcx, %%rcx" & LF &
+               "xorq %%rdx, %%rdx" & LF &
+               "xorq %%rsi, %%rsi" & LF &
+               "movq %5, %%rax" & LF &
+               "1:" & LF &
+               "vpxor %%ymm8, %%ymm8, %%ymm8" & LF &
+               "vpxor %%ymm9, %%ymm9, %%ymm9" & LF &
+               "vmovdqu 16(%1,%%rcx,1), %%ymm0" & LF &
+               "vpand %%ymm7, %%ymm0, %%ymm4" & LF &
+               "vpsrlw $4, %%ymm0, %%ymm5" & LF &
+               "vpand %%ymm7, %%ymm5, %%ymm5" & LF &
+               "vpmaddubsw 0(%2,%%rdx,8), %%ymm4, %%ymm1" & LF &
+               "vpbroadcastd 0(%3,%%rdx,1), %%ymm2" & LF &
+               "vpmaddwd %%ymm2, %%ymm1, %%ymm1" & LF &
+               "vpaddd %%ymm1, %%ymm8, %%ymm8" & LF &
+               "vpmaddubsw 0(%6,%%rdx,8), %%ymm4, %%ymm10" & LF &
+               "vpmaddwd %%ymm2, %%ymm10, %%ymm10" & LF &
+               "vpaddd %%ymm10, %%ymm9, %%ymm9" & LF &
+               "vpmaddubsw 32(%2,%%rdx,8), %%ymm5, %%ymm1" & LF &
+               "vpbroadcastd 4(%3,%%rdx,1), %%ymm2" & LF &
+               "vpmaddwd %%ymm2, %%ymm1, %%ymm1" & LF &
+               "vpaddd %%ymm1, %%ymm8, %%ymm8" & LF &
+               "vpmaddubsw 32(%6,%%rdx,8), %%ymm5, %%ymm10" & LF &
+               "vpmaddwd %%ymm2, %%ymm10, %%ymm10" & LF &
+               "vpaddd %%ymm10, %%ymm9, %%ymm9" & LF &
+               "vmovdqu 48(%1,%%rcx,1), %%ymm0" & LF &
+               "vpand %%ymm7, %%ymm0, %%ymm4" & LF &
+               "vpsrlw $4, %%ymm0, %%ymm5" & LF &
+               "vpand %%ymm7, %%ymm5, %%ymm5" & LF &
+               "vpmaddubsw 64(%2,%%rdx,8), %%ymm4, %%ymm1" & LF &
+               "vpbroadcastd 8(%3,%%rdx,1), %%ymm2" & LF &
+               "vpmaddwd %%ymm2, %%ymm1, %%ymm1" & LF &
+               "vpaddd %%ymm1, %%ymm8, %%ymm8" & LF &
+               "vpmaddubsw 64(%6,%%rdx,8), %%ymm4, %%ymm10" & LF &
+               "vpmaddwd %%ymm2, %%ymm10, %%ymm10" & LF &
+               "vpaddd %%ymm10, %%ymm9, %%ymm9" & LF &
+               "vpmaddubsw 96(%2,%%rdx,8), %%ymm5, %%ymm1" & LF &
+               "vpbroadcastd 12(%3,%%rdx,1), %%ymm2" & LF &
+               "vpmaddwd %%ymm2, %%ymm1, %%ymm1" & LF &
+               "vpaddd %%ymm1, %%ymm8, %%ymm8" & LF &
+               "vpmaddubsw 96(%6,%%rdx,8), %%ymm5, %%ymm10" & LF &
+               "vpmaddwd %%ymm2, %%ymm10, %%ymm10" & LF &
+               "vpaddd %%ymm10, %%ymm9, %%ymm9" & LF &
+               "vmovdqu 80(%1,%%rcx,1), %%ymm0" & LF &
+               "vpand %%ymm7, %%ymm0, %%ymm4" & LF &
+               "vpsrlw $4, %%ymm0, %%ymm5" & LF &
+               "vpand %%ymm7, %%ymm5, %%ymm5" & LF &
+               "vpmaddubsw 128(%2,%%rdx,8), %%ymm4, %%ymm1" & LF &
+               "vpbroadcastd 16(%3,%%rdx,1), %%ymm2" & LF &
+               "vpmaddwd %%ymm2, %%ymm1, %%ymm1" & LF &
+               "vpaddd %%ymm1, %%ymm8, %%ymm8" & LF &
+               "vpmaddubsw 128(%6,%%rdx,8), %%ymm4, %%ymm10" & LF &
+               "vpmaddwd %%ymm2, %%ymm10, %%ymm10" & LF &
+               "vpaddd %%ymm10, %%ymm9, %%ymm9" & LF &
+               "vpmaddubsw 160(%2,%%rdx,8), %%ymm5, %%ymm1" & LF &
+               "vpbroadcastd 20(%3,%%rdx,1), %%ymm2" & LF &
+               "vpmaddwd %%ymm2, %%ymm1, %%ymm1" & LF &
+               "vpaddd %%ymm1, %%ymm8, %%ymm8" & LF &
+               "vpmaddubsw 160(%6,%%rdx,8), %%ymm5, %%ymm10" & LF &
+               "vpmaddwd %%ymm2, %%ymm10, %%ymm10" & LF &
+               "vpaddd %%ymm10, %%ymm9, %%ymm9" & LF &
+               "vmovdqu 112(%1,%%rcx,1), %%ymm0" & LF &
+               "vpand %%ymm7, %%ymm0, %%ymm4" & LF &
+               "vpsrlw $4, %%ymm0, %%ymm5" & LF &
+               "vpand %%ymm7, %%ymm5, %%ymm5" & LF &
+               "vpmaddubsw 192(%2,%%rdx,8), %%ymm4, %%ymm1" & LF &
+               "vpbroadcastd 24(%3,%%rdx,1), %%ymm2" & LF &
+               "vpmaddwd %%ymm2, %%ymm1, %%ymm1" & LF &
+               "vpaddd %%ymm1, %%ymm8, %%ymm8" & LF &
+               "vpmaddubsw 192(%6,%%rdx,8), %%ymm4, %%ymm10" & LF &
+               "vpmaddwd %%ymm2, %%ymm10, %%ymm10" & LF &
+               "vpaddd %%ymm10, %%ymm9, %%ymm9" & LF &
+               "vpmaddubsw 224(%2,%%rdx,8), %%ymm5, %%ymm1" & LF &
+               "vpbroadcastd 28(%3,%%rdx,1), %%ymm2" & LF &
+               "vpmaddwd %%ymm2, %%ymm1, %%ymm1" & LF &
+               "vpaddd %%ymm1, %%ymm8, %%ymm8" & LF &
+               "vpmaddubsw 224(%6,%%rdx,8), %%ymm5, %%ymm10" & LF &
+               "vpmaddwd %%ymm2, %%ymm10, %%ymm10" & LF &
+               "vpaddd %%ymm10, %%ymm9, %%ymm9" & LF &
+               "vcvtdq2ps %%ymm8, %%ymm8" & LF &
+               "vfmadd231ps 0(%4,%%rsi,1)%{1to8%}, %%ymm8, %%ymm6" & LF &
+               "vcvtdq2ps %%ymm9, %%ymm9" & LF &
+               "vfmadd231ps 512(%4,%%rsi,1)%{1to8%}, %%ymm9, %%ymm3" & LF &
+               "addq $144, %%rcx" & LF &
+               "addq $32, %%rdx" & LF &
+               "addq $4, %%rsi" & LF &
+               "decq %%rax" & LF &
+               "jnz 1b" & LF &
+               "vmovaps %%ymm6, (%0)" & LF &
+               "vmovups %%ymm3, 32(%0)",
+               Inputs =>
+                 [System.Address'Asm_Input ("r", Landed (0)'Address),
+                  System.Address'Asm_Input ("r", Data (Base)'Address),
+                  System.Address'Asm_Input
+                    ("r", Values (Values'First + First)'Address),
+                  System.Address'Asm_Input ("r", Row_Factor (0)'Address),
+                  System.Address'Asm_Input ("r", Row_Both (0)'Address),
+                  Element_Count'Asm_Input ("r", Blocks),
+                  System.Address'Asm_Input
+                    ("r", Values (Values'First + First_B)'Address)],
+               Clobber  =>
+                 "rax,rcx,rdx,rsi,ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,"
+                 & "ymm8,ymm9,ymm10,memory",
+               Volatile => True);
+
+            declare
+               Total   : N.Wide_Real := 0.0;
+               Total_B : N.Wide_Real := 0.0;
+               At_Sum  : constant Element_Count :=
+                 Sums'First + Row * Count + At_Vector;
+            begin
+               for Lane in Lanes_8'Range loop
+                  Total := Total + N.Wide_Real (Landed (0) (Lane));
+                  Total_B := Total_B + N.Wide_Real (Landed (1) (Lane));
+               end loop;
+
+               Sums (At_Sum) := Sums (At_Sum) + Total - Undo;
+               if Pair then
+                  Sums (At_Sum + 1) := Sums (At_Sum + 1) + Total_B - Undo_B;
+               end if;
+            end;
+         end;
+      end loop;
+
+      Taken := True;
+   end Rows_Duo_Q4K;
+
    ------------------------
    -- Rows_Singly_Q5K --
    ------------------------
@@ -17474,6 +17881,49 @@ package body Model_Runner.Quantization.Integers.Kernels is
                if not Done then
                   return;
                end if;
+            end;
+
+            Ok := True;
+            return;
+         end if;
+
+         --  Two to four vectors of Q4_K two at a time, each weight read
+         --  once for a pair: a drafted round's check hands a mixture's
+         --  experts one to four positions each, and the strips below work
+         --  out a whole tile's scales for them as for a batch of a hundred.
+         if Format = G.Type_Q4_K and then Count in 2 .. 4 then
+            declare
+               Reach : constant Element_Count :=
+                 First + (Count - 1) * Stride + Blocks * Per;
+               Blocks_Reach : constant Element_Count :=
+                 (First + (Count - 1) * Stride) / Activation_Block
+                 + Blocks * 8;
+               At_V  : Element_Count := 0;
+               Done  : Boolean;
+            begin
+               if First < Values'First
+                 or else First mod Activation_Block /= 0
+                 or else Stride mod Activation_Block /= 0
+                 or else Reach < First
+                 or else Reach - 1 > Values'Last
+                 or else Scales'Length < Blocks_Reach
+                 or else Totals'Length < Blocks_Reach
+                 or else Sums'Length < Rows * Count
+               then
+                  return;
+               end if;
+
+               while At_V < Count loop
+                  Rows_Duo_Q4K
+                    (Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
+                     Totals, First + At_V * Stride,
+                     First + Element_Count'Min (At_V + 1, Count - 1) * Stride,
+                     Count, At_V, At_V + 1 < Count, Sums, Done);
+                  if not Done then
+                     return;
+                  end if;
+                  At_V := At_V + 2;
+               end loop;
             end;
 
             Ok := True;

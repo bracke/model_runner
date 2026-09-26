@@ -711,6 +711,7 @@ package body Model_Runner.Tensors is
       --  keeps the strips.
       if Count in 2 .. Singly_Most
         and then not Item.Interleaved
+        and then not QI.Takes_Few_Together (Item.Format)
         and then Long_Long_Integer (Last - First + 1)
                  * Long_Long_Integer (Row_Bytes (Item)) <= Singly_Bytes
       then

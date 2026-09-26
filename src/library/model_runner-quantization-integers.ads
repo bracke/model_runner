@@ -208,6 +208,16 @@ package Model_Runner.Quantization.Integers is
    --  @param Allowed True only where the host answered plainly.
    procedure Use_Deep_Rows (Allowed : Boolean);
 
+   --  Whether a product of two to four vectors in this format has a kernel
+   --  of its own here, which reads each weight once for them all: Q4_K,
+   --  where the deepest compilation runs. Elsewhere a caller does better
+   --  taking a few vectors one at a time than on the tile meant for many.
+   --
+   --  @param Format The weights' format.
+   --  @return True where the few vectors go together.
+   function Takes_Few_Together
+     (Format : Model_Runner.GGUF.Tensor_Type) return Boolean;
+
    --  Quantize a run of vectors to one byte an element.
    --
    --  Symmetric and per block: the scale is the block's largest magnitude
