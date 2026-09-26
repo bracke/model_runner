@@ -813,6 +813,13 @@ package body Model_Runner.Sampling is
    type Count_Slots is array (Element_Count range 0 .. Blocks - 1)
      of Element_Count;
 
+   --  Whether a sampling configuration selects its top-k a block at a
+   --  time, in the one pass that also asks every logit whether it is
+   --  finite.
+   function Selects_By_Block (Item : Sampler) return Boolean
+   is (Item.Chosen /= null
+       and then Item.Settings.Top_K in 1 .. Blocked_Limit);
+
    --  Value into the best Wanted of Into (0 .. Kept - 1), which it keeps in
    --  rank order, as the selection below always has.
    procedure Keep_Best
@@ -1295,13 +1302,19 @@ package body Model_Runner.Sampling is
          return;
       end if;
 
-      if Across /= null then
-         Across.all.Divide
-           (Blocks, Finite'Unchecked_Access, Whole, Cost => Over);
-      end if;
+      --  The pass below that selects a small top-k asks every logit this
+      --  as it goes, so where it runs this pass is not run: a second walk
+      --  of the vocabulary and a second wake of the team, for an answer
+      --  the first already gives.
+      if not Selects_By_Block (Item) then
+         if Across /= null then
+            Across.all.Divide
+              (Blocks, Finite'Unchecked_Access, Whole, Cost => Over);
+         end if;
 
-      if not Whole then
-         Finite.Run (0, Blocks - 1);
+         if not Whole then
+            Finite.Run (0, Blocks - 1);
+         end if;
       end if;
 
       --  Read in block order, so the token reported is the first one in the
@@ -1414,12 +1427,35 @@ package body Model_Runner.Sampling is
          --  because the order is total. Two passes over a vocabulary of
          --  248 thousand, on one thread, were five milliseconds of a
          --  sampled token.
-         if Item.Chosen /= null
-           and then Item.Settings.Top_K in 1 .. Blocked_Limit
-         then
+         if Selects_By_Block (Item) then
             declare
                Wanted : constant Element_Count :=
                  Element_Count (Item.Settings.Top_K);
+
+               --  The masks, read through once here rather than through
+               --  the sampler at every token.
+               Masked  : Mask_Array renames Item.Masked.all;
+               Stepped : Mask_Array renames Item.Stepped.all;
+
+               --  Whether the only adjustment Adjusted would make is the
+               --  repeat penalty, over a window whose mask answers; and
+               --  that penalty, where there is one.
+               Penalty   : constant Real := Item.Settings.Repeat_Penalty;
+               Penalized : constant Boolean :=
+                 Penalty /= 1.0
+                 and then Item.Ordered /= null
+                 and then Item.Ordered_Held > 0;
+               Plain     : constant Boolean :=
+                 Item.Bias_Used = 0
+                 and then Item.Settings.DRY_Multiplier <= 0.0
+                 and then Item.Settings.Frequency_Penalty = 0.0
+                 and then Item.Settings.Presence_Penalty = 0.0
+                 and then (not Penalized
+                           or else (Item.Recent /= null
+                                    and then Item.Recent.all'Length
+                                             >= Item.Vocabulary));
+               Recent    : constant Mask_Array_Access :=
+                 (if Item.Recent /= null then Item.Recent else Item.Masked);
 
                type Pick_Work is limited new Model_Runner.Shares.Work
                with record
@@ -1437,38 +1473,82 @@ package body Model_Runner.Sampling is
                  (Work : in out Pick_Work; First : Element_Count;
                   Last : Element_Count)
                is
+                  --  Every index below is a block's, which Block_First and
+                  --  Block_Last keep inside the vocabulary, and the arrays
+                  --  are the sampler's own, sized to it when it opened.
                   pragma Suppress (Validity_Check);
+                  pragma Suppress (Index_Check);
+                  pragma Suppress (Range_Check);
+                  pragma Suppress (Access_Check);
+                  pragma Suppress (Overflow_Check);
                begin
                   if First > Last then
                      return;
                   end if;
 
                   for Block in First .. Last loop
-                     for Index in Block_First (Block, Over)
-                                  .. Block_Last (Block, Over)
-                     loop
-                        if not Item.Masked.all (Natural (Index))
-                          and then not Item.Stepped.all (Natural (Index))
-                        then
-                           declare
-                              Value : constant Real :=
-                                Adjusted (Item, Logits, Index)
-                                / Effective_Temp;
-                           begin
-                              if not N.Is_Finite (Value) then
-                                 Work.Found (Block) := True;
-                                 Work.Where (Block) := Index;
-                                 exit;
-                              end if;
+                     declare
+                        --  The block's worst kept logit once it holds its
+                        --  few: a candidate below it is no candidate, and
+                        --  asking costs one comparison where handing every
+                        --  one to Keep_Best cost a call and a record's
+                        --  worth of copying -- 23 ns a token, a quarter of
+                        --  a million of them.
+                        Floor : Real := Real'First;
+                     begin
+                        for Index in Block_First (Block, Over)
+                                     .. Block_Last (Block, Over)
+                        loop
+                           --  Every logit finite as it arrived, masked or
+                           --  not, as the pass this stands in for asked.
+                           if not N.Is_Finite (Logits (Logits'First + Index))
+                           then
+                              Work.Found (Block) := True;
+                              Work.Where (Block) := Index;
+                              exit;
+                           end if;
 
-                              Keep_Best
-                                (Work.Lists (Block), Work.Held (Block),
-                                 Wanted,
-                                 (Token => Token_Id (Index), Logit => Value,
-                                  Probability => 0.0));
-                           end;
-                        end if;
-                     end loop;
+                           if not Masked (Natural (Index))
+                             and then not Stepped (Natural (Index))
+                           then
+                              declare
+                                 --  What Adjusted gives, worked out here where
+                                 --  the only adjustment is the repeat penalty
+                                 --  over the window's mask: the call and its
+                                 --  five questions a token were most of what
+                                 --  a quarter of a million tokens cost.
+                                 Raw   : constant Real :=
+                                   Logits (Logits'First + Index);
+                                 Value : constant Real :=
+                                   (if not Plain then Adjusted (Item, Logits, Index)
+                                    elsif Penalized
+                                      and then Recent (Natural (Index))
+                                    then (if Raw > 0.0 then Raw / Penalty
+                                          else Raw * Penalty)
+                                    else Raw)
+                                   / Effective_Temp;
+                              begin
+                                 if not N.Is_Finite (Value) then
+                                    Work.Found (Block) := True;
+                                    Work.Where (Block) := Index;
+                                    exit;
+                                 end if;
+
+                                 if Value >= Floor then
+                                    Keep_Best
+                                      (Work.Lists (Block), Work.Held (Block),
+                                       Wanted,
+                                       (Token => Token_Id (Index), Logit => Value,
+                                        Probability => 0.0));
+                                    if Work.Held (Block) = Wanted then
+                                       Floor :=
+                                         Work.Lists (Block) (Wanted - 1).Logit;
+                                    end if;
+                                 end if;
+                              end;
+                           end if;
+                        end loop;
+                     end;
                   end loop;
                end Run;
 

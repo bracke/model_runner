@@ -7,6 +7,12 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Sampling a large vocabulary is cheaper again.** The blocked top-k pass
+  skips a token below its block's worst kept one with a single comparison,
+  applies the default repeat penalty in the loop, and checks for
+  non-finite logits in the same walk: 1.55 -> 0.80 ms a draw over Qwen3.6's
+  248,320 tokens, the same tokens drawn.
+
 - **A sampled drafting round's rejection starts the next round.** The token
   a rejection draws was evaluated on its own, a whole forward pass, to give
   the next round something to draw from; it is now the next round's first
