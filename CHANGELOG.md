@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A sampled drafting round's rejection starts the next round.** The token
+  a rejection draws was evaluated on its own, a whole forward pass, to give
+  the next round something to draw from; it is now the next round's first
+  proposal, evaluated in that round's check beside the drafts after it.
+  qwen3.6-35b-a3b under `run`'s defaults: 18.7 -> 20.0 tokens a second on
+  code, 18.0 -> 19.2 on prose, the same distribution.
+
 - **Q8_0 products over two to four vectors take the subgroup kernel.** A
   drafted round's check on the device read every activation as a scalar
   once a weight and a vector, on the row kernel; the subgroup kernel now

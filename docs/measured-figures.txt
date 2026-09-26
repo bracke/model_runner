@@ -7784,7 +7784,7 @@ device A77842DEBEF239D6 src/shaders/row_product.comp src/shaders/matrix_product.
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-drafting 0EEB901635461BF4 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+drafting 6709222728F68297 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14
@@ -23300,4 +23300,18 @@ panels 50E5C60D3AD95EFF src/library/model_runner-quantization-interleave.ads src
 # more than four: re-fingerprinted.
 #   device C0A42034DCC616FE -> A77842DEBEF239D6,
 #   outside C0A42034DCC616FE -> A77842DEBEF239D6.
+# model: as named
+
+# 2026-09-26: a sampled round's rejection is the next round's first
+# proposal. The residual the rejection draws was evaluated alone -- a
+# whole forward pass, on a split mixture a third of a round -- to give the
+# next round logits to draw its first proposal from; greedy never did, its
+# next round drawing from the check's own row. Now the residual is carried:
+# the next round proposes it first, drafts after it beside the last
+# accepted position's state, and its check evaluates it with the drafts.
+# qwen3.6-35b-a3b, `run`'s defaults, alternated after warming, 256 tokens:
+# code 18.7 -> 20.0 t/s (93 -> 87 forward passes), prose 18.0 -> 19.2. The
+# distribution test (4000 runs each way) holds; a round that ignores the
+# carried token fails it. The drafting figures are greedy: re-fingerprinted.
+#   drafting 0EEB901635461BF4 -> 6709222728F68297.
 # model: as named

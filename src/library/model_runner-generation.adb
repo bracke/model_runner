@@ -553,6 +553,14 @@ package body Model_Runner.Generation is
       --  a single-token round does not: that one's state is the session's
       --  own last.
       Next_Chained : Boolean := False;
+
+      --  A round's rejection, carried to the next round as its first
+      --  proposal: the token the residual drew, already the text's, whose
+      --  own position the next round's check evaluates beside the drafts
+      --  that follow it. Evaluated alone, it cost a whole token's forward
+      --  pass for a rejection -- on a split mixture, a third of a round.
+      Carried     : Token_Id := Vocab.No_Token;
+      Has_Carried : Boolean := False;
       Next_Out    : T.Real_Array_Access := null;
       Next_States : T.Real_Array_Access := null;
       Status       : E.Error_Info := E.Success;
@@ -1396,11 +1404,16 @@ package body Model_Runner.Generation is
                Opened.all := Logits.all;
             end if;
 
-            S.Sample (Sampler, Logits.all, Guess, Local, Sharing);
-            if E.Is_Error (Local) then
-               Conclude (Runtime_Error, Local);
-               Failed := True;
-               return;
+            if Has_Carried then
+               Guess := Carried;
+               Has_Carried := False;
+            else
+               S.Sample (Sampler, Logits.all, Guess, Local, Sharing);
+               if E.Is_Error (Local) then
+                  Conclude (Runtime_Error, Local);
+                  Failed := True;
+                  return;
+               end if;
             end if;
 
             Count := 1;
@@ -1724,10 +1737,11 @@ package body Model_Runner.Generation is
                            return;
                         end if;
 
+                        --  The next round's first proposal, and recorded
+                        --  and given out there, as every first proposal is.
                         Rejected := True;
-                        Verified_Count := Verified_Count + 1;
-                        Verified.all (Verified_Count) := Residual;
-                        S.Record_Token (Sampler, Residual);
+                        Carried := Residual;
+                        Has_Carried := True;
                         exit;
                      end if;
                   end;
@@ -1801,19 +1815,9 @@ package body Model_Runner.Generation is
             --  conditioning. The residual is evaluated instead, which commits
             --  it to the session and leaves the right distribution behind.
             if Rejected then
-               L.Evaluate (Session, Source, Residual, Logits.all,
-                           Cancel, Local);
-               if E.Is_Error (Local) then
-                  if Local.Code = E.Generation_Cancelled then
-                     Conclude (Cancelled);
-                  elsif Local.Code = E.Generation_Context_Exhausted then
-                     Conclude (Context_Full);
-                  else
-                     Conclude (Runtime_Error, Local);
-                  end if;
-                  Failed := True;
-                  return;
-               end if;
+               --  Nothing to read here: the next round begins with the
+               --  residual rather than a draw from these.
+               null;
             elsif Count > 1 then
                declare
                   Row : constant N.Element_Count :=
@@ -1865,7 +1869,11 @@ package body Model_Runner.Generation is
                   begin
                      Next_In.all :=
                        Next_States.all (At_Row .. At_Row + Width - 1);
-                     Next_Chained := not Rejected;
+
+                     --  The last accepted position's state, which is what
+                     --  the next round's first proposal is drafted beside
+                     --  whether it is drawn from the logits or carried.
+                     Next_Chained := True;
                   end;
                end;
             elsif By_Next then
