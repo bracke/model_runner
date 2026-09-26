@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Q8_0 products over two to four vectors take the subgroup kernel.** A
+  drafted round's check on the device read every activation as a scalar
+  once a weight and a vector, on the row kernel; the subgroup kernel now
+  takes two, three or four vectors, decoding each weight once. Three
+  positions of qwen3.6-35b-a3b's largest product 530 -> 370 us against 290
+  for one; `run`'s defaults 18.1 -> 19.2 tokens a second on code.
+
 - **A drafted round's check spends less on its experts.** The processor's
   workers take a split mixture's experts largest first as each comes free,
   rather than dealt out beforehand, so no worker waits on another's longer

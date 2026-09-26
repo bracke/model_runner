@@ -156,6 +156,10 @@ package body Model_Runner.Platform.Device.Products is
    --  Q8_0's band on the same kernel: fewer rows a workgroup, more
    --  workgroups, which a format that is read rather than decoded wants.
    Q8_Wave_Rows   : constant := 2;
+
+   --  And its compilations over several vectors, which load each vector's
+   --  activations once for this many rows.
+   Q8_Multi_Rows  : constant := 4;
    Q6_Wave_Rows   : constant := 2;
 
    --  The row length past which a Q6_K row goes to the compilation that
@@ -863,7 +867,11 @@ package body Model_Runner.Platform.Device.Products is
    --  format has its own decode and its own pipeline.
    function Waved
      (Item : Engine; Packing : Weight_Packing; Count : Natural) return Boolean
-   is (Count = 1
+   is ((Packing = Packed_Q8_0
+        and then Count in Multi_Count
+        and then Item.Q8_Multi_Lines (Count) /= Null_Handle)
+       or else
+       (Count = 1
        and then ((Packing = Packed_Q4_K and then Item.Wave_Line /= Null_Handle)
                  or else
                  (Packing = Packed_Q5_K
@@ -882,7 +890,7 @@ package body Model_Runner.Platform.Device.Products is
                   and then Item.NL_Wave_Line /= Null_Handle)
                  or else
                  (Packing = Packed_IQ4_XS
-                  and then Item.XS_Wave_Line /= Null_Handle)));
+                  and then Item.XS_Wave_Line /= Null_Handle))));
 
    --  Invocations a workgroup of the bound row kernel has. The super-block
    --  kernel's workgroup is a single subgroup of thirty-two; the half-group
@@ -913,8 +921,11 @@ package body Model_Runner.Platform.Device.Products is
 
    --  Rows a subgroup kernel's workgroup lands: the k-quants' band, or the
    --  low-bit formats' own.
-   function Wave_Band (Packing : Weight_Packing) return Positive
-   is (if Packing in Low_Packing then Low_Wave_Rows
+   function Wave_Band
+     (Packing : Weight_Packing; Count : Natural := 1) return Positive
+   is (if Packing = Packed_Q8_0 and then Count in Multi_Count
+       then Q8_Multi_Rows
+       elsif Packing in Low_Packing then Low_Wave_Rows
        elsif Packing in Packed_IQ4_NL | Packed_IQ4_XS then IQ4_Wave_Rows
        elsif Packing = Packed_Q8_0 then Q8_Wave_Rows
        elsif Packing = Packed_Q6_K then Q6_Wave_Rows
@@ -926,7 +937,8 @@ package body Model_Runner.Platform.Device.Products is
      (Item : Engine; Packing : Weight_Packing; Count : Natural; Rows : Natural)
       return Natural
    is (if Waved (Item, Packing, Count)
-       then (Rows + Wave_Band (Packing) - 1) / Wave_Band (Packing)
+       then (Rows + Wave_Band (Packing, Count) - 1)
+            / Wave_Band (Packing, Count)
        else Rows);
 
    function Row_Line
@@ -937,7 +949,8 @@ package body Model_Runner.Platform.Device.Products is
    is (if Packing in Low_Packing and then Waved (Item, Packing, Count)
        then Item.Low_Wave_Lines (Packing)
        elsif Packing = Packed_Q8_0 and then Waved (Item, Packing, Count)
-       then Item.Q8_Wave_Line
+       then (if Count in Multi_Count then Item.Q8_Multi_Lines (Count)
+             else Item.Q8_Wave_Line)
        elsif Packing = Packed_IQ4_NL and then Waved (Item, Packing, Count)
        then Item.NL_Wave_Line
        elsif Packing = Packed_IQ4_XS and then Waved (Item, Packing, Count)
@@ -2461,6 +2474,26 @@ package body Model_Runner.Platform.Device.Products is
                then
                   Item.Q8_Wave_Shader := Made;
                end if;
+
+               --  And its compilations over several vectors.
+               for Count in Multi_Count loop
+                  declare
+                     More : aliased constant Model_Runner.Shaders.Word_Array :=
+                       (case Count is
+                          when 2 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V2,
+                          when 3 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V3,
+                          when 4 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V4);
+                  begin
+                     Request.Size := Interfaces.C.size_t (More'Length * 4);
+                     Request.Code := More'Address;
+
+                     if Create (Item.Logical, Request'Address, Null_Handle,
+                                Made'Access) = 0
+                     then
+                        Item.Q8_Multi_Shaders (Count) := Made;
+                     end if;
+                  end;
+               end loop;
             end if;
          end;
 
@@ -3399,6 +3432,13 @@ package body Model_Runner.Platform.Device.Products is
                   Request.Stage.Module := Item.Q8_Wave_Shader;
                   Line (Low_Wave_Lanes, 1, Item.Q8_Wave_Line);
                end if;
+
+               for Count in Multi_Count loop
+                  if Item.Q8_Multi_Shaders (Count) /= Null_Handle then
+                     Request.Stage.Module := Item.Q8_Multi_Shaders (Count);
+                     Line (Low_Wave_Lanes, 1, Item.Q8_Multi_Lines (Count));
+                  end if;
+               end loop;
 
                if Item.NL_Wave_Shader /= Null_Handle then
                   Request.Stage.Module := Item.NL_Wave_Shader;
@@ -4491,6 +4531,9 @@ package body Model_Runner.Platform.Device.Products is
          Give_Back (Item.Low_Wave_Lines (Packing), "vkDestroyPipeline");
       end loop;
       Give_Back (Item.Q8_Wave_Line, "vkDestroyPipeline");
+      for Count in Multi_Count loop
+         Give_Back (Item.Q8_Multi_Lines (Count), "vkDestroyPipeline");
+      end loop;
       Give_Back (Item.NL_Wave_Line, "vkDestroyPipeline");
       Give_Back (Item.XS_Wave_Line, "vkDestroyPipeline");
       Give_Back (Item.Low_Pipeline, "vkDestroyPipeline");
@@ -4601,6 +4644,9 @@ package body Model_Runner.Platform.Device.Products is
          Give_Back (Item.Low_Wave_Shaders (Packing), "vkDestroyShaderModule");
       end loop;
       Give_Back (Item.Q8_Wave_Shader, "vkDestroyShaderModule");
+      for Count in Multi_Count loop
+         Give_Back (Item.Q8_Multi_Shaders (Count), "vkDestroyShaderModule");
+      end loop;
       Give_Back (Item.NL_Wave_Shader, "vkDestroyShaderModule");
       Give_Back (Item.XS_Wave_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Low_Shader, "vkDestroyShaderModule");

@@ -1625,6 +1625,108 @@ float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
 }
 #endif
 
+#ifdef VEC
+//  A few vectors at once -- a drafted round's check, two to four positions
+//  -- through the same walk: each lane's sixteen weights of a row decoded
+//  once and dotted with every vector's sixteen activations, which a lane
+//  loads once for all the rows it takes. The row kernel this replaces for
+//  them read every activation as a scalar once a weight and a vector, and
+//  took a check of three positions 1.8 times what one took.
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+    uint itid = tid & 15u;
+    uint ix = tid >> 4u;
+
+    uint member = gl_WorkGroupID.z;
+    bool listed = shape.routed >= LISTED_BY_POSITION;
+    uint which = listed ? member
+               : shape.routed != 0u ? route[member] : shape.members[member];
+    uint slice = which * shape.stride;
+    uint experts = shape.members[0];
+    uint run_at = listed ? route[experts + member] : 0u;
+    uint run_count = listed ? route[member] : shape.count - shape.first;
+    uint list_at = 2u * experts;
+
+    if (run_count == 0u) {
+        return;
+    }
+
+    //  Where each vector begins, and whether it is one: past the run or
+    //  the batch it reads the last real one and is not stored.
+    uint from_k[VEC];
+    bool real_k[VEC];
+    for (uint k = 0u; k < VEC; ++k) {
+        uint kk = min(k, run_count - 1u);
+        real_k[k] = k < run_count;
+        from_k[k] = listed
+              ? (shape.routed == LISTED_BY_POSITION
+                   ? route[list_at + run_at + kk] : run_at + kk)
+                * shape.columns
+              : (shape.first + kk) * shape.columns + member * shape.apart;
+    }
+
+    uint first_row = NUM_ROWS * gl_WorkGroupID.x;
+    uint groups = (shape.columns + 255u) / 256u;
+    uint span = (shape.columns / BLOCK_ELEMS) * BLOCK_BYTES;
+
+    float temp[NUM_ROWS][VEC];
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        for (uint k = 0u; k < VEC; ++k) {
+            temp[r][k] = 0.0;
+        }
+    }
+
+    for (uint i = ix; i < groups; i += 4u) {
+        uint col = i * 256u + itid * 16u;
+
+        if (col < shape.columns) {
+            vec4 a[VEC][4];
+            for (uint k = 0u; k < VEC; ++k) {
+                uint xb = (from_k[k] + col) >> 2u;
+                a[k][0] = x4[xb];
+                a[k][1] = x4[xb + 1u];
+                a[k][2] = x4[xb + 2u];
+                a[k][3] = x4[xb + 3u];
+            }
+            uint block = col / BLOCK_ELEMS;
+            uint within = col % BLOCK_ELEMS;
+
+            for (uint r = 0u; r < NUM_ROWS; ++r) {
+                uint row = min(first_row + r, shape.rows - 1u);
+                uint at = shape.base + slice + row * span
+                          + block * BLOCK_BYTES;
+                uint q = at + 2u + within;
+                float scale = half_at(at);
+                vec4 w0 = vec4(unpack8(int(quad_at(q))));
+                vec4 w1 = vec4(unpack8(int(quad_at(q + 4u))));
+                vec4 w2 = vec4(unpack8(int(quad_at(q + 8u))));
+                vec4 w3 = vec4(unpack8(int(quad_at(q + 12u))));
+
+                for (uint k = 0u; k < VEC; ++k) {
+                    temp[r][k] += scale
+                                  * (dot(a[k][0], w0) + dot(a[k][1], w1)
+                                   + dot(a[k][2], w2) + dot(a[k][3], w3));
+                }
+            }
+        }
+    }
+
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        uint row = first_row + r;
+        for (uint k = 0u; k < VEC; ++k) {
+            float whole = subgroupAdd(temp[r][k]);
+
+            if (tid == 0u && row < shape.rows && real_k[k]) {
+                uint out_at = listed
+                              ? (run_at + k) * shape.rows + row
+                              : member * shape.rows * shape.count
+                                + (shape.first + k) * shape.rows + row;
+                y[out_at] = shape.joins != 0u ? whole + rj[out_at] : whole;
+            }
+        }
+    }
+}
+#else
 void main() {
     uint tid = gl_LocalInvocationID.x;
 
@@ -1721,3 +1823,4 @@ void main() {
         }
     }
 }
+#endif

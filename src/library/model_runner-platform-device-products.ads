@@ -71,6 +71,10 @@ package Model_Runner.Platform.Device.Products is
    --  the same thing is a pipeline each and no more words.
    type Row_Line_Array is array (1 .. Batch_Group) of System.Address;
 
+   --  The vector counts the Q8_0 subgroup kernel takes several at a time.
+   subtype Multi_Count is Positive range 2 .. 4;
+   type Multi_Array is array (Multi_Count) of System.Address;
+
    --  Query positions one workgroup of the tiled attention kernel answers.
    --  attention.comp declares the same number as QUERIES under QUERY_TILE
    --  and the two have to agree: this decides how many workgroups the
@@ -2810,6 +2814,11 @@ private
       --  And Q8_0, on the same kernel compiled for it.
       Q8_Wave_Shader : System.Address := System.Null_Address;
       Q8_Wave_Line   : System.Address := System.Null_Address;
+
+      --  And the same walk over two, three or four vectors at once, for a
+      --  drafted round's check.
+      Q8_Multi_Shaders : Multi_Array := [others => System.Null_Address];
+      Q8_Multi_Lines   : Multi_Array := [others => System.Null_Address];
 
       --  And the two IQ4 formats, the same way: each read through its table
       --  of sixteen values, IQ4_XS with its sub-block scales beside.
