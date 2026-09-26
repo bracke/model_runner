@@ -837,6 +837,21 @@ package body Model_Runner.Platform.Device.Products is
        and then Columns mod 4 = 0
        and then Base mod 16 = 0);
 
+   --  Whether a binary32 product over a batch goes to f32_tile.comp: more
+   --  vectors than the thin kernel takes, where the row kernel would read
+   --  the matrix again for every eight of them.
+   function F32_Tiled
+     (Item    : Engine;
+      Packing : Weight_Packing;
+      Rows    : Natural;
+      Count   : Natural;
+      Base    : Interfaces.Unsigned_64) return Boolean
+   is (Item.F32_Tile_Line /= Null_Handle
+       and then Packing = Values_F32
+       and then Rows >= 64
+       and then Count > Thin_Vectors
+       and then Base mod 4 = 0);
+
    function Half_Grouped
      (Item : Engine; Packing : Weight_Packing; Count : Natural) return Boolean
    is (Count = 1
@@ -2675,6 +2690,21 @@ package body Model_Runner.Platform.Device.Products is
             end if;
          end;
 
+         --  And the binary32 tile.
+         declare
+            Tiled32 : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.F32_Tile;
+         begin
+            Request.Size := Interfaces.C.size_t (Tiled32'Length * 4);
+            Request.Code := Tiled32'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.F32_Tiler := Made;
+            end if;
+         end;
+
          --  And the rotation, which is the same story: a device that
          --  refuses it turns on the host, as every device did before.
          declare
@@ -3477,6 +3507,16 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Thin_Line := Made;
+            end if;
+         end if;
+
+         if Item.F32_Tiler /= Null_Handle then
+            Request.Stage.Module := Item.F32_Tiler;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.F32_Tile_Line := Made;
             end if;
          end if;
 
@@ -4473,6 +4513,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Eight_Halved_Line, "vkDestroyPipeline");
       Give_Back (Item.Merge_Line, "vkDestroyPipeline");
       Give_Back (Item.Thin_Line, "vkDestroyPipeline");
+      Give_Back (Item.F32_Tile_Line, "vkDestroyPipeline");
       Give_Back (Item.Invert_Line, "vkDestroyPipeline");
       Give_Back (Item.Narrow_Line, "vkDestroyPipeline");
       Give_Back (Item.Narrow_More_Line, "vkDestroyPipeline");
@@ -4505,6 +4546,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Exact_Paired_Attend, "vkDestroyShaderModule");
       Give_Back (Item.Merger, "vkDestroyShaderModule");
       Give_Back (Item.Thinner, "vkDestroyShaderModule");
+      Give_Back (Item.F32_Tiler, "vkDestroyShaderModule");
       Give_Back (Item.Inverter, "vkDestroyShaderModule");
       Give_Back (Item.Narrow, "vkDestroyShaderModule");
       Give_Back (Item.Narrow_More, "vkDestroyShaderModule");
@@ -6711,6 +6753,25 @@ package body Model_Runner.Platform.Device.Products is
                      Product_Bytes, Shape'Address);
                Dispatch (Item.Buffer, C.unsigned (Rows), C.unsigned (Count),
                          1);
+            end;
+         elsif F32_Tiled (Item, Packing, Rows, Count, Weight_Base) then
+            Bind_Pipeline
+              (Item.Buffer, Bind_Point_Compute, Item.F32_Tile_Line);
+
+            declare
+               Shape : aliased Shape_Constants :=
+                 (Rows    => C.unsigned (Rows),
+                  Columns => C.unsigned (Columns),
+                  Count   => C.unsigned (Count),
+                  First   => 0,
+                  Packing => C.unsigned (Weight_Packing'Pos (Packing)),
+                  Base    => C.unsigned (Weight_Base),
+                  Joins   => 0, Table => 0, others => <>);
+            begin
+               Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                     Product_Bytes, Shape'Address);
+               Dispatch (Item.Buffer, C.unsigned ((Rows + 63) / 64),
+                         C.unsigned ((Count + 63) / 64), 1);
             end;
          else
             declare
@@ -13133,6 +13194,43 @@ package body Model_Runner.Platform.Device.Products is
                      Half_Wide := This.Columns;
                   end;
 
+                  goto Next_Dispatch;
+               end if;
+
+               --  More binary32 vectors than that go to the binary32 tile.
+               if This.Gathers = 0
+                 and then not This.Listed
+                 and then not Thin (Item, This.Packing, This.Rows,
+                                    This.Columns, Count, Places (Index).Base)
+                 and then F32_Tiled
+                            (Item, This.Packing, This.Rows, Count,
+                             Places (Index).Base)
+               then
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute, Item.F32_Tile_Line);
+
+                  declare
+                     Shape : aliased Shape_Constants :=
+                       (Rows    => C.unsigned (This.Rows),
+                        Columns => C.unsigned (This.Columns),
+                        Count   => C.unsigned (Count),
+                        First   => 0,
+                        Packing =>
+                          C.unsigned (Weight_Packing'Pos (This.Packing)),
+                        Base    => C.unsigned (Places (Index).Base),
+                        Joins   => (if This.Joins then 1 else 0),
+                        others  => <>);
+                  begin
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+                     Dispatch (Item.Buffer,
+                               C.unsigned ((This.Rows + 63) / 64),
+                               C.unsigned ((Count + 63) / 64), 1);
+                  end;
+
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute,
+                     Row_Line (Item, Count));
                   goto Next_Dispatch;
                end if;
 

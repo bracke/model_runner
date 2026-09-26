@@ -1,0 +1,115 @@
+#version 450
+
+//  A binary32 matrix against a batch of binary32 vectors, a tile at a time.
+//
+//  The matrix instruction takes half precision and nothing else, so the
+//  tiles of matrix_product.comp refuse binary32 on purpose: a router's
+//  scores through half-precision weights would choose a different expert
+//  now and then. That left the row kernel, which reads the matrix again for
+//  every eight vectors -- a mixture's router over a prompt of 1302 read its
+//  two megabytes 163 times and took 6.4 ms a layer, a tenth of a layer.
+//
+//  Here a workgroup takes sixty-four rows by sixty-four vectors, the two
+//  staged through shared memory sixteen columns at a time, and each lane
+//  keeps a four by four block of the answers in binary32 the whole way.
+//  The sum over the columns runs in their order, one lane a sum, which is
+//  the processor's order and not the row kernel's lanes-then-fold.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(std430, binding = 0) readonly  buffer Weights  { uint  w[]; };
+layout(std430, binding = 1) readonly  buffer Vectors  { float x[]; };
+layout(std430, binding = 2) writeonly buffer Result   { float y[]; };
+layout(std430, binding = 4) readonly  buffer Residual { float rj[]; };
+
+layout(push_constant) uniform Shape {
+    uint rows;
+    uint columns;
+    uint count;
+    uint first;
+    uint format;
+
+    //  Where the matrix begins, in bytes, a multiple of four.
+    uint base;
+
+    //  Whether the residual at binding four is added before the store.
+    uint joins;
+} shape;
+
+const uint TR = 64u;
+const uint TV = 64u;
+const uint TK = 16u;
+
+//  A column of the tile a row, padded a word so that the lanes reading one
+//  row apiece do not meet in a bank.
+shared float ws[TK][TR + 1u];
+shared float xs[TK][TV + 1u];
+
+void main() {
+    uint r0 = gl_WorkGroupID.x * TR;
+    uint v0 = gl_WorkGroupID.y * TV;
+    uint tx = gl_LocalInvocationID.x;
+    uint ty = gl_LocalInvocationID.y;
+    uint lid = ty * 16u + tx;
+    uint at = shape.base >> 2u;
+
+    float acc[4][4];
+    for (uint i = 0u; i < 4u; ++i) {
+        for (uint j = 0u; j < 4u; ++j) {
+            acc[i][j] = 0.0;
+        }
+    }
+
+    for (uint k0 = 0u; k0 < shape.columns; k0 += TK) {
+        //  Sixteen columns of sixty-four rows and of sixty-four vectors,
+        //  four values a lane each, neighbouring lanes on neighbouring
+        //  columns of one row.
+        for (uint i = 0u; i < 4u; ++i) {
+            uint e = lid + i * 256u;
+            uint rr = e / TK;
+            uint kk = e % TK;
+            uint k = k0 + kk;
+
+            uint r = r0 + rr;
+            ws[kk][rr] = (r < shape.rows && k < shape.columns)
+                         ? uintBitsToFloat(w[at + r * shape.columns + k])
+                         : 0.0;
+
+            uint v = v0 + rr;
+            xs[kk][rr] = (v < shape.count && k < shape.columns)
+                         ? x[v * shape.columns + k]
+                         : 0.0;
+        }
+
+        barrier();
+
+        for (uint kk = 0u; kk < TK; ++kk) {
+            float a[4];
+            float b[4];
+            for (uint i = 0u; i < 4u; ++i) {
+                a[i] = ws[kk][ty * 4u + i];
+                b[i] = xs[kk][tx * 4u + i];
+            }
+            for (uint i = 0u; i < 4u; ++i) {
+                for (uint j = 0u; j < 4u; ++j) {
+                    acc[i][j] += a[i] * b[j];
+                }
+            }
+        }
+
+        barrier();
+    }
+
+    //  Out, a vector's answers together, as every product here stores.
+    for (uint i = 0u; i < 4u; ++i) {
+        uint r = r0 + ty * 4u + i;
+        for (uint j = 0u; j < 4u; ++j) {
+            uint v = v0 + tx * 4u + j;
+            if (r < shape.rows && v < shape.count) {
+                uint out_at = v * shape.rows + r;
+                y[out_at] = shape.joins != 0u ? acc[i][j] + rj[out_at]
+                                              : acc[i][j];
+            }
+        }
+    }
+}

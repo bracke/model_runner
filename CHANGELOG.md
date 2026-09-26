@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Binary32 products over a batch have a tile of their own.** The matrix
+  instruction takes half precision only, so a binary32 matrix -- a
+  mixture's router -- went to the row kernel, which reads the matrix again
+  for every eight vectors. A binary32 tile of 64 rows by 64 vectors, kept
+  in binary32 throughout, takes a batch of more than eight: qwen3.6-35b's
+  router over a prompt of 1302, 6.4 -> 1.5 ms a layer, the prompt about
+  3.5 per cent faster, the same output.
+
 - **A split mixture takes its prompt in batches of 2048.** A streamed batch
   copies every layer's expert stacks to the device once, so batches of 512
   copied qwen3.6-35b-a3b's eighteen gigabytes three times over for a

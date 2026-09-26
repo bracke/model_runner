@@ -101,6 +101,7 @@ compile mix                          mix.comp              vulkan1.0
 compile heads                        heads.comp            vulkan1.1
 compile merge                        merge.comp            vulkan1.0
 compile thin                         thin.comp             vulkan1.0
+compile f32_tile                     f32_tile.comp         vulkan1.0
 compile invert                       invert.comp           vulkan1.0
 compile attention_packed             attention_packed.comp vulkan1.0
 compile pack                         pack.comp             vulkan1.0

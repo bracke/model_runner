@@ -5673,6 +5673,26 @@ package body Checks is
          end if;
       end;
 
+      --  And the binary32 tile, the same way.
+      declare
+         Found : Boolean;
+
+         Digest : constant Interfaces.Unsigned_64 :=
+           Shader_Generation.Source_Digest
+             (Root & "/src/shaders/f32_tile.comp", Found);
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if not Found then
+            Fail ("src/shaders/f32_tile.comp is missing, and the words "
+                  & "compiled from it are committed");
+         elsif Digest /= Model_Runner.Shaders.F32_Tile_Digest then
+            Fail ("src/shaders/f32_tile.comp has changed since it was "
+                  & "compiled; compile it and run 'tests shader' again with "
+                  & "every shader named");
+         end if;
+      end;
+
       --  The merge of a split attention's slices, asked the same way.
       declare
          Found : Boolean;

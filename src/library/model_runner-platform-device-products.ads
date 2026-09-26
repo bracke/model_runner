@@ -2730,6 +2730,7 @@ private
       --  thin.comp: a few binary32 rows against a few vectors, a
       --  workgroup a row.
       Thinner    : System.Address := System.Null_Address;
+      F32_Tiler  : System.Address := System.Null_Address;
 
       Set_Layout : System.Address := System.Null_Address;
       Layout     : System.Address := System.Null_Address;
@@ -2847,6 +2848,7 @@ private
       Merge_Line  : System.Address := System.Null_Address;
       Invert_Line : System.Address := System.Null_Address;
       Thin_Line   : System.Address := System.Null_Address;
+      F32_Tile_Line : System.Address := System.Null_Address;
       Heads_Line  : System.Address := System.Null_Address;
 
       --  Whether this engine may dispatch the matrix product at all, which
