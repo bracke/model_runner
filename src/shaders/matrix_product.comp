@@ -2103,7 +2103,11 @@ void main() {
                 }
             } else if (shape.format == FMT_Q8_0) {
                 uint at = row + (k0 / 32u) * 34u;
-                float16_t d = float16_t(half_at(at));
+
+                //  A block begins on an even byte, so its scale is in one
+                //  word: one load, where two bytes a load was two.
+                float16_t d = float16_t(unpackHalf2x16
+                    ((w[at >> 2u] >> ((at & 2u) * 8u)) & 65535u).x);
 
                 uint q = at + 2u + half_of * 16u;
                 uint p0, p1, p2, p3;

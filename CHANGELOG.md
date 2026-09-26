@@ -7,6 +7,11 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A Q8_0 block's scale is one load.** The matrix tile read a block's
+  half-precision scale as two bytes, two loads, where it always lies in one
+  word. qwen3.5-4b's prompt of 1302 about 1 per cent faster, the same
+  output.
+
 - **A mixture's expert tile reads Q4_K a step ahead.** The listed tile
   waited out every weight load between its barriers -- about 40 per cent
   of its time, at 30 GB/s. It now loads the next step's Q4_K words before
