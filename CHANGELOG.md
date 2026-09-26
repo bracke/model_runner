@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A drafted round's check spends less on its experts.** The processor's
+  workers take a split mixture's experts largest first as each comes free,
+  rather than dealt out beforehand, so no worker waits on another's longer
+  run; and a product of two to four vectors over a matrix the cache holds
+  goes a vector at a time through the one-vector kernel, where the tile
+  meant for long batches spent three and a half times as long. A
+  four-position check's experts on qwen3.6-35b-a3b: 2.25 -> 1.66 ms a
+  layer; `run`'s defaults 16.0 -> 18.1 tokens a second on a code prompt,
+  14.3 -> 16.2 on prose.
+
 - **Sampling a large vocabulary is one pass across the pool, and a drafted
   round's check on a split mixture routes on the device.** A sampled token
   built every candidate and then selected its top-k, two passes over the

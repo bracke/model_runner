@@ -659,6 +659,11 @@ package body Model_Runner.Tensors is
    -- Mat_Mul_Range_Packed --
    ---------------------------
 
+   --  The most vectors, and the largest share of a matrix in bytes, that
+   --  Mat_Mul_Range_Packed takes a vector at a time.
+   Singly_Most  : constant := 4;
+   Singly_Bytes : constant := 1_048_576;
+
    procedure Mat_Mul_Range_Packed
      (Item    : View;
       Values  : Model_Runner.Quantization.Integers.Signed_Array;
@@ -694,6 +699,62 @@ package body Model_Runner.Tensors is
       end if;
 
       Blocks := Item.Columns / Per_Block;
+
+      --  A few vectors against a matrix the nearest caches hold, a vector
+      --  at a time through the kernel a single vector takes: the tile of
+      --  strips works out a whole tile's scales for every call, which a
+      --  batch of a hundred amortizes and a batch of two does not -- a
+      --  mixture's expert over two vectors took three and a half times
+      --  what it took over one, 0.92 ms against 0.26, where the second
+      --  pass over a matrix still in the cache costs a third of the first.
+      --  A matrix past the cache is read again from memory each time, and
+      --  keeps the strips.
+      if Count in 2 .. Singly_Most
+        and then not Item.Interleaved
+        and then Long_Long_Integer (Last - First + 1)
+                 * Long_Long_Integer (Row_Bytes (Item)) <= Singly_Bytes
+      then
+         declare
+            Per_Row  : constant Element_Count :=
+              Item.Columns / QI.Activation_Block;
+            Per_Half : constant := QI.Activation_Block / QI.Activation_Half;
+         begin
+            for Which in 0 .. Count - 1 loop
+               declare
+                  One_Value : constant QI.Signed_Array
+                    (0 .. Item.Columns - 1) :=
+                    Values (Values'First + Which * Item.Columns
+                            .. Values'First + Which * Item.Columns
+                               + Item.Columns - 1);
+                  One_Scale : constant Real_Array (0 .. Per_Row - 1) :=
+                    Scales (Scales'First + Which * Per_Row
+                            .. Scales'First + Which * Per_Row + Per_Row - 1);
+                  One_Total : constant QI.Sum_Array (0 .. Per_Row - 1) :=
+                    Totals (Totals'First + Which * Per_Row
+                            .. Totals'First + Which * Per_Row + Per_Row - 1);
+                  One_Half  : constant QI.Sum_Array
+                    (0 .. Per_Row * Per_Half - 1) :=
+                    Halves (Halves'First + Which * Per_Row * Per_Half
+                            .. Halves'First + Which * Per_Row * Per_Half
+                               + Per_Row * Per_Half - 1);
+                  Done : Boolean;
+               begin
+                  Mat_Mul_Range_Packed
+                    (Item, One_Value, One_Scale, One_Total, One_Half, 1,
+                     Target (Target'First + Which * Item.Rows
+                             .. Target'First + Which * Item.Rows
+                                + Item.Rows - 1),
+                     First, Last, Done);
+                  if not Done then
+                     return;
+                  end if;
+               end;
+            end loop;
+         end;
+
+         Handled := True;
+         return;
+      end if;
 
       declare
          Held : B.Byte_Array (1 .. Item.Span)

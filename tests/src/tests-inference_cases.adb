@@ -2634,6 +2634,54 @@ package body Tests.Inference_Cases is
                        "the processor refused " & Name & ": "
                        & E.Error_Code'Image (Why));
 
+               --  And the processor against itself, four positions at a
+               --  time and one: a batch that short gives most of its
+               --  experts one to four positions, which the pool multiplies
+               --  a vector at a time, and a position alone gives each one.
+               --  The device's arms below compare against the processor, so
+               --  a fault in the pool's experts both sides share would pass
+               --  there.
+               --  In Q4_K, at the deep widths, with the activations in
+               --  integers as a run has them: where the pool packs the
+               --  positions for its integer kernels.
+               declare
+                  Deep    : B.Byte_Array_Access;
+                  By_One  : N.Real_Array (0 .. Tiny_Model.Vocabulary - 1);
+                  By_Four : N.Real_Array (0 .. Tiny_Model.Vocabulary - 1);
+                  Apart   : N.Real := 0.0;
+                  Was     : constant Boolean :=
+                    Model_Runner.Backend.CPU.Integer_Activations;
+               begin
+                  Model_Runner.Backend.CPU.Use_Integer_Activations (True);
+                  Tiny_Model.Build
+                    (Deep, Tiny_Model.Q4_K, Room => Room, Kind => Kind,
+                     Experts => 20, Experts_Used => 4);
+                  Logits_On
+                    (Deep, Model_Runner.Backend.Backend_CPU, 1, By_One, Why,
+                     Team => Team'Unchecked_Access);
+                  Assert (Why = E.No_Error,
+                          "the processor refused " & Name
+                          & " a position at a time: "
+                          & E.Error_Code'Image (Why));
+                  Logits_On
+                    (Deep, Model_Runner.Backend.Backend_CPU, 4, By_Four, Why,
+                     Team => Team'Unchecked_Access);
+                  Assert (Why = E.No_Error,
+                          "the processor refused " & Name
+                          & " four positions at a time: "
+                          & E.Error_Code'Image (Why));
+                  for Index in By_One'Range loop
+                     Apart :=
+                       N.Real'Max (Apart, abs (By_One (Index) - By_Four (Index)));
+                  end loop;
+                  B.Free (Deep);
+                  Model_Runner.Backend.CPU.Use_Integer_Activations (Was);
+                  Assert (Apart <= Tolerance,
+                          "on " & Name & " the processor's logits four "
+                          & "positions at a time differ from one at a time by "
+                          & N.Real'Image (Apart));
+               end;
+
                --  A position at a time, the whole batch split, and the
                --  whole batch with its stacks streamed to the device: a
                --  batch as short as the fixture's is the pool's unless told

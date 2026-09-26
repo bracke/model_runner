@@ -7993,11 +7993,18 @@ package body Tests.Backend_Cases is
 
       --  Three of the five, out of order.
       Members : constant Model_Runner.Shares.Member_Rows := [3, 0, 4];
+
+      --  What the suite runs with, put back at the end: the pool packs only
+      --  where it quantizes activations, which a run does unless told not
+      --  to and the suite does not, so this asks for it.
+      Was : constant Boolean := CPU.Integer_Activations;
    begin
+      CPU.Use_Integer_Activations (True);
       if not CPU.Integer_Activations then
          Ada.Text_IO.Put_Line
            (Ada.Text_IO.Standard_Error,
             "note: the pool does not quantize here, so nothing is packed");
+         CPU.Use_Integer_Activations (Was);
          return;
       end if;
 
@@ -8071,6 +8078,7 @@ package body Tests.Backend_Cases is
       T.Free (Straight);
       T.Free (Through);
       B.Free (Held);
+      CPU.Use_Integer_Activations (Was);
    end Packed_Rows_Multiply_As_The_Pool_Multiplies;
 
    --------------------

@@ -1,3 +1,4 @@
+with System.Atomic_Operations.Integer_Arithmetic;
 with Ada.Strings.Fixed;
 with Ada.Real_Time;
 with Ada.Exceptions;
@@ -14,6 +15,11 @@ with Model_Runner.Quantization.Integers;
 with Model_Runner.Quantization.Interleave;
 
 package body Model_Runner.Llama is
+
+   --  A counter the workers of a pool job take items from.
+   type Take_Counter is new Integer with Atomic;
+   package Takes is new System.Atomic_Operations.Integer_Arithmetic
+     (Take_Counter);
 
    --  See Set_Stream_Least.
    Stream_Least : Positive := Stream_Least_Default;
@@ -10950,7 +10956,16 @@ package body Model_Runner.Llama is
 
             type Expert_Share is limited new Workers_CPU.Task_Item with
                record
-                  Ok : Boolean := True;
+                  Ok   : Boolean := True;
+
+                  --  The next item a worker takes, largest first: taken as
+                  --  each worker comes free rather than dealt out before, so
+                  --  that no worker waits on another's long run of experts.
+                  --  Dealt, a drafted round's check of four positions -- a
+                  --  score of experts of one to four positions each --
+                  --  took its slowest share 2.3 ms a layer where the whole
+                  --  of the work was 1.4 ms a worker.
+                  Next : aliased Take_Counter := 0;
                end record;
 
             overriding procedure Run
@@ -10987,307 +11002,316 @@ package body Model_Runner.Llama is
                   Share.Ok := False;
                end if;
 
-               for Index_Of in Natural (From) .. Natural (To) loop
-                  if Share.Ok and then Chunk_Expert (Order (Index_Of)) = Many
-                  then
-                     --  The shared expert over a run of the batch's rows:
-                     --  the same three products an expert is, over the
-                     --  rows themselves rather than a gathering of them,
-                     --  and its answer put where the sums below read the
-                     --  shared expert's -- a row's own place, at its gate.
-                     declare
-                        Chunk : constant Natural := Order (Index_Of);
-                        Start : constant Natural := Chunk_Start (Chunk);
-                        Members_Held : constant Natural :=
-                          Chunk_Count (Chunk);
-                        Held : constant Element_Count :=
-                          Element_Count (Members_Held);
-                        Picked : Model_Runner.Shares.Member_Rows
-                          (0 .. Members_Held - 1);
-                        Done   : Boolean;
-                     begin
-                        for Index in 0 .. Members_Held - 1 loop
-                           declare
-                              At_In : constant Element_Count :=
-                                Rows.all'First
-                                + Element_Count (Start + Index) * Width;
-                              At_Room : constant Element_Count :=
-                                In_Room.all'First
-                                + Element_Count (Index) * Width;
-                           begin
-                              In_Room.all (At_Room .. At_Room + Width - 1)
-                                := Rows.all (At_In .. At_In + Width - 1);
-                              Picked (Index) := Start + Index;
-                           end;
-                        end loop;
-
-                        Done := False;
-                        if Supers (Current.Shared_Gate) and then Has_Super
-                        then
-                           Workers_CPU.Multiply_Packed
-                             (Current.Shared_Gate, Packed_Super, Picked,
-                              A_Room, Done);
-                        elsif not Supers (Current.Shared_Gate)
-                          and then Has_Plain
-                        then
-                           Workers_CPU.Multiply_Packed
-                             (Current.Shared_Gate, Packed_Plain, Picked,
-                              A_Room, Done);
-                        end if;
-
-                        if not Done then
-                           Workers_CPU.Dispatch_Batch
-                             (null, Current.Shared_Gate, In_Room, Held,
-                              A_Room, Local);
-                           if E.Is_Error (Local) then
-                              Share.Ok := False;
-                           end if;
-                        end if;
-
-                        Done := False;
-                        if Supers (Current.Shared_Up) and then Has_Super
-                        then
-                           Workers_CPU.Multiply_Packed
-                             (Current.Shared_Up, Packed_Super, Picked,
-                              B_Room, Done);
-                        elsif not Supers (Current.Shared_Up)
-                          and then Has_Plain
-                        then
-                           Workers_CPU.Multiply_Packed
-                             (Current.Shared_Up, Packed_Plain, Picked,
-                              B_Room, Done);
-                        end if;
-
-                        if not Done then
-                           Workers_CPU.Dispatch_Batch
-                             (null, Current.Shared_Up, In_Room, Held,
-                              B_Room, Local);
-                           if E.Is_Error (Local) then
-                              Share.Ok := False;
-                           end if;
-                        end if;
-
-                        --  The gated middle, as the batch off the pool
-                        --  and one position both take it: the logistic
-                        --  unit, whatever the experts' own is.
-                        K.SiLU (A_Room.all (A_Room.all'First
-                                            .. A_Room.all'First
-                                               + Held * Shared_Feed - 1));
-                        K.Multiply
-                          (A_Room.all (A_Room.all'First
-                                       .. A_Room.all'First
-                                          + Held * Shared_Feed - 1),
-                           B_Room.all (B_Room.all'First
-                                       .. B_Room.all'First
-                                          + Held * Shared_Feed - 1));
-
-                        Workers_CPU.Dispatch_Batch
-                          (null, Current.Shared_Down, A_Room, Held,
-                           Out_Room, Local);
-                        if E.Is_Error (Local) then
-                           Share.Ok := False;
-                        end if;
-
-                        for Index in 0 .. Members_Held - 1 loop
-                           declare
-                              From_At : constant Element_Count :=
-                                Out_Room.all'First
-                                + Element_Count (Index) * Width;
-                              Into : constant Element_Count :=
-                                Item.Shared_Rows_Out.all'First
-                                + Element_Count (Start + Index) * Width;
-                           begin
-                              Item.Shared_Rows_Out.all
-                                (Into .. Into + Width - 1) :=
-                                Out_Room.all (From_At .. From_At + Width - 1);
-                           end;
-                        end loop;
-                     end;
-                  elsif Share.Ok then
-                     declare
-                        Chunk : constant Natural := Order (Index_Of);
-                        Which : constant Natural := Chunk_Expert (Chunk);
-                        Start : constant Natural := Chunk_Start (Chunk);
-                        Members_Held : constant Natural :=
-                          Chunk_Count (Chunk);
-
-                        Held : constant Element_Count :=
-                          Element_Count (Members_Held);
-
-                        Expert_At : Expert renames
-                          Current.Experts.all (Which);
-                     begin
+               loop
+                  declare
+                     --  Which item this worker takes next, whatever range
+                     --  the pool cut for it: every worker takes until none
+                     --  are left.
+                     Index_Of : constant Natural :=
+                       Natural (Takes.Atomic_Fetch_And_Add (Share.Next, 1));
+                  begin
+                     exit when Index_Of >= Chunks;
+                     if Share.Ok and then Chunk_Expert (Order (Index_Of)) = Many
+                     then
+                        --  The shared expert over a run of the batch's rows:
+                        --  the same three products an expert is, over the
+                        --  rows themselves rather than a gathering of them,
+                        --  and its answer put where the sums below read the
+                        --  shared expert's -- a row's own place, at its gate.
+                        declare
+                           Chunk : constant Natural := Order (Index_Of);
+                           Start : constant Natural := Chunk_Start (Chunk);
+                           Members_Held : constant Natural :=
+                             Chunk_Count (Chunk);
+                           Held : constant Element_Count :=
+                             Element_Count (Members_Held);
+                           Picked : Model_Runner.Shares.Member_Rows
+                             (0 .. Members_Held - 1);
+                           Done   : Boolean;
                         begin
                            for Index in 0 .. Members_Held - 1 loop
                               declare
-                                 Pick : constant Natural :=
-                                   Listed (Start + Index);
-                                 Where : constant Element_Count :=
-                                   Element_Count (Pick / Used);
                                  At_In : constant Element_Count :=
-                                   Rows.all'First + Where * Width;
+                                   Rows.all'First
+                                   + Element_Count (Start + Index) * Width;
                                  At_Room : constant Element_Count :=
                                    In_Room.all'First
                                    + Element_Count (Index) * Width;
                               begin
                                  In_Room.all (At_Room .. At_Room + Width - 1)
                                    := Rows.all (At_In .. At_In + Width - 1);
+                                 Picked (Index) := Start + Index;
                               end;
                            end loop;
 
-                           --  The two arms from the packed rows where
-                           --  the pool packed them, gathered by member,
-                           --  and from the rows as they are otherwise.
-                           declare
-                              Picked : Model_Runner.Shares.Member_Rows
-                                (0 .. Members_Held - 1);
-                              Done   : Boolean;
-                           begin
-                              for Index in Picked'Range loop
-                                 Picked (Index) :=
-                                   Listed (Start + Index) / Used;
-                              end loop;
+                           Done := False;
+                           if Supers (Current.Shared_Gate) and then Has_Super
+                           then
+                              Workers_CPU.Multiply_Packed
+                                (Current.Shared_Gate, Packed_Super, Picked,
+                                 A_Room, Done);
+                           elsif not Supers (Current.Shared_Gate)
+                             and then Has_Plain
+                           then
+                              Workers_CPU.Multiply_Packed
+                                (Current.Shared_Gate, Packed_Plain, Picked,
+                                 A_Room, Done);
+                           end if;
 
-                              Done := False;
-                              if Supers (Expert_At.Gate) and then Has_Super
-                              then
-                                 Workers_CPU.Multiply_Packed
-                                   (Expert_At.Gate, Packed_Super, Picked,
-                                    A_Room, Done);
-                              elsif not Supers (Expert_At.Gate)
-                                and then Has_Plain
-                              then
-                                 Workers_CPU.Multiply_Packed
-                                   (Expert_At.Gate, Packed_Plain, Picked,
-                                    A_Room, Done);
+                           if not Done then
+                              Workers_CPU.Dispatch_Batch
+                                (null, Current.Shared_Gate, In_Room, Held,
+                                 A_Room, Local);
+                              if E.Is_Error (Local) then
+                                 Share.Ok := False;
                               end if;
+                           end if;
 
-                              if not Done then
-                                 Workers_CPU.Dispatch_Batch
-                                   (null, Expert_At.Gate, In_Room, Held,
-                                    A_Room, Local);
-                                 if E.Is_Error (Local) then
-                                    Share.Ok := False;
-                                 end if;
+                           Done := False;
+                           if Supers (Current.Shared_Up) and then Has_Super
+                           then
+                              Workers_CPU.Multiply_Packed
+                                (Current.Shared_Up, Packed_Super, Picked,
+                                 B_Room, Done);
+                           elsif not Supers (Current.Shared_Up)
+                             and then Has_Plain
+                           then
+                              Workers_CPU.Multiply_Packed
+                                (Current.Shared_Up, Packed_Plain, Picked,
+                                 B_Room, Done);
+                           end if;
+
+                           if not Done then
+                              Workers_CPU.Dispatch_Batch
+                                (null, Current.Shared_Up, In_Room, Held,
+                                 B_Room, Local);
+                              if E.Is_Error (Local) then
+                                 Share.Ok := False;
                               end if;
+                           end if;
 
-                              Done := False;
-                              if Supers (Expert_At.Up) and then Has_Super
-                              then
-                                 Workers_CPU.Multiply_Packed
-                                   (Expert_At.Up, Packed_Super, Picked,
-                                    B_Room, Done);
-                              elsif not Supers (Expert_At.Up)
-                                and then Has_Plain
-                              then
-                                 Workers_CPU.Multiply_Packed
-                                   (Expert_At.Up, Packed_Plain, Picked,
-                                    B_Room, Done);
-                              end if;
-
-                              if not Done then
-                                 Workers_CPU.Dispatch_Batch
-                                   (null, Expert_At.Up, In_Room, Held,
-                                    B_Room, Local);
-                                 if E.Is_Error (Local) then
-                                    Share.Ok := False;
-                                 end if;
-                              end if;
-                           end;
-
-                           for Index in 0 .. Members_Held - 1 loop
-                              declare
-                                 At_Arm : constant Element_Count :=
-                                   Element_Count (Index) * Feed;
-
-                                 Gate_Part : T.Real_Array renames
-                                   A_Room.all
-                                     (A_Room.all'First + At_Arm
-                                      .. A_Room.all'First + At_Arm + Feed
-                                         - 1);
-
-                                 Up_Part : T.Real_Array renames
-                                   B_Room.all
-                                     (B_Room.all'First + At_Arm
-                                      .. B_Room.all'First + At_Arm + Feed
-                                         - 1);
-
-                                 At_Feed : constant Element_Count :=
-                                   Element_Count (Which) * Feed;
-                              begin
-                                 if Current.Expert_Gate_Bias /= null then
-                                    K.Add
-                                      (Gate_Part,
-                                       Current.Expert_Gate_Bias.all
-                                         (Current.Expert_Gate_Bias.all'First
-                                            + At_Feed
-                                          .. Current.Expert_Gate_Bias.all'First
-                                             + At_Feed + Feed - 1));
-                                    K.Add
-                                      (Up_Part,
-                                       Current.Expert_Up_Bias.all
-                                         (Current.Expert_Up_Bias.all'First
-                                            + At_Feed
-                                          .. Current.Expert_Up_Bias.all'First
-                                             + At_Feed + Feed - 1));
-                                 end if;
-
-                                 if Settings.Gate_Alpha > 0.0 then
-                                    K.Clamped_Gate
-                                      (Gate_Part, Up_Part,
-                                       Settings.Gate_Alpha,
-                                       Settings.Gate_Limit);
-                                 else
-                                    Gate_Activation
-                                      (Item.Owner.all, Gate_Part);
-                                    K.Multiply (Gate_Part, Up_Part);
-                                 end if;
-                              end;
-                           end loop;
+                           --  The gated middle, as the batch off the pool
+                           --  and one position both take it: the logistic
+                           --  unit, whatever the experts' own is.
+                           K.SiLU (A_Room.all (A_Room.all'First
+                                               .. A_Room.all'First
+                                                  + Held * Shared_Feed - 1));
+                           K.Multiply
+                             (A_Room.all (A_Room.all'First
+                                          .. A_Room.all'First
+                                             + Held * Shared_Feed - 1),
+                              B_Room.all (B_Room.all'First
+                                          .. B_Room.all'First
+                                             + Held * Shared_Feed - 1));
 
                            Workers_CPU.Dispatch_Batch
-                             (null, Expert_At.Down, A_Room, Held, Out_Room,
-                              Local);
+                             (null, Current.Shared_Down, A_Room, Held,
+                              Out_Room, Local);
                            if E.Is_Error (Local) then
                               Share.Ok := False;
                            end if;
 
                            for Index in 0 .. Members_Held - 1 loop
                               declare
-                                 Pick : constant Natural :=
-                                   Listed (Start + Index);
-
                                  From_At : constant Element_Count :=
                                    Out_Room.all'First
                                    + Element_Count (Index) * Width;
-
                                  Into : constant Element_Count :=
-                                   Item.Ranked.all'First
-                                   + Element_Count (Pick) * Width;
-
-                                 Mine : T.Real_Array renames
-                                   Item.Ranked.all (Into .. Into + Width - 1);
-
-                                 At_Wide : constant Element_Count :=
-                                   Element_Count (Which) * Width;
+                                   Item.Shared_Rows_Out.all'First
+                                   + Element_Count (Start + Index) * Width;
                               begin
-                                 Mine := Out_Room.all
-                                   (From_At .. From_At + Width - 1);
-
-                                 if Current.Expert_Down_Bias /= null then
-                                    K.Add
-                                      (Mine,
-                                       Current.Expert_Down_Bias.all
-                                         (Current.Expert_Down_Bias.all'First
-                                            + At_Wide
-                                          .. Current.Expert_Down_Bias.all'First
-                                             + At_Wide + Width - 1));
-                                 end if;
+                                 Item.Shared_Rows_Out.all
+                                   (Into .. Into + Width - 1) :=
+                                   Out_Room.all (From_At .. From_At + Width - 1);
                               end;
                            end loop;
                         end;
-                     end;
-                  end if;
+                     elsif Share.Ok then
+                        declare
+                           Chunk : constant Natural := Order (Index_Of);
+                           Which : constant Natural := Chunk_Expert (Chunk);
+                           Start : constant Natural := Chunk_Start (Chunk);
+                           Members_Held : constant Natural :=
+                             Chunk_Count (Chunk);
+
+                           Held : constant Element_Count :=
+                             Element_Count (Members_Held);
+
+                           Expert_At : Expert renames
+                             Current.Experts.all (Which);
+                        begin
+                           begin
+                              for Index in 0 .. Members_Held - 1 loop
+                                 declare
+                                    Pick : constant Natural :=
+                                      Listed (Start + Index);
+                                    Where : constant Element_Count :=
+                                      Element_Count (Pick / Used);
+                                    At_In : constant Element_Count :=
+                                      Rows.all'First + Where * Width;
+                                    At_Room : constant Element_Count :=
+                                      In_Room.all'First
+                                      + Element_Count (Index) * Width;
+                                 begin
+                                    In_Room.all (At_Room .. At_Room + Width - 1)
+                                      := Rows.all (At_In .. At_In + Width - 1);
+                                 end;
+                              end loop;
+
+                              --  The two arms from the packed rows where
+                              --  the pool packed them, gathered by member,
+                              --  and from the rows as they are otherwise.
+                              declare
+                                 Picked : Model_Runner.Shares.Member_Rows
+                                   (0 .. Members_Held - 1);
+                                 Done   : Boolean;
+                              begin
+                                 for Index in Picked'Range loop
+                                    Picked (Index) :=
+                                      Listed (Start + Index) / Used;
+                                 end loop;
+
+                                 Done := False;
+                                 if Supers (Expert_At.Gate) and then Has_Super
+                                 then
+                                    Workers_CPU.Multiply_Packed
+                                      (Expert_At.Gate, Packed_Super, Picked,
+                                       A_Room, Done);
+                                 elsif not Supers (Expert_At.Gate)
+                                   and then Has_Plain
+                                 then
+                                    Workers_CPU.Multiply_Packed
+                                      (Expert_At.Gate, Packed_Plain, Picked,
+                                       A_Room, Done);
+                                 end if;
+
+                                 if not Done then
+                                    Workers_CPU.Dispatch_Batch
+                                      (null, Expert_At.Gate, In_Room, Held,
+                                       A_Room, Local);
+                                    if E.Is_Error (Local) then
+                                       Share.Ok := False;
+                                    end if;
+                                 end if;
+
+                                 Done := False;
+                                 if Supers (Expert_At.Up) and then Has_Super
+                                 then
+                                    Workers_CPU.Multiply_Packed
+                                      (Expert_At.Up, Packed_Super, Picked,
+                                       B_Room, Done);
+                                 elsif not Supers (Expert_At.Up)
+                                   and then Has_Plain
+                                 then
+                                    Workers_CPU.Multiply_Packed
+                                      (Expert_At.Up, Packed_Plain, Picked,
+                                       B_Room, Done);
+                                 end if;
+
+                                 if not Done then
+                                    Workers_CPU.Dispatch_Batch
+                                      (null, Expert_At.Up, In_Room, Held,
+                                       B_Room, Local);
+                                    if E.Is_Error (Local) then
+                                       Share.Ok := False;
+                                    end if;
+                                 end if;
+                              end;
+
+                              for Index in 0 .. Members_Held - 1 loop
+                                 declare
+                                    At_Arm : constant Element_Count :=
+                                      Element_Count (Index) * Feed;
+
+                                    Gate_Part : T.Real_Array renames
+                                      A_Room.all
+                                        (A_Room.all'First + At_Arm
+                                         .. A_Room.all'First + At_Arm + Feed
+                                            - 1);
+
+                                    Up_Part : T.Real_Array renames
+                                      B_Room.all
+                                        (B_Room.all'First + At_Arm
+                                         .. B_Room.all'First + At_Arm + Feed
+                                            - 1);
+
+                                    At_Feed : constant Element_Count :=
+                                      Element_Count (Which) * Feed;
+                                 begin
+                                    if Current.Expert_Gate_Bias /= null then
+                                       K.Add
+                                         (Gate_Part,
+                                          Current.Expert_Gate_Bias.all
+                                            (Current.Expert_Gate_Bias.all'First
+                                               + At_Feed
+                                             .. Current.Expert_Gate_Bias.all'First
+                                                + At_Feed + Feed - 1));
+                                       K.Add
+                                         (Up_Part,
+                                          Current.Expert_Up_Bias.all
+                                            (Current.Expert_Up_Bias.all'First
+                                               + At_Feed
+                                             .. Current.Expert_Up_Bias.all'First
+                                                + At_Feed + Feed - 1));
+                                    end if;
+
+                                    if Settings.Gate_Alpha > 0.0 then
+                                       K.Clamped_Gate
+                                         (Gate_Part, Up_Part,
+                                          Settings.Gate_Alpha,
+                                          Settings.Gate_Limit);
+                                    else
+                                       Gate_Activation
+                                         (Item.Owner.all, Gate_Part);
+                                       K.Multiply (Gate_Part, Up_Part);
+                                    end if;
+                                 end;
+                              end loop;
+
+                              Workers_CPU.Dispatch_Batch
+                                (null, Expert_At.Down, A_Room, Held, Out_Room,
+                                 Local);
+                              if E.Is_Error (Local) then
+                                 Share.Ok := False;
+                              end if;
+
+                              for Index in 0 .. Members_Held - 1 loop
+                                 declare
+                                    Pick : constant Natural :=
+                                      Listed (Start + Index);
+
+                                    From_At : constant Element_Count :=
+                                      Out_Room.all'First
+                                      + Element_Count (Index) * Width;
+
+                                    Into : constant Element_Count :=
+                                      Item.Ranked.all'First
+                                      + Element_Count (Pick) * Width;
+
+                                    Mine : T.Real_Array renames
+                                      Item.Ranked.all (Into .. Into + Width - 1);
+
+                                    At_Wide : constant Element_Count :=
+                                      Element_Count (Which) * Width;
+                                 begin
+                                    Mine := Out_Room.all
+                                      (From_At .. From_At + Width - 1);
+
+                                    if Current.Expert_Down_Bias /= null then
+                                       K.Add
+                                         (Mine,
+                                          Current.Expert_Down_Bias.all
+                                            (Current.Expert_Down_Bias.all'First
+                                               + At_Wide
+                                             .. Current.Expert_Down_Bias.all'First
+                                                + At_Wide + Width - 1));
+                                    end if;
+                                 end;
+                              end loop;
+                           end;
+                        end;
+                     end if;
+                  end;
                end loop;
 
                T.Free (In_Room);
@@ -11413,17 +11437,10 @@ package body Model_Runner.Llama is
                  (Packed_Plain, Rows, Count, Width, False, Has_Plain);
             end if;
 
-            --  The experts by size, largest first, dealt back and forth
-            --  across as many bins as the pool will cut shares, and the
-            --  bins laid out one after another.
+            --  The experts by size, largest first, in the order the
+            --  workers take them.
             declare
-               Bins   : constant Positive :=
-                 Positive (Workers_CPU.Worker_Total (Item.Team.all)) + 1;
                Sorted : array (0 .. Chunks - 1) of Natural;
-               Bin_Of : array (0 .. Chunks - 1) of Natural;
-               Bin    : Natural := 0;
-               Ahead  : Boolean := True;
-               Placed : Natural := 0;
             begin
                for Which in Sorted'Range loop
                   Sorted (Which) := Which;
@@ -11446,30 +11463,7 @@ package body Model_Runner.Llama is
                end loop;
 
                for Rank in Sorted'Range loop
-                  Bin_Of (Sorted (Rank)) := Bin;
-
-                  if Ahead then
-                     if Bin = Bins - 1 then
-                        Ahead := False;
-                     else
-                        Bin := Bin + 1;
-                     end if;
-                  else
-                     if Bin = 0 then
-                        Ahead := True;
-                     else
-                        Bin := Bin - 1;
-                     end if;
-                  end if;
-               end loop;
-
-               for Bin_Index in 0 .. Bins - 1 loop
-                  for Which in Bin_Of'Range loop
-                     if Bin_Of (Which) = Bin_Index then
-                        Order (Placed) := Which;
-                        Placed := Placed + 1;
-                     end if;
-                  end loop;
+                  Order (Rank) := Sorted (Rank);
                end loop;
             end;
 
