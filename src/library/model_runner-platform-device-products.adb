@@ -12962,7 +12962,7 @@ package body Model_Runner.Platform.Device.Products is
                   Bind_Pipeline
                     (Item.Buffer, Bind_Point_Compute,
                      (if This.Linear.Head = Held_Rule_Head
-                        and then Count = 1
+                        and then Count <= Single_Rule_Most
                         and then Item.Single_Rule_Line /= Null_Handle
                       then Item.Single_Rule_Line
                       elsif This.Linear.Head = Held_Rule_Head

@@ -160,6 +160,11 @@ package Model_Runner.Platform.Device.Products is
    --  at a time.
    Held_Rule_Head : constant := 128;
 
+   --  The most positions a batch walks one at a time through the rule's
+   --  single-position compilation rather than in chunks: a drafted
+   --  round's check.
+   Single_Rule_Most : constant := 4;
+
    --  How a matrix's bytes are packed. The device decodes every one of these
    --  itself, which is every format this program reads: nothing has to be
    --  repacked to reach a device any more, and repacking is what it always

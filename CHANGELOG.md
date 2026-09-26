@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A drafted round's check walks the delta rule one position at a time.**
+  Up to four positions at a head of 128 now take the single-position
+  compilation, the state held in registers across them, instead of the
+  chunked one meant for prompts: the rule of a four-position check on
+  qwen3.6-35b-a3b 273 -> 226 us a layer, `run`'s defaults about 2 per cent
+  faster (20.85 -> 21.3 tokens a second on code).
+
 - **Q4_K over two to four vectors reads each weight once for a pair.** A
   drafted round's check gives the processor's experts a few positions each;
   a kernel of its own now unpacks each weight once for two of them, each

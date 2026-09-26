@@ -5180,10 +5180,15 @@ package body Tests.Backend_Cases is
       --  And one position at that width, a generated token, which the
       --  device takes through the compilation made for single positions.
       procedure Single is new Check (Head => 128, Count => 1);
+
+      --  And a drafted round's check, which walks its four positions
+      --  through that compilation too, keeping a state for each.
+      procedure Checked is new Check (Head => 128, Count => 4);
    begin
       Narrow;
       Wide;
       Single;
+      Checked;
    end The_Linear_Layer_On_The_Device_Says_What_The_Host_Says;
 
    ----------------------------------------------------
