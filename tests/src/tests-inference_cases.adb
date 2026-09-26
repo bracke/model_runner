@@ -2637,11 +2637,12 @@ package body Tests.Inference_Cases is
                --  A position at a time, the whole batch split, and the
                --  whole batch with its stacks streamed to the device: a
                --  batch as short as the fixture's is the pool's unless told
-               --  otherwise.
-               for Arm in reverse 1 .. 3 loop
+               --  otherwise. And four at a time, as a drafted round's check
+               --  goes, whose front half routes its positions on the device.
+               for Arm in reverse 1 .. 4 loop
                   declare
                      Chunk : constant Positive :=
-                       (if Arm = 1 then 1 else Length);
+                       (if Arm = 1 then 1 elsif Arm = 4 then 4 else Length);
                   begin
                      Model_Runner.Backend.Device.Close;
                      Model_Runner.Backend.Device.Open
@@ -2681,6 +2682,7 @@ package body Tests.Inference_Cases is
                      Assert (Worst <= Tolerance,
                              "on " & Name
                              & (case Arm is
+                                   when 4 => " four positions at a time",
                                    when 3 => " with its stacks streamed",
                                    when 2 => " in one batch",
                                    when others => " a position at a time")

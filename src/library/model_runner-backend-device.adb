@@ -2147,8 +2147,9 @@ package body Model_Runner.Backend.Device is
    Front_Routed : Boolean := False;
    Front_Router : System.Address := System.Null_Address;
    Front_Used   : Natural := 0;
-   Front_Words  : Model_Runner.Numerics.Real_Array (0 .. 2 * 32 - 1) :=
-     [others => 0.0];
+   Front_Count  : Natural := 0;
+   Front_Words  : Model_Runner.Numerics.Real_Array
+     (0 .. 2 * 32 * Front_Route_Most - 1) := [others => 0.0];
    Shared_At      : Interfaces.Unsigned_64 := 0;
    Shared_Width   : Model_Runner.Numerics.Element_Count := 0;
 
@@ -3585,17 +3586,19 @@ package body Model_Runner.Backend.Device is
          end if;
          Step_Room (Width);
          if No_Feed then
-            --  A token's front half routes too, where it was handed the
-            --  router: the normalization before the feed-forward, the
-            --  router's product and the choosing, the choice coming home
-            --  with the residual. The host routed with a pool of its own,
-            --  a sixth of its experts' time.
-            if Slots = 1
+            --  A token's front half routes too, and a short batch's, where
+            --  it was handed the router: the normalization before the
+            --  feed-forward, the router's product and the choosing, the
+            --  choice coming home with the residual. The host routed with
+            --  a pool of its own, a sixth of a token's experts' time, and
+            --  a millisecond a layer of a drafted round's four positions.
+            if Slots <= Front_Route_Most
               and then T.Is_Present (Router)
               and then Feed_Norm /= null
               and then not Parallel
               and then Used in 1 .. Products.Max_Route
-              and then 2 * Used <= Front_Words'Length
+              and then Model_Runner.Numerics.Element_Count (2 * Used) * Slots
+                       <= Front_Words'Length
               and then Natural (Router.Rows) = Experts
               and then Router.Columns = Width
             then
@@ -4124,14 +4127,17 @@ package body Model_Runner.Backend.Device is
          end if;
 
          if Routes_Front then
-            Front_Words
-              (0 .. Model_Runner.Numerics.Element_Count (2 * Used) - 1) :=
-              Landing.all (Landing.all'First + At_Route
-                           .. Landing.all'First + At_Route
-                              + Model_Runner.Numerics.Element_Count (2 * Used)
-                              - 1);
+            declare
+               Words : constant Model_Runner.Numerics.Element_Count :=
+                 Model_Runner.Numerics.Element_Count (2 * Used) * Slots;
+            begin
+               Front_Words (0 .. Words - 1) :=
+                 Landing.all (Landing.all'First + At_Route
+                              .. Landing.all'First + At_Route + Words - 1);
+            end;
             Front_Router := At_Offset (Router.Base, Router.Offset);
             Front_Used := Used;
+            Front_Count := Natural (Slots);
             Front_Routed := True;
          end if;
 
@@ -4879,6 +4885,7 @@ package body Model_Runner.Backend.Device is
    procedure Take_Front_Route
      (Router : T.View;
       Used   : Natural;
+      Count  : Positive;
       Choice : out Choice_Array;
       Shares : out Model_Runner.Numerics.Real_Array;
       Found  : out Boolean)
@@ -4896,21 +4903,34 @@ package body Model_Runner.Backend.Device is
 
       if not Front_Routed
         or else Used /= Front_Used
-        or else Choice'Length /= Used
-        or else Natural (Shares'Length) /= Used
+        or else Count /= Front_Count
+        or else Choice'Length /= Count * Used
+        or else Natural (Shares'Length) /= Count * Used
         or else Front_Router /= At_Offset (Router.Base, Router.Offset)
       then
          return;
       end if;
       Front_Routed := False;
 
-      for Slot in 0 .. Used - 1 loop
-         Choice (Choice'First + Slot) :=
-           Natural (Bits (Front_Words
-                            (Model_Runner.Numerics.Element_Count (Slot))));
-         Shares (Shares'First + Model_Runner.Numerics.Element_Count (Slot)) :=
-           Value (Bits (Front_Words
-                          (Model_Runner.Numerics.Element_Count (Used + Slot))));
+      --  The route step's words, a position at a time: its experts as
+      --  words, then its shares as the bits of a binary32.
+      for Where in 0 .. Count - 1 loop
+         for Slot in 0 .. Used - 1 loop
+            declare
+               At_Word : constant Model_Runner.Numerics.Element_Count :=
+                 Model_Runner.Numerics.Element_Count (Where * 2 * Used);
+               Into    : constant Natural := Where * Used + Slot;
+            begin
+               Choice (Choice'First + Into) :=
+                 Natural (Bits (Front_Words
+                   (At_Word + Model_Runner.Numerics.Element_Count (Slot))));
+               Shares (Shares'First
+                       + Model_Runner.Numerics.Element_Count (Into)) :=
+                 Value (Bits (Front_Words
+                   (At_Word
+                    + Model_Runner.Numerics.Element_Count (Used + Slot))));
+            end;
+         end loop;
       end loop;
       Found := True;
    end Take_Front_Route;

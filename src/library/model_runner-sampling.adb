@@ -802,6 +802,49 @@ package body Model_Runner.Sampling is
    type Value_Slots is array (Element_Count range 0 .. Blocks - 1) of Real;
    type Found_Slots is array (Element_Count range 0 .. Blocks - 1) of Boolean;
 
+   --  The largest top-k a pass over the vocabulary selects a block at a
+   --  time, each block keeping its own best few; past it the pass is the
+   --  one below it, which materializes every candidate first.
+   Blocked_Limit : constant := 64;
+
+   subtype Blocked_List is Candidate_Array (0 .. Blocked_Limit - 1);
+   type Blocked_Lists is array (Element_Count range 0 .. Blocks - 1)
+     of Blocked_List;
+   type Count_Slots is array (Element_Count range 0 .. Blocks - 1)
+     of Element_Count;
+
+   --  Value into the best Wanted of Into (0 .. Kept - 1), which it keeps in
+   --  rank order, as the selection below always has.
+   procedure Keep_Best
+     (Into   : in out Candidate_Array;
+      Kept   : in out Element_Count;
+      Wanted : Element_Count;
+      Value  : Candidate) is
+   begin
+      if Kept < Wanted
+        or else Ranks_Before (Value, Into (Into'First + Kept - 1))
+      then
+         declare
+            Place : Element_Count := Kept;
+         begin
+            if Kept = Wanted then
+               Place := Kept - 1;
+            else
+               Kept := Kept + 1;
+            end if;
+
+            while Place > 0
+              and then Ranks_Before (Value, Into (Into'First + Place - 1))
+            loop
+               Into (Into'First + Place) := Into (Into'First + Place - 1);
+               Place := Place - 1;
+            end loop;
+
+            Into (Into'First + Place) := Value;
+         end;
+      end if;
+   end Keep_Best;
+
    --  What an element of the greedy walk costs when the penalties are on,
    --  against an element of the blend the pool's inline bound was chosen
    --  on. It is a mask read, a second mask read and a binary search of the
@@ -1174,6 +1217,9 @@ package body Model_Runner.Sampling is
       Count     : Element_Count := 0;
       Surviving : Element_Count := 0;
 
+      --  Whether the top-k was selected already, a block at a time.
+      Selected  : Boolean := False;
+
       Over : constant Element_Count := Logits'Length;
 
       --  The first logit of a block that is not a number, if there is one.
@@ -1361,39 +1407,142 @@ package body Model_Runner.Sampling is
             end;
          end if;
 
-         for Index in 0 .. Element_Count (Item.Vocabulary) - 1 loop
-            if not Item.Masked.all (Natural (Index))
-              and then not Item.Stepped.all (Natural (Index))
-            then
-               declare
-                  --  Suppressed for the same reason as the loop above: the
-                  --  arithmetic below can leave a value the check would fire
-                  --  on before anything can ask whether it did.
+         --  Where the top-k is small, one pass that keeps each block's
+         --  best few as it goes, the blocks dealt across the team, and the
+         --  blocks' few merged in block order: the same candidates in the
+         --  same order as materializing every one and selecting from them,
+         --  because the order is total. Two passes over a vocabulary of
+         --  248 thousand, on one thread, were five milliseconds of a
+         --  sampled token.
+         if Item.Chosen /= null
+           and then Item.Settings.Top_K in 1 .. Blocked_Limit
+         then
+            declare
+               Wanted : constant Element_Count :=
+                 Element_Count (Item.Settings.Top_K);
+
+               type Pick_Work is limited new Model_Runner.Shares.Work
+               with record
+                  Lists  : Blocked_Lists;
+                  Held   : Count_Slots := [others => 0];
+                  Found  : Found_Slots := [others => False];
+                  Where  : Index_Slots := [others => 0];
+               end record;
+
+               overriding procedure Run
+                 (Work : in out Pick_Work; First : Element_Count;
+                  Last : Element_Count);
+
+               overriding procedure Run
+                 (Work : in out Pick_Work; First : Element_Count;
+                  Last : Element_Count)
+               is
                   pragma Suppress (Validity_Check);
-
-                  Value : Real := Adjusted (Item, Logits, Index);
                begin
-                  --  5  temperature
-                  Value := Value / Effective_Temp;
-
-                  --  The inputs were all finite and the result need not be: a
-                  --  large logit divided by a small temperature overflows,
-                  --  and a penalty below one multiplies. Reported, like a
-                  --  logit that arrived non-finite, rather than trapping here.
-                  if not N.Is_Finite (Value) then
-                     Status := E.Make (E.Sampling_Non_Finite_Logit);
-                     E.Add_Integer
-                       (Status, "token", Long_Long_Integer (Index));
+                  if First > Last then
                      return;
                   end if;
 
-                  Item.Working.all (Count) :=
-                    (Token => Token_Id (Index), Logit => Value,
-                     Probability => 0.0);
-                  Count := Count + 1;
-               end;
-            end if;
-         end loop;
+                  for Block in First .. Last loop
+                     for Index in Block_First (Block, Over)
+                                  .. Block_Last (Block, Over)
+                     loop
+                        if not Item.Masked.all (Natural (Index))
+                          and then not Item.Stepped.all (Natural (Index))
+                        then
+                           declare
+                              Value : constant Real :=
+                                Adjusted (Item, Logits, Index)
+                                / Effective_Temp;
+                           begin
+                              if not N.Is_Finite (Value) then
+                                 Work.Found (Block) := True;
+                                 Work.Where (Block) := Index;
+                                 exit;
+                              end if;
+
+                              Keep_Best
+                                (Work.Lists (Block), Work.Held (Block),
+                                 Wanted,
+                                 (Token => Token_Id (Index), Logit => Value,
+                                  Probability => 0.0));
+                           end;
+                        end if;
+                     end loop;
+                  end loop;
+               end Run;
+
+               Pick  : aliased Pick_Work;
+               Dealt : Boolean := False;
+               Kept  : Element_Count := 0;
+            begin
+               if Across /= null then
+                  Across.all.Divide
+                    (Blocks, Pick'Unchecked_Access, Dealt, Cost => Over);
+               end if;
+
+               if not Dealt then
+                  Pick.Run (0, Blocks - 1);
+               end if;
+
+               for Block in 0 .. Blocks - 1 loop
+                  if Pick.Found (Block) then
+                     Status := E.Make (E.Sampling_Non_Finite_Logit);
+                     E.Add_Integer
+                       (Status, "token",
+                        Long_Long_Integer (Pick.Where (Block)));
+                     return;
+                  end if;
+               end loop;
+
+               for Block in 0 .. Blocks - 1 loop
+                  for Place in 0 .. Pick.Held (Block) - 1 loop
+                     Keep_Best
+                       (Item.Chosen.all, Kept, Wanted,
+                        Pick.Lists (Block) (Place));
+                  end loop;
+               end loop;
+
+               Item.Working.all (0 .. Kept - 1) :=
+                 Item.Chosen.all (0 .. Kept - 1);
+               Count := Kept;
+               Selected := True;
+            end;
+         else
+            for Index in 0 .. Element_Count (Item.Vocabulary) - 1 loop
+               if not Item.Masked.all (Natural (Index))
+                 and then not Item.Stepped.all (Natural (Index))
+               then
+                  declare
+                     --  Suppressed for the same reason as the loop above: the
+                     --  arithmetic below can leave a value the check would fire
+                     --  on before anything can ask whether it did.
+                     pragma Suppress (Validity_Check);
+
+                     Value : Real := Adjusted (Item, Logits, Index);
+                  begin
+                     --  5  temperature
+                     Value := Value / Effective_Temp;
+
+                     --  The inputs were all finite and the result need not be: a
+                     --  large logit divided by a small temperature overflows,
+                     --  and a penalty below one multiplies. Reported, like a
+                     --  logit that arrived non-finite, rather than trapping here.
+                     if not N.Is_Finite (Value) then
+                        Status := E.Make (E.Sampling_Non_Finite_Logit);
+                        E.Add_Integer
+                          (Status, "token", Long_Long_Integer (Index));
+                        return;
+                     end if;
+
+                     Item.Working.all (Count) :=
+                       (Token => Token_Id (Index), Logit => Value,
+                        Probability => 0.0);
+                     Count := Count + 1;
+                  end;
+               end if;
+            end loop;
+         end if;
       end;
 
       if Count = 0 then
@@ -1403,7 +1552,9 @@ package body Model_Runner.Sampling is
 
       --  5  order the candidates, or select the head of the order when
       --      that is all the filters below will look at.
-      if Item.Chosen /= null
+      if Selected then
+         null;
+      elsif Item.Chosen /= null
         and then Element_Count (Item.Settings.Top_K) < Count
       then
          declare

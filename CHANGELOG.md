@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Sampling a large vocabulary is one pass across the pool, and a drafted
+  round's check on a split mixture routes on the device.** A sampled token
+  built every candidate and then selected its top-k, two passes over the
+  vocabulary on one thread -- 5 ms a token over Qwen3.6's 248,320; each
+  block of the vocabulary now keeps its own best few, the blocks dealt
+  across the pool and merged in order, the same candidates in the same
+  order. And the four positions a drafted round checks are routed by the
+  device's front half and wait on an awake pool, as a single token's are.
+  qwen3.6-35b-a3b under `run`'s defaults (sampled, drafting from its next
+  block): 12.2 -> 15.9 tokens a second.
+
 - **A split mixture's token routes on the device, and the pool waits
   awake for its experts.** The device's front half of a token's layer now
   normalizes, runs the router and chooses the experts before it comes home,

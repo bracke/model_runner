@@ -10758,23 +10758,26 @@ package body Model_Runner.Llama is
          end;
       end if;
 
-      --  A token whose front half the device ran chose there too, where
-      --  it was handed the router: taken rather than routed again.
-      if Count = 1
+      --  A token or a short batch whose front half the device ran chose
+      --  there too, where it was handed the router: taken rather than
+      --  routed again.
+      if Count <= Model_Runner.Backend.Device.Front_Route_Most
         and then Item.Owner.all.Split_Feed
         and then Model_Runner.Backend."="
                    (Item.Owner.Able.Kind,
                     Model_Runner.Backend.Backend_Device)
       then
          declare
-            Choice : Model_Runner.Backend.Device.Choice_Array (0 .. Used - 1);
+            Choice : Model_Runner.Backend.Device.Choice_Array
+              (0 .. Natural (Count) * Used - 1);
             Found  : Boolean;
          begin
             Model_Runner.Backend.Device.Take_Front_Route
-              (Current.Router, Used, Choice,
+              (Current.Router, Used, Positive (Count), Choice,
                Item.Pick_Share.all
                  (Item.Pick_Share.all'First
-                  .. Item.Pick_Share.all'First + Element_Count (Used) - 1),
+                  .. Item.Pick_Share.all'First
+                     + Count * Element_Count (Used) - 1),
                Found);
             if Found then
                for Index in Choice'Range loop
@@ -19521,6 +19524,11 @@ package body Model_Runner.Llama is
                   if Sent then
                      Asked := True;
                      Prefetch_Next (Natural (Index));
+                     if Half and then Source.Split_Feed
+                       and then Workers_CPU."/=" (Item.Team, null)
+                     then
+                        Workers_CPU.Rouse (Item.Team.all);
+                     end if;
                      Model_Runner.Backend.Device.Whole_Layer
                        (Acts.all (0 .. Count * Width - 1),
                         Device_Norm (Current.Attention_Norm,
@@ -19801,6 +19809,11 @@ package body Model_Runner.Llama is
                                              (Current, Natural (Index)));
                      Asked := True;
                      Prefetch_Next (Natural (Index));
+                     if Half and then Source.Split_Feed
+                       and then Workers_CPU."/=" (Item.Team, null)
+                     then
+                        Workers_CPU.Rouse (Item.Team.all);
+                     end if;
                      Model_Runner.Backend.Device.Whole_Layer
                        (Acts.all (0 .. Count * Width - 1),
                         Device_Norm (Current.Attention_Norm,
@@ -20874,6 +20887,11 @@ package body Model_Runner.Llama is
                   then
                      Mixture_Batch
                        (Item, Current, Norm, Count, Grouped, Status);
+
+                     --  The pool roused for these experts may sleep again.
+                     if Workers_CPU."/=" (Item.Team, null) then
+                        Workers_CPU.Rest (Item.Team.all);
+                     end if;
                      exit when E.Is_Error (Status);
                   end if;
 

@@ -1686,24 +1686,32 @@ package Model_Runner.Backend.Device is
       Status      : out Model_Runner.Errors.Error_Info;
       Cancel      : Model_Runner.Cancellation.Token_Reference := null);
 
-   --  The experts a token's front half chose on the device, where it was
-   --  handed the layer's router: the front half of a split mixture's
-   --  layer routes before it comes home, so the host's experts start from
-   --  the choice rather than a product of their own. Found is False where
-   --  the last front half routed nothing, or routed with another router.
-   --  Taken once.
+   --  The experts a front half chose on the device, where it was handed
+   --  the layer's router: the front half of a split mixture's layer, for
+   --  a token or a short batch -- a drafted round's check -- routes before
+   --  it comes home, so the host's experts start from the choice rather
+   --  than a product of their own. Found is False where the last front
+   --  half routed nothing, or routed with another router or another
+   --  number of positions. Taken once.
    --
    --  @param Router The router the host would route with.
    --  @param Used Experts a position takes.
-   --  @param Choice Receives the experts, best first.
-   --  @param Shares Receives their shares, renormalized.
+   --  @param Count Positions routed.
+   --  @param Choice Receives the experts, position by position, best
+   --    first.
+   --  @param Shares Receives their shares, renormalized, in the same
+   --    order.
    --  @param Found True where the choice was there to take.
    procedure Take_Front_Route
      (Router : Model_Runner.Tensors.View;
       Used   : Natural;
+      Count  : Positive;
       Choice : out Choice_Array;
       Shares : out Model_Runner.Numerics.Real_Array;
       Found  : out Boolean);
+
+   --  The most positions a front half routes for the host.
+   Front_Route_Most : constant := 8;
 
    --  Put a matrix on the device and keep it, computing nothing.
    --
