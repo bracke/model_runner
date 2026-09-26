@@ -17,6 +17,9 @@ package body Library_Surface is
       new String'("Value_Code"),
       new String'("Wipe"),
 
+      --  The device keeper's count of rounds, which is how its test tells
+      --  a keeper that stopped from one that went on.
+      new String'("Keeper_Rounds"),
       --  Second opinions.
       new String'("All_Finite"),
       new String'("Row_Dot"),

@@ -117,6 +117,7 @@ compile conv                         conv.comp             vulkan1.0
 compile rule                         rule.comp             vulkan1.0
 compile rule_held                    rule_held.comp        vulkan1.1
 compile rule_held_single             rule_held.comp        vulkan1.1 SINGLE
+compile keep_clock                   keep_clock.comp       vulkan1.0
 
 # shellcheck disable=SC2086
 (cd "$ROOT/tests" && "$TESTS" shader $PAIRS)

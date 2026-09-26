@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The device's clock is kept up while a split mixture's experts run on
+  the processor.** An integrated part clocks itself by how busy it has
+  been, and a split mixture leaves it idle through every layer's experts:
+  qwen3.6-35b-a3b's device half ran at 800 MHz of 2,700. A keeper on a
+  second device context resubmits one small kernel of arithmetic while
+  split layers are running and stops within a tenth of a second after.
+  qwen3.6-35b-a3b under `run`'s defaults: 21.1 -> 24.6 tokens a second
+  drafted, 16.1 -> 16.75 plain. Models whole on the device are left alone.
+
 - **The Q4_K one- and two-vector kernels read a row ahead.** A split
   mixture's experts come off the file's own pages, where the hardware
   prefetcher stops at every 4 KB page; the kernels now ask for the lines a

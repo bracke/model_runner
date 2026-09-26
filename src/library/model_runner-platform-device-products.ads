@@ -2410,6 +2410,38 @@ package Model_Runner.Platform.Device.Products is
    --  bound.
    Max_Resident : constant := 32_768;
 
+   --  Keeping the device's clock up while the processor works.
+   --
+   --  An integrated part clocks itself by how busy it has lately been. A
+   --  split mixture leaves the device idle while the processor takes each
+   --  layer's experts, so the part never leaves its lowest clock, and the
+   --  half of every layer the device does runs there: qwen3.6-35b-a3b's
+   --  device sat at 800 MHz of 2,700 for a whole run. The keeper is a
+   --  second device on the same part, with one small kernel of arithmetic
+   --  it submits again and again while the engine has lately said it is
+   --  working, and not otherwise; a device of its own, so that its work
+   --  never waits in the engine's queue.
+
+   --  Make the keeper on a context of its own, opened on the same part as
+   --  the engine's. Ready is False where the device would not have it,
+   --  and then nothing is kept.
+   --
+   --  @param On Open context of the keeper's own, on the engine's part.
+   --  @param Ready True when the keeper was made.
+   procedure Open_Keeper (On : Context; Ready : out Boolean);
+
+   --  Stop it, wait for its last round, and give back what it holds.
+   procedure Close_Keeper;
+
+   --  The engine is working: keep the clock up for a little while.
+   --  Nothing when there is no keeper. Cheap enough to say every layer.
+   procedure Keep_Clock;
+
+   --  How many rounds the keeper has run since it was opened.
+   --
+   --  @return The count, from nought at Open_Keeper.
+   function Keeper_Rounds return Natural;
+
 private
 
    --  One descriptor set for every product a sequence may hold.

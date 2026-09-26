@@ -1,4 +1,5 @@
 with Ada.Environment_Variables;
+with Ada.Real_Time;
 with Ada.Unchecked_Conversion;
 
 with Interfaces.C;
@@ -13718,5 +13719,497 @@ package body Model_Runner.Platform.Device.Products is
             Stopped, Key);
       end;
    end Multiply;
+
+   ---------------------------------------------------------------------------
+   --  The keeper: see Open_Keeper.
+   ---------------------------------------------------------------------------
+
+   --  Rounds of arithmetic a submission asks for: about a tenth of a
+   --  millisecond on the part this was measured on. Longer and the engine's
+   --  own work waits behind it -- twenty thousand cost a token 6 per cent --
+   --  and shorter keeps the part less busy: none at all, only the
+   --  submissions, kept a split mixture's check at 22 tokens a second of
+   --  the 24.7 these give.
+   Keeper_Spin : constant := 4_000;
+
+   --  How long after the engine last said it was working the keeper goes
+   --  on: long enough to bridge a sampled token and a drafted round's
+   --  bookkeeping, short enough that a session waiting for its user leaves
+   --  the part alone.
+   Keeper_Linger : constant Ada.Real_Time.Time_Span :=
+     Ada.Real_Time.Milliseconds (100);
+
+   --  What the keeper holds on its own device.
+   type Keeper_Objects is record
+      Logical  : Address := Null_Handle;
+      Queue    : Address := Null_Handle;
+      Module   : Address := Null_Handle;
+      Set_Kind : Address := Null_Handle;
+      Layout   : Address := Null_Handle;
+      Pipeline : Address := Null_Handle;
+      Sink     : Address := Null_Handle;
+      Memory   : Address := Null_Handle;
+      Pool     : Address := Null_Handle;
+      Set      : Address := Null_Handle;
+      Commands : Address := Null_Handle;
+      Buffer   : Address := Null_Handle;
+      Fence    : Address := Null_Handle;
+   end record;
+
+   Keep : Keeper_Objects;
+
+   --  When the engine last said it was working, whether there is a keeper
+   --  to wake, and whether it is running a round: what the engine, the
+   --  keeper and Close_Keeper decide by, under one lock.
+   protected Keeper_Stamp is
+      procedure Touch (Wake : out Boolean);
+      procedure Begin_Round (Go : out Boolean);
+      procedure Set_Open (On : Boolean);
+      function Rounds return Natural;
+      entry Settled;
+   private
+      Last     : Ada.Real_Time.Time := Ada.Real_Time.Time_First;
+      Open     : Boolean := False;
+      Spinning : Boolean := False;
+      Count    : Natural := 0;
+   end Keeper_Stamp;
+
+   protected body Keeper_Stamp is
+      procedure Touch (Wake : out Boolean) is
+      begin
+         Last := Ada.Real_Time.Clock;
+         Wake := Open and then not Spinning;
+      end Touch;
+
+      procedure Begin_Round (Go : out Boolean) is
+         use type Ada.Real_Time.Time;
+         use type Ada.Real_Time.Time_Span;
+      begin
+         Go := Open and then Ada.Real_Time.Clock - Last < Keeper_Linger;
+         Spinning := Go;
+         if Go and then Count < Natural'Last then
+            Count := Count + 1;
+         end if;
+      end Begin_Round;
+
+      procedure Set_Open (On : Boolean) is
+      begin
+         Open := On;
+         if On then
+            Count := 0;
+         end if;
+      end Set_Open;
+
+      function Rounds return Natural is (Count);
+
+      entry Settled when not Spinning is
+      begin
+         null;
+      end Settled;
+   end Keeper_Stamp;
+
+   --  One submission of the kernel, waited for.
+   procedure Keeper_Round (Ok : out Boolean) is
+      Submit : constant Submit_Call := To_Submit (Point ("vkQueueSubmit"));
+      Wait   : constant Wait_Call := To_Wait (Point ("vkWaitForFences"));
+      Reset  : constant Reset_Fences_Call :=
+        To_Reset_Fences (Point ("vkResetFences"));
+
+      Buffer_Handle : aliased Address := Keep.Buffer;
+      Fence_Handle  : aliased Address := Keep.Fence;
+      Request       : aliased Submit_Info;
+   begin
+      Ok := False;
+
+      if Submit = null or else Wait = null or else Reset = null then
+         return;
+      end if;
+
+      Request.Buffers := Buffer_Handle'Address;
+
+      if Submit (Keep.Queue, 1, Request'Address, Keep.Fence) /= 0
+        or else Wait (Keep.Logical, 1, Fence_Handle'Address, 1,
+                      1_000_000_000) /= 0
+        or else Reset (Keep.Logical, 1, Fence_Handle'Address) /= 0
+      then
+         return;
+      end if;
+
+      Ok := True;
+   end Keeper_Round;
+
+   --  Woken by Keep_Clock, it runs rounds for as long as the engine has
+   --  lately been working, and waits again.
+   task Keeper with Storage_Size => 8 * 1024 * 1024 is
+      entry Wake;
+   end Keeper;
+
+   task body Keeper is
+      Go, Ok : Boolean;
+   begin
+      loop
+         select
+            accept Wake;
+         or
+            terminate;
+         end select;
+
+         begin
+            loop
+               Keeper_Stamp.Begin_Round (Go);
+               exit when not Go;
+
+               Keeper_Round (Ok);
+               if not Ok then
+                  --  A device that refuses a round refuses the next: the
+                  --  keeper stops, and the engine is none the worse.
+                  Keeper_Stamp.Set_Open (False);
+               end if;
+            end loop;
+         exception
+            when others =>
+               --  Nor for anything else: a keeper that has stopped is
+               --  one Close_Keeper must not wait for.
+               Keeper_Stamp.Set_Open (False);
+               Keeper_Stamp.Begin_Round (Go);
+         end;
+      end loop;
+   end Keeper;
+
+   procedure Close_Keeper is
+      procedure Drop (Name : String; Handle : in out Address);
+
+      procedure Drop (Name : String; Handle : in out Address) is
+         Call : constant Destroy_Call := To_Destroy (Point (Name));
+      begin
+         if Handle /= Null_Handle and then Call /= null then
+            Call (Keep.Logical, Handle, Null_Handle);
+         end if;
+         Handle := Null_Handle;
+      end Drop;
+   begin
+      Keeper_Stamp.Set_Open (False);
+      Keeper_Stamp.Settled;
+
+      --  Nothing is asked of the loader for a keeper never made: the
+      --  instance it would be asked through may be gone by now.
+      if Keep.Logical = Null_Handle then
+         Keep := (others => <>);
+         return;
+      end if;
+
+      --  The command buffer goes with its pool, and the set with its.
+      Drop ("vkDestroyFence", Keep.Fence);
+      Drop ("vkDestroyCommandPool", Keep.Commands);
+      Drop ("vkDestroyDescriptorPool", Keep.Pool);
+      Drop ("vkDestroyPipeline", Keep.Pipeline);
+      Drop ("vkDestroyPipelineLayout", Keep.Layout);
+      Drop ("vkDestroyDescriptorSetLayout", Keep.Set_Kind);
+      Drop ("vkDestroyShaderModule", Keep.Module);
+      Drop ("vkDestroyBuffer", Keep.Sink);
+      Drop ("vkFreeMemory", Keep.Memory);
+
+      --  The device itself is its context's, which the caller closes.
+      Keep := (others => <>);
+   end Close_Keeper;
+
+   procedure Open_Keeper (On : Context; Ready : out Boolean) is
+      Made : aliased Address := Null_Handle;
+
+      Sink_Bytes : constant := 256;
+
+      procedure Fail;
+
+      procedure Fail is
+      begin
+         Close_Keeper;
+         Ready := False;
+      end Fail;
+   begin
+      Close_Keeper;
+      Ready := False;
+
+      if not Is_Open (On) or else Instance_Of = Null_Handle then
+         return;
+      end if;
+
+      Keep.Logical := On.Logical;
+      Keep.Queue := On.Queue;
+
+      --  The kernel.
+      declare
+         Create  : constant Create_Call :=
+           To_Create (Point ("vkCreateShaderModule"));
+         Words   : aliased constant Model_Runner.Shaders.Word_Array :=
+           Model_Runner.Shaders.Keep_Clock;
+         Request : aliased Shader_Create_Info;
+      begin
+         Request.Size := Interfaces.C.size_t (Words'Length * 4);
+         Request.Code := Words'Address;
+
+         if Create = null
+           or else Create (Keep.Logical, Request'Address, Null_Handle,
+                           Made'Access) /= 0
+         then
+            Fail;
+            return;
+         end if;
+
+         Keep.Module := Made;
+      end;
+
+      --  One storage buffer, and a pipeline that takes it and the count.
+      declare
+         Create   : constant Create_Call :=
+           To_Create (Point ("vkCreateDescriptorSetLayout"));
+         Bindings : aliased Binding_Array;
+         Request  : aliased Set_Layout_Create_Info;
+      begin
+         Request.Count := 1;
+         Request.Bindings := Bindings'Address;
+
+         if Create = null
+           or else Create (Keep.Logical, Request'Address, Null_Handle,
+                           Made'Access) /= 0
+         then
+            Fail;
+            return;
+         end if;
+
+         Keep.Set_Kind := Made;
+      end;
+
+      declare
+         Create  : constant Create_Call :=
+           To_Create (Point ("vkCreatePipelineLayout"));
+         Sets    : aliased Address := Keep.Set_Kind;
+         Pushes  : aliased Push_Range := (Size => 4, others => <>);
+         Request : aliased Pipeline_Layout_Info;
+      begin
+         Request.Sets := Sets'Address;
+         Request.Pushes := Pushes'Address;
+
+         if Create = null
+           or else Create (Keep.Logical, Request'Address, Null_Handle,
+                           Made'Access) /= 0
+         then
+            Fail;
+            return;
+         end if;
+
+         Keep.Layout := Made;
+      end;
+
+      declare
+         Create  : constant Create_Pipelines_Call :=
+           To_Create_Pipelines (Point ("vkCreateComputePipelines"));
+         Name    : C.Strings.chars_ptr := C.Strings.New_String ("main");
+         Request : aliased Compute_Pipeline_Info;
+         Answer  : C.int := -1;
+      begin
+         Request.Stage.Module := Keep.Module;
+         Request.Stage.Name := Name;
+         Request.Layout := Keep.Layout;
+
+         if Create /= null then
+            Answer := Create (Keep.Logical, Null_Handle, 1, Request'Address,
+                              Null_Handle, Made'Access);
+         end if;
+
+         C.Strings.Free (Name);
+
+         if Answer /= 0 then
+            Fail;
+            return;
+         end if;
+
+         Keep.Pipeline := Made;
+      end;
+
+      --  The sink, in whatever memory the buffer may have.
+      declare
+         Create   : constant Create_Call := To_Create (Point ("vkCreateBuffer"));
+         Wants    : constant Requirements_Call :=
+           To_Requirements (Point ("vkGetBufferMemoryRequirements"));
+         Allocate : constant Create_Call :=
+           To_Create (Point ("vkAllocateMemory"));
+         Bind     : constant Bind_Call := To_Bind (Point ("vkBindBufferMemory"));
+
+         Request  : aliased Buffer_Create_Info :=
+           (Size => Sink_Bytes, Usage => Usage_Storage_Buffer, others => <>);
+         Needs    : aliased Memory_Requirements;
+         Asking   : aliased Memory_Allocate_Info;
+      begin
+         if Create = null or else Wants = null or else Allocate = null
+           or else Bind = null
+           or else Create (Keep.Logical, Request'Address, Null_Handle,
+                           Made'Access) /= 0
+         then
+            Fail;
+            return;
+         end if;
+
+         Keep.Sink := Made;
+         Wants (Keep.Logical, Keep.Sink, Needs'Address);
+
+         Asking.Size := Needs.Size;
+         for Kind in 0 .. 31 loop
+            if (Interfaces.Unsigned_32 (Needs.Kinds)
+                and Interfaces.Shift_Left (1, Kind)) /= 0
+            then
+               Asking.Which := C.unsigned (Kind);
+               exit;
+            end if;
+         end loop;
+
+         if Allocate (Keep.Logical, Asking'Address, Null_Handle, Made'Access)
+            /= 0
+         then
+            Fail;
+            return;
+         end if;
+
+         Keep.Memory := Made;
+
+         if Bind (Keep.Logical, Keep.Sink, Keep.Memory, 0) /= 0 then
+            Fail;
+            return;
+         end if;
+      end;
+
+      --  The set that points the kernel at it.
+      declare
+         Create   : constant Create_Call :=
+           To_Create (Point ("vkCreateDescriptorPool"));
+         Allocate : constant Allocate_Sets_Call :=
+           To_Allocate_Sets (Point ("vkAllocateDescriptorSets"));
+         Update   : constant Update_Sets_Call :=
+           To_Update_Sets (Point ("vkUpdateDescriptorSets"));
+
+         Sizes   : aliased Pool_Size := (Count => 1, others => <>);
+         Pooled  : aliased Descriptor_Pool_Info;
+         Layouts : aliased Address := Keep.Set_Kind;
+         Asking  : aliased Descriptor_Set_Info;
+         Told    : aliased Buffer_Info :=
+           (Buffer => Keep.Sink, Offset => 0, Extent => Sink_Bytes);
+         Note    : aliased Write_Descriptor;
+      begin
+         Pooled.Sizes := Sizes'Address;
+
+         if Create = null or else Allocate = null or else Update = null
+           or else Create (Keep.Logical, Pooled'Address, Null_Handle,
+                           Made'Access) /= 0
+         then
+            Fail;
+            return;
+         end if;
+
+         Keep.Pool := Made;
+         Asking.Pool := Keep.Pool;
+         Asking.Layouts := Layouts'Address;
+
+         if Allocate (Keep.Logical, Asking'Address, Made'Access) /= 0 then
+            Fail;
+            return;
+         end if;
+
+         Keep.Set := Made;
+         Note.Target := Keep.Set;
+         Note.Buffers := Told'Address;
+         Update (Keep.Logical, 1, Note'Address, 0, Null_Handle);
+      end;
+
+      --  The one command buffer, recorded once and submitted every round,
+      --  and the fence a round waits on.
+      declare
+         Create   : constant Create_Call :=
+           To_Create (Point ("vkCreateCommandPool"));
+         Allocate : constant Allocate_Buffers_Call :=
+           To_Allocate_Buffers (Point ("vkAllocateCommandBuffers"));
+         Start    : constant Begin_Call :=
+           To_Begin (Point ("vkBeginCommandBuffer"));
+         Stop     : constant End_Call := To_End (Point ("vkEndCommandBuffer"));
+         Bind_Pipeline : constant Bind_Pipeline_Call :=
+           To_Bind_Pipeline (Point ("vkCmdBindPipeline"));
+         Bind_Sets : constant Bind_Sets_Call :=
+           To_Bind_Sets (Point ("vkCmdBindDescriptorSets"));
+         Push     : constant Push_Call := To_Push (Point ("vkCmdPushConstants"));
+         Dispatch : constant Dispatch_Call :=
+           To_Dispatch (Point ("vkCmdDispatch"));
+         Fence    : constant Create_Call := To_Create (Point ("vkCreateFence"));
+
+         Pooled : aliased Command_Pool_Info;
+         Asking : aliased Command_Buffer_Info;
+         Began  : aliased Command_Begin_Info := (Flags => 0, others => <>);
+         Sets   : aliased Address := Keep.Set;
+         Spin   : aliased C.unsigned := Keeper_Spin;
+         Fenced : aliased Fence_Create_Info;
+      begin
+         Pooled.Family := C.unsigned (On.Family);
+
+         if Create = null or else Allocate = null or else Start = null
+           or else Stop = null or else Bind_Pipeline = null
+           or else Bind_Sets = null or else Push = null or else Dispatch = null
+           or else Create (Keep.Logical, Pooled'Address, Null_Handle,
+                           Made'Access) /= 0
+         then
+            Fail;
+            return;
+         end if;
+
+         Keep.Commands := Made;
+         Asking.Pool := Keep.Commands;
+
+         if Allocate (Keep.Logical, Asking'Address, Made'Access) /= 0 then
+            Fail;
+            return;
+         end if;
+
+         Keep.Buffer := Made;
+
+         if Start (Keep.Buffer, Began'Address) /= 0 then
+            Fail;
+            return;
+         end if;
+
+         Bind_Pipeline (Keep.Buffer, Bind_Point_Compute, Keep.Pipeline);
+         Bind_Sets (Keep.Buffer, Bind_Point_Compute, Keep.Layout, 0, 1,
+                    Sets'Address, 0, Null_Handle);
+         Push (Keep.Buffer, Keep.Layout, Stage_Compute, 0, 4, Spin'Address);
+         Dispatch (Keep.Buffer, 1, 1, 1);
+
+         if Stop (Keep.Buffer) /= 0
+           or else Fence = null
+           or else Fence (Keep.Logical, Fenced'Address, Null_Handle,
+                          Made'Access) /= 0
+         then
+            Fail;
+            return;
+         end if;
+
+         Keep.Fence := Made;
+      end;
+
+      Keeper_Stamp.Set_Open (True);
+      Ready := True;
+   end Open_Keeper;
+
+   procedure Keep_Clock is
+      Wake : Boolean;
+   begin
+      Keeper_Stamp.Touch (Wake);
+
+      --  Only a keeper waiting to be woken is: one busy with a round will
+      --  see the stamp when it asks for the next.
+      if Wake then
+         select
+            Keeper.Wake;
+         else
+            null;
+         end select;
+      end if;
+   end Keep_Clock;
+
+   function Keeper_Rounds return Natural is (Keeper_Stamp.Rounds);
 
 end Model_Runner.Platform.Device.Products;

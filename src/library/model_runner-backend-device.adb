@@ -27,6 +27,12 @@ package body Model_Runner.Backend.Device is
    Opened : Devices.Context;
    Engine : Products.Engine;
 
+   --  A second context on the same part, for the keeper that holds its
+   --  clock up while a split mixture's experts run on the processor; see
+   --  Products.Open_Keeper. Opened at the first split layer, once.
+   Keeping      : Devices.Context;
+   Keeper_Asked : Boolean := False;
+
    Ready_Now : Boolean := False;
 
    --  The layers' outcomes, as Note_Layer counts them.
@@ -510,6 +516,9 @@ package body Model_Runner.Backend.Device is
 
    procedure Close is
    begin
+      Products.Close_Keeper;
+      Devices.Close (Keeping);
+      Keeper_Asked := False;
       T.Free (Landing);
       T.Free (Fed_Room);
       Products.Close (Engine);
@@ -581,6 +590,27 @@ package body Model_Runner.Backend.Device is
    begin
       if Split then
          Split_Count := Split_Count + 1;
+
+         --  The device waits while the processor takes this layer's
+         --  experts, and a part left waiting lowers its clock.
+         if not Keeper_Asked and then Ready_Now then
+            declare
+               Found : Boolean;
+            begin
+               Keeper_Asked := True;
+               Devices.Open
+                 (Keeping, Model_Runner.Backend.Device.Held, Opened_Which,
+                  Found);
+               if Found then
+                  Products.Open_Keeper (Keeping, Found);
+               end if;
+               if not Found then
+                  Devices.Close (Keeping);
+               end if;
+            end;
+         end if;
+
+         Products.Keep_Clock;
          return;
       end if;
 

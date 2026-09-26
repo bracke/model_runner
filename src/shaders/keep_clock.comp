@@ -1,0 +1,33 @@
+#version 450
+
+//  Nothing but arithmetic, to keep the device's clock up.
+//
+//  An integrated part lowers its clock when it sits idle for a moment, and
+//  a split mixture leaves it idle for most of every layer while the
+//  processor works through the experts: its own half then runs at the
+//  lowest clock the part has. One workgroup running this beside it, from a
+//  device of its own, keeps the part busy enough to be clocked up, for the
+//  cost of one compute unit's share of a hundred microseconds at a time.
+//
+//  The sink is never written: the sum is never that number. It is there
+//  so that the loop has a use and is not taken away.
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) writeonly buffer Sink { float sink[]; };
+
+layout(push_constant) uniform Shape {
+    uint rounds;
+} shape;
+
+void main() {
+    float a = float(gl_LocalInvocationID.x);
+
+    for (uint i = 0u; i < shape.rounds; i++) {
+        a = a * 1.0000001 + 0.5;
+    }
+
+    if (a == -12345.0) {
+        sink[gl_LocalInvocationID.x] = a;
+    }
+}

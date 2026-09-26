@@ -4794,6 +4794,95 @@ package body Tests.Backend_Cases is
    --  chunked kernel computes it, called on the same numbers. Over a ring
    --  of three slots beginning at a position that wraps it, and a batch
    --  longer than the ring, so a slot written is a slot read.
+   --  The keeper spins while the engine says it is working, stops soon
+   --  after it stops saying so, and closes without waiting on a round
+   --  forever -- on a device of its own beside the engine's.
+   --
+   --  Skipped where there is no device.
+   procedure The_Keeper_Spins_While_Asked_And_Stops_After
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Held    : Devices.Inventory;
+      Opened  : Devices.Context;
+      Keeping : Devices.Context;
+      Engine  : Products.Engine;
+      Found   : Boolean;
+      Ready   : Boolean;
+   begin
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Devices.Open (Opened, Held, 1, Ready);
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Open (Engine, Opened, Ready);
+      Devices.Open (Keeping, Held, 1, Found);
+      if not Ready or else not Found then
+         Products.Close (Engine);
+         Devices.Close (Keeping);
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Open_Keeper (Keeping, Ready);
+      Assert (Ready, "the keeper would not be made");
+
+      --  What follows closes everything however it ends: a keeper left
+      --  spinning would ask a closed instance for its next round.
+      begin
+
+         --  Asked for a fifth of a second, a round at a time.
+         for Asked in 1 .. 20 loop
+            Products.Keep_Clock;
+            delay 0.01;
+         end loop;
+
+         declare
+            Spun : constant Natural := Products.Keeper_Rounds;
+         begin
+            Assert (Spun > 0, "the keeper ran no round while asked");
+
+            --  Left alone for longer than it lingers, then counted twice: a
+            --  keeper that has stopped counts nothing between.
+            delay 0.3;
+            declare
+               Then_Spun : constant Natural := Products.Keeper_Rounds;
+            begin
+               delay 0.2;
+               Assert (Products.Keeper_Rounds = Then_Spun,
+                       "the keeper went on spinning when nobody asked");
+            end;
+         end;
+
+         --  And asked again, which wakes it, then closed while it spins.
+         Products.Keep_Clock;
+         delay 0.02;
+         Products.Close_Keeper;
+
+         Products.Close (Engine);
+         Devices.Close (Keeping);
+         Devices.Close (Opened);
+         Devices.Close (Held);
+      exception
+         when others =>
+            Products.Close_Keeper;
+            Products.Close (Engine);
+            Devices.Close (Keeping);
+            Devices.Close (Opened);
+            Devices.Close (Held);
+            raise;
+      end;
+   end The_Keeper_Spins_While_Asked_And_Stops_After;
+
    procedure The_Linear_Layer_On_The_Device_Says_What_The_Host_Says
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -8545,6 +8634,10 @@ package body Tests.Backend_Cases is
         (T, The_Packed_Attention_Says_Which_Heads_It_Reads'Access,
          "the packed attention says which head shapes it reads: a whole "
          & "number of fours, and a value head within the room it keeps");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, The_Keeper_Spins_While_Asked_And_Stops_After'Access,
+         "the keeper spins while the engine says it is working, stops soon "
+         & "after, and closes without waiting on a round forever");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, The_Linear_Layer_On_The_Device_Says_What_The_Host_Says'Access,
          "the convolution over the memory a ring keeps and the gated delta "
