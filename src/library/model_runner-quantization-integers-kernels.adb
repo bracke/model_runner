@@ -16669,6 +16669,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
             --  block by block, which is the order it was summed in before.
             --  Everything this computes it computed already and in the same
             --  order, so no answer moves.
+            --  The lines a kilobyte ahead are asked for as each block is read:
+            --  the weights come off the file's own 4 KB pages, where the
+            --  hardware's stream stops at every page.
             System.Machine_Code.Asm
               ("vpxor %%xmm12, %%xmm12, %%xmm12" & LF &
                "xorq %%rcx, %%rcx" & LF &
@@ -16677,6 +16680,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "movq %6, %%rax" & LF &
                "2:" & LF &
                "vmovdqu 4(%1,%%rcx,1), %%xmm0" & LF &
+               "prefetcht0 1024(%1,%%rcx,1)" & LF &
+               "prefetcht0 1088(%1,%%rcx,1)" & LF &
+               "prefetcht0 1152(%1,%%rcx,1)" & LF &
                "vpsrldq $4, %%xmm0, %%xmm1" & LF &
                "vpsrldq $8, %%xmm0, %%xmm2" & LF &
                "vpbroadcastd 0(%5), %%xmm3" & LF &
@@ -16935,6 +16941,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
             --  block by block, which is the order it was summed in before.
             --  Everything this computes it computed already and in the same
             --  order, so no answer moves.
+            --  The lines a kilobyte ahead are asked for as each block is read:
+            --  the weights come off the file's own 4 KB pages, where the
+            --  hardware's stream stops at every page.
             System.Machine_Code.Asm
               ("vpxor %%xmm12, %%xmm12, %%xmm12" & LF &
                "xorq %%rcx, %%rcx" & LF &
@@ -16943,6 +16952,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "movq %6, %%rax" & LF &
                "2:" & LF &
                "vmovdqu 4(%1,%%rcx,1), %%xmm0" & LF &
+               "prefetcht0 1024(%1,%%rcx,1)" & LF &
+               "prefetcht0 1088(%1,%%rcx,1)" & LF &
+               "prefetcht0 1152(%1,%%rcx,1)" & LF &
                "vpsrldq $4, %%xmm0, %%xmm1" & LF &
                "vpsrldq $8, %%xmm0, %%xmm2" & LF &
                "vpbroadcastd 0(%5), %%xmm3" & LF &

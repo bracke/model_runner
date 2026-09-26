@@ -7,6 +7,12 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The Q4_K one- and two-vector kernels read a row ahead.** A split
+  mixture's experts come off the file's own pages, where the hardware
+  prefetcher stops at every 4 KB page; the kernels now ask for the lines a
+  kilobyte ahead. qwen3.6-35b-a3b plain generation about 1 per cent
+  faster, the same bits.
+
 - **A drafted round's check walks the delta rule one position at a time.**
   Up to four positions at a head of 128 now take the single-position
   compilation, the state held in registers across them, instead of the
