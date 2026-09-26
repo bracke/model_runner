@@ -2099,6 +2099,41 @@ package body Model_Runner.Backend.Device is
       Ok := True;
    end Normalize_And_Project;
 
+   ---------------------
+   -- Prefetch_Stacks --
+   ---------------------
+
+   procedure Prefetch_Stacks
+     (Gate : T.View;
+      Up   : T.View;
+      Down : T.View)
+   is
+      procedure One (V : T.View) is
+         Packing : Products.Weight_Packing;
+         Known   : Boolean;
+      begin
+         if not T.Is_Present (V) or else V.Base = System.Null_Address then
+            return;
+         end if;
+         Packing_Of (V.Format, Packing, Known);
+         if not Known then
+            return;
+         end if;
+         Products.Prefetch
+           (Engine, V.Base, V.Span, V.Offset, Packing,
+            Natural (V.Rows), Natural (V.Columns),
+            At_Offset (V.Base, V.Offset));
+      end One;
+   begin
+      if not Ready_Now then
+         return;
+      end if;
+      One (Gate);
+      One (Up);
+      One (Down);
+      Products.Prefetch_Go (Engine);
+   end Prefetch_Stacks;
+
    ------------------
    -- Start_Shared --
    ------------------

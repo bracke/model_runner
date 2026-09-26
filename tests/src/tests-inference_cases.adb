@@ -2634,35 +2634,59 @@ package body Tests.Inference_Cases is
                        "the processor refused " & Name & ": "
                        & E.Error_Code'Image (Why));
 
-               for Chunk in reverse 1 .. 2 loop
-                  Model_Runner.Backend.Device.Close;
-                  Model_Runner.Backend.Device.Open
-                    (Awake, Budget => All_Of - Experts / 4);
-                  Assert (Awake, "the device did not reopen for " & Name);
-                  Logits_On
-                    (Image, Model_Runner.Backend.Backend_Device,
-                     (if Chunk = 2 then Length else 1), Device, Why,
-                     Team => Team'Unchecked_Access);
-                  Assert (Why = E.No_Error,
-                          "the device refused " & Name & ": "
-                          & E.Error_Code'Image (Why));
-                  Assert (Model_Runner.Backend.Device.Layers_Split > 0,
-                          "no layer of " & Name & " ran split, of"
-                          & Model_Runner.Backend.Device.Layers_Whole'Image
-                          & " whole and"
-                          & Model_Runner.Backend.Device.Layers_Handed'Image
-                          & " handed back");
-                  Worst := 0.0;
-                  for Index in Host'Range loop
-                     Worst :=
-                       N.Real'Max (Worst, abs (Host (Index) - Device (Index)));
-                  end loop;
-                  Assert (Worst <= Tolerance,
-                          "on " & Name
-                          & (if Chunk = 2 then " in one batch"
-                             else " a position at a time")
-                          & " the device's logits differ from the "
-                          & "processor's by " & N.Real'Image (Worst));
+               --  A position at a time, the whole batch split, and the
+               --  whole batch with its stacks streamed to the device: a
+               --  batch as short as the fixture's is the pool's unless told
+               --  otherwise.
+               for Arm in reverse 1 .. 3 loop
+                  declare
+                     Chunk : constant Positive :=
+                       (if Arm = 1 then 1 else Length);
+                  begin
+                     Model_Runner.Backend.Device.Close;
+                     Model_Runner.Backend.Device.Open
+                       (Awake, Budget => All_Of - Experts / 4);
+                     Assert (Awake, "the device did not reopen for " & Name);
+                     if Arm = 3 then
+                        L.Set_Stream_Least (1);
+                     end if;
+                     Logits_On
+                       (Image, Model_Runner.Backend.Backend_Device,
+                        Chunk, Device, Why,
+                        Team => Team'Unchecked_Access);
+                     L.Set_Stream_Least (L.Stream_Least_Default);
+                     Assert (Why = E.No_Error,
+                             "the device refused " & Name & ": "
+                             & E.Error_Code'Image (Why));
+                     if Arm = 3 then
+                        Assert (Model_Runner.Backend.Device.Layers_Whole > 0,
+                                "no layer of " & Name & " streamed its stacks,"
+                                & Model_Runner.Backend.Device.Layers_Split'Image
+                                & " split and"
+                                & Model_Runner.Backend.Device.Layers_Handed'Image
+                                & " handed back");
+                     else
+                        Assert (Model_Runner.Backend.Device.Layers_Split > 0,
+                                "no layer of " & Name & " ran split, of"
+                                & Model_Runner.Backend.Device.Layers_Whole'Image
+                                & " whole and"
+                                & Model_Runner.Backend.Device.Layers_Handed'Image
+                                & " handed back");
+                     end if;
+                     Worst := 0.0;
+                     for Index in Host'Range loop
+                        Worst :=
+                          N.Real'Max (Worst, abs (Host (Index) - Device (Index)));
+                     end loop;
+                     Assert (Worst <= Tolerance,
+                             "on " & Name
+                             & (case Arm is
+                                   when 3 => " with its stacks streamed",
+                                   when 2 => " in one batch",
+                                   when others => " a position at a time")
+                             & " the device's logits differ from the "
+                             & "processor's by " & N.Real'Image (Worst));
+                  end;
                end loop;
                B.Free (Image);
             end;

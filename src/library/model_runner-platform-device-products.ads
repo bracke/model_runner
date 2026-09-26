@@ -1620,6 +1620,38 @@ package Model_Runner.Platform.Device.Products is
       Target : out Model_Runner.Numerics.Real_Array;
       Ok     : out Boolean);
 
+   --  Start copying a matrix the device does not hold into a buffer of its
+   --  own, in the background, for the sequence that will read it next: an
+   --  expert stack of a mixture the device streams rather than keeps. The
+   --  copy runs on a task of its own while the device works on what it was
+   --  already given, and the sequence that names the matrix by Key takes
+   --  the buffer, waiting for the copy only if it has not finished.
+   --
+   --  @param Item Ready engine.
+   --  @param Base Where the storage the matrix lies in begins.
+   --  @param Span Bytes that storage holds.
+   --  @param At_Byte Where in it the matrix begins.
+   --  @param Packing How it is packed.
+   --  @param Rows Its rows.
+   --  @param Columns Its columns.
+   --  @param Key What the sequence names it by.
+   procedure Prefetch
+     (Item    : in out Engine;
+      Base    : System.Address;
+      Span    : Model_Runner.Bytes.Byte_Count;
+      At_Byte : Model_Runner.Bytes.Byte_Count;
+      Packing : Weight_Packing;
+      Rows    : Natural;
+      Columns : Natural;
+      Key     : System.Address);
+
+   --  Hand the copies Prefetch set up to the copier, all at once: one
+   --  handing a layer, so that the host goes back to the device rather
+   --  than waiting on the copier for each of a layer's matrices.
+   --
+   --  @param Item Engine.
+   procedure Prefetch_Go (Item : in out Engine);
+
    --  One position attending to everything a cache holds.
    --
    --  The scores against every key in range, the bound where the architecture

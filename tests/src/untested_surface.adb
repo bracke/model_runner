@@ -5,7 +5,9 @@ package body Untested_Surface is
    --
    --  Reached through a caller. Every one of these runs on an ordinary
    --  path -- a container parse, a session open, a report -- so a mistake in
-   --  it fails something else. What is missing is a test that names it and
+   --  it fails something else. The three prefetches are a batch's streamed
+   --  expert stacks, which the split mixture's test runs streamed: a copy
+   --  half made fails it. What is missing is a test that names it and
    --  says what it should do, which is what would tell a wrong answer from
    --  an answer nobody looked at.
    --
@@ -60,14 +62,20 @@ package body Untested_Surface is
          | "Metadata_Element_Kind"
          | "Model_Name"
          | "Next_Seed"
+         | "On_Call"
+         | "On_Result"
+         | "On_Step"
          | "Ordinal"
          | "Plan_For"
          | "Power"
+         | "Prefetch"
+         | "Prefetch_Go"
+         | "Prefetch_Stacks"
          | "Product_Batch"
-         | "Put_Table"
-         | "Put_Words"
          | "Put_Data_Field"
          | "Put_Statistics"
+         | "Put_Table"
+         | "Put_Words"
          | "Record_Conversion"
          | "Recovery_Hint"
          | "Repack_Names"
@@ -86,10 +94,7 @@ package body Untested_Surface is
          | "Tensor_Is_Supported"
          | "To_Tensor_Type"
          | "To_Value_Type"
-         | "Wide_From_Bits"
-         | "On_Call"
-         | "On_Result"
-         | "On_Step";
+         | "Wide_From_Bits";
    end Is_Untested;
 
    -----------

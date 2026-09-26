@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A split mixture's long batch runs its experts on the device.** A
+  mixture too big for the device ran every prompt's experts on the
+  processor's pool, which a long prompt keeps busy with nearly every expert
+  of every layer. A batch of 256 positions or more now streams the layer's
+  expert stacks to the device instead -- copied into reused buffers, the
+  next layer's in the background while the device runs this one -- and the
+  layer runs whole there. qwen3.6-35b-a3b's prompt of 434 tokens, 123 ->
+  215 tokens a second; of 1302, 107 -> 206; the same first token. The
+  split mixture's device test now runs a streamed batch too, and fails on a
+  copy half made.
+
 - **A split mixture's shared expert runs on the device beside the pool.**
   Where a mixture too big for the device runs each layer's front half there
   and its experts on the processor's pool, a generated token's eight chosen

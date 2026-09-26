@@ -1229,6 +1229,24 @@ package Model_Runner.Llama is
    --  @return The times, one per phase.
    function Time_Spent (Item : Session) return Phase_Times;
 
+   --  The fewest positions a batch holds for a split mixture's expert stacks
+   --  to be streamed to the device rather than run on the processor's pool.
+   --
+   --  A mixture too big for the device keeps its experts on the processor,
+   --  and a generated token's handful of experts is the pool's to run. A
+   --  long batch touches nearly every expert of every layer, and the device
+   --  runs them far faster than the pool does, so for a batch this long the
+   --  stacks are copied over a layer at a time -- the next layer's in the
+   --  background while this one runs -- and the whole layer goes to the
+   --  device. qwen3.6-35b-a3b's prompt of 434 read 123 tokens a second
+   --  split and 207 streamed, and one of 1302, 107 and 168.
+   Stream_Least_Default : constant := 256;
+
+   --  Change it, for the run: a test streams a fixture's short batch.
+   --
+   --  @param Positions The fewest positions a streamed batch holds.
+   procedure Set_Stream_Least (Positions : Positive);
+
    --  The session's worker pool, as something that can be handed to a
    --  package that must not know what a pool is.
    --

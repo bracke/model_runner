@@ -1118,6 +1118,19 @@ package Model_Runner.Backend.Device is
      (Into : Model_Runner.Tensors.Real_Array_Access;
       Ok   : out Boolean);
 
+   --  Start copying a layer's expert stacks to the device in the
+   --  background, for a batch whose mixture the device will run with
+   --  stacks it does not hold: the copy runs while the device works on
+   --  the layer before, and the layer's sequence takes the copies.
+   --
+   --  @param Gate The layer's gate stack.
+   --  @param Up Its up stack.
+   --  @param Down Its down stack.
+   procedure Prefetch_Stacks
+     (Gate : Model_Runner.Tensors.View;
+      Up   : Model_Runner.Tensors.View;
+      Down : Model_Runner.Tensors.View);
+
    --  A whole layer, in one submission.
    --
    --  `Attend_And_Feed` takes its second half and `Normalize_And_Project`

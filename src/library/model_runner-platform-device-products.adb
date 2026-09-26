@@ -4250,6 +4250,10 @@ package body Model_Runner.Platform.Device.Products is
    --  the other two of everything a submission holds.
    procedure Settle (Item : in out Engine; Ok : out Boolean);
 
+   --  The copies in the background landed and their buffers given up,
+   --  claimed or not: before the device they belong to goes.
+   procedure Drop_Prefetches (Item : in out Engine);
+
    procedure Close (Item : in out Engine) is
       --  Whatever this engine was opened on, which is nothing at all for an
       --  engine that never was.
@@ -4277,6 +4281,10 @@ package body Model_Runner.Platform.Device.Products is
       begin
          Settle (Item, Settled);
       end;
+
+      if Item.Logical /= Null_Handle then
+         Drop_Prefetches (Item);
+      end if;
 
       --  Everything the device was holding for a model, then the two that
       --  change every call.
@@ -5277,7 +5285,201 @@ package body Model_Runner.Platform.Device.Products is
    --    go back at the end of it rather than being kept.
    --  @param Ok False when the matrix could not be put anywhere.
    --  @param Key Identifies the matrix so it may be kept between calls.
-   procedure Acquire_Weights
+   ---------------------------------------------------------------------------
+   --  Copies in the background
+   ---------------------------------------------------------------------------
+
+   --  A matrix being copied, or copied, into a buffer of its own for the
+   --  sequence that will name it: the next layer's expert stacks, while the
+   --  device works through this layer's.
+   Prefetch_Slots : constant := 8;
+
+   subtype Prefetch_Index is Positive range 1 .. Prefetch_Slots;
+
+   type Prefetched is record
+      Used   : Boolean := False;
+      Key    : System.Address := System.Null_Address;
+      Buffer : Address := Null_Handle;
+      Memory : Address := Null_Handle;
+      Mapped : Address := Null_Handle;
+      Tier   : Tier_Index := 1;
+      Bytes  : Interfaces.Unsigned_64 := 0;
+   end record;
+
+   Prefetches : array (Prefetch_Index) of Prefetched;
+
+   type Copy_Job is record
+      Into  : System.Address := System.Null_Address;
+      From  : System.Address := System.Null_Address;
+      Bytes : Interfaces.Unsigned_64 := 0;
+      Slot  : Prefetch_Index := 1;
+   end record;
+
+   type Copy_Jobs is array (1 .. Prefetch_Slots) of Copy_Job;
+
+   --  The copies set up and not yet handed over.
+   Waiting      : Copy_Jobs;
+   Waiting_Held : Natural := 0;
+
+   type Landing_Flags is array (Prefetch_Index) of Boolean;
+
+   --  Which slots' copies have landed.
+   protected Landed is
+      procedure Clear (Slot : Prefetch_Index);
+      procedure Mark (Slot : Prefetch_Index; Good : Boolean);
+      entry Wait (Prefetch_Index);
+      function Copied (Slot : Prefetch_Index) return Boolean;
+   private
+      Done : Landing_Flags := [others => True];
+      Fine : Landing_Flags := [others => True];
+   end Landed;
+
+   protected body Landed is
+      procedure Clear (Slot : Prefetch_Index) is
+      begin
+         Done (Slot) := False;
+         Fine (Slot) := False;
+      end Clear;
+
+      procedure Mark (Slot : Prefetch_Index; Good : Boolean) is
+      begin
+         Done (Slot) := True;
+         Fine (Slot) := Good;
+      end Mark;
+
+      function Copied (Slot : Prefetch_Index) return Boolean
+      is (Done (Slot) and then Fine (Slot));
+
+      entry Wait (for Slot in Prefetch_Index) when Done (Slot) is
+      begin
+         null;
+      end Wait;
+   end Landed;
+
+   --  The one copier: handed a layer's worth of copies at a time, it runs
+   --  them in order and marks each as it lands.
+   task Copier is
+      entry Start (Jobs : Copy_Jobs; Count : Natural);
+   end Copier;
+
+   task body Copier is
+      Held  : Copy_Jobs;
+      Many  : Natural := 0;
+   begin
+      loop
+         select
+            accept Start (Jobs : Copy_Jobs; Count : Natural) do
+               Held := Jobs;
+               Many := Count;
+            end Start;
+         or
+            terminate;
+         end select;
+
+         for Index in 1 .. Many loop
+            declare
+               Good : Boolean := True;
+            begin
+               declare
+                  Job : Copy_Job renames Held (Index);
+
+                  subtype Room is Model_Runner.Bytes.Byte_Array
+                    (1 .. Model_Runner.Bytes.Byte_Count (Job.Bytes));
+
+                  Into : Room with Import, Address => Job.Into;
+                  From : Room with Import, Address => Job.From;
+               begin
+                  Into := From;
+               exception
+                  when others =>
+                     Good := False;
+               end;
+
+               Landed.Mark (Held (Index).Slot, Good);
+            end;
+         end loop;
+      end loop;
+   end Copier;
+
+   procedure Drop_Prefetches (Item : in out Engine) is
+   begin
+      Waiting_Held := 0;
+      for Slot in Prefetch_Index loop
+         if Prefetches (Slot).Used then
+            Landed.Wait (Slot);
+            Release_Weight
+              (Item, Prefetches (Slot).Buffer, Prefetches (Slot).Memory,
+               Prefetches (Slot).Mapped);
+            Prefetches (Slot) := (others => <>);
+         end if;
+      end loop;
+   end Drop_Prefetches;
+
+   --  Waited for and handed over, or none.
+   procedure Take_Prefetched
+     (Item   : in out Engine;
+      Key    : System.Address;
+      Bytes  : Interfaces.Unsigned_64;
+      Buffer : out Address;
+      Memory : out Address;
+      Mapped : out Address;
+      Tier   : out Tier_Index;
+      Found  : out Boolean) is
+   begin
+      Found := False;
+      Buffer := Null_Handle;
+      Memory := Null_Handle;
+      Mapped := Null_Handle;
+      Tier := 1;
+
+      for Slot in Prefetch_Index loop
+         if Prefetches (Slot).Used
+           and then Prefetches (Slot).Key = Key
+           and then Prefetches (Slot).Bytes = Bytes
+         then
+            --  A copy that has not landed in half a minute has gone wrong
+            --  somewhere the copier cannot say -- a page of the file the
+            --  disk would not give -- and the matrix is copied here as it
+            --  was before. Its buffer is left where it is: the copier may
+            --  still write it.
+            select
+               Landed.Wait (Slot);
+            or
+               delay 30.0;
+               Prefetches (Slot) := (others => <>);
+               return;
+            end select;
+
+            --  Landed and wrong: the buffer is the copier's no longer, and
+            --  goes back; the matrix is copied here instead.
+            if not Landed.Copied (Slot) then
+               Release_Weight
+                 (Item, Prefetches (Slot).Buffer, Prefetches (Slot).Memory,
+                  Prefetches (Slot).Mapped);
+               Prefetches (Slot) := (others => <>);
+               return;
+            end if;
+
+            Buffer := Prefetches (Slot).Buffer;
+            Memory := Prefetches (Slot).Memory;
+            Mapped := Prefetches (Slot).Mapped;
+            Tier := Prefetches (Slot).Tier;
+            Prefetches (Slot) := (others => <>);
+            Found := True;
+            return;
+         end if;
+      end loop;
+   end Take_Prefetched;
+
+   --  Where a matrix is streamed rather than kept: an expert stack of a
+   --  mixture the device does not hold, for a batch long enough that the
+   --  device reading it beats the processor's pool. Nothing resident is
+   --  given back to make room for it -- it would be the layer's own front
+   --  half, uploaded again a layer later -- and it is not kept; its buffer
+   --  goes back among the spares instead, mapped, for the next layer's
+   --  stack of the same size, so that a stack costs its copy and nothing
+   --  else. Mapped and Tier say where the caller hands it back.
+   procedure Acquire_Weights_Streamed
      (Item         : in out Engine;
       Weights      : Model_Runner.Bytes.Byte_Array;
       At_Byte      : Model_Runner.Bytes.Byte_Count;
@@ -5291,15 +5493,17 @@ package body Model_Runner.Platform.Device.Products is
       Borrowed     : out Boolean;
       Ok           : out Boolean;
       Key          : System.Address;
-      Pinned       : Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64'Last)
+      Pinned       : Interfaces.Unsigned_64;
+      Stream       : Boolean;
+      Mapped       : out Address;
+      Tier         : out Tier_Index)
    is
       Weight_Buffer : Address renames Buffer;
       Weight_Memory : Address renames Memory;
       Weight_Base   : Interfaces.Unsigned_64 renames Base;
       Weight_Own    : Boolean := False;
-      Weight_Mapped : Address := Null_Handle;
-      Weight_Tier   : Tier_Index := 1;
+      Weight_Mapped : Address renames Mapped;
+      Weight_Tier   : Tier_Index renames Tier;
       Good          : Boolean;
 
       --  Whether a tier has room for this matrix beside what it holds,
@@ -5316,11 +5520,28 @@ package body Model_Runner.Platform.Device.Products is
       is (if Fits (1) or else Item.Second < 0 or else not Fits (2)
           then 1 else 2);
    begin
+      Mapped := Null_Handle;
+      Tier := 1;
       Weight_Buffer := Null_Handle;
       Weight_Memory := Null_Handle;
       Weight_Base := 0;
       Borrowed := False;
       Ok := True;
+
+      --  Copied already, or being copied, in the background.
+      if Stream and then Key /= System.Null_Address then
+         declare
+            Found : Boolean;
+         begin
+            Take_Prefetched
+              (Item, Key, Weight_Bytes, Weight_Buffer, Weight_Memory, Mapped, Tier,
+               Found);
+            if Found then
+               Borrowed := True;
+               return;
+            end if;
+         end;
+      end if;
 
       --  Is it already there? A matrix is what it is, what shape it is, and
       --  where it is. Every part of that is compared, because a caller that
@@ -5418,6 +5639,7 @@ package body Model_Runner.Platform.Device.Products is
 
             if Weight_Buffer = Null_Handle
               and then Key /= System.Null_Address and then Item.Budget > 0
+              and then not Stream
             then
                declare
                   Gone : Boolean := True;
@@ -5485,6 +5707,7 @@ package body Model_Runner.Platform.Device.Products is
          --  with nothing left to release, and it is handled the same way --
          --  computed, given back, correct.
          if Key /= System.Null_Address
+           and then not Stream
            and then Item.Used < Max_Resident
            and then (Weight_Own
                      or else Item.Budget = 0
@@ -5522,7 +5745,124 @@ package body Model_Runner.Platform.Device.Products is
          end if;
       end if;
 
+   end Acquire_Weights_Streamed;
+
+   procedure Acquire_Weights
+     (Item         : in out Engine;
+      Weights      : Model_Runner.Bytes.Byte_Array;
+      At_Byte      : Model_Runner.Bytes.Byte_Count;
+      Packing      : Weight_Packing;
+      Rows         : Natural;
+      Columns      : Natural;
+      Weight_Bytes : Interfaces.Unsigned_64;
+      Buffer       : out Address;
+      Memory       : out Address;
+      Base         : out Interfaces.Unsigned_64;
+      Borrowed     : out Boolean;
+      Ok           : out Boolean;
+      Key          : System.Address;
+      Pinned       : Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64'Last)
+   is
+      Mapped : Address;
+      Tier   : Tier_Index;
+   begin
+      Acquire_Weights_Streamed
+        (Item, Weights, At_Byte, Packing, Rows, Columns, Weight_Bytes,
+         Buffer, Memory, Base, Borrowed, Ok, Key, Pinned,
+         Stream => False, Mapped => Mapped, Tier => Tier);
    end Acquire_Weights;
+
+   --------------
+   -- Prefetch --
+   --------------
+
+   procedure Prefetch
+     (Item    : in out Engine;
+      Base    : System.Address;
+      Span    : Model_Runner.Bytes.Byte_Count;
+      At_Byte : Model_Runner.Bytes.Byte_Count;
+      Packing : Weight_Packing;
+      Rows    : Natural;
+      Columns : Natural;
+      Key     : System.Address)
+   is
+      Bytes : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Rows) * Row_Bytes (Packing, Columns);
+
+      Buffer : Address := Null_Handle;
+      Memory : Address := Null_Handle;
+      Mapped : Address := Null_Handle;
+      Tier   : Tier_Index := 1;
+      Good   : Boolean;
+      Free   : Natural := 0;
+   begin
+      if not Is_Ready (Item)
+        or else Waiting_Held >= Prefetch_Slots
+        or else Key = System.Null_Address
+        or else Bytes = 0
+        or else Interfaces.Unsigned_64 (At_Byte) + Bytes
+                > Interfaces.Unsigned_64 (Span)
+      then
+         return;
+      end if;
+
+      --  Held already, or on its way.
+      if Index_Find (Item, Key, Bytes, Packing, Rows, Columns) /= 0 then
+         return;
+      end if;
+
+      for Slot in Prefetch_Index loop
+         if Prefetches (Slot).Used and then Prefetches (Slot).Key = Key then
+            return;
+         end if;
+         if not Prefetches (Slot).Used and then Free = 0 then
+            Free := Slot;
+         end if;
+      end loop;
+
+      if Free = 0 then
+         return;
+      end if;
+
+      Take_Spare (Item, Bytes, Buffer, Memory, Mapped, Tier, Good);
+      if not Good then
+         Take (Item, Bytes, Buffer, Memory, Good);
+         if Good then
+            Map_Memory (Item, Memory, Bytes, Mapped, Good);
+         end if;
+         if not Good then
+            Release_Weight (Item, Buffer, Memory, Mapped);
+            return;
+         end if;
+      end if;
+
+      Prefetches (Free) :=
+        (Used => True, Key => Key, Buffer => Buffer, Memory => Memory,
+         Mapped => Mapped, Tier => Tier, Bytes => Bytes);
+      Landed.Clear (Free);
+
+      Waiting_Held := Waiting_Held + 1;
+      Waiting (Waiting_Held) :=
+        (Into  => Mapped,
+         From  => System.Storage_Elements."+"
+                    (Base, System.Storage_Elements.Storage_Offset (At_Byte)),
+         Bytes => Bytes,
+         Slot  => Free);
+   end Prefetch;
+
+   -----------------
+   -- Prefetch_Go --
+   -----------------
+
+   procedure Prefetch_Go (Item : in out Engine) is
+      pragma Unreferenced (Item);
+   begin
+      if Waiting_Held > 0 then
+         Copier.Start (Waiting, Waiting_Held);
+         Waiting_Held := 0;
+      end if;
+   end Prefetch_Go;
 
    ---------------------
    -- Submit_And_Wait --
@@ -9846,6 +10186,12 @@ package body Model_Runner.Platform.Device.Products is
          Memory   : Address := Null_Handle;
          Base     : Interfaces.Unsigned_64 := 0;
          Borrowed : Boolean := False;
+
+         --  A streamed stack's mapping and heap, for its buffer to go back
+         --  among the spares rather than to the driver.
+         Streamed : Boolean := False;
+         Mapped   : Address := Null_Handle;
+         Tier     : Tier_Index := 1;
          Weight   : Interfaces.Unsigned_64 := 0;
          At_Byte  : Interfaces.Unsigned_64 := 0;
          Bytes    : Interfaces.Unsigned_64 := 0;
@@ -10041,8 +10387,21 @@ package body Model_Runner.Platform.Device.Products is
       begin
          for Index in 1 .. Steps.Held loop
             if Places (Index).Borrowed then
-               Give_Back_Buffer
-                 (Item, Places (Index).Buffer, Places (Index).Memory);
+               declare
+                  Kept : Boolean := False;
+               begin
+                  if Places (Index).Streamed then
+                     Keep_Spare
+                       (Item, Places (Index).Buffer, Places (Index).Memory,
+                        Places (Index).Mapped, Places (Index).Weight,
+                        Places (Index).Tier, Kept);
+                  end if;
+
+                  if not Kept then
+                     Give_Back_Buffer
+                       (Item, Places (Index).Buffer, Places (Index).Memory);
+                  end if;
+               end;
                Places (Index).Borrowed := False;
             end if;
          end loop;
@@ -10562,7 +10921,7 @@ package body Model_Runner.Platform.Device.Products is
             --  square to the loader is asking it to upload four million
             --  values out of an array of two thousand, which faults in the
             --  driver rather than anywhere this program can see.
-            Acquire_Weights
+            Acquire_Weights_Streamed
               (Item, Held, This.At_Byte, This.Packing,
                (if This.Norms or else This.Rotates or else This.Routes
                   or else This.Readies or else This.Biases
@@ -10583,7 +10942,13 @@ package body Model_Runner.Platform.Device.Products is
                Places (Index).Weight,
                Places (Index).Buffer, Places (Index).Memory,
                Places (Index).Base, Places (Index).Borrowed, Good, This.Key,
-               Pinned => Pinned);
+               Pinned => Pinned,
+               Stream => This.Gathers > 0 or else This.Listed,
+               Mapped => Places (Index).Mapped,
+               Tier => Places (Index).Tier);
+            Places (Index).Streamed :=
+              Places (Index).Borrowed
+              and then (This.Gathers > 0 or else This.Listed);
             if not Good then
                Release_All;
                return;

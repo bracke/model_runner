@@ -15,6 +15,14 @@ with Model_Runner.Quantization.Interleave;
 
 package body Model_Runner.Llama is
 
+   --  See Set_Stream_Least.
+   Stream_Least : Positive := Stream_Least_Default;
+
+   procedure Set_Stream_Least (Positions : Positive) is
+   begin
+      Stream_Least := Positions;
+   end Set_Stream_Least;
+
    use type Model_Runner.Tokenizer.Token_Id;
    use type Model_Runner.Numerics.Element_Count;
    use type System.Address;
@@ -18535,7 +18543,9 @@ package body Model_Runner.Llama is
       --  through the routing inverted and every expert run over the
       --  positions that chose it as one dispatch a matrix.
       function Mixture_Whole (L : Layer) return Boolean
-      is (Source.Stacked
+      is ((Source.Stacked
+           or else (Source.Split_Feed
+                    and then Count >= Element_Count (Stream_Least)))
           and then L.Experts /= null
           and then T.Is_Present (L.Router)
           and then T.Is_Present (L.Gate_Stack)
@@ -18549,6 +18559,23 @@ package body Model_Runner.Llama is
                    <= Model_Runner.Backend.Device.Max_Route
           and then Settings.Renormalize_Experts
           and then not Settings.Sigmoid_Gate);
+
+      --  The next layer's expert stacks, copied to the device in the
+      --  background while this layer runs, where the device streams them.
+      procedure Prefetch_Next (Index : Natural) is
+      begin
+         if Source.Split_Feed
+           and then not Source.Stacked
+           and then Count >= Element_Count (Stream_Least)
+           and then Index < Source.Layers.all'Last
+           and then Mixture_Whole (Source.Layers.all (Index + 1))
+         then
+            Model_Runner.Backend.Device.Prefetch_Stacks
+              (Source.Layers.all (Index + 1).Gate_Stack,
+               Source.Layers.all (Index + 1).Up_Stack,
+               Source.Layers.all (Index + 1).Down_Stack);
+         end if;
+      end Prefetch_Next;
 
       --  As the token's.
       function Linear_Front_Fits (L : Layer) return Boolean
@@ -19447,6 +19474,7 @@ package body Model_Runner.Llama is
 
                   if Sent then
                      Asked := True;
+                     Prefetch_Next (Natural (Index));
                      Model_Runner.Backend.Device.Whole_Layer
                        (Acts.all (0 .. Count * Width - 1),
                         Device_Norm (Current.Attention_Norm,
@@ -19726,6 +19754,7 @@ package body Model_Runner.Llama is
                                   and then Whole_Layer_Fits
                                              (Current, Natural (Index)));
                      Asked := True;
+                     Prefetch_Next (Natural (Index));
                      Model_Runner.Backend.Device.Whole_Layer
                        (Acts.all (0 .. Count * Width - 1),
                         Device_Norm (Current.Attention_Norm,

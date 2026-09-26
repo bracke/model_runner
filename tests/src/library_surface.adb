@@ -128,6 +128,11 @@ package body Library_Surface is
       --  either way.
       new String'("Time_Spent"),
 
+      --  The batch length past which a split mixture's stacks stream to the
+      --  device. The engine's own default is the one a run wants; a test
+      --  lowers it so a fixture's short batch takes the streamed road.
+      new String'("Set_Stream_Least"),
+
       --  How far back a windowed session may be rewound before a slid layer
       --  can no longer attend. The engine does not decide for the caller --
       --  rewind no further, or clear and re-read -- so it answers rather
