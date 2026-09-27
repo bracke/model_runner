@@ -728,6 +728,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A short cache is attended to by every subgroup, not one.** A generated
+  token's attention dealt a tile of cached positions to its subgroups in
+  runs of sixty-four, so a tile the cache does not fill -- every tile of a
+  short context, and the last of a long one -- waited on one subgroup's
+  loads while the rest had little or nothing to do. Such a tile is now
+  dealt a position a subgroup in turn, and the rounds of keys past the
+  cache's end are not run. gemma-3-270m's attention 34.9 -> 18.3 us a
+  layer, level with llama.cpp; same tokens; generation +1-2 per cent on
+  short contexts (gemma-3-270m, gemma-3-4b, qwen3-8b) and level after
+  1,300 positions.
+
 - **A token's logits reach the sampler in one copy.** They crossed the
   memory three times on their way out of the device -- to a landing, to the
   session's row, to the caller's -- while the device waited for the next

@@ -746,12 +746,32 @@ void main() {
 //  Four rounds' keys asked for before any is used, so four loads are in
 //  flight a lane rather than one: a round's cluster adds wait on its
 //  load, and thirty-two waits in a row are what a tile costs otherwise.
+//
+//
+//  A tile the cache does not fill -- every tile of a short cache, and the
+//  last of a long one -- has its positions dealt round the subgroups, a
+//  position each in turn, rather than a run of them each: it is then
+//  shared out evenly, and the rounds past the cache's end are not run at
+//  all. Dealt in runs, seventy positions were sixty-four keys in four
+//  rounds of waiting for one subgroup and six for the next, and a token of
+//  a small model waits on every one of its layers' attention in turn. A
+//  full tile keeps its runs: dealt, gemma-3-4b read 0.8 per cent slower
+//  after 1,300 positions, neighbouring rows no longer read together.
+#define AT_TILE(K, WIDTH) \
+    (dealt ? ((K) * (gl_SubgroupSize / WIDTH) + which) * gl_NumSubgroups \
+             + gl_SubgroupID \
+           : gl_SubgroupID * gl_SubgroupSize \
+             + (K) * (gl_SubgroupSize / WIDTH) + which)
 #define ACROSS_ROUNDS(WIDTH, DEPTH) \
     for (uint r = 0u; r < WIDTH; r += DEPTH) { \
+        if (dealt \
+            && base + r * (gl_SubgroupSize / WIDTH) * gl_NumSubgroups \
+               > last_max) { \
+            break; \
+        } \
         vec4 kk[DEPTH]; \
         for (uint e = 0u; e < DEPTH; e++) { \
-            uint at_tile = mine_at + (r + e) * (gl_SubgroupSize / WIDTH) \
-                           + which; \
+            uint at_tile = AT_TILE (r + e, WIDTH); \
             uint pos = min (base + at_tile, last_max); \
             uint k_at = place_of (held_of[0], pos, shape.k_base, \
                                   shape.kv_width) \
@@ -759,8 +779,7 @@ void main() {
             kk[e] = kv4[(k_at >> 2u) + piece]; \
         } \
         for (uint e = 0u; e < DEPTH; e++) { \
-            uint at_tile = mine_at + (r + e) * (gl_SubgroupSize / WIDTH) \
-                           + which; \
+            uint at_tile = AT_TILE (r + e, WIDTH); \
             for (uint h = 0u; h < HEADS; h++) { \
                 float whole = subgroupClusteredAdd (dot (qv[h], kk[e]), \
                                                     WIDTH); \
@@ -776,12 +795,15 @@ void main() {
          base += LANES) {
         uint step = base + lane;
 
+        //  Whether this tile runs past the cache's end, which is when its
+        //  positions are dealt round rather than taken in runs.
+        bool dealt = base + LANES - 1u > my_last;
+
 #if defined(SUBGROUPS) && !defined(HALVED)
         if (across) {
             //  This subgroup's positions of the tile, a few keys a round.
             //  A cluster's width has to be a constant the compiler sees,
             //  so the three widths are three copies of the rounds.
-            uint mine_at = gl_SubgroupID * gl_SubgroupSize;
             uint which = gl_SubgroupInvocationID / pieces;
 
             if (pieces == 32u) {
@@ -1008,8 +1030,6 @@ void main() {
 
 #ifndef HALVED
         if (v_aligned) {
-            uint vlo = min (v_part * vl, span);
-            uint vhi = min (vlo + vl, span);
             uint c4 = v_comp * 4u;
 
             if (c4 < shape.value_size) {
@@ -1036,27 +1056,41 @@ void main() {
                     }
                 }
 
-                uint run = vlo + ((vhi - vlo) & ~(VROUND - 1u));
+                //  This part's positions of the tile: a run of them, or
+                //  in a tile the cache does not fill, dealt round the
+                //  parts a position each in turn as the keys are, so it
+                //  is shared out evenly rather than left to the first
+                //  part or two, each waiting on its loads a round at a
+                //  time. A run is a deal of one from its own start.
+                uint deal = dealt ? LANES / vl : 1u;
+                uint from = dealt ? v_part : v_part * vl;
+                uint count = dealt
+                             ? (span > v_part
+                                ? (span - v_part + deal - 1u) / deal : 0u)
+                             : min (vl, span - min (from, span));
+                uint run = count & ~(VROUND - 1u);
 
-                for (uint j = vlo; j < run; j += VROUND) {
+                for (uint t = 0u; t < run; t += VROUND) {
                     vec4 v[VROUND];
 
                     for (uint e = 0u; e < VROUND; e++) {
-                        v[e] = kv4[V4_AT (base + j + e)];
+                        v[e] = kv4[V4_AT (base + from + (t + e) * deal)];
                     }
 
                     for (uint i = 0u; i < QUERIES; i++) {
                         for (uint h = 0u; h < HEADS; h++) {
-                            uint at = (i * HEADS + h) * LANES + j;
+                            uint at = (i * HEADS + h) * LANES + from;
 
                             for (uint e = 0u; e < VROUND; e++) {
-                                heldv[i][h] += tile[at + e] * v[e];
+                                heldv[i][h] += tile[at + (t + e) * deal]
+                                               * v[e];
                             }
                         }
                     }
                 }
 
-                for (uint j = run; j < vhi; j++) {
+                for (uint t = run; t < count; t++) {
+                    uint j = from + t * deal;
                     vec4 v = kv4[V4_AT (base + j)];
 
                     for (uint i = 0u; i < QUERIES; i++) {
