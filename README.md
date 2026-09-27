@@ -11849,6 +11849,15 @@ prompt with and without a draft and compares. Up to one thing, which
 positions in a batch and an undrafted one reads them singly, and those two
 are not bit-for-bit the same arithmetic.
 
+The draft must number its tokens as the model does. Its vocabulary may be
+shorter -- Qwen2.5's large models pad theirs to 152,064 where the small ones
+stop at 151,936 -- as long as the tokens both have are the same text; a draft
+never proposes a token it does not have. So Qwen2.5-Coder-0.5B-Instruct drafts
+for a Qwen2.5-14B fine-tune: Steelman-14B Q4_K_M, 256 tokens of Ada, went from
+7.6 tokens a second alone (8.8 with `run`'s own lookup drafting) to 12.7 with
+`--draft-model qwen2.5-coder-0.5b-instruct-q8_0.gguf --draft-tokens 3`, 64 per
+cent of proposals accepted.
+
 What it saves is passes over the big model's weights: however many proposals
 are accepted, they cost one pass. What it costs is the draft model's own
 passes, one per proposal, and the output projection once per checked position

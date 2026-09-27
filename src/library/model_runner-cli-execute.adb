@@ -2698,6 +2698,52 @@ package body Model_Runner.CLI.Execute is
       Embed_Model     : aliased L.Model;
       Embed_Model_Ready : Boolean := False;
 
+      --  Whether a draft numbers its tokens as the target does: its
+      --  vocabulary no longer than the target's, and the same text under
+      --  every number both have, but for a few at the end of the draft's
+      --  where one model has special tokens and the other has padding --
+      --  Qwen2's small models against Qwen2.5's large ones, which pad to
+      --  152,064. A proposal is a number, so any draft of no more numbers
+      --  keeps the target's distribution; the text is what says whether it
+      --  will ever be accepted.
+      function Numbers_Alike
+        (Draft, Target : L.Model) return Boolean
+      is
+         --  Qwen2 against Qwen2.5 differ in nineteen; a draft with another
+         --  tokenizer differs in nearly every one.
+         Unlike_Most : constant := 64;
+
+         Drafts  : constant access constant Model_Runner.Tokenizer.Vocabulary :=
+           L.Vocabulary (Draft);
+         Targets : constant access constant Model_Runner.Tokenizer.Vocabulary :=
+           L.Vocabulary (Target);
+         Size    : constant Natural := L.Config (Draft).Vocabulary;
+         Differ  : Natural := 0;
+      begin
+         if Size = L.Config (Target).Vocabulary then
+            return True;
+         elsif Size > L.Config (Target).Vocabulary
+           or else Drafts = null or else Targets = null
+         then
+            return False;
+         end if;
+
+         for Id in 0 .. Natural'Min (Size, Model_Runner.Tokenizer.Size (Drafts.all))
+                        - 1
+         loop
+            if Id >= Model_Runner.Tokenizer.Size (Targets.all)
+              or else Model_Runner.Tokenizer.Token_Text
+                        (Drafts.all, Model_Runner.Tokenizer.Token_Id (Id))
+                      /= Model_Runner.Tokenizer.Token_Text
+                        (Targets.all, Model_Runner.Tokenizer.Token_Id (Id))
+            then
+               Differ := Differ + 1;
+            end if;
+         end loop;
+
+         return Differ <= Unlike_Most;
+      end Numbers_Alike;
+
       --  Two models that do not number their tokens alike.
       function Draft_Mismatch (Draft, Wanted : Natural) return E.Error_Info is
          Result : E.Error_Info := E.Make (E.Arch_Unsupported_Feature);
@@ -2995,9 +3041,7 @@ package body Model_Runner.CLI.Execute is
                return;
             end if;
 
-            if L.Config (Draft_Model).Vocabulary
-               /= L.Config (Prepared).Vocabulary
-            then
+            if not Numbers_Alike (Draft_Model, Prepared) then
                Fail (Draft_Mismatch (L.Config (Draft_Model).Vocabulary,
                                      L.Config (Prepared).Vocabulary));
                return;

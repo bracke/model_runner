@@ -1,3 +1,4 @@
+with Ada.Strings.Fixed;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
 
@@ -71,8 +72,12 @@ package body Tiny_Model is
       Sections     : Boolean := False;
       Depth        : Natural := 0;
       Code_Norms   : Boolean := True;
-      Ranking      : Boolean := False)
+      Ranking      : Boolean := False;
+      Padding      : Natural := 0)
    is
+      --  Rows of the embedding and of the output, the padding among them.
+      Rows_Of_Words : constant Natural := Vocabulary + Padding;
+
       Quantized : constant Boolean :=
         Format in Q4_0 | Q4_1 | Q5_0 | Q5_1 | Q8_0
                 | Q2_K | Q3_K | Q4_K | Q5_K | Q6_K
@@ -1038,7 +1043,7 @@ package body Tiny_Model is
          --  pieces and byte-fallback tokens, which is the smallest shape that
          --  still exercises every decoding path.
          Fixtures.Begin_Array
-           (Builder, "tokenizer.ggml.tokens", G.Value_String, Vocabulary);
+           (Builder, "tokenizer.ggml.tokens", G.Value_String, Rows_Of_Words);
          Fixtures.String_Element (Builder, "<unk>");
          Fixtures.String_Element (Builder, "<s>");
          Fixtures.String_Element (Builder, "</s>");
@@ -1061,11 +1066,17 @@ package body Tiny_Model is
          Fixtures.String_Element (Builder, "<0x64>");
          Fixtures.String_Element (Builder, "<0x20>");
          Fixtures.String_Element (Builder, "<0x0A>");
+         for Index in 1 .. Padding loop
+            Fixtures.String_Element
+              (Builder, "[PAD" & Ada.Strings.Fixed.Trim
+                                   (Natural'Image (Index), Ada.Strings.Left)
+                        & "]");
+         end loop;
          Fixtures.End_Array (Builder);
 
          Fixtures.Begin_Array
-           (Builder, "tokenizer.ggml.scores", G.Value_Float32, Vocabulary);
-         for Index in 0 .. Vocabulary - 1 loop
+           (Builder, "tokenizer.ggml.scores", G.Value_Float32, Rows_Of_Words);
+         for Index in 0 .. Rows_Of_Words - 1 loop
             --  Longer pieces score higher so that the merge order is
             --  deterministic and easy to predict.
             Fixtures.Float_Element (Builder, N.Real (Index) * 0.5);
@@ -1073,7 +1084,8 @@ package body Tiny_Model is
          Fixtures.End_Array (Builder);
 
          Fixtures.Begin_Array
-           (Builder, "tokenizer.ggml.token_type", G.Value_Int32, Vocabulary);
+           (Builder, "tokenizer.ggml.token_type", G.Value_Int32,
+            Rows_Of_Words);
          Fixtures.Int32_Element (Builder, 2);   --  <unk>
          Fixtures.Int32_Element (Builder, 3);   --  <s>
          Fixtures.Int32_Element (Builder, 3);   --  </s>
@@ -1082,6 +1094,9 @@ package body Tiny_Model is
          end loop;
          for Index in 10 .. Vocabulary - 1 loop
             Fixtures.Int32_Element (Builder, 6);
+         end loop;
+         for Index in 1 .. Padding loop
+            Fixtures.Int32_Element (Builder, 5);   --  unused
          end loop;
          Fixtures.End_Array (Builder);
       end if;
@@ -1131,7 +1146,7 @@ package body Tiny_Model is
          end;
       end if;
 
-      Weight ("token_embd.weight", [G.U64 (Embedding), Vocabulary]);
+      Weight ("token_embd.weight", [G.U64 (Embedding), G.U64 (Rows_Of_Words)]);
 
       --  Bert's other two embeddings and the normalization over their sum.
       --  Two segment rows, of which a text uses the first: the second is
@@ -1735,7 +1750,7 @@ package body Tiny_Model is
       --  for such a model pass, which is exactly the reading the engine
       --  refuses.
       if Kind not in Bert | Nomic_Bert | Jina_Bert_V2 then
-         Weight ("output.weight", [G.U64 (Embedding), Vocabulary]);
+         Weight ("output.weight", [G.U64 (Embedding), G.U64 (Rows_Of_Words)]);
       end if;
 
       --  A reranker's scoring head, where this fixture builds one: a dense
@@ -1752,7 +1767,7 @@ package body Tiny_Model is
       --  writes is the last thing the model adds. GPT2's does not, which a
       --  published gpt2 file said and this fixture had been contradicting.
       if Kind = Phi2 then
-         Norm_Of ("output.bias", Natural (Vocabulary));
+         Norm_Of ("output.bias", Rows_Of_Words);
       end if;
 
       Fixtures.Build (Builder, Result);

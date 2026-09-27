@@ -32,6 +32,12 @@ package body Model_Runner.Generation is
    use type N.Element_Count;
    package Vocab renames Model_Runner.Tokenizer;
 
+   --  The logit a draft model's run is given for the target's tokens past
+   --  its own vocabulary: low enough that no temperature, penalty or bias
+   --  the sampler applies gives it a chance, and finite, so that nothing
+   --  that looks for a non-finite logit takes it for a fault.
+   Draft_Tail : constant N.Real := N."-" (1.0E30);
+
    ------------------
    -- Seconds_Text --
    ------------------
@@ -497,6 +503,35 @@ package body Model_Runner.Generation is
         (if Drafting
          then Natural'Min (Item.Draft_Tokens, L.Max_Batch - 1)
          else 0);
+
+      --  How many logits the draft model writes: its own vocabulary, which
+      --  may stop short of the target's -- Qwen's larger models pad theirs
+      --  past the tokens the small ones number. The draft writes the front
+      --  of Aside, and the rest is never proposed; see Draft_Tail.
+      Draft_Words : constant N.Element_Count :=
+        (if Draft /= null
+         then N.Element_Count (L.Config (Draft.all).Vocabulary)
+         else N.Element_Count (Settings.Vocabulary));
+
+      --  A token as the draft reads it: the target's own where the draft
+      --  numbers it, and the first token where it does not -- a padding
+      --  token a target trained never to say, but might. The draft's
+      --  context is a token off there, which costs its proposals and not
+      --  the target's text.
+      function For_Draft (Token : Vocab.Token_Id) return Vocab.Token_Id
+      is (if N.Element_Count (Token) < Draft_Words then Token else 0);
+
+      --  And a run of them, as the prompt reaches the draft.
+      function Draft_Tokens_Of
+        (Tokens : Vocab.Token_Array) return Vocab.Token_Array
+      is
+         Result : Vocab.Token_Array := Tokens;
+      begin
+         for Token of Result loop
+            Token := For_Draft (Token);
+         end loop;
+         return Result;
+      end Draft_Tokens_Of;
 
       --  What a round proposed and what came back for it. Proposals are the
       --  draft's; Verified holds the ones the target agrees with, which is
@@ -1285,7 +1320,9 @@ package body Model_Runner.Generation is
                   begin
                      L.Evaluate_Batch
                        (Draft_Session.all, Draft.all,
-                        Tokens.all (Index .. Last), Aside.all,
+                        Draft_Tokens_Of (Tokens.all (Index .. Last)),
+                        Aside.all (Aside.all'First
+                                   .. Aside.all'First + Draft_Words - 1),
                         Cancel => Cancel, Status => Local);
 
                      if E.Is_Error (Local) then
@@ -1500,8 +1537,11 @@ package body Model_Runner.Generation is
                --  large as the target would cost exactly what it saves.
                for Step in 1 .. Largest_Draft loop
                   L.Evaluate
-                    (Draft_Session.all, Draft.all, Proposed.all (Count),
-                     Aside.all, Cancel, Local);
+                    (Draft_Session.all, Draft.all,
+                     For_Draft (Proposed.all (Count)),
+                     Aside.all (Aside.all'First
+                                .. Aside.all'First + Draft_Words - 1),
+                     Cancel, Local);
 
                   --  A draft that has run out of room stops proposing rather
                   --  than stopping the run: what it has proposed so far is
@@ -1515,6 +1555,12 @@ package body Model_Runner.Generation is
                      Failed := True;
                      return;
                   end if;
+
+                  --  Draft_Tail: the target's tokens past the draft's own
+                  --  have no chance under it, so it never proposes one and
+                  --  its distribution is nought there.
+                  Aside.all (Aside.all'First + Draft_Words .. Aside.all'Last)
+                    := [others => Draft_Tail];
 
                   S.Sample
                     (Sampler, Aside.all, Guess, Local, Sharing,
@@ -1794,8 +1840,11 @@ package body Model_Runner.Generation is
                     L.Position (Draft_Session.all) - Before + 1;
                begin
                   L.Evaluate
-                    (Draft_Session.all, Draft.all, Verified.all (Step),
-                     Aside.all, Cancel, Local);
+                    (Draft_Session.all, Draft.all,
+                     For_Draft (Verified.all (Step)),
+                     Aside.all (Aside.all'First
+                                .. Aside.all'First + Draft_Words - 1),
+                     Cancel, Local);
                   if E.Is_Error (Local) then
                      Conclude (Runtime_Error, Local);
                      Failed := True;

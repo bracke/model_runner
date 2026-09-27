@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A draft model may have a shorter vocabulary than the model it drafts
+  for.** Qwen2.5's large models pad their vocabularies to 152,064 tokens
+  where the small ones stop at 151,936, and `--draft-model` refused every
+  such pair. The draft now writes the front of the target's row and gives
+  the rest no chance, a target token it lacks reaches it as its first, and
+  the two must agree on the text of the tokens both have. Steelman-14B with
+  Qwen2.5-Coder-0.5B drafting three: 7.6 -> 12.7 tokens a second on Ada.
+
 - **The device's clock is kept up while a split mixture's experts run on
   the processor.** An integrated part clocks itself by how busy it has
   been, and a split mixture leaves it idle through every layer's experts:

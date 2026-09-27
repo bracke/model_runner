@@ -7784,7 +7784,7 @@ device 684736F30C458451 src/shaders/row_product.comp src/shaders/matrix_product.
 #   the eight-lane fold moved into the insertion.
 # load: nothing else running, on a part that had stopped cooling -- it
 #   settled at 51 C before the first run.
-drafting 1B6A49B8A7247133 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+drafting C0654B8EEBA8366F src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14
@@ -23429,4 +23429,19 @@ panels A21238CA02033B91 src/library/model_runner-quantization-interleave.ads src
 # TinyLlama, whole on the device, where no keeper is made: re-fingerprinted.
 #   device AE8A94685A7D3B76 -> 684736F30C458451,
 #   outside AE8A94685A7D3B76 -> 684736F30C458451.
+# model: as named
+
+# 2026-09-27: a draft model with a shorter vocabulary. Steelman-14B (a
+# Qwen2.5-14B fine-tune, 152,064 tokens) refused Qwen2-0.5B and Qwen2.5-
+# Coder-0.5B (151,936) as drafts. The draft now evaluates into the front of
+# the target's row, the tail is given Draft_Tail (-1e30) before it samples,
+# a target token past its vocabulary reaches it as token 0, and the CLI
+# takes a draft whose tokens are the target's text but for at most 64
+# (Qwen2 against Qwen2.5 differ in 19 special tokens). Steelman-14B Q4_K_M,
+# `run`, an Ada prompt, 256 tokens, seed 7: alone 7.61 t/s, `run`'s lookup
+# drafting 8.84 (65 of 228), Qwen2-0.5B-Instruct drafting 3: 9.44 (139 of
+# 360), Qwen2.5-Coder-0.5B-Instruct Q8_0 drafting 3/4/5/6: 12.75 (168 of
+# 264) / 12.02 / 11.79 / 11.28. The drafting figures draft with the model
+# itself or its next block, whose vocabulary is its own: re-fingerprinted.
+#   drafting 1B6A49B8A7247133 -> C0654B8EEBA8366F.
 # model: as named

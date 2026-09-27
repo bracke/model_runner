@@ -363,6 +363,10 @@ package Tiny_Model is
    --  @param Ranking Build a reranker: a scoring head beside the blocks and
    --    a ranked pooling type, so the model scores a text rather than
    --    embedding it. For the bert kinds; nothing for the rest.
+   --  @param Padding Unused tokens past the sixteen, each a row of the
+   --    embedding and of the output: what Qwen's larger models do, whose
+   --    vocabularies are padded past the tokens their small ones number.
+   --    Written on the SentencePiece road only.
    procedure Build
      (Result         : out Model_Runner.Bytes.Byte_Array_Access;
       Format         : Weight_Format := F32;
@@ -383,6 +387,7 @@ package Tiny_Model is
       Sections       : Boolean := False;
       Depth          : Natural := 0;
       Code_Norms     : Boolean := True;
-      Ranking        : Boolean := False);
+      Ranking        : Boolean := False;
+      Padding        : Natural := 0);
 
 end Tiny_Model;

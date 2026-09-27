@@ -5618,6 +5618,132 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Drafting_Shifts_When_The_Room_Runs_Out;
 
+   ------------------------------------------------
+   -- A_Draft_With_Fewer_Tokens_Keeps_The_Target --
+   ------------------------------------------------
+
+   --  A draft whose vocabulary stops short of the target's drafts for it,
+   --  and the run says what the target says alone.
+   --
+   --  Qwen's large models pad their vocabularies past the tokens the small
+   --  ones number -- 152,064 against 151,936 -- and a draft model was
+   --  refused unless the two counts were equal. The draft now writes the
+   --  front of the target's row and the rest is given no chance, so it
+   --  never proposes a token it does not have: greedy, a drafted run is
+   --  the target's own text whatever is accepted, and sampled it runs to
+   --  its end without a proposal out of range.
+   procedure A_Draft_With_Fewer_Tokens_Keeps_The_Target
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Gen renames Model_Runner.Generation;
+
+      Padded : B.Byte_Array_Access;
+      Small  : B.Byte_Array_Access;
+
+      Prompt : constant String := "abab";
+   begin
+      Tiny_Model.Build (Padded, Room => 64, Padding => 8);
+      Tiny_Model.Build (Small, Room => 64);
+
+      declare
+         Held_Padded : aliased constant B.Byte_Array := Padded.all;
+         Held_Small  : aliased constant B.Byte_Array := Small.all;
+         Target : aliased Harness (Held_Padded'Access);
+         Draft  : aliased Harness (Held_Small'Access);
+
+         procedure Turn
+           (With_Draft : Boolean;
+            Greedy     : Boolean;
+            Text       : out Model_Runner.Bytes.Byte_Array_Access;
+            Length     : out Natural;
+            Proposed   : out Natural)
+         is
+            Live    : L.Session;
+            Second  : aliased L.Session;
+            Request : Gen.Request;
+            Stop    : Model_Runner.Stops.Set;
+            Outcome : Gen.Result;
+            Local   : E.Error_Info;
+
+            --  What a run samples with unless told otherwise.
+            Sampled_Settings : Model_Runner.Sampling.Configuration;
+         begin
+            L.Open (Live, Target.Ready, 64, Status => Local);
+            Assert (E.Is_Ok (Local), "the target session did not open");
+
+            if With_Draft then
+               L.Open (Second, Draft.Ready, 64, Status => Local);
+               Assert (E.Is_Ok (Local), "the draft session did not open");
+            end if;
+
+            Model_Runner.Stops.Open (Stop);
+            Request.Max_Tokens := 24;
+            Request.Sampling :=
+              (if Greedy then Model_Runner.Sampling.Greedy_Configuration
+               else Sampled_Settings);
+            Request.Seed := 7;
+            Request.Has_Seed := True;
+            Request.Add_Beginning := True;
+            Request.Retain_Text := True;
+            Request.Draft_Tokens := (if With_Draft then 3 else 0);
+
+            Gen.Generate
+              (Target.Ready, Live, Prompt, Request, Stop, null, null,
+               null, null, null, null,
+               Draft =>
+                 (if With_Draft then Draft.Ready'Unchecked_Access else null),
+               Draft_Session =>
+                 (if With_Draft then Second'Unchecked_Access else null),
+               Outcome => Outcome);
+
+            Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                    "the run failed: "
+                    & E.Error_Code'Image (Outcome.Error.Code));
+
+            Text := Outcome.Text;
+            Length := Outcome.Text_Length;
+            Proposed := Outcome.Drafted;
+
+            Model_Runner.Stops.Close (Stop);
+            if With_Draft then
+               L.Close (Second);
+            end if;
+            L.Close (Live);
+         end Turn;
+
+         Plain_Text, Draft_Text, Sampled_Text :
+           Model_Runner.Bytes.Byte_Array_Access;
+         Plain_Last, Draft_Last, Sampled_Last : Natural;
+         Ignored, Proposed, Sampled_Proposed : Natural;
+      begin
+         Start (Target);
+         Start (Draft);
+
+         Assert (L.Config (Draft.Ready).Vocabulary + 8
+                 = L.Config (Target.Ready).Vocabulary,
+                 "the fixtures are not a padded target and a smaller draft");
+
+         Turn (False, True, Plain_Text, Plain_Last, Ignored);
+         Turn (True, True, Draft_Text, Draft_Last, Proposed);
+
+         Assert (Proposed > 0, "the smaller draft proposed nothing");
+         Assert (Plain_Last > 0 and then Draft_Last = Plain_Last
+                 and then B."=" (Plain_Text.all (1 .. B.Byte_Index (Plain_Last)),
+                                 Draft_Text.all (1 .. B.Byte_Index (Draft_Last))),
+                 "a greedy run drafted by a smaller vocabulary said "
+                 & "something the target alone does not");
+
+         Turn (True, False, Sampled_Text, Sampled_Last, Sampled_Proposed);
+         Assert (Sampled_Proposed > 0 and then Sampled_Last > 0,
+                 "the sampled drafted run proposed or said nothing");
+      end;
+
+      B.Free (Padded);
+      B.Free (Small);
+   end A_Draft_With_Fewer_Tokens_Keeps_The_Target;
+
    ------------------------------------
    -- Drafting_Runs_On_A_Device --
    ------------------------------------
@@ -12824,6 +12950,10 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Adapters_Stack_And_Come_Off_Again'Access,
          "adapters stack, and a scale of minus one takes one off again");
+      Register_Routine
+        (T, A_Draft_With_Fewer_Tokens_Keeps_The_Target'Access,
+         "a draft whose vocabulary stops short of the target's drafts for "
+         & "it, and the run says what the target says alone");
       Register_Routine
         (T, Drafting_Shifts_When_The_Room_Runs_Out'Access,
          "a drafted run drops its oldest positions when the context fills, "
