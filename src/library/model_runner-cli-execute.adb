@@ -4226,6 +4226,11 @@ package body Model_Runner.CLI.Execute is
                   Request.Draft_From_Context :=
                     Item.Draft_Lookup and then not Draft_Ready;
 
+                  --  A draft model's rounds follow what the rounds before
+                  --  kept, unless a length was named.
+                  Request.Draft_Adapts :=
+                    Draft_Ready and then not Item.Draft_Tokens_Set;
+
                   --  And where nothing drafts, a dense model large enough
                   --  that a round pays drafts out of its own context: what
                   --  followed this phrase the last time it was said. A

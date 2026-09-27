@@ -5653,7 +5653,9 @@ package body Tests.Inference_Cases is
             Text       : out Model_Runner.Bytes.Byte_Array_Access;
             Length     : out Natural;
             Proposed   : out Natural;
-            Accepted   : out Natural)
+            Accepted   : out Natural;
+            Adapts     : Boolean := False;
+            Tokens     : Positive := 6)
          is
             Live    : L.Session;
             Second  : aliased L.Session;
@@ -5671,13 +5673,14 @@ package body Tests.Inference_Cases is
             end if;
 
             Model_Runner.Stops.Open (Stop);
-            Request.Max_Tokens := 6;
+            Request.Max_Tokens := Tokens;
             Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
             Request.Seed := 7;
             Request.Has_Seed := True;
             Request.Add_Beginning := True;
             Request.Retain_Text := True;
             Request.Draft_Tokens := (if With_Draft then 3 else 0);
+            Request.Draft_Adapts := Adapts;
 
             Gen.Generate
               (Under.Ready, Live, Prompt, Request, Stop, null, null,
@@ -5740,6 +5743,38 @@ package body Tests.Inference_Cases is
 
          B.Free (Plain_Text);
          B.Free (Draft_Text);
+
+         --  And with the rounds following what was kept: the same text
+         --  again, and a model drafting for itself -- which keeps every
+         --  proposal -- proposes more a round than at a fixed three, so
+         --  over the same tokens it proposes more in all.
+         declare
+            Fixed_Text, Adapt_Text : Model_Runner.Bytes.Byte_Array_Access;
+            Fixed_Last, Adapt_Last : Natural;
+            Fixed_Proposed, Adapt_Proposed : Natural;
+            Kept_A, Kept_B : Natural;
+         begin
+            Turn (True, Fixed_Text, Fixed_Last, Fixed_Proposed, Kept_A,
+                  Tokens => 10);
+            Turn (True, Adapt_Text, Adapt_Last, Adapt_Proposed, Kept_B,
+                  Adapts => True, Tokens => 10);
+
+            Assert (Adapt_Last = Fixed_Last
+                    and then B."="
+                               (Fixed_Text.all (1 .. B.Byte_Index (Fixed_Last)),
+                                Adapt_Text.all
+                                  (1 .. B.Byte_Index (Adapt_Last))),
+                    "a run whose rounds adapt produced different text");
+            Assert (Kept_B = Adapt_Proposed,
+                    "a model drafting for itself had a proposal turned down");
+            Assert (Adapt_Proposed > Fixed_Proposed,
+                    "the rounds did not grow: proposed"
+                    & Natural'Image (Adapt_Proposed) & " against"
+                    & Natural'Image (Fixed_Proposed) & " at three");
+
+            B.Free (Fixed_Text);
+            B.Free (Adapt_Text);
+         end;
       end;
 
       B.Free (Image);

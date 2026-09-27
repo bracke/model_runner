@@ -156,6 +156,12 @@ package Model_Runner.Generation is
       --  wins this, as it wins the context.
       Draft_From_Next : Boolean := False;
 
+      --  Whether a round's proposals follow how many the last round kept,
+      --  from Draft_Tokens up to two more or down to one, rather than
+      --  staying at Draft_Tokens. For a draft model or the block past the
+      --  stack; the context proposes what it finds.
+      Draft_Adapts : Boolean := False;
+
       --  Explicit seed. When Has_Seed is False the seed comes from the entropy
       --  source, and the value actually used is reported in the result.
       Seed     : Seed_Value := 0;

@@ -573,6 +573,11 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A drafted round near the end of the context no longer ends the run.**
+  A round whose proposals did not all fit in the room left stopped the run
+  as full, though a shorter round would have gone in; it now checks the
+  proposals that fit.
+
 - **A development build starts again.** The token walks' starting value,
   minus infinity, was made at elaboration where a checking build's validity
   checks took it for invalid data, so every development binary stopped with
@@ -727,6 +732,15 @@ Keep a Changelog and the project uses semantic versioning.
   group form.
 
 ### Changed
+
+- **A draft model's rounds follow what was kept.** With no
+  `--draft-tokens` named, a round proposes one more after a round that kept
+  every proposal and one fewer after one that turned down more than the
+  last, between one and two past the usual three: a reply that repeats its
+  context keeps most and wants longer rounds, a free one keeps few. Same
+  text; greedy, code and prose, gemma-3-4b drafted by its 270M 43.8 ->
+  45.8 and 29.3 -> 29.9 tokens a second, qwen3-8b 18.2 -> 18.3 and 15.6 ->
+  16.5, Steelman-14B 14.7 -> 14.4 and 7.8 -> 8.2.
 
 - **A model's own drafts read their slice of the head at four bits.** A
   model with a block past its stack drafts from it and scores each proposal

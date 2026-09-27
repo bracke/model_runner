@@ -499,10 +499,26 @@ package body Model_Runner.Generation is
       By_Context : constant Boolean :=
         Drafting and then not By_Model and then not By_Next;
 
+      --  Whether a round's length follows what the rounds before kept.
+      Adapting : constant Boolean :=
+        Drafting and then Item.Draft_Adapts and then not By_Context;
+
       Largest_Draft : constant Natural :=
         (if Drafting
-         then Natural'Min (Item.Draft_Tokens, L.Max_Batch - 1)
+         then Natural'Min
+                (Item.Draft_Tokens + (if Adapting then 2 else 0),
+                 L.Max_Batch - 1)
          else 0);
+
+      --  How many this round proposes: all it may, or where it adapts, one
+      --  more after a round that kept every proposal and one fewer after
+      --  one that turned down more than the last. A reply that repeats its
+      --  context keeps most and a free one few, and the best length
+      --  follows: gemma-3-4b drafted by its 270M wrote code fastest at
+      --  four a round (46.1 against 43.7 at three) and prose at three
+      --  (29.4 against 27.0 at four), Steelman-14B code at four.
+      Round_Draft : Natural :=
+        Natural'Min (Item.Draft_Tokens, Largest_Draft);
 
       --  How many logits the draft model writes: its own vocabulary, which
       --  may stop short of the target's -- Qwen's larger models pad theirs
@@ -1465,7 +1481,7 @@ package body Model_Runner.Generation is
                   Next_In.all := L.Last_State (Session);
                end if;
 
-               for Step in 1 .. Largest_Draft loop
+               for Step in 1 .. Round_Draft loop
                   exit when Before + Step - 2 >= L.Capacity (Session);
 
                   L.Draft_Next
@@ -1535,7 +1551,7 @@ package body Model_Runner.Generation is
                --  And what the draft would say after it, and after that, and
                --  so on. Each proposal costs the draft a pass; a draft as
                --  large as the target would cost exactly what it saves.
-               for Step in 1 .. Largest_Draft loop
+               for Step in 1 .. Round_Draft loop
                   L.Evaluate
                     (Draft_Session.all, Draft.all,
                      For_Draft (Proposed.all (Count)),
@@ -1589,6 +1605,18 @@ package body Model_Runner.Generation is
                   Proposed.all (Count) := Guess;
                end loop;
             end if;
+
+            --  No more than the context has room for: a round near its end
+            --  checks the proposals that fit, rather than ending the run as
+            --  full while a shorter round would still have gone in. The
+            --  ones left out are as good as turned down -- the draft is
+            --  rewound past them with the rest. Always the target's own,
+            --  which is the single-token path's case, shift and all.
+            Count := Natural'Max
+              (1,
+               Natural'Min
+                 (Count,
+                  Integer'Max (0, L.Capacity (Session) - Before)));
 
             --  The first is the target's own; the rest are the draft's, and
             --  those are what the count below is about.
@@ -1932,6 +1960,15 @@ package body Model_Runner.Generation is
             --  Accepted proposals, not counting the target's own first token
             --  nor a residual that replaced a rejected one.
             Outcome.Accepted := Outcome.Accepted + Accepted - 1;
+
+            if Adapting then
+               if Accepted - 1 >= Count - 1 and then Count - 1 = Round_Draft
+               then
+                  Round_Draft := Natural'Min (Round_Draft + 1, Largest_Draft);
+               elsif Accepted < Count - 1 then
+                  Round_Draft := Natural'Max (Round_Draft - 1, 1);
+               end if;
+            end if;
 
             Verified_At := 0;
             Produced_Here := Verified_Count;
