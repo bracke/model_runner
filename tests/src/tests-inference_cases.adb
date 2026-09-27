@@ -5992,6 +5992,183 @@ package body Tests.Inference_Cases is
       Model_Runner.Backend.Device.Close;
    end Drafting_Runs_On_A_Device;
 
+   ------------------------------------------------------
+   -- A_Paged_Draft_Leaves_The_Target_Its_Own_Tables --
+   ------------------------------------------------------
+
+   --  A paged target drafted by another model's paged session on the
+   --  device says what the same run says in blocks.
+   --
+   --  Every paged session writes its page tables at the same front of the
+   --  pool, and a session whose pages already reached its position skipped
+   --  writing them again: after a rejected proposal the target's next
+   --  check re-read positions it had covered, the draft having written its
+   --  own tables there in between, and qwen3-8b drafted by qwen3-0.6b said
+   --  something else from the first round. The skip now asks whose tables
+   --  are there (Tables_Of). A model drafting for itself cannot show any of
+   --  this -- its draft's cache holds what the target's does -- so the
+   --  draft here is another model, and both sessions are paged.
+   --
+   --  THIS FIXTURE DOES NOT REPRODUCE THAT RACE: two layers and random
+   --  weights never reach the stale skip, and a skip without the check
+   --  passes here. What caught and cleared it was the real pair, greedy:
+   --  drafted text 2793f04a against the undrafted 915827ab before, and
+   --  915827ab after. What this holds is the rest -- two models' paged
+   --  sessions drafting on one device, their pages dealt from one pool,
+   --  read as the same run in blocks reads them.
+   --
+   --  Skipped where there is no device.
+   procedure A_Paged_Draft_Leaves_The_Target_Its_Own_Tables
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Gen renames Model_Runner.Generation;
+
+      Padded, Small : B.Byte_Array_Access;
+      Ready : Boolean;
+
+      Prompt : constant String := "abab";
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready);
+
+      if not Ready then
+         return;
+      end if;
+
+      --  Deep, so that the device attends to them itself and reads the
+      --  page tables, and ending on a token they do not say, so that the
+      --  runs go on long enough to fill pages.
+      Tiny_Model.Build
+        (Padded, Format => Tiny_Model.Q4_K, End_Token => 15, Room => 256,
+         Padding => 8);
+      Tiny_Model.Build
+        (Small, Format => Tiny_Model.Q4_K, End_Token => 15, Room => 256);
+
+      declare
+         Held_Target : aliased constant B.Byte_Array := Padded.all;
+         Held_Draft  : aliased constant B.Byte_Array := Small.all;
+         Target_Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held_Target'Access);
+         Draft_Source  : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held_Draft'Access);
+         Target_Item, Draft_Item : Containers.Container;
+
+         Target : aliased L.Model;
+         Draft  : aliased L.Model;
+
+         Status : E.Error_Info;
+
+         type Said is array (1 .. 512) of Vocab.Token_Id;
+
+         procedure Turn
+           (Paged      : Boolean;
+            Tokens     : out Said;
+            Length     : out Natural;
+            Proposed   : out Natural)
+         is
+            Live    : L.Session;
+            Second  : aliased L.Session;
+            Request : Gen.Request;
+            Stop    : Model_Runner.Stops.Set;
+            Outcome : Gen.Result;
+            Local   : E.Error_Info;
+         begin
+            L.Open (Live, Target, 256, Status => Local, Paged => Paged);
+            Assert (E.Is_Ok (Local), "the session did not open");
+
+            L.Open (Second, Draft, 256, Status => Local, Paged => Paged);
+            Assert (E.Is_Ok (Local), "the draft session did not open");
+
+            Model_Runner.Stops.Open (Stop);
+            Request.Max_Tokens := 160;
+            Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+            Request.Seed := 5;
+            Request.Has_Seed := True;
+            Request.Add_Beginning := True;
+            Request.Draft_Tokens := 3;
+
+            Gen.Generate
+              (Target, Live, Prompt, Request, Stop, null, null,
+               null, null, null, null,
+               Draft => Draft'Unchecked_Access,
+               Draft_Session => Second'Unchecked_Access,
+               Outcome => Outcome);
+
+            Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                    "the run failed: "
+                    & E.Error_Code'Image (Outcome.Error.Code));
+
+            --  What the session committed, which is what it said:
+            --  the deep fixture's tokens need not decode to any text.
+            Tokens := [others => Vocab.No_Token];
+            Length := Natural'Min (L.Position (Live), Said'Length);
+            for Index in 1 .. Length loop
+               Tokens (Index) := L.Committed_Token (Live, Index - 1);
+            end loop;
+            Proposed := Outcome.Drafted;
+            if Paged then
+               Assert (L.Holds_Pages (Live) and then L.Holds_Pages (Second),
+                       "the sessions were not paged: target "
+                       & Boolean'Image (L.Holds_Pages (Live)) & ", draft "
+                       & Boolean'Image (L.Holds_Pages (Second)));
+            end if;
+
+            Model_Runner.Stops.Close (Stop);
+            L.Close (Second);
+            L.Close (Live);
+         end Turn;
+
+         Plain_Text, Draft_Text : Said;
+         Plain_Last, Draft_Last : Natural;
+         Ignored, Proposed      : Natural;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse
+           (Target_Item, Target_Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the target fixture did not parse");
+         Model_Runner.GGUF.Containers.Reader.Parse
+           (Draft_Item, Draft_Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the draft fixture did not parse");
+
+         L.Prepare
+           (Target, Target_Item, Target_Source,
+            Backend => Model_Runner.Backend.Backend_Device,
+            Status  => Status);
+         Assert (E.Is_Ok (Status),
+                 "the device would not take the target: "
+                 & E.Error_Code'Image (Status.Code));
+         L.Prepare
+           (Draft, Draft_Item, Draft_Source,
+            Backend => Model_Runner.Backend.Backend_Device,
+            Status  => Status);
+         Assert (E.Is_Ok (Status), "the draft would not prepare");
+
+         --  Against the same run in blocks rather than pages: the same
+         --  batches, the same arithmetic, the keys and values reached
+         --  through a table or not. Against an undrafted run it could not
+         --  be -- a drafted run reads its positions in batches, and over
+         --  many tokens that alone may move a quantized model's choice.
+         Turn (False, Plain_Text, Plain_Last, Ignored);
+         Turn (True, Draft_Text, Draft_Last, Proposed);
+
+         Assert (Plain_Last > 20, "the run in blocks produced too little");
+         Assert (Proposed > 0, "the draft proposed nothing");
+         Assert (Draft_Last = Plain_Last and then Draft_Text = Plain_Text,
+                 "a paged target drafted by another model's paged session "
+                 & "said something else than the same run in blocks");
+
+         L.Close (Target, Status);
+         L.Close (Draft, Status);
+         Containers.Close (Target_Item);
+         Containers.Close (Draft_Item);
+      end;
+
+      B.Free (Padded);
+      B.Free (Small);
+      Model_Runner.Backend.Device.Close;
+   end A_Paged_Draft_Leaves_The_Target_Its_Own_Tables;
+
    --------------------------------------------------
    -- Drafting_Reports_The_Same_Probabilities --
    --------------------------------------------------
@@ -13047,6 +13224,10 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Adapters_Stack_And_Come_Off_Again'Access,
          "adapters stack, and a scale of minus one takes one off again");
+      Register_Routine
+        (T, A_Paged_Draft_Leaves_The_Target_Its_Own_Tables'Access,
+         "a paged target drafted by another model's paged session on the "
+         & "device says what the same run says in blocks");
       Register_Routine
         (T, A_Draft_Is_Found_Among_The_Stored_Models'Access,
          "a run with no draft named finds one among the stored models: the "

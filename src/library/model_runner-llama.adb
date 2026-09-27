@@ -6467,6 +6467,16 @@ package body Model_Runner.Llama is
      [others => null];
    Pages_Taken : Element_Count := 0;
 
+   --  Whose page tables are at the front of the pool, and where the front
+   --  was when they were written. Every paged session writes its tables
+   --  to the same place -- the front, Pages_Taken -- so a session may skip
+   --  writing them again only while they are still its own and the front
+   --  has not moved: a draft model's session between two of the target's
+   --  tokens wrote its own there, and the target, its pages reaching far
+   --  enough, read the draft's tables for its keys and values.
+   Tables_Of    : Session_Access := null;
+   Tables_Front : Element_Count := 0;
+
    --  How many slots are held, and the most that may be. The pool is
    --  bounded by the device's memory, which the reserve enforces; a server
    --  may bound it tighter, to hold more sessions in less by turning the
@@ -8218,7 +8228,11 @@ package body Model_Runner.Llama is
       --  layer to walk, no reserve to grow and nothing to write. Stamped
       --  above still, so a page turned out elsewhere is the one nobody has
       --  read for longest.
-      if Item.Paged_In and then Upto <= Element_Count (Item.Paged_Upto) then
+      if Item.Paged_In
+        and then Upto <= Element_Count (Item.Paged_Upto)
+        and then Tables_Of = Item
+        and then Tables_Front = Pages_Taken
+      then
          Ok := True;
          return;
       end if;
@@ -8341,6 +8355,8 @@ package body Model_Runner.Llama is
                if not Ok then
                   return;
                end if;
+               Tables_Of := Item;
+               Tables_Front := Pages_Taken;
             end;
          end;
       else

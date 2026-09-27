@@ -572,6 +572,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A draft model with paged sessions no longer changes what the model
+  says.** Every paged session writes its page tables to one shared place,
+  and a session whose pages already covered its position skipped the
+  write; after a rejected proposal the model re-read the draft's tables.
+  qwen3-8b drafted by qwen3-0.6b drifted into nonsense within a few
+  sentences. Fixed, it now drafts at 19.2 tokens a second against 14.3.
+
 - **A device test that failed no longer hangs.** A failed assertion in
   the long-prompt agreement test left its processor pool open, and the
   pool's scope waited for its workers for ever. A sequence stopped between
