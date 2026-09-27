@@ -748,6 +748,71 @@ package body Tests.Tools_Cases is
       Ada.Directories.Delete_Tree (Dir);
    end Memory_Persists_To_A_File;
 
+   --  A store file that will not parse leaves the runner with no notes and
+   --  raises nothing: a sound record followed by a damaged one keeps
+   --  neither, a length longer than any number is refused, and one that
+   --  reaches the largest number is refused rather than added to a position
+   --  past it.
+   procedure Damaged_Memory_File_Leaves_No_Notes
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Dir    : constant String := "obj/memory_damaged";
+      Store  : constant String := Dir & "/notes.mem";
+      Room   : String (1 .. Tools.Max_Call_Bytes);
+      Last   : Natural;
+      Status : E.Error_Info;
+
+      procedure Write (Content : String) is
+         use Ada.Streams;
+         F     : Stream_IO.File_Type;
+         Block : Stream_Element_Array
+           (1 .. Stream_Element_Offset (Content'Length));
+      begin
+         for I in Content'Range loop
+            Block (Stream_Element_Offset (I - Content'First + 1)) :=
+              Stream_Element (Character'Pos (Content (I)));
+         end loop;
+         Stream_IO.Create (F, Stream_IO.Out_File, Store);
+         Stream_IO.Write (F, Block);
+         Stream_IO.Close (F);
+      end Write;
+
+      --  What a fresh runner reading the store says for the key.
+      function Recalled (Key : String) return String is
+         Reader : Builtin.Instance;
+      begin
+         Reader.Use_Memory_File (Store);
+         Reader.Run ("memory_get", "{""key"":""" & Key & """}",
+                     Room, Last, Status);
+         return Room (1 .. Last);
+      end Recalled;
+
+      Nothing : constant String := "error: nothing remembered under that key";
+   begin
+      if Ada.Directories.Exists (Dir) then
+         Ada.Directories.Delete_Tree (Dir);
+      end if;
+      Ada.Directories.Create_Path (Dir);
+
+      Write ("1 a1 b");
+      Assert (Recalled ("a") = "b", "a sound store was not read");
+
+      Write ("1 a1 b" & "3 cd");
+      Assert (Recalled ("a") = Nothing,
+              "a store damaged after its first record kept that record");
+
+      Write ("99999999999999999999999 a1 b");
+      Assert (Recalled ("a") = Nothing,
+              "a length past any number was read as one");
+
+      Write ("1 a" & Natural'Image (Natural'Last) (2 .. 11) & " b");
+      Assert (Recalled ("a") = Nothing,
+              "a value length reaching the largest number was read");
+
+      Ada.Directories.Delete_Tree (Dir);
+   end Damaged_Memory_File_Leaves_No_Notes;
+
    --  A result too big for the call buffer keeps its head and its tail, with
    --  the middle dropped and its size noted, rather than losing everything
    --  past the head. read_file over an oversized file shows it: the file's
@@ -1473,6 +1538,9 @@ package body Tests.Tools_Cases is
       Register_Routine
         (T, Parallel_Safety_Is_Marked'Access,
          "the runner marks which tools may overlap and which may not");
+      Register_Routine
+        (T, Damaged_Memory_File_Leaves_No_Notes'Access,
+         "a damaged memory file leaves no notes and raises nothing");
       Register_Routine
         (T, Memory_Persists_To_A_File'Access,
          "a note written with a memory file behind it is read back by a "

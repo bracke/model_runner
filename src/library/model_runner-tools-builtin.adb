@@ -649,7 +649,11 @@ package body Model_Runner.Tools.Builtin is
    end Save_Store;
 
    --  Read the notes from the store into the runner. A file that is missing
-   --  or will not parse leaves the runner with no notes rather than failing.
+   --  or will not parse leaves the runner with no notes rather than failing:
+   --  the whole file is read into notes of its own first and the runner's
+   --  are replaced only when every record in it parsed, so a file damaged
+   --  part way does not leave the runner holding the part before the damage
+   --  as though it were all there was.
    procedure Load_Store (Self : in out Instance) is
       Path : constant String := U.To_String (Self.Store);
    begin
@@ -662,16 +666,33 @@ package body Model_Runner.Tools.Builtin is
          Data : constant String := Read_Bytes (Path);
          Pos  : Natural := Data'First;
 
+         Read      : Notes;
+         Read_Used : Natural := 0;
+
+         --  Bytes from Pos to the end, which is how far a length may reach:
+         --  asked as a subtraction, so a length near the largest number is
+         --  refused rather than added to a position past it.
+         function Left return Natural
+         is (if Pos > Data'Last then 0 else Data'Last - Pos + 1);
+
          --  A decimal length followed by one space; Ok is false when what is
-         --  there is not that shape, which ends the parse.
+         --  there is not that shape, or is a number past what a length can
+         --  be, which ends the parse.
          function Read_Length (Ok : out Boolean) return Natural is
             N    : Natural := 0;
             Seen : Boolean := False;
          begin
             Ok := False;
             while Pos <= Data'Last and then Data (Pos) in '0' .. '9' loop
-               N := N * 10 + (Character'Pos (Data (Pos))
-                              - Character'Pos ('0'));
+               declare
+                  Digit : constant Natural :=
+                    Character'Pos (Data (Pos)) - Character'Pos ('0');
+               begin
+                  if N > (Natural'Last - Digit) / 10 then
+                     return 0;
+                  end if;
+                  N := N * 10 + Digit;
+               end;
                Pos  := Pos + 1;
                Seen := True;
             end loop;
@@ -682,14 +703,14 @@ package body Model_Runner.Tools.Builtin is
             return N;
          end Read_Length;
       begin
-         Read_Notes :
          while Pos <= Data'Last loop
             declare
                Good_K : Boolean;
                K_Len  : constant Natural := Read_Length (Good_K);
             begin
-               exit Read_Notes when not Good_K
-                 or else Pos + K_Len - 1 > Data'Last;
+               if not Good_K or else K_Len > Left then
+                  return;
+               end if;
                declare
                   Key    : constant String := Data (Pos .. Pos + K_Len - 1);
                   Good_V : Boolean;
@@ -697,22 +718,27 @@ package body Model_Runner.Tools.Builtin is
                begin
                   Pos   := Pos + K_Len;
                   V_Len := Read_Length (Good_V);
-                  exit Read_Notes when not Good_V
-                    or else Pos + V_Len - 1 > Data'Last;
+                  if not Good_V or else V_Len > Left then
+                     return;
+                  end if;
                   declare
                      Value : constant String := Data (Pos .. Pos + V_Len - 1);
                   begin
                      Pos := Pos + V_Len;
-                     if Self.Used < Max_Notes then
-                        Self.Used := Self.Used + 1;
-                        Self.Memory (Self.Used) :=
+                     if Read_Used < Max_Notes then
+                        Read_Used := Read_Used + 1;
+                        Read (Read_Used) :=
                           (Key   => U.To_Unbounded_String (Key),
                            Value => U.To_Unbounded_String (Value));
                      end if;
                   end;
                end;
             end;
-         end loop Read_Notes;
+         end loop;
+
+         --  Every record parsed, to the last byte: these are the notes.
+         Self.Memory := Read;
+         Self.Used := Read_Used;
       end;
    end Load_Store;
 
