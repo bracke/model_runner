@@ -6946,7 +6946,7 @@ package body Model_Runner.Platform.Device.Products is
    -- Reserve --
    -------------
 
-   procedure Reserve
+   procedure Reserve_Exact
      (Item            : in out Engine;
       Elements        : Model_Runner.Numerics.Element_Count;
       Copy_Upto       : Model_Runner.Numerics.Element_Count;
@@ -7419,6 +7419,52 @@ package body Model_Runner.Platform.Device.Products is
       Item.Copy_Only := Copy_Only;
       Item.Copy_Split := Split;
       Item.Copy_Keys_Halves := (if Split then Interfaces.Unsigned_64 (Keys_Upto) else 0);
+   end Reserve_Exact;
+
+   --  What Reserve_Exact does, with room to grow. A paged cache grows by a
+   --  page's worth of tables at a time, and two paged sessions -- a model
+   --  and its draft -- ask for sizes a few kilobytes apart; asked for
+   --  exactly, the buffer was made again and the whole cache copied into
+   --  it at every step up: qwen3-8b drafted by qwen3-0.6b spent 2.4 s of a
+   --  9.4 s run, 12 ms a time, in 202 of them. Made a quarter larger than
+   --  asked, where the budget allows, a step up is a step into room
+   --  already there; where it does not, it is made to size as before.
+   procedure Reserve
+     (Item            : in out Engine;
+      Elements        : Model_Runner.Numerics.Element_Count;
+      Copy_Upto       : Model_Runner.Numerics.Element_Count;
+      Ok              : out Boolean;
+      Allow_Copy_Only : Boolean := False;
+      Keys_Upto       : Model_Runner.Numerics.Element_Count := 0)
+   is
+
+      function Roomier
+        (Count : Model_Runner.Numerics.Element_Count)
+         return Model_Runner.Numerics.Element_Count
+      is (Count + Count / 4);
+
+      Wanted      : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Elements) * 4;
+      Copy_Wanted : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Copy_Upto) * 2;
+   begin
+      --  Room enough already: the exact call answers at once.
+      if Item.Cache_Bytes >= Wanted
+        and then (Item.Copy_Bytes >= Copy_Wanted
+                  or else not Wants_Copy (Item))
+      then
+         Reserve_Exact
+           (Item, Elements, Copy_Upto, Ok, Allow_Copy_Only, Keys_Upto);
+         return;
+      end if;
+
+      Reserve_Exact
+        (Item, Roomier (Elements), Roomier (Copy_Upto), Ok, Allow_Copy_Only,
+         (if Keys_Upto = 0 then 0 else Roomier (Keys_Upto)));
+      if not Ok then
+         Reserve_Exact
+           (Item, Elements, Copy_Upto, Ok, Allow_Copy_Only, Keys_Upto);
+      end if;
    end Reserve;
 
    -------------------

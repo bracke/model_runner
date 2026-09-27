@@ -573,6 +573,12 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A paged cache no longer copies itself whole as it grows.** Each step up
+  of a paged cache made the device's buffer again at the exact new size and
+  copied the whole cache into it; a model and its draft model stepped up
+  in turn. It is now made with a quarter to spare. qwen3-8b drafted by
+  qwen3-0.6b after a 1,300-token prompt: 13.6 -> 17.5 tokens a second.
+
 - **A model with merged Q, K and V runs whole layers on the device again.**
   The device's check for the step that reads its own rows of a fused
   projection still asked for the projection to be exactly its width, so

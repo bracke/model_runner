@@ -4799,6 +4799,72 @@ package body Tests.Backend_Cases is
    --  forever -- on a device of its own beside the engine's.
    --
    --  Skipped where there is no device.
+   --  A cache asked for a little more than it holds is not made again.
+   --
+   --  A paged cache grows by a page's worth of tables at a time, and two
+   --  paged sessions ask for sizes a few kilobytes apart. Reserve made the
+   --  buffer again to the exact size and copied the whole cache into it at
+   --  every step up -- qwen3-8b drafted by qwen3-0.6b spent 2.4 s of 9.4 in
+   --  202 of them. Grown with room, a step up is a step into room already
+   --  there.
+   --
+   --  Skipped where there is no device.
+   procedure A_Cache_Grows_With_Room
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      use type Interfaces.Unsigned_64;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+      Found  : Boolean;
+      Ready  : Boolean;
+      Ok     : Boolean;
+   begin
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Devices.Open (Opened, Held, 1, Ready);
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Open (Engine, Opened, Ready);
+      if not Ready then
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Reserve (Engine, 100_000, 100_000, Ok);
+      Assert (Ok, "the first reserve was refused");
+
+      declare
+         First : constant Interfaces.Unsigned_64 := Products.Cached_Bytes (Engine);
+      begin
+         Assert (First >= 400_000, "the first reserve holds less than asked");
+
+         --  A page's tables more: into room already there.
+         Products.Reserve (Engine, 100_700, 100_700, Ok);
+         Assert (Ok, "the second reserve was refused");
+         Assert (Products.Cached_Bytes (Engine) = First,
+                 "a step up of 700 elements made the cache again:"
+                 & Interfaces.Unsigned_64'Image (First) & " ->"
+                 & Interfaces.Unsigned_64'Image
+                     (Products.Cached_Bytes (Engine)));
+      end;
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Cache_Grows_With_Room;
+
    procedure The_Keeper_Spins_While_Asked_And_Stops_After
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -5494,11 +5560,16 @@ package body Tests.Backend_Cases is
             --  that says no for the other reason.
             Products.Reserve (Engine, Between, Between, Ok);
 
+            --  Six bytes an element, and up to a quarter more: a cache made
+            --  again is made with room to grow where the bound allows.
             if Ok then
                Assert (Products.Cached_Bytes (Engine)
-                       = Interfaces.Unsigned_64 (Between) * 6,
+                         >= Interfaces.Unsigned_64 (Between) * 6
+                       and then Products.Cached_Bytes (Engine)
+                         <= Interfaces.Unsigned_64 (Between + Between / 4) * 6,
                        "a cache the two buffers hold takes something other "
-                       & "than six bytes an element of the device");
+                       & "than six bytes an element of the device, and up to "
+                       & "a quarter more");
             end if;
          end;
       end if;
@@ -8634,6 +8705,9 @@ package body Tests.Backend_Cases is
         (T, The_Packed_Attention_Says_Which_Heads_It_Reads'Access,
          "the packed attention says which head shapes it reads: a whole "
          & "number of fours, and a value head within the room it keeps");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Cache_Grows_With_Room'Access,
+         "a cache asked for a little more than it holds is not made again");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, The_Keeper_Spins_While_Asked_And_Stops_After'Access,
          "the keeper spins while the engine says it is working, stops soon "
