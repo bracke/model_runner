@@ -6248,6 +6248,127 @@ package body Tests.Inference_Cases is
       Model_Runner.Backend.Device.Close;
    end A_Draft_Of_Smaller_Pages_Is_Paged_Beside_Its_Model;
 
+   ------------------------------------------------
+   -- A_Drafted_Run_Rewinds_Inside_Its_Window --
+   ------------------------------------------------
+
+   --  A drafted run on a sliding-window model goes past the window's ring,
+   --  rewinding as proposals are refused, and says what it says undrafted.
+   --
+   --  A slide kept exactly a window behind the newest position; a round
+   --  runs positions ahead and rewinds to the last agreed, and the window
+   --  of the position rewound to reached a cell the slide had let go --
+   --  gemma-3-4b drafted by Gemma 3 270M stopped with a range check about
+   --  1,200 positions in. Here a window of eight, a ring of 520 cells, and
+   --  a draft of other weights, so that proposals are refused.
+   procedure A_Drafted_Run_Rewinds_Inside_Its_Window
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Gen renames Model_Runner.Generation;
+
+      Target_Image, Draft_Image : B.Byte_Array_Access;
+
+      Prompt : String (1 .. 400);
+   begin
+      for Index in Prompt'Range loop
+         Prompt (Index) := (if Index mod 3 = 0 then 'b' else 'a');
+      end loop;
+
+      Tiny_Model.Build
+        (Target_Image, Room => 720, Window => 8, Padding => 8);
+      Tiny_Model.Build (Draft_Image, Room => 720, Window => 8);
+
+      declare
+         Held_Target : aliased constant B.Byte_Array := Target_Image.all;
+         Held_Draft  : aliased constant B.Byte_Array := Draft_Image.all;
+         Target : aliased Harness (Held_Target'Access);
+         Draft  : aliased Harness (Held_Draft'Access);
+
+         procedure Turn
+           (With_Draft : Boolean;
+            Text       : out Model_Runner.Bytes.Byte_Array_Access;
+            Length     : out Natural;
+            Proposed   : out Natural;
+            Accepted   : out Natural;
+            Reached    : out Natural)
+         is
+            Live    : L.Session;
+            Second  : aliased L.Session;
+            Request : Gen.Request;
+            Stop    : Model_Runner.Stops.Set;
+            Outcome : Gen.Result;
+            Local   : E.Error_Info;
+         begin
+            L.Open (Live, Target.Ready, 720, Status => Local);
+            Assert (E.Is_Ok (Local), "the session did not open");
+            if With_Draft then
+               L.Open (Second, Draft.Ready, 720, Status => Local);
+               Assert (E.Is_Ok (Local), "the draft session did not open");
+            end if;
+
+            Model_Runner.Stops.Open (Stop);
+            Request.Max_Tokens := 400;
+            Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+            Request.Seed := 3;
+            Request.Has_Seed := True;
+            Request.Add_Beginning := True;
+            Request.Retain_Text := True;
+            Request.Draft_Tokens := (if With_Draft then 3 else 0);
+
+            Gen.Generate
+              (Target.Ready, Live, Prompt, Request, Stop, null, null,
+               null, null, null, null,
+               Draft =>
+                 (if With_Draft then Draft.Ready'Unchecked_Access else null),
+               Draft_Session =>
+                 (if With_Draft then Second'Unchecked_Access else null),
+               Outcome => Outcome);
+
+            Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                    "the run failed: "
+                    & E.Error_Code'Image (Outcome.Error.Code));
+
+            Text := Outcome.Text;
+            Length := Outcome.Text_Length;
+            Proposed := Outcome.Drafted;
+            Accepted := Outcome.Accepted;
+            Reached := L.Position (Live);
+
+            Model_Runner.Stops.Close (Stop);
+            if With_Draft then
+               L.Close (Second);
+            end if;
+            L.Close (Live);
+         end Turn;
+
+         Plain_Text, Draft_Text : Model_Runner.Bytes.Byte_Array_Access;
+         Plain_Last, Draft_Last : Natural;
+         Ignored_A, Ignored_B, Ignored_C : Natural;
+         Proposed, Accepted, Reached : Natural;
+      begin
+         Start (Target);
+         Start (Draft);
+
+         Turn (False, Plain_Text, Plain_Last, Ignored_A, Ignored_B, Ignored_C);
+         Turn (True, Draft_Text, Draft_Last, Proposed, Accepted, Reached);
+
+         Assert (Reached > 8 + L.Max_Batch,
+                 "the drafted run stopped at" & Natural'Image (Reached)
+                 & ", short of the window's ring");
+         Assert (Proposed > Accepted,
+                 "no proposal was refused, so nothing rewound");
+         Assert (Plain_Last > 0 and then Draft_Last = Plain_Last
+                 and then B."=" (Plain_Text.all (1 .. B.Byte_Index (Plain_Last)),
+                                 Draft_Text.all (1 .. B.Byte_Index (Draft_Last))),
+                 "the drafted run said something else past the ring");
+      end;
+
+      B.Free (Target_Image);
+      B.Free (Draft_Image);
+   end A_Drafted_Run_Rewinds_Inside_Its_Window;
+
    ---------------------------------------------------
    -- A_Shift_On_The_Device_Reaches_Its_Cache_Copy --
    ---------------------------------------------------
@@ -13738,6 +13859,11 @@ package body Tests.Inference_Cases is
         (T, A_Draft_Of_Smaller_Pages_Is_Paged_Beside_Its_Model'Access,
          "a draft whose pages are smaller than its model's is paged beside "
          & "it, and the run says what the same run says in blocks");
+      Register_Routine
+        (T, A_Drafted_Run_Rewinds_Inside_Its_Window'Access,
+         "a drafted run on a sliding-window model goes past the window's "
+         & "ring, rewinding as proposals are refused, and says what it says "
+         & "undrafted");
       Register_Routine
         (T, A_Shift_On_The_Device_Reaches_Its_Cache_Copy'Access,
          "a paged session shifted on the device says, a token later, what "

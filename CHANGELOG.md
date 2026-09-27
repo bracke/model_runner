@@ -573,6 +573,12 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A drafted run on a sliding-window model no longer stops with an
+  internal error.** Rewinding refused proposals could reach back past the
+  positions the window had kept: gemma-3-4b drafted by Gemma 3 270M
+  stopped about 1,200 positions into a conversation. The window now keeps
+  a little slack behind it.
+
 - **Gemma 3 no longer loses the thread past its window on the device.** A
   sliding-window layer moves its kept positions down as the window slides,
   and a paged session -- the device's default -- kept them where they were:

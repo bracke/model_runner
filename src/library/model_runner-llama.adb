@@ -12555,6 +12555,11 @@ package body Model_Runner.Llama is
       --  Whether any layer's rows moved down, which a paged session's
       --  pages do not follow.
       Slid : Boolean := False;
+
+      --  Positions a slide keeps past the window, for a rewind to land in:
+      --  a drafted round's worth and more. A ring keeps a batch's worth of
+      --  cells past the window, so this is room it has.
+      Rewind_Slack : constant := 64;
    begin
       if Item.Cells = null or else Settings.Window = 0 then
          return;
@@ -12597,8 +12602,16 @@ package body Model_Runner.Llama is
                   --  the positions about to be written.
                   Held  : constant Element_Count :=
                     Element_Count (Item.Committed);
+                  --  A window's worth behind the newest position, and a
+                  --  little more: a drafted round runs positions ahead and
+                  --  rewinds to the last agreed, and the window of a
+                  --  position rewound to reaches back past one kept for the
+                  --  newest. Kept to the window alone, gemma-3-4b drafted by
+                  --  Gemma 3 270M stopped with a range check some 1,200
+                  --  positions in, reading a cell the slide had let go.
                   Start : constant Element_Count :=
-                    (if Held < Width then 0 else Held - Width + 1);
+                    (if Held < Width + Rewind_Slack then 0
+                     else Held - Width - Rewind_Slack + 1);
                   Moved : constant Element_Count :=
                     (if Start >= Held then 0 else Held - Start);
 
