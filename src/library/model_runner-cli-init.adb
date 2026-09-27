@@ -1,7 +1,7 @@
 with Ada.Strings.Unbounded;
-with Ada.Text_IO;
 
 with Model_Runner.Errors;
+with Model_Runner.CLI.Choosers;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Records;
@@ -25,30 +25,6 @@ package body Model_Runner.CLI.Init is
    package T renames Model_Runner.Text;
    package Tp renames Model_Runner.Framework.Templates;
 
-   --  A line typed at the terminal, or nothing at the end of input.
-   function Answer return String is
-   begin
-      return Ada.Text_IO.Get_Line;
-   exception
-      when Ada.Text_IO.End_Error =>
-         return "";
-   end Answer;
-
-   function Trimmed (Text : String) return String is
-      First : Natural := Text'First;
-      Last  : Natural := Text'Last;
-   begin
-      while First <= Last and then Text (First) in ' ' | ASCII.HT | ASCII.CR
-      loop
-         First := First + 1;
-      end loop;
-      while Last >= First and then Text (Last) in ' ' | ASCII.HT | ASCII.CR
-      loop
-         Last := Last - 1;
-      end loop;
-      return Text (First .. Last);
-   end Trimmed;
-
    ---------
    -- Run --
    ---------
@@ -62,9 +38,7 @@ package body Model_Runner.CLI.Init is
         (if T.Is_Empty (Item.Project_Directory) then "."
          else T.To_String (Item.Project_Directory));
 
-      Interactive : constant Boolean :=
-        Model_Runner.Platform.Is_Terminal (0)
-        and then Model_Runner.Platform.Is_Terminal (2);
+      Interactive : constant Boolean := Choosers.Is_Available;
 
       Places   : Model_Runner.Framework.Name_Lists.Vector;
       Registry : Tp.Registry;
@@ -133,54 +107,57 @@ package body Model_Runner.CLI.Init is
          end loop;
       end Show_Facts;
 
-      --  The template a typed answer names: its number or its identifier.
-      function Picked (Typed : String) return String is
-         Number : Natural := 0;
-      begin
-         if Typed'Length in 1 .. 4
-           and then (for all Char of Typed => Char in '0' .. '9')
-         then
-            Number := Natural'Value (Typed);
-         end if;
-         if Number in 1 .. Tp.Count (Registry) then
-            return Tp.Id (Tp.Template_At (Registry, Number));
-         end if;
-         return Typed;
-      end Picked;
-
       --  Ask for one input until it is given a value it takes, or the
-      --  caller gives nothing.
+      --  caller gives up.
       procedure Ask (Declared : Tp.Input_Declaration; Got : out Boolean) is
          Check : E.Error_Info;
+         Typed : Unbounded_String;
       begin
-         Got := False;
          loop
-            Pres.Put_Note
-              (Screen, "cli.init.input",
-               [Loc.Named ("name", To_String (Declared.Label)),
-                Loc.Named ("detail", To_String (Declared.Description))]);
-            if Declared.Choices /= Null_Unbounded_String then
-               Pres.Put_Note
-                 (Screen, "cli.init.choices",
-                  [Loc.Named ("value", To_String (Declared.Choices))]);
+            Choosers.Ask
+              (Screen, To_String (Declared.Label),
+               To_String (Declared.Description), To_String (Declared.Choices),
+               To_String (Declared.Default), Typed, Got);
+            if not Got then
+               return;
             end if;
-
-            declare
-               Typed : constant String := Trimmed (Answer);
-            begin
-               if Typed = "" then
-                  return;
-               end if;
-               Cf.Check_Input (Declared, Typed, Check);
-               if E.Is_Ok (Check) then
-                  Given.Include (To_String (Declared.Id), Typed);
-                  Got := True;
-                  return;
-               end if;
-               Pres.Report (Screen, Check);
-            end;
+            Cf.Check_Input (Declared, To_String (Typed), Check);
+            if E.Is_Ok (Check) then
+               Given.Include (To_String (Declared.Id), To_String (Typed));
+               return;
+            end if;
+            Pres.Report (Screen, Check);
          end loop;
       end Ask;
+
+      --  The templates to choose from, the ones that cannot be used shown
+      --  with why and not taken.
+      function Offered return Choosers.Choice_List is
+         Result : Choosers.Choice_List;
+      begin
+         for Index in 1 .. Tp.Count (Registry) loop
+            declare
+               Shown   : constant Tp.Template := Tp.Template_At (Registry, Index);
+               Problem : constant E.Error_Info := Tp.Problem (Registry, Index);
+            begin
+               Choosers.Append
+                 (Result,
+                  (Label      => To_Unbounded_String
+                                   (Tp.Display_Name (Shown) & "  ("
+                                    & Tp.Id (Shown) & ")"),
+                   Tag        => Null_Unbounded_String,
+                   Details    => To_Unbounded_String
+                                   (Tp.Description (Shown) & ASCII.LF
+                                    & Tp.Details (Shown) & ASCII.LF
+                                    & (if E.Is_Ok (Problem) then ""
+                                       else Pres.Message_Value
+                                              (Screen, "cli.init.cannot"))),
+                   Selectable => E.Is_Ok (Problem)));
+            end;
+         end loop;
+         return Result;
+      end Offered;
+
    begin
       Status := E.Exit_Success;
 
@@ -204,20 +181,24 @@ package body Model_Runner.CLI.Init is
             return;
          end if;
 
-         Pres.Put_Message (Screen, "cli.init.header");
-         List;
-
          if not Interactive then
+            Pres.Put_Message (Screen, "cli.init.header");
+            List;
             Outcome := E.Make (E.Framework_Input_Missing);
             E.Add_Text (Outcome, "name", "template");
             Fail (Outcome);
             return;
          end if;
 
-         Pres.Put_Note
-           (Screen, "cli.init.choose",
-            [Loc.Named ("count", T.Image (Long_Long_Integer (Tp.Count (Registry))))]);
-         Chosen := To_Unbounded_String (Picked (Trimmed (Answer)));
+         declare
+            Picked : constant Natural :=
+              Choosers.Choose (Screen, "cli.init.choose", Offered);
+         begin
+            if Picked > 0 then
+               Chosen := To_Unbounded_String
+                 (Tp.Id (Tp.Template_At (Registry, Picked)));
+            end if;
+         end;
          if Chosen = Null_Unbounded_String then
             Pres.Put_Note (Screen, "cli.init.cancelled");
             Status := E.Exit_Cancelled;

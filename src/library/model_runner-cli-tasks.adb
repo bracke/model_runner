@@ -1,13 +1,13 @@
+with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
-with Ada.Text_IO;
 
+with Model_Runner.CLI.Choosers;
 with Model_Runner.Errors;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Localization;
-with Model_Runner.Platform;
 with Model_Runner.Text;
 
 package body Model_Runner.CLI.Tasks is
@@ -22,29 +22,6 @@ package body Model_Runner.CLI.Tasks is
    package S renames Model_Runner.Framework.Stores;
    package T renames Model_Runner.Text;
    package Tk renames Model_Runner.Framework.Tasks;
-
-   function Answer return String is
-   begin
-      return Ada.Text_IO.Get_Line;
-   exception
-      when Ada.Text_IO.End_Error =>
-         return "";
-   end Answer;
-
-   function Trimmed (Text : String) return String is
-      First : Natural := Text'First;
-      Last  : Natural := Text'Last;
-   begin
-      while First <= Last and then Text (First) in ' ' | ASCII.HT | ASCII.CR
-      loop
-         First := First + 1;
-      end loop;
-      while Last >= First and then Text (Last) in ' ' | ASCII.HT | ASCII.CR
-      loop
-         Last := Last - 1;
-      end loop;
-      return Text (First .. Last);
-   end Trimmed;
 
    function Joined
      (Items : Model_Runner.Framework.Name_Lists.Vector) return String
@@ -77,9 +54,7 @@ package body Model_Runner.CLI.Tasks is
          else T.To_String (Item.Task_Action));
       Argument  : constant String := T.To_String (Item.Task_Argument);
 
-      Interactive : constant Boolean :=
-        Model_Runner.Platform.Is_Terminal (0)
-        and then Model_Runner.Platform.Is_Terminal (2);
+      Interactive : constant Boolean := Choosers.Is_Available;
 
       Store   : S.Store;
       Report  : S.Recovery_Report;
@@ -179,16 +154,23 @@ package body Model_Runner.CLI.Tasks is
                                         | E.Framework_Task_Kind_Unknown;
 
             if Outcome.Code = E.Framework_Task_Kind_Unknown then
-               Pres.Put_Note
-                 (Screen, "cli.task.kinds",
-                  [Loc.Named ("value", Joined (Tk.Kinds (Store)))]);
-               Pres.Put_Note
-                 (Screen, "cli.task.input", [Loc.Named ("name", "kind")]);
                declare
-                  Typed : constant String := Trimmed (Answer);
+                  Known : constant Model_Runner.Framework.Name_Lists.Vector :=
+                    Tk.Kinds (Store);
+                  Offer : Choosers.Choice_List;
+                  Taken : Natural;
                begin
-                  exit when Typed = "";
-                  Fields.Include ("kind", Typed);
+                  for Kind of Known loop
+                     Choosers.Append
+                       (Offer,
+                        (Label   => To_Unbounded_String (Kind),
+                         Details => To_Unbounded_String
+                                      (Joined (Tk.Allowed_Fields (Store, Kind))),
+                         others  => <>));
+                  end loop;
+                  Taken := Choosers.Choose (Screen, "cli.task.choose_kind", Offer);
+                  exit when Taken = 0;
+                  Fields.Include ("kind", Known (Taken));
                end;
             else
                declare
@@ -196,27 +178,24 @@ package body Model_Runner.CLI.Tasks is
                     Tk.Required_Fields
                       (Store, (if Fields.Contains ("kind")
                                then Fields ("kind") else ""));
-                  Asked  : Boolean := False;
+                  Typed  : Unbounded_String;
+                  Got    : Boolean;
                begin
                   Wanted.Prepend ("title");
                   for Field of Wanted loop
                      if not Fields.Contains (Field)
-                       or else Trimmed (Fields (Field)) = ""
+                       or else Ada.Strings.Fixed.Trim (Fields (Field), Ada.Strings.Both) = ""
                      then
-                        Pres.Put_Note
-                          (Screen, "cli.task.input",
-                           [Loc.Named ("name", Field)]);
-                        declare
-                           Typed : constant String := Trimmed (Answer);
-                        begin
-                           if Typed /= "" then
-                              Fields.Include (Field, Typed);
-                              Asked := True;
-                           end if;
-                        end;
+                        Choosers.Ask (Screen, Field, "", "", "", Typed, Got);
+                        if not Got then
+                           Pres.Put_Note (Screen, "cli.task.cancelled");
+                           Status := E.Exit_Cancelled;
+                           Outcome := E.Success;
+                           return;
+                        end if;
+                        Fields.Include (Field, To_String (Typed));
                      end if;
                   end loop;
-                  exit when not Asked;
                end;
             end if;
          end loop;

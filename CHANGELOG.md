@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **One terminal interface for every command that asks (Phase F).** A
+  selector with arrow and page keys, a / filter that narrows as it is
+  typed, Tab for details, Enter to choose and Escape to give up; a choice
+  that cannot be taken shows why instead. The window is measured at every
+  key, so a resize is redrawn to fit, and the terminal's mode is put back
+  on every way out. Forms ask for each value through it -- choices by the
+  selector, anything else on a line with its default. `init` chooses its
+  template and `task new` its kind and fields through it; without a
+  terminal both say what is missing and stop.
+
 - **`model_runner task` manages persistent work (Phase E).** A task is a
   definition -- title, kind, component, requirements, dependencies,
   parent, provenance -- and a runtime state moved only by the lifecycle's

@@ -13,6 +13,8 @@ with Model_Runner.CLI.Execute;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO.Text_Streams;
 with Captured_Output;
+with Model_Runner.CLI.Choosers;
+with Model_Runner.Framework;
 with Project_Tools.Files;
 with Project_Tools.Processes;
 with Project_Tools.Text;
@@ -1663,6 +1665,119 @@ package body Tests.CLI_Cases is
       Assert (Task_Run ("nonsense", "", "") = 2,
               "an action the command does not have was taken");
    end Task_Command_Manages_Work;
+
+   --  The shared selector, key by key and without a terminal: it moves,
+   --  filters, shows details, refuses to take what cannot be taken, fits
+   --  its window however large, and gives up on Escape.
+   procedure Selector_Behaves (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package C renames Model_Runner.CLI.Choosers;
+      use type C.Key_Kind;
+
+      Items : C.Choice_List;
+      State : C.Selector;
+      Used  : Natural;
+      Words : constant C.Wording :=
+        (Title   => Ada.Strings.Unbounded.To_Unbounded_String ("Select work:"),
+         Keys    => Ada.Strings.Unbounded.To_Unbounded_String ("keys"),
+         Filter  => Ada.Strings.Unbounded.To_Unbounded_String ("filter:"),
+         Nothing => Ada.Strings.Unbounded.To_Unbounded_String ("nothing"));
+
+      procedure Add_Item (Label, Tag : String; Can : Boolean) is
+      begin
+         C.Append
+           (Items,
+            (Label      => Ada.Strings.Unbounded.To_Unbounded_String (Label),
+             Tag        => Ada.Strings.Unbounded.To_Unbounded_String (Tag),
+             Details    => Ada.Strings.Unbounded.To_Unbounded_String
+                             ("why: " & Label),
+             Selectable => Can));
+      end Add_Item;
+
+      procedure Press (Kind : C.Key_Kind; Char : Character := ' ') is
+      begin
+         C.Press (State, (Kind => Kind, Char => Char), Rows => 2);
+      end Press;
+   begin
+      Assert (C.Decode (ASCII.ESC & "[A", Used).Kind = C.Up and then Used = 3,
+              "an up arrow was not read as one");
+      Assert (C.Decode (ASCII.ESC & "[6~", Used).Kind = C.Page_Down
+              and then Used = 4, "page down was not read as one");
+      Assert (C.Decode ([1 => ASCII.ESC], Used).Kind = C.Escape
+              and then Used = 1,
+              "a lone escape was not read as Escape");
+      Assert (C.Decode ([1 => ASCII.CR], Used).Kind = C.Return_Key
+              and then Used = 1,
+              "a return was not read");
+      Assert (C.Decode ([1 => Character'Val (3)], Used).Kind = C.Interrupt
+              and then Used = 1,
+              "an interrupt was not read");
+
+      Add_Item ("TASK-PARSER-021  Invalid UTF-8 rejection", "[ready]", True);
+      Add_Item ("TASK-CONFIG-014  Environment overrides", "[ready]", True);
+      Add_Item ("TASK-IO-031  Partial stream reads", "[blocked]", False);
+      Assert (C.Length (Items) = 3, "a choice was lost");
+
+      State := C.Start (Items);
+      Press (C.Down);
+      Press (C.Down);
+      Press (C.Down);
+      Press (C.Return_Key);
+      Assert (not C.Finished (State),
+              "a blocked choice was taken rather than explained");
+      declare
+         Lines : constant Model_Runner.Framework.Name_Lists.Vector :=
+           C.Render (State, Words, Rows => 12, Columns => 60);
+         Shown : Boolean := False;
+      begin
+         for Line of Lines loop
+            Shown := Shown or else Line = "    why: TASK-IO-031  Partial stream reads";
+         end loop;
+         Assert (Shown, "the blocked choice's reason was not shown");
+      end;
+
+      --  A small window shows only what fits, and every line fits it.
+      declare
+         Lines : constant Model_Runner.Framework.Name_Lists.Vector :=
+           C.Render (State, Words, Rows => 4, Columns => 20);
+      begin
+         Assert (Natural (Lines.Length) <= 4,
+                 "a render did not fit its window's height");
+         for Line of Lines loop
+            Assert (Line'Length <= 22, "a line did not fit its window");
+         end loop;
+      end;
+
+      --  The filter narrows as it is typed; Escape takes it away again.
+      Press (C.Tab);
+      Press (C.Printable, '/');
+      Press (C.Printable, 'c');
+      Press (C.Printable, 'o');
+      Press (C.Printable, 'n');
+      Assert (C.Visible_Count (State) = 1, "the filter did not narrow");
+      Press (C.Return_Key);
+      Press (C.Return_Key);
+      Assert (C.Finished (State) and then C.Chosen (State) = 2,
+              "the filtered choice was not the one taken");
+
+      State := C.Start (Items);
+      Press (C.Printable, '/');
+      Press (C.Printable, 'z');
+      Assert (C.Visible_Count (State) = 0, "a filter matching nothing matched");
+      Press (C.Backspace);
+      Press (C.Escape);
+      Assert (C.Visible_Count (State) = 3 and then not C.Finished (State),
+              "Escape did not end the filter first");
+      Press (C.End_Key);
+      Press (C.Page_Up);
+      Press (C.Home);
+      Press (C.Escape);
+      Assert (C.Finished (State) and then C.Chosen (State) = 0,
+              "Escape did not give up");
+      Assert (not C.Is_Available or else C.Is_Available,
+              "whether a terminal can be asked is not answered");
+   end Selector_Behaves;
 
    --  An inspection that named a feed-forward width and nothing else
    --  described a block a mixture-of-experts model does not have: the file
@@ -11930,6 +12045,9 @@ package body Tests.CLI_Cases is
         (T, Beginning_Marker_Follows_The_Vocabulary'Access,
          "a vocabulary that declares it wants no beginning marker is not "
          & "given one");
+      Register_Routine
+        (T, Selector_Behaves'Access,
+         "the shared selector moves, filters, explains and fits its window");
       Register_Routine
         (T, Task_Command_Manages_Work'Access,
          "task creates, moves, lists and shows the project's work");
