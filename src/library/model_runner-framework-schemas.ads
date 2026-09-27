@@ -35,6 +35,9 @@ package Model_Runner.Framework.Schemas is
    --  A project's resolved configuration, current or of one revision.
    Configuration_Schema : constant String := "project.configuration";
 
+   --  A specification, requirement or decision.
+   Intent_Schema : constant String := "intent.entity";
+
    --  One event.
    Event_Schema : constant String := "event.record";
 

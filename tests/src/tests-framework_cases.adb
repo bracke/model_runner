@@ -7,11 +7,14 @@ with AUnit.Assertions;
 
 with Model_Runner.Errors;
 with Model_Runner.Framework;
+with Model_Runner.Framework.Authority;
+with Model_Runner.Framework.Bootstrap;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Facts;
 with Model_Runner.Framework.Identifiers;
+with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Leases;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Results;
@@ -1491,6 +1494,427 @@ package body Tests.Framework_Cases is
    end Consistency_Finds_What_Is_Wrong;
 
    ---------------------------------------------------------------------------
+   --  Specifications, requirements, decisions, authority and bootstrap.
+   ---------------------------------------------------------------------------
+
+   package Nt renames Model_Runner.Framework.Intent;
+   package Au renames Model_Runner.Framework.Authority;
+   package Bs renames Model_Runner.Framework.Bootstrap;
+
+   --  A requirement goes through its lifecycle, and a revision that
+   --  changes its meaning undoes what no longer applies without rewriting
+   --  what was.
+   procedure Requirement_Revisions_Invalidate
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Project : constant String := Fresh ("requirements");
+      Store   : S.Store;
+      Status  : E.Error_Info;
+      Change  : S.Transaction;
+      Id      : Unbounded_String;
+      Value   : Nt.Entity;
+      Effect  : Nt.Impact;
+      Kept    : R.Item;
+
+      procedure Move (Next : String) is
+      begin
+         Nt.Move (Store, Change, Nt.Requirement, To_String (Id), Next,
+                   Tr.Ordinary_Only, Status);
+         Assert (E.Is_Ok (Status), "the move to " & Next & " was refused: "
+                 & Code_Of (Status));
+         S.Commit (Store, Change, Status);
+      end Move;
+   begin
+      S.Create (Store, Project, "Requirements", Status);
+      Nt.Propose
+        (Store, Change, Nt.Requirement, "PARSER", "Reject bad UTF-8",
+         "The parser SHALL reject invalid UTF-8.", "a test feeds 0xC0 0x80",
+         "user", "", "parser", Id, Status);
+      Assert (E.Is_Ok (Status) and then To_String (Id) = "REQ-PARSER-001",
+              "a requirement was not given its identifier");
+      S.Commit (Store, Change, Status);
+
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Id), "verified",
+                Tr.Ordinary_Only, Status);
+      Assert (Status.Code = E.Framework_Transition_Invalid,
+              "a candidate was verified");
+      Move ("accepted");
+      Move ("implemented");
+      Move ("verified");
+
+      --  A reworded title is not a change of meaning.
+      Nt.Revise (Store, Change, Nt.Requirement, To_String (Id),
+                  "Refuse bad UTF-8", "The parser SHALL reject invalid UTF-8.",
+                  "a test feeds 0xC0 0x80", Effect, Status);
+      Assert (E.Is_Ok (Status) and then not Effect.Normative
+              and then To_String (Effect.After) = "verified",
+              "a new title undid a verification");
+      S.Commit (Store, Change, Status);
+
+      --  New criteria: the evidence was for the old ones.
+      Nt.Revise (Store, Change, Nt.Requirement, To_String (Id),
+                  "Refuse bad UTF-8", "The parser SHALL reject invalid UTF-8.",
+                  "a test feeds every overlong form", Effect, Status);
+      Assert (Effect.Normative and then Effect.Invalidated
+              and then To_String (Effect.After) = "implemented",
+              "new criteria left a requirement verified");
+      S.Commit (Store, Change, Status);
+
+      --  A new statement: the implementation was for the old one.
+      Nt.Revise (Store, Change, Nt.Requirement, To_String (Id),
+                  "Refuse bad UTF-8", "The parser SHALL reject and report"
+                  & " invalid UTF-8.", "a test feeds every overlong form",
+                  Effect, Status);
+      Assert (To_String (Effect.After) = "accepted"
+              and then not Effect.Invalidated,
+              "a new statement left an implemented requirement implemented");
+      S.Commit (Store, Change, Status);
+
+      Nt.Read (Store, Nt.Requirement, To_String (Id), Value, Status);
+      Assert (E.Is_Ok (Status) and then Value.Revision = 7
+              and then To_String (Value.State) = "accepted",
+              "the requirement is not at its last revision: "
+              & Natural'Image (Value.Revision));
+      S.Read (Store, F.Requirements_Area,
+              To_String (Id) & ".rev-000005", Kept, Status);
+      Assert (E.Is_Ok (Status)
+              and then R.Get (Kept, "criteria") = "a test feeds 0xC0 0x80"
+              and then R.Get (Kept, "state") = "verified",
+              "an earlier revision was not kept as it was");
+      Assert (Natural (Nt.List (Store, Nt.Requirement).Length) = 1,
+              "the kept revisions are listed as requirements");
+
+      declare
+         Invalidated : Boolean := False;
+         Listed      : constant Ev.Event_List := Ev.Since (Store, 0);
+      begin
+         for Index in 1 .. Ev.Length (Listed) loop
+            Invalidated := Invalidated
+              or else Ev.Element (Listed, Index).Kind
+                        = Ev.Requirement_Verification_Invalidated;
+         end loop;
+         Assert (Invalidated, "the lost verification was not recorded");
+      end;
+
+      Move ("obsolete");
+      Nt.Revise (Store, Change, Nt.Requirement, To_String (Id), "x", "y", "z",
+                  Effect, Status);
+      Assert (Status.Code = E.Framework_Transition_Invalid,
+              "an obsolete requirement was revised");
+
+      Nt.Read (Store, Nt.Requirement, "REQ-NONE-001", Value, Status);
+      Assert (Status.Code = E.Framework_Not_Found,
+              "a requirement nobody proposed was read");
+      Assert (Nt.First_State (Nt.Decision) = "proposed"
+              and then Nt.Namespace (Nt.Specification) = "SPEC"
+              and then Tr.Is_State (Nt.Machine_Of (Nt.Requirement),
+                                    "implemented"),
+              "the registers are not what they should be");
+      S.Close (Store);
+   end Requirement_Revisions_Invalidate;
+
+   --  A decision replaced says by what, and the decisions that apply to a
+   --  component are its own and the project's.
+   procedure Decisions_Supersede_And_Apply
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Project  : constant String := Fresh ("decisions");
+      Store    : S.Store;
+      Status   : E.Error_Info;
+      Change   : S.Transaction;
+      Old_Id   : Unbounded_String;
+      New_Id   : Unbounded_String;
+      Other_Id : Unbounded_String;
+      Req_Id   : Unbounded_String;
+      Value    : Nt.Entity;
+   begin
+      S.Create (Store, Project, "Decisions", Status);
+      Nt.Propose (Store, Change, Nt.Decision, "IO", "Blocking reads",
+                   "Reads block.", "simplest", "user", "", "io", Old_Id,
+                   Status);
+      Nt.Propose (Store, Change, Nt.Decision, "IO", "Asynchronous reads",
+                   "Reads are asynchronous.", "throughput", "user", "", "io",
+                   New_Id, Status);
+      Nt.Propose (Store, Change, Nt.Decision, "", "Ada 2022",
+                   "Code is Ada 2022.", "", "user", "", "project", Other_Id,
+                   Status);
+      S.Commit (Store, Change, Status);
+      Nt.Move (Store, Change, Nt.Decision, To_String (Old_Id), "accepted",
+                Tr.Ordinary_Only, Status);
+      Nt.Move (Store, Change, Nt.Decision, To_String (Other_Id), "accepted",
+                Tr.Ordinary_Only, Status);
+      S.Commit (Store, Change, Status);
+
+      Nt.Supersede (Store, Change, Nt.Decision, To_String (Old_Id),
+                     To_String (New_Id), Status);
+      Assert (E.Is_Ok (Status), "a decision was not superseded: "
+              & Code_Of (Status));
+      S.Commit (Store, Change, Status);
+
+      Nt.Read (Store, Nt.Decision, To_String (Old_Id), Value, Status);
+      Assert (To_String (Value.State) = "superseded"
+              and then Value.Superseded_By = New_Id,
+              "the decision replaced does not say by what");
+      Nt.Read (Store, Nt.Decision, To_String (New_Id), Value, Status);
+      Assert (To_String (Value.State) = "accepted"
+              and then Value.Supersedes = Old_Id,
+              "the replacing decision does not say what it replaced");
+
+      Assert (Natural (Nt.Applicable_Decisions (Store, "io").Length) = 2
+              and then Natural (Nt.Applicable_Decisions (Store, "ui").Length)
+                       = 1,
+              "the decisions applying to a component are not its own and the"
+              & " project's");
+
+      --  Links are kept once, in the order made.
+      Nt.Propose (Store, Change, Nt.Requirement, "IO", "t", "x", "", "user",
+                   "", "io", Req_Id, Status);
+      Nt.Link (Store, Change, Nt.Requirement, To_String (Req_Id),
+                Nt.Dependency, "REQ-IO-009", Status);
+      Nt.Link (Store, Change, Nt.Requirement, To_String (Req_Id),
+                Nt.Dependency, "REQ-IO-009", Status);
+      Nt.Link (Store, Change, Nt.Requirement, To_String (Req_Id),
+                Nt.Test, "tests/io", Status);
+      S.Commit (Store, Change, Status);
+      Assert (Natural (Nt.Links (Store, Nt.Requirement, To_String (Req_Id),
+                                  Nt.Dependency).Length) = 1
+              and then Nt.Links (Store, Nt.Requirement, To_String (Req_Id),
+                                  Nt.Test).First_Element = "tests/io",
+              "links were not kept once each");
+
+      --  A dependency on a requirement nobody made is found.
+      declare
+         Findings : constant Cn.Finding_List := Cn.Check (Store);
+         Undefined : Boolean := False;
+         use type Cn.Finding_Kind;
+      begin
+         for Index in 1 .. Cn.Length (Findings) loop
+            Undefined := Undefined
+              or else Cn.Element (Findings, Index).Kind
+                        = Cn.Undefined_Requirement;
+         end loop;
+         Assert (Undefined, "a dependency on no requirement was not found");
+      end;
+      S.Close (Store);
+   end Decisions_Supersede_And_Apply;
+
+   --  The highest statement governs; the others agree, refine, are
+   --  overridden by name, or conflict.
+   procedure Authority_Is_Resolved (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Given  : Au.Statement_List;
+      Result : Au.Resolution;
+      Found  : Boolean;
+
+      function Said
+        (Standing : Au.Level; Source, Subject, Value : String;
+         Overrides : String := "") return Au.Statement
+      is (Standing  => Standing,
+          Source    => To_Unbounded_String (Source),
+          Subject   => To_Unbounded_String (Subject),
+          Value     => To_Unbounded_String (Value),
+          Overrides => To_Unbounded_String (Overrides));
+
+      function Relation_Of (Source : String) return Au.Relation is
+      begin
+         for Index in 1 .. Au.Length (Result) loop
+            if To_String (Au.Element (Result, Index).Other.Source) = Source then
+               return Au.Element (Result, Index).Relation;
+            end if;
+         end loop;
+         return Au.Agreement;
+      end Relation_Of;
+
+      use type Au.Relation;
+   begin
+      Au.Append (Given, Said (Au.Resolved_Configuration, "CONFIG",
+                              "scalar.build.command", "alr build"));
+      Au.Append (Given, Said (Au.Project_Decision, "DEC-001",
+                              "scalar.build.command", "alr build --release",
+                              Overrides => "CONFIG"));
+      Au.Append (Given, Said (Au.Language_Baseline, "BASE",
+                              "scalar.build.command", "gprbuild"));
+      Au.Append (Given, Said (Au.Agent_Assumption, "GUESS",
+                              "scalar.build.command", "alr build --release"));
+      Au.Append (Given, Said (Au.Project_Specification, "SPEC-001",
+                              "scalar.build.command.flags", "-gnatwa"));
+      Assert (Au.Count (Given) = 5, "a statement was lost");
+
+      Result := Au.Resolve (Given);
+      Assert (To_String (Au.Governing (Result, "scalar.build.command", Found)
+                           .Source) = "DEC-001" and then Found,
+              "the highest standing does not govern");
+      Assert (Relation_Of ("CONFIG") = Au.Explicit_Override,
+              "an override naming what it overrides was not one");
+      Assert (Relation_Of ("BASE") = Au.Conflict,
+              "a disagreement nobody resolved was not a conflict");
+      Assert (Relation_Of ("GUESS") = Au.Agreement,
+              "a statement saying the same did not agree");
+      Assert (Relation_Of ("DEC-001") = Au.Refinement,
+              "a narrower subject did not refine a broader one");
+      declare
+         Nothing : constant Au.Statement :=
+           Au.Governing (Result, "nobody.said", Found);
+         pragma Unreferenced (Nothing);
+      begin
+         Assert (not Found, "a subject nobody spoke to has a ruling");
+      end;
+   end Authority_Is_Resolved;
+
+   --  What decisions and the configuration say is gathered from the state,
+   --  and a conflict between them is found by the consistency check.
+   procedure Authority_Conflicts_Are_Found
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Project  : constant String := Fresh ("authority");
+      Store    : S.Store;
+      Status   : E.Error_Info;
+      Change   : S.Transaction;
+      Registry : Tp.Registry;
+      Composed : Tp.Composition;
+      Given    : Cf.Value_Maps.Map;
+      Planned  : Cf.Plan;
+      Done     : Cf.Outcome;
+      Id       : Unbounded_String;
+      Findings : Cn.Finding_List;
+
+      function Conflicted return Boolean is
+         use type Cn.Finding_Kind;
+      begin
+         for Index in 1 .. Cn.Length (Findings) loop
+            if Cn.Element (Findings, Index).Kind = Cn.Conflicting_Authority then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Conflicted;
+   begin
+      Tp.Add (Registry, Parsed ("template = t" & LF & "name = T" & LF
+                                & "version = 1" & LF
+                                & "scalar build.command = make" & LF));
+      Tp.Compose (Registry, "t", Composed, Status);
+      Cf.Prepare (Composed, Project, Given, Planned, Status);
+      Cf.Initialize (Store, Project, Planned, Done, Status);
+
+      Nt.Propose (Store, Change, Nt.Decision, "", "Build with Alire",
+                   "Alire builds it.", "", "user", "", "project", Id, Status);
+      Nt.Govern (Store, Change, Nt.Decision, To_String (Id),
+                  "scalar.build.command", "alr build", "", Status);
+      Nt.Move (Store, Change, Nt.Decision, To_String (Id), "accepted",
+                Tr.Ordinary_Only, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "a governing decision was not committed: "
+              & Code_Of (Status));
+      Assert (Au.Count (Au.Gather (Store)) = 2,
+              "the decision and the setting were not both gathered");
+
+      Findings := Cn.Check (Store);
+      Assert (Conflicted, "a decision contradicting the configuration without"
+              & " saying so was not found");
+
+      Nt.Govern (Store, Change, Nt.Decision, To_String (Id),
+                  "scalar.build.command", "alr build", "CONFIG", Status);
+      S.Commit (Store, Change, Status);
+      Findings := Cn.Check (Store);
+      Assert (not Conflicted, "an explicit override was reported as a conflict");
+      S.Close (Store);
+   end Authority_Conflicts_Are_Found;
+
+   --  Bootstrap classifies what a document says, and running it again
+   --  makes only what is new.
+   procedure Bootstrap_Is_Repeatable
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Project : constant String := Fresh ("bootstrap");
+      Store   : S.Store;
+      Status  : E.Error_Info;
+      Change  : S.Transaction;
+      Report  : Bs.Report;
+      Document : constant String :=
+        "# The parser" & LF
+        & "" & LF
+        & "- REQ-PARSE-003: Input is read in one pass." & LF
+        & "The parser SHALL reject invalid UTF-8." & LF
+        & "It MUST report the offset of the first bad byte." & LF
+        & "Decision: errors are values, not exceptions." & LF
+        & "Nothing here is normative." & LF
+        & "The parser SHALL reject invalid UTF-8." & LF
+        & "The MUSTARD is SHALLOW." & LF;
+      Found   : constant Bs.Output_List := Bs.Scan ("docs/parser.md", Document);
+
+      function Count_Of (Kind : Bs.Output_Kind) return Natural is
+         use type Bs.Output_Kind;
+         Total : Natural := 0;
+      begin
+         for Index in 1 .. Bs.Length (Found) loop
+            if Bs.Element (Found, Index).Kind = Kind then
+               Total := Total + 1;
+            end if;
+         end loop;
+         return Total;
+      end Count_Of;
+   begin
+      Assert (Count_Of (Bs.Specification_Candidate) = 1
+              and then Count_Of (Bs.Imported_Item) = 1
+              and then Count_Of (Bs.Requirement_Candidate) = 2
+              and then Count_Of (Bs.Decision_Candidate) = 1
+              and then Count_Of (Bs.Issue) = 1,
+              "a document was not classified as it says");
+
+      S.Create (Store, Project, "Bootstrap", Status);
+      Bs.Apply (Store, Change, Found, Report, Status);
+      Assert (E.Is_Ok (Status), "bootstrap was refused: " & Code_Of (Status));
+      S.Commit (Store, Change, Status);
+      Assert (Report.Created = 5 and then Report.Issues = 1,
+              "bootstrap did not make what it found");
+      Assert (Natural (Nt.List (Store, Nt.Requirement, "accepted").Length) = 1
+              and then Natural (Nt.List (Store, Nt.Requirement, "candidate")
+                                  .Length) = 2,
+              "only the imported item should be accepted");
+
+      --  Again, and again with a line added.
+      Bs.Apply (Store, Change, Found, Report, Status);
+      S.Commit (Store, Change, Status);
+      Assert (Report.Created = 0 and then Report.Existing = 5,
+              "bootstrap run again made its findings twice");
+      Bs.Apply (Store, Change,
+                Bs.Scan ("docs/parser.md",
+                         Document & "Output MUST be flushed." & LF),
+                Report, Status);
+      S.Commit (Store, Change, Status);
+      Assert (Report.Created = 1,
+              "bootstrap over an edited document did not make only what is"
+              & " new");
+      Assert (Natural (Nt.List (Store, Nt.Requirement).Length) = 4
+              and then Nt.Find_By_Provenance
+                         (Store, Nt.Requirement, "docs/parser.md#REQ-PARSE-003")
+                       /= "",
+              "the requirements bootstrap made are not the ones it found");
+
+      --  A discovered fact, made once.
+      declare
+         Facts_Found : Bs.Output_List;
+      begin
+         Bs.Append (Facts_Found,
+                    (Kind       => Bs.Discovered_Fact,
+                     Key        => To_Unbounded_String ("language"),
+                     Text       => To_Unbounded_String ("Ada_2022"),
+                     others     => <>));
+         Bs.Apply (Store, Change, Facts_Found, Report, Status);
+         S.Commit (Store, Change, Status);
+         Bs.Apply (Store, Change, Facts_Found, Report, Status);
+         Assert (Report.Existing = 1 and then Report.Created = 0,
+                 "a discovered fact was recorded twice");
+      end;
+      S.Close (Store);
+   end Bootstrap_Is_Repeatable;
+
+   ---------------------------------------------------------------------------
    -- Register_Tests --
    ---------------------------------------------------------------------------
 
@@ -1571,6 +1995,21 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Consistency_Finds_What_Is_Wrong'Access,
          "the consistency check finds what does not hold together");
+      Register_Routine
+        (T, Requirement_Revisions_Invalidate'Access,
+         "a requirement's new meaning undoes what no longer applies");
+      Register_Routine
+        (T, Decisions_Supersede_And_Apply'Access,
+         "a decision replaced says by what, and applies where it should");
+      Register_Routine
+        (T, Authority_Is_Resolved'Access,
+         "the highest statement governs and the others stand to it");
+      Register_Routine
+        (T, Authority_Conflicts_Are_Found'Access,
+         "a conflict between decision and configuration is found");
+      Register_Routine
+        (T, Bootstrap_Is_Repeatable'Access,
+         "bootstrap classifies a document and makes only what is new");
    end Register_Tests;
 
 end Tests.Framework_Cases;

@@ -105,7 +105,8 @@ package body Model_Runner.Framework.Transitions is
             & (case From.Moves (Held).Requires is
                  when Ordinary        => "ordinary",
                  when Reopen          => "reopen",
-                 when Reconsideration => "reconsideration")
+                 when Reconsideration => "reconsideration",
+                 when Invalidation    => "invalidation")
             & " policy");
       end if;
    end Check;

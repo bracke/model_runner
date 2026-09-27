@@ -50,7 +50,25 @@ package Model_Runner.Framework.Events is
       Workspace_Created,
       Workspace_Integrated,
       Requirement_Verified,
-      Requirement_Verification_Invalidated);
+      Requirement_Verification_Invalidated,
+
+      --  Beyond the core set: every move of the intent registers is
+      --  recorded, so that what happened to one can be read back whole.
+      Specification_Proposed,
+      Specification_Revised,
+      Specification_Rejected,
+      Specification_Superseded,
+      Specification_Reconsidered,
+      Requirement_Proposed,
+      Requirement_Implemented,
+      Requirement_Blocked,
+      Requirement_Rejected,
+      Requirement_Reconsidered,
+      Decision_Proposed,
+      Decision_Revised,
+      Decision_Rejected,
+      Decision_Superseded,
+      Decision_Reconsidered);
 
    --  One event, as read back.
    type Event is record

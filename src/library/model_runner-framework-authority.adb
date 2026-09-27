@@ -1,0 +1,206 @@
+with Model_Runner.Errors;
+with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Intent;
+with Model_Runner.Framework.Records;
+
+package body Model_Runner.Framework.Authority is
+
+   use Ada.Strings.Unbounded;
+
+   package E renames Model_Runner.Errors;
+
+   ------------
+   -- Append --
+   ------------
+
+   procedure Append (Into : in out Statement_List; Item : Statement) is
+   begin
+      Into.Statements.Append (Item);
+   end Append;
+
+   function Count (From : Statement_List) return Natural
+   is (Natural (From.Statements.Length));
+
+   ------------
+   -- Gather --
+   ------------
+
+   function Gather (Item : Stores.Store) return Statement_List is
+      Result : Statement_List;
+
+      procedure From_Register
+        (Kind    : Intent.Intent_Kind;
+         Where   : Area;
+         Project : Level;
+         Scoped  : Level) is
+      begin
+         for Name of Intent.List (Item, Kind, "accepted") loop
+            declare
+               Held   : Records.Item;
+               Status : E.Error_Info;
+            begin
+               Stores.Read (Item, Where, Name, Held, Status);
+               if E.Is_Ok (Status) and then Records.Get (Held, "governs") /= ""
+               then
+                  Append
+                    (Result,
+                     (Standing  =>
+                        (if Records.Get (Held, "scope") = "project"
+                         then Project else Scoped),
+                      Source    => To_Unbounded_String (Name),
+                      Subject   => To_Unbounded_String
+                                     (Records.Get (Held, "governs")),
+                      Value     => To_Unbounded_String
+                                     (Records.Get (Held, "ruling")),
+                      Overrides => To_Unbounded_String
+                                     (Records.Get (Held, "overrides"))));
+               end if;
+            end;
+         end loop;
+      end From_Register;
+
+      Config : Records.Item;
+      Status : E.Error_Info;
+
+      --  The settings a statement can be about; inputs, files and facts
+      --  are what the project is, not rules about how it is made.
+      type Prefix_Text is access constant String;
+      Governed : constant array (1 .. 6) of Prefix_Text :=
+        [new String'("scalar."), new String'("map."), new String'("adapter."),
+         new String'("profile."), new String'("task_kind."),
+         new String'("schema.")];
+   begin
+      From_Register
+        (Intent.Decision, Decisions_Area, Project_Decision, Project_Decision);
+      From_Register
+        (Intent.Specification, Specs_Area, Project_Specification,
+         Component_Specification);
+
+      --  The configuration's settings, each its own subject by the field
+      --  it is kept in, so a decision about one names that field.
+      Configurations.Read (Item, Config, Status);
+      if E.Is_Ok (Status) then
+         for Index in 1 .. Records.Field_Count (Config) loop
+            declare
+               Field : constant String := Records.Field_Name (Config, Index);
+            begin
+               for Prefix of Governed loop
+                  if Field'Length > Prefix'Length
+                    and then Field (Field'First .. Field'First + Prefix'Length - 1)
+                               = Prefix.all
+                  then
+                     Append
+                       (Result,
+                        (Standing  => Resolved_Configuration,
+                         Source    => To_Unbounded_String ("CONFIG"),
+                         Subject   => To_Unbounded_String (Field),
+                         Value     => To_Unbounded_String
+                                        (Records.Get (Config, Field)),
+                         Overrides => Null_Unbounded_String));
+                  end if;
+               end loop;
+            end;
+         end loop;
+      end if;
+      return Result;
+   end Gather;
+
+   -------------
+   -- Resolve --
+   -------------
+
+   function Resolve (From : Statement_List) return Resolution is
+      Result : Resolution;
+
+      function Place_Of (Subject : Unbounded_String) return Natural is
+      begin
+         for Index in 1 .. Natural (Result.Governing.Length) loop
+            if Result.Governing (Index).Subject = Subject then
+               return Index;
+            end if;
+         end loop;
+         return 0;
+      end Place_Of;
+   begin
+      --  The governing statement of each subject: the highest standing,
+      --  and of equals the first given, so that equals that disagree are
+      --  still set against each other below.
+      for Next of From.Statements loop
+         declare
+            Held : constant Natural := Place_Of (Next.Subject);
+         begin
+            if Held = 0 then
+               Result.Governing.Append (Next);
+            elsif Next.Standing < Result.Governing (Held).Standing then
+               Result.Governing (Held) := Next;
+            end if;
+         end;
+      end loop;
+
+      --  Every other statement, against the one governing its subject.
+      for Next of From.Statements loop
+         declare
+            Rule : constant Statement := Result.Governing (Place_Of (Next.Subject));
+         begin
+            if Rule /= Next then
+               Result.Standings.Append
+                 (Standing_Of'
+                    (Governing => Rule,
+                     Other     => Next,
+                     Relation  =>
+                       (if Rule.Value = Next.Value then Agreement
+                        elsif Rule.Overrides = Next.Source then Explicit_Override
+                        else Conflict)));
+            end if;
+         end;
+      end loop;
+
+      --  A narrower subject refines a broader one.
+      for Narrow of Result.Governing loop
+         for Broad of Result.Governing loop
+            declare
+               Inner : constant String := To_String (Narrow.Subject);
+               Outer : constant String := To_String (Broad.Subject) & ".";
+            begin
+               if Inner'Length > Outer'Length
+                 and then Inner (Inner'First .. Inner'First + Outer'Length - 1)
+                            = Outer
+               then
+                  Result.Standings.Append
+                    (Standing_Of'
+                       (Governing => Narrow,
+                        Other     => Broad,
+                        Relation  => Refinement));
+               end if;
+            end;
+         end loop;
+      end loop;
+      return Result;
+   end Resolve;
+
+   ---------------
+   -- Governing --
+   ---------------
+
+   function Governing
+     (From    : Resolution;
+      Subject : String;
+      Found   : out Boolean) return Statement is
+   begin
+      for Rule of From.Governing loop
+         if To_String (Rule.Subject) = Subject then
+            Found := True;
+            return Rule;
+         end if;
+      end loop;
+      Found := False;
+      return (others => <>);
+   end Governing;
+
+   function Length (From : Resolution) return Natural
+   is (Natural (From.Standings.Length));
+
+   function Element (From : Resolution; Index : Positive) return Standing_Of
+   is (From.Standings (Index));
+
+end Model_Runner.Framework.Authority;

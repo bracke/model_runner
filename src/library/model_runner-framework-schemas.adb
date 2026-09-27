@@ -141,6 +141,31 @@ package body Model_Runner.Framework.Schemas is
           Rule ("occurred_at", Text_Field, True),
           Rule ("detail", Text_Field, False)]),
 
+      --  Specifications, requirements and decisions, and each kept
+      --  revision of one. Links and what an entity governs are optional
+      --  fields; a later build's are kept.
+      (Id      => new String'(Intent_Schema),
+       Version => 1,
+       Policy  => Preserve_Unknown,
+       Rules   => new Rule_List'
+         [Rule ("kind", Choice_Field, True,
+                "specification requirement decision "),
+          Rule ("state", Text_Field, True),
+          Rule ("title", Text_Field, True),
+          Rule ("text", Text_Field, True),
+          Rule ("criteria", Text_Field, False),
+          Rule ("source", Text_Field, True),
+          Rule ("provenance", Text_Field, False),
+          Rule ("scope", Text_Field, True),
+          Rule ("meaning", Text_Field, True),
+          Rule ("supersedes", Text_Field, False),
+          Rule ("superseded_by", Text_Field, False),
+          Rule ("governs", Text_Field, False),
+          Rule ("ruling", Text_Field, False),
+          Rule ("overrides", Text_Field, False),
+          Rule ("revision_of", Identifier_Field, False),
+          Rule ("links.*", Text_Field, False)]),
+
       (Id      => new String'(Lease_Schema),
        Version => 1,
        Policy  => Preserve_Unknown,

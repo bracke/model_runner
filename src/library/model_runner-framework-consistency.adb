@@ -1,7 +1,9 @@
 with Ada.Characters.Handling;
 
 with Model_Runner.Errors;
+with Model_Runner.Framework.Authority;
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Leases;
 with Model_Runner.Framework.Records;
 with Model_Runner.Text;
@@ -136,6 +138,42 @@ package body Model_Runner.Framework.Consistency is
       for Resource of Leases.Stale (Item) loop
          Found (Stale_Lease, Resource, "its lease has run out");
       end loop;
+
+      --  A requirement depended on is one there is.
+      for Id of Intent.List (Item, Intent.Requirement) loop
+         for Target of Intent.Links (Item, Intent.Requirement, Id,
+                                     Intent.Dependency)
+         loop
+            if not Stores.Exists (Item, Requirements_Area, Target) then
+               Found (Undefined_Requirement, Id,
+                      "it depends on " & Target & ", which is not there");
+            end if;
+         end loop;
+      end loop;
+
+      --  Statements that disagree with what governs their subject, and do
+      --  not say they override it.
+      declare
+         use type Authority.Relation;
+         Resolved : constant Authority.Resolution :=
+           Authority.Resolve (Authority.Gather (Item));
+      begin
+         for Index in 1 .. Authority.Length (Resolved) loop
+            declare
+               Standing : constant Authority.Standing_Of :=
+                 Authority.Element (Resolved, Index);
+            begin
+               if Standing.Relation = Authority.Conflict then
+                  Found (Conflicting_Authority,
+                         To_String (Standing.Governing.Subject),
+                         To_String (Standing.Governing.Source) & " says "
+                         & To_String (Standing.Governing.Value) & " and "
+                         & To_String (Standing.Other.Source) & " says "
+                         & To_String (Standing.Other.Value));
+               end if;
+            end;
+         end loop;
+      end;
 
       return Result;
    end Check;

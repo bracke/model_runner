@@ -19,7 +19,9 @@ package Model_Runner.Framework.Consistency is
       Duplicate_Identifier,
       Incomplete_Transaction,
       Index_Mismatch,
-      Stale_Lease);
+      Stale_Lease,
+      Undefined_Requirement,
+      Conflicting_Authority);
 
    --  One thing found wrong.
    type Finding is record

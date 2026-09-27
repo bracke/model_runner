@@ -15,8 +15,9 @@ with Model_Runner.Framework.Stores;
 --  leaves the state as it was.
 package Model_Runner.Framework.Transitions is
 
-   --  What a move needs beyond being asked for.
-   type Permission is (Ordinary, Reopen, Reconsideration);
+   --  What a move needs beyond being asked for. Invalidation is what a
+   --  revision's new meaning undoes, which nobody asks for directly.
+   type Permission is (Ordinary, Reopen, Reconsideration, Invalidation);
 
    --  The permissions a caller has been given.
    type Permissions is array (Permission) of Boolean;

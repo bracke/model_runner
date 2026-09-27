@@ -14,11 +14,11 @@ package body Library_Surface is
    Held : constant Text_List :=
      [
       --  The project state's operations its commands do not reach yet:
-      --  /task hands out identifiers and moves tasks, and the schema
-      --  version and an area's portability are what a migration and a
-      --  repository policy ask, which later phases bring. Until they
-      --  arrive, the suite asks.
-      new String'("Allocate_Identifier"),
+      --  a task's context is told the decisions that apply to it, /task
+      --  moves tasks, and the schema version and an area's portability are
+      --  what a migration and a repository policy ask, which later phases
+      --  bring. Until they arrive, the suite asks.
+      new String'("Applicable_Decisions"),
       new String'("Current_Version"),
       new String'("Portability_Of"),
 

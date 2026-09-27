@@ -7,6 +7,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **What the project is meant to be, kept apart from any conversation
+  (Phase D).** Specifications, requirements and decisions are registers
+  with stable identifiers (SPEC-, REQ-, DEC-), lifecycles of their own and
+  revisions that keep every earlier one. A revision's meaning -- its text
+  and criteria -- is fingerprinted: new criteria make a verified
+  requirement implemented again, a new statement sends an implemented or
+  verified one back to accepted, and the lost verification is recorded as
+  an event. Decisions supersede each other by name and apply to their
+  component and the project. Authority resolution sets every statement
+  against the one governing its subject -- agreement, refinement, explicit
+  override or conflict -- and the consistency check reports conflicts and
+  dependencies on requirements that are not there. Bootstrap reads a
+  document into a specification candidate, imported requirements,
+  requirement and decision candidates and issues, and running it again
+  makes only what is new.
+
 - **Project state records what happened, and who holds what (Phase C).**
   Events are staged in the transaction whose change they describe --
   committed with it or not at all -- numbered in one sequence and naming
