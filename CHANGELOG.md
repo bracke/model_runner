@@ -728,6 +728,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A model's own drafts read their slice of the head at four bits.** A
+  model with a block past its stack drafts from it and scores each proposal
+  against the first 65,536 rows of the output head; those rows are now
+  written again as Q4_0 for the drafts alone, and the model's own head is
+  untouched. The run writes what it wrote; qwen3.5-4b 24.7 -> 26.1 tokens a
+  second greedy and 27.2 -> 28.5 sampled, qwen3.6-35b-a3b 25.0 -> 25.9 and
+  20.5 -> 21.6.
+
 - **A draft model's head is read at four bits.** A draft's output head is
   the widest product of its token -- half of Gemma 3 270M's, 262,144 rows
   -- and what it says is only a proposal the model drafted for checks, so

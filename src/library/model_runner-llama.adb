@@ -3015,19 +3015,28 @@ package body Model_Runner.Llama is
        then Item.Settings.Embedding_Mul
        else 1.0);
 
-   ------------------
-   -- Lighten_Head --
-   ------------------
+   --  Rows of the output head a draft from the block past the stack reads.
+   --  See Draft_Next.
+   Draft_Vocabulary : constant := 65_536;
 
-   procedure Lighten_Head
-     (Item    : in out Model;
-      Threads : Positive := 1;
-      Status  : out E.Error_Info)
+   --  The first Rows rows of Head written again as the legacy four-bit
+   --  kind, into Room: decoded a row at a time and encoded a block at a
+   --  time the way the reference encoder writes one -- the scale is the
+   --  value of largest magnitude over minus eight, with its sign, and each
+   --  weight the nearest of sixteen steps of it, the first sixteen in the
+   --  low nibbles and the last in the high. Room is null where Head's
+   --  width is not whole blocks or its format is already four bits or
+   --  fewer, and on any failure.
+   procedure Encode_Four_Bits
+     (Accounting : in out Model_Runner.Memory.Account;
+      Head       : T.View;
+      Rows       : Element_Count;
+      Threads    : Positive;
+      Room       : out B.Byte_Array_Access;
+      Status     : out E.Error_Info)
    is
       use type Model_Runner.GGUF.Tensor_Type;
       use type Interfaces.Unsigned_16;
-
-      Head : constant T.View := Item.Output;
 
       --  The legacy four-bit block: a binary16 scale and thirty-two
       --  nibbles, eighteen bytes.
@@ -3036,13 +3045,13 @@ package body Model_Runner.Llama is
 
       Blocks : constant Element_Count := Head.Columns / Block_Width;
       Row_Bytes : constant B.Byte_Count := B.Byte_Count (Blocks) * Block_Bytes;
-      Needed : constant B.Byte_Count :=
-        Row_Bytes * B.Byte_Count (Head.Rows);
+      Needed : constant B.Byte_Count := Row_Bytes * B.Byte_Count (Rows);
    begin
       Status := E.Success;
+      Room := null;
 
-      if Item.Light_Head /= null
-        or else Head.Rows = 0
+      if Rows = 0
+        or else Rows > Head.Rows
         or else Head.Columns mod Block_Width /= 0
         or else Head.Format not in Model_Runner.GGUF.Type_F32
                                  | Model_Runner.GGUF.Type_F16
@@ -3057,24 +3066,23 @@ package body Model_Runner.Llama is
       end if;
 
       Mem.Check_Allocation
-        (Item.Accounting, Mem.Converted_Weights,
+        (Accounting, Mem.Converted_Weights,
          Interfaces.Unsigned_64 (Needed), Status);
       if E.Is_Error (Status) then
          return;
       end if;
 
-      B.Allocate (Needed, Item.Light_Head);
-      if Item.Light_Head = null then
+      B.Allocate (Needed, Room);
+      if Room = null then
          Status := E.Make (E.Memory_Allocation_Failed);
          return;
       end if;
 
       Mem.Record_Allocation
-        (Item.Accounting, Mem.Converted_Weights,
-         Interfaces.Unsigned_64 (Needed));
+        (Accounting, Mem.Converted_Weights, Interfaces.Unsigned_64 (Needed));
 
       declare
-         Target : B.Byte_Array renames Item.Light_Head.all;
+         Target : B.Byte_Array renames Room.all;
 
          protected Trouble is
             procedure Note (Reason : E.Error_Info);
@@ -3094,11 +3102,6 @@ package body Model_Runner.Llama is
             function Reason return E.Error_Info is (Bad);
          end Trouble;
 
-         --  Rows First .. Last decoded and written again, a block at a
-         --  time the way the reference encoder writes one: the scale is
-         --  the value of largest magnitude over minus eight, with its
-         --  sign, and each weight the nearest of sixteen steps of it, the
-         --  first sixteen in the low nibbles and the last in the high.
          procedure Encode (First, Last : Element_Count) is
             Row    : N.Real_Array (0 .. Head.Columns - 1);
             Status : E.Error_Info;
@@ -3162,10 +3165,9 @@ package body Model_Runner.Llama is
          end Encode;
 
          Workers : constant Positive :=
-           Positive'Min (Threads, Positive'Max (1, Natural (Head.Rows / 4096)));
+           Positive'Min (Threads, Positive'Max (1, Natural (Rows / 4096)));
          Share   : constant Element_Count :=
-           (Head.Rows + Element_Count (Workers) - 1)
-           / Element_Count (Workers);
+           (Rows + Element_Count (Workers) - 1) / Element_Count (Workers);
 
          task type Encoder is
             entry Start (First, Last : Element_Count);
@@ -3193,8 +3195,7 @@ package body Model_Runner.Llama is
                     Element_Count (Index - 1) * Share;
                begin
                   Team (Index).Start
-                    (First,
-                     Element_Count'Min (Head.Rows - 1, First + Share - 1));
+                    (First, Element_Count'Min (Rows - 1, First + Share - 1));
                end;
             end loop;
          end;
@@ -3202,32 +3203,90 @@ package body Model_Runner.Llama is
          Status := Trouble.Reason;
       end;
 
-      if E.Is_Ok (Status) then
-         declare
-            Fresh : T.View;
-         begin
-            T.Make
-              (Format  => Model_Runner.GGUF.Type_Q4_0,
-               Rows    => Head.Rows,
-               Columns => Head.Columns,
-               Data    => Item.Light_Head,
-               Offset  => 0,
-               Result  => Fresh,
-               Status  => Status);
-            if E.Is_Ok (Status) then
-               Fresh.Role := Head.Role;
-               Item.Output := Fresh;
-               return;
-            end if;
-         end;
+      if E.Is_Error (Status) then
+         Mem.Record_Release
+           (Accounting, Mem.Converted_Weights,
+            Interfaces.Unsigned_64 (Needed));
+         B.Free (Room);
+      end if;
+   end Encode_Four_Bits;
+
+   --  A view over Room as the four-bit rows Encode_Four_Bits wrote, or
+   --  the empty view where it wrote none.
+   function Four_Bit_View
+     (Room : B.Byte_Array_Access; Rows, Columns : Element_Count;
+      Role : T.Weight_Role) return T.View
+   is
+      Fresh  : T.View;
+      Status : E.Error_Info;
+   begin
+      if Room = null then
+         return T.Empty_View;
       end if;
 
-      --  Whatever went wrong, the head is the file's own again.
-      Mem.Record_Release
-        (Item.Accounting, Mem.Converted_Weights,
-         Interfaces.Unsigned_64 (Needed));
-      B.Free (Item.Light_Head);
+      T.Make
+        (Format  => Model_Runner.GGUF.Type_Q4_0,
+         Rows    => Rows,
+         Columns => Columns,
+         Data    => Room,
+         Offset  => 0,
+         Result  => Fresh,
+         Status  => Status);
+      if E.Is_Error (Status) then
+         return T.Empty_View;
+      end if;
+
+      Fresh.Role := Role;
+      return Fresh;
+   end Four_Bit_View;
+
+   ------------------
+   -- Lighten_Head --
+   ------------------
+
+   procedure Lighten_Head
+     (Item    : in out Model;
+      Threads : Positive := 1;
+      Status  : out E.Error_Info)
+   is
+      Head : constant T.View := Item.Output;
+   begin
+      Status := E.Success;
+      if Item.Light_Head /= null then
+         return;
+      end if;
+
+      Encode_Four_Bits
+        (Item.Accounting, Head, Head.Rows, Threads, Item.Light_Head, Status);
+      if Item.Light_Head /= null then
+         Item.Output :=
+           Four_Bit_View (Item.Light_Head, Head.Rows, Head.Columns, Head.Role);
+      end if;
    end Lighten_Head;
+
+   ------------------------
+   -- Lighten_Draft_Head --
+   ------------------------
+
+   procedure Lighten_Draft_Head
+     (Item    : in out Model;
+      Threads : Positive := 1;
+      Status  : out E.Error_Info)
+   is
+      Head : constant T.View := Item.Output;
+      Rows : constant Element_Count :=
+        Element_Count'Min (Head.Rows, Draft_Vocabulary);
+   begin
+      Status := E.Success;
+      if Item.Draft_Head_Bytes /= null then
+         return;
+      end if;
+
+      Encode_Four_Bits
+        (Item.Accounting, Head, Rows, Threads, Item.Draft_Head_Bytes, Status);
+      Item.Draft_Head :=
+        Four_Bit_View (Item.Draft_Head_Bytes, Rows, Head.Columns, Head.Role);
+   end Lighten_Draft_Head;
 
    -----------------
    -- Head_Format --
@@ -12195,6 +12254,13 @@ package body Model_Runner.Llama is
             Interfaces.Unsigned_64 (Item.Light_Head.all'Length));
          B.Free (Item.Light_Head);
       end if;
+      if Item.Draft_Head_Bytes /= null then
+         Mem.Record_Release
+           (Item.Accounting, Mem.Converted_Weights,
+            Interfaces.Unsigned_64 (Item.Draft_Head_Bytes.all'Length));
+         B.Free (Item.Draft_Head_Bytes);
+      end if;
+      Item.Draft_Head := T.Empty_View;
       Item.Embeddings := T.Empty_View;
       Item.Output := T.Empty_View;
       Item.Settings := (others => <>);
@@ -16507,10 +16573,6 @@ package body Model_Runner.Llama is
       end loop;
    end Gate_Heads;
 
-   --  Rows of the output head a draft from the block past the stack reads.
-   --  See Draft_Next.
-   Draft_Vocabulary : constant := 65_536;
-
    -----------------
    -- Layer_Bytes --
    -----------------
@@ -16849,6 +16911,14 @@ package body Model_Runner.Llama is
             Head.Rows := Rows;
             Head.Length :=
               Model_Runner.Bytes.Byte_Count (Rows) * T.Row_Bytes (Source.Output);
+
+            --  Or those rows at four bits, where the run asked for them:
+            --  the block only proposes, so a coarser head changes how many
+            --  proposals are kept and never what is written.
+            if Source.Draft_Head.Rows = Rows then
+               Head := Source.Draft_Head;
+            end if;
+
             Product (Item, Head, Item.Normalized, Item.Logit_Row, Status);
             if E.Is_Error (Status) then
                return;

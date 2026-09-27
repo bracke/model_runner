@@ -965,6 +965,24 @@ package Model_Runner.Llama is
       Threads : Positive := 1;
       Status  : out Model_Runner.Errors.Error_Info);
 
+   --  Write the rows of the output head a draft from the block past the
+   --  stack reads again at four bits, for that draft alone.
+   --
+   --  The block's proposals are scored against the head's first rows, and
+   --  what it proposes the model checks token by token: a coarser copy of
+   --  those rows changes how many proposals are kept and never what the
+   --  run writes. The model's own head is untouched. Nothing is written
+   --  for a head already at four bits or fewer, or not whole blocks wide.
+   --
+   --  @param Item Prepared model that drafts from its own block.
+   --  @param Threads Workers to encode with.
+   --  @param Status Success, or why the copy could not be made; drafts
+   --    then read the head's own rows, as before.
+   procedure Lighten_Draft_Head
+     (Item    : in out Model;
+      Threads : Positive := 1;
+      Status  : out Model_Runner.Errors.Error_Info);
+
    --  The format the output head is read in, which Lighten_Head changes.
    --
    --  @param Item Prepared model.
@@ -2435,6 +2453,11 @@ private
 
       --  The output head at four bits, for a model that only drafts.
       Light_Head  : Model_Runner.Bytes.Byte_Array_Access := null;
+
+      --  The rows of the head a draft from the block past the stack reads,
+      --  at four bits, where the run asked for them; empty otherwise.
+      Draft_Head       : aliased Model_Runner.Tensors.View;
+      Draft_Head_Bytes : Model_Runner.Bytes.Byte_Array_Access := null;
 
       --  What every resolved matrix is called, against where it lives.
       --

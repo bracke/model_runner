@@ -4203,6 +4203,18 @@ package body Model_Runner.CLI.Execute is
                                          <= Next_Draft_Share
                                        and then L.Token_Bytes (Prepared)
                                                 >= Next_Draft_Bytes));
+                  --  The block's proposals read a slice of the head, at
+                  --  four bits for that alone.
+                  if Request.Draft_From_Next then
+                     declare
+                        Lighter : E.Error_Info;
+                     begin
+                        L.Lighten_Draft_Head
+                          (Prepared, Model_Runner.Platform.Core_Count,
+                           Lighter);
+                     end;
+                  end if;
+
                   Request.Draft_Tokens :=
                     (if Request.Draft_From_Next
                        and then not Item.Draft_Tokens_Set

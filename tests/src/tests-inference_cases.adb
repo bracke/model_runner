@@ -1468,6 +1468,81 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Evaluation_Is_Deterministic;
 
+   --  The rows a draft from the block past the stack reads, written again
+   --  at four bits for that draft alone: the model's own logits do not move
+   --  by a bit, and the block's drafted ones move, by less than a tenth of
+   --  their largest. A draft reading the model's rows still, or a model
+   --  reading the draft's, is what this is here to see.
+   procedure A_Lightened_Draft_Head_Leaves_The_Model_Alone
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Room : constant := 64;
+
+      Image  : B.Byte_Array_Access;
+      Prompt : constant Vocab.Token_Array (1 .. 4) := [4, 7, 2, 9];
+   begin
+      Tiny_Model.Build
+        (Image, Kind => Tiny_Model.Qwen35, Room => Room,
+         Format => Tiny_Model.Q8_0);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : aliased Harness (Held'Access);
+         Status : E.Error_Info;
+
+         Width : N.Element_Count;
+
+         procedure Read
+           (Logits, Drafted : out Logit_Vector)
+         is
+            Live  : L.Session;
+            State : N.Real_Array (0 .. Width - 1);
+         begin
+            L.Open (Live, Under.Ready, Context => Room, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+            for Token of Prompt loop
+               L.Evaluate (Live, Under.Ready, Token, Logits, Status => Status);
+               Assert (E.Is_Ok (Status), "evaluation failed");
+            end loop;
+            L.Draft_Next
+              (Live, Under.Ready, 3, L.Last_State (Live), Prompt'Length - 1,
+               Drafted, State, Status);
+            Assert (E.Is_Ok (Status), "the block did not draft");
+            L.Close (Live);
+         end Read;
+
+         Before, After             : Logit_Vector;
+         Drafted_Before, Drafted_After : Logit_Vector;
+         Largest, Moved : N.Real := 0.0;
+      begin
+         Start (Under);
+         Width := N.Element_Count (L.Config (Under.Ready).Embedding);
+
+         Read (Before, Drafted_Before);
+         L.Lighten_Draft_Head (Under.Ready, 2, Status);
+         Assert (E.Is_Ok (Status), "the draft's rows would not lighten");
+         Read (After, Drafted_After);
+
+         for Index in Before'Range loop
+            Assert (After (Index) = Before (Index),
+                    "the model's own logit moved at"
+                    & N.Element_Count'Image (Index));
+            Largest := N.Real'Max (Largest, abs Drafted_Before (Index));
+            Moved := N.Real'Max
+              (Moved, abs (Drafted_After (Index) - Drafted_Before (Index)));
+         end loop;
+
+         Assert (Moved > 0.0, "the draft read the model's own rows");
+         Assert (Moved <= 0.1 * Largest,
+                 "the drafted logits moved" & N.Real'Image (Moved)
+                 & " against a largest of" & N.Real'Image (Largest));
+      end;
+
+      B.Free (Image);
+   end A_Lightened_Draft_Head_Leaves_The_Model_Alone;
+
    --  A draft's head written again at four bits reads nearly what the
    --  file's did: the head says Q4_0 afterwards, and a token's logits
    --  move by less than a tenth of their largest -- where a scale of the
@@ -14035,6 +14110,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Evaluation_Is_Deterministic'Access,
          "the same token sequence produces identical logits");
+      Register_Routine
+        (T, A_Lightened_Draft_Head_Leaves_The_Model_Alone'Access,
+         "the block's rows at four bits move its drafts and not the model");
       Register_Routine
         (T, A_Lightened_Head_Reads_Nearly_The_Same'Access,
          "a draft's head written again at four bits reads nearly the same");
