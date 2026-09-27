@@ -728,6 +728,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A token's logits reach the sampler in one copy.** They crossed the
+  memory three times on their way out of the device -- to a landing, to the
+  session's row, to the caller's -- while the device waited for the next
+  token. `Evaluate` now also takes the caller's row itself and the head
+  writes there, and a projection with nothing to turn copies its answers
+  out of the device's mapping straight to the rows it was given. Same
+  tokens; gemma-3-270m 154.6 -> 156.3 tokens a second, gemma-3-4b 23.76 ->
+  23.88.
+
 - **A token's logits are not cleared before they are written.** Evaluate
   zeroed the caller's logits on the way in -- a megabyte over Gemma 3's
   262,144 tokens, on the host while the device waited for the next token's

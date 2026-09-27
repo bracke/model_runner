@@ -1570,6 +1570,11 @@ package Model_Runner.Platform.Device.Products is
       Pages_At   : Natural := 0;
       Page_Shift : Natural := 0);
 
+   --  Where a caller's rows begin, one for each answer a sequence keeps.
+   type Address_List is array (Positive range <>) of System.Address;
+
+   No_Places : constant Address_List (1 .. 0) := [others => System.Null_Address];
+
    --  Perform every product a sequence holds, in the order they were named.
    --
    --  An unchained product reads the activation given here; a chained one
@@ -1593,6 +1598,13 @@ package Model_Runner.Platform.Device.Products is
    --  @param Carry_Out True where the last step's answer is to be left on
    --    the device for the next sequence to read, rather than copied back
    --    into Target.
+   --  @param Kept_Into Where given, one place for each step the sequence
+   --    keeps, in order: each kept answer is copied out of the mapping
+   --    straight to its place, with room for its rows times Count, and
+   --    Target is not written and need hold nothing. A caller that would
+   --    only copy Target on to rows of its own saves that copy -- the
+   --    vocabulary's logits, a token's widest answer. Any other count of
+   --    places is refused.
    --
    --  A layer's answer is the next layer's activation, and between them it
    --  went to the host and came back: a megabyte a layer out of the mapped
@@ -1610,7 +1622,8 @@ package Model_Runner.Platform.Device.Products is
       Cancelled : out Boolean;
       Cancel    : Model_Runner.Cancellation.Token_Reference := null;
       Carry_In  : Boolean := False;
-      Carry_Out : Boolean := False);
+      Carry_Out : Boolean := False;
+      Kept_Into : Address_List := No_Places);
 
    --  The activation the last sequence left on the device, read back.
    --

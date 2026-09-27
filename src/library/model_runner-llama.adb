@@ -16641,15 +16641,20 @@ package body Model_Runner.Llama is
    -- Evaluate_Token --
    --------------------
 
-   --  Evaluate's work. Every way to success leaves through writing all of
-   --  Logits, so it is not cleared on the way in: a megabyte of zeros on
-   --  a large vocabulary, on the serial stretch between one token's head
-   --  and the next token's first layer. Evaluate clears it on a failure.
+   --  Evaluate's work, the logits written into Row, whose length the
+   --  caller gives as Asked. Every way to success leaves through writing
+   --  all of Row, so it is not cleared on the way in: a megabyte of zeros
+   --  on a large vocabulary, on the serial stretch between one token's
+   --  head and the next token's first layer. Evaluate clears it on a
+   --  failure. Row is the session's own or the caller's: the head writes
+   --  straight into the caller's where it can, a copy of the vocabulary
+   --  fewer on that stretch.
    procedure Evaluate_Token
      (Item   : in out Session;
       Source : Model'Class;
       Token  : Token_Id;
-      Logits : out Real_Array;
+      Row    : T.Real_Array_Access;
+      Asked  : Element_Count;
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
       Status : out E.Error_Info)
    is
@@ -17182,9 +17187,9 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      if Logits'Length /= Element_Count (Settings.Vocabulary) then
+      if Asked /= Element_Count (Settings.Vocabulary) then
          Status := E.Make (E.Tensor_Shape_Mismatch);
-         E.Add_Integer (Status, "output", Long_Long_Integer (Logits'Length));
+         E.Add_Integer (Status, "output", Long_Long_Integer (Asked));
          return;
       end if;
 
@@ -18410,7 +18415,7 @@ package body Model_Runner.Llama is
          begin
             Model_Runner.Backend.Device.Normalize_And_Project
               ([Source.Output], Item.Activation, Source.Output_Norm.all,
-               Settings.Epsilon, [Item.Logit_Row], Done,
+               Settings.Epsilon, [Row], Done,
                Cancel => Item.Stopping, Carry_In => True);
 
             if Done then
@@ -18440,7 +18445,7 @@ package body Model_Runner.Llama is
       --  the one that most benefits from the pool. It writes into a
       --  session-owned row that is then copied into the caller's vector.
       Product
-        (Item, Source.Output, Item.Normalized, Item.Logit_Row, Status);
+        (Item, Source.Output, Item.Normalized, Row, Status);
       if E.Is_Error (Status) then
          Item.Current := Failed;
          return;
@@ -18450,8 +18455,7 @@ package body Model_Runner.Llama is
 
       <<Logits_Made>>
 
-      Logits := Item.Logit_Row.all;
-      Finish_Logits (Source, Logits);
+      Finish_Logits (Source, Row.all);
 
       --  Commit: the position becomes readable context only now, after every
       --  layer of this token has succeeded.
@@ -18477,9 +18481,28 @@ package body Model_Runner.Llama is
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
       Status : out E.Error_Info) is
    begin
-      Evaluate_Token (Item, Source, Token, Logits, Cancel, Status);
+      Evaluate_Token
+        (Item, Source, Token, Item.Logit_Row, Logits'Length, Cancel, Status);
       if E.Is_Error (Status) then
          Logits := [others => 0.0];
+      else
+         Logits := Item.Logit_Row.all;
+      end if;
+   end Evaluate;
+
+   procedure Evaluate
+     (Item   : in out Session;
+      Source : Model'Class;
+      Token  : Token_Id;
+      Logits : T.Real_Array_Access;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Status : out E.Error_Info) is
+   begin
+      Evaluate_Token
+        (Item, Source, Token, Logits,
+         (if Logits = null then 0 else Logits.all'Length), Cancel, Status);
+      if E.Is_Error (Status) and then Logits /= null then
+         Logits.all := [others => 0.0];
       end if;
    end Evaluate;
 

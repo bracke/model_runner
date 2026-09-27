@@ -1608,7 +1608,7 @@ package body Model_Runner.Generation is
             --  have made this a loss where it should be a wash.
             if Count = 1 then
                L.Evaluate
-                 (Session, Source, Proposed.all (1), Logits.all,
+                 (Session, Source, Proposed.all (1), Logits,
                   Cancel, Local);
             else
                L.Evaluate_Batch
@@ -1629,7 +1629,7 @@ package body Model_Runner.Generation is
                   Make_Room (Room);
                   if Room and then Count = 1 then
                      L.Evaluate
-                       (Session, Source, Proposed.all (1), Logits.all,
+                       (Session, Source, Proposed.all (1), Logits,
                         Cancel, Local);
                   elsif Room then
                      L.Evaluate_Batch
@@ -2133,7 +2133,7 @@ package body Model_Runner.Generation is
                      Status := E.Success;
                   else
                      L.Evaluate
-                       (Session, Source, Token, Logits.all, Cancel, Status);
+                       (Session, Source, Token, Logits, Cancel, Status);
                   end if;
 
                   --  A context that has filled, when the caller asked for the
@@ -2154,7 +2154,7 @@ package body Model_Runner.Generation is
                         if E.Is_Ok (Moved) then
                            Outcome.Shifted := Outcome.Shifted + 1;
                            L.Evaluate
-                             (Session, Source, Token, Logits.all, Cancel,
+                             (Session, Source, Token, Logits, Cancel,
                               Status);
                         end if;
                      end;

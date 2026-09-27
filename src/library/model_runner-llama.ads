@@ -1536,6 +1536,26 @@ package Model_Runner.Llama is
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Evaluate, the logits written where the caller keeps them. The head
+   --  writes them there itself rather than into the session's own row to
+   --  be copied over, so a token's logits cross the memory once fewer on
+   --  the stretch where the device waits for the next token.
+   --
+   --  @param Item Session to advance.
+   --  @param Source Prepared model the session was opened on.
+   --  @param Token Token to evaluate.
+   --  @param Logits The caller's vocabulary-sized row; a null one or one
+   --    of another length is refused as the array form refuses it.
+   --  @param Cancel Cancellation token, or null.
+   --  @param Status As the array form reports.
+   procedure Evaluate
+     (Item   : in out Session;
+      Source : Model'Class;
+      Token  : Token_Id;
+      Logits : Model_Runner.Tensors.Real_Array_Access;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Status : out Model_Runner.Errors.Error_Info);
+
    --  Where a given row stands in its picture, for a model whose
    --  positions have three parts: its row and column in the picture's
    --  grid, whether it is the picture's first or last row, and -- on the

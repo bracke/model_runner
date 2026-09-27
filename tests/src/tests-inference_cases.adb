@@ -1468,6 +1468,72 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Evaluation_Is_Deterministic;
 
+   --  The logits written where the caller keeps them are the logits the
+   --  array form hands back, to the bit, token after token; and a row the
+   --  form cannot fill -- none, or one of another length -- is refused as
+   --  the array form refuses it, commits nothing, and leaves the row it
+   --  was given cleared.
+   procedure Logits_Written_In_Place_Are_The_Logits
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Given, Kept : L.Session;
+         Status : E.Error_Info;
+         Logits : Logit_Vector;
+         Row    : Model_Runner.Tensors.Real_Array_Access :=
+           new N.Real_Array'(Logit_Vector'Range => 0.0);
+         Short  : Model_Runner.Tensors.Real_Array_Access :=
+           new N.Real_Array'(0 .. Logit_Vector'Length - 2 => 1.0);
+      begin
+         Start (Under);
+         L.Open (Given, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the first session did not open");
+         L.Open (Kept, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the second session did not open");
+
+         for Token in Vocab.Token_Id range 4 .. 6 loop
+            L.Evaluate (Given, Under.Ready, Token, Logits, Status => Status);
+            Assert (E.Is_Ok (Status), "the array form failed");
+            L.Evaluate (Kept, Under.Ready, Token, Row, Status => Status);
+            Assert (E.Is_Ok (Status), "the row form failed");
+
+            for Index in Logits'Range loop
+               Assert (Row.all (Index) = Logits (Index),
+                       "the forms differ at"
+                       & N.Element_Count'Image (Index));
+            end loop;
+         end loop;
+
+         L.Evaluate (Kept, Under.Ready, 4, Short, Status => Status);
+         Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                 "a short row was not refused as a shape mismatch");
+         Assert ((for all Value of Short.all => Value = 0.0),
+                 "a refused row was not cleared");
+
+         L.Evaluate (Kept, Under.Ready, 4, null, Status => Status);
+         Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                 "no row was not refused as a shape mismatch");
+
+         Assert (L.Position (Kept) = 3,
+                 "a refused row committed a position");
+
+         L.Close (Given);
+         L.Close (Kept);
+         Model_Runner.Tensors.Free (Row);
+         Model_Runner.Tensors.Free (Short);
+      end;
+
+      B.Free (Image);
+   end Logits_Written_In_Place_Are_The_Logits;
+
    --  A cancelled token commits nothing: the context is exactly what it was.
    --  An observer that asks for cancellation once it has seen enough stages.
    --
@@ -13903,6 +13969,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Evaluation_Is_Deterministic'Access,
          "the same token sequence produces identical logits");
+      Register_Routine
+        (T, Logits_Written_In_Place_Are_The_Logits'Access,
+         "the logits written where the caller keeps them are the logits");
       Register_Routine
         (T, Standing_Cancellation_Stops_Each_Stage'Access,
          "a standing request stops the parser and the batched pass");

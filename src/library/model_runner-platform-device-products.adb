@@ -10367,7 +10367,8 @@ package body Model_Runner.Platform.Device.Products is
       Cancelled : out Boolean;
       Cancel    : Model_Runner.Cancellation.Token_Reference := null;
       Carry_In  : Boolean := False;
-      Carry_Out : Boolean := False)
+      Carry_Out : Boolean := False;
+      Kept_Into : Address_List := No_Places)
    is
       use type System.Storage_Elements.Integer_Address;
 
@@ -11045,9 +11046,25 @@ package body Model_Runner.Platform.Device.Products is
       if Vectors'Length
            < Model_Runner.Numerics.Element_Count (Steps.Items (1).Columns)
              * Model_Runner.Numerics.Element_Count (Count)
-        or else Target'Length < Wanted
+        or else (Kept_Into'Length = 0 and then Target'Length < Wanted)
       then
          return;
+      end if;
+
+      if Kept_Into'Length > 0 then
+         declare
+            Keeps : Natural := 0;
+         begin
+            for Index in 1 .. Steps.Held loop
+               if Steps.Items (Index).Kept then
+                  Keeps := Keeps + 1;
+               end if;
+            end loop;
+
+            if Keeps /= Kept_Into'Length then
+               return;
+            end if;
+         end;
       end if;
 
       --  The other of the two of everything a submission holds, and the
@@ -13687,6 +13704,7 @@ package body Model_Runner.Platform.Device.Products is
       declare
          Good_Map : Boolean;
          Filled   : Model_Runner.Numerics.Element_Count := Target'First;
+         Placed   : Natural := 0;
       begin
          Standing (Item, Item.Result_Memory, Item.Result_At,
                    Item.Result_Bytes, Good_Map);
@@ -13716,7 +13734,18 @@ package body Model_Runner.Platform.Device.Products is
                --  over, so what a caller indexes does not depend on what it
                --  kept -- and for a gated feed-forward that is three
                --  answers of the four left where they were written.
-               if Steps.Items (Index).Kept then
+               if Steps.Items (Index).Kept and then Kept_Into'Length > 0
+               then
+                  Placed := Placed + 1;
+                  declare
+                     Place : Model_Runner.Numerics.Real_Array (Slice'Range)
+                       with Import,
+                            Address =>
+                              Kept_Into (Kept_Into'First + Placed - 1);
+                  begin
+                     Place := Slice;
+                  end;
+               elsif Steps.Items (Index).Kept then
                   Target (Slice'Range) := Slice;
                end if;
 

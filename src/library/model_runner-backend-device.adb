@@ -2066,6 +2066,42 @@ package body Model_Runner.Backend.Device is
          end;
       end if;
 
+      --  With nothing turned, the answers the host keeps are the products,
+      --  one for each row given, in order: they go out of the mapping
+      --  straight to the caller's rows rather than through the landing.
+      --  The head's logits are this, on the stretch where the device
+      --  waits for the next token.
+      if not Rotating then
+         declare
+            Places : Products.Address_List (1 .. Into'Length);
+            None   : Model_Runner.Numerics.Real_Array (1 .. 0);
+         begin
+            for Index in Places'Range loop
+               declare
+                  Mine : T.Real_Array_Access renames
+                    Into (Into'First + (Index - 1));
+               begin
+                  Places (Index) := Mine.all (Mine.all'First)'Address;
+               end;
+            end loop;
+
+            Products.Run
+              (Engine, Steps,
+               Vector.all (Vector.all'First
+                           .. Vector.all'First + Slots * Width - 1),
+               Positive (Slots), None, Ran, Cancelled, Cancel,
+               Carry_In => Carry_In, Kept_Into => Places);
+         end;
+
+         if Cancelled or else not Ran then
+            return;
+         end if;
+
+         Note_Timeline (Steps, Positive (Slots));
+         Ok := True;
+         return;
+      end if;
+
       if Landing = null or else Landing.all'Length < Wanted then
          T.Free (Landing);
          T.Allocate (Wanted, Landing);
