@@ -208,16 +208,30 @@ package body Speed_Run is
          --  seven-token prompt" for a file the command tokenizes into six.
          --  A tool that exists so the figures are a command has to read
          --  what the command reads.
+         --  Its lines, too, as the command reads them: a line ended the
+         --  Windows way is a line without its carriage return.
          function As_Commanded return String is
             Whole : constant String :=
               Project_Tools.Files.Read_Raw_File (Prompt_Path);
+            Kept  : String (1 .. Whole'Length);
+            Last  : Natural := 0;
          begin
-            if Whole'Length > 0
-              and then Whole (Whole'Last) = ASCII.LF
-            then
-               return Whole (Whole'First .. Whole'Last - 1);
+            for Index in Whole'Range loop
+               if Whole (Index) = ASCII.CR
+                 and then (Index = Whole'Last
+                           or else Whole (Index + 1) = ASCII.LF)
+               then
+                  null;
+               else
+                  Last := Last + 1;
+                  Kept (Last) := Whole (Index);
+               end if;
+            end loop;
+
+            if Last > 0 and then Kept (Last) = ASCII.LF then
+               Last := Last - 1;
             end if;
-            return Whole;
+            return Kept (1 .. Last);
          end As_Commanded;
 
          Prompt : constant String := As_Commanded;

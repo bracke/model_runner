@@ -3392,7 +3392,21 @@ package body Checks is
             --  is silent about, and silence and a clean bill have to look
             --  different. It read one directory name before and a crate
             --  keeping its sources anywhere else came out looking tidy.
-            if Units = 0 then
+            --  Unless the tree never built it at all: a crate pinned for a
+            --  build-time tool -- awklib and regexp are i18n's, for the
+            --  CLDR data -- has no object directory where that tool did not
+            --  run, as on a runner whose downloads are cached. That is said,
+            --  not failed; a crate with objects and no matched unit is the
+            --  case this exists for, and still fails.
+            if Units = 0
+              and then not Ada.Directories.Exists (Place & "/obj")
+            then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "  note: the pinned crate " & Name
+                  & " was not built in this tree, so nothing is said "
+                  & "about its warnings");
+            elsif Units = 0 then
                Fail ("the pinned crate " & Name
                      & " has no compiled unit this check could match to a "
                      & "source, so what it says about that crate is nothing "

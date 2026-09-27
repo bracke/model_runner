@@ -17,3 +17,13 @@ tests/fixtures/*.gguf binary
 
 #  The recording is read line by line and its values compared exactly.
 tests/fixtures/*.expect text eol=lf
+
+#  The chat templates and their renderings are compared byte for byte, and a
+#  template's line breaks are part of what it renders: converted on a Windows
+#  checkout, the model's own template rendered a carriage return the carried
+#  format does not. The prompts and the vision crossing are read the same way.
+tests/fixtures/*.jinja text eol=lf
+tests/fixtures/*.render text eol=lf
+tests/fixtures/*.txt text eol=lf
+tests/fixtures/*.vision-crossing text eol=lf
+tests/fixtures/*.jpg binary

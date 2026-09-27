@@ -9,6 +9,7 @@ with AUnit.Assertions;
 
 with Interfaces;
 
+with Model_Runner.Quantization.Integers;
 with Model_Runner.Kernels;
 with Model_Runner.Delta_Rule;
 with Model_Runner.Backend;
@@ -609,7 +610,17 @@ package body Tests.Backend_Cases is
          CPU.Use_Integer_Activations (True);
 
          for Batch of Counts loop
-            if G."=" (Shape, G.Type_Q4_1)
+            --  Where either side has no integer kernel on this host its
+            --  product is the floating-point one, and the comparison is
+            --  between two arithmetics: a panel's kernels are the byte
+            --  product's alone, so a host without it -- every hosted
+            --  runner this has met -- compares Q4_0's integer rows with
+            --  binary32 panels.
+            if not Model_Runner.Quantization.Integers.Has_Integer_Kernel
+                     (Shape, Interleaved => True)
+              or else not Model_Runner.Quantization.Integers
+                            .Has_Integer_Kernel (Shape)
+              or else G."=" (Shape, G.Type_Q4_1)
               or else G."=" (Shape, G.Type_Q5_0)
               or else G."=" (Shape, G.Type_Q5_1)
               or else G."=" (Shape, G.Type_Q2_K)

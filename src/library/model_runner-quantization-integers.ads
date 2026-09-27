@@ -183,7 +183,8 @@ package Model_Runner.Quantization.Integers is
    --  @param Format Weight format.
    --  @param Interleaved Whether the weights are laid out a panel of rows
    --    at a time.
-   --  @return True when Accumulate_Rows implements it.
+   --  @return True when Accumulate_Rows implements it -- which for a
+   --    panel is only where the deepest compilation may be entered.
    function Has_Integer_Kernel
      (Format      : Model_Runner.GGUF.Tensor_Type;
       Interleaved : Boolean := False) return Boolean;

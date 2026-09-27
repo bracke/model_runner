@@ -9,6 +9,12 @@ jobs:
   linux-release-check:
     name: Linux release checklist
     runs-on: ubuntu-latest
+    # The whole conformance sweep takes over an hour on a workstation and
+    # did not finish in the six hours a hosted runner allows, so every run
+    # ended cancelled rather than failed or passed. The checklist is run
+    # --short here (conformance over binary32 weights alone) and bounded,
+    # so a stall reads as a failure within two and a half hours.
+    timeout-minutes: 150
     steps:
       - name: Check out model_runner
         uses: actions/checkout@v7
@@ -46,7 +52,7 @@ jobs:
         run: tools/bin/check_all_selftest
       - name: Run aggregate release checker
         working-directory: model_runner
-        run: tools/bin/check_all
+        run: tools/bin/check_all --short
 
   # macOS and Windows verify the library and its AUnit suite build and run
   # natively. model_runner is pure Ada -- it reads a model file and does
@@ -54,6 +60,7 @@ jobs:
   # checklist above stays Linux-only.
   macos-build-check:
     name: macOS native build check
+    timeout-minutes: 90
     # macos-latest is arm64; gnat_native=15.2.1 ships no aarch64-darwin binary.
     runs-on: macos-15-intel
     steps:
@@ -96,6 +103,7 @@ jobs:
 
   windows-build-check:
     name: Windows native build check
+    timeout-minutes: 90
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7

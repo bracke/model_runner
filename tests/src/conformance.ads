@@ -259,6 +259,9 @@ package Conformance is
    --  the device alone, one long enough for its tile kernels.
    --
    --  @param Result Totals, including the worst differences observed.
-   procedure Run (Result : out Report);
+   --  @param Short_Sweep Cross binary32 weights alone -- every architecture,
+   --    shape, backend, repacking and cache still, at a twenty-third of the
+   --    sweep -- for a runner that cannot spend the hours the whole takes.
+   procedure Run (Result : out Report; Short_Sweep : Boolean := False);
 
 end Conformance;

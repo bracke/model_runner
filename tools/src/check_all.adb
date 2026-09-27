@@ -28,6 +28,12 @@ procedure Check_All is
 
    Root   : constant String := Project_Root;
 
+   --  Whether the conformance sweep is to cross binary32 alone. See the
+   --  gate's step below.
+   Short  : constant Boolean :=
+     Ada.Command_Line.Argument_Count >= 1
+     and then Ada.Command_Line.Argument (1) = "--short";
+
    --  A built executable, by whichever name this host gives it.
    --
    --  Two paths, because the name is run from the directory the step runs
@@ -108,10 +114,21 @@ begin
    --  a second definition of what must pass, kept in step with the first by
    --  hand -- and this repository has spent a great deal of effort removing
    --  exactly that arrangement everywhere else it appeared.
-   Project_Tools.Release_Checks.Run
-     ("suite, repository checks, conformance and fuzzing", Root & "/tests",
-      Built ("./bin/tests", Root & "/tests/bin/tests"),
-      [1 => new String'("check")]);
+   --  A runner that cannot spend the hours the whole conformance sweep
+   --  takes asks for --short, which the gate passes on: binary32 weights
+   --  alone, every architecture and shape still. A release runs it whole.
+   if Short then
+      Project_Tools.Release_Checks.Run
+        ("suite, repository checks, short conformance and fuzzing",
+         Root & "/tests",
+         Built ("./bin/tests", Root & "/tests/bin/tests"),
+         [new String'("check"), new String'("--short")]);
+   else
+      Project_Tools.Release_Checks.Run
+        ("suite, repository checks, conformance and fuzzing", Root & "/tests",
+         Built ("./bin/tests", Root & "/tests/bin/tests"),
+         [1 => new String'("check")]);
+   end if;
 
    --  The long campaign, which is this checklist's own addition. The gate
    --  asks whether the parser still refuses what it should; two thousand

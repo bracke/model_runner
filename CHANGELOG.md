@@ -573,6 +573,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A prompt file reads the same on every host.** A line ended the Windows
+  way lost its carriage return on Windows and kept it elsewhere, so the one
+  file was a token longer on Linux and macOS; `--prompt-file` now drops a
+  carriage return ending any line on every host, and `tests speed` reads its
+  prompt the same way.
+
+- **Weights laid out in panels no longer pack activations for nothing.** The
+  panel kernels are the byte-product compilation's alone, but a host without
+  that instruction was told a panel had an integer kernel, packed the
+  activations and then took the floating-point path anyway.
+
 - **A drafted round near the end of the context no longer ends the run.**
   A round whose proposals did not all fit in the room left stopped the run
   as full, though a shorter round would have gone in; it now checks the

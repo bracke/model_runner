@@ -54,7 +54,11 @@ package body Model_Runner.Quantization.Integers is
    function Has_Integer_Kernel
      (Format      : Model_Runner.GGUF.Tensor_Type;
       Interleaved : Boolean := False) return Boolean
-   is (Format = G.Type_Q8_0
+   is (if Interleaved and then not Deeper then False
+       --  The panel kernels are the deepest compilation's alone; the other
+       --  two refuse a panel and the product falls to the floating-point
+       --  path, so True there would pack activations nothing reads.
+       else Format = G.Type_Q8_0
        or else Format = G.Type_Q4_0
        or else Format = G.Type_Q4_K
        or else Format = G.Type_Q5_K

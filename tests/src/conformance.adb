@@ -51,7 +51,7 @@ package body Conformance is
       return False;
    end Wanted_Integers;
 
-   procedure Run (Result : out Report) is
+   procedure Run (Result : out Report; Short_Sweep : Boolean := False) is
       Image : B.Byte_Array_Access;
 
       --  Whether the caller has already put the whole sweep into the
@@ -1145,6 +1145,12 @@ package body Conformance is
          for Backend of Swept loop
             for Which_Arch in Crossed'Range loop
                for Format in Tiny_Model.Weight_Format loop
+                  --  A short sweep crosses binary32 alone; the count below
+                  --  is the same arithmetic over one format.
+                  if Short_Sweep and then Format /= Tiny_Model.F32 then
+                     goto Next_Format;
+                  end if;
+
                   for Shape in Model_Shape loop
                      --  The shapes a supported model comes in. The window is
                      --  three so that the eight-token sequences cross it
@@ -1460,6 +1466,8 @@ package body Conformance is
 
                      B.Free (Image);
                   end loop;
+
+                  <<Next_Format>>
                end loop;
             end loop;
          end loop;
@@ -1695,7 +1703,9 @@ package body Conformance is
 
          declare
             Formats : constant Natural :=
-              Tiny_Model.Weight_Format'Pos (Tiny_Model.Weight_Format'Last) + 1;
+              (if Short_Sweep then 1
+               else Tiny_Model.Weight_Format'Pos
+                      (Tiny_Model.Weight_Format'Last) + 1);
             Backends : constant Natural := Swept'Length;
             Repacks : constant Natural :=
               L.Repack_Mode'Pos (L.Repack_Mode'Last) + 1;

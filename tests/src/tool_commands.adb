@@ -34,7 +34,8 @@ package body Tool_Commands is
    Nothing : aliased constant String := "";
 
    Opts_None      : aliased constant String := " ";
-   Opts_Check     : aliased constant String := " --repository --record-warnings ";
+   Opts_Check     : aliased constant String :=
+     " --repository --record-warnings --short ";
    Opts_Fuzz      : aliased constant String := " --seed --cases ";
    Opts_Conform   : aliased constant String := " --arith ";
    Opts_Speed     : aliased constant String :=
@@ -69,7 +70,8 @@ package body Tool_Commands is
      " --model --against --text --chunk --chunks --threads --backend"
      & " --anyway --wait --rope-scaling --rope-scale ";
 
-   Takes_Check     : aliased constant String := "[ROOT] [--repository] [--record-warnings]";
+   Takes_Check     : aliased constant String :=
+     "[ROOT] [--repository] [--record-warnings] [--short]";
    Takes_Fuzz      : aliased constant String := "[--seed N] [--cases N]";
    Takes_Conform   : aliased constant String := "[--arith MODE]";
    Takes_Speed     : aliased constant String :=

@@ -855,6 +855,17 @@ package body Model_Runner.CLI.Execute is
             --  very long line puts the entire file on the stack.
             Get_Line (Handle, Result.all (Filled + 1 .. Stop), Last);
 
+            --  A line ended the Windows way keeps its carriage return on a
+            --  host whose text files end lines with a line feed alone, and
+            --  loses it on Windows, so the one file was a different prompt
+            --  on each. Dropped on every host: a prompt is its lines.
+            if Last < Stop
+              and then Last > Filled
+              and then Result.all (Last) = ASCII.CR
+            then
+               Last := Last - 1;
+            end if;
+
             --  Last < Stop means the separator was reached rather than the
             --  buffer filling, so the line genuinely ended here.
             if Last < Stop and then not End_Of_File (Handle) then

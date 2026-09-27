@@ -10387,6 +10387,7 @@ package body Tests.Inference_Cases is
          Expected : Reference_Transformer.Real_Vector
            (0 .. Tiny_Model.Vocabulary - 1);
          Direct, Restored : Logit_Vector;
+         Device_Open : Boolean := True;
 
          --  The engine, on Backend, with Cache keys and Values values,
          --  against the reference rounding as each says.
@@ -10447,6 +10448,10 @@ package body Tests.Inference_Cases is
          --  The device backend is a singleton the suite leaves closed, so
          --  it is opened here and closed after; a machine without one
          --  crosses on the processor alone.
+         --  A device that did not open is one the loop does not reach:
+         --  preparing for a closed backend succeeds and the first token
+         --  answers that it is closed, which is what every hosted runner
+         --  without a device reported.
          declare
             Awake : Boolean;
          begin
@@ -10455,11 +10460,15 @@ package body Tests.Inference_Cases is
                Ada.Text_IO.Put_Line
                  (Ada.Text_IO.Standard_Error,
                   "note: no device held values apart from keys here");
+               Device_Open := False;
             end if;
          end;
          for Backend in Model_Runner.Backend.Backend_Kind range
            Model_Runner.Backend.Backend_CPU .. Model_Runner.Backend.Backend_Device
          loop
+            exit when Model_Runner.Backend."="
+                        (Backend, Model_Runner.Backend.Backend_Device)
+                      and then not Device_Open;
             Cross (Backend, L.Eighth, L.Value_Fourth,
                    Reference_Transformer.To_Bytes, Reference_Transformer.To_Nibbles,
                    "byte keys with nibble values on "

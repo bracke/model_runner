@@ -855,8 +855,15 @@ begin
    elsif Command = "check" then
       --  Repository and dependency-boundary checks.
       declare
+         --  The first operand that is not an option: `check --short` is a
+         --  gate over "..", not over a tree named --short.
          Root   : constant String :=
            (if Ada.Command_Line.Argument_Count >= 2
+              and then (Ada.Command_Line.Argument (2)'Length < 2
+                        or else Ada.Command_Line.Argument (2)
+                                  (Ada.Command_Line.Argument (2)'First
+                                   .. Ada.Command_Line.Argument (2)'First + 1)
+                                /= "--")
             then Ada.Command_Line.Argument (2)
             else "..");
          Result : Checks.Report;
@@ -1050,10 +1057,17 @@ begin
          --  conformance sweep is not what a caller who wants a file
          --  rewritten is asking for.
          Recording : Boolean := False;
+
+         --  Conformance over binary32 weights alone: the hosted runner has
+         --  two cores and six hours, and the whole sweep did not finish in
+         --  them. The release checklist runs it whole.
+         Short : Boolean := False;
       begin
          for Index in 2 .. Ada.Command_Line.Argument_Count loop
             if Ada.Command_Line.Argument (Index) = "--repository" then
                Repository_Only := True;
+            elsif Ada.Command_Line.Argument (Index) = "--short" then
+               Short := True;
             elsif Ada.Command_Line.Argument (Index) = "--record-warnings" then
                Recording := True;
                Repository_Only := True;
@@ -1112,7 +1126,7 @@ begin
          --  They cost forty-four milliseconds and ninety, which is no reason
          --  to leave either out.
          if not Repository_Only then
-            Conformance.Run (Agreed);
+            Conformance.Run (Agreed, Short_Sweep => Short);
             Report_Stage ("conformance", 4000.0);
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,

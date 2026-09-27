@@ -3928,6 +3928,17 @@ package body Tests.CLI_Cases is
          --  stamp; the host stamps to the nanosecond, and the parse above
          --  has already spent more than one.
          Editor := GNAT.OS_Lib.Open_Read_Write (Path, GNAT.OS_Lib.Binary);
+
+         --  A host that would not replace the open file will not open it
+         --  for writing either -- Windows holds an open file against both
+         --  -- so this case cannot be staged there, for the reason the one
+         --  above cannot.
+         if Editor = GNAT.OS_Lib.Invalid_FD and then not Replaceable then
+            Containers.Close (Parsed);
+            Files.Close (Source);
+            return;
+         end if;
+
          Assert (Editor /= GNAT.OS_Lib.Invalid_FD,
                  "the fixture could not be opened for editing");
          GNAT.OS_Lib.Lseek (Editor, -1, GNAT.OS_Lib.Seek_End);
@@ -10878,10 +10889,19 @@ package body Tests.CLI_Cases is
             --  which are a fifth of a device prompt and were on one core
             --  until they were shared out. The reference backend is serial
             --  by construction and takes one.
+            --  The device's are bounded by the cores there are, which
+            --  is two on a hosted runner.
             Expected : constant String :=
               (if Back.Backend_Kind'Pos (Kind)
                  = Back.Backend_Kind'Pos (Back.Backend_Reference)
-               then "1" else "3");
+               then "1"
+               elsif Back.Backend_Kind'Pos (Kind)
+                     = Back.Backend_Kind'Pos (Back.Backend_Device)
+               then Ada.Strings.Fixed.Trim
+                      (Positive'Image
+                         (Positive'Min (3, Model_Runner.Platform.Core_Count)),
+                       Ada.Strings.Left)
+               else "3");
 
             --  A run on a device needs a device. Inspection does not -- it
             --  reports what was asked for without opening anything -- so
