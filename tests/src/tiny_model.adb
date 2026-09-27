@@ -1450,7 +1450,7 @@ package body Tiny_Model is
          --  projection, and a reader that preferred one would agree with a
          --  reader that preferred the other about nothing.
          if Kind not in Phi3 | Falcon | Phi2 | GPT2 | Nomic_Bert | Gptneox | Chatglm
-                      | Deepseek2
+                      | Deepseek2 | Mpt
            and then not Linear_Block (Index)
          then
             Weight (Layer_Name (Index, "attn_k.weight"),
