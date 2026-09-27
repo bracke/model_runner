@@ -573,6 +573,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A model with merged Q, K and V runs whole layers on the device again.**
+  The device's check for the step that reads its own rows of a fused
+  projection still asked for the projection to be exactly its width, so
+  phi3 -- whose file merges the three -- ran none of its layers whole:
+  21.5 -> 26.7 tokens a second, the same text. The suite's device tests,
+  whose fixture is fused the same way, now reach the device's own paths.
+
 - **Rolling the context on the device no longer loses the thread.** With
   `--context-shift`, a paged session (the device's default) and a packed
   cache in a block (`--kv-cache q8`/`q4` with `--no-paged`) kept the rows

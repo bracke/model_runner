@@ -6005,18 +6005,13 @@ package body Tests.Inference_Cases is
    --  kept the rows from before the roll, and Gemma 3 rolling its context
    --  went on mid-sentence ("from his father clock that governed the
    --  light's rotation"). Here a deep fixture, shifted paged, against the
-   --  exact block that was right all along. The packed block's half of the
-   --  fix -- Write_Block after the shift -- has no oracle here: a packed
-   --  block and packed pages pack on the host and the device and differ by
-   --  their rounding before any shift. Gemma 3 at q4 and q8 is what caught
-   --  and cleared it, the same text paged and in a block after a roll.
-   --
-   --  NOR DOES THE PAGED HALF REPRODUCE HERE: the device takes no layer of
-   --  this fixture whole (Layers_Whole is nought, every layer handed back
-   --  for its shape), so the token after the shift attends on the host from
-   --  its current copy, and a shift that leaves the pages stale passes.
-   --  Gemma 3 and qwen3-8b rolling a 256-position context caught and
-   --  cleared it. What this holds is the rest.
+   --  exact block that was right all along; a shift that leaves the pages
+   --  stale fails it by some tenths. The packed block's half of the fix --
+   --  Write_Block after the shift -- has no clean oracle here: a packed
+   --  block and packed pages already differ by about a tenth on this
+   --  fixture before any shift, which Gemma 3 at q4 and q8 does not show
+   --  (the same text paged and in a block). Gemma 3 is what caught and
+   --  cleared that half.
    --
    --  Skipped where there is no device.
    procedure A_Shift_On_The_Device_Reaches_Its_Cache_Copy
@@ -6034,7 +6029,8 @@ package body Tests.Inference_Cases is
          return;
       end if;
 
-      Tiny_Model.Build (Image, Format => Tiny_Model.Q4_K, Room => 64);
+      Tiny_Model.Build
+        (Image, Format => Tiny_Model.Q4_K, Room => 64);
 
       declare
          Held   : aliased constant B.Byte_Array := Image.all;
@@ -6107,6 +6103,10 @@ package body Tests.Inference_Cases is
             Blocks : constant N.Real_Array := After (False, L.Exact);
             Pages  : constant N.Real_Array := After (True, L.Exact);
          begin
+            --  The fixture goes whole on the device, or none of this is
+            --  asked of the device's copy at all.
+            Assert (Model_Runner.Backend.Device.Layers_Whole > 0,
+                    "no layer of the deep fixture went whole on the device");
             Same (Pages, Blocks, 1.0E-3, "the paged session");
          end;
 
@@ -6134,13 +6134,10 @@ package body Tests.Inference_Cases is
    --  standing behind a marker both ways, and the token after them in
    --  pages against in blocks.
    --
-   --  THIS FIXTURE DOES NOT REPRODUCE THAT FAULT: its session holds pages,
-   --  but a batch without the pages given back passes here too -- the
-   --  token after attends where the host's copy is current. Gemma 3 with
-   --  its projector is what caught and cleared it: a red picture described
-   --  in two sentences, drafted and not, where before it was one word and
-   --  noise. What this holds is the rest: a paged session's picture and
-   --  the token after it read as the same in blocks.
+   --  A batch that leaves the pages as they were fails it, now that the
+   --  device takes the deep fixture's layers whole; Gemma 3 with its
+   --  projector caught it first -- a red picture named in one word and
+   --  then noise, and described in two sentences once mended.
    --
    --  Skipped where there is no device.
    procedure A_Paged_Picture_Reaches_The_Device_Pages
@@ -6264,13 +6261,11 @@ package body Tests.Inference_Cases is
    --  this -- its draft's cache holds what the target's does -- so the
    --  draft here is another model, and both sessions are paged.
    --
-   --  THIS FIXTURE DOES NOT REPRODUCE THAT RACE: two layers and random
-   --  weights never reach the stale skip, and a skip without the check
-   --  passes here. What caught and cleared it was the real pair, greedy:
-   --  drafted text 2793f04a against the undrafted 915827ab before, and
-   --  915827ab after. What this holds is the rest -- two models' paged
-   --  sessions drafting on one device, their pages dealt from one pool,
-   --  read as the same run in blocks reads them.
+   --  A skip without the check fails it. It did not while the device took
+   --  no layer of the deep fixture whole -- a fused-QKV reader was refused
+   --  its shape until that was mended -- and the real pair caught it first:
+   --  qwen3-8b drafted by qwen3-0.6b, greedy, 2793f04a against the
+   --  undrafted 915827ab before, and 915827ab after.
    --
    --  Skipped where there is no device.
    procedure A_Paged_Draft_Leaves_The_Target_Its_Own_Tables

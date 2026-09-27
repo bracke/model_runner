@@ -10771,9 +10771,21 @@ package body Model_Runner.Platform.Device.Products is
                --  values' projection; it carries a weight one head wide or
                --  none, kept like a normalization's; and it needs the
                --  cache where it places, and the pipeline at all.
+               --  A reader of a fused product reads its own rows of it,
+               --  every Reads_Stride: the product spans the stride, and the
+               --  reader's rows lie inside it. This asked for the product
+               --  to be the reader's width whatever the stride, so no
+               --  fused-QKV layer ever went whole -- phi3's none of 288 --
+               --  and the suite's deep fixture, fused the same way, never
+               --  put a layer whole on the device at all.
                if This.Rows = 0
                  or else This.Reads not in 1 .. Index - 1
-                 or else Steps.Items (This.Reads).Rows /= This.Rows
+                 or else (if This.Reads_Stride = 0
+                          then Steps.Items (This.Reads).Rows /= This.Rows
+                          else Steps.Items (This.Reads).Rows
+                                 /= This.Reads_Stride
+                               or else This.Reads_At + This.Rows
+                                       > This.Reads_Stride)
                  or else (This.Reads_Two /= 0
                           and then This.Reads_Two not in 1 .. Index - 1)
                  or else (This.Into_Cache
