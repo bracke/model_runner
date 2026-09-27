@@ -64,6 +64,186 @@ package body Checks is
    -- Run --
    ---------
 
+   --  Which line stops a catalog loading, found by halving.
+   --
+   --  The runtime refuses a catalog whole: one line it cannot compile and
+   --  nothing renders, in any locale, with no indication of where. A
+   --  placeholder named seconds does it, which took a bisection by hand
+   --  to find and is the reason this exists -- the next one should cost
+   --  nobody an afternoon.
+   --
+   --  Halving rather than one line at a time, because each attempt
+   --  compiles a whole catalog: eleven opens against eleven hundred. The
+   --  header goes into every candidate, and a candidate that is missing
+   --  most of its keys still loads, which is what makes the search
+   --  possible at all.
+   --
+   --  @param Source Catalog to search.
+   --  @param Scratch Where to write candidates.
+   --  @return The offending line, or the empty string when the catalog
+   --    loads or when no single line accounts for it.
+   function Offending_Line (Source, Scratch : String) return String is
+      --  Read directly rather than through Contents, which takes a path
+      --  relative to the repository and would look for this one inside
+      --  itself. That silently returned nothing, and the search returned
+      --  nothing with it -- which looked exactly like a catalog with no
+      --  single line to blame.
+      Text : constant String :=
+        (if Files.File_Exists (Source)
+         then Files.Read_Raw_File (Source) else "");
+
+      --  Every line, as start and stop offsets into Text.
+      type Span is record
+         From, To : Natural := 0;
+      end record;
+
+      Lines : array (1 .. 4096) of Span;
+      Count : Natural := 0;
+
+      --  The header this catalog needs whatever else is dropped.
+      Header : Natural := 0;
+
+      procedure Split is
+         At_Byte : Natural := Text'First;
+      begin
+         while At_Byte <= Text'Last loop
+            declare
+               Stop : Natural := At_Byte;
+            begin
+               while Stop <= Text'Last
+                 and then Text (Stop) /= Character'Val (10)
+               loop
+                  Stop := Stop + 1;
+               end loop;
+
+               --  A line ended the Windows way is the same logical
+               --  line: its carriage return is left out of the span, so
+               --  a candidate written back line by line is the catalog
+               --  as it reads, not one with a return doubled on every
+               --  line -- which on a CRLF checkout changed the catalog
+               --  being searched and named the header's first key as
+               --  the fault. The same for a last line with no line feed.
+               if Count < Lines'Last then
+                  Count := Count + 1;
+                  Lines (Count) :=
+                    (At_Byte,
+                     (if Stop - 1 >= At_Byte
+                        and then Text (Stop - 1) = Character'Val (13)
+                      then Stop - 2 else Stop - 1));
+               end if;
+               At_Byte := Stop + 1;
+            end;
+         end loop;
+      end Split;
+
+      --  Whether the catalog made of the header plus lines First .. Last
+      --  refuses to load.
+      function Refuses (First, Last : Natural) return Boolean is
+         Held      : Model_Runner.Localization.Catalog;
+         Answer    : Boolean;
+         Candidate : Ada.Strings.Unbounded.Unbounded_String;
+
+         procedure Take (Index : Natural) is
+         begin
+            Ada.Strings.Unbounded.Append
+              (Candidate, Text (Lines (Index).From .. Lines (Index).To));
+            Ada.Strings.Unbounded.Append (Candidate, Character'Val (10));
+         end Take;
+      begin
+         --  Written with line feeds whatever the host writes a text file
+         --  with, so the candidate is the same bytes on every host and
+         --  differs from the catalog only by what was left out.
+         for Index in 1 .. Header loop
+            Take (Index);
+         end loop;
+         for Index in First .. Last loop
+            Take (Index);
+         end loop;
+         Files.Write_Raw_File
+           (Scratch, Ada.Strings.Unbounded.To_String (Candidate));
+
+         Model_Runner.Localization.Open (Held, Scratch, "en");
+         Answer := not Model_Runner.Localization.Is_Ready (Held);
+         Model_Runner.Localization.Close (Held);
+         return Answer;
+      end Refuses;
+
+      Low, High : Natural;
+   begin
+      if Text'Length = 0 then
+         return "";
+      end if;
+
+      Split;
+
+      --  The header is everything before the first locale entry, which is
+      --  where default_locale is stated.
+      while Header < Count
+        and then not Project_Tools.Text.Contains
+                       (Text (Lines (Header + 1).From
+                              .. Lines (Header + 1).To), "en.")
+      loop
+         Header := Header + 1;
+      end loop;
+
+      Low := Header + 1;
+      High := Count;
+
+      if not Refuses (Low, High) then
+         return "";
+      end if;
+
+      --  Halve while one half still refuses on its own. When neither
+      --  does, the two lines that disagree are in different halves and
+      --  this cannot name one -- which is said by returning nothing
+      --  rather than by naming the wrong line.
+      while High > Low loop
+         declare
+            Middle : constant Natural := Low + (High - Low) / 2;
+         begin
+            if Refuses (Low, Middle) then
+               High := Middle;
+            elsif Refuses (Middle + 1, High) then
+               Low := Middle + 1;
+            else
+               return "";
+            end if;
+         end;
+      end loop;
+
+      return Text (Lines (Low).From .. Lines (Low).To);
+   end Offending_Line;
+
+   -----------------------
+   -- Compiled_Anything --
+   -----------------------
+
+   function Compiled_Anything
+     (Place : String; Name : String := "") return Boolean
+   is
+      function Holds_Ali (Where : String) return Boolean is
+         Search : Dirs.Search_Type;
+         Found  : Boolean := False;
+      begin
+         if not Dirs.Exists (Where)
+           or else Dirs."/=" (Dirs.Kind (Where), Dirs.Directory)
+         then
+            return False;
+         end if;
+
+         Dirs.Start_Search
+           (Search, Where, "*.ali",
+            [Dirs.Ordinary_File => True, others => False]);
+         Found := Dirs.More_Entries (Search);
+         Dirs.End_Search (Search);
+         return Found;
+      end Holds_Ali;
+   begin
+      return Holds_Ali (Place & "/obj/development")
+        or else Holds_Ali (Place & "/obj/release")
+        or else (Name /= "" and then Holds_Ali (Place & "/obj/" & Name));
+   end Compiled_Anything;
+
    procedure Run
      (Root             : String;
       Result           : out Report;
@@ -333,137 +513,6 @@ package body Checks is
             return "";
          end if;
       end Contents;
-
-      --  Which line stops a catalog loading, found by halving.
-      --
-      --  The runtime refuses a catalog whole: one line it cannot compile and
-      --  nothing renders, in any locale, with no indication of where. A
-      --  placeholder named seconds does it, which took a bisection by hand
-      --  to find and is the reason this exists -- the next one should cost
-      --  nobody an afternoon.
-      --
-      --  Halving rather than one line at a time, because each attempt
-      --  compiles a whole catalog: eleven opens against eleven hundred. The
-      --  header goes into every candidate, and a candidate that is missing
-      --  most of its keys still loads, which is what makes the search
-      --  possible at all.
-      --
-      --  @param Source Catalog to search.
-      --  @param Scratch Where to write candidates.
-      --  @return The offending line, or the empty string when the catalog
-      --    loads or when no single line accounts for it.
-      function Offending_Line (Source, Scratch : String) return String is
-         --  Read directly rather than through Contents, which takes a path
-         --  relative to the repository and would look for this one inside
-         --  itself. That silently returned nothing, and the search returned
-         --  nothing with it -- which looked exactly like a catalog with no
-         --  single line to blame.
-         Text : constant String :=
-           (if Files.File_Exists (Source)
-            then Files.Read_Raw_File (Source) else "");
-
-         --  Every line, as start and stop offsets into Text.
-         type Span is record
-            From, To : Natural := 0;
-         end record;
-
-         Lines : array (1 .. 4096) of Span;
-         Count : Natural := 0;
-
-         --  The header this catalog needs whatever else is dropped.
-         Header : Natural := 0;
-
-         procedure Split is
-            At_Byte : Natural := Text'First;
-         begin
-            while At_Byte <= Text'Last loop
-               declare
-                  Stop : Natural := At_Byte;
-               begin
-                  while Stop <= Text'Last
-                    and then Text (Stop) /= Character'Val (10)
-                  loop
-                     Stop := Stop + 1;
-                  end loop;
-
-                  if Count < Lines'Last then
-                     Count := Count + 1;
-                     Lines (Count) := (At_Byte, Stop - 1);
-                  end if;
-                  At_Byte := Stop + 1;
-               end;
-            end loop;
-         end Split;
-
-         --  Whether the catalog made of the header plus lines First .. Last
-         --  refuses to load.
-         function Refuses (First, Last : Natural) return Boolean is
-            Handle : Ada.Text_IO.File_Type;
-            Held   : Model_Runner.Localization.Catalog;
-            Answer : Boolean;
-         begin
-            Ada.Text_IO.Create (Handle, Ada.Text_IO.Out_File, Scratch);
-            for Index in 1 .. Header loop
-               Ada.Text_IO.Put_Line
-                 (Handle, Text (Lines (Index).From .. Lines (Index).To));
-            end loop;
-            for Index in First .. Last loop
-               Ada.Text_IO.Put_Line
-                 (Handle, Text (Lines (Index).From .. Lines (Index).To));
-            end loop;
-            Ada.Text_IO.Close (Handle);
-
-            Model_Runner.Localization.Open (Held, Scratch, "en");
-            Answer := not Model_Runner.Localization.Is_Ready (Held);
-            Model_Runner.Localization.Close (Held);
-            return Answer;
-         end Refuses;
-
-         Low, High : Natural;
-      begin
-         if Text'Length = 0 then
-            return "";
-         end if;
-
-         Split;
-
-         --  The header is everything before the first locale entry, which is
-         --  where default_locale is stated.
-         while Header < Count
-           and then not Project_Tools.Text.Contains
-                          (Text (Lines (Header + 1).From
-                                 .. Lines (Header + 1).To), "en.")
-         loop
-            Header := Header + 1;
-         end loop;
-
-         Low := Header + 1;
-         High := Count;
-
-         if not Refuses (Low, High) then
-            return "";
-         end if;
-
-         --  Halve while one half still refuses on its own. When neither
-         --  does, the two lines that disagree are in different halves and
-         --  this cannot name one -- which is said by returning nothing
-         --  rather than by naming the wrong line.
-         while High > Low loop
-            declare
-               Middle : constant Natural := Low + (High - Low) / 2;
-            begin
-               if Refuses (Low, Middle) then
-                  High := Middle;
-               elsif Refuses (Middle + 1, High) then
-                  Low := Middle + 1;
-               else
-                  return "";
-               end if;
-            end;
-         end loop;
-
-         return Text (Lines (Low).From .. Lines (Low).To);
-      end Offending_Line;
 
       --  One section of a document, from its heading to the next one.
       --  The heading must end at its line: "## Backend" is a prefix of
@@ -3074,7 +3123,6 @@ package body Checks is
            "en.error.backend.closed = the backend is closed"
            & Character'Val (10) & Fault;
 
-         Handle : Ada.Text_IO.File_Type;
          At_Was : Natural := 0;
       begin
          Result.Performed := Result.Performed + 1;
@@ -3088,25 +3136,61 @@ package body Checks is
                   & "line this plants a fault in, so the search for what "
                   & "breaks a catalog was not exercised");
          else
-            Ada.Text_IO.Create (Handle, Ada.Text_IO.Out_File, Planted);
-            Ada.Text_IO.Put (Handle, Real (Real'First .. At_Was - 1));
-            Ada.Text_IO.Put (Handle, Now);
-            Ada.Text_IO.Put
-              (Handle, Real (At_Was + Was'Length .. Real'Last));
-            Ada.Text_IO.Close (Handle);
-
+            --  Once with the catalog's own line feeds and once with every
+            --  line ended the Windows way, which is what a checkout that
+            --  converts line endings hands the search: it found the
+            --  header's first key there, because the carriage returns were
+            --  written back into every candidate twice over.
             declare
-               Found : constant String :=
-                 Offending_Line (Planted, Path ("obj/catalog-candidate.txt"));
+               With_Fault : constant String :=
+                 Real (Real'First .. At_Was - 1) & Now
+                 & Real (At_Was + Was'Length .. Real'Last);
+
+               --  The same text with a carriage return before every line
+               --  feed that has none.
+               function Returned (Text : String) return String is
+                  Room : String (1 .. 2 * Text'Length);
+                  Used : Natural := 0;
+               begin
+                  for Index in Text'Range loop
+                     if Text (Index) = Character'Val (10)
+                       and then (Index = Text'First
+                                 or else Text (Index - 1)
+                                         /= Character'Val (13))
+                     then
+                        Used := Used + 1;
+                        Room (Used) := Character'Val (13);
+                     end if;
+                     Used := Used + 1;
+                     Room (Used) := Text (Index);
+                  end loop;
+                  return Room (1 .. Used);
+               end Returned;
+
+               procedure Search (Content, Ended : String) is
+               begin
+                  Files.Write_Raw_File (Planted, Content);
+
+                  declare
+                     Found : constant String :=
+                       Offending_Line
+                         (Planted, Path ("obj/catalog-candidate.txt"));
+                  begin
+                     if Found /= Fault then
+                        Fail ("the search for the line that breaks a "
+                              & "catalog with lines ended " & Ended
+                              & " returned "
+                              & (if Found = "" then "nothing"
+                                 else """" & Found & """")
+                              & " where the planted line was """ & Fault
+                              & """, so it would not find a real one "
+                              & "either");
+                     end if;
+                  end;
+               end Search;
             begin
-               if Found /= Fault then
-                  Fail ("the search for the line that breaks a catalog "
-                        & "returned "
-                        & (if Found = "" then "nothing"
-                           else """" & Found & """")
-                        & " where the planted line was """ & Fault
-                        & """, so it would not find a real one either");
-               end if;
+               Search (With_Fault, "by line feeds");
+               Search (Returned (With_Fault), "the Windows way");
             end;
          end if;
       end;
@@ -3392,26 +3476,31 @@ package body Checks is
             --  is silent about, and silence and a clean bill have to look
             --  different. It read one directory name before and a crate
             --  keeping its sources anywhere else came out looking tidy.
-            --  Unless the tree never built it at all: a crate pinned for a
-            --  build-time tool -- awklib and regexp are i18n's, for the
-            --  CLDR data -- has no object directory where that tool did not
+            --  Unless the tree compiled nothing of it at all: a crate pinned
+            --  for a build-time tool -- awklib and regexp are i18n's, for
+            --  the CLDR data -- has no compiled unit where that tool did not
             --  run, as on a runner whose downloads are cached. That is said,
-            --  not failed; a crate with objects and no matched unit is the
-            --  case this exists for, and still fails.
-            if Units = 0
-              and then not Ada.Directories.Exists (Place & "/obj")
-            then
-               Ada.Text_IO.Put_Line
-                 (Ada.Text_IO.Standard_Error,
-                  "  note: the pinned crate " & Name
-                  & " was not built in this tree, so nothing is said "
-                  & "about its warnings");
-            elsif Units = 0 then
-               Fail ("the pinned crate " & Name
-                     & " has no compiled unit this check could match to a "
-                     & "source, so what it says about that crate is nothing "
-                     & "at all");
-            end if;
+            --  not failed; a crate that compiled units none of which match
+            --  its sources is the case this exists for, and still fails.
+            --  What was compiled is what says so -- an object directory
+            --  alone does not: alr and gprbuild make one for a crate they
+            --  prepare and then do not compile, as for a crate pinned for
+            --  a build-time tool that did not run.
+            case Evidence_Of (Compiled_Anything (Place, Name), Units) is
+               when Compiled =>
+                  null;
+               when Not_Built =>
+                  Ada.Text_IO.Put_Line
+                    (Ada.Text_IO.Standard_Error,
+                     "  note: the pinned crate " & Name
+                     & " compiled nothing in this tree, so nothing is said "
+                     & "about its warnings");
+               when Unmatched =>
+                  Fail ("the pinned crate " & Name
+                        & " has no compiled unit this check could match to a "
+                        & "source, so what it says about that crate is "
+                        & "nothing at all");
+            end case;
 
             if Units > 0 and then Behind > 0 then
                Unbuilt := Unbuilt + 1;
@@ -3762,7 +3851,21 @@ package body Checks is
 
          Walk (Root & "/src");
          Walk (Root & "/tests/src");
-         Walk (Root & "/tools/src");
+
+         --  The release checker's tools are a crate of their own, built by
+         --  the release checklist and by nothing else: a job that builds
+         --  the library and its tests and asks these checks has compiled
+         --  none of them, and that is not a tree that cannot be built from
+         --  clean. Where the tools compiled anything, every one of their
+         --  units is held to the same evidence as the rest.
+         if Compiled_Anything (Root & "/tools") then
+            Walk (Root & "/tools/src");
+         else
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "  note: the release checker's tools were not built here, "
+               & "so their units are not asked for compilation evidence");
+         end if;
 
          if Named = 0 then
             Fail ("no sources were found to check for compilation evidence, "
