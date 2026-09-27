@@ -573,6 +573,12 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A development build starts again.** The token walks' starting value,
+  minus infinity, was made at elaboration where a checking build's validity
+  checks took it for invalid data, so every development binary stopped with
+  `CONSTRAINT_ERROR` before reading its command line. It is made with those
+  checks off now.
+
 - **A drafted run on a sliding-window model no longer stops with an
   internal error.** Rewinding refused proposals could reach back past the
   positions the window had kept: gemma-3-4b drafted by Gemma 3 270M
@@ -721,6 +727,13 @@ Keep a Changelog and the project uses semantic versioning.
   group form.
 
 ### Changed
+
+- **A token's logits are not cleared before they are written.** Evaluate
+  zeroed the caller's logits on the way in -- a megabyte over Gemma 3's
+  262,144 tokens, on the host while the device waited for the next token's
+  first layer -- though every way to success writes them all. They are
+  cleared now only when evaluation fails. gemma-3-270m greedy 154.5 -> 155.1
+  tokens a second.
 
 - **Choosing a token passes over the ones that cannot be chosen.** The
   greedy pick and the top-k few asked every token of the vocabulary about

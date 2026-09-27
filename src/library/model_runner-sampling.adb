@@ -30,8 +30,15 @@ package body Model_Runner.Sampling is
      new Ada.Unchecked_Conversion (Interfaces.Unsigned_32, Real);
 
    --  Below every number: what a walk's best starts at, so that its first
-   --  token is asked about whatever it holds.
-   Below_All : constant Real := To_Real (16#FF80_0000#);
+   --  token is asked about whatever it holds. Minus infinity, which a
+   --  checking build's validity checks take for invalid data at
+   --  elaboration; it is the one value meant here.
+   package Infinities is
+      pragma Suppress (Validity_Check);
+      Minus : constant Real := To_Real (16#FF80_0000#);
+   end Infinities;
+
+   Below_All : Real renames Infinities.Minus;
 
    --  Whether any logit of a stretch is not a number or is infinite.
    --
@@ -996,7 +1003,9 @@ package body Model_Runner.Sampling is
    begin
       while At_Index + 7 <= High loop
          --  All eight asked at once and one branch taken on the answer;
-         --  almost always none beats.
+         --  almost always none beats. A plain or, because "or else" would
+         --  be eight branches again.
+         pragma Style_Checks (Off);
          if Logits (Logits'First + At_Index + 0) > Top_0 or
            Logits (Logits'First + At_Index + 1) > Top_1 or
            Logits (Logits'First + At_Index + 2) > Top_2 or
@@ -1006,6 +1015,7 @@ package body Model_Runner.Sampling is
            Logits (Logits'First + At_Index + 6) > Top_6 or
            Logits (Logits'First + At_Index + 7) > Top_7
          then
+            pragma Style_Checks (On);
             if Logits (Logits'First + At_Index + 0) > Top_0 then
                Consider (At_Index + 0, Top_0, Place_0);
             end if;

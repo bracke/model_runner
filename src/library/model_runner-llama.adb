@@ -16637,11 +16637,15 @@ package body Model_Runner.Llama is
       end;
    end Draft_Next;
 
-   --------------
-   -- Evaluate --
-   --------------
+   --------------------
+   -- Evaluate_Token --
+   --------------------
 
-   procedure Evaluate
+   --  Evaluate's work. Every way to success leaves through writing all of
+   --  Logits, so it is not cleared on the way in: a megabyte of zeros on
+   --  a large vocabulary, on the serial stretch between one token's head
+   --  and the next token's first layer. Evaluate clears it on a failure.
+   procedure Evaluate_Token
      (Item   : in out Session;
       Source : Model'Class;
       Token  : Token_Id;
@@ -17129,8 +17133,6 @@ package body Model_Runner.Llama is
       --  that is to measure them the same way.
       Mark : Ada.Real_Time.Time := Ada.Real_Time.Clock;
    begin
-      Logits := [others => 0.0];
-
       --  Where the products can reach it. Not cleared on the way out, and
       --  it does not need to be: every entry point that reaches a product
       --  sets it first, so what is read is always this call's token. A
@@ -18461,6 +18463,24 @@ package body Model_Runner.Llama is
          Item.Current := Failed;
          Status := E.Make (E.Internal_Invariant_Violated);
          E.Add_Frame (Status, "llama.evaluate");
+   end Evaluate_Token;
+
+   --------------
+   -- Evaluate --
+   --------------
+
+   procedure Evaluate
+     (Item   : in out Session;
+      Source : Model'Class;
+      Token  : Token_Id;
+      Logits : out Real_Array;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Status : out E.Error_Info) is
+   begin
+      Evaluate_Token (Item, Source, Token, Logits, Cancel, Status);
+      if E.Is_Error (Status) then
+         Logits := [others => 0.0];
+      end if;
    end Evaluate;
 
    ---------------------
