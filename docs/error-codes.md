@@ -272,6 +272,25 @@ ordinal is never reused, not because they might appear.
 | `MR-CONV-0003` | `error.conversation.empty` | recovery_user_correctable | 2 | raised |
 | `MR-CONV-0004` | `error.conversation.system_unsupported` | recovery_unsupported | 4 | reserved |
 
+## FRAMEWORK
+
+| Code | Message key | Recovery | Exit | State |
+| --- | --- | --- | --- | --- |
+| `MR-FRAMEWORK-0001` | `error.framework.not_initialized` | recovery_user_correctable | 2 | raised |
+| `MR-FRAMEWORK-0002` | `error.framework.already_initialized` | recovery_user_correctable | 2 | raised |
+| `MR-FRAMEWORK-0003` | `error.framework.format_unsupported` | recovery_unsupported | 4 | raised |
+| `MR-FRAMEWORK-0004` | `error.framework.record_malformed` | recovery_user_correctable | 6 | raised |
+| `MR-FRAMEWORK-0005` | `error.framework.schema_violation` | recovery_user_correctable | 6 | raised |
+| `MR-FRAMEWORK-0006` | `error.framework.identifier_invalid` | recovery_user_correctable | 2 | raised |
+| `MR-FRAMEWORK-0007` | `error.framework.name_invalid` | recovery_user_correctable | 2 | raised |
+| `MR-FRAMEWORK-0008` | `error.framework.transaction_failed` | recovery_user_correctable | 6 | raised |
+| `MR-FRAMEWORK-0009` | `error.framework.recovery_required` | recovery_user_correctable | 6 | raised |
+| `MR-FRAMEWORK-0010` | `error.framework.locked` | recovery_user_correctable | 6 | raised |
+| `MR-FRAMEWORK-0011` | `error.framework.not_found` | recovery_user_correctable | 2 | raised |
+| `MR-FRAMEWORK-0012` | `error.framework.revision_conflict` | recovery_user_correctable | 6 | raised |
+| `MR-FRAMEWORK-0013` | `error.framework.result_conflict` | recovery_user_correctable | 6 | raised |
+| `MR-FRAMEWORK-0014` | `error.framework.integrity_failed` | recovery_user_correctable | 6 | raised |
+
 ## INTERNAL
 
 | Code | Message key | Recovery | Exit | State |

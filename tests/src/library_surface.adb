@@ -12,7 +12,18 @@ package body Library_Surface is
 
    --  The codec's other half.
    Held : constant Text_List :=
-     [new String'("Get_F16"),
+     [
+      --  The project state's first callers are the commands of the next
+      --  phase: /init makes the state and records what the template says
+      --  about the project, and /task hands out identifiers. Until they
+      --  arrive, the suite is what opens it.
+      new String'("Allocate_Identifier"),
+      new String'("Current_Version"),
+      new String'("Fingerprint_Of"),
+      new String'("Portability_Of"),
+      new String'("Record_Fact"),
+
+      new String'("Get_F16"),
       new String'("Tensor_Code"),
       new String'("Value_Code"),
       new String'("Wipe"),

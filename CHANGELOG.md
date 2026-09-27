@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Durable project state for spec-driven development (Phase A).** The
+  foundation `docs/spec_driven_development_framework_v3_revised.md` builds
+  on, in `Model_Runner.Framework`: a `.model_runner` state root with a
+  format record and thirteen areas, each classed as authored, runtime,
+  historical or derived; one canonical, length-prefixed record format with
+  schema id, version, entity and revision on every record, fingerprinted
+  by FNV-1a; schemas that require, choose, keep unknown and extension
+  fields and refuse a later version; identifiers handed out from persisted
+  counters; transactions that check schema and revision, journal the
+  change and commit it with one rename, and are finished or thrown away on
+  the next open; an exclusive session lock; content-addressed immutable
+  results; project facts with source and confidence; and an entity index
+  that is rebuilt when it is missing. Fourteen `MR-FRAMEWORK` diagnostics.
+  No command reaches it yet; `/init` is the next phase.
+
 - **`run` finds a draft model by itself.** With no draft option named, a
   dense model of two gigabytes a token or more without a next-token block
   drafts with the largest model in the model store or its own folder of its
@@ -17634,7 +17649,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 187 diagnostic
+- Localization through `messages`, with a catalog entry for all 201 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

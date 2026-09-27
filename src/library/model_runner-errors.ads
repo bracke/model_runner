@@ -42,6 +42,7 @@ package Model_Runner.Errors is
       Domain_Conversation,
       Domain_Grammar,
       Domain_Tools,
+      Domain_Framework,
       Domain_Internal);
 
    --  How serious a condition is for the operation that reported it.
@@ -343,6 +344,22 @@ package Model_Runner.Errors is
       Conversation_Invalid_Role,
       Conversation_Empty,
       Conversation_System_Unsupported,
+
+      --  The project state a development session keeps under .model_runner.
+      Framework_Not_Initialized,
+      Framework_Already_Initialized,
+      Framework_Format_Unsupported,
+      Framework_Record_Malformed,
+      Framework_Schema_Violation,
+      Framework_Identifier_Invalid,
+      Framework_Name_Invalid,
+      Framework_Transaction_Failed,
+      Framework_Recovery_Required,
+      Framework_Locked,
+      Framework_Not_Found,
+      Framework_Revision_Conflict,
+      Framework_Result_Conflict,
+      Framework_Integrity_Failed,
 
       --  Internal invariants.
       Internal_Invariant_Violated,

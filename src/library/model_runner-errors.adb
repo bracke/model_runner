@@ -64,6 +64,8 @@ package body Model_Runner.Errors is
          return Domain_Grammar;
       elsif Prefix = "TOOLS" then
          return Domain_Tools;
+      elsif Prefix = "FRAMEWORK" then
+         return Domain_Framework;
       else
          return Domain_Internal;
       end if;
@@ -92,6 +94,7 @@ package body Model_Runner.Errors is
          when Domain_Conversation => return "CONV";
          when Domain_Grammar      => return "GRAM";
          when Domain_Tools        => return "TOOLS";
+         when Domain_Framework    => return "FRAMEWORK";
          when Domain_Internal     => return "INTERNAL";
       end case;
    end Domain_Token;
@@ -117,6 +120,7 @@ package body Model_Runner.Errors is
          when Domain_Conversation => return "conversation";
          when Domain_Grammar      => return "grammar";
          when Domain_Tools        => return "tools";
+         when Domain_Framework    => return "framework";
          when Domain_Internal     => return "internal";
       end case;
    end Key_Segment;
@@ -224,6 +228,7 @@ package body Model_Runner.Errors is
             | Backend_Product_Too_Large
             | Conversation_System_Unsupported
             | Tools_Not_In_Template
+            | Framework_Format_Unsupported
             | Internal_Not_Implemented =>
             return Recovery_Unsupported;
 
@@ -262,6 +267,12 @@ package body Model_Runner.Errors is
                   return Recovery_User_Correctable;
                when Domain_Internal | Domain_Lifecycle =>
                   return Recovery_Terminal;
+               when Domain_Framework =>
+                  --  Project state is the caller's: a name, a lock another
+                  --  session holds, a change made against an old revision.
+                  --  What is not theirs -- a torn journal, a record that no
+                  --  longer matches its fingerprint -- says so in its text.
+                  return Recovery_User_Correctable;
                when others =>
                   return Recovery_None;
             end case;
@@ -487,6 +498,19 @@ package body Model_Runner.Errors is
 
          when Domain_IO =>
             return Exit_Input_Output;
+
+         --  A directory with no project in it, a name or identifier that
+         --  is not one, is what the caller asked for. Everything else is
+         --  the state on disk, and exits as the input it is.
+         when Domain_Framework =>
+            return
+              (if Item.Code in Framework_Not_Initialized
+                             | Framework_Already_Initialized
+                             | Framework_Identifier_Invalid
+                             | Framework_Name_Invalid
+                             | Framework_Not_Found
+               then Exit_Usage
+               else Exit_Input_Output);
 
          when Domain_GGUF
             | Domain_Tokenizer
