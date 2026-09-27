@@ -7,12 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
-- **`run` finds a draft model in the model store by itself.** With no draft
-  option named, a dense model of two gigabytes a token or more without a
-  next-token block drafts with the largest stored model of its architecture,
-  at most an eighth of its size, whose tokens are its text; three a round.
-  Steelman-14B with Qwen2.5-Coder-0.5B beside it in the store: 7.6 -> 12.7
-  tokens a second with no options. `--draft-tokens 0` turns it off.
+- **`run` finds a draft model by itself.** With no draft option named, a
+  dense model of two gigabytes a token or more without a next-token block
+  drafts with the largest model in the model store or its own folder of its
+  architecture, at most a sixth of its size, whose tokens are its text;
+  three a round. Steelman-14B with Qwen2.5-Coder-0.5B in the store: 7.6 ->
+  12.7 tokens a second; qwen3-8b beside Qwen3-0.6B: 14.1 -> 17.8, with no
+  options. `--draft-tokens 0` turns it off.
 
 - **A draft model may have a shorter vocabulary than the model it drafts
   for.** Qwen2.5's large models pad their vocabularies to 152,064 tokens

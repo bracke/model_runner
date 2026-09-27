@@ -3042,8 +3042,9 @@ package body Model_Runner.CLI.Execute is
          --  agreeing about numbers rather than about text.
          --  And where none was named and nothing else would draft -- a
          --  dense model of Next_Draft_Bytes a token or more, with no block
-         --  past its stack -- a draft out of the model store, when one
-         --  there numbers its tokens as this one does; see Drafts.Find. Found, it is said so
+         --  past its stack -- a draft out of the model store or the
+         --  model's own folder, when one there numbers its tokens as this
+         --  one does; see Drafts.Find. Found, it is said so
          --  and loaded as a named one is; one that will not load or open
          --  leaves the run to draft as it would have without it, since
          --  nobody asked for it.
@@ -3056,13 +3057,33 @@ package body Model_Runner.CLI.Execute is
            and then L.Token_Bytes (Prepared) >= Next_Draft_Bytes
            and then L.Vocabulary (Prepared) /= null
          then
-            Auto_Draft :=
-              T.To_Bounded
-                (Model_Runner.Drafts.Find
-                   (Model_Runner.Platform.Models_Directory,
-                    Model_Runner.Platform.Resolve_Model_Path
-                      (Resolve_Alias (T.To_String (Item.Model_Path))),
-                    Container, L.Vocabulary (Prepared).all));
+            --  In the store, and beside the model: a folder of models kept
+            --  by hand is where the small one of a family usually is.
+            declare
+               Model_File : constant String :=
+                 Model_Runner.Platform.Resolve_Model_Path
+                   (Resolve_Alias (T.To_String (Item.Model_Path)));
+               Beside : constant String :=
+                 Ada.Directories.Containing_Directory
+                   (Ada.Directories.Full_Name (Model_File));
+               In_Store : constant String :=
+                 Model_Runner.Drafts.Find
+                   (Model_Runner.Platform.Models_Directory, Model_File,
+                    Container, L.Vocabulary (Prepared).all);
+               Near : constant String :=
+                 Model_Runner.Drafts.Find
+                   (Beside, Model_File, Container,
+                    L.Vocabulary (Prepared).all);
+
+               function Bytes (Path : String) return Long_Long_Integer
+               is (if Path = "" then 0
+                   else Long_Long_Integer (Ada.Directories.Size (Path)));
+            begin
+               Auto_Draft :=
+                 T.To_Bounded
+                   (if Bytes (Near) > Bytes (In_Store) then Near
+                    else In_Store);
+            end;
          end if;
 
          if not T.Is_Empty (Item.Draft_Path)

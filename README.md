@@ -11860,10 +11860,12 @@ cent of proposals accepted.
 
 With no draft option named, `run` looks for one itself. A dense model of two
 gigabytes a token or more, with no next-token block of its own, takes the
-largest file in the model store (`models-dir`, `MODEL_RUNNER_MODELS`) that is
-of its architecture, at most an eighth of its size, and numbers its tokens as
-it does, and drafts three a round with it; the run says which on standard
-error. `--draft-tokens 0` turns it off, and a draft that will not load leaves
+largest file in the model store (`models-dir`, `MODEL_RUNNER_MODELS`) or in its
+own folder that is of its architecture, at most a sixth of its size, and
+numbers its tokens as it does, and drafts three a round with it; the run says
+which on standard error. qwen3-8b Q4_K_M beside Qwen3-0.6B Q8_0 in the same
+folder, `run`'s defaults, 256 tokens of code: 14.1 tokens a second with the
+lookup drafting it had before, 17.8 with the small model found. `--draft-tokens 0` turns it off, and a draft that will not load leaves
 the run to draft as it would have without one. Finding it reads each
 candidate's header, not its weights; loading it is the same second or so a
 named `--draft-model` costs.
