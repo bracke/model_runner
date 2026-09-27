@@ -1,8 +1,10 @@
 with Ada.Containers.Generic_Array_Sort;
+with Ada.Unchecked_Conversion;
 with Ada.Unchecked_Deallocation;
 
 package body Model_Runner.Sampling is
 
+   use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
    use type Model_Runner.Numerics.Element_Count;
    use type Model_Runner.Numerics.Wide_Real;
@@ -21,6 +23,47 @@ package body Model_Runner.Sampling is
      new Ada.Unchecked_Deallocation (History_Array, History_Array_Access);
    procedure Free_Mask is
      new Ada.Unchecked_Deallocation (Mask_Array, Mask_Array_Access);
+
+   function To_Bits is
+     new Ada.Unchecked_Conversion (Real, Interfaces.Unsigned_32);
+   function To_Real is
+     new Ada.Unchecked_Conversion (Interfaces.Unsigned_32, Real);
+
+   --  Below every number: what a walk's best starts at, so that its first
+   --  token is asked about whatever it holds.
+   Below_All : constant Real := To_Real (16#FF80_0000#);
+
+   --  Whether any logit of a stretch is not a number or is infinite.
+   --
+   --  The walks below pass most tokens over after one comparison, which a
+   --  logit that is not a number would slip through: it compares false
+   --  with everything. So the stretch is asked first, all at once, and one
+   --  that holds such a logit takes the walk that asks every token and
+   --  reports the first.
+   function Has_Non_Finite
+     (Logits : Real_Array; First, Last : Element_Count) return Boolean
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      --  The whole exponent plus its lowest bit is the sign bit, and any
+      --  smaller exponent plus it is not: so the sign bits of the sums,
+      --  gathered by an or, say whether some logit's exponent is whole.
+      --  An and, an add and an or, which the baseline vector instructions
+      --  have; a greatest of the fields had to be pieced together out of
+      --  comparisons and was slower than the walk it guards.
+      Exponent : constant Interfaces.Unsigned_32 := 16#7F80_0000#;
+      Lowest   : constant Interfaces.Unsigned_32 := 16#0080_0000#;
+      Gathered : Interfaces.Unsigned_32 := 0;
+   begin
+      for Index in First .. Last loop
+         Gathered := Gathered
+           or ((To_Bits (Logits (Logits'First + Index)) and Exponent)
+               + Lowest);
+      end loop;
+      return (Gathered and 16#8000_0000#) /= 0;
+   end Has_Non_Finite;
 
    --  Total order over candidates: higher logit first, and among equal logits
    --  the lower token identifier first. Being a total order rather than a
@@ -852,6 +895,242 @@ package body Model_Runner.Sampling is
       end if;
    end Keep_Best;
 
+   --  The greedy walk over one block, where nothing can raise a logit.
+   --
+   --  A token whose logit as it stands is no higher than the best so far
+   --  cannot become the best: a penalty of one or more only lowers a logit,
+   --  and a mask only removes one. So a token that does not beat the best
+   --  is passed over after one comparison, and only one that does is asked
+   --  about the masks and the window. Asked of every token, that was
+   --  nearly two nanoseconds a token -- half a millisecond of Gemma 3's
+   --  quarter of a million, spent while the device waits for the host. A
+   --  tie stays with the earlier token, since equal is passed over.
+   --
+   --  Eight bests rather than one, a token to each by its place, so that no
+   --  comparison waits on the one before: one best is a chain, each
+   --  comparison waiting to hear whether the last one moved. Named one by
+   --  one rather than as an array so that they stay in registers -- as an
+   --  array the walk was slower than the chain. Each lane keeps its
+   --  earliest highest, so the highest of the lanes, the earliest among
+   --  equals, is the walk's. And here rather than inside the work item so
+   --  that the logits arrive as a parameter: read through the enclosing
+   --  frame, every token cost three dependent loads to find the array.
+   procedure Walk_Greedy
+     (Logits  : Real_Array;
+      Low     : Element_Count;
+      High    : Element_Count;
+      Masked  : Mask_Array;
+      Stepped : Mask_Array;
+      Window  : Mask_Array;
+      Recent  : Boolean;
+      Penalty : Real;
+      Seen    : in out Boolean;
+      Best    : in out Element_Count;
+      Top     : in out Real)
+   is
+      pragma Suppress (Validity_Check);
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      Below : Real renames Below_All;
+
+      --  A lane starts below every number, so that its first token is
+      --  asked about whatever it holds; a place of Nobody is a lane that
+      --  has kept nothing yet.
+      Nobody : constant Element_Count := Element_Count'Last;
+
+      Top_0, Top_1, Top_2, Top_3, Top_4, Top_5, Top_6, Top_7 : Real := Below;
+      Place_0, Place_1, Place_2, Place_3,
+      Place_4, Place_5, Place_6, Place_7 : Element_Count := Nobody;
+
+      At_Index : Element_Count := Low;
+
+      --  A token whose logit as it stands beats its lane's best: through
+      --  the masks and the window, and then the same question of what it
+      --  became.
+      procedure Consider
+        (Index : Element_Count;
+         Top   : in out Real;
+         Place : in out Element_Count)
+        with No_Inline;
+
+      procedure Consider
+        (Index : Element_Count;
+         Top   : in out Real;
+         Place : in out Element_Count)
+      is
+         Here : Real := Logits (Logits'First + Index);
+      begin
+         if Masked (Natural (Index))
+           or else Stepped (Natural (Index))
+         then
+            return;
+         end if;
+
+         if Recent and then Window (Natural (Index)) then
+            Here := (if Here > 0.0 then Here / Penalty
+                     else Here * Penalty);
+         end if;
+
+         if Place = Nobody or else Here > Top then
+            Top := Here;
+            Place := Index;
+         end if;
+      end Consider;
+
+      procedure Fold (Lane_Top : Real; Lane_Place : Element_Count)
+      is
+      begin
+         if Lane_Place /= Nobody
+           and then (not Seen
+                     or else Lane_Top > Top
+                     or else (Lane_Top = Top
+                              and then Lane_Place < Best))
+         then
+            Seen := True;
+            Best := Lane_Place;
+            Top := Lane_Top;
+         end if;
+      end Fold;
+   begin
+      while At_Index + 7 <= High loop
+         --  All eight asked at once and one branch taken on the answer;
+         --  almost always none beats.
+         if Logits (Logits'First + At_Index + 0) > Top_0 or
+           Logits (Logits'First + At_Index + 1) > Top_1 or
+           Logits (Logits'First + At_Index + 2) > Top_2 or
+           Logits (Logits'First + At_Index + 3) > Top_3 or
+           Logits (Logits'First + At_Index + 4) > Top_4 or
+           Logits (Logits'First + At_Index + 5) > Top_5 or
+           Logits (Logits'First + At_Index + 6) > Top_6 or
+           Logits (Logits'First + At_Index + 7) > Top_7
+         then
+            if Logits (Logits'First + At_Index + 0) > Top_0 then
+               Consider (At_Index + 0, Top_0, Place_0);
+            end if;
+            if Logits (Logits'First + At_Index + 1) > Top_1 then
+               Consider (At_Index + 1, Top_1, Place_1);
+            end if;
+            if Logits (Logits'First + At_Index + 2) > Top_2 then
+               Consider (At_Index + 2, Top_2, Place_2);
+            end if;
+            if Logits (Logits'First + At_Index + 3) > Top_3 then
+               Consider (At_Index + 3, Top_3, Place_3);
+            end if;
+            if Logits (Logits'First + At_Index + 4) > Top_4 then
+               Consider (At_Index + 4, Top_4, Place_4);
+            end if;
+            if Logits (Logits'First + At_Index + 5) > Top_5 then
+               Consider (At_Index + 5, Top_5, Place_5);
+            end if;
+            if Logits (Logits'First + At_Index + 6) > Top_6 then
+               Consider (At_Index + 6, Top_6, Place_6);
+            end if;
+            if Logits (Logits'First + At_Index + 7) > Top_7 then
+               Consider (At_Index + 7, Top_7, Place_7);
+            end if;
+         end if;
+         At_Index := At_Index + 8;
+      end loop;
+
+      while At_Index <= High loop
+         if Logits (Logits'First + At_Index) > Top_0 then
+            Consider (At_Index, Top_0, Place_0);
+         end if;
+         At_Index := At_Index + 1;
+      end loop;
+
+      Fold (Top_0, Place_0);
+      Fold (Top_1, Place_1);
+      Fold (Top_2, Place_2);
+      Fold (Top_3, Place_3);
+      Fold (Top_4, Place_4);
+      Fold (Top_5, Place_5);
+      Fold (Top_6, Place_6);
+      Fold (Top_7, Place_7);
+   end Walk_Greedy;
+
+   --  The top-k walk over one block, where nothing can raise a logit.
+   --
+   --  A token no higher as it stands than what the block's last kept one
+   --  was before the temperature cannot be kept: the penalty only lowers a
+   --  logit, and dividing by a positive temperature keeps order, so its
+   --  value is at most the last kept one's; and an equal value from a later
+   --  token does not displace it. So once the block holds its few, a token
+   --  is passed over after one comparison, and only the few that could be
+   --  kept are asked about the masks, the window and the division. What
+   --  each kept one was before the temperature rides in its probability,
+   --  which nothing reads until the softmax writes it. A logit so negative
+   --  that the penalty or the division could overflow it is asked about in
+   --  full, as the finite check that asks it was before.
+   procedure Walk_Top_K
+     (Logits      : Real_Array;
+      Low         : Element_Count;
+      High        : Element_Count;
+      Masked      : Mask_Array;
+      Stepped     : Mask_Array;
+      Window      : Mask_Array;
+      Penalized   : Boolean;
+      Penalty     : Real;
+      Temperature : Real;
+      Wanted      : Element_Count;
+      List        : in out Blocked_List;
+      Held        : in out Element_Count;
+      Found       : in out Boolean;
+      Where       : in out Element_Count)
+   is
+      pragma Suppress (Validity_Check);
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Access_Check);
+      pragma Suppress (Overflow_Check);
+
+      Low_Safe : constant Real :=
+        -(Real'Last / 4.0) * Real'Min (Temperature, 1.0)
+        / Real'Max (Penalty, 1.0);
+
+      Floor     : Real := Real'First;
+      Floor_Raw : Real := Below_All;
+   begin
+      for Index in Low .. High loop
+         declare
+            Raw : constant Real := Logits (Logits'First + Index);
+         begin
+            if (Raw > Floor_Raw or else Raw < Low_Safe)
+              and then not Masked (Natural (Index))
+              and then not Stepped (Natural (Index))
+            then
+               declare
+                  Adjusted : constant Real :=
+                    (if Penalized and then Window (Natural (Index))
+                     then (if Raw > 0.0 then Raw / Penalty
+                           else Raw * Penalty)
+                     else Raw);
+                  Value    : constant Real := Adjusted / Temperature;
+               begin
+                  if not N.Is_Finite (Value) then
+                     Found := True;
+                     Where := Index;
+                     return;
+                  end if;
+
+                  if Value >= Floor then
+                     Keep_Best
+                       (List, Held, Wanted,
+                        (Token => Token_Id (Index), Logit => Value,
+                         Probability => Adjusted));
+                     if Held = Wanted then
+                        Floor := List (Wanted - 1).Logit;
+                        Floor_Raw := List (Wanted - 1).Probability;
+                     end if;
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+   end Walk_Top_K;
+
    --  What an element of the greedy walk costs when the penalties are on,
    --  against an element of the blend the pool's inline bound was chosen
    --  on. It is a mask read, a second mask read and a binary search of the
@@ -920,6 +1199,7 @@ package body Model_Runner.Sampling is
          pragma Suppress (Validity_Check);
          pragma Suppress (Index_Check);
          pragma Suppress (Range_Check);
+         pragma Suppress (Overflow_Check);
 
          --  What the walk has to do to a logit beyond reading it, asked
          --  once. The repetition penalty on its own is the common case --
@@ -946,6 +1226,11 @@ package body Model_Runner.Sampling is
          Stepped : Mask_Array renames Item.Stepped.all;
          Window  : constant Mask_Array_Access :=
            (if Item.Recent /= null then Item.Recent else Item.Masked);
+
+         --  Whether no adjustment can raise a logit, which is what lets a
+         --  token be passed over on its logit as it stands.
+         Screens : constant Boolean :=
+           not General and then (not Recent or else Penalty >= 1.0);
       begin
          if First > Last then
             return;
@@ -957,6 +1242,21 @@ package body Model_Runner.Sampling is
                Top  : Real := 0.0;
                Seen : Boolean := False;
             begin
+               --  Screened where nothing can raise a logit and every one
+               --  of the block is finite; see Walk_Greedy.
+               if Screens
+                 and then not Has_Non_Finite
+                                (Logits, Block_First (Block, Over),
+                                 Block_Last (Block, Over))
+               then
+                  Walk_Greedy
+                    (Logits, Block_First (Block, Over),
+                     Block_Last (Block, Over), Masked, Stepped, Window.all,
+                     Recent, Penalty, Seen, Best, Top);
+
+                  goto Block_Done;
+               end if;
+
                for Index in Block_First (Block, Over)
                             .. Block_Last (Block, Over)
                loop
@@ -992,6 +1292,7 @@ package body Model_Runner.Sampling is
                   end;
                end loop;
 
+               <<Block_Done>>
                Work.Found (Block) := Seen;
                Work.Where (Block) := Best;
                Work.Value (Block) := Top;
@@ -1007,7 +1308,20 @@ package body Model_Runner.Sampling is
    begin
       Status := E.Success;
 
-      if Across /= null then
+      --  A screened walk is kept on this task: it costs less than waking
+      --  the team, and a team woken for it measured slower in what the
+      --  host did next -- the token's first layer went to the device a
+      --  seventh of a millisecond later.
+      if Across /= null
+        and then not
+          (Item.Bias_Used = 0
+           and then Item.Settings.DRY_Multiplier <= 0.0
+           and then Item.Settings.Frequency_Penalty = 0.0
+           and then Item.Settings.Presence_Penalty = 0.0
+           and then (Item.Settings.Repeat_Penalty >= 1.0
+                     or else Item.Recent = null
+                     or else Item.Ordered_Held = 0))
+      then
          Across.all.Divide
            (Blocks, Work'Unchecked_Access, Whole,
             Cost => Over * (if Penalized (Item) then Greedy_Weight else 1));
@@ -1457,6 +1771,14 @@ package body Model_Runner.Sampling is
                Recent    : constant Mask_Array_Access :=
                  (if Item.Recent /= null then Item.Recent else Item.Masked);
 
+               --  Whether no adjustment can raise a logit and none can be
+               --  divided by a temperature that is not positive, which is
+               --  what lets Walk_Top_K pass a token over on its logit.
+               Screens   : constant Boolean :=
+                 Plain
+                 and then (not Penalized or else Penalty >= 1.0)
+                 and then Effective_Temp > 0.0;
+
                type Pick_Work is limited new Model_Runner.Shares.Work
                with record
                   Lists  : Blocked_Lists;
@@ -1556,7 +1878,21 @@ package body Model_Runner.Sampling is
                Dealt : Boolean := False;
                Kept  : Element_Count := 0;
             begin
-               if Across /= null then
+               --  Screened, the walk is one list over the whole vocabulary
+               --  on this task: a comparison a token is less than handing
+               --  the blocks to the team costs, and one list keeps its few
+               --  in a few hundred insertions where fifty-six lists took
+               --  ten thousand between them.
+               if Screens
+                 and then not Has_Non_Finite (Logits, 0, Over - 1)
+               then
+                  Walk_Top_K
+                    (Logits, 0, Over - 1, Masked, Stepped, Recent.all,
+                     Penalized, Penalty, Effective_Temp, Wanted,
+                     Pick.Lists (0), Pick.Held (0), Pick.Found (0),
+                     Pick.Where (0));
+                  Dealt := True;
+               elsif Across /= null then
                   Across.all.Divide
                     (Blocks, Pick'Unchecked_Access, Dealt, Cost => Over);
                end if;
@@ -1581,6 +1917,12 @@ package body Model_Runner.Sampling is
                        (Item.Chosen.all, Kept, Wanted,
                         Pick.Lists (Block) (Place));
                   end loop;
+               end loop;
+
+               --  The screened walk carried each one's value before the
+               --  temperature in its probability; nothing is to read it.
+               for Place in 0 .. Kept - 1 loop
+                  Item.Chosen.all (Place).Probability := 0.0;
                end loop;
 
                Item.Working.all (0 .. Kept - 1) :=

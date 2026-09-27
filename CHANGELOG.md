@@ -722,6 +722,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Choosing a token passes over the ones that cannot be chosen.** The
+  greedy pick and the top-k few asked every token of the vocabulary about
+  its masks, the repetition window and the temperature, on the host while
+  the device waited: 0.2 ms greedy and 0.7 ms sampling a token over Gemma
+  3's 262,144, a tenth of a 270M model's token. A token whose logit as it
+  stands cannot beat the best so far, or the last of the few kept, is now
+  passed over after one comparison -- exact, since a penalty of one or more
+  only lowers a logit and a positive temperature keeps order -- with the
+  greedy walk in eight independent lanes, the top-k one in a single list,
+  and a vector pass that sends a stretch holding a logit that is not a
+  number to the walk that reports it. Same tokens; gemma-3-270m 138 -> 153
+  tokens a second sampling, gemma-3-4b drafting 38.4 -> 39.6, qwen3-8b
+  18.2 -> 18.5.
+
 - **A run takes the device by default.** With no `--backend` named, `run`
   uses the device where one opens and the model file fits what it holds, and
   the processor otherwise, with a note saying so; a device option named

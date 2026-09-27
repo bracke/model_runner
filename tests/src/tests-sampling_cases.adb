@@ -3080,6 +3080,257 @@ package body Tests.Sampling_Cases is
       end loop;
    end Speculative_Sampling_Keeps_The_Target;
 
+   ------------------------------------------
+   -- Screened_Walks_Choose_As_Full_Ones --
+   ------------------------------------------
+
+   --  The greedy choice and the top-k few over a large vocabulary are what
+   --  asking every token gives, with forbidden tokens, a penalized window
+   --  and ties about.
+   --
+   --  Both walks pass a token over on its logit as it stands when it cannot
+   --  beat what they hold, which is exact only because a penalty of one or
+   --  more lowers and a positive temperature keeps order -- and the top-k
+   --  walk compares against what its last kept token was before the
+   --  temperature, not after. Each is checked here against the choice made
+   --  by hand: the favourites forbidden or penalized so that the answer is
+   --  not simply the highest logit, and the logits on a coarse grid so that
+   --  ties are everywhere.
+   procedure Screened_Walks_Choose_As_Full_Ones
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Size : constant := 20_011;
+
+      type Logit_Access is access N.Real_Array;
+      procedure Free is
+        new Ada.Unchecked_Deallocation (N.Real_Array, Logit_Access);
+
+      Logits : Logit_Access := new N.Real_Array (0 .. Size - 1);
+      Probs  : aliased N.Real_Array := [0 .. Size - 1 => 0.0];
+
+      Penalty : constant N.Real := 1.5;
+      Said    : array (1 .. 12) of Vocab.Token_Id;
+      Barred  : array (1 .. 6) of Vocab.Token_Id;
+
+      function Is_Said (Token : Natural) return Boolean is
+        (for some Each of Said => Natural (Each) = Token);
+      function Is_Barred (Token : Natural) return Boolean is
+        (for some Each of Barred => Natural (Each) = Token);
+
+      function Adjusted (Token : Natural) return N.Real is
+        (if Is_Said (Token)
+         then (if Logits (N.Element_Count (Token)) > 0.0
+               then Logits (N.Element_Count (Token)) / Penalty
+               else Logits (N.Element_Count (Token)) * Penalty)
+         else Logits (N.Element_Count (Token)));
+
+      --  Before the other in the order both walks keep: higher first, the
+      --  lower token among equals.
+      function Before (Left, Right : Natural) return Boolean is
+        (Adjusted (Left) > Adjusted (Right)
+         or else (Adjusted (Left) = Adjusted (Right) and then Left < Right));
+
+      --  The same by the logits as they stand, before anything is said.
+      function Raw_Before (Left, Right : Natural) return Boolean is
+        (Logits (N.Element_Count (Left)) > Logits (N.Element_Count (Right))
+         or else (Logits (N.Element_Count (Left))
+                    = Logits (N.Element_Count (Right))
+                  and then Left < Right));
+
+      Seed : Interfaces.Unsigned_32 := 12_345;
+
+      function Next return Natural is
+         use type Interfaces.Unsigned_32;
+      begin
+         Seed := Seed * 1_664_525 + 1_013_904_223;
+         return Natural (Interfaces.Shift_Right (Seed, 8));
+      end Next;
+   begin
+      for Trial in 1 .. 6 loop
+         --  On a grid of halves, mostly low, with a few high ones: the ties.
+         for Index in Logits'Range loop
+            Logits (Index) := N.Real (Next mod 40) * 0.5 - 12.0;
+         end loop;
+         for Count in 1 .. 60 loop
+            Logits (N.Element_Count (Next mod Size)) :=
+              N.Real (Next mod 8) * 0.5 + 8.0;
+         end loop;
+
+         --  A tie above all the rest that the lanes of one block must
+         --  settle: the earlier token in the later lane. And one higher
+         --  still, which the favourite's penalty below takes under it.
+         Logits (7) := 12.5;
+         Logits (9) := 12.5;
+         Logits (15) := 12.5;
+         Logits (30) := 13.0;
+
+         --  The highest few, and a few elsewhere, forbidden or said.
+         declare
+            Order : array (1 .. 24) of Natural := [others => 0];
+            Held  : Natural := 0;
+         begin
+            for Index in 0 .. Size - 1 loop
+               if Held < Order'Last or else Raw_Before (Index, Order (Held))
+               then
+                  declare
+                     Place : Natural := Natural'Min (Held + 1, Order'Last);
+                  begin
+                     Held := Place;
+                     while Place > 1
+                       and then Raw_Before (Index, Order (Place - 1))
+                     loop
+                        Order (Place) := Order (Place - 1);
+                        Place := Place - 1;
+                     end loop;
+                     Order (Place) := Index;
+                  end;
+               end if;
+            end loop;
+
+            for Place in Barred'Range loop
+               Barred (Place) :=
+                 Vocab.Token_Id
+                   (if Place <= 3 then Order (Place * 2 + 3 + Trial mod 2)
+                    else Next mod Size);
+            end loop;
+            --  The favourite always said, so that the greedy answer is
+            --  one the penalty moved.
+            for Place in Said'Range loop
+               Said (Place) :=
+                 Vocab.Token_Id
+                   (if Place = 1 then Order (1)
+                    elsif Place <= 6 then Order (Place * 3 + Trial mod 3)
+                    else Next mod Size);
+            end loop;
+         end;
+
+         --  The negative ones among the said, so that a penalty that
+         --  multiplies is exercised as well as one that divides.
+         Logits (N.Element_Count (Said (Said'Last))) := -3.0;
+
+         for Greedy in Boolean loop
+            declare
+               Sampler : S.Sampler;
+               Config  : S.Configuration :=
+                 (if Greedy then S.Greedy_Configuration
+                  else S.Configuration'(others => <>));
+               Status  : E.Error_Info;
+               Token   : Vocab.Token_Id;
+            begin
+               Config.Repeat_Penalty := Penalty;
+               Config.Repeat_Window := Said'Length;
+               if not Greedy then
+                  Config.Temperature := 0.7;
+                  Config.Top_K := 40;
+                  Config.Top_P := 1.0;
+                  Config.Min_P := 0.0;
+               end if;
+
+               S.Open (Sampler, Config, Size, 7, Status);
+               Assert (E.Is_Ok (Status), "the sampler would not open");
+               for Each of Said loop
+                  S.Record_Token (Sampler, Each);
+               end loop;
+               for Place in Barred'Range loop
+                  if Place mod 2 = 0 then
+                     S.Forbid (Sampler, Barred (Place));
+                  else
+                     S.Forbid_For_Step (Sampler, Barred (Place));
+                  end if;
+               end loop;
+
+               S.Sample
+                 (Sampler, Logits.all, Token, Status,
+                  Probs => Probs'Unchecked_Access);
+               Assert (E.Is_Ok (Status), "the sampler refused the logits");
+
+               --  By hand: every token asked.
+               declare
+                  Kept  : array (1 .. 40) of Natural := [others => 0];
+                  Held  : Natural := 0;
+               begin
+                  for Index in 0 .. Size - 1 loop
+                     if not Is_Barred (Index)
+                       and then (Held < Kept'Last
+                                 or else Before (Index, Kept (Held)))
+                     then
+                        declare
+                           Place : Natural :=
+                             Natural'Min (Held + 1, Kept'Last);
+                        begin
+                           Held := Place;
+                           while Place > 1
+                             and then Before (Index, Kept (Place - 1))
+                           loop
+                              Kept (Place) := Kept (Place - 1);
+                              Place := Place - 1;
+                           end loop;
+                           Kept (Place) := Index;
+                        end;
+                     end if;
+                  end loop;
+
+                  if Greedy then
+                     Assert (Natural (Token) = Kept (1),
+                             "trial" & Trial'Image & ": greedy chose"
+                             & Token'Image & " where asking every token "
+                             & "chose" & Kept (1)'Image);
+                  else
+                     for Index in 0 .. Size - 1 loop
+                        declare
+                           Chosen : constant Boolean :=
+                             (for some Each of Kept => Each = Index);
+                        begin
+                           Assert
+                             (Chosen = (Probs (N.Element_Count (Index)) > 0.0),
+                              "trial" & Trial'Image & ": token"
+                              & Index'Image
+                              & (if Chosen then " is one of the top 40 "
+                                 & "and was given no chance"
+                                 else " is not one of the top 40 and was "
+                                 & "given a chance"));
+                        end;
+                     end loop;
+                  end if;
+               end;
+
+               S.Close (Sampler);
+            end;
+         end loop;
+      end loop;
+
+      --  A logit that is not a number, late in the vocabulary, is still
+      --  found by both: the walks pass tokens over on a comparison that
+      --  such a logit fails.
+      declare
+         pragma Suppress (Validity_Check);
+      begin
+         Logits (Size - 3) := N.From_Bits (16#7FC0_0000#);
+         for Greedy in Boolean loop
+            declare
+               Sampler : S.Sampler;
+               Status  : E.Error_Info;
+               Token   : Vocab.Token_Id;
+            begin
+               S.Open
+                 (Sampler,
+                  (if Greedy then S.Greedy_Configuration
+                   else S.Configuration'(others => <>)),
+                  Size, 7, Status);
+               S.Sample (Sampler, Logits.all, Token, Status);
+               Assert (Status.Code = E.Sampling_Non_Finite_Logit,
+                       "a logit that is not a number went unnoticed"
+                       & (if Greedy then " choosing greedily" else ""));
+               S.Close (Sampler);
+            end;
+         end loop;
+      end;
+
+      Free (Logits);
+   end Screened_Walks_Choose_As_Full_Ones;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -3231,6 +3482,10 @@ package body Tests.Sampling_Cases is
         (T, Built_In_Formats_Compile'Access,
          "the chat formats this build carries compile and render through "
          & "the same door as a model's own");
+      Register_Routine
+        (T, Screened_Walks_Choose_As_Full_Ones'Access,
+         "the greedy choice and the top-k few over a large vocabulary are "
+         & "what asking every token gives");
    end Register_Tests;
 
 end Tests.Sampling_Cases;
