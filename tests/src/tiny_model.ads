@@ -199,6 +199,17 @@ package Tiny_Model is
    --  where a token is by a fall-off in the scores instead. Its
    --  feed-forward is gated, so a mixture has experts to route to.
    --
+   --  Mamba, Mamba2 and RWKV6 run a state position by position: no
+   --  attention to widen or window, no rotation to stretch, no experts to
+   --  route to, and the engine refuses a file stating any of them by name.
+   --  StableLM has no mixture and Jamba reads values as wide as its keys;
+   --  Jamba and DeepSeek2 attend to everything, so neither takes a window.
+   --  Neither of those two is declared unable to hold the mixture, which
+   --  both are already -- the mixed fixture is their plain one, byte for
+   --  byte -- nor DeepSeek2 the widths apart, which its latent attention
+   --  always states: a declaration no file can show was only ever kept
+   --  true by hand.
+   --
    --  @param Kind  Architecture to ask about.
    --  @param Shape Shape to ask about.
    --  @return True when that architecture cannot be built in that shape.
@@ -213,14 +224,14 @@ package Tiny_Model is
    is (case Shape is
          when Mixed => Kind in Falcon | Phi2 | GPT2 | Bert | Starcoder2
                               | Stablelm | Gptneox | Mpt | Mamba | Mamba2
-                              | Rwkv6 | Jamba | Deepseek2,
+                              | Rwkv6,
          when Stretched =>
            Kind in GPT2 | Bert | Jina_Bert_V2 | Mpt | Mamba | Mamba2 | Rwkv6
                  | Jamba | Deepseek2,
          when Windowed =>
            Kind in Bert | Nomic_Bert | Jina_Bert_V2 | Mamba | Mamba2 | Rwkv6
                  | Jamba | Deepseek2,
-         when Apart => Kind in Qwen35 | Mamba | Mamba2 | Rwkv6 | Jamba | Deepseek2,
+         when Apart => Kind in Qwen35 | Mamba | Mamba2 | Rwkv6 | Jamba,
          when Reaching =>
            Kind in GPT2 | Bert | Nomic_Bert | Jina_Bert_V2 | Mpt | Mamba
                  | Mamba2 | Rwkv6 | Jamba | Deepseek2,

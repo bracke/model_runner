@@ -573,6 +573,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A file stating what its architecture has no use for is refused.** An
+  attention width, a sliding window, a rotation stretch or an expert count on
+  Mamba, Mamba2 or RWKV6; a mixture on StableLM; a window on Jamba or
+  DeepSeek2; values wider than keys on Jamba -- each was read and ignored, so
+  the file ran as some other model under its own name. Each is now refused
+  as an unsupported feature, naming the key.
+
 - **Mamba, Mamba2 and RWKV6 files load without a feed-forward.** The
   loader asked each layer for `ffn_norm` and a gated feed-forward that these
   architectures do not have and the evaluation never read, so a published

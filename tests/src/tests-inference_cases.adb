@@ -1468,6 +1468,107 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Evaluation_Is_Deterministic;
 
+   --  A file stating what its architecture has no use for is refused by
+   --  name: an attention width, a window, a rotation's stretch or an
+   --  expert count on Mamba, Mamba2 or RWKV6; a mixture on StableLM; a
+   --  window on Jamba or DeepSeek2; values wider than keys on Jamba. Each
+   --  loaded before and ran some other model under the file's name.
+   procedure Unused_Shape_Metadata_Is_Refused
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      type Pair is record
+         Kind  : Tiny_Model.Fixture_Architecture;
+         Shape : Tiny_Model.Fixture_Shape;
+      end record;
+
+      Refused : constant array (1 .. 13) of Pair :=
+        [(Tiny_Model.Mamba, Tiny_Model.Mixed),
+         (Tiny_Model.Mamba, Tiny_Model.Stretched),
+         (Tiny_Model.Mamba, Tiny_Model.Apart),
+         (Tiny_Model.Mamba2, Tiny_Model.Mixed),
+         (Tiny_Model.Mamba2, Tiny_Model.Stretched),
+         (Tiny_Model.Mamba2, Tiny_Model.Apart),
+         (Tiny_Model.Rwkv6, Tiny_Model.Mixed),
+         (Tiny_Model.Rwkv6, Tiny_Model.Stretched),
+         (Tiny_Model.Rwkv6, Tiny_Model.Apart),
+         (Tiny_Model.Stablelm, Tiny_Model.Mixed),
+         (Tiny_Model.Jamba, Tiny_Model.Windowed),
+         (Tiny_Model.Jamba, Tiny_Model.Apart),
+         (Tiny_Model.Deepseek2, Tiny_Model.Windowed)];
+   begin
+      for Each of Refused loop
+         declare
+            Image : B.Byte_Array_Access;
+            What  : constant String :=
+              Tiny_Model.Fixture_Architecture'Image (Each.Kind) & " "
+              & Tiny_Model.Fixture_Shape'Image (Each.Shape);
+         begin
+            Tiny_Model.Build_Shaped
+              (Image, Tiny_Model.F32, Each.Kind, Each.Shape);
+            Assert (Tiny_Model.Cannot_Hold (Each.Kind, Each.Shape),
+                    What & " is not declared a shape it cannot hold");
+
+            declare
+               Held   : aliased constant B.Byte_Array := Image.all;
+               Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+                 (Held'Access);
+               Parsed : Containers.Container;
+               Ready  : L.Model;
+               Status : E.Error_Info;
+            begin
+               Containers.Reader.Parse (Parsed, Source, Status => Status);
+               Assert (E.Is_Ok (Status), What & " did not parse");
+
+               L.Prepare (Ready, Parsed, Source, Status => Status);
+               Assert (Status.Code = E.Arch_Unsupported_Feature,
+                       What & " was not refused as a feature the "
+                       & "architecture lacks: "
+                       & E.Error_Code'Image (Status.Code));
+               L.Close (Ready, Status);
+               Containers.Close (Parsed);
+            end;
+
+            B.Free (Image);
+         end;
+      end loop;
+
+      --  And the plain shapes of the same architectures still load.
+      for Kind in Tiny_Model.Fixture_Architecture loop
+         if Kind in Tiny_Model.Mamba | Tiny_Model.Mamba2 | Tiny_Model.Rwkv6
+                  | Tiny_Model.Stablelm | Tiny_Model.Jamba
+                  | Tiny_Model.Deepseek2
+         then
+            declare
+               Image : B.Byte_Array_Access;
+            begin
+               Tiny_Model.Build_Shaped (Image, Tiny_Model.F32, Kind);
+
+               declare
+                  Held   : aliased constant B.Byte_Array := Image.all;
+                  Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+                    (Held'Access);
+                  Parsed : Containers.Container;
+                  Ready  : L.Model;
+                  Status : E.Error_Info;
+               begin
+                  Containers.Reader.Parse (Parsed, Source, Status => Status);
+                  L.Prepare (Ready, Parsed, Source, Status => Status);
+                  Assert (E.Is_Ok (Status),
+                          Tiny_Model.Fixture_Architecture'Image (Kind)
+                          & " plain was refused: "
+                          & E.Error_Code'Image (Status.Code));
+                  L.Close (Ready, Status);
+                  Containers.Close (Parsed);
+               end;
+
+               B.Free (Image);
+            end;
+         end if;
+      end loop;
+   end Unused_Shape_Metadata_Is_Refused;
+
    --  The rows a draft from the block past the stack reads, written again
    --  at four bits for that draft alone: the model's own logits do not move
    --  by a bit, and the block's drafted ones move, by less than a tenth of
@@ -14154,6 +14255,10 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Evaluation_Is_Deterministic'Access,
          "the same token sequence produces identical logits");
+      Register_Routine
+        (T, Unused_Shape_Metadata_Is_Refused'Access,
+         "a file stating what its architecture has no use for is refused "
+         & "by name, and the plain file still loads");
       Register_Routine
         (T, A_Lightened_Draft_Head_Leaves_The_Model_Alone'Access,
          "the block's rows at four bits move its drafts and not the model");

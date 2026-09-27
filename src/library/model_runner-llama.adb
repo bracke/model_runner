@@ -1785,6 +1785,66 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      --  What a file states that its architecture has no use for, refused
+      --  by name rather than read and ignored. A model built on a state
+      --  that runs position by position -- Mamba, Mamba2, RWKV6 -- has no
+      --  attention to widen or to window, no rotation to stretch and no
+      --  experts to route to; StableLM has no mixture; Jamba and DeepSeek2
+      --  attend to everything, and Jamba's attention reads values as wide
+      --  as its keys. A file stating one of these describes a model this
+      --  does not compute, and loading it anyway ran some other model under
+      --  the file's name and said nothing.
+      declare
+         function States (Key : String) return Boolean
+         is (Containers.Has (Source, Model_Key (Settings.Kind, Key)));
+
+         --  The first key of those a stateful model has no use for that
+         --  the file states, or nothing.
+         function Unused_By_State return String
+         is (if States ("attention.key_length")
+             then "attention.key_length"
+             elsif States ("attention.value_length")
+             then "attention.value_length"
+             elsif States ("attention.sliding_window")
+             then "attention.sliding_window"
+             elsif States ("rope.scaling.type") then "rope.scaling.type"
+             elsif States ("rope.scaling.factor") then "rope.scaling.factor"
+             elsif States ("expert_count") then "expert_count"
+             elsif States ("expert_used_count") then "expert_used_count"
+             else "");
+      begin
+         if Pure_SSM (Settings.Kind) or else Is_RWKV (Settings.Kind) then
+            if Unused_By_State /= "" then
+               Reject_Feature (Unused_By_State);
+               return;
+            end if;
+
+            if Containers.Find_Tensor (Source, "rope_freqs.weight") /= 0 then
+               Reject_Feature ("rope_freqs");
+               return;
+            end if;
+         end if;
+
+         if Settings.Kind = Stablelm and then States ("expert_count") then
+            Reject_Feature ("expert_count");
+            return;
+         end if;
+
+         if Settings.Kind in Jamba | Deepseek2
+           and then States ("attention.sliding_window")
+         then
+            Reject_Feature ("attention.sliding_window");
+            return;
+         end if;
+
+         if Settings.Kind = Jamba
+           and then Settings.Head_Size /= Settings.Value_Size
+         then
+            Reject_Feature ("attention.value_length");
+            return;
+         end if;
+      end;
+
       Status := E.Success;
    end Read_Configuration;
 
