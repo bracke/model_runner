@@ -2473,10 +2473,18 @@ package body Model_Runner.Llama is
       --  and the second was found by listing what the first one's fix did
       --  not cover rather than by anything failing.
       --
-      --  Said unconditionally. A model that never touched a device gives
-      --  back nothing, which costs nothing, and a model cannot know whether
-      --  the device holds its addresses.
-      Model_Runner.Backend.Device.Forget_Matrices;
+      --  Said whenever this model holds weights, since a model cannot know
+      --  whether the device holds its addresses. But not by one that holds
+      --  none: the device forgets every matrix, not only this model's, and
+      --  preparing a draft begins by closing it -- which emptied the
+      --  device of the model it drafts for, eleven gigabytes that then
+      --  came back one matrix a product (34.8 tokens a second to 2.9).
+      if Item.Weights_Held
+        or else Item.Weights_Span /= 0
+        or else Item.Arena /= null
+      then
+         Model_Runner.Backend.Device.Forget_Matrices;
+      end if;
       --  Only what was allocated is released. A borrowed span belongs to the
       --  source that gave it and is unmapped when that source closes.
       B.Free (Item.Arena);

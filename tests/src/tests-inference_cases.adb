@@ -6248,6 +6248,110 @@ package body Tests.Inference_Cases is
       Model_Runner.Backend.Device.Close;
    end A_Draft_Of_Smaller_Pages_Is_Paged_Beside_Its_Model;
 
+   -----------------------------------------------------
+   -- Preparing_A_Draft_Keeps_Its_Model_On_The_Device --
+   -----------------------------------------------------
+
+   --  Preparing a second model leaves the first one's matrices where they
+   --  are on the device.
+   --
+   --  Preparing begins by closing the model being prepared, and closing
+   --  told the device to forget every matrix it held -- the model already
+   --  running included. Qwen3-Coder-30B drafted by qwen3 went from 34.8
+   --  tokens a second to 2.9, its eleven gigabytes coming back one matrix
+   --  a product. A model that holds no weights now says nothing.
+   --
+   --  Skipped where there is no device.
+   procedure Preparing_A_Draft_Keeps_Its_Model_On_The_Device
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Gen renames Model_Runner.Generation;
+
+      Fixture : B.Byte_Array_Access;
+      Ready   : Boolean;
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready);
+
+      if not Ready then
+         return;
+      end if;
+
+      Tiny_Model.Build
+        (Fixture, Format => Tiny_Model.Q4_K, End_Token => 15, Room => 128);
+
+      declare
+         Held : aliased constant B.Byte_Array := Fixture.all;
+         Target_Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Draft_Source  : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Target_Item, Draft_Item : Containers.Container;
+
+         Target, Draft : L.Model;
+         Live    : L.Session;
+         Request : Gen.Request;
+         Stop    : Model_Runner.Stops.Set;
+         Outcome : Gen.Result;
+         Status  : E.Error_Info;
+         Before  : Interfaces.Unsigned_64;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse
+           (Target_Item, Target_Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the model fixture did not parse");
+         Model_Runner.GGUF.Containers.Reader.Parse
+           (Draft_Item, Draft_Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the draft fixture did not parse");
+
+         L.Prepare
+           (Target, Target_Item, Target_Source,
+            Backend => Model_Runner.Backend.Backend_Device,
+            Status  => Status);
+         Assert (E.Is_Ok (Status), "the device would not take the model");
+
+         L.Open (Live, Target, 128, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+         Model_Runner.Stops.Open (Stop);
+         Request.Max_Tokens := 4;
+         Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+         Request.Add_Beginning := True;
+         Gen.Generate
+           (Target, Live, "abab", Request, Stop, null, null,
+            null, null, null, null, Outcome => Outcome);
+         Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                 "the run failed");
+         Model_Runner.Stops.Close (Stop);
+
+         Before := Model_Runner.Backend.Device.Resident_Bytes;
+         Assert (Interfaces.">" (Before, 0),
+                 "the model left nothing resident on the device");
+
+         L.Prepare
+           (Draft, Draft_Item, Draft_Source,
+            Backend => Model_Runner.Backend.Backend_Device,
+            Status  => Status);
+         Assert (E.Is_Ok (Status), "the draft would not prepare");
+
+         Assert (Interfaces.">=" (Model_Runner.Backend.Device.Resident_Bytes,
+                                  Before),
+                 "preparing a draft emptied the device of its model:"
+                 & Interfaces.Unsigned_64'Image
+                     (Model_Runner.Backend.Device.Resident_Bytes)
+                 & " resident of" & Interfaces.Unsigned_64'Image (Before));
+
+         L.Close (Live);
+         L.Close (Target, Status);
+         L.Close (Draft, Status);
+         Containers.Close (Target_Item);
+         Containers.Close (Draft_Item);
+      end;
+
+      B.Free (Fixture);
+      Model_Runner.Backend.Device.Close;
+   end Preparing_A_Draft_Keeps_Its_Model_On_The_Device;
+
    ------------------------------------------------
    -- A_Drafted_Run_Rewinds_Inside_Its_Window --
    ------------------------------------------------
@@ -13859,6 +13963,10 @@ package body Tests.Inference_Cases is
         (T, A_Draft_Of_Smaller_Pages_Is_Paged_Beside_Its_Model'Access,
          "a draft whose pages are smaller than its model's is paged beside "
          & "it, and the run says what the same run says in blocks");
+      Register_Routine
+        (T, Preparing_A_Draft_Keeps_Its_Model_On_The_Device'Access,
+         "preparing a second model leaves the first one's matrices on "
+         & "the device");
       Register_Routine
         (T, A_Drafted_Run_Rewinds_Inside_Its_Window'Access,
          "a drafted run on a sliding-window model goes past the window's "
