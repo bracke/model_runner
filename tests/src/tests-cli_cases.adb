@@ -1581,6 +1581,89 @@ package body Tests.CLI_Cases is
               "a refused init left state behind");
    end Init_Starts_A_Project;
 
+   --  task manages the project's work from the command line: new creates
+   --  a candidate from --set fields, accept and cancel move it, list and
+   --  show say where it stands, derive makes what accepted requirements
+   --  imply, and what is not a task or a legal move is refused.
+   procedure Task_Command_Manages_Work
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Project : constant String := "obj/task-project";
+
+      function Task_Run (Action, Argument, Field : String) return Natural is
+         Source : Fixed_Arguments;
+         Status : Natural;
+      begin
+         Add (Source, "task");
+         if Action /= "" then
+            Add (Source, Action);
+         end if;
+         if Argument /= "" then
+            Add (Source, Argument);
+         end if;
+         Add (Source, "--directory");
+         Add (Source, Project);
+         if Field /= "" then
+            Add (Source, "--set");
+            Add (Source, Field);
+         end if;
+         Ran (Source, Status);
+         return Status;
+      end Task_Run;
+
+      Status : Natural;
+   begin
+      if Ada.Directories.Exists (Project) then
+         Ada.Directories.Delete_Tree (Project);
+      end if;
+      Assert (Task_Run ("", "", "") = 6 or else Task_Run ("", "", "") = 2,
+              "task in a directory with no project did not fail");
+
+      declare
+         Source : Fixed_Arguments;
+      begin
+         Add (Source, "init");
+         Add (Source, "generic");
+         Add (Source, "--directory");
+         Add (Source, Project);
+         Ran (Source, Status);
+         Assert (Status = 0, "a project for tasks was not made");
+      end;
+
+      Assert (Task_Run ("list", "", "") = 0
+              and then Last_Output = "",
+              "an empty project listed tasks");
+      Assert (Task_Run ("new", "Look into it", "kind=analysis") = 0
+              and then Ada.Strings.Fixed.Index (Last_Output, "TASK-001") > 0,
+              "a task was not created: " & Last_Output);
+      Assert (Task_Run ("new", "No kind", "") = 2,
+              "a task with no kind was created");
+      Assert (Task_Run ("new", "Wrong", "kind=nonsense") = 2,
+              "a task of no kind the project has was created");
+      Assert (Task_Run ("accept", "TASK-001", "") = 0,
+              "a candidate was not accepted");
+      Assert (Task_Run ("list", "", "") = 0
+              and then Ada.Strings.Fixed.Index (Last_Output, "[ready]") > 0,
+              "an accepted task with nothing to wait for is not listed ready: "
+              & Last_Output);
+      Assert (Task_Run ("show", "TASK-001", "") = 0
+              and then Ada.Strings.Fixed.Index (Last_Output, "fingerprint") > 0,
+              "the effective task was not shown");
+      Assert (Task_Run ("reject", "TASK-001", "") = 2,
+              "an accepted task was rejected");
+      Assert (Task_Run ("cancel", "TASK-001", "") = 0,
+              "an accepted task was not cancelled");
+      Assert (Task_Run ("accept", "", "") = 2,
+              "a move naming no task was taken");
+      Assert (Task_Run ("show", "TASK-404", "") = 2,
+              "a task nobody made was shown");
+      Assert (Task_Run ("derive", "", "") = 0,
+              "derivation with nothing to derive failed");
+      Assert (Task_Run ("nonsense", "", "") = 2,
+              "an action the command does not have was taken");
+   end Task_Command_Manages_Work;
+
    --  An inspection that named a feed-forward width and nothing else
    --  described a block a mixture-of-experts model does not have: the file
    --  states that width, the engine computes with an expert's, and the
@@ -11847,6 +11930,9 @@ package body Tests.CLI_Cases is
         (T, Beginning_Marker_Follows_The_Vocabulary'Access,
          "a vocabulary that declares it wants no beginning marker is not "
          & "given one");
+      Register_Routine
+        (T, Task_Command_Manages_Work'Access,
+         "task creates, moves, lists and shows the project's work");
       Register_Routine
         (T, Init_Starts_A_Project'Access,
          "init starts a project from a shipped template and refuses what"

@@ -372,6 +372,11 @@ package Model_Runner.Errors is
       Framework_Transition_Invalid,
       Framework_Lease_Held,
 
+      --  Tasks.
+      Framework_Task_Kind_Unknown,
+      Framework_Dependency_Cycle,
+      Framework_Task_Not_Ready,
+
       --  Internal invariants.
       Internal_Invariant_Violated,
       Internal_Unexpected_Exception,

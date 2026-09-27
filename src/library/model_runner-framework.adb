@@ -69,6 +69,25 @@ package body Model_Runner.Framework is
       end case;
    end Portability_Of;
 
+   --------------
+   -- Lines_Of --
+   --------------
+
+   function Lines_Of (Text : String) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+      Start  : Natural := Text'First;
+   begin
+      for Index in Text'First .. Text'Last + 1 loop
+         if Index > Text'Last or else Text (Index) = ASCII.LF then
+            if Index > Start then
+               Result.Append (Text (Start .. Index - 1));
+            end if;
+            Start := Index + 1;
+         end if;
+      end loop;
+      return Result;
+   end Lines_Of;
+
    ---------------
    -- Timestamp --
    ---------------

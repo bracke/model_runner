@@ -295,8 +295,11 @@ ordinal is never reused, not because they might appear.
 | `MR-FRAMEWORK-0017` | `error.framework.template_conflict` | recovery_user_correctable | 6 | raised |
 | `MR-FRAMEWORK-0018` | `error.framework.input_missing` | recovery_user_correctable | 2 | raised |
 | `MR-FRAMEWORK-0019` | `error.framework.input_invalid` | recovery_user_correctable | 2 | raised |
-| `MR-FRAMEWORK-0020` | `error.framework.transition_invalid` | recovery_user_correctable | 6 | raised |
+| `MR-FRAMEWORK-0020` | `error.framework.transition_invalid` | recovery_user_correctable | 2 | raised |
 | `MR-FRAMEWORK-0021` | `error.framework.lease_held` | recovery_user_correctable | 6 | raised |
+| `MR-FRAMEWORK-0022` | `error.framework.task_kind_unknown` | recovery_user_correctable | 2 | raised |
+| `MR-FRAMEWORK-0023` | `error.framework.dependency_cycle` | recovery_user_correctable | 2 | raised |
+| `MR-FRAMEWORK-0024` | `error.framework.task_not_ready` | recovery_user_correctable | 2 | raised |
 
 ## INTERNAL
 

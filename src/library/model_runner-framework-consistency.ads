@@ -21,7 +21,11 @@ package Model_Runner.Framework.Consistency is
       Index_Mismatch,
       Stale_Lease,
       Undefined_Requirement,
-      Conflicting_Authority);
+      Conflicting_Authority,
+      Unknown_Task_Reference,
+      Cyclic_Dependency,
+      Invalid_Task_Kind,
+      Invalid_Task_Field);
 
    --  One thing found wrong.
    type Finding is record

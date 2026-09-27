@@ -20,6 +20,7 @@ with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Schemas;
 with Model_Runner.Framework.Stores;
+with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Templates;
 with Model_Runner.Framework.Transitions;
 with Model_Runner.Text;
@@ -1915,6 +1916,327 @@ package body Tests.Framework_Cases is
    end Bootstrap_Is_Repeatable;
 
    ---------------------------------------------------------------------------
+   --  Tasks.
+   ---------------------------------------------------------------------------
+
+   package Tk renames Model_Runner.Framework.Tasks;
+
+   --  A project whose configuration defines two kinds of task, and a
+   --  requirement accepted in it.
+   procedure Task_Project
+     (Store  : in out S.Store;
+      Leaf   : String;
+      Policy : String := "")
+   is
+      Project  : constant String := Fresh (Leaf);
+      Registry : Tp.Registry;
+      Composed : Tp.Composition;
+      Given    : Cf.Value_Maps.Map;
+      Planned  : Cf.Plan;
+      Done     : Cf.Outcome;
+      Status   : E.Error_Info;
+   begin
+      Tp.Add (Registry, Parsed
+        ("template = work" & LF & "name = W" & LF & "version = 1" & LF
+         & "task_kind implementation = component, requirements?, notes?" & LF
+         & "task_kind analysis = estimate?" & LF
+         & "scalar task.profile.implementation = tests" & LF
+         & "profile tests = run the tests" & LF & Policy));
+      Tp.Compose (Registry, "work", Composed, Status);
+      Cf.Prepare (Composed, Project, Given, Planned, Status);
+      Cf.Initialize (Store, Project, Planned, Done, Status);
+      Assert (E.Is_Ok (Status), "a task project was not made: "
+              & Code_Of (Status));
+   end Task_Project;
+
+   function Fields
+     (Title, Kind : String; Extra_Name, Extra_Value : String := "")
+      return Tk.Field_Map
+   is
+      Result : Tk.Field_Map;
+   begin
+      Result.Include ("title", Title);
+      Result.Include ("kind", Kind);
+      if Extra_Name /= "" then
+         Result.Include (Extra_Name, Extra_Value);
+      end if;
+      return Result;
+   end Fields;
+
+   --  A task is created against its kind's schema, refused for what the
+   --  schema does not allow, and goes through its lifecycle only by legal
+   --  moves: approved, blocked, retried, cancelled and completed.
+   procedure Tasks_Follow_Their_Lifecycle
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Id     : Unbounded_String;
+      Other  : Unbounded_String;
+
+      procedure Move (Task_Id, Next : String; Gates : Boolean := False) is
+      begin
+         Tk.Move (Store, Change, Task_Id, Next, "because",
+                  Gates_Passed => Gates, Status => Status);
+         Assert (E.Is_Ok (Status), "the move of " & Task_Id & " to " & Next
+                 & " was refused: " & Code_Of (Status));
+         S.Commit (Store, Change, Status);
+      end Move;
+   begin
+      Task_Project (Store, "tasks");
+      Assert (Natural (Tk.Kinds (Store).Length) = 2
+              and then Tk.Required_Fields (Store, "implementation")
+                         .First_Element = "component",
+              "the project's kinds of task were not read from its"
+              & " configuration");
+
+      Tk.Create (Store, Change, Fields ("x", "bugfix"), "user", "", Id, Status);
+      Assert (Status.Code = E.Framework_Task_Kind_Unknown,
+              "a kind the project does not define was taken");
+      Tk.Create (Store, Change, Fields ("x", "implementation"), "user", "", Id,
+                 Status);
+      Assert (Status.Code = E.Framework_Input_Missing,
+              "a field the kind requires was not asked for");
+      Tk.Create (Store, Change,
+                 Fields ("x", "analysis", "colour", "blue"), "user", "", Id,
+                 Status);
+      Assert (Status.Code = E.Framework_Schema_Violation,
+              "a field no kind defines was carried");
+      Tk.Create (Store, Change,
+                 Fields ("x", "analysis", "depends_on", "TASK-NONE-001"), "user",
+                 "", Id, Status);
+      Assert (Status.Code = E.Framework_Not_Found,
+              "a dependency on no task was taken");
+
+      Tk.Create (Store, Change,
+                 Fields ("Parse the input", "implementation", "component",
+                         "parser"), "user", "", Id, Status);
+      Assert (E.Is_Ok (Status) and then To_String (Id) = "TASK-PARSER-001",
+              "a task was not created: " & Code_Of (Status));
+      Tk.Create (Store, Change,
+                 Fields ("Look at the input", "analysis", "estimate", "2h"),
+                 "user", "", Other, Status);
+      S.Commit (Store, Change, Status);
+      Assert (Tk.State_Of (Store, To_String (Id)) = "candidate",
+              "a new task is not a candidate");
+      Assert (not Tk.Ready (Store, To_String (Id)).Ready,
+              "a candidate is ready");
+
+      Tk.Move (Store, Change, To_String (Id), "running", "", Status => Status);
+      Assert (Status.Code = E.Framework_Transition_Invalid,
+              "a candidate was started");
+
+      --  Waiting for another task.
+      Tk.Add_Dependency (Store, Change, To_String (Id), To_String (Other),
+                         Status);
+      Assert (E.Is_Ok (Status), "a dependency was refused");
+      S.Commit (Store, Change, Status);
+      Tk.Add_Dependency (Store, Change, To_String (Other), To_String (Id),
+                         Status);
+      Assert (Status.Code = E.Framework_Dependency_Cycle,
+              "a dependency cycle was made");
+
+      Move (To_String (Id), "accepted");
+      Assert (not Tk.Ready (Store, To_String (Id)).Ready,
+              "a task waiting for another is ready");
+      Tk.Move (Store, Change, To_String (Id), "running", "", Status => Status);
+      Assert (Status.Code = E.Framework_Task_Not_Ready,
+              "a task that is not ready was started");
+
+      Move (To_String (Other), "accepted");
+      Move (To_String (Other), "running");
+      Move (To_String (Other), "verification");
+      Tk.Move (Store, Change, To_String (Other), "complete", "",
+               Status => Status);
+      Assert (Status.Code = E.Framework_Task_Not_Ready,
+              "a task whose gates did not pass was completed");
+      Move (To_String (Other), "complete", Gates => True);
+      Assert (Tk.Ready (Store, To_String (Id)).Ready,
+              "a task whose dependency completed is not ready");
+
+      --  Blocked, retried after a failure, then done.
+      Move (To_String (Id), "running");
+      Move (To_String (Id), "blocked");
+      Move (To_String (Id), "accepted");
+      Move (To_String (Id), "running");
+      Move (To_String (Id), "failed");
+      Move (To_String (Id), "accepted");
+      Move (To_String (Id), "running");
+      Move (To_String (Id), "verification");
+      Move (To_String (Id), "complete", Gates => True);
+
+      declare
+         View : R.Item;
+      begin
+         Tk.Effective (Store, To_String (Id), View, Status);
+         Assert (E.Is_Ok (Status)
+                 and then R.Get (View, "runtime.state") = "complete"
+                 and then R.Get (View, "runtime.generation") = "3"
+                 and then R.Get (View, "verification_profile")
+                          = "tests: run the tests"
+                 and then R.Get (View, "fingerprint")'Length = 16,
+                 "the effective task is not what the task is");
+      end;
+
+      --  Reopening needs its policy, and so does cancelling a done task.
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      Assert (Status.Code = E.Framework_Transition_Invalid,
+              "a complete task was reopened without the policy");
+      Tk.Move (Store, Change, To_String (Id), "accepted", "",
+               Granted => [others => True], Status => Status);
+      Assert (E.Is_Ok (Status), "a complete task could not be reopened");
+      S.Commit (Store, Change, Status);
+      Move (To_String (Id), "cancelled");
+      Assert (Natural (Tk.List (Store, "cancelled").Length) = 1
+              and then Natural (Tk.List (Store).Length) = 2,
+              "the tasks are not listed by state");
+      S.Close (Store);
+   end Tasks_Follow_Their_Lifecycle;
+
+   --  A parent handed wholly to its children waits for them, and goes back
+   --  to work, not to complete, when they are done.
+   procedure Parents_Wait_For_Children
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Parent : Unbounded_String;
+      Child  : Unbounded_String;
+      Became : Model_Runner.Framework.Name_Lists.Vector;
+   begin
+      Task_Project (Store, "parents");
+      Tk.Create (Store, Change, Fields ("The whole", "analysis"), "user", "",
+                 Parent, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Create (Store, Change,
+                 Fields ("A part", "analysis", "parent", To_String (Parent)),
+                 "user", "", Child, Status);
+      S.Commit (Store, Change, Status);
+      Assert (Tk.Children (Store, To_String (Parent)).First_Element
+              = To_String (Child), "a child does not know its parent");
+
+      Tk.Move (Store, Change, To_String (Parent), "accepted", "",
+               Status => Status);
+      Tk.Move (Store, Change, To_String (Child), "accepted", "",
+               Status => Status);
+      S.Commit (Store, Change, Status);
+      Tk.Block_On_Children (Store, Change, To_String (Parent), Status);
+      Assert (E.Is_Ok (Status), "a parent could not wait for its children");
+      S.Commit (Store, Change, Status);
+      Tk.Block_On_Children (Store, Change, To_String (Child), Status);
+      Assert (Status.Code = E.Framework_Not_Found,
+              "a task with no children waited for them");
+
+      Tk.Recompute_Readiness (Store, Change, Became, Status);
+      S.Commit (Store, Change, Status);
+      Assert (Natural (Became.Length) = 1
+              and then Became.First_Element = To_String (Child),
+              "only the child should have become ready");
+
+      Tk.Move (Store, Change, To_String (Child), "running", "",
+               Status => Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Child), "verification", "",
+               Status => Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Child), "complete", "",
+               Gates_Passed => True, Status => Status);
+      S.Commit (Store, Change, Status);
+
+      Tk.Recompute_Readiness (Store, Change, Became, Status);
+      Assert (E.Is_Ok (Status), "readiness was not worked out: "
+              & Code_Of (Status));
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "readiness was not committed: "
+              & Code_Of (Status));
+      Assert (Tk.State_Of (Store, To_String (Parent)) = "accepted"
+              and then Became.Contains (To_String (Parent)),
+              "a parent whose children are done did not go back to work");
+
+      Tk.Recompute_Readiness (Store, Change, Became, Status);
+      Assert (Became.Is_Empty, "a task was announced ready twice");
+      S.Close (Store);
+   end Parents_Wait_For_Children;
+
+   --  Tasks derived from accepted requirements are made once, however
+   --  often derivation runs, and automatic acceptance is the policy's to
+   --  give.
+   procedure Derivation_Is_Idempotent
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Req    : Unbounded_String;
+      Made   : Model_Runner.Framework.Name_Lists.Vector;
+      Effect : Nt.Impact;
+   begin
+      Task_Project (Store, "derivation");
+      Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.",
+                  "", "user", "", "io", Req, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Derive (Store, Change, Made, Status);
+      Assert (Made.Is_Empty, "a candidate requirement derived a task");
+
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted",
+               Tr.Ordinary_Only, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Derive (Store, Change, Made, Status);
+      Assert (E.Is_Ok (Status) and then Natural (Made.Length) = 1,
+              "an accepted requirement derived no task: " & Code_Of (Status));
+      S.Commit (Store, Change, Status);
+      declare
+         Derived : constant String := Made.First_Element;
+         Defined : R.Item;
+      begin
+         Assert (Tk.State_Of (Store, Derived) = "candidate",
+                 "a derived task was accepted without the policy");
+         Tk.Definition (Store, Derived, Defined, Status);
+         Assert (R.Get (Defined, "created_by") = "requirement_derivation"
+                 and then R.Get (Defined, "origin") = To_String (Req) & "@2"
+                 and then R.Get (Defined, "component") = "io",
+                 "a derived task does not say where it came from");
+      end;
+
+      Tk.Derive (Store, Change, Made, Status);
+      Assert (Made.Is_Empty, "derivation run again made a task twice");
+
+      --  A new meaning is new work; a new title is not.
+      Nt.Revise (Store, Change, Nt.Requirement, To_String (Req), "Read it",
+                 "It SHALL read.", "", Effect, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Derive (Store, Change, Made, Status);
+      Assert (Made.Is_Empty, "a reworded requirement derived new work");
+      S.Close (Store);
+
+      Change := S.No_Changes;
+      Task_Project (Store, "derivation-automatic",
+                    "scalar task.auto_accept = true" & LF);
+      Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.",
+                  "", "user", "", "io", Req, Status);
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted",
+               Tr.Ordinary_Only, Status);
+      Assert (E.Is_Ok (Status), "a requirement proposed and accepted in one"
+              & " change was refused: " & Code_Of (Status));
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "a requirement proposed and accepted in one"
+              & " change was not committed: " & Code_Of (Status));
+      Tk.Derive (Store, Change, Made, Status);
+      Assert (E.Is_Ok (Status) and then not Made.Is_Empty,
+              "the automatic project derived nothing: " & Code_Of (Status));
+      S.Commit (Store, Change, Status);
+      Assert (Tk.State_Of (Store, Made.First_Element) = "accepted",
+              "the policy's automatic acceptance was not applied");
+      Assert (Tk.Cycles (Store).Is_Empty, "a cycle was found where none is");
+      S.Close (Store);
+   end Derivation_Is_Idempotent;
+
+   ---------------------------------------------------------------------------
    -- Register_Tests --
    ---------------------------------------------------------------------------
 
@@ -2010,6 +2332,17 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Bootstrap_Is_Repeatable'Access,
          "bootstrap classifies a document and makes only what is new");
+      Register_Routine
+        (T, Tasks_Follow_Their_Lifecycle'Access,
+         "a task is approved, blocked, retried, cancelled and completed only"
+         & " by legal moves");
+      Register_Routine
+        (T, Parents_Wait_For_Children'Access,
+         "a parent waits for its children and goes back to work after them");
+      Register_Routine
+        (T, Derivation_Is_Idempotent'Access,
+         "a requirement derives its task once, however often derivation"
+         & " runs");
    end Register_Tests;
 
 end Tests.Framework_Cases;

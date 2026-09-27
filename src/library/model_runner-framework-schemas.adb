@@ -166,6 +166,42 @@ package body Model_Runner.Framework.Schemas is
           Rule ("revision_of", Identifier_Field, False),
           Rule ("links.*", Text_Field, False)]),
 
+      --  A task's definition: its core fields, and its kind's own as
+      --  field.NAME, which the kind's schema in the configuration checks.
+      (Id      => new String'(Task_Definition_Schema),
+       Version => 1,
+       Policy  => Preserve_Unknown,
+       Rules   => new Rule_List'
+         [Rule ("title", Text_Field, True),
+          Rule ("kind", Text_Field, True),
+          Rule ("created_by", Text_Field, True),
+          Rule ("origin", Text_Field, False),
+          Rule ("component", Text_Field, False),
+          Rule ("requirements", Text_Field, False),
+          Rule ("depends_on", Text_Field, False),
+          Rule ("priority", Number_Field, False),
+          Rule ("acceptance", Text_Field, False),
+          Rule ("parent", Identifier_Field, False),
+          Rule ("notes", Text_Field, False),
+          Rule ("derivation_key", Text_Field, False),
+          Rule ("field.*", Text_Field, False)]),
+
+      (Id      => new String'(Task_Runtime_Schema),
+       Version => 1,
+       Policy  => Preserve_Unknown,
+       Rules   => new Rule_List'
+         [Rule ("state", Text_Field, True),
+          Rule ("generation", Number_Field, True),
+          Rule ("blocking_reasons", Text_Field, False),
+          Rule ("current_failure", Text_Field, False),
+          Rule ("accepted_by", Text_Field, False)]),
+
+      (Id      => new String'(Readiness_Schema),
+       Version => 1,
+       Policy  => Reject_Unknown,
+       Rules   => new Rule_List'
+         [1 => Rule ("task.*", Choice_Field, False, "ready waiting ")]),
+
       (Id      => new String'(Lease_Schema),
        Version => 1,
        Policy  => Preserve_Unknown,

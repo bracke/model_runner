@@ -512,6 +512,10 @@ package body Model_Runner.Errors is
                              | Framework_Template_Not_Found
                              | Framework_Input_Missing
                              | Framework_Input_Invalid
+                             | Framework_Transition_Invalid
+                             | Framework_Task_Kind_Unknown
+                             | Framework_Dependency_Cycle
+                             | Framework_Task_Not_Ready
                then Exit_Usage
                else Exit_Input_Output);
 

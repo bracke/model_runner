@@ -38,6 +38,13 @@ package Model_Runner.Framework.Schemas is
    --  A specification, requirement or decision.
    Intent_Schema : constant String := "intent.entity";
 
+   --  A task's definition, and its runtime state.
+   Task_Definition_Schema : constant String := "task.definition";
+   Task_Runtime_Schema    : constant String := "task.runtime";
+
+   --  The derived cache of which tasks are ready.
+   Readiness_Schema : constant String := "index.readiness";
+
    --  One event.
    Event_Schema : constant String := "event.record";
 

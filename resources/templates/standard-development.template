@@ -1,0 +1,14 @@
+# The kinds of task every project here works with, for a template to
+# include. Each lists the fields it requires; a ? marks one it allows.
+template = standard-development
+name = Standard Development
+description = Implementation, bugfix, test, documentation and analysis tasks.
+version = 1
+category = process
+
+task_kind implementation = component, requirements?, notes?
+task_kind bugfix = component?, requirements?, notes?, reproduction?
+task_kind test = component?, requirements?, notes?
+task_kind documentation = component?, notes?
+task_kind analysis = component?, notes?, question?
+scalar task.derived_kind = implementation

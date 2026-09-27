@@ -1,0 +1,1016 @@
+with Ada.Characters.Handling;
+with Ada.Strings.Fixed;
+
+with Model_Runner.Framework.Events;
+with Model_Runner.Framework.Identifiers;
+with Model_Runner.Framework.Intent;
+with Model_Runner.Framework.Leases;
+with Model_Runner.Framework.Schemas;
+
+package body Model_Runner.Framework.Tasks is
+
+   use Ada.Strings.Unbounded;
+   use type Model_Runner.Errors.Error_Code;
+
+   package E renames Model_Runner.Errors;
+
+   State_Suffix    : constant String := ".state";
+   Readiness_Name  : constant String := "readiness";
+   Children_Reason : constant String := "waiting for its children: ";
+   Deriver         : constant String := "task-derivation";
+
+   --  The fields every task may have, whatever its kind.
+   Core : constant array (1 .. 9) of access constant String :=
+     [new String'("title"), new String'("kind"), new String'("component"),
+      new String'("requirements"), new String'("depends_on"),
+      new String'("priority"), new String'("acceptance"),
+      new String'("parent"), new String'("notes")];
+
+   function Is_Core (Name : String) return Boolean
+   is (for some Field of Core => Field.all = Name);
+
+   function Trim (Text : String) return String
+   is (Ada.Strings.Fixed.Trim (Text, Ada.Strings.Both));
+
+   --  The words of a comma- or line-separated list.
+   function Split (Text : String) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+      Start  : Natural := Text'First;
+   begin
+      for Index in Text'First .. Text'Last + 1 loop
+         if Index > Text'Last or else Text (Index) in ',' | ASCII.LF then
+            if Trim (Text (Start .. Index - 1)) /= "" then
+               Result.Append (Trim (Text (Start .. Index - 1)));
+            end if;
+            Start := Index + 1;
+         end if;
+      end loop;
+      return Result;
+   end Split;
+
+   function Joined (Items : Name_Lists.Vector; Between : String) return String is
+      Result : Unbounded_String;
+   begin
+      for Item of Items loop
+         if Result /= Null_Unbounded_String then
+            Append (Result, Between);
+         end if;
+         Append (Result, Item);
+      end loop;
+      return To_String (Result);
+   end Joined;
+
+   function Config (Item : Stores.Store) return Records.Item is
+      Value  : Records.Item;
+      Status : E.Error_Info;
+   begin
+      Configurations.Read (Item, Value, Status);
+      return (if E.Is_Ok (Status) then Value else Records.Create ("", 1, "", 0));
+   end Config;
+
+   ---------------
+   -- Lifecycle --
+   ---------------
+
+   function Lifecycle return Transitions.Machine
+   is (Transitions.Task_Machine);
+
+   -----------
+   -- Kinds --
+   -----------
+
+   function Kinds (Item : Stores.Store) return Name_Lists.Vector is
+      Settings : constant Records.Item := Config (Item);
+      Prefix   : constant String := "task_kind.";
+      Result   : Name_Lists.Vector;
+   begin
+      for Index in 1 .. Records.Field_Count (Settings) loop
+         declare
+            Field : constant String := Records.Field_Name (Settings, Index);
+         begin
+            if Field'Length > Prefix'Length
+              and then Field (Field'First .. Field'First + Prefix'Length - 1)
+                         = Prefix
+            then
+               Result.Append (Field (Field'First + Prefix'Length .. Field'Last));
+            end if;
+         end;
+      end loop;
+      return Result;
+   end Kinds;
+
+   --  The fields a kind lists, each with whether it is required.
+   procedure Kind_Fields
+     (Item     : Stores.Store;
+      Kind     : String;
+      Required : out Name_Lists.Vector;
+      Allowed  : out Name_Lists.Vector) is
+   begin
+      Required.Clear;
+      Allowed.Clear;
+      for Field of Split (Records.Get (Config (Item), "task_kind." & Kind)) loop
+         if Field (Field'Last) = '?' then
+            Allowed.Append (Field (Field'First .. Field'Last - 1));
+         else
+            Required.Append (Field);
+            Allowed.Append (Field);
+         end if;
+      end loop;
+   end Kind_Fields;
+
+   ---------------------
+   -- Required_Fields --
+   ---------------------
+
+   function Required_Fields
+     (Item : Stores.Store;
+      Kind : String) return Name_Lists.Vector
+   is
+      Required, Allowed : Name_Lists.Vector;
+   begin
+      Kind_Fields (Item, Kind, Required, Allowed);
+      return Required;
+   end Required_Fields;
+
+   --------------------
+   -- Allowed_Fields --
+   --------------------
+
+   function Allowed_Fields
+     (Item : Stores.Store;
+      Kind : String) return Name_Lists.Vector
+   is
+      Required, Allowed : Name_Lists.Vector;
+   begin
+      Kind_Fields (Item, Kind, Required, Allowed);
+      return Allowed;
+   end Allowed_Fields;
+
+   --  A task's runtime record, as the transaction will leave it, or as the
+   --  state has it at its next revision.
+   procedure Runtime
+     (Item   : Stores.Store;
+      Change : Stores.Transaction;
+      Id     : String;
+      Value  : out Records.Item;
+      Status : out E.Error_Info)
+   is
+      Staged : Boolean;
+   begin
+      Status := E.Success;
+      Stores.Pending (Change, Tasks_Area, Id & State_Suffix, Value, Staged);
+      if not Staged then
+         Stores.Read (Item, Tasks_Area, Id & State_Suffix, Value, Status);
+         if E.Is_Ok (Status) then
+            Records.Set_Revision (Value, Records.Revision (Value) + 1);
+         end if;
+      end if;
+   end Runtime;
+
+   function Task_Exists
+     (Item   : Stores.Store;
+      Change : Stores.Transaction;
+      Id     : String) return Boolean
+   is
+      Value  : Records.Item;
+      Staged : Boolean;
+   begin
+      Stores.Pending (Change, Tasks_Area, Id, Value, Staged);
+      return Staged or else Stores.Exists (Item, Tasks_Area, Id);
+   end Task_Exists;
+
+   ----------------
+   -- Definition --
+   ----------------
+
+   procedure Definition
+     (Item   : Stores.Store;
+      Id     : String;
+      Value  : out Records.Item;
+      Status : out Model_Runner.Errors.Error_Info) is
+   begin
+      Stores.Read (Item, Tasks_Area, Id, Value, Status);
+   end Definition;
+
+   --------------
+   -- State_Of --
+   --------------
+
+   function State_Of (Item : Stores.Store; Id : String) return String is
+      Value  : Records.Item;
+      Status : E.Error_Info;
+   begin
+      Stores.Read (Item, Tasks_Area, Id & State_Suffix, Value, Status);
+      return (if E.Is_Ok (Status) then Records.Get (Value, "state") else "");
+   end State_Of;
+
+   ------------
+   -- Create --
+   ------------
+
+   procedure Create
+     (Item       : Stores.Store;
+      Change     : in out Stores.Transaction;
+      Fields     : Field_Map;
+      Created_By : String;
+      Origin     : String;
+      Id         : out Ada.Strings.Unbounded.Unbounded_String;
+      Status     : out Model_Runner.Errors.Error_Info)
+   is
+      function Given (Name : String) return String
+      is (if Fields.Contains (Name) then Trim (Fields (Name)) else "");
+
+      Kind     : constant String := Given ("kind");
+      Known    : constant Name_Lists.Vector := Kinds (Item);
+      Required : Name_Lists.Vector;
+      Allowed  : Name_Lists.Vector;
+      Missing  : Name_Lists.Vector;
+      Event    : Unbounded_String;
+      Linked   : Name_Lists.Vector := Split (Given ("depends_on"));
+   begin
+      Linked.Append (Split (Given ("parent")));
+      Id := Null_Unbounded_String;
+      Status := E.Success;
+
+      if not Known.Contains (Kind) then
+         Status := E.Make (E.Framework_Task_Kind_Unknown);
+         E.Add_Text (Status, "name", Kind);
+         E.Add_Text
+           (Status, "detail",
+            (if Known.Is_Empty then "the project defines none"
+             else "the project's are " & Joined (Known, ", ")));
+         return;
+      end if;
+
+      Kind_Fields (Item, Kind, Required, Allowed);
+      if Given ("title") = "" then
+         Missing.Append ("title");
+      end if;
+      for Field of Required loop
+         if Given (Field) = "" and then not Missing.Contains (Field) then
+            Missing.Append (Field);
+         end if;
+      end loop;
+      if not Missing.Is_Empty then
+         Status := E.Make (E.Framework_Input_Missing);
+         E.Add_Text (Status, "name", Joined (Missing, ", "));
+         return;
+      end if;
+
+      --  A field with no schema has no meaning, so it is refused rather
+      --  than carried.
+      for Position in Fields.Iterate loop
+         declare
+            Name : constant String := Configurations.Value_Maps.Key (Position);
+         begin
+            if not Is_Core (Name) and then not Allowed.Contains (Name) then
+               Status := E.Make (E.Framework_Schema_Violation);
+               E.Add_Text (Status, "name", Name);
+               E.Add_Text
+                 (Status, "detail", "no field of a " & Kind & " task is called so");
+               return;
+            elsif not Records.Is_Field_Name ("field." & Name) then
+               Status := E.Make (E.Framework_Name_Invalid);
+               E.Add_Text (Status, "value", Name);
+               return;
+            end if;
+         end;
+      end loop;
+
+      for Requirement of Split (Given ("requirements")) loop
+         if not Stores.Exists (Item, Requirements_Area, Requirement) then
+            Status := E.Make (E.Framework_Not_Found);
+            E.Add_Text (Status, "name", Requirement);
+            return;
+         end if;
+      end loop;
+      for Other of Linked loop
+         if not Task_Exists (Item, Change, Other) then
+            Status := E.Make (E.Framework_Not_Found);
+            E.Add_Text (Status, "name", Other);
+            return;
+         end if;
+      end loop;
+
+      declare
+         Component : constant String := Given ("component");
+         Key       : String :=
+           Ada.Characters.Handling.To_Upper (Component);
+      begin
+         for Char of Key loop
+            if Char not in 'A' .. 'Z' | '0' .. '9' then
+               Char := '_';
+            end if;
+         end loop;
+         Stores.Allocate_Identifier
+           (Item, Change, "TASK",
+            (if Component /= "" and then Identifiers.Is_Valid (Key) then Key
+             else ""),
+            Id, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+      end;
+
+      declare
+         Task_Id : constant String := To_String (Id);
+         Defined : Records.Item :=
+           Records.Create (Schemas.Task_Definition_Schema, 1, Task_Id, 1);
+         State   : Records.Item :=
+           Records.Create
+             (Schemas.Task_Runtime_Schema, 1, Task_Id & "-STATE", 1);
+      begin
+         for Position in Fields.Iterate loop
+            declare
+               Name  : constant String :=
+                 Configurations.Value_Maps.Key (Position);
+               Value : constant String :=
+                 Trim (Configurations.Value_Maps.Element (Position));
+            begin
+               if Value /= "" then
+                  Records.Set
+                    (Defined, (if Is_Core (Name) then Name else "field." & Name),
+                     (if Name in "requirements" | "depends_on"
+                      then Joined (Split (Value), [1 => ASCII.LF])
+                      else Value));
+               end if;
+            end;
+         end loop;
+         if not Records.Has (Defined, "acceptance") then
+            Records.Set (Defined, "acceptance", "from_requirements");
+         end if;
+         Records.Set (Defined, "created_by", Created_By);
+         Records.Set (Defined, "origin", Origin);
+         Stores.Put (Change, Tasks_Area, Task_Id, Defined);
+
+         Records.Set (State, "state", "candidate");
+         Records.Set (State, "generation", "0");
+         Stores.Put (Change, Tasks_Area, Task_Id & State_Suffix, State);
+
+         Events.Emit
+           (Item, Change, Events.Task_Candidate_Created, Task_Id,
+            Given ("title"), Event, Status);
+      end;
+   end Create;
+
+   function Ready_In
+     (Item   : Stores.Store;
+      Change : Stores.Transaction;
+      Id     : String) return Readiness;
+
+   --  The event a move is recorded by.
+   function Event_For (Next : String) return Events.Event_Kind
+   is (if Next = "accepted" then Events.Task_Accepted
+       elsif Next = "rejected" then Events.Task_Rejected
+       elsif Next = "running" then Events.Task_Started
+       elsif Next = "blocked" then Events.Task_Blocked
+       elsif Next = "verification" then Events.Task_Verification_Started
+       elsif Next = "complete" then Events.Task_Completed
+       elsif Next = "failed" then Events.Task_Failed
+       elsif Next = "cancelled" then Events.Task_Cancelled
+       else Events.Task_Candidate_Created);
+
+   ----------
+   -- Move --
+   ----------
+
+   procedure Move
+     (Item         : Stores.Store;
+      Change       : in out Stores.Transaction;
+      Id           : String;
+      Next         : String;
+      Reason       : String;
+      Granted      : Transitions.Permissions := Transitions.Ordinary_Only;
+      Gates_Passed : Boolean := False;
+      Status       : out Model_Runner.Errors.Error_Info)
+   is
+      Value : Records.Item;
+
+      procedure Not_Ready (Detail : String) is
+      begin
+         Status := E.Make (E.Framework_Task_Not_Ready);
+         E.Add_Text (Status, "name", Id);
+         E.Add_Text (Status, "detail", Detail);
+      end Not_Ready;
+   begin
+      Runtime (Item, Change, Id, Value, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      --  Checked here, before the machine: a move the machine allows may
+      --  still not be one this task can make now.
+      Transitions.Check
+        (Lifecycle, Id, Records.Get (Value, "state"), Next, Granted, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      if Next = "running" then
+         declare
+            Now : constant Readiness := Ready_In (Item, Change, Id);
+         begin
+            if not Now.Ready then
+               Not_Ready (Joined (Now.Reasons, "; "));
+               return;
+            end if;
+         end;
+      elsif Next = "complete" and then not Gates_Passed then
+         Not_Ready ("its completion gates have not passed");
+         return;
+      end if;
+
+      Transitions.Apply
+        (Item, Change, Lifecycle, Tasks_Area, Id & State_Suffix, Next, Granted,
+         Event_For (Next), Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      --  What the move changes beyond the state.
+      Runtime (Item, Change, Id, Value, Status);
+      if Next = "running" then
+         declare
+            Generation : constant String := Records.Get (Value, "generation");
+         begin
+            Records.Set
+              (Value, "generation",
+               Trim (Natural'Image
+                       ((if Generation = "" then 0
+                         else Natural'Value (Generation)) + 1)));
+         end;
+      elsif Next = "blocked" then
+         Records.Set (Value, "blocking_reasons", Reason);
+      elsif Next = "failed" then
+         Records.Set (Value, "current_failure", Reason);
+      elsif Next = "accepted" then
+         Records.Remove (Value, "blocking_reasons");
+         Records.Remove (Value, "current_failure");
+         if Reason /= "" then
+            Records.Set (Value, "accepted_by", Reason);
+         end if;
+      end if;
+      Stores.Put (Change, Tasks_Area, Id & State_Suffix, Value);
+   end Move;
+
+   --  A task's state as the transaction will leave it.
+   function State_In
+     (Item   : Stores.Store;
+      Change : Stores.Transaction;
+      Id     : String) return String
+   is
+      Value  : Records.Item;
+      Staged : Boolean;
+   begin
+      Stores.Pending (Change, Tasks_Area, Id & State_Suffix, Value, Staged);
+      return (if Staged then Records.Get (Value, "state")
+              else State_Of (Item, Id));
+   end State_In;
+
+   --  Readiness, as the transaction will leave it.
+   function Ready_In
+     (Item   : Stores.Store;
+      Change : Stores.Transaction;
+      Id     : String) return Readiness
+   is
+      Result  : Readiness;
+      Defined : Records.Item;
+      Status  : E.Error_Info;
+      State   : constant String := State_In (Item, Change, Id);
+   begin
+      Definition (Item, Id, Defined, Status);
+      if E.Is_Error (Status) then
+         Result.Reasons.Append ("there is no such task");
+         return Result;
+      end if;
+
+      if State /= "accepted" then
+         Result.Reasons.Append ("it is " & State);
+      end if;
+
+      for Other of Split (Records.Get (Defined, "depends_on")) loop
+         if State_In (Item, Change, Other) /= "complete" then
+            Result.Reasons.Append
+              ("it waits for " & Other & ", which is "
+               & (if State_In (Item, Change, Other) = "" then "not there"
+                  else State_In (Item, Change, Other)));
+         end if;
+      end loop;
+
+      for Child of Children (Item, Id) loop
+         if State_In (Item, Change, Child)
+              not in "complete" | "cancelled" | "rejected"
+         then
+            Result.Reasons.Append
+              ("its child " & Child & " is " & State_In (Item, Change, Child));
+         end if;
+      end loop;
+
+      for Requirement of Split (Records.Get (Defined, "requirements")) loop
+         declare
+            Held : Intent.Entity;
+         begin
+            Intent.Read (Item, Intent.Requirement, Requirement, Held, Status);
+            if E.Is_Error (Status) then
+               Result.Reasons.Append (Requirement & " is not there");
+            elsif To_String (Held.State) in "obsolete" | "rejected" | "candidate"
+            then
+               Result.Reasons.Append
+                 (Requirement & " is " & To_String (Held.State));
+            end if;
+         end;
+      end loop;
+
+      declare
+         Holder : constant String := Leases.Holder (Item, "task." & Id);
+      begin
+         if Holder /= "" then
+            Result.Reasons.Append ("it is held by " & Holder);
+         end if;
+      end;
+
+      Result.Ready := Result.Reasons.Is_Empty;
+      return Result;
+   end Ready_In;
+
+   -----------
+   -- Ready --
+   -----------
+
+   function Ready (Item : Stores.Store; Id : String) return Readiness
+   is (Ready_In (Item, Stores.No_Changes, Id));
+
+   -------------------------
+   -- Recompute_Readiness --
+   -------------------------
+
+   procedure Recompute_Readiness
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Became : out Name_Lists.Vector;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Cache   : Records.Item;
+      Changed : Boolean := False;
+      Event   : Unbounded_String;
+   begin
+      Became.Clear;
+      Status := E.Success;
+
+      --  A parent waiting on its children goes back to work once they are
+      --  all done.
+      for Id of List (Item, "blocked") loop
+         declare
+            Value : Records.Item;
+            Held  : E.Error_Info;
+         begin
+            Stores.Read (Item, Tasks_Area, Id & State_Suffix, Value, Held);
+            if E.Is_Ok (Held)
+              and then Ada.Strings.Fixed.Index
+                         (Records.Get (Value, "blocking_reasons"),
+                          Children_Reason) = 1
+              and then (for all Child of Children (Item, Id) =>
+                          State_Of (Item, Child) in "complete" | "cancelled")
+            then
+               Move (Item, Change, Id, "accepted", "its children are done",
+                     Status => Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+         end;
+      end loop;
+
+      if Stores.Exists (Item, Indexes_Area, Readiness_Name) then
+         Stores.Read (Item, Indexes_Area, Readiness_Name, Cache, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         Records.Set_Revision (Cache, Records.Revision (Cache) + 1);
+      else
+         Cache := Records.Create (Schemas.Readiness_Schema, 1, "READINESS", 1);
+      end if;
+
+      for Id of List (Item) loop
+         declare
+            Now  : constant Boolean := Ready_In (Item, Change, Id).Ready;
+            Held : constant String := Records.Get (Cache, "task." & Id);
+         begin
+            if Now and then Held /= "ready" then
+               Records.Set (Cache, "task." & Id, "ready");
+               Changed := True;
+               Became.Append (Id);
+               Events.Emit
+                 (Item, Change, Events.Task_Became_Ready, Id, "", Event, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            elsif not Now and then Held /= "waiting" then
+               Records.Set (Cache, "task." & Id, "waiting");
+               Changed := True;
+            end if;
+         end;
+      end loop;
+
+      if Changed then
+         Stores.Put (Change, Indexes_Area, Readiness_Name, Cache);
+      end if;
+   end Recompute_Readiness;
+
+   -----------------------
+   -- Block_On_Children --
+   -----------------------
+
+   procedure Block_On_Children
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Parent : String;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Waiting : constant Name_Lists.Vector := Children (Item, Parent);
+   begin
+      if Waiting.Is_Empty then
+         Status := E.Make (E.Framework_Not_Found);
+         E.Add_Text (Status, "name", "the children of " & Parent);
+         return;
+      end if;
+      Move (Item, Change, Parent, "blocked",
+            Children_Reason & Joined (Waiting, ", "), Status => Status);
+   end Block_On_Children;
+
+   ----------
+   -- List --
+   ----------
+
+   function List
+     (Item  : Stores.Store;
+      State : String := "") return Name_Lists.Vector
+   is
+      Result : Name_Lists.Vector;
+   begin
+      for Name of Stores.Names (Item, Tasks_Area) loop
+         if Ada.Strings.Fixed.Index (Name, ".") = 0
+           and then (State = "" or else State_Of (Item, Name) = State)
+         then
+            Result.Append (Name);
+         end if;
+      end loop;
+      return Result;
+   end List;
+
+   --------------
+   -- Children --
+   --------------
+
+   function Children
+     (Item   : Stores.Store;
+      Parent : String) return Name_Lists.Vector
+   is
+      Result : Name_Lists.Vector;
+   begin
+      for Id of List (Item) loop
+         declare
+            Value  : Records.Item;
+            Status : E.Error_Info;
+         begin
+            Definition (Item, Id, Value, Status);
+            if E.Is_Ok (Status) and then Records.Get (Value, "parent") = Parent
+            then
+               Result.Append (Id);
+            end if;
+         end;
+      end loop;
+      return Result;
+   end Children;
+
+   ---------------
+   -- Effective --
+   ---------------
+
+   procedure Effective
+     (Item   : Stores.Store;
+      Id     : String;
+      Value  : out Records.Item;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Defined  : Records.Item;
+      State    : Records.Item;
+      Settings : constant Records.Item := Config (Item);
+   begin
+      Value := Records.Create ("task.effective", 1, Id, 1);
+      Definition (Item, Id, Defined, Status);
+      if E.Is_Ok (Status) then
+         Stores.Read (Item, Tasks_Area, Id & State_Suffix, State, Status);
+      end if;
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      for Index in 1 .. Records.Field_Count (Defined) loop
+         Records.Set
+           (Value, "definition." & Records.Field_Name (Defined, Index),
+            Records.Get (Defined, Records.Field_Name (Defined, Index)));
+      end loop;
+      Records.Set
+        (Value, "definition.revision",
+         Trim (Natural'Image (Records.Revision (Defined))));
+      Records.Set (Value, "runtime.state", Records.Get (State, "state"));
+      Records.Set (Value, "runtime.generation", Records.Get (State, "generation"));
+
+      declare
+         Now : constant Readiness := Ready (Item, Id);
+      begin
+         Records.Set (Value, "ready", (if Now.Ready then "true" else "false"));
+         Records.Set
+           (Value, "blocked_by", Joined (Now.Reasons, [1 => ASCII.LF]));
+      end;
+
+      --  The revision of each requirement served, which is what evidence
+      --  and traceability name.
+      for Requirement of Split (Records.Get (Defined, "requirements")) loop
+         declare
+            Held : Intent.Entity;
+            Read : E.Error_Info;
+         begin
+            Intent.Read (Item, Intent.Requirement, Requirement, Held, Read);
+            if E.Is_Ok (Read) then
+               Records.Set
+                 (Value, "requirement." & Requirement,
+                  "revision" & Natural'Image (Held.Revision) & ", "
+                  & To_String (Held.Meaning));
+            end if;
+         end;
+      end loop;
+
+      for Decision of Intent.Applicable_Decisions
+                        (Item, Records.Get (Defined, "component"))
+      loop
+         declare
+            Held : Intent.Entity;
+            Read : E.Error_Info;
+         begin
+            Intent.Read (Item, Intent.Decision, Decision, Held, Read);
+            Records.Set
+              (Value, "decision." & Decision,
+               "revision" & Natural'Image (Held.Revision));
+         end;
+      end loop;
+
+      declare
+         Kind    : constant String := Records.Get (Defined, "kind");
+         Profile : constant String :=
+           Records.Get (Settings, "scalar.task.profile." & Kind);
+      begin
+         Records.Set
+           (Value, "kind.fields", Records.Get (Settings, "task_kind." & Kind));
+         if Profile /= "" then
+            Records.Set
+              (Value, "verification_profile",
+               Profile & ": " & Records.Get (Settings, "profile." & Profile));
+         end if;
+      end;
+
+      Records.Set (Value, "fingerprint", Records.Fingerprint_Of (Value));
+   end Effective;
+
+   ------------
+   -- Derive --
+   ------------
+
+   procedure Derive
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Made   : out Name_Lists.Vector;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Settings  : constant Records.Item := Config (Item);
+      Kind      : constant String :=
+        (if Records.Get (Settings, "scalar.task.derived_kind") /= ""
+         then Records.Get (Settings, "scalar.task.derived_kind")
+         else "implementation");
+      Automatic : constant Boolean :=
+        Records.Get (Settings, "scalar.task.auto_accept") = "true";
+      Listed    : constant Events.Event_List := Events.Since (Item, 0);
+
+      --  The keys of the derivations already made.
+      Done : Name_Lists.Vector;
+
+      use type Events.Event_Kind;
+   begin
+      Made.Clear;
+      Status := E.Success;
+
+      --  Nothing is derived for a project whose configuration has no kind
+      --  of task to derive.
+      if not Kinds (Item).Contains (Kind) then
+         return;
+      end if;
+
+      for Id of List (Item) loop
+         declare
+            Value : Records.Item;
+            Read  : E.Error_Info;
+         begin
+            Definition (Item, Id, Value, Read);
+            if E.Is_Ok (Read) and then Records.Get (Value, "derivation_key") /= ""
+            then
+               Done.Append (Records.Get (Value, "derivation_key"));
+            end if;
+         end;
+      end loop;
+
+      --  Driven by the events that accept and revise requirements, each
+      --  consumed once; the derivation key is the second guard, so a
+      --  requirement accepted before anybody consumed its event is not
+      --  derived twice either.
+      for Index in 1 .. Events.Length (Listed) loop
+         declare
+            Happened : constant Events.Event := Events.Element (Listed, Index);
+            Fresh    : Boolean;
+         begin
+            if Happened.Known
+              and then Happened.Kind in Events.Requirement_Accepted
+                                      | Events.Requirement_Revised
+            then
+               Events.Consume
+                 (Item, Change, Deriver, To_String (Happened.Id), Fresh, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               declare
+                  Requirement : constant String := To_String (Happened.Subject);
+                  Held        : Intent.Entity;
+                  Read        : E.Error_Info;
+               begin
+                  Intent.Read (Item, Intent.Requirement, Requirement, Held, Read);
+                  if Fresh and then E.Is_Ok (Read)
+                    and then To_String (Held.State) = "accepted"
+                  then
+                     declare
+                        Key    : constant String :=
+                          "derive:" & Requirement & "#" & To_String (Held.Meaning);
+                        Fields : Field_Map;
+                        Id     : Unbounded_String;
+                        Value  : Records.Item;
+                        Staged : Boolean;
+                     begin
+                        if not Done.Contains (Key) then
+                           Fields.Include ("title", "Implement " & Requirement);
+                           Fields.Include ("kind", Kind);
+                           Fields.Include ("requirements", Requirement);
+                           if To_String (Held.Scope) /= "project" then
+                              Fields.Include ("component", To_String (Held.Scope));
+                           end if;
+                           Create
+                             (Item, Change, Fields, "requirement_derivation",
+                              Requirement & "@"
+                              & Trim (Natural'Image (Held.Revision)),
+                              Id, Status);
+                           if E.Is_Error (Status) then
+                              return;
+                           end if;
+
+                           Stores.Pending
+                             (Change, Tasks_Area, To_String (Id), Value, Staged);
+                           Records.Set (Value, "derivation_key", Key);
+                           Stores.Put (Change, Tasks_Area, To_String (Id), Value);
+                           Done.Append (Key);
+                           Made.Append (To_String (Id));
+
+                           if Automatic then
+                              Move (Item, Change, To_String (Id), "accepted",
+                                    "the policy task.auto_accept",
+                                    Status => Status);
+                              if E.Is_Error (Status) then
+                                 return;
+                              end if;
+                           end if;
+                        end if;
+                     end;
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+   end Derive;
+
+   --  The tasks a task waits for, as the transaction will leave it.
+   function Waits_For
+     (Item   : Stores.Store;
+      Change : Stores.Transaction;
+      Id     : String;
+      Field  : String := "depends_on") return Name_Lists.Vector
+   is
+      Value  : Records.Item;
+      Staged : Boolean;
+      Status : E.Error_Info;
+   begin
+      Stores.Pending (Change, Tasks_Area, Id, Value, Staged);
+      if not Staged then
+         Definition (Item, Id, Value, Status);
+         if E.Is_Error (Status) then
+            return Name_Lists.Empty_Vector;
+         end if;
+      end if;
+      return Split (Records.Get (Value, Field));
+   end Waits_For;
+
+   --  Whether following a field from one task reaches another.
+   function Reaches
+     (Item   : Stores.Store;
+      Change : Stores.Transaction;
+      From   : String;
+      Target : String;
+      Field  : String) return Boolean
+   is
+      Seen  : Name_Lists.Vector;
+      Queue : Name_Lists.Vector := Waits_For (Item, Change, From, Field);
+   begin
+      while not Queue.Is_Empty loop
+         declare
+            Next : constant String := Queue.First_Element;
+         begin
+            Queue.Delete_First;
+            if Next = Target then
+               return True;
+            elsif not Seen.Contains (Next) then
+               Seen.Append (Next);
+               Queue.Append (Waits_For (Item, Change, Next, Field));
+            end if;
+         end;
+      end loop;
+      return False;
+   end Reaches;
+
+   --------------------
+   -- Add_Dependency --
+   --------------------
+
+   procedure Add_Dependency
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Id     : String;
+      On     : String;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Value  : Records.Item;
+      Staged : Boolean;
+      type Text is access constant String;
+      Pair   : constant array (1 .. 2) of Text :=
+        [new String'(Id), new String'(On)];
+   begin
+      Status := E.Success;
+      for Name of Pair loop
+         if not Task_Exists (Item, Change, Name.all) then
+            Status := E.Make (E.Framework_Not_Found);
+            E.Add_Text (Status, "name", Name.all);
+            return;
+         end if;
+      end loop;
+
+      if On = Id or else Reaches (Item, Change, On, Id, "depends_on") then
+         Status := E.Make (E.Framework_Dependency_Cycle);
+         E.Add_Text (Status, "name", Id);
+         E.Add_Text (Status, "detail", On & " already waits for it");
+         return;
+      end if;
+
+      Stores.Pending (Change, Tasks_Area, Id, Value, Staged);
+      if not Staged then
+         Definition (Item, Id, Value, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         Records.Set_Revision (Value, Records.Revision (Value) + 1);
+      end if;
+
+      declare
+         Held : Name_Lists.Vector := Split (Records.Get (Value, "depends_on"));
+      begin
+         if not Held.Contains (On) then
+            Held.Append (On);
+            Records.Set (Value, "depends_on", Joined (Held, [1 => ASCII.LF]));
+            Stores.Put (Change, Tasks_Area, Id, Value);
+         end if;
+      end;
+   end Add_Dependency;
+
+   ------------
+   -- Cycles --
+   ------------
+
+   function Cycles (Item : Stores.Store) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+   begin
+      for Id of List (Item) loop
+         if Reaches (Item, Stores.No_Changes, Id, Id, "depends_on")
+           or else Reaches (Item, Stores.No_Changes, Id, Id, "parent")
+         then
+            Result.Append (Id);
+         end if;
+      end loop;
+      return Result;
+   end Cycles;
+
+end Model_Runner.Framework.Tasks;

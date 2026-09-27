@@ -19,6 +19,7 @@ en.cli.general.command.embed =   embed MODEL     reduce a text to one vector
 en.cli.general.command.inspect =   inspect MODEL   report what a model file contains
 en.cli.general.command.models =   models [remove NAME]  list the models on hand, or remove one
 en.cli.general.command.init =   init [TEMPLATE]  start a project's state from an installed template
+en.cli.general.command.task =   task [ACTION]    list and manage the project's tasks
 en.cli.general.command.help =   help [COMMAND]  show help for a command
 en.cli.general.command.version =   version         show version information
 en.cli.general.more = Run 'model_runner help COMMAND' for the options of a command.
@@ -153,6 +154,15 @@ en.help.init.quiet =   --quiet                 suppress progress, notes and warn
 en.help.init.verbose =   --verbose               report progress and detail on standard error
 en.help.init.locale =   --locale NAME           locale for program messages
 en.help.init.color =   --color=MODE            colour output: {value}
+en.help.task.usage = Usage: model_runner task [list|new TITLE|accept ID|reject ID|cancel ID|show ID|derive] [options]
+en.help.task.summary = Manage the project's persistent tasks. list shows each with its state, ready shown as one; new creates a candidate from --set fields, asking a terminal for what its kind requires; accept, reject and cancel move one; show prints the effective task; derive makes the tasks accepted requirements imply. Tasks that became ready are named after each change.
+en.help.task.options = Options:
+en.help.task.set =   --set NAME=VALUE        give the new task's field NAME its value; repeatable
+en.help.task.directory =   --directory DIR         the project in DIR rather than the current directory
+en.help.task.quiet =   --quiet                 suppress progress, notes and warnings
+en.help.task.verbose =   --verbose               report progress and detail on standard error
+en.help.task.locale =   --locale NAME           locale for program messages
+en.help.task.color =   --color=MODE            colour output: {value}
 en.help.inspect.options = Options:
 en.help.inspect.metadata =   --metadata              list metadata keys, types and values
 en.help.inspect.tensors =   --tensors               list tensor names, shapes and formats
@@ -330,6 +340,15 @@ en.cli.init.fact =   fact {name} = {value}
 en.cli.init.made = made {path}
 en.cli.init.kept = kept {path}, which was there already
 en.cli.init.done = initialized {name} in {path}; configuration {detail}
+en.cli.task.item = {name}  [{value}]  {detail}
+en.cli.task.none = there are no tasks
+en.cli.task.created = created {name}: {detail}
+en.cli.task.moved = {name} is {value}
+en.cli.task.field = {name}: {value}
+en.cli.task.derived = derived {name}
+en.cli.task.ready = {name} became ready
+en.cli.task.kinds = kinds of task: {value}
+en.cli.task.input = {name}:
 en.cli.agent.stopped = agent stopped: {state} after {count} steps and {total} tool calls
 en.cli.interactive.tool_needs_text = /tool needs the tool's answer as text
 en.cli.interactive.path_needed = that command needs a file path
@@ -661,6 +680,9 @@ en.error.framework.input_missing = initialization needs a value for {name}, and 
 en.error.framework.input_invalid = {value} is not a value for {name}: {detail}
 en.error.framework.transition_invalid = {name} cannot go from {value} to {expected}: {detail}
 en.error.framework.lease_held = {name} is held by {detail} until {value}
+en.error.framework.task_kind_unknown = {name} is not a kind of task: {detail}
+en.error.framework.dependency_cycle = {name} cannot wait for that: {detail}
+en.error.framework.task_not_ready = {name} cannot move yet: {detail}
 en.error.internal.invariant_violated = internal invariant violated
 en.error.internal.unexpected_exception = unexpected internal failure
 en.error.internal.not_implemented = not implemented in this build
@@ -686,6 +708,7 @@ da.cli.general.command.embed =   embed MODEL     reducér en tekst til én vekto
 da.cli.general.command.inspect = inspect MODEL   vis hvad en modelfil indeholder
 da.cli.general.command.models =   models [remove NAME]  vis modellerne ved hånden, eller fjern en
 da.cli.general.command.init =   init [SKABELON]  start et projekts tilstand fra en installeret skabelon
+da.cli.general.command.task =   task [HANDLING]  vis og styr projektets opgaver
 da.cli.general.command.help = help [KOMMANDO] vis hjælp til en kommando
 da.cli.general.command.version = version         vis versionsoplysninger
 da.cli.general.more = Kør 'model_runner help KOMMANDO' for at se en kommandos tilvalg.
@@ -767,6 +790,15 @@ da.help.init.quiet =   --quiet                 undertryk status, noter og advars
 da.help.init.verbose =   --verbose               vis status og detaljer på standardfejl
 da.help.init.locale =   --locale NAVN           sprog for programmets beskeder
 da.help.init.color =   --color=TILSTAND        farvet output: {value}
+da.help.task.usage = Brug: model_runner task [list|new TITEL|accept ID|reject ID|cancel ID|show ID|derive] [tilvalg]
+da.help.task.summary = Styr projektets vedvarende opgaver. list viser hver med dens tilstand, klar vist som en; new opretter en kandidat fra --set-felter og spørger en terminal om det dens slags kræver; accept, reject og cancel flytter en; show viser den effektive opgave; derive laver de opgaver accepterede krav medfører. Opgaver der blev klar nævnes efter hver ændring.
+da.help.task.options = Tilvalg:
+da.help.task.set =   --set NAVN=VÆRDI        giv den nye opgaves felt NAVN sin værdi; kan gentages
+da.help.task.directory =   --directory MAPPE       projektet i MAPPE i stedet for den aktuelle mappe
+da.help.task.quiet =   --quiet                 undertryk status, noter og advarsler
+da.help.task.verbose =   --verbose               vis status og detaljer på standardfejl
+da.help.task.locale =   --locale NAVN           sprog for programmets beskeder
+da.help.task.color =   --color=TILSTAND        farvet output: {value}
 da.help.inspect.options = Tilvalg:
 da.help.inspect.metadata = --metadata              vis metadatanogler, typer og vaerdier
 da.help.inspect.tensors = --tensors               vis tensorernes navne, former og formater
@@ -1089,6 +1121,15 @@ da.cli.init.fact =   kendsgerning {name} = {value}
 da.cli.init.made = lavede {path}
 da.cli.init.kept = beholdt {path}, som var der i forvejen
 da.cli.init.done = initialiserede {name} i {path}; konfiguration {detail}
+da.cli.task.item = {name}  [{value}]  {detail}
+da.cli.task.none = der er ingen opgaver
+da.cli.task.created = oprettede {name}: {detail}
+da.cli.task.moved = {name} er {value}
+da.cli.task.field = {name}: {value}
+da.cli.task.derived = afledte {name}
+da.cli.task.ready = {name} blev klar
+da.cli.task.kinds = slags opgaver: {value}
+da.cli.task.input = {name}:
 da.cli.agent.stopped = agenten stoppede: {state} efter {count} trin og {total} værktøjskald
 da.cli.interactive.tool_needs_text = /tool skal have værktøjets svar som tekst
 da.cli.interactive.path_needed = den kommando skal have en filsti
@@ -1307,6 +1348,9 @@ da.error.framework.input_missing = initialiseringen skal have en værdi for {nam
 da.error.framework.input_invalid = {value} er ikke en værdi for {name}: {detail}
 da.error.framework.transition_invalid = {name} kan ikke gå fra {value} til {expected}: {detail}
 da.error.framework.lease_held = {name} holdes af {detail} indtil {value}
+da.error.framework.task_kind_unknown = {name} er ikke en slags opgave: {detail}
+da.error.framework.dependency_cycle = {name} kan ikke vente på det: {detail}
+da.error.framework.task_not_ready = {name} kan ikke flyttes endnu: {detail}
 
 # Pseudo-locale. Generated from the English entries: every letter
 # outside a {placeholder} or a protocol token is accented and the
@@ -1330,6 +1374,7 @@ qps.cli.general.command.embed = ⟦  embed MODEL     réðúçé á ŧéxŧ ŧó
 qps.cli.general.command.inspect = ⟦  íñßpéçŧ MÓÐÉĹ   ŕépóŕŧ wháŧ á móðéĺ fíĺé çóñŧáíñß⟧
 qps.cli.general.command.models = ⟦  móðéĺß [ŕémóvé NAME]  ĺíßŧ ŧhé móðéĺß óñ háñð, óŕ ŕémóvé óñé⟧
 qps.cli.general.command.init = ⟦  íñíŧ [TEMPLATE]  ßŧáŕŧ á pŕójéçŧ'ß ßŧáŧé fŕóm áñ íñßŧáĺĺéð ŧémpĺáŧé⟧
+qps.cli.general.command.task = ⟦  ŧáßk [ACTION]    ĺíßŧ áñð máñágé ŧhé pŕójéçŧ'ß ŧáßkß⟧
 qps.cli.general.command.help = ⟦  héĺp [ÇÓMMÁÑÐ]  ßhów héĺp fóŕ á çómmáñð⟧
 qps.cli.general.command.version = ⟦  véŕßíóñ         ßhów véŕßíóñ íñfóŕmáŧíóñ⟧
 qps.cli.general.more = ⟦Ŕúñ 'model_runner héĺp ÇÓMMÁÑÐ' fóŕ ŧhé ópŧíóñß óf á çómmáñð.⟧
@@ -1462,6 +1507,15 @@ qps.help.init.quiet = ⟦  --quiet                 ßúppŕéßß pŕógŕéßß
 qps.help.init.verbose = ⟦  --verbose               ŕépóŕŧ pŕógŕéßß áñð ðéŧáíĺ óñ ßŧáñðáŕð éŕŕóŕ⟧
 qps.help.init.locale = ⟦  --locale NAME           ĺóçáĺé fóŕ pŕógŕám méßßágéß⟧
 qps.help.init.color = ⟦  --color=MODE            çóĺóúŕ óúŧpúŧ: {value}⟧
+qps.help.task.usage = ⟦Úßágé: móðéĺ_ŕúññéŕ ŧáßk [ĺíßŧ|ñéw TITLE|áççépŧ ID|ŕéjéçŧ ID|çáñçéĺ ID|ßhów ID|ðéŕívé] [ópŧíóñß]⟧
+qps.help.task.summary = ⟦Máñágé ŧhé pŕójéçŧ'ß péŕßíßŧéñŧ ŧáßkß. ĺíßŧ ßhówß éáçh wíŧh íŧß ßŧáŧé, ŕéáðý ßhówñ áß óñé; ñéw çŕéáŧéß á çáñðíðáŧé fŕóm --set fíéĺðß, áßkíñg á ŧéŕmíñáĺ fóŕ wháŧ íŧß kíñð ŕéqúíŕéß; áççépŧ, ŕéjéçŧ áñð çáñçéĺ móvé óñé; ßhów pŕíñŧß ŧhé éfféçŧívé ŧáßk; ðéŕívé mákéß ŧhé ŧáßkß áççépŧéð ŕéqúíŕéméñŧß ímpĺý. Ŧáßkß ŧháŧ béçámé ŕéáðý áŕé ñáméð áfŧéŕ éáçh çháñgé.⟧
+qps.help.task.options = ⟦Ópŧíóñß:⟧
+qps.help.task.set = ⟦  --set NAME=VALUE        gívé ŧhé ñéw ŧáßk'ß fíéĺð NAME íŧß váĺúé; ŕépéáŧábĺé⟧
+qps.help.task.directory = ⟦  --directory DIR         ŧhé pŕójéçŧ íñ DIR ŕáŧhéŕ ŧháñ ŧhé çúŕŕéñŧ ðíŕéçŧóŕý⟧
+qps.help.task.quiet = ⟦  --quiet                 ßúppŕéßß pŕógŕéßß, ñóŧéß áñð wáŕñíñgß⟧
+qps.help.task.verbose = ⟦  --verbose               ŕépóŕŧ pŕógŕéßß áñð ðéŧáíĺ óñ ßŧáñðáŕð éŕŕóŕ⟧
+qps.help.task.locale = ⟦  --locale NAME           ĺóçáĺé fóŕ pŕógŕám méßßágéß⟧
+qps.help.task.color = ⟦  --color=MODE            çóĺóúŕ óúŧpúŧ: {value}⟧
 qps.help.inspect.options = ⟦Ópŧíóñß:⟧
 qps.help.inspect.metadata = ⟦  --metadata              ĺíßŧ méŧáðáŧá kéýß, ŧýpéß áñð váĺúéß⟧
 qps.help.inspect.tensors = ⟦  --tensors               ĺíßŧ ŧéñßóŕ ñáméß, ßhápéß áñð fóŕmáŧß⟧
@@ -1635,6 +1689,15 @@ qps.cli.init.fact = ⟦  fáçŧ {name} = {value}⟧
 qps.cli.init.made = ⟦máðé {path}⟧
 qps.cli.init.kept = ⟦képŧ {path}, whíçh wáß ŧhéŕé áĺŕéáðý⟧
 qps.cli.init.done = ⟦íñíŧíáĺízéð {name} íñ {path}; çóñfígúŕáŧíóñ {detail}⟧
+qps.cli.task.item = ⟦{name}  [{value}]  {detail}⟧
+qps.cli.task.none = ⟦ŧhéŕé áŕé ñó ŧáßkß⟧
+qps.cli.task.created = ⟦çŕéáŧéð {name}: {detail}⟧
+qps.cli.task.moved = ⟦{name} íß {value}⟧
+qps.cli.task.field = ⟦{name}: {value}⟧
+qps.cli.task.derived = ⟦ðéŕívéð {name}⟧
+qps.cli.task.ready = ⟦{name} béçámé ŕéáðý⟧
+qps.cli.task.kinds = ⟦kíñðß óf ŧáßk: {value}⟧
+qps.cli.task.input = ⟦{name}:⟧
 qps.cli.agent.stopped = ⟦ágéñŧ ßŧóppéð: {state} áfŧéŕ {count} ßŧépß áñð {total} ŧóóĺ çáĺĺß⟧
 qps.cli.interactive.tool_needs_text = ⟦/tool ñééðß ŧhé ŧóóĺ'ß áñßwéŕ áß ŧéxŧ⟧
 qps.cli.interactive.path_needed = ⟦ŧháŧ çómmáñð ñééðß á fíĺé páŧh⟧
@@ -1947,6 +2010,9 @@ qps.error.framework.input_missing = ⟦íñíŧíáĺízáŧíóñ ñééðß á
 qps.error.framework.input_invalid = ⟦{value} íß ñóŧ á váĺúé fóŕ {name}: {detail}⟧
 qps.error.framework.transition_invalid = ⟦{name} çáññóŧ gó fŕóm {value} ŧó {expected}: {detail}⟧
 qps.error.framework.lease_held = ⟦{name} íß héĺð bý {detail} úñŧíĺ {value}⟧
+qps.error.framework.task_kind_unknown = ⟦{name} íß ñóŧ á kíñð óf ŧáßk: {detail}⟧
+qps.error.framework.dependency_cycle = ⟦{name} çáññóŧ wáíŧ fóŕ ŧháŧ: {detail}⟧
+qps.error.framework.task_not_ready = ⟦{name} çáññóŧ móvé ýéŧ: {detail}⟧
 qps.error.internal.invariant_violated = ⟦íñŧéŕñáĺ íñváŕíáñŧ víóĺáŧéð⟧
 qps.error.internal.unexpected_exception = ⟦úñéxpéçŧéð íñŧéŕñáĺ fáíĺúŕé⟧
 qps.error.internal.not_implemented = ⟦ñóŧ ímpĺéméñŧéð íñ ŧhíß búíĺð⟧

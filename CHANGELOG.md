@@ -7,6 +7,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`model_runner task` manages persistent work (Phase E).** A task is a
+  definition -- title, kind, component, requirements, dependencies,
+  parent, provenance -- and a runtime state moved only by the lifecycle's
+  legal transitions, each an event. Kinds come from the resolved
+  configuration (`task_kind NAME = FIELDS`, `?` for optional; a new
+  `standard-development` template ships five), and a field no kind allows
+  is refused. Ready is derived -- accepted, dependencies complete,
+  children closed, requirements standing, not leased -- and announced
+  when it changes; starting needs it and completing needs the gates. A
+  parent can wait on its children and returns to work, not to complete,
+  when they finish; dependency cycles are refused and found. Accepted
+  requirements derive implementation tasks once per meaning, candidates
+  unless `task.auto_accept` says otherwise; the Effective Task is
+  fingerprinted. `task new|accept|reject|cancel|list|show|derive`. Three
+  more `MR-FRAMEWORK` diagnostics.
+
 - **What the project is meant to be, kept apart from any conversation
   (Phase D).** Specifications, requirements and decisions are registers
   with stable identifiers (SPEC-, REQ-, DEC-), lifecycles of their own and
@@ -17694,7 +17710,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 208 diagnostic
+- Localization through `messages`, with a catalog entry for all 211 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

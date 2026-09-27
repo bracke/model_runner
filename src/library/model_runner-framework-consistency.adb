@@ -6,6 +6,7 @@ with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Leases;
 with Model_Runner.Framework.Records;
+with Model_Runner.Framework.Tasks;
 with Model_Runner.Text;
 
 package body Model_Runner.Framework.Consistency is
@@ -172,6 +173,85 @@ package body Model_Runner.Framework.Consistency is
                          & To_String (Standing.Other.Value));
                end if;
             end;
+         end loop;
+      end;
+
+
+      --  Tasks: every task named is one there is, no dependency or parent
+      --  comes back to itself, and every task is of a kind the project
+      --  defines, with only the fields that kind allows.
+      declare
+         Known_Kinds : constant Name_Lists.Vector := Tasks.Kinds (Item);
+         Linking     : Name_Lists.Vector := Name_Lists.To_Vector ("depends_on", 1);
+      begin
+         Linking.Append ("parent");
+         for Id of Tasks.List (Item) loop
+            declare
+               Defined : Records.Item;
+               Status  : E.Error_Info;
+            begin
+               Tasks.Definition (Item, Id, Defined, Status);
+               if E.Is_Ok (Status) then
+                  for Field of Linking loop
+                     for Other of Lines_Of (Records.Get (Defined, Field)) loop
+                        if not Stores.Exists (Item, Tasks_Area, Other) then
+                           Found (Unknown_Task_Reference, Id,
+                                  "its " & Field & " names " & Other
+                                  & ", which is not there");
+                        end if;
+                     end loop;
+                  end loop;
+
+                  for Requirement of Lines_Of
+                                       (Records.Get (Defined, "requirements"))
+                  loop
+                     if not Stores.Exists (Item, Requirements_Area, Requirement)
+                     then
+                        Found (Undefined_Requirement, Id,
+                               "it serves " & Requirement
+                               & ", which is not there");
+                     end if;
+                  end loop;
+
+                  declare
+                     Kind : constant String := Records.Get (Defined, "kind");
+                  begin
+                     if not Known_Kinds.Contains (Kind) then
+                        Found (Invalid_Task_Kind, Id,
+                               Kind & " is not a kind the project defines");
+                     else
+                        declare
+                           Allowed : constant Name_Lists.Vector :=
+                             Tasks.Allowed_Fields (Item, Kind);
+                        begin
+                           for Index in 1 .. Records.Field_Count (Defined) loop
+                              declare
+                                 Field : constant String :=
+                                   Records.Field_Name (Defined, Index);
+                              begin
+                                 if Field'Length > 6
+                                   and then Field (Field'First .. Field'First + 5)
+                                              = "field."
+                                   and then not Allowed.Contains
+                                                  (Field (Field'First + 6
+                                                          .. Field'Last))
+                                 then
+                                    Found (Invalid_Task_Field, Id,
+                                           Field (Field'First + 6 .. Field'Last)
+                                           & " is not a field of " & Kind);
+                                 end if;
+                              end;
+                           end loop;
+                        end;
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
+
+         for Id of Tasks.Cycles (Item) loop
+            Found (Cyclic_Dependency, Id,
+                   "its dependencies or its parents come back to it");
          end loop;
       end;
 

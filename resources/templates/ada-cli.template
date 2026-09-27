@@ -6,7 +6,7 @@ version = 1
 category = application
 language = Ada
 tags = ada, cli
-includes = ada, alire, aunit
+includes = ada, alire, aunit, standard-development
 
 input project_name
   type = identifier

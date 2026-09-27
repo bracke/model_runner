@@ -5,6 +5,7 @@ name = Existing Repository
 description = A repository of any kind, taken as it is.
 version = 1
 category = existing
+includes = standard-development
 
 input project_name
   type = text

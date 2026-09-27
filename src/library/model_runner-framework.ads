@@ -53,6 +53,13 @@ package Model_Runner.Framework is
    package Name_Lists is new Ada.Containers.Indefinite_Vectors
      (Index_Type => Positive, Element_Type => String);
 
+   --  The lines of a text, empty ones left out: how a field holding a
+   --  list keeps it.
+   --
+   --  @param Text The text.
+   --  @return Its lines.
+   function Lines_Of (Text : String) return Name_Lists.Vector;
+
    --  What kind of state an area holds.
    --
    --  Authored state is what people and the harness decided; runtime state
