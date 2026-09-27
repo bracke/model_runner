@@ -4353,9 +4353,12 @@ package body Reference_Transformer is
             --  The hybrids name the normalization before the feed-forward
             --  for what it follows rather than what it precedes: it is the
             --  same normalization in the same place.
+            --  Nor Mamba, Mamba2 and RWKV6, which have no feed-forward
+            --  after the block: a published file of any of them carries no
+            --  ffn_norm, and reading one made this refuse it.
             if Item.Kind
                  not in Falcon | Phi2 | Bert | Nomic_Bert | Jina_Bert_V2 | Command_R
-                        | Olmo2
+                        | Olmo2 | Mamba | Mamba2 | Rwkv6
             then
                Current.Feed_Norm :=
                  Read_Vector
@@ -4379,7 +4382,10 @@ package body Reference_Transformer is
                end if;
             end if;
 
-            if Item.Experts > 0
+            if Item.Kind in Mamba | Mamba2 | Rwkv6 then
+               --  No feed-forward to read: see the normalization above.
+               null;
+            elsif Item.Experts > 0
               and then (Item.Kind not in Jamba | Deepseek2
                         or else Containers.Find_Tensor
                                   (Source,
@@ -7134,8 +7140,13 @@ package body Reference_Transformer is
             Free_History (Block_Values);
          end;
       elsif Item.Output /= null then
+         --  RWKV6 among them: its last normalization is a layer norm with a
+         --  shift, like its per-block ones, as llama.cpp's graph states it
+         --  (LLM_NORM over output_norm and output_norm_b). Both this and
+         --  the engine divided by the root mean square here and agreed with
+         --  each other about a model neither computed.
          if Item.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox | Mpt
-           | Command_R
+           | Command_R | Rwkv6
          then
             Normalize_Centred
               (State, Item.Output_Norm.all, Item.Output_Norm_Bias, Normed);

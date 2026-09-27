@@ -1603,8 +1603,14 @@ package body Tiny_Model is
                      KV_Heads * Key_Size);
          end if;
 
+         --  Nor where the block has no feed-forward of its own: Mamba's
+         --  and Mamba2's layers are the block and nothing after it, and
+         --  RWKV6's channel mix is its own, normalized by attn_norm_2 and
+         --  written with the rest of its block above. A published file of
+         --  either carries none of this, and a fixture that wrote it had
+         --  the loaders asking for tensors no evaluation reads.
          if Kind not in Falcon | Phi2 | Bert | Nomic_Bert | Jina_Bert_V2
-                       | Olmo2 | Command_R
+                       | Olmo2 | Command_R | Mamba | Mamba2 | Rwkv6
          then
             --  Named for what it follows by the hybrid, for what it
             --  precedes by the rest; the same normalization.
@@ -1624,9 +1630,12 @@ package body Tiny_Model is
             end if;
          end if;
 
-         if (if Kind = Jamba then Jamba_MoE (Index)
-             elsif Kind = Deepseek2 then DS_MoE (Index)
-             else Experts > 0)
+         if Kind in Mamba | Mamba2 | Rwkv6 then
+            --  No feed-forward: see the normalization above.
+            null;
+         elsif (if Kind = Jamba then Jamba_MoE (Index)
+                elsif Kind = Deepseek2 then DS_MoE (Index)
+                else Experts > 0)
          then
             --  The router, then the experts stacked on an outermost axis,
             --  which is how a file writes them: one tensor a matrix rather

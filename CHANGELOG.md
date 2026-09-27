@@ -573,6 +573,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Mamba, Mamba2 and RWKV6 files load without a feed-forward.** The
+  loader asked each layer for `ffn_norm` and a gated feed-forward that these
+  architectures do not have and the evaluation never read, so a published
+  file -- which carries none -- was refused as missing a tensor.
+
+- **RWKV6's output normalization centres and shifts.** It is a layer norm
+  with a bias, as llama.cpp computes it, and was divided by the root mean
+  square without its `output_norm.bias`.
+
 - **A prompt file reads the same on every host.** A line ended the Windows
   way lost its carriage return on Windows and kept it elsewhere, so the one
   file was a token longer on Linux and macOS; `--prompt-file` now drops a

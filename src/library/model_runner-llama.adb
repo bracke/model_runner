@@ -4620,8 +4620,16 @@ package body Model_Runner.Llama is
             --  Falcon has one normalization a block, not two: attention
             --  and the feed-forward read the same normalized input. The
             --  feed norm stays null and the block below reads that.
+            --  Nor where no feed-forward follows the block: Mamba's and
+            --  Mamba2's layers are the block and nothing after it, and
+            --  RWKV6's channel mix is its own, normalized by attn_norm_2
+            --  above. A published file of either carries no ffn_norm and
+            --  no feed-forward, and requiring them refused it for tensors
+            --  the evaluation never reads.
             if Item.Settings.Kind not in Falcon | Phi2 | Olmo2 | Command_R
               and then not Normalizes_After (Item.Settings.Kind)
+              and then not Pure_SSM (Item.Settings.Kind)
+              and then not Is_RWKV (Item.Settings.Kind)
             then
                --  The hybrids name the normalization before the
                --  feed-forward for what it follows rather than what it
@@ -4663,7 +4671,12 @@ package body Model_Runner.Llama is
                end if;
             end if;
 
-            if Item.Settings.Kind in Falcon | Phi2 | GPT2 | Bert | Starcoder2 | Gptneox | Mpt
+            if Pure_SSM (Item.Settings.Kind) or else Is_RWKV (Item.Settings.Kind)
+            then
+               --  No feed-forward to read: see the normalization above.
+               null;
+
+            elsif Item.Settings.Kind in Falcon | Phi2 | GPT2 | Bert | Starcoder2 | Gptneox | Mpt
             then
                --  No gate: one projection up, a Gaussian unit, one down.
                --  The gate stays null, and the block below reads that
@@ -4978,8 +4991,13 @@ package body Model_Runner.Llama is
               (Item, Source, "output_norm.weight", Width, Item.Output_Norm,
                Status);
 
+            --  RWKV6 among them: its last normalization is a layer norm
+            --  with a shift, as its per-block ones are, and the file
+            --  carries the shift. Without it the output normalization
+            --  divided by the root mean square and did not centre.
             if E.Is_Ok (Status)
               and then Item.Settings.Kind in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox
+                                           | Rwkv6
             then
                Resolve_Norm
                  (Item, Source, "output_norm.bias", Width,
@@ -19786,7 +19804,13 @@ package body Model_Runner.Llama is
                         --  block normalized it on the way out, and a fresh
                         --  normalization of the residual where they run one
                         --  after the other.
-                        if Normalizes_After (Source.Settings.Kind) then
+                        --  Nothing where no feed-forward follows: Mamba's
+                        --  block and RWKV6's two mixes are the whole layer.
+                        if Pure_SSM (Source.Settings.Kind)
+                          or else Is_RWKV (Source.Settings.Kind)
+                        then
+                           null;
+                        elsif Normalizes_After (Source.Settings.Kind) then
                            Norm.all (Origin .. Origin + Width - 1) :=
                              Acts.all (Origin .. Origin + Width - 1);
                         elsif Current.Feed_Norm /= null then
