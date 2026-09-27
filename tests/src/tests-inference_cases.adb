@@ -5992,6 +5992,135 @@ package body Tests.Inference_Cases is
       Model_Runner.Backend.Device.Close;
    end Drafting_Runs_On_A_Device;
 
+   -------------------------------------------------
+   -- A_Paged_Picture_Reaches_The_Device_Pages --
+   -------------------------------------------------
+
+   --  A paged session given a picture's rows says, a token later, what a
+   --  session in blocks says.
+   --
+   --  A batch with a picture's rows in it attends on the host, whose
+   --  attention knows the rows look both ways, and writes its keys and
+   --  values into the device's copy through Put_Position -- which writes
+   --  a block, and a paged session has pages. The pages kept what they
+   --  held, the next token read them, and Gemma 3 named a red picture
+   --  "Red" and then said nothing but noise. Here a deep fixture, rows
+   --  standing behind a marker both ways, and the token after them in
+   --  pages against in blocks.
+   --
+   --  THIS FIXTURE DOES NOT REPRODUCE THAT FAULT: its session holds pages,
+   --  but a batch without the pages given back passes here too -- the
+   --  token after attends where the host's copy is current. Gemma 3 with
+   --  its projector is what caught and cleared it: a red picture described
+   --  in two sentences, drafted and not, where before it was one word and
+   --  noise. What this holds is the rest: a paged session's picture and
+   --  the token after it read as the same in blocks.
+   --
+   --  Skipped where there is no device.
+   procedure A_Paged_Picture_Reaches_The_Device_Pages
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Image : B.Byte_Array_Access;
+      Ready : Boolean;
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready);
+
+      if not Ready then
+         return;
+      end if;
+
+      Tiny_Model.Build (Image, Format => Tiny_Model.Q4_K, Room => 64);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Item   : Containers.Container;
+         Model  : aliased L.Model;
+         Status : E.Error_Info;
+
+         Width : constant N.Element_Count :=
+           N.Element_Count (Tiny_Model.Deep_Embedding);
+
+         Rows : Model_Runner.Tensors.Real_Array_Access;
+
+         function After (Paged : Boolean) return N.Real_Array is
+            Live   : L.Session;
+            Words  : constant access constant Vocab.Vocabulary :=
+              L.Vocabulary (Model);
+            Soft   : constant Vocab.Token_Id := Vocab.Find (Words.all, "c");
+            Tokens : constant Vocab.Token_Array :=
+              [Vocab.Beginning_Token (Words.all), Vocab.Find (Words.all, "a"),
+               Soft, Soft, Soft, Soft, Soft, Soft,
+               Vocab.Find (Words.all, "b")];
+            Logits : N.Real_Array
+              (0 .. N.Element_Count (L.Config (Model).Vocabulary) - 1);
+            Local  : E.Error_Info;
+         begin
+            L.Open (Live, Model, 64, Status => Local, Paged => Paged);
+            Assert (E.Is_Ok (Local), "the session did not open");
+
+            L.Evaluate_Batch
+              (Live, Model, Tokens, Logits,
+               Given => (Token => Soft, Rows => Rows, First => 0,
+                         Causal => False, others => <>),
+               Status => Local);
+            Assert (E.Is_Ok (Local), "the picture's batch failed: "
+                    & E.Error_Code'Image (Local.Code));
+
+            L.Evaluate
+              (Live, Model, Vocab.Find (Words.all, "a"), Logits,
+               Status => Local);
+            Assert (E.Is_Ok (Local), "the token after the picture failed");
+            if Paged then
+               Assert (L.Holds_Pages (Live), "the paged session held no pages");
+            end if;
+
+            L.Close (Live);
+            return Logits;
+         end After;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse
+           (Item, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+         L.Prepare
+           (Model, Item, Source,
+            Backend => Model_Runner.Backend.Backend_Device,
+            Status  => Status);
+         Assert (E.Is_Ok (Status), "the device would not take the fixture");
+
+         Model_Runner.Tensors.Allocate (6 * Width, Rows);
+         for Index in Rows.all'Range loop
+            Rows.all (Index) :=
+              N.Real (Integer (Index mod 17) - 8) / 16.0;
+         end loop;
+
+         declare
+            In_Pages  : constant N.Real_Array := After (Paged => True);
+            In_Blocks : constant N.Real_Array := After (Paged => False);
+            Worst     : N.Real := 0.0;
+         begin
+            for Index in In_Pages'Range loop
+               Worst := N.Real'Max
+                 (Worst, abs (In_Pages (Index) - In_Blocks (Index)));
+            end loop;
+            Assert (Worst <= 1.0E-3,
+                    "the token after a picture, paged, differs from the same "
+                    & "in blocks by" & N.Real'Image (Worst));
+         end;
+
+         Model_Runner.Tensors.Free (Rows);
+         L.Close (Model, Status);
+         Containers.Close (Item);
+      end;
+
+      B.Free (Image);
+      Model_Runner.Backend.Device.Close;
+   end A_Paged_Picture_Reaches_The_Device_Pages;
+
    ------------------------------------------------------
    -- A_Paged_Draft_Leaves_The_Target_Its_Own_Tables --
    ------------------------------------------------------
@@ -13224,6 +13353,10 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Adapters_Stack_And_Come_Off_Again'Access,
          "adapters stack, and a scale of minus one takes one off again");
+      Register_Routine
+        (T, A_Paged_Picture_Reaches_The_Device_Pages'Access,
+         "a paged session given a picture's rows says, a token later, what "
+         & "a session in blocks says");
       Register_Routine
         (T, A_Paged_Draft_Leaves_The_Target_Its_Own_Tables'Access,
          "a paged target drafted by another model's paged session on the "

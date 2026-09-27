@@ -573,6 +573,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A picture no longer turns Gemma 3's answer into noise on the device.**
+  A prompt with a picture attends on the host, and its keys and values
+  never reached a paged session's pages on the device, which is `run`'s
+  default there: the answer's first word was right and the rest was
+  noise. The pages are now given back after such a prompt and written
+  again from the host's copy.
+
 - **A draft model with paged sessions no longer changes what the model
   says.** Every paged session writes its page tables to one shared place,
   and a session whose pages already covered its position skipped the

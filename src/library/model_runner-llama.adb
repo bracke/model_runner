@@ -21155,6 +21155,19 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      --  A paged session's batch with a picture's rows in it attended on
+      --  the host, and wrote its keys and values into the host's copy
+      --  only: Put_Position writes a block, which a paged session has not
+      --  got, so the device's pages kept whatever they held before. The
+      --  next token read them there -- Gemma 3 named a red picture "Red"
+      --  and then said nothing but noise. Its pages given back, the next
+      --  pass takes them again and writes the committed cache into them
+      --  from the host's copy, as it does for a session turned out and
+      --  come back.
+      if Item.Paged and then Has_Runs then
+         Release_Session_Pages (Item'Unchecked_Access);
+      end if;
+
       --  Only the last token's distribution is produced: the earlier tokens
       --  of a prompt are consumed to build context, not to be sampled from.
       --  Every position's state, for a caller that pools over them. The
