@@ -96,6 +96,14 @@ package Model_Runner.Framework is
    --  @return The timestamp.
    function Timestamp return String;
 
+   --  A moment some seconds from now, written as Timestamp writes one.
+   --  Timestamps compare as text in the order they happen, which is what a
+   --  lease's expiry is checked by.
+   --
+   --  @param Seconds How far ahead.
+   --  @return The timestamp.
+   function Timestamp_After (Seconds : Natural) return String;
+
    --  The 64-bit FNV-1a hash of some bytes.
    --
    --  The one hash the state uses to fingerprint what it stores. It is not

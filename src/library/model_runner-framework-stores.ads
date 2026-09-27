@@ -207,11 +207,60 @@ package Model_Runner.Framework.Stores is
       Where  : Area;
       Name   : String);
 
+   --  The record a transaction will write in place of a name, if it
+   --  stages one: what a second change to the same record in the same
+   --  transaction starts from.
+   --
+   --  @param Change The transaction.
+   --  @param Where Its area.
+   --  @param Name Its name.
+   --  @param Value The staged record, when Found.
+   --  @param Found Whether the transaction writes it.
+   procedure Pending
+     (Change : Transaction;
+      Where  : Area;
+      Name   : String;
+      Value  : out Records.Item;
+      Found  : out Boolean);
+
    --  How many changes a transaction holds.
    --
    --  @param Change The transaction.
    --  @return The count.
    function Change_Count (Change : Transaction) return Natural;
+
+   --  Hand out the next number of a namespace and key, counting it in the
+   --  transaction, so that it is taken exactly when the change that uses
+   --  it is committed.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Namespace The kind of entity, as EVT.
+   --  @param Key What it belongs to; empty for none.
+   --  @param Number The number, from 1.
+   --  @param Status Framework_Identifier_Invalid when the namespace and key
+   --    do not make an identifier.
+   procedure Allocate_Number
+     (Item      : Store;
+      Change    : in out Transaction;
+      Namespace : String;
+      Key       : String;
+      Number    : out Natural;
+      Status    : out Model_Runner.Errors.Error_Info);
+
+   --  The identifier of a transaction: TXN- and nine digits, handed out
+   --  the first time it is asked for and the same afterwards, until the
+   --  transaction is committed. What its events name as their transaction.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Id Its identifier.
+   --  @param Status A failure to read the counters.
+   procedure Identify
+     (Item   : Store;
+      Change : in out Transaction;
+      Id     : out Ada.Strings.Unbounded.Unbounded_String;
+      Status : out Model_Runner.Errors.Error_Info);
 
    --  Hand out the next identifier of a namespace and key, counting it in
    --  the transaction, so that it is taken exactly when the change that
@@ -278,6 +327,15 @@ package Model_Runner.Framework.Stores is
       Change : in out Transaction;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Whether a change was left in the journal: staged and never marked,
+   --  or marked and never finished. An open store has recovered what it
+   --  found, so this is a change made since, or one that could not be
+   --  recovered.
+   --
+   --  @param Item The store.
+   --  @return True when the journal holds anything.
+   function Journal_Pending (Item : Store) return Boolean;
+
    --  Build the entity index again from the records.
    --
    --  @param Item The store.
@@ -319,10 +377,12 @@ private
 
    type Transaction is record
       Operations : Operation_Vectors.Vector;
+      Id         : Unbounded_String;
    end record;
 
    No_Changes : constant Transaction :=
-     (Operations => Operation_Vectors.Empty_Vector);
+     (Operations => Operation_Vectors.Empty_Vector,
+      Id         => Null_Unbounded_String);
 
    type Store is new Ada.Finalization.Limited_Controlled with record
       Root         : Unbounded_String;

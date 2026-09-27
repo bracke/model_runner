@@ -41,6 +41,19 @@ package Model_Runner.Framework.Identifiers is
    --  @return The counters record at revision 1.
    function Empty_Counters return Records.Item;
 
+   --  Hand out the next number of a namespace and key, and count it.
+   --
+   --  @param Counters The counters record, advanced by one for this
+   --    namespace and key.
+   --  @param Namespace The kind of entity.
+   --  @param Key What it belongs to; empty for none.
+   --  @return The number, or zero when the namespace and key do not make
+   --    an identifier or the counter cannot be read.
+   function Allocate_Number
+     (Counters  : in out Records.Item;
+      Namespace : String;
+      Key       : String) return Natural;
+
    --  Hand out the next identifier of a namespace and key, and count it.
    --
    --  @param Counters The counters record, advanced by one for this

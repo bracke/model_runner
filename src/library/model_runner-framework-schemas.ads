@@ -35,6 +35,15 @@ package Model_Runner.Framework.Schemas is
    --  A project's resolved configuration, current or of one revision.
    Configuration_Schema : constant String := "project.configuration";
 
+   --  One event.
+   Event_Schema : constant String := "event.record";
+
+   --  A lease on a resource, held by one owner until it expires.
+   Lease_Schema : constant String := "runtime.lease";
+
+   --  The events one consumer has acted on.
+   Consumption_Schema : constant String := "runtime.consumed";
+
    --  The list of changes a transaction is making.
    Manifest_Schema : constant String := "journal.manifest";
 

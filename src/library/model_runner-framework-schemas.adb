@@ -124,7 +124,40 @@ package body Model_Runner.Framework.Schemas is
        Policy  => Reject_Unknown,
        Rules   => new Rule_List'
          [Rule ("operations", Number_Field, True),
-          Rule ("op.*", Text_Field, False)])];
+          Rule ("transaction", Text_Field, False),
+          Rule ("op.*", Text_Field, False)]),
+
+      --  An event. What kind it is is checked where it is made, against
+      --  the kinds this build knows; a later build's kind is kept and
+      --  read back as the word it is.
+      (Id      => new String'(Event_Schema),
+       Version => 1,
+       Policy  => Preserve_Unknown,
+       Rules   => new Rule_List'
+         [Rule ("event_kind", Text_Field, True),
+          Rule ("sequence", Number_Field, True),
+          Rule ("subject", Identifier_Field, True),
+          Rule ("transaction", Identifier_Field, True),
+          Rule ("occurred_at", Text_Field, True),
+          Rule ("detail", Text_Field, False)]),
+
+      (Id      => new String'(Lease_Schema),
+       Version => 1,
+       Policy  => Preserve_Unknown,
+       Rules   => new Rule_List'
+         [Rule ("resource", Text_Field, True),
+          Rule ("owner", Text_Field, True),
+          Rule ("acquired_at", Text_Field, True),
+          Rule ("expires_at", Text_Field, True)]),
+
+      --  The events one consumer has acted on, each a field of its own so
+      --  that a record grows by one field an event and is never parsed.
+      (Id      => new String'(Consumption_Schema),
+       Version => 1,
+       Policy  => Reject_Unknown,
+       Rules   => new Rule_List'
+         [Rule ("consumer", Text_Field, True),
+          Rule ("done.*", Text_Field, False)])];
 
    --  Whether a rule names a field.
    function Names (Item : Field_Rule; Field : String) return Boolean is

@@ -61,6 +61,15 @@ package body Model_Runner.Framework.Stores is
       return [1 .. Integer'Max (0, 6 - Plain'Length) => '0'] & Plain;
    end Six;
 
+   --  Nine digits, which is what a sequence is written with so that its
+   --  names sort as its numbers do.
+   function Nine (Value : Natural) return String is
+      Image : constant String := Natural'Image (Value);
+      Plain : constant String := Image (Image'First + 1 .. Image'Last);
+   begin
+      return [1 .. Integer'Max (0, 9 - Plain'Length) => '0'] & Plain;
+   end Nine;
+
    function Image (Value : Natural) return String is
       Text : constant String := Natural'Image (Value);
    begin
@@ -344,6 +353,26 @@ package body Model_Runner.Framework.Stores is
       end if;
    end Remove;
 
+   -------------
+   -- Pending --
+   -------------
+
+   procedure Pending
+     (Change : Transaction;
+      Where  : Area;
+      Name   : String;
+      Value  : out Records.Item;
+      Found  : out Boolean)
+   is
+      Held : constant Natural := Position (Change, Where, Name);
+   begin
+      Found := Held /= 0
+        and then Change.Operations (Held).Kind = Put_Operation;
+      Value :=
+        (if Found then Change.Operations (Held).Value
+         else Records.Create ("", 1, "", 0));
+   end Pending;
+
    ------------------
    -- Change_Count --
    ------------------
@@ -351,23 +380,23 @@ package body Model_Runner.Framework.Stores is
    function Change_Count (Change : Transaction) return Natural
    is (Natural (Change.Operations.Length));
 
-   -------------------------
-   -- Allocate_Identifier --
-   -------------------------
+   ---------------------
+   -- Allocate_Number --
+   ---------------------
 
-   procedure Allocate_Identifier
+   procedure Allocate_Number
      (Item      : Store;
       Change    : in out Transaction;
       Namespace : String;
       Key       : String;
-      Id        : out Ada.Strings.Unbounded.Unbounded_String;
+      Number    : out Natural;
       Status    : out Model_Runner.Errors.Error_Info)
    is
       Held     : constant Natural :=
         Position (Change, Project_Area, Counters_Name);
       Counters : Records.Item;
    begin
-      Id := Null_Unbounded_String;
+      Number := 0;
       Status := E.Success;
 
       if Held /= 0
@@ -384,22 +413,62 @@ package body Model_Runner.Framework.Stores is
          Counters := Identifiers.Empty_Counters;
       end if;
 
-      declare
-         Given : constant String :=
-           Identifiers.Allocate (Counters, Namespace, Key);
-      begin
-         if Given = "" then
-            Status := E.Make (E.Framework_Identifier_Invalid);
-            E.Add_Text
-              (Status, "value",
-               (if Key = "" then Namespace else Namespace & "-" & Key));
-            return;
-         end if;
-         Id := To_Unbounded_String (Given);
-      end;
+      Number := Identifiers.Allocate_Number (Counters, Namespace, Key);
+      if Number = 0 then
+         Status := E.Make (E.Framework_Identifier_Invalid);
+         E.Add_Text
+           (Status, "value",
+            (if Key = "" then Namespace else Namespace & "-" & Key));
+         return;
+      end if;
 
       Put (Change, Project_Area, Counters_Name, Counters);
+   end Allocate_Number;
+
+   -------------------------
+   -- Allocate_Identifier --
+   -------------------------
+
+   procedure Allocate_Identifier
+     (Item      : Store;
+      Change    : in out Transaction;
+      Namespace : String;
+      Key       : String;
+      Id        : out Ada.Strings.Unbounded.Unbounded_String;
+      Status    : out Model_Runner.Errors.Error_Info)
+   is
+      Number : Natural;
+   begin
+      Id := Null_Unbounded_String;
+      Allocate_Number (Item, Change, Namespace, Key, Number, Status);
+      if E.Is_Ok (Status) then
+         Id := To_Unbounded_String (Identifiers.Format (Namespace, Key, Number));
+      end if;
    end Allocate_Identifier;
+
+   --------------
+   -- Identify --
+   --------------
+
+   procedure Identify
+     (Item   : Store;
+      Change : in out Transaction;
+      Id     : out Ada.Strings.Unbounded.Unbounded_String;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Number : Natural;
+   begin
+      Status := E.Success;
+      if Change.Id = Null_Unbounded_String then
+         Allocate_Number (Item, Change, "TXN", "", Number, Status);
+         if E.Is_Error (Status) then
+            Id := Null_Unbounded_String;
+            return;
+         end if;
+         Change.Id := To_Unbounded_String ("TXN-" & Nine (Number));
+      end if;
+      Id := Change.Id;
+   end Identify;
 
    ---------------------------------------------------------------------------
    --  The index.
@@ -417,6 +486,14 @@ package body Model_Runner.Framework.Stores is
       Records.Set (Index, "entries", Image (Records.Field_Count (Index)));
       Write_Whole (Index_Path (Root (Item)), Records.Serialize (Index), Status);
    end Write_Index;
+
+   ---------------------
+   -- Journal_Pending --
+   ---------------------
+
+   function Journal_Pending (Item : Store) return Boolean
+   is (Item.Opened
+       and then not Files_In (Journal_Directory (Root (Item))).Is_Empty);
 
    -------------------
    -- Rebuild_Index --
@@ -635,6 +712,9 @@ package body Model_Runner.Framework.Stores is
 
       Records.Set
         (Manifest, "operations", Image (Natural (Change.Operations.Length)));
+      if Change.Id /= Null_Unbounded_String then
+         Records.Set (Manifest, "transaction", To_String (Change.Id));
+      end if;
       Write_Text
         (Join (Journal, Pending_File), Records.Serialize (Manifest), Status);
    end Stage;
@@ -819,6 +899,7 @@ package body Model_Runner.Framework.Stores is
       end if;
       if E.Is_Ok (Status) then
          Change.Operations.Clear;
+         Change.Id := Null_Unbounded_String;
       end if;
    end Commit;
 
@@ -981,7 +1062,9 @@ package body Model_Runner.Framework.Stores is
             Put (Change, Project_Area, Identity_Name, Identity);
          end;
 
-         if not Exists (Item, Project_Area, Counters_Name) then
+         if not Exists (Item, Project_Area, Counters_Name)
+           and then Position (Change, Project_Area, Counters_Name) = 0
+         then
             Put (Change, Project_Area, Counters_Name,
                  Identifiers.Empty_Counters);
          end if;

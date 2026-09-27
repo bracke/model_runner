@@ -1,5 +1,6 @@
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
+with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 
 with AUnit.Assertions;
@@ -7,13 +8,17 @@ with AUnit.Assertions;
 with Model_Runner.Errors;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Consistency;
+with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Facts;
 with Model_Runner.Framework.Identifiers;
+with Model_Runner.Framework.Leases;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Schemas;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Templates;
+with Model_Runner.Framework.Transitions;
 with Model_Runner.Text;
 
 package body Tests.Framework_Cases is
@@ -27,6 +32,7 @@ package body Tests.Framework_Cases is
    use type Model_Runner.Framework.Facts.Confidence_Level;
    use type Model_Runner.Framework.Stores.Recovery_Report;
    use type Model_Runner.Framework.Results.Result_Kind;
+   use type Model_Runner.Framework.Events.Event_Kind;
 
    package E renames Model_Runner.Errors;
    package F renames Model_Runner.Framework;
@@ -333,6 +339,15 @@ package body Tests.Framework_Cases is
       S.Allocate_Identifier (Store, Change, "req", "", Id, Status);
       Assert (Status.Code = E.Framework_Identifier_Invalid,
               "a namespace that is not one was given a number");
+      declare
+         Number : Natural;
+      begin
+         S.Allocate_Number (Store, Change, "REQ", "PARSER", Number, Status);
+         Assert (E.Is_Ok (Status) and then Number = 3,
+                 "a number is not counted with the identifiers of its key");
+         S.Allocate_Number (Store, Change, "REQ", "IO", Number, Status);
+         Assert (Number = 1, "a key's numbers are not its own");
+      end;
       S.Commit (Store, Change, Status);
       Assert (E.Is_Ok (Status), "the counters were not committed");
       Assert (S.Change_Count (Change) = 0, "a committed change was kept");
@@ -365,7 +380,7 @@ package body Tests.Framework_Cases is
               = 2, "a changed fact is not its second revision");
 
       S.Allocate_Identifier (Store, Change, "REQ", "PARSER", Id, Status);
-      Assert (To_String (Id) = "REQ-PARSER-003",
+      Assert (To_String (Id) = "REQ-PARSER-004",
               "the counters did not survive the restart");
 
       Model_Runner.Framework.Facts.Find (Store, "Bad Key", Found, Status);
@@ -1110,6 +1125,372 @@ package body Tests.Framework_Cases is
    end Initialized_Project_Outlives_Template;
 
    ---------------------------------------------------------------------------
+   --  Events, transitions, leases and consistency.
+   ---------------------------------------------------------------------------
+
+   package Ev renames Model_Runner.Framework.Events;
+   package Tr renames Model_Runner.Framework.Transitions;
+   package Ls renames Model_Runner.Framework.Leases;
+   package Cn renames Model_Runner.Framework.Consistency;
+
+   --  A task-like record, for the machine to move.
+   function Task_Record (Entity, State : String) return R.Item is
+      Value : R.Item := R.Create ("project.fact", 1, Entity, 1);
+   begin
+      R.Set (Value, "key", "k");
+      R.Set (Value, "value", "v");
+      R.Set (Value, "source", "explicit");
+      R.Set (Value, "confidence", "certain");
+      R.Set (Value, "state", State);
+      return Value;
+   end Task_Record;
+
+   --  An event is committed with its change, never without it, and names
+   --  the transaction it came from.
+   procedure Events_Commit_With_Their_Change
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Project : constant String := Fresh ("events");
+      Store   : S.Store;
+      Status  : E.Error_Info;
+      Change  : S.Transaction;
+      Id      : Unbounded_String;
+      Txn     : Unbounded_String;
+      Before  : Natural;
+      Listed  : Ev.Event_List;
+   begin
+      S.Create (Store, Project, "Events", Status);
+      Before := Ev.Length (Ev.Since (Store, 0));
+
+      S.Put (Change, F.Project_Area, "fact.a", Task_Record ("FACT-A", "x"));
+      Ev.Emit (Store, Change, Ev.Requirement_Accepted, "FACT-A", "why", Id,
+               Status);
+      Assert (E.Is_Ok (Status), "an event was not staged: " & Code_Of (Status));
+      S.Identify (Store, Change, Txn, Status);
+      Assert (Ev.Length (Ev.Since (Store, 0)) = Before,
+              "an event was there before its change was committed");
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "an event's change was not committed");
+
+      Listed := Ev.Since (Store, Before);
+      Assert (Ev.Length (Listed) = 1, "a committed event is not there");
+      declare
+         Got : constant Ev.Event := Ev.Element (Listed, 1);
+      begin
+         Assert (Got.Id = Id and then Got.Known
+                 and then Got.Kind = Ev.Requirement_Accepted
+                 and then To_String (Got.Subject) = "FACT-A"
+                 and then Got.Transaction = Txn
+                 and then To_String (Got.Detail) = "why"
+                 and then Got.Sequence = Before + 1,
+                 "an event did not come back as it was written");
+         Assert (Ev.Kind_Name (Got.Kind) = "Requirement_Accepted",
+                 "an event kind is not written as its name");
+      end;
+
+      --  A change that fails takes its event with it.
+      S.Put (Change, F.Project_Area, "fact.a", Task_Record ("FACT-A", "y"));
+      Ev.Emit (Store, Change, Ev.Requirement_Revised, "FACT-A", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Assert (Status.Code = E.Framework_Revision_Conflict,
+              "a change against an old revision was committed");
+      Assert (Ev.Length (Ev.Since (Store, 0)) = Before + 1,
+              "a refused change left its event behind");
+
+      Ev.Emit (Store, Change, Ev.Requirement_Revised, "not an id", "", Id,
+               Status);
+      Assert (Status.Code = E.Framework_Identifier_Invalid,
+              "an event about no entity was staged");
+      S.Close (Store);
+   end Events_Commit_With_Their_Change;
+
+   --  An event acted on is recognised when it comes again, whether in the
+   --  same transaction or after a restart.
+   procedure Consumption_Is_Idempotent
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Project : constant String := Fresh ("consumed");
+      Store   : S.Store;
+      Report  : S.Recovery_Report;
+      Status  : E.Error_Info;
+      Change  : S.Transaction;
+      Id      : Unbounded_String;
+      Fresh_1 : Boolean;
+      Fresh_2 : Boolean;
+   begin
+      S.Create (Store, Project, "Consumed", Status);
+      Ev.Emit (Store, Change, Ev.Build_Completed, "PROJECT", "", Id, Status);
+      S.Commit (Store, Change, Status);
+
+      Ev.Consume (Store, Change, "counter", To_String (Id), Fresh_1, Status);
+      Ev.Consume (Store, Change, "counter", To_String (Id), Fresh_2, Status);
+      Assert (Fresh_1 and then not Fresh_2,
+              "an event delivered twice in one change was acted on twice");
+      Commit_Fact (Store, "builds", "1");
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "a consumption was not committed");
+      S.Close (Store);
+
+      S.Open (Store, Project, Report, Status);
+      Ev.Consume (Store, Change, "counter", To_String (Id), Fresh_1, Status);
+      Assert (E.Is_Ok (Status) and then not Fresh_1,
+              "an event replayed after a restart was acted on again");
+      Ev.Consume (Store, Change, "another", To_String (Id), Fresh_1, Status);
+      Assert (Fresh_1, "one consumer's record answered for another");
+      Ev.Consume (Store, Change, "no/name", To_String (Id), Fresh_1, Status);
+      Assert (Status.Code = E.Framework_Name_Invalid,
+              "a consumer that is no name was recorded");
+      S.Close (Store);
+   end Consumption_Is_Idempotent;
+
+   --  The task lifecycle allows exactly its moves, the policy moves only
+   --  with their policy, and an illegal move changes nothing.
+   procedure Task_Transition_Matrix
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Machine : Tr.Machine := Tr.Task_Machine;
+      type Name is access constant String;
+      States  : constant array (1 .. 9) of Name :=
+        [new String'("candidate"), new String'("accepted"),
+         new String'("running"), new String'("blocked"),
+         new String'("verification"), new String'("complete"),
+         new String'("failed"), new String'("cancelled"),
+         new String'("rejected")];
+      Allowed : constant String :=
+        "candidate>accepted candidate>rejected accepted>running "
+        & "accepted>blocked accepted>cancelled blocked>accepted "
+        & "blocked>cancelled blocked>failed running>verification "
+        & "running>blocked running>failed running>cancelled "
+        & "verification>complete verification>running verification>blocked "
+        & "verification>failed verification>cancelled failed>accepted "
+        & "failed>cancelled ";
+      Policy  : constant String :=
+        "complete>accepted cancelled>accepted rejected>candidate ";
+      Status  : E.Error_Info;
+      All_Granted : constant Tr.Permissions := [others => True];
+   begin
+      --  Every pair of states, against the table in the specification.
+      for From of States loop
+         for To of States loop
+            declare
+               Pair : constant String := From.all & ">" & To.all & " ";
+               Ordinary_Move : constant Boolean :=
+                 Ada.Strings.Fixed.Index (Allowed, Pair) > 0
+                 and then (Ada.Strings.Fixed.Index (Allowed, Pair) = 1
+                           or else Allowed
+                             (Ada.Strings.Fixed.Index (Allowed, Pair) - 1)
+                             = ' ');
+               Policy_Move : constant Boolean :=
+                 Ada.Strings.Fixed.Index (Policy, Pair) > 0
+                 and then (Ada.Strings.Fixed.Index (Policy, Pair) = 1
+                           or else Policy
+                             (Ada.Strings.Fixed.Index (Policy, Pair) - 1)
+                             = ' ');
+            begin
+               Tr.Check (Machine, "TASK-1", From.all, To.all, Tr.Ordinary_Only,
+                         Status);
+               Assert (E.Is_Ok (Status) = Ordinary_Move,
+                       "the move " & Pair & "is wrongly "
+                       & (if Ordinary_Move then "refused" else "allowed"));
+               Tr.Check (Machine, "TASK-1", From.all, To.all, All_Granted,
+                         Status);
+               Assert (E.Is_Ok (Status) = (Ordinary_Move or else Policy_Move),
+                       "the move " & Pair & "is wrong under its policy");
+            end;
+         end loop;
+      end loop;
+
+      Assert (Tr.Is_State (Machine, "verification")
+              and then not Tr.Is_State (Machine, "ready"),
+              "ready is a stored state; it is derived");
+
+      --  A project can narrow the machine, and widen it.
+      Tr.Forbid (Machine, "running", "cancelled");
+      Tr.Check (Machine, "TASK-1", "running", "cancelled", Tr.Ordinary_Only,
+                Status);
+      Assert (Status.Code = E.Framework_Transition_Invalid,
+              "a forbidden move was allowed");
+      Tr.Allow (Machine, "blocked", "review");
+      Tr.Add_State (Machine, "archived");
+      Tr.Check (Machine, "TASK-1", "blocked", "review", Tr.Ordinary_Only,
+                Status);
+      Assert (E.Is_Ok (Status), "an added move was refused");
+      Tr.Check (Machine, "TASK-1", "archived", "nowhere", Tr.Ordinary_Only,
+                Status);
+      Assert (Status.Code = E.Framework_Transition_Invalid,
+              "a move to no state was allowed");
+   end Task_Transition_Matrix;
+
+   --  A move applied to a record writes its next revision and its event
+   --  together; an illegal one writes neither.
+   procedure Transitions_Are_Applied_Whole
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Project : constant String := Fresh ("transitions");
+      Store   : S.Store;
+      Status  : E.Error_Info;
+      Change  : S.Transaction;
+      Value   : R.Item;
+      Before  : Natural;
+   begin
+      S.Create (Store, Project, "Transitions", Status);
+      S.Put (Change, F.Tasks_Area, "task-1", Task_Record ("TASK-1", "candidate"));
+      S.Commit (Store, Change, Status);
+      Before := Ev.Length (Ev.Since (Store, 0));
+
+      Tr.Apply (Store, Change, Tr.Task_Machine, F.Tasks_Area, "task-1",
+                "running", Tr.Ordinary_Only, Ev.Task_Started, Status);
+      Assert (Status.Code = E.Framework_Transition_Invalid,
+              "a candidate was started");
+      Assert (S.Change_Count (Change) = 0, "a refused move staged something");
+
+      Tr.Apply (Store, Change, Tr.Task_Machine, F.Tasks_Area, "task-1",
+                "accepted", Tr.Ordinary_Only, Ev.Task_Accepted, Status);
+      Tr.Apply (Store, Change, Tr.Task_Machine, F.Tasks_Area, "task-1",
+                "running", Tr.Ordinary_Only, Ev.Task_Started, Status);
+      Assert (E.Is_Ok (Status), "two legal moves in one change were refused");
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "legal moves were not committed: "
+              & Code_Of (Status));
+
+      S.Read (Store, F.Tasks_Area, "task-1", Value, Status);
+      Assert (R.Get (Value, "state") = "running" and then R.Revision (Value) = 2,
+              "the moves did not make one next revision");
+      Assert (Ev.Length (Ev.Since (Store, Before)) = 2
+              and then To_String (Ev.Element (Ev.Since (Store, Before), 1).Detail)
+                       = "candidate -> accepted",
+              "the moves did not each leave their event");
+      S.Close (Store);
+   end Transitions_Are_Applied_Whole;
+
+   --  A lease is held by one owner until it runs out, and then is stale.
+   procedure Leases_Run_Out (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Project : constant String := Fresh ("leases");
+      Store   : S.Store;
+      Status  : E.Error_Info;
+      Change  : S.Transaction;
+      Gone    : R.Item := R.Create
+        (Model_Runner.Framework.Schemas.Lease_Schema, 1, "LEASE", 1);
+   begin
+      S.Create (Store, Project, "Leases", Status);
+      Ls.Acquire (Store, Change, "workspace-1", "agent-a", 600, Status);
+      S.Commit (Store, Change, Status);
+      Assert (Ls.Holder (Store, "workspace-1") = "agent-a",
+              "a lease taken is not held");
+
+      Ls.Acquire (Store, Change, "workspace-1", "agent-b", 600, Status);
+      Assert (Status.Code = E.Framework_Lease_Held,
+              "a second owner took a held lease");
+      Ls.Release (Store, Change, "workspace-1", "agent-b", Status);
+      Assert (Status.Code = E.Framework_Lease_Held,
+              "a lease was let go by somebody who does not hold it");
+      Ls.Acquire (Store, Change, "workspace-1", "agent-a", 600, Status);
+      Assert (E.Is_Ok (Status), "an owner could not renew its lease");
+      S.Commit (Store, Change, Status);
+      Ls.Release (Store, Change, "workspace-1", "agent-a", Status);
+      S.Commit (Store, Change, Status);
+      Assert (Ls.Holder (Store, "workspace-1") = "",
+              "a released lease is still held");
+      Ls.Acquire (Store, Change, "no/name", "agent-a", 1, Status);
+      Assert (Status.Code = E.Framework_Name_Invalid,
+              "a lease on no name was taken");
+
+      --  One whose owner stopped renewing it.
+      R.Set (Gone, "resource", "workspace-2");
+      R.Set (Gone, "owner", "crashed");
+      R.Set (Gone, "acquired_at", "2020-01-01T00:00:00Z");
+      R.Set (Gone, "expires_at", "2020-01-01T00:10:00Z");
+      S.Put (Change, F.Runtime_Area, "lease.workspace-2", Gone);
+      S.Commit (Store, Change, Status);
+      Assert (Ls.Holder (Store, "workspace-2") = ""
+              and then Natural (Ls.Stale (Store).Length) = 1,
+              "a lease that ran out is still held, or not seen as stale");
+      Ls.Acquire (Store, Change, "workspace-2", "agent-b", 600, Status);
+      Assert (E.Is_Ok (Status), "a stale lease could not be taken over");
+      S.Close (Store);
+   end Leases_Run_Out;
+
+   --  The consistency check finds what does not hold together, and finds
+   --  nothing in state that does.
+   procedure Consistency_Finds_What_Is_Wrong
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Project : constant String := Fresh ("consistency");
+      Store   : S.Store;
+      Status  : E.Error_Info;
+      Change  : S.Transaction;
+      Gone    : R.Item := R.Create
+        (Model_Runner.Framework.Schemas.Lease_Schema, 1, "LEASE", 1);
+      Findings : Cn.Finding_List;
+
+      function Has (Kind : Cn.Finding_Kind) return Boolean is
+         use type Cn.Finding_Kind;
+      begin
+         for Index in 1 .. Cn.Length (Findings) loop
+            if Cn.Element (Findings, Index).Kind = Kind then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Has;
+   begin
+      S.Create (Store, Project, "Consistency", Status);
+      Commit_Fact (Store, "language", "Ada_2022");
+      Findings := Cn.Check (Store);
+      Assert (Cn.Length (Findings) = 0,
+              "state that holds together was found wanting: "
+              & (if Cn.Length (Findings) > 0
+                 then Cn.Kind_Word (Cn.Element (Findings, 1).Kind) & " "
+                      & To_String (Cn.Element (Findings, 1).Detail)
+                 else ""));
+
+      --  Two records claiming one entity.
+      S.Put (Change, F.Specs_Area, "copy", Task_Record ("FACT-LANGUAGE", "x"));
+      S.Commit (Store, Change, Status);
+
+      --  A lease that ran out.
+      R.Set (Gone, "resource", "w");
+      R.Set (Gone, "owner", "crashed");
+      R.Set (Gone, "acquired_at", "2020-01-01T00:00:00Z");
+      R.Set (Gone, "expires_at", "2020-01-01T00:10:00Z");
+      S.Put (Change, F.Runtime_Area, "lease.w", Gone);
+      S.Commit (Store, Change, Status);
+
+      --  A record that is no longer one, and a change left staged.
+      Put_File (S.Root (Store) & "/decisions/broken.rec", "broken");
+      S.Put (Change, F.Project_Area, "fact.later", Task_Record ("FACT-L", "x"));
+      S.Stage (Store, Change, Status);
+
+      Findings := Cn.Check (Store);
+      Assert (Has (Cn.Duplicate_Identifier), "a duplicate entity was not found");
+      Assert (Has (Cn.Stale_Lease), "a stale lease was not found");
+      Assert (Has (Cn.Schema_Mismatch), "a broken record was not found");
+      Assert (Has (Cn.Incomplete_Transaction),
+              "a change left in the journal was not found");
+      Assert (Cn.Kind_Word (Cn.Index_Mismatch) = "index_mismatch",
+              "a kind of finding is not written as its word");
+
+      --  An index that says something the records do not.
+      declare
+         Index : R.Item;
+      begin
+         S.Read (Store, F.Indexes_Area, "entities", Index, Status);
+         R.Set (Index, "entity.NOBODY", "project/nobody");
+         Put_File (S.Root (Store) & "/indexes/entities.rec", R.Serialize (Index));
+      end;
+      Findings := Cn.Check (Store);
+      Assert (Has (Cn.Index_Mismatch), "a wrong index was not found");
+      S.Close (Store);
+   end Consistency_Finds_What_Is_Wrong;
+
+   ---------------------------------------------------------------------------
    -- Register_Tests --
    ---------------------------------------------------------------------------
 
@@ -1171,6 +1552,25 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Initialized_Project_Outlives_Template'Access,
          "an initialized project reopens with its templates gone");
+      Register_Routine
+        (T, Events_Commit_With_Their_Change'Access,
+         "an event is committed with its change and never without it");
+      Register_Routine
+        (T, Consumption_Is_Idempotent'Access,
+         "an event delivered twice is acted on once");
+      Register_Routine
+        (T, Task_Transition_Matrix'Access,
+         "the task lifecycle allows exactly the moves of its matrix");
+      Register_Routine
+        (T, Transitions_Are_Applied_Whole'Access,
+         "a move writes its revision and event together, an illegal one"
+         & " neither");
+      Register_Routine
+        (T, Leases_Run_Out'Access,
+         "a lease is held by one owner until it runs out");
+      Register_Routine
+        (T, Consistency_Finds_What_Is_Wrong'Access,
+         "the consistency check finds what does not hold together");
    end Register_Tests;
 
 end Tests.Framework_Cases;

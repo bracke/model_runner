@@ -368,6 +368,10 @@ package Model_Runner.Errors is
       Framework_Input_Missing,
       Framework_Input_Invalid,
 
+      --  Changes of state, and who holds what while they are made.
+      Framework_Transition_Invalid,
+      Framework_Lease_Held,
+
       --  Internal invariants.
       Internal_Invariant_Violated,
       Internal_Unexpected_Exception,

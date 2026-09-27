@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Project state records what happened, and who holds what (Phase C).**
+  Events are staged in the transaction whose change they describe --
+  committed with it or not at all -- numbered in one sequence and naming
+  their subject and transaction; a consumer records what it acted on in
+  the same transaction as its consequences, so an event delivered twice is
+  acted on once. State machines are data: the task lifecycle's matrix
+  ships as the default, a project can forbid or add moves, reopening and
+  reconsidering need their policy, and a move writes the record's next
+  revision and its event together or neither. Leases hold a resource for
+  one owner until they run out and are then reported stale. A consistency
+  check finds schema mismatches, duplicate identifiers, unfinished
+  journals, a wrong index and stale leases without a model. `init` records
+  `Project_Initialized`. Two more `MR-FRAMEWORK` diagnostics.
+
 - **`model_runner init` starts a project from a template (Phase B).**
   Project kinds are template files -- six ship in `resources/templates`
   (`ada`, `alire`, `aunit`, `ada-cli`, `ada-library`, `generic`), and the
@@ -17664,7 +17678,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 206 diagnostic
+- Localization through `messages`, with a catalog entry for all 208 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

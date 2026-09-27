@@ -2,6 +2,7 @@ with Ada.Directories;
 
 with Hostkit.Fs;
 
+with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Facts;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Schemas;
@@ -520,6 +521,17 @@ package body Model_Runner.Framework.Configurations is
            (Value_Maps.Key (Position), Value_Maps.Element (Position),
             Facts.Build_Metadata, Facts.Certain);
       end loop;
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      declare
+         Event : Unbounded_String;
+      begin
+         Events.Emit
+           (Item, Change, Events.Project_Initialized, "PROJECT",
+            Records.Get (Planned.Configuration, "template_id"), Event, Status);
+      end;
       if E.Is_Error (Status) then
          return;
       end if;

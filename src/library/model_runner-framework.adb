@@ -73,12 +73,22 @@ package body Model_Runner.Framework is
    -- Timestamp --
    ---------------
 
-   function Timestamp return String is
-      Text : String := Ada.Calendar.Formatting.Image (Ada.Calendar.Clock);
+   function Timestamp return String
+   is (Timestamp_After (0));
+
+   ---------------------
+   -- Timestamp_After --
+   ---------------------
+
+   function Timestamp_After (Seconds : Natural) return String is
+      use type Ada.Calendar.Time;
+      Text : String :=
+        Ada.Calendar.Formatting.Image
+          (Ada.Calendar.Clock + Duration (Seconds));
    begin
       Text (Text'First + 10) := 'T';
       return Text & "Z";
-   end Timestamp;
+   end Timestamp_After;
 
    ----------
    -- Hash --

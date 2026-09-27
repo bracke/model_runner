@@ -659,6 +659,8 @@ en.error.framework.template_invalid = the template {path} cannot be used: {detai
 en.error.framework.template_conflict = the templates composed disagree about {name}: {detail}
 en.error.framework.input_missing = initialization needs a value for {name}, and none was given
 en.error.framework.input_invalid = {value} is not a value for {name}: {detail}
+en.error.framework.transition_invalid = {name} cannot go from {value} to {expected}: {detail}
+en.error.framework.lease_held = {name} is held by {detail} until {value}
 en.error.internal.invariant_violated = internal invariant violated
 en.error.internal.unexpected_exception = unexpected internal failure
 en.error.internal.not_implemented = not implemented in this build
@@ -1303,6 +1305,8 @@ da.error.framework.template_invalid = skabelonen {path} kan ikke bruges: {detail
 da.error.framework.template_conflict = de sammensatte skabeloner er uenige om {name}: {detail}
 da.error.framework.input_missing = initialiseringen skal have en værdi for {name}, og ingen blev givet
 da.error.framework.input_invalid = {value} er ikke en værdi for {name}: {detail}
+da.error.framework.transition_invalid = {name} kan ikke gå fra {value} til {expected}: {detail}
+da.error.framework.lease_held = {name} holdes af {detail} indtil {value}
 
 # Pseudo-locale. Generated from the English entries: every letter
 # outside a {placeholder} or a protocol token is accented and the
@@ -1941,6 +1945,8 @@ qps.error.framework.template_invalid = ⟦ŧhé ŧémpĺáŧé {path} çáññó
 qps.error.framework.template_conflict = ⟦ŧhé ŧémpĺáŧéß çómpóßéð ðíßágŕéé ábóúŧ {name}: {detail}⟧
 qps.error.framework.input_missing = ⟦íñíŧíáĺízáŧíóñ ñééðß á váĺúé fóŕ {name}, áñð ñóñé wáß gívéñ⟧
 qps.error.framework.input_invalid = ⟦{value} íß ñóŧ á váĺúé fóŕ {name}: {detail}⟧
+qps.error.framework.transition_invalid = ⟦{name} çáññóŧ gó fŕóm {value} ŧó {expected}: {detail}⟧
+qps.error.framework.lease_held = ⟦{name} íß héĺð bý {detail} úñŧíĺ {value}⟧
 qps.error.internal.invariant_violated = ⟦íñŧéŕñáĺ íñváŕíáñŧ víóĺáŧéð⟧
 qps.error.internal.unexpected_exception = ⟦úñéxpéçŧéð íñŧéŕñáĺ fáíĺúŕé⟧
 qps.error.internal.not_implemented = ⟦ñóŧ ímpĺéméñŧéð íñ ŧhíß búíĺð⟧

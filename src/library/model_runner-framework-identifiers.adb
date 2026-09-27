@@ -56,14 +56,14 @@ package body Model_Runner.Framework.Identifiers is
    function Empty_Counters return Records.Item
    is (Records.Create (Counters_Schema, 1, Counters_Entity, 1));
 
-   --------------
-   -- Allocate --
-   --------------
+   ---------------------
+   -- Allocate_Number --
+   ---------------------
 
-   function Allocate
+   function Allocate_Number
      (Counters  : in out Records.Item;
       Namespace : String;
-      Key       : String) return String
+      Key       : String) return Natural
    is
       Stem  : constant String :=
         (if Key = "" then Namespace else Namespace & "-" & Key);
@@ -72,12 +72,12 @@ package body Model_Runner.Framework.Identifiers is
       Next  : Natural := 0;
    begin
       if not Is_Valid (Stem) or else not Is_Valid (Namespace) then
-         return "";
+         return 0;
       end if;
 
       for Char of Held loop
          if Char not in '0' .. '9' or else Next > 99_999_999 then
-            return "";
+            return 0;
          end if;
          Next := Next * 10 + (Character'Pos (Char) - Character'Pos ('0'));
       end loop;
@@ -89,7 +89,21 @@ package body Model_Runner.Framework.Identifiers is
          Records.Set
            (Counters, Field, Following (Following'First + 1 .. Following'Last));
       end;
-      return Format (Namespace, Key, Next);
+      return Next;
+   end Allocate_Number;
+
+   --------------
+   -- Allocate --
+   --------------
+
+   function Allocate
+     (Counters  : in out Records.Item;
+      Namespace : String;
+      Key       : String) return String
+   is
+      Number : constant Natural := Allocate_Number (Counters, Namespace, Key);
+   begin
+      return (if Number = 0 then "" else Format (Namespace, Key, Number));
    end Allocate;
 
 end Model_Runner.Framework.Identifiers;
