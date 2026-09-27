@@ -790,6 +790,8 @@ package body Tests.Accounting_Cases is
       Put_File ("README.md", "a readme");
       Put_File ("CHANGELOG.md", "a changelog");
       Put_File ("SECURITY.md", "a security note");
+      Put_File ("resources/templates/generic.template", "template = generic");
+      Put_File ("resources/templates/notes.txt", "not a template");
 
       Packaging.Run (Root, Into, Written);
       Assert (Written, "a complete root did not produce an archive");
@@ -804,6 +806,9 @@ package body Tests.Accounting_Cases is
       Must_Hold (Prefix & "/README.md");
       Must_Hold (Prefix & "/CHANGELOG.md");
       Must_Hold (Prefix & "/SECURITY.md");
+      Must_Hold
+        (Prefix & "/share/" & Model_Runner.Program_Name
+         & "/templates/generic.template");
 
       --  And nothing else. Every check above asks whether something is
       --  there; none of them asks what else is, and a distribution is as
@@ -821,10 +826,12 @@ package body Tests.Accounting_Cases is
            & Prefix & "/LICENSE|"
            & Prefix & "/README.md|"
            & Prefix & "/CHANGELOG.md|"
-           & Prefix & "/SECURITY.md|";
+           & Prefix & "/SECURITY.md|"
+           & Prefix & "/share/" & Model_Runner.Program_Name
+           & "/templates/generic.template|";
       begin
          Assert (Held = Expected,
-                 "the archive carries something other than its six members:"
+                 "the archive carries something other than its members:"
                  & ASCII.LF & "  holds    " & Held
                  & ASCII.LF & "  expected " & Expected);
       end;

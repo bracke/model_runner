@@ -37,8 +37,9 @@ package Model_Runner.Framework.Records is
    Max_Bytes : constant := 64 * 1024 * 1024;
 
    --  Whether a string is a field name: letters, digits and the
-   --  characters _ . : -, starting with a letter. A colon marks an
-   --  extension namespace, as in vendor:field.
+   --  characters _ . : - /, starting with a letter. A colon marks an
+   --  extension namespace, as in vendor:field; a slash lets a field be
+   --  named after a path.
    --
    --  @param Name The candidate.
    --  @return True when Name can name a field.

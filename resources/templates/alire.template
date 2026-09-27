@@ -1,0 +1,13 @@
+# Building with Alire, for a template to include.
+template = alire
+name = Alire
+description = Builds with the Alire package manager.
+version = 1
+category = build
+tags = alire
+
+fact build_system = Alire
+adapter build = alire
+scalar build.command = alr build
+profile build = alr build
+discover alire.toml fact build_system = Alire

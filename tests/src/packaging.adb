@@ -171,6 +171,13 @@ package body Packaging is
          end;
       end loop;
 
+      if not Ada.Directories.Exists
+               (Hostkit.Fs.Join (Root, "resources/templates"))
+      then
+         IO.Put_Line (IO.Standard_Error, "package: missing resources/templates");
+         return;
+      end if;
+
       Tarlib.Files.Create_Write (Sink, Archive_Path, Result);
       if not Tarlib.Errors.Is_Success (Result) then
          IO.Put_Line
@@ -202,6 +209,43 @@ package body Packaging is
             Added := Added + 1;
          end;
       end loop;
+
+      --  The project templates, whichever are there: an installed program
+      --  offers /init every template the checkout ships, and a list kept
+      --  here would be one more place for a new template to be forgotten.
+      declare
+         Templates : constant String :=
+           Hostkit.Fs.Join (Root, "resources/templates");
+         Search    : Ada.Directories.Search_Type;
+         Found     : Ada.Directories.Directory_Entry_Type;
+         Ok        : Boolean := True;
+      begin
+         Ada.Directories.Start_Search
+           (Search, Templates, "*.template",
+            [Ada.Directories.Ordinary_File => True, others => False]);
+         while Ok and then Ada.Directories.More_Entries (Search) loop
+            Ada.Directories.Get_Next_Entry (Search, Found);
+            Add_File
+              (Archive, Ada.Directories.Full_Name (Found),
+               Prefix & "/share/" & Model_Runner.Program_Name & "/templates/"
+               & Ada.Directories.Simple_Name (Found),
+               False, Ok);
+            if Ok then
+               Added := Added + 1;
+            else
+               IO.Put_Line
+                 (IO.Standard_Error,
+                  "package: could not add "
+                  & Ada.Directories.Simple_Name (Found));
+            end if;
+         end loop;
+         Ada.Directories.End_Search (Search);
+
+         if not Ok then
+            Tarlib.Files.Close (Sink, Result);
+            return;
+         end if;
+      end;
 
       Tarlib.Writers.Finish (Archive, Result);
       if not Tarlib.Errors.Is_Success (Result) then

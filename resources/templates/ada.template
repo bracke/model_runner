@@ -1,0 +1,13 @@
+# The Ada language, for a template to include.
+template = ada
+name = Ada
+description = The Ada language, 2022 edition.
+version = 1
+category = language
+language = Ada
+
+fact language = Ada_2022
+set source.extensions = .ads
+set source.extensions = .adb
+adapter language = ada
+directory src

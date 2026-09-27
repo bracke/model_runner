@@ -290,6 +290,11 @@ ordinal is never reused, not because they might appear.
 | `MR-FRAMEWORK-0012` | `error.framework.revision_conflict` | recovery_user_correctable | 6 | raised |
 | `MR-FRAMEWORK-0013` | `error.framework.result_conflict` | recovery_user_correctable | 6 | raised |
 | `MR-FRAMEWORK-0014` | `error.framework.integrity_failed` | recovery_user_correctable | 6 | raised |
+| `MR-FRAMEWORK-0015` | `error.framework.template_not_found` | recovery_user_correctable | 2 | raised |
+| `MR-FRAMEWORK-0016` | `error.framework.template_invalid` | recovery_user_correctable | 6 | raised |
+| `MR-FRAMEWORK-0017` | `error.framework.template_conflict` | recovery_user_correctable | 6 | raised |
+| `MR-FRAMEWORK-0018` | `error.framework.input_missing` | recovery_user_correctable | 2 | raised |
+| `MR-FRAMEWORK-0019` | `error.framework.input_invalid` | recovery_user_correctable | 2 | raised |
 
 ## INTERNAL
 

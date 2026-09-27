@@ -1,0 +1,22 @@
+# Any repository, whatever it is written in. Records what the files at
+# its top say about it and asks nothing it can find out.
+template = generic
+name = Existing Repository
+description = A repository of any kind, taken as it is.
+version = 1
+category = existing
+
+input project_name
+  type = text
+  label = Project name
+  description = what the project is called
+  required = true
+  default = ${directory_name}
+
+discover .git fact vcs = git
+discover alire.toml fact build_system = Alire
+discover Makefile fact build_system = Make
+discover CMakeLists.txt fact build_system = CMake
+discover Cargo.toml fact build_system = Cargo
+discover package.json fact build_system = npm
+discover pyproject.toml fact build_system = Python

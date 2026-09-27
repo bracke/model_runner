@@ -1,0 +1,15 @@
+# Testing with AUnit in a tests crate beside the project, for a template
+# to include.
+template = aunit
+name = AUnit
+description = Tests with AUnit, in a tests crate of their own.
+version = 1
+category = test
+tags = aunit
+
+fact test_framework = AUnit
+adapter test = aunit
+directory tests
+list verification.full = build
+list verification.full = tests
+profile tests = cd tests && alr build && bin/tests

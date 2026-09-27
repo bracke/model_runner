@@ -98,6 +98,20 @@ package body Model_Runner.Framework.Schemas is
           Rule ("provenance", Text_Field, False),
           Rule ("references", Text_Field, False)]),
 
+      --  What a template resolved to. Its declarations are fields named
+      --  by their kind and key, which no schema can list ahead of time, so
+      --  only the provenance and the fingerprint are required.
+      (Id      => new String'(Configuration_Schema),
+       Version => 1,
+       Policy  => Preserve_Unknown,
+       Rules   => new Rule_List'
+         [Rule ("template_id", Text_Field, True),
+          Rule ("template_version", Text_Field, True),
+          Rule ("template_fingerprint", Text_Field, True),
+          Rule ("template_origin", Text_Field, True),
+          Rule ("template_order", Text_Field, True),
+          Rule ("configuration_fingerprint", Text_Field, True)]),
+
       (Id      => new String'(Index_Schema),
        Version => 1,
        Policy  => Reject_Unknown,

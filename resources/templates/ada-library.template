@@ -1,0 +1,20 @@
+# An Ada library for other programs to build on.
+template = ada-library
+name = Ada Library
+description = A library of Ada packages, built with Alire and tested with AUnit.
+version = 1
+category = library
+language = Ada
+tags = ada, library
+includes = ada, alire, aunit
+
+input project_name
+  type = identifier
+  label = Library name
+  description = the library's name, which is its root package's too
+  required = true
+  default = ${directory_name}
+
+scalar project.kind = library
+file alire.toml = name = "${project_name}"\ndescription = ""\nversion = "0.1.0-dev"\n
+file src/${project_name}.ads = package ${project_name} is\nend ${project_name};\n

@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`model_runner init` starts a project from a template (Phase B).**
+  Project kinds are template files -- six ship in `resources/templates`
+  (`ada`, `alire`, `aunit`, `ada-cli`, `ada-library`, `generic`), and the
+  user's own go in `templates` beside the settings file. A template declares
+  inputs, discovery rules, facts, directories, files and configuration
+  values; templates compose through `includes`, with explicit merge rules
+  per kind (scalars conflict unless overridden, sets unite, lists
+  concatenate) and cycles or conflicts refused. `init TEMPLATE --set
+  NAME=VALUE` resolves inputs from what was given, what the project's files
+  show and the defaults, asks a terminal for the rest and names the missing
+  ones anywhere else, and commits the Resolved Project Configuration --
+  revision, fingerprint, provenance -- with the facts in one transaction.
+  The project then runs on that record: removing the template changes
+  nothing. Five more `MR-FRAMEWORK` diagnostics.
+
 - **Durable project state for spec-driven development (Phase A).** The
   foundation `docs/spec_driven_development_framework_v3_revised.md` builds
   on, in `Model_Runner.Framework`: a `.model_runner` state root with a
@@ -17649,7 +17664,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 201 diagnostic
+- Localization through `messages`, with a catalog entry for all 206 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

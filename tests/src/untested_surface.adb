@@ -33,6 +33,12 @@ package body Untested_Surface is
    --  awake for the experts -- and the split fixture's position-at-a-time
    --  arm runs exactly that against the processor's logits; it is named
    --  there by what it compares, not by these.
+   --
+   --  The project state's file operations. Read_Text, Write_Text and
+   --  Write_Whole are a private package of the framework, which a test
+   --  cannot name; every record the state's tests read and every change
+   --  they commit goes through them, and a torn or wrong write fails the
+   --  round trip and recovery tests that read it back.
    function Is_Untested (Name : String) return Boolean is
    begin
       return Name in
@@ -83,6 +89,7 @@ package body Untested_Surface is
          | "Put_Statistics"
          | "Put_Table"
          | "Put_Words"
+         | "Read_Text"
          | "Record_Conversion"
          | "Recovery_Hint"
          | "Repack_Names"
@@ -103,13 +110,15 @@ package body Untested_Surface is
          | "Tensor_Is_Supported"
          | "To_Tensor_Type"
          | "To_Value_Type"
-         | "Wide_From_Bits";
+         | "Wide_From_Bits"
+         | "Write_Text"
+         | "Write_Whole";
    end Is_Untested;
 
    -----------
    -- Count --
    -----------
 
-   function Count return Natural is (66);
+   function Count return Natural is (69);
 
 end Untested_Surface;

@@ -6,12 +6,15 @@ with AUnit.Assertions;
 
 with Model_Runner.Errors;
 with Model_Runner.Framework;
+with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Facts;
 with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Schemas;
 with Model_Runner.Framework.Stores;
+with Model_Runner.Framework.Templates;
+with Model_Runner.Text;
 
 package body Tests.Framework_Cases is
 
@@ -61,8 +64,18 @@ package body Tests.Framework_Cases is
       Ada.Streams.Stream_IO.Close (File);
    end Put_File;
 
-   function Code_Of (Status : E.Error_Info) return String
-   is (E.Error_Code'Image (Status.Code));
+   --  A condition's code and the text of its parameters, for a message
+   --  that says what went wrong and not only that something did.
+   function Code_Of (Status : E.Error_Info) return String is
+      Result : Unbounded_String :=
+        To_Unbounded_String (E.Error_Code'Image (Status.Code));
+   begin
+      for Index in 1 .. Status.Parameter_Total loop
+         Append (Result, " " & Model_Runner.Text.To_String
+                                 (Status.Parameters (Index).Text_Value));
+      end loop;
+      return To_String (Result);
+   end Code_Of;
 
    --  A fact, staged and committed.
    procedure Commit_Fact
@@ -703,6 +716,400 @@ package body Tests.Framework_Cases is
    end Areas_Are_Classified;
 
    ---------------------------------------------------------------------------
+   --  Templates and configuration.
+   ---------------------------------------------------------------------------
+
+   package Tp renames Model_Runner.Framework.Templates;
+   package Cf renames Model_Runner.Framework.Configurations;
+
+   LF : constant Character := ASCII.LF;
+
+   --  Templates for a small language family, composed the way an installed
+   --  set would be.
+   Base_Text : constant String :=
+     "# a language" & LF
+     & "template = lang" & LF
+     & "name = A Language" & LF
+     & "version = 3" & LF
+     & "language = Lang" & LF
+     & "fact language = Lang_2022" & LF
+     & "set tags = lang" & LF
+     & "list verify.steps = compile" & LF
+     & "scalar build.command = make" & LF
+     & "directory src" & LF;
+
+   Tool_Text : constant String :=
+     "template = tool" & LF
+     & "name = A Build Tool" & LF
+     & "version = 1" & LF
+     & "discover tool.toml fact build_system = Tool" & LF
+     & "discover tool.toml input project_name = from_tool" & LF
+     & "set tags = tool" & LF
+     & "list verify.steps = compile" & LF
+     & "list verify.steps = test" & LF
+     & "override scalar build.command = tool build" & LF
+     & "adapter build = tool" & LF;
+
+   App_Text : constant String :=
+     "template = app" & LF
+     & "name = An Application" & LF
+     & "description = A program in the language, built with the tool." & LF
+     & "version = 2" & LF
+     & "category = application" & LF
+     & "includes = lang, tool" & LF
+     & "" & LF
+     & "input project_name" & LF
+     & "  type = identifier" & LF
+     & "  label = Project name" & LF
+     & "  required = true" & LF
+     & "input style" & LF
+     & "  type = choice" & LF
+     & "  choices = terse, verbose" & LF
+     & "  default = terse" & LF
+     & "input token" & LF
+     & "  type = text" & LF
+     & "  secret = true" & LF
+     & "" & LF
+     & "set tags = app" & LF
+     & "file src/${project_name}.txt = hello\n" & LF
+     & "file src/main.txt = the ${project_name} program, ${style}\n" & LF
+     & "profile quick = ${project_name} check" & LF;
+
+   function Parsed (Text : String) return Tp.Template is
+      Value  : Tp.Template;
+      Status : E.Error_Info;
+   begin
+      Tp.Parse (Text, "memory", Value, Status);
+      Assert (E.Is_Ok (Status), "a template was refused: " & Code_Of (Status));
+      return Value;
+   end Parsed;
+
+   function Family return Tp.Registry is
+      Result : Tp.Registry;
+   begin
+      Tp.Add (Result, Parsed (App_Text));
+      Tp.Add (Result, Parsed (Base_Text));
+      Tp.Add (Result, Parsed (Tool_Text));
+      return Result;
+   end Family;
+
+   --  A template declares; composing puts its includes first and merges by
+   --  what each declaration is.
+   procedure Templates_Compose (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Registry : constant Tp.Registry := Family;
+      Composed : Tp.Composition;
+      Status   : E.Error_Info;
+
+      function Value_Of (Kind : Tp.Setting_Kind; Key : String) return String
+      is
+         Result : Unbounded_String;
+      begin
+         for Index in 1 .. Tp.Setting_Count (Composed) loop
+            declare
+               Held : constant Tp.Setting := Tp.Setting_At (Composed, Index);
+               use type Tp.Setting_Kind;
+            begin
+               if Held.Kind = Kind and then To_String (Held.Key) = Key then
+                  if Result /= Null_Unbounded_String then
+                     Append (Result, ",");
+                  end if;
+                  Append (Result, Held.Value);
+               end if;
+            end;
+         end loop;
+         return To_String (Result);
+      end Value_Of;
+   begin
+      Assert (Tp.Count (Registry) = 3
+              and then Tp.Id (Tp.Template_At (Registry, 1)) = "app",
+              "the registry is not sorted by identifier");
+      Assert (E.Is_Ok (Tp.Problem (Registry, 1)), "a whole template is unavailable");
+      Assert (Tp.Display_Name (Tp.Template_At (Registry, 1)) = "An Application"
+              and then Tp.Details (Tp.Template_At (Registry, 1)) = "application"
+              and then Tp.Version (Tp.Template_At (Registry, 1)) = "2"
+              and then Tp.Description (Tp.Template_At (Registry, 1))'Length > 0,
+              "a template does not say what it is");
+
+      Tp.Compose (Registry, "app", Composed, Status);
+      Assert (E.Is_Ok (Status), "a family did not compose: " & Code_Of (Status));
+      Assert (Tp.Order (Composed).First_Element = "lang"
+              and then Tp.Order (Composed).Last_Element = "app"
+              and then Natural (Tp.Order (Composed).Length) = 3,
+              "includes were not composed first, in order");
+      Assert (Value_Of (Tp.Set_Setting, "tags") = "app,lang,tool",
+              "a set is not the union of its parts");
+      Assert (Value_Of (Tp.List_Setting, "verify.steps") = "compile,test",
+              "a list did not keep its first value where it was first");
+      Assert (Value_Of (Tp.Scalar_Setting, "build.command") = "tool build",
+              "an override did not win");
+      Assert (Tp.Input_Count (Composed) = 3 and then Tp.Rule_Count (Composed) = 2,
+              "inputs or discoveries were lost in composing");
+      Assert (Tp.Kind_Word (Tp.Task_Kind_Setting) = "task_kind",
+              "a kind is not written as its word");
+      Assert (Tp.Id (Tp.Root (Composed)) = "app"
+              and then Tp.Template_Fingerprint (Tp.Root (Composed))'Length = 16,
+              "a composition does not know its template");
+   end Templates_Compose;
+
+   --  What templates cannot agree on, and what they cannot be, is refused.
+   procedure Template_Conflicts_Are_Refused
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Registry : Tp.Registry := Family;
+      Composed : Tp.Composition;
+      Status   : E.Error_Info;
+      Value    : Tp.Template;
+   begin
+      Tp.Add (Registry, Parsed ("template = clash" & LF & "name = C" & LF
+                                & "version = 1" & LF & "includes = lang" & LF
+                                & "scalar build.command = other" & LF));
+      Tp.Compose (Registry, "clash", Composed, Status);
+      Assert (Status.Code = E.Framework_Template_Conflict,
+              "two values for one scalar composed: " & Code_Of (Status));
+
+      Tp.Add (Registry, Parsed ("template = loop-a" & LF & "name = A" & LF
+                                & "version = 1" & LF & "includes = loop-b"
+                                & LF));
+      Tp.Add (Registry, Parsed ("template = loop-b" & LF & "name = B" & LF
+                                & "version = 1" & LF & "includes = loop-a"
+                                & LF));
+      Tp.Compose (Registry, "loop-a", Composed, Status);
+      Assert (Status.Code = E.Framework_Template_Invalid,
+              "a template including itself composed");
+
+      Tp.Add (Registry, Parsed ("template = lonely" & LF & "name = L" & LF
+                                & "version = 1" & LF & "includes = absent"
+                                & LF));
+      Tp.Compose (Registry, "lonely", Composed, Status);
+      Assert (Status.Code = E.Framework_Template_Not_Found,
+              "a template including one that is not there composed");
+      Tp.Compose (Registry, "nobody", Composed, Status);
+      Assert (Status.Code = E.Framework_Template_Not_Found,
+              "a template that is not there composed");
+
+      Tp.Parse ("template = x" & LF & "name = X" & LF & "version = 1" & LF
+                & "colour blue = yes" & LF, "memory", Value, Status);
+      Assert (Status.Code = E.Framework_Template_Invalid,
+              "a line nobody understands was read");
+      Tp.Parse ("name = X" & LF & "version = 1" & LF, "memory", Value, Status);
+      Assert (Status.Code = E.Framework_Template_Invalid,
+              "a template that does not say which it is was read");
+      Tp.Parse ("template = x" & LF & "name = X" & LF & "version = 1" & LF
+                & "file ../outside = no" & LF, "memory", Value, Status);
+      Assert (Status.Code = E.Framework_Template_Invalid,
+              "a file outside the project was declared");
+   end Template_Conflicts_Are_Refused;
+
+   --  Inputs are given, found or defaulted, checked, and asked for by name
+   --  when none of those; a secret stays out of the configuration.
+   procedure Inputs_Are_Resolved (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Project  : constant String := Fresh ("inputs");
+      Registry : constant Tp.Registry := Family;
+      Composed : Tp.Composition;
+      Status   : E.Error_Info;
+      Given    : Cf.Value_Maps.Map;
+      Planned  : Cf.Plan;
+   begin
+      Tp.Compose (Registry, "app", Composed, Status);
+
+      Cf.Prepare (Composed, Project, Given, Planned, Status);
+      Assert (Status.Code = E.Framework_Input_Missing
+              and then Natural (Planned.Missing.Length) = 1
+              and then Planned.Missing.First_Element = "project_name",
+              "a required input with no value was not asked for");
+
+      declare
+         Checked : E.Error_Info;
+         Style   : constant Tp.Input_Declaration := Tp.Input_At (Composed, 2);
+      begin
+         Cf.Check_Input (Style, "verbose", Checked);
+         Assert (E.Is_Ok (Checked), "one of an input's choices was refused");
+         Cf.Check_Input (Style, "shout", Checked);
+         Assert (Checked.Code = E.Framework_Input_Invalid,
+                 "a value none of an input's choices was taken");
+      end;
+
+      Given.Include ("project_name", "not an identifier");
+      Cf.Prepare (Composed, Project, Given, Planned, Status);
+      Assert (Status.Code = E.Framework_Input_Invalid,
+              "a value of the wrong kind was taken");
+
+      Given.Include ("project_name", "demo");
+      Given.Include ("style", "loud");
+      Cf.Prepare (Composed, Project, Given, Planned, Status);
+      Assert (Status.Code = E.Framework_Input_Invalid,
+              "a choice that is none of them was taken");
+
+      Given.Delete ("style");
+      Given.Include ("token", "s3cret");
+      Given.Include ("colour", "blue");
+      Cf.Prepare (Composed, Project, Given, Planned, Status);
+      Assert (Status.Code = E.Framework_Input_Invalid,
+              "an input no template asks for was taken");
+      Given.Delete ("colour");
+
+      Cf.Prepare (Composed, Project, Given, Planned, Status);
+      Assert (E.Is_Ok (Status), "good inputs were refused: " & Code_Of (Status));
+      Assert (Planned.Inputs ("style") = "terse", "a default was not taken");
+      Assert (To_String (Planned.Project_Name) = "demo",
+              "the project is not called what it was named");
+      Assert (not R.Has (Planned.Configuration, "input.token")
+              and then R.Get (Planned.Configuration, "input.project_name")
+                       = "demo",
+              "a secret was written into the configuration");
+      Assert (Planned.Files.Contains ("src/main.txt")
+              and then Planned.Files ("src/main.txt")
+                       = "the demo program, terse" & LF,
+              "a file was not written with its inputs");
+      Assert (R.Get (Planned.Configuration, "profile.quick") = "demo check",
+              "a declaration was not written with its inputs");
+
+      --  Discovery answers what it can, and a caller's value outranks it.
+      Put_File (Project & "/tool.toml", "");
+      Given.Clear;
+      Cf.Prepare (Composed, Project, Given, Planned, Status);
+      Assert (E.Is_Ok (Status) and then Planned.Inputs ("project_name")
+              = "from_tool", "a discovered input was asked for again");
+      Assert (Planned.Discovered_Facts ("build_system") = "Tool"
+              and then R.Get (Planned.Configuration, "fact.build_system")
+                       = "Tool", "a discovered fact was not recorded");
+      Given.Include ("project_name", "given");
+      Cf.Prepare (Composed, Project, Given, Planned, Status);
+      Assert (Planned.Inputs ("project_name") = "given",
+              "discovery outranked what the caller gave");
+   end Inputs_Are_Resolved;
+
+   --  The same template and inputs make the same configuration, whatever
+   --  order its declarations came in and wherever the template was read.
+   procedure Configuration_Fingerprint_Is_Stable
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Project  : constant String := Fresh ("stable");
+      First    : Tp.Registry;
+      Second   : Tp.Registry;
+      One, Two : Tp.Composition;
+      Status   : E.Error_Info;
+      Given    : Cf.Value_Maps.Map;
+      A, B     : Cf.Plan;
+      Moved    : Tp.Template;
+   begin
+      Tp.Add (First, Parsed ("template = t" & LF & "name = T" & LF
+                             & "version = 1" & LF & "scalar a = 1" & LF
+                             & "set s = x" & LF & "set s = y" & LF));
+      Tp.Parse ("template = t" & LF & "name = T" & LF & "version = 1" & LF
+                & "set s = y" & LF & "set s = x" & LF & "scalar a = 1" & LF,
+                "elsewhere/t.template", Moved, Status);
+      Tp.Add (Second, Moved);
+
+      Tp.Compose (First, "t", One, Status);
+      Tp.Compose (Second, "t", Two, Status);
+      Cf.Prepare (One, Project, Given, A, Status);
+      Cf.Prepare (Two, Project, Given, B, Status);
+      Assert (R.Get (A.Configuration, "configuration_fingerprint")
+              = R.Get (B.Configuration, "configuration_fingerprint")
+              and then R.Get (A.Configuration, "set.s") = "x" & LF & "y",
+              "one configuration in two orders has two fingerprints");
+      Assert (Cf.Configuration_Fingerprint (A.Configuration)
+              = R.Get (A.Configuration, "configuration_fingerprint"),
+              "a configuration's fingerprint is not of itself");
+
+      Given.Include ("nothing", "x");
+      Cf.Prepare (One, Project, Given, A, Status);
+      Assert (Status.Code = E.Framework_Input_Invalid,
+              "an input for a template with none was taken");
+   end Configuration_Fingerprint_Is_Stable;
+
+   --  A project initialized from templates opens and reads its
+   --  configuration with the templates gone.
+   procedure Initialized_Project_Outlives_Template
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Project   : constant String := Fresh ("initialized");
+      Installed : constant String := Fresh ("installed-templates");
+      Registry  : Tp.Registry;
+      Composed  : Tp.Composition;
+      Status    : E.Error_Info;
+      Given     : Cf.Value_Maps.Map;
+      Planned   : Cf.Plan;
+      Done      : Cf.Outcome;
+      Store     : S.Store;
+      Report    : S.Recovery_Report;
+      Config    : R.Item;
+      Found     : Model_Runner.Framework.Facts.Fact;
+      Places    : Model_Runner.Framework.Name_Lists.Vector;
+   begin
+      Put_File (Installed & "/app.template", App_Text);
+      Put_File (Installed & "/lang.template", Base_Text);
+      Put_File (Installed & "/tool.template", Tool_Text);
+      Put_File (Installed & "/broken.template", "not a template" & LF);
+      Places.Append (Installed);
+      Tp.Discover (Places, Registry);
+      Assert (Tp.Count (Registry) = 4, "installed templates were not found");
+      Assert (Tp.Problem (Registry, 2).Code = E.Framework_Template_Invalid
+              and then Tp.Id (Tp.Template_At (Registry, 2)) = "broken",
+              "a broken template was not kept as unavailable");
+      Assert (Tp.Origin (Tp.Template_At (Registry, 1))
+              = Installed & "/app.template",
+              "a template does not say where it was read");
+
+      Put_File (Project & "/keep.txt", "mine");
+      Tp.Compose (Registry, "app", Composed, Status);
+      Given.Include ("project_name", "demo");
+      Cf.Prepare (Composed, Project, Given, Planned, Status);
+      Cf.Initialize (Store, Project, Planned, Done, Status);
+      Assert (E.Is_Ok (Status), "a project was not initialized: "
+              & Code_Of (Status));
+      Assert (Natural (Done.Made_Directories.Length) = 1
+              and then Natural (Done.Written_Files.Length) = 2
+              and then Dirs.Exists (Project & "/src/demo.txt"),
+              "the template's directories and files were not made");
+      S.Close (Store);
+
+      Cf.Initialize (Store, Project, Planned, Done, Status);
+      Assert (Status.Code = E.Framework_Already_Initialized,
+              "a project was initialized twice");
+
+      Dirs.Delete_Tree (Installed);
+
+      S.Open (Store, Project, Report, Status);
+      Assert (E.Is_Ok (Status), "an initialized project did not reopen");
+      Cf.Read (Store, Config, Status);
+      Assert (E.Is_Ok (Status) and then R.Revision (Config) = 1
+              and then R.Get (Config, "template_id") = "app"
+              and then R.Get (Config, "template_order") = "lang, tool, app",
+              "the configuration did not outlive its template");
+      Assert (S.Exists (Store, F.Config_Area, "revision-000001"),
+              "the configuration's first revision was not kept");
+      Assert (S.Project_Name (Store) = "demo",
+              "the project is not called by its input");
+      Model_Runner.Framework.Facts.Find (Store, "language", Found, Status);
+      Assert (E.Is_Ok (Status) and then To_String (Found.Value) = "Lang_2022"
+              and then Found.Source = Model_Runner.Framework.Facts.Template,
+              "a template's fact was not recorded as the template's");
+
+      --  A configuration changed under its fingerprint is found out.
+      R.Set (Config, "scalar.build.command", "something else");
+      R.Set_Revision (Config, 2);
+      declare
+         Change : S.Transaction;
+      begin
+         S.Put (Change, F.Config_Area, "resolved", Config);
+         S.Commit (Store, Change, Status);
+      end;
+      Cf.Read (Store, Config, Status);
+      Assert (Status.Code = E.Framework_Integrity_Failed,
+              "a configuration that no longer matches its fingerprint was read");
+      S.Close (Store);
+   end Initialized_Project_Outlives_Template;
+
+   ---------------------------------------------------------------------------
    -- Register_Tests --
    ---------------------------------------------------------------------------
 
@@ -749,6 +1156,21 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Areas_Are_Classified'Access,
          "each area says what kind of state it holds");
+      Register_Routine
+        (T, Templates_Compose'Access,
+         "templates compose includes first and merge by kind");
+      Register_Routine
+        (T, Template_Conflicts_Are_Refused'Access,
+         "templates that conflict, cycle or are malformed are refused");
+      Register_Routine
+        (T, Inputs_Are_Resolved'Access,
+         "inputs are given, discovered or defaulted, and checked");
+      Register_Routine
+        (T, Configuration_Fingerprint_Is_Stable'Access,
+         "one configuration has one fingerprint whatever its order or origin");
+      Register_Routine
+        (T, Initialized_Project_Outlives_Template'Access,
+         "an initialized project reopens with its templates gone");
    end Register_Tests;
 
 end Tests.Framework_Cases;

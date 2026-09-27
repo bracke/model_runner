@@ -1,0 +1,20 @@
+# An Ada program run from the command line.
+template = ada-cli
+name = Ada CLI Application
+description = A command-line program in Ada, built with Alire and tested with AUnit.
+version = 1
+category = application
+language = Ada
+tags = ada, cli
+includes = ada, alire, aunit
+
+input project_name
+  type = identifier
+  label = Project name
+  description = the program's name, which is its main procedure's too
+  required = true
+  default = ${directory_name}
+
+scalar project.kind = executable
+file alire.toml = name = "${project_name}"\ndescription = ""\nversion = "0.1.0-dev"\n\nexecutables = ["${project_name}"]\n
+file src/${project_name}.adb = procedure ${project_name} is\nbegin\n   null;\nend ${project_name};\n

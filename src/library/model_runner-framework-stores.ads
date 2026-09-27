@@ -51,6 +51,9 @@ package Model_Runner.Framework.Stores is
    --  A change to the state, staged and not yet committed.
    type Transaction is private;
 
+   --  A transaction with nothing in it.
+   No_Changes : constant Transaction;
+
    --  Whether a string can name a record in an area: letters, digits and
    --  the characters _ . -, starting with a letter or digit.
    --
@@ -74,7 +77,9 @@ package Model_Runner.Framework.Stores is
    --
    --  The state root's own record is written last, so a directory whose
    --  creation was interrupted is one that has not been made, and making
-   --  it again finishes the work.
+   --  it again finishes the work. What else the state starts with is
+   --  committed in the same transaction as the project's identity, so it
+   --  is there exactly when the project is.
    --
    --  @param Item The store, open when Status is a success.
    --  @param Project_Directory The project.
@@ -82,11 +87,15 @@ package Model_Runner.Framework.Stores is
    --  @param Status Framework_Already_Initialized when the project has
    --    state, Framework_Locked when another session holds it, and a write
    --    or schema failure otherwise.
+   --  @param Initial What else the state starts with. A creation that is
+   --    finishing an interrupted one keeps what that one committed and
+   --    passes this over.
    procedure Create
      (Item              : in out Store;
       Project_Directory : String;
       Project_Name      : String;
-      Status            : out Model_Runner.Errors.Error_Info);
+      Status            : out Model_Runner.Errors.Error_Info;
+      Initial           : Transaction := No_Changes);
 
    --  Open a project's state directory, finishing what was interrupted.
    --
@@ -311,6 +320,9 @@ private
    type Transaction is record
       Operations : Operation_Vectors.Vector;
    end record;
+
+   No_Changes : constant Transaction :=
+     (Operations => Operation_Vectors.Empty_Vector);
 
    type Store is new Ada.Finalization.Limited_Controlled with record
       Root         : Unbounded_String;

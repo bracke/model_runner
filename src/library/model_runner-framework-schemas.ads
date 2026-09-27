@@ -32,6 +32,9 @@ package Model_Runner.Framework.Schemas is
    --  The derived index of every entity in the state.
    Index_Schema : constant String := "index.entities";
 
+   --  A project's resolved configuration, current or of one revision.
+   Configuration_Schema : constant String := "project.configuration";
+
    --  The list of changes a transaction is making.
    Manifest_Schema : constant String := "journal.manifest";
 

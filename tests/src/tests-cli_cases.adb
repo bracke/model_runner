@@ -1523,6 +1523,64 @@ package body Tests.CLI_Cases is
 
    --  A mixture is reported as one, and a dense model is not.
    --
+   --  init starts a project from an installed template: the shipped
+   --  templates are found, the inputs given are taken, and the project is
+   --  made; a second init, an unknown template and an input no template
+   --  asks for are each refused by name.
+   procedure Init_Starts_A_Project
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Project : constant String := "obj/init-project";
+
+      function Init (Template, Input : String) return Natural is
+         Source : Fixed_Arguments;
+         Status : Natural;
+      begin
+         Add (Source, "init");
+         Add (Source, Template);
+         Add (Source, "--directory");
+         Add (Source, Project);
+         if Input /= "" then
+            Add (Source, "--set");
+            Add (Source, Input);
+         end if;
+         Ran (Source, Status);
+         return Status;
+      end Init;
+   begin
+      if Ada.Directories.Exists (Project) then
+         Ada.Directories.Delete_Tree (Project);
+      end if;
+
+      Assert (Init ("ada-cli", "project_name=demo") = 0,
+              "a project was not initialized from a shipped template");
+      Assert (Ada.Strings.Fixed.Index (Last_Output, "src/demo.adb") > 0
+              and then Ada.Strings.Fixed.Index (Last_Output, "fact language")
+                       > 0,
+              "the plan did not say what the project would be: "
+              & Last_Output);
+      Assert (Ada.Directories.Exists (Project & "/src/demo.adb")
+              and then Ada.Directories.Exists
+                         (Project & "/.model_runner/config/resolved.rec"),
+              "the project's files and state were not made");
+
+      Assert (Init ("ada-cli", "project_name=demo") = 2,
+              "a project was initialized twice");
+      Ada.Directories.Delete_Tree (Project);
+
+      Assert (Init ("no-such-template", "") = 2,
+              "a template nobody installed was used");
+      Assert (Init ("ada-cli", "colour=blue") = 2,
+              "an input no template asks for was taken");
+      Assert (Init ("ada-cli", "project_name") = 2,
+              "an input with no value was taken");
+      Assert (Init ("ada-library", "project_name=not an identifier") = 2,
+              "an input of the wrong kind was taken");
+      Assert (not Ada.Directories.Exists (Project & "/.model_runner"),
+              "a refused init left state behind");
+   end Init_Starts_A_Project;
+
    --  An inspection that named a feed-forward width and nothing else
    --  described a block a mixture-of-experts model does not have: the file
    --  states that width, the engine computes with an expert's, and the
@@ -11789,6 +11847,10 @@ package body Tests.CLI_Cases is
         (T, Beginning_Marker_Follows_The_Vocabulary'Access,
          "a vocabulary that declares it wants no beginning marker is not "
          & "given one");
+      Register_Routine
+        (T, Init_Starts_A_Project'Access,
+         "init starts a project from a shipped template and refuses what"
+         & " it cannot");
       Register_Routine
         (T, Inspection_Reports_A_Mixture'Access,
          "an inspection reports a mixture as one, and a dense model as "

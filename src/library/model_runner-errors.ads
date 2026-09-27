@@ -361,6 +361,13 @@ package Model_Runner.Errors is
       Framework_Result_Conflict,
       Framework_Integrity_Failed,
 
+      --  Project templates, and what initializing a project from one asks.
+      Framework_Template_Not_Found,
+      Framework_Template_Invalid,
+      Framework_Template_Conflict,
+      Framework_Input_Missing,
+      Framework_Input_Invalid,
+
       --  Internal invariants.
       Internal_Invariant_Violated,
       Internal_Unexpected_Exception,

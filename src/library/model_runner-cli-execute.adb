@@ -52,6 +52,7 @@ with Model_Runner.Tools.Runner;
 with GNAT.OS_Lib;
 with Model_Runner.CLI.Interactive;
 with Model_Runner.CLI.Checkpoint;
+with Model_Runner.CLI.Init;
 
 package body Model_Runner.CLI.Execute is
 
@@ -1924,7 +1925,8 @@ package body Model_Runner.CLI.Execute is
       --  already named exactly those four, so a fifth command would have
       --  compiled, dispatched, taken options -- and had no help.
       case Opt.Command_Of (Topic) is
-         when Opt.Command_Run | Opt.Command_Embed | Opt.Command_Inspect =>
+         when Opt.Command_Run | Opt.Command_Embed | Opt.Command_Inspect
+            | Opt.Command_Init =>
             declare
                Kind : constant Opt.Command_Kind := Opt.Command_Of (Topic);
                Word : constant String := Opt.Command_Word (Kind);
@@ -5639,6 +5641,9 @@ package body Model_Runner.CLI.Execute is
 
          when Opt.Command_Models =>
             Do_Models (Item, Screen, Status);
+
+         when Opt.Command_Init =>
+            Model_Runner.CLI.Init.Run (Item, Screen, Status);
 
          when Opt.Command_Run =>
             if T.Is_Empty (Item.Model_Path) then

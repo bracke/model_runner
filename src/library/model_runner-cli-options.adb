@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 113) of Registry_Row :=
+   Registry : constant array (1 .. 115) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -224,6 +224,9 @@ package body Model_Runner.CLI.Options is
       (Text ("--metadata"), [Command_Inspect => True, others => False], Text ("metadata")),
       (Text ("--tensors"), [Command_Inspect => True, others => False], Text ("tensors")),
       (Text ("--validate"), [Command_Inspect => True, others => False], Text ("validate")),
+      (Text ("--set"), [Command_Init => True, others => False], Text ("set")),
+      (Text ("--directory"), [Command_Init => True, others => False],
+       Text ("directory")),
       (Text ("--quiet"), [others => True], Text ("quiet")),
       (Text ("--verbose"), [others => True], Text ("verbose")),
       (Text ("--locale"), [others => True], Text ("locale")),
@@ -269,6 +272,7 @@ package body Model_Runner.CLI.Options is
          when Command_Embed   => "embed",
          when Command_Inspect => "inspect",
          when Command_Models  => "models",
+         when Command_Init    => "init",
          when Command_Help    => "help",
          when Command_Version => "version");
 
@@ -908,7 +912,7 @@ package body Model_Runner.CLI.Options is
          Flag_Tools, Flag_Tools_File, Flag_Tool_Command,
          Flag_Max_Retries, Flag_Max_Total_Tokens, Flag_Max_Parallel,
          Flag_Context_Shift, Flag_Context_Keep,
-         Flag_Threads, Flag_Backend);
+         Flag_Threads, Flag_Backend, Flag_Directory);
       Seen : array (Option_Flag) of Boolean := [others => False];
 
       procedure Fail (Code : E.Error_Code; Name : String; Detail : String := "")
@@ -1486,6 +1490,37 @@ package body Model_Runner.CLI.Options is
                      Result.Deny_Tools (Result.Deny_Tool_Count) :=
                        T.To_Bounded (Held.all);
                      Free_Text (Held);
+
+                  elsif Name = "--set" then
+                     --  Repeatable: each gives one of the template's inputs
+                     --  as NAME=VALUE.
+                     if Result.Input_Count = Max_Guards then
+                        Fail (E.CLI_Option_Out_Of_Range, Name);
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument,
+                                 Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     if Held'Length = 0 or else Held (Held'First) = '='
+                       or else (for all Char of Held.all => Char /= '=')
+                     then
+                        Fail (E.CLI_Invalid_Option_Value, Name, Held.all);
+                        Free_Text (Held);
+                        return;
+                     end if;
+                     Result.Input_Count := Result.Input_Count + 1;
+                     Result.Inputs (Result.Input_Count) :=
+                       T.To_Bounded (Held.all);
+                     Free_Text (Held);
+
+                  elsif Name = "--directory" then
+                     Bounded_Value
+                       (Flag_Directory, Result.Project_Directory, Good);
+                     if not Good then
+                        return;
+                     end if;
 
                   elsif Name = "--deny-arg" then
                      --  Repeatable: a call whose arguments contain one of
@@ -2634,6 +2669,8 @@ package body Model_Runner.CLI.Options is
                      Result.Kind := Command_Inspect;
                   elsif Argument = "models" then
                      Result.Kind := Command_Models;
+                  elsif Argument = "init" then
+                     Result.Kind := Command_Init;
                   elsif Argument = "help" then
                      Result.Kind := Command_Help;
                   elsif Argument = "version" then
@@ -2642,6 +2679,10 @@ package body Model_Runner.CLI.Options is
                      Fail (E.CLI_Unknown_Command, "", Argument);
                      return;
                   end if;
+
+               elsif Operands = 2 and then Result.Kind = Command_Init then
+                  --  init TEMPLATE: the template to start from.
+                  Result.Template_Name := T.To_Bounded (Argument);
 
                elsif Operands = 2 and then Result.Kind = Command_Models then
                   if Argument = "remove" or else Argument = "rm" then

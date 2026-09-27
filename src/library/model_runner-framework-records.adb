@@ -60,7 +60,7 @@ package body Model_Runner.Framework.Records is
 
       for Char of Name loop
          if Char not in 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9'
-                      | '_' | '.' | ':' | '-'
+                      | '_' | '.' | ':' | '-' | '/'
          then
             return False;
          end if;

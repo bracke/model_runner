@@ -64,6 +64,7 @@ package Model_Runner.CLI.Options is
       Command_Embed,
       Command_Inspect,
       Command_Models,
+      Command_Init,
       Command_Help,
       Command_Version);
 
@@ -252,6 +253,14 @@ package Model_Runner.CLI.Options is
 
       --  Topic of a help request, or an empty value for the general help.
       Help_Topic : Model_Runner.Text.Bounded;
+
+      --  init: the template to start the project from, empty to choose one;
+      --  the inputs given as --set NAME=VALUE; and the project's directory,
+      --  empty for the current one.
+      Template_Name     : Model_Runner.Text.Bounded;
+      Inputs            : Guard_List := [others => Model_Runner.Text.Empty];
+      Input_Count       : Natural := 0;
+      Project_Directory : Model_Runner.Text.Bounded;
 
       Prompt_Kind : Prompt_Source := Prompt_Unset;
 

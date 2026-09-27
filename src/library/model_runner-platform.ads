@@ -146,6 +146,21 @@ package Model_Runner.Platform is
    function Resolve_Session_Path
      (Named : String; For_Saving : Boolean) return String;
 
+   --  Where the project templates installed with the program are: a
+   --  templates directory beside the message catalog's, so an installation
+   --  keeps them in <prefix>/share/model_runner/templates and a checkout in
+   --  resources/templates.
+   --
+   --  @return The directory, which may not exist.
+   function Installed_Templates_Directory return String;
+
+   --  Where the user's own project templates are: a templates directory
+   --  beside the settings file.
+   --
+   --  @return The directory, which may not exist, or the empty string where
+   --    there is no settings file's place.
+   function User_Templates_Directory return String;
+
    --  Make the directory a path is written into, and its parents, where
    --  they are not there. A path in a directory that exists, and one the
    --  directory cannot be made for, are both left to the write to report.

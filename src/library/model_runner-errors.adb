@@ -509,6 +509,9 @@ package body Model_Runner.Errors is
                              | Framework_Identifier_Invalid
                              | Framework_Name_Invalid
                              | Framework_Not_Found
+                             | Framework_Template_Not_Found
+                             | Framework_Input_Missing
+                             | Framework_Input_Invalid
                then Exit_Usage
                else Exit_Input_Output);
 

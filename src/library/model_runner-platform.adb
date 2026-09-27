@@ -212,6 +212,38 @@ package body Model_Runner.Platform is
          return Conventional;
    end Catalog_Path;
 
+   -----------------------------------
+   -- Installed_Templates_Directory --
+   -----------------------------------
+
+   function Installed_Templates_Directory return String is
+      Messages : constant String :=
+        Ada.Directories.Containing_Directory (Catalog_Path);
+   begin
+      return Hostkit.Fs.Join
+               (Ada.Directories.Containing_Directory (Messages), "templates");
+   exception
+      when others =>
+         return Hostkit.Fs.Join ("resources", "templates");
+   end Installed_Templates_Directory;
+
+   ------------------------------
+   -- User_Templates_Directory --
+   ------------------------------
+
+   function User_Templates_Directory return String is
+      Settings : constant String := Config_File;
+   begin
+      if Settings = "" then
+         return "";
+      end if;
+      return Hostkit.Fs.Join
+               (Ada.Directories.Containing_Directory (Settings), "templates");
+   exception
+      when others =>
+         return "";
+   end User_Templates_Directory;
+
    -----------------
    -- Config_File --
    -----------------

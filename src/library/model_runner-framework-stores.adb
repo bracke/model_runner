@@ -1,10 +1,9 @@
 with Ada.Characters.Handling;
 with Ada.Directories;
-with Ada.Streams.Stream_IO;
-with Ada.Unchecked_Deallocation;
 
 with Hostkit.Fs;
 
+with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Schemas;
 
@@ -12,16 +11,11 @@ package body Model_Runner.Framework.Stores is
 
    package E renames Model_Runner.Errors;
    package Dirs renames Ada.Directories;
-   package Stream_IO renames Ada.Streams.Stream_IO;
 
-   use type Dirs.File_Kind;
-   use type Dirs.File_Size;
    use type Hostkit.Locks.Lock_Outcome;
-
-   package Sorting is new Name_Lists.Generic_Sorting;
+   use Model_Runner.Framework.Files;
 
    Record_Suffix  : constant String := ".rec";
-   Partial_Suffix : constant String := ".partial";
 
    Format_File   : constant String := "format.rec";
    Lock_File     : constant String := "lock";
@@ -37,9 +31,6 @@ package body Model_Runner.Framework.Stores is
    Root_Entity     : constant String := "ROOT";
    Index_Entity    : constant String := "INDEX";
    Journal_Entity  : constant String := "JOURNAL";
-
-   type String_Access is access String;
-   procedure Free is new Ada.Unchecked_Deallocation (String, String_Access);
 
    ---------------------------------------------------------------------------
    --  Paths.
@@ -116,161 +107,6 @@ package body Model_Runner.Framework.Stores is
       end loop;
       return "";
    end Word;
-
-   ---------------------------------------------------------------------------
-   --  Files.
-   ---------------------------------------------------------------------------
-
-   procedure Write_Failed
-     (Path   : String;
-      Status : out E.Error_Info) is
-   begin
-      Status := E.Make (E.Framework_Transaction_Failed);
-      E.Add_Text (Status, "path", Path, E.Param_Path);
-   end Write_Failed;
-
-   --  Read a whole file.
-   procedure Read_Text
-     (Path   : String;
-      Text   : out Unbounded_String;
-      Status : out E.Error_Info)
-   is
-      File   : Stream_IO.File_Type;
-      Buffer : String_Access;
-   begin
-      Text := Null_Unbounded_String;
-      Status := E.Success;
-
-      declare
-         Size : constant Dirs.File_Size := Dirs.Size (Path);
-      begin
-         if Size > Records.Max_Bytes then
-            Status := E.Make (E.IO_File_Too_Large);
-            E.Add_Text (Status, "path", Path, E.Param_Path);
-            E.Add_Integer
-              (Status, "size", Long_Long_Integer (Size), E.Param_Bytes);
-            E.Add_Integer
-              (Status, "limit", Long_Long_Integer (Records.Max_Bytes),
-               E.Param_Bytes);
-            return;
-         end if;
-
-         Buffer := new String (1 .. Natural (Size));
-      end;
-
-      Stream_IO.Open (File, Stream_IO.In_File, Path);
-      String'Read (Stream_IO.Stream (File), Buffer.all);
-      Stream_IO.Close (File);
-      Text := To_Unbounded_String (Buffer.all);
-      Free (Buffer);
-   exception
-      when others =>
-         if Stream_IO.Is_Open (File) then
-            Stream_IO.Close (File);
-         end if;
-         Free (Buffer);
-         Status := E.Make (E.IO_Read_Failed);
-         E.Add_Text (Status, "path", Path, E.Param_Path);
-   end Read_Text;
-
-   --  Write a whole file, replacing what was there.
-   procedure Write_Text
-     (Path   : String;
-      Text   : String;
-      Status : out E.Error_Info)
-   is
-      File : Stream_IO.File_Type;
-   begin
-      Status := E.Success;
-      Stream_IO.Create (File, Stream_IO.Out_File, Path);
-      String'Write (Stream_IO.Stream (File), Text);
-      Stream_IO.Close (File);
-   exception
-      when others =>
-         if Stream_IO.Is_Open (File) then
-            Stream_IO.Close (File);
-         end if;
-         Write_Failed (Path, Status);
-   end Write_Text;
-
-   --  Write a file so that it is either what it was or what it is now:
-   --  written beside itself and renamed over.
-   procedure Write_Whole
-     (Path   : String;
-      Text   : String;
-      Status : out E.Error_Info) is
-   begin
-      Write_Text (Path & Partial_Suffix, Text, Status);
-      if E.Is_Ok (Status)
-        and then not Hostkit.Fs.Replace_File (Path & Partial_Suffix, Path)
-      then
-         Write_Failed (Path, Status);
-      end if;
-   end Write_Whole;
-
-   --  Remove a file when it is there.
-   function Delete_If_Present (Path : String) return Boolean is
-   begin
-      if Dirs.Exists (Path) then
-         Dirs.Delete_File (Path);
-      end if;
-      return True;
-   exception
-      when others =>
-         return False;
-   end Delete_If_Present;
-
-   --  Remove a file when it is there and can be; one that stays is
-   --  derived and is found wanting when it is next read.
-   procedure Discard (Path : String) is
-      Gone : constant Boolean := Delete_If_Present (Path);
-   begin
-      pragma Unreferenced (Gone);
-   end Discard;
-
-   --  Make a directory and its parents.
-   function Make_Directory (Path : String) return Boolean is
-   begin
-      if not Dirs.Exists (Path) then
-         Dirs.Create_Path (Path);
-      end if;
-      return Dirs.Kind (Path) = Dirs.Directory;
-   exception
-      when others =>
-         return False;
-   end Make_Directory;
-
-   --  The ordinary files in a directory, sorted.
-   function Files_In (Directory : String) return Name_Lists.Vector is
-      Result : Name_Lists.Vector;
-      Search : Dirs.Search_Type;
-      Found  : Dirs.Directory_Entry_Type;
-   begin
-      if not Dirs.Exists (Directory)
-        or else Dirs.Kind (Directory) /= Dirs.Directory
-      then
-         return Result;
-      end if;
-
-      Dirs.Start_Search
-        (Search, Directory, "",
-         [Dirs.Ordinary_File => True, others => False]);
-      while Dirs.More_Entries (Search) loop
-         Dirs.Get_Next_Entry (Search, Found);
-         Result.Append (Dirs.Simple_Name (Found));
-      end loop;
-      Dirs.End_Search (Search);
-
-      Sorting.Sort (Result);
-      return Result;
-   exception
-      when others =>
-         return Result;
-   end Files_In;
-
-   function Ends_With (Text, Suffix : String) return Boolean
-   is (Text'Length >= Suffix'Length
-       and then Text (Text'Last - Suffix'Length + 1 .. Text'Last) = Suffix);
 
    --  Read a record from a file and check it against its schema.
    procedure Read_Record
@@ -692,11 +528,16 @@ package body Model_Runner.Framework.Stores is
       Cleared : Boolean := True;
    begin
       for File of Files_In (Journal) loop
-         if File /= Manifest_File then
-            Cleared := Delete_If_Present (Join (Journal, File)) and Cleared;
+         if File /= Manifest_File
+           and then not Delete_If_Present (Join (Journal, File))
+         then
+            Cleared := False;
          end if;
       end loop;
-      return Delete_If_Present (Join (Journal, Manifest_File)) and Cleared;
+
+      --  The mark stays while anything it covers does.
+      return Cleared
+        and then Delete_If_Present (Join (Journal, Manifest_File));
    end Clear_Journal;
 
    -----------
@@ -1094,11 +935,12 @@ package body Model_Runner.Framework.Stores is
      (Item              : in out Store;
       Project_Directory : String;
       Project_Name      : String;
-      Status            : out Model_Runner.Errors.Error_Info)
+      Status            : out Model_Runner.Errors.Error_Info;
+      Initial           : Transaction := No_Changes)
    is
       State  : constant String := State_Root (Project_Directory);
       Report : Recovery_Report;
-      Change : Transaction;
+      Change : Transaction := Initial;
    begin
       Close (Item);
 
