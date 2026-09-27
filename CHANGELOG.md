@@ -573,6 +573,12 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Rolling the context on the device no longer loses the thread.** With
+  `--context-shift`, a paged session (the device's default) and a packed
+  cache in a block (`--kv-cache q8`/`q4` with `--no-paged`) kept the rows
+  from before the roll on the device, and the text went on mid-sentence
+  from the conversation before it. Both now carry the shift over.
+
 - **A picture no longer turns Gemma 3's answer into noise on the device.**
   A prompt with a picture attends on the host, and its keys and values
   never reached a paged session's pages on the device, which is `run`'s

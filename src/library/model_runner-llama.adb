@@ -14711,6 +14711,15 @@ package body Model_Runner.Llama is
          end;
       end if;
 
+      --  A paged session's pages held the same stale rows, and nothing sent
+      --  them over either: Gemma 3 rolling its context on the device went
+      --  on from the conversation before the roll, mid-sentence. Given back,
+      --  they are taken again at the next pass and written from the host's
+      --  copy, which the edits above made current.
+      if Item.Paged and then Item.Paged_In then
+         Release_Session_Pages (Item'Unchecked_Access);
+      end if;
+
       --  And the history, which is what a restored context is checked
       --  against and what a prefix comparison reads.
       for Step in 0 .. Moved - 1 loop
@@ -14736,6 +14745,20 @@ package body Model_Runner.Llama is
       end if;
 
       Item.Committed := Keep + Moved;
+
+      --  A packed block went stale the same way and was not sent over
+      --  either -- only an exact block is, above: Gemma 3 at q4 or q8
+      --  rolling its context in a block went on mid-sentence as the paged
+      --  session had. Written again from the host's packed copy, which is
+      --  current, up to the count just committed.
+      if Item.Seat >= 0 and then Item.Held in Eighth | Fourth then
+         declare
+            Written : Boolean;
+         begin
+            Write_Block
+              (Item'Unchecked_Access, Block_Base (Item), Written);
+         end;
+      end if;
    end Shift;
 
    ------------

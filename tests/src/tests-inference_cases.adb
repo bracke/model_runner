@@ -5992,6 +5992,132 @@ package body Tests.Inference_Cases is
       Model_Runner.Backend.Device.Close;
    end Drafting_Runs_On_A_Device;
 
+   ---------------------------------------------------
+   -- A_Shift_On_The_Device_Reaches_Its_Cache_Copy --
+   ---------------------------------------------------
+
+   --  A paged session shifted on the device says, a token later, what the
+   --  same session in a block says.
+   --
+   --  A shift edits the host's copy of the cache: the kept positions move
+   --  down and their keys turn back. It sent the edits to the device's copy
+   --  only for an exact block. A paged session's pages and a packed block
+   --  kept the rows from before the roll, and Gemma 3 rolling its context
+   --  went on mid-sentence ("from his father clock that governed the
+   --  light's rotation"). Here a deep fixture, shifted paged, against the
+   --  exact block that was right all along. The packed block's half of the
+   --  fix -- Write_Block after the shift -- has no oracle here: a packed
+   --  block and packed pages pack on the host and the device and differ by
+   --  their rounding before any shift. Gemma 3 at q4 and q8 is what caught
+   --  and cleared it, the same text paged and in a block after a roll.
+   --
+   --  NOR DOES THE PAGED HALF REPRODUCE HERE: the device takes no layer of
+   --  this fixture whole (Layers_Whole is nought, every layer handed back
+   --  for its shape), so the token after the shift attends on the host from
+   --  its current copy, and a shift that leaves the pages stale passes.
+   --  Gemma 3 and qwen3-8b rolling a 256-position context caught and
+   --  cleared it. What this holds is the rest.
+   --
+   --  Skipped where there is no device.
+   procedure A_Shift_On_The_Device_Reaches_Its_Cache_Copy
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Image : B.Byte_Array_Access;
+      Ready : Boolean;
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready);
+
+      if not Ready then
+         return;
+      end if;
+
+      Tiny_Model.Build (Image, Format => Tiny_Model.Q4_K, Room => 64);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Item   : Containers.Container;
+         Model  : aliased L.Model;
+         Status : E.Error_Info;
+
+         function After
+           (Paged : Boolean; Cache : L.Cache_Precision) return N.Real_Array
+         is
+            Live   : L.Session;
+            Words  : constant access constant Vocab.Vocabulary :=
+              L.Vocabulary (Model);
+            A      : constant Vocab.Token_Id := Vocab.Find (Words.all, "a");
+            Bee    : constant Vocab.Token_Id := Vocab.Find (Words.all, "b");
+            Tokens : constant Vocab.Token_Array :=
+              [Vocab.Beginning_Token (Words.all), A, Bee, A, Bee, Bee, A, A,
+               Bee, A, Bee, Bee, A, Bee, A, A, Bee, Bee, A, Bee];
+            Logits : N.Real_Array
+              (0 .. N.Element_Count (L.Config (Model).Vocabulary) - 1);
+            Local  : E.Error_Info;
+         begin
+            L.Open (Live, Model, 64, Cache => Cache, Status => Local,
+                    Paged => Paged);
+            Assert (E.Is_Ok (Local), "the session did not open");
+
+            L.Evaluate_Batch (Live, Model, Tokens, Logits, Status => Local);
+            Assert (E.Is_Ok (Local), "the batch failed");
+
+            --  A token of its own after the batch, so that the device's
+            --  copy is in use before the shift.
+            L.Evaluate (Live, Model, A, Logits, Status => Local);
+            Assert (E.Is_Ok (Local), "the token before the shift failed");
+
+            L.Shift (Live, Model, Keep => 2, Drop => 8, Status => Local);
+            Assert (E.Is_Ok (Local), "the shift failed");
+
+            L.Evaluate (Live, Model, Bee, Logits, Status => Local);
+            Assert (E.Is_Ok (Local), "the token after the shift failed");
+
+            L.Close (Live);
+            return Logits;
+         end After;
+
+         procedure Same
+           (Got, Wanted : N.Real_Array; Tolerance : N.Real; What : String)
+         is
+            Worst : N.Real := 0.0;
+         begin
+            for Index in Got'Range loop
+               Worst := N.Real'Max (Worst, abs (Got (Index) - Wanted (Index)));
+            end loop;
+            Assert (Worst <= Tolerance,
+                    What & " differs after a shift from the exact block by"
+                    & N.Real'Image (Worst));
+         end Same;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse
+           (Item, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+         L.Prepare
+           (Model, Item, Source,
+            Backend => Model_Runner.Backend.Backend_Device,
+            Status  => Status);
+         Assert (E.Is_Ok (Status), "the device would not take the fixture");
+
+         declare
+            Blocks : constant N.Real_Array := After (False, L.Exact);
+            Pages  : constant N.Real_Array := After (True, L.Exact);
+         begin
+            Same (Pages, Blocks, 1.0E-3, "the paged session");
+         end;
+
+         L.Close (Model, Status);
+         Containers.Close (Item);
+      end;
+
+      B.Free (Image);
+      Model_Runner.Backend.Device.Close;
+   end A_Shift_On_The_Device_Reaches_Its_Cache_Copy;
+
    -------------------------------------------------
    -- A_Paged_Picture_Reaches_The_Device_Pages --
    -------------------------------------------------
@@ -13353,6 +13479,10 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Adapters_Stack_And_Come_Off_Again'Access,
          "adapters stack, and a scale of minus one takes one off again");
+      Register_Routine
+        (T, A_Shift_On_The_Device_Reaches_Its_Cache_Copy'Access,
+         "a paged session shifted on the device says, a token later, what "
+         & "the same session in a block says");
       Register_Routine
         (T, A_Paged_Picture_Reaches_The_Device_Pages'Access,
          "a paged session given a picture's rows says, a token later, what "
