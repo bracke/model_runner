@@ -6046,7 +6046,7 @@ package body Model_Runner.Llama is
             else Item.Owner.Able.Kind)
       is
          when Model_Runner.Backend.Backend_CPU =>
-            Workers_CPU.Dispatch (Item.Team, Weight, Vector, Target, Status);
+            Workers_CPU.Dispatch (Item.Team, Weight, Vector, Target, Status, Roles => Item.Arithmetic);
          when Model_Runner.Backend.Backend_Reference =>
             Model_Runner.Backend.Reference.Product
               (Weight, Vector, Target, Status);
@@ -6119,7 +6119,7 @@ package body Model_Runner.Llama is
           or else Item.Owner.Able.Kind = Model_Runner.Backend.Backend_CPU)
         and then Apart = 0
       then
-         Workers_CPU.Dispatch_Group (Item.Team, Weights, Vector, Into, Status);
+         Workers_CPU.Dispatch_Group (Item.Team, Weights, Vector, Into, Status, Roles => Item.Arithmetic);
          return;
       end if;
 
@@ -6260,7 +6260,7 @@ package body Model_Runner.Llama is
       is
          when Model_Runner.Backend.Backend_CPU =>
             Workers_CPU.Dispatch_Batch
-              (Item.Team, Weight, Vectors, Count, Target, Status);
+              (Item.Team, Weight, Vectors, Count, Target, Status, Roles => Item.Arithmetic);
          when Model_Runner.Backend.Backend_Reference =>
             Model_Runner.Backend.Reference.Product_Batch
               (Weight, Vectors, Count, Target, Status);
@@ -11451,7 +11451,7 @@ package body Model_Runner.Llama is
                            if not Done then
                               Workers_CPU.Dispatch_Batch
                                 (null, Current.Shared_Gate, In_Room, Held,
-                                 A_Room, Local);
+                                 A_Room, Local, Roles => Item.Arithmetic);
                               if E.Is_Error (Local) then
                                  Share.Ok := False;
                               end if;
@@ -11474,7 +11474,7 @@ package body Model_Runner.Llama is
                            if not Done then
                               Workers_CPU.Dispatch_Batch
                                 (null, Current.Shared_Up, In_Room, Held,
-                                 B_Room, Local);
+                                 B_Room, Local, Roles => Item.Arithmetic);
                               if E.Is_Error (Local) then
                                  Share.Ok := False;
                               end if;
@@ -11496,7 +11496,7 @@ package body Model_Runner.Llama is
 
                            Workers_CPU.Dispatch_Batch
                              (null, Current.Shared_Down, A_Room, Held,
-                              Out_Room, Local);
+                              Out_Room, Local, Roles => Item.Arithmetic);
                            if E.Is_Error (Local) then
                               Share.Ok := False;
                            end if;
@@ -11578,7 +11578,7 @@ package body Model_Runner.Llama is
                                  if not Done then
                                     Workers_CPU.Dispatch_Batch
                                       (null, Expert_At.Gate, In_Room, Held,
-                                       A_Room, Local);
+                                       A_Room, Local, Roles => Item.Arithmetic);
                                     if E.Is_Error (Local) then
                                        Share.Ok := False;
                                     end if;
@@ -11601,7 +11601,7 @@ package body Model_Runner.Llama is
                                  if not Done then
                                     Workers_CPU.Dispatch_Batch
                                       (null, Expert_At.Up, In_Room, Held,
-                                       B_Room, Local);
+                                       B_Room, Local, Roles => Item.Arithmetic);
                                     if E.Is_Error (Local) then
                                        Share.Ok := False;
                                     end if;
@@ -11660,7 +11660,7 @@ package body Model_Runner.Llama is
 
                               Workers_CPU.Dispatch_Batch
                                 (null, Expert_At.Down, A_Room, Held, Out_Room,
-                                 Local);
+                                 Local, Roles => Item.Arithmetic);
                               if E.Is_Error (Local) then
                                  Share.Ok := False;
                               end if;
@@ -11820,11 +11820,11 @@ package body Model_Runner.Llama is
 
             if Has_Super then
                Workers_CPU.Pack
-                 (Packed_Super, Rows, Count, Width, True, Has_Super);
+                 (Packed_Super, Rows, Count, Width, True, Has_Super, Roles => Item.Arithmetic);
             end if;
             if Has_Plain then
                Workers_CPU.Pack
-                 (Packed_Plain, Rows, Count, Width, False, Has_Plain);
+                 (Packed_Plain, Rows, Count, Width, False, Has_Plain, Roles => Item.Arithmetic);
             end if;
 
             --  The experts by size, largest first, in the order the
@@ -14551,6 +14551,11 @@ package body Model_Runner.Llama is
 
       Item.Owner := Source'Unchecked_Access;
       Item.Team := Workers;
+
+      --  The arithmetic, fixed for the session's life: the backend's
+      --  default as it stands now, read once here and never again while
+      --  the session runs.
+      Item.Arithmetic := Workers_CPU.Integer_Activation_Roles;
       Item.Context := Capacity;
       Item.Committed := 0;
       Item.Current := Ready;

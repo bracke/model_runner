@@ -90,7 +90,9 @@ with Model_Runner.Tokenizer;
 --  sessions may therefore be evaluated from two tasks, on a backend that
 --  allows it: the processor backends do, each session bringing its own
 --  worker pool, and the device backend does not -- it is one queue and says
---  so.
+--  so. Each session keeps the arithmetic the processor backend was told as
+--  it opened, so two may run side by side in two arithmetics, and telling
+--  the backend again changes only the sessions opened after.
 package Model_Runner.Llama is
 
    subtype Real is Model_Runner.Numerics.Real;
@@ -2862,6 +2864,13 @@ private
       Gathered   : Choice_Access := null;
       Plan       : Model_Runner.Memory.Session_Plan;
       Team       : Model_Runner.Backend.CPU.Pool_Reference := null;
+
+      --  Which roles' products quantize their activations, taken from the
+      --  backend's default as the session opens and handed to every
+      --  product it asks for: another session set up in another arithmetic
+      --  while this one runs changes nothing here.
+      Arithmetic : Model_Runner.Backend.CPU.Role_Set :=
+        Model_Runner.Backend.CPU.No_Role;
 
       --  Whether this session's products go to the processor's pool
       --  whatever the model's backend: set while a mixture's feed-forward

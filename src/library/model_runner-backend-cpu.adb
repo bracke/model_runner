@@ -239,10 +239,27 @@ package body Model_Runner.Backend.CPU is
    -- Partition --
    ---------------
 
-   --  Which roles of weight quantize their activations. Written by one
-   --  task before the workers exist and read by them after, which is the
-   --  same protocol Model_Runner.Quantization states for its own such flag.
-   Quantized : Role_Set := No_Role;
+   --  Which roles of weight quantize their activations by default: what a
+   --  session copies as it opens and what a product asked without roles of
+   --  its own takes. Behind a lock, because a caller may tell it while
+   --  another task opens a session or asks a product -- which was a read
+   --  racing a write of the same array when every product read it as it
+   --  ran.
+   protected Default_Policy is
+      procedure Set (Roles : Role_Set);
+      function Get return Role_Set;
+   private
+      Quantized : Role_Set := No_Role;
+   end Default_Policy;
+
+   protected body Default_Policy is
+      procedure Set (Roles : Role_Set) is
+      begin
+         Quantized := Roles;
+      end Set;
+
+      function Get return Role_Set is (Quantized);
+   end Default_Policy;
 
    -------------------------------
    -- Use_Integer_Activations --
@@ -250,22 +267,25 @@ package body Model_Runner.Backend.CPU is
 
    procedure Use_Integer_Activations (Allowed : Boolean) is
    begin
-      Quantized := (if Allowed then Every_Role else No_Role);
+      Default_Policy.Set (if Allowed then Every_Role else No_Role);
    end Use_Integer_Activations;
 
    procedure Use_Integer_Activations (Roles : Role_Set) is
    begin
-      Quantized := Roles;
+      Default_Policy.Set (Roles);
    end Use_Integer_Activations;
 
    ---------------------------
    -- Integer_Activations --
    ---------------------------
 
-   function Integer_Activations return Boolean
-   is (for some Role in Quantized'Range => Quantized (Role));
+   function Integer_Activations return Boolean is
+      Roles : constant Role_Set := Default_Policy.Get;
+   begin
+      return (for some Role in Roles'Range => Roles (Role));
+   end Integer_Activations;
 
-   function Integer_Activation_Roles return Role_Set is (Quantized);
+   function Integer_Activation_Roles return Role_Set is (Default_Policy.Get);
 
    --  Shares for a product of one vector, which is what a generated token
    --  is. Fewer than the machine has, on purpose.
@@ -574,7 +594,8 @@ package body Model_Runner.Backend.CPU is
      (Item   : in out Pool;
       Weight : T.View;
       Vector : T.Real_Array_Access;
-      Count  : Element_Count) return Boolean
+      Count  : Element_Count;
+      Roles  : Role_Set) return Boolean
    is
       package QI renames Model_Runner.Quantization.Integers;
 
@@ -584,7 +605,7 @@ package body Model_Runner.Backend.CPU is
         (if Columns = 0 then 0 else Elements / QI.Activation_Block);
       Ok       : Boolean;
    begin
-      if not Quantized (Weight.Role)
+      if not Roles (Weight.Role)
         or else Vector = null
         or else Count = 0
         or else not QI.Packs_Vectors
@@ -699,7 +720,8 @@ package body Model_Runner.Backend.CPU is
      (Weight : T.View;
       Vector : T.Real_Array_Access;
       Count  : Element_Count;
-      Target : T.Real_Array_Access)
+      Target : T.Real_Array_Access;
+      Roles  : Role_Set)
    is
       package QI renames Model_Runner.Quantization.Integers;
 
@@ -724,7 +746,7 @@ package body Model_Runner.Backend.CPU is
          return;
       end if;
 
-      if Quantized (Weight.Role)
+      if Roles (Weight.Role)
         and then QI.Packs_Vectors
                    (Weight.Format, Count, Weight.Interleaved)
         and then QI.Is_Packable (Columns)
@@ -1284,7 +1306,8 @@ package body Model_Runner.Backend.CPU is
       Weight : T.View;
       Vector : T.Real_Array_Access;
       Target : T.Real_Array_Access;
-      Status : out E.Error_Info)
+      Status : out E.Error_Info;
+      Roles   : Role_Set := Integer_Activation_Roles)
    is
       use type Model_Runner.GGUF.Tensor_Type;
       Work        : Job;
@@ -1316,7 +1339,7 @@ package body Model_Runner.Backend.CPU is
          Work   => null,
          others => <>);
 
-      if Prepare_Packed (Item, Weight, Vector, 1) then
+      if Prepare_Packed (Item, Weight, Vector, 1, Roles) then
          Work.Values := Item.Values;
          Work.Scales := Item.Scales;
          Work.Totals := Item.Totals;
@@ -1411,7 +1434,8 @@ package body Model_Runner.Backend.CPU is
       Weights : T.View_Group;
       Vector  : T.Real_Array_Access;
       Into    : T.Target_Group;
-      Status  : out E.Error_Info)
+      Status  : out E.Error_Info;
+      Roles   : Role_Set)
    is
       use type Model_Runner.GGUF.Tensor_Type;
       Work        : Job;
@@ -1453,7 +1477,7 @@ package body Model_Runner.Backend.CPU is
          Work.Rows_Three := Weights (Weights'First + 2).Rows;
       end if;
 
-      if Prepare_Packed (Item, Work.Weight, Vector, 1) then
+      if Prepare_Packed (Item, Work.Weight, Vector, 1, Roles) then
          Work.Values := Item.Values;
          Work.Scales := Item.Scales;
          Work.Totals := Item.Totals;
@@ -1519,7 +1543,8 @@ package body Model_Runner.Backend.CPU is
       Weights : T.View_Group;
       Vector  : T.Real_Array_Access;
       Into    : T.Target_Group;
-      Status  : out E.Error_Info)
+      Status  : out E.Error_Info;
+      Roles   : Role_Set := Integer_Activation_Roles)
    is
       use type Model_Runner.GGUF.Tensor_Type;
 
@@ -1552,14 +1577,14 @@ package body Model_Runner.Backend.CPU is
       end if;
 
       if Together then
-         Mat_Vec_Group (Item.all, Weights, Vector, Into, Status);
+         Mat_Vec_Group (Item.all, Weights, Vector, Into, Status, Roles);
          return;
       end if;
 
       for Index in Weights'Range loop
          Dispatch
            (Item, Weights (Index), Vector,
-            Into (Into'First + (Index - Weights'First)), Status);
+            Into (Into'First + (Index - Weights'First)), Status, Roles);
          exit when E.Is_Error (Status);
       end loop;
    end Dispatch_Group;
@@ -1573,15 +1598,16 @@ package body Model_Runner.Backend.CPU is
       Weight : T.View;
       Vector : T.Real_Array_Access;
       Target : T.Real_Array_Access;
-      Status : out E.Error_Info) is
+      Status : out E.Error_Info;
+      Roles   : Role_Set := Integer_Activation_Roles) is
    begin
       if Item = null then
          --  Serial path, on the calling task. Identical results to the
          --  parallel path, because the partition never changes a row's value.
          Status := E.Success;
-         Serially (Weight, Vector, 1, Target);
+         Serially (Weight, Vector, 1, Target, Roles);
       else
-         Mat_Vec (Item.all, Weight, Vector, Target, Status);
+         Mat_Vec (Item.all, Weight, Vector, Target, Status, Roles);
       end if;
    end Dispatch;
 
@@ -1595,7 +1621,8 @@ package body Model_Runner.Backend.CPU is
       Vectors : T.Real_Array_Access;
       Count   : Element_Count;
       Target  : T.Real_Array_Access;
-      Status  : out E.Error_Info)
+      Status  : out E.Error_Info;
+      Roles   : Role_Set := Integer_Activation_Roles)
    is
       Work        : Job;
       Accepted    : Boolean;
@@ -1624,7 +1651,7 @@ package body Model_Runner.Backend.CPU is
          Work   => null,
          others => <>);
 
-      if Prepare_Packed (Item, Weight, Vectors, Count) then
+      if Prepare_Packed (Item, Weight, Vectors, Count, Roles) then
          Work.Values := Item.Values;
          Work.Scales := Item.Scales;
          Work.Totals := Item.Totals;
@@ -1697,13 +1724,14 @@ package body Model_Runner.Backend.CPU is
       Vectors : T.Real_Array_Access;
       Count   : Element_Count;
       Target  : T.Real_Array_Access;
-      Status  : out E.Error_Info) is
+      Status  : out E.Error_Info;
+      Roles   : Role_Set := Integer_Activation_Roles) is
    begin
       if Item = null then
          Status := E.Success;
-         Serially (Weight, Vectors, Count, Target);
+         Serially (Weight, Vectors, Count, Target, Roles);
       else
-         Mat_Mul (Item.all, Weight, Vectors, Count, Target, Status);
+         Mat_Mul (Item.all, Weight, Vectors, Count, Target, Status, Roles);
       end if;
    end Dispatch_Batch;
 
@@ -1717,7 +1745,8 @@ package body Model_Runner.Backend.CPU is
       Count   : Element_Count;
       Columns : Element_Count;
       Super   : Boolean;
-      Ok      : out Boolean)
+      Ok      : out Boolean;
+      Roles   : Role_Set := Integer_Activation_Roles)
    is
       package QI renames Model_Runner.Quantization.Integers;
 
@@ -1728,7 +1757,7 @@ package body Model_Runner.Backend.CPU is
 
       --  The rows packed here are read against experts, which are the
       --  feed-forward of a mixture, so that is the role asked.
-      if not Quantized (T.Role_Feed_Forward)
+      if not Roles (T.Role_Feed_Forward)
         or else Vectors = null
         or else Count = 0
         or else not QI.Is_Packable (Columns)

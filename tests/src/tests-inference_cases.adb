@@ -1468,6 +1468,77 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Evaluation_Is_Deterministic;
 
+   --  A session keeps the arithmetic it opened in. Two sessions may run on
+   --  processor backends side by side, and the byte arithmetic was read by
+   --  every product from one setting of the process's: setting it for a
+   --  second session changed the first's part way through its run. Here a
+   --  session opened quantizing, evaluated after the default was set back
+   --  to binary32, answers what a quantizing session answers to the bit --
+   --  and not what a binary32 one does, which is what makes the first
+   --  equality evidence.
+   procedure A_Session_Keeps_Its_Arithmetic
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package CPU renames Model_Runner.Backend.CPU;
+      use type N.Real_Array;
+
+      Image : B.Byte_Array_Access;
+      Was   : constant CPU.Role_Set := CPU.Integer_Activation_Roles;
+   begin
+      Tiny_Model.Build (Image, Format => Tiny_Model.Q8_0);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Status : E.Error_Info;
+         Opened_Quantizing, Quantizing, Floating : Logit_Vector;
+
+         procedure Answer (Live : in out L.Session; Into : out Logit_Vector)
+         is
+         begin
+            for Token of Vocab.Token_Array'[4, 7, 5] loop
+               L.Evaluate (Live, Under.Ready, Token, Into, Status => Status);
+               Assert (E.Is_Ok (Status), "evaluation failed");
+            end loop;
+         end Answer;
+
+         First, Second, Third : L.Session;
+      begin
+         Start (Under);
+
+         CPU.Use_Integer_Activations (CPU.Every_Role);
+         L.Open (First, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the first session did not open");
+
+         --  Another session is being set up in the other arithmetic.
+         CPU.Use_Integer_Activations (CPU.No_Role);
+         Answer (First, Opened_Quantizing);
+
+         L.Open (Second, Under.Ready, Status => Status);
+         Answer (Second, Floating);
+
+         CPU.Use_Integer_Activations (CPU.Every_Role);
+         L.Open (Third, Under.Ready, Status => Status);
+         Answer (Third, Quantizing);
+
+         CPU.Use_Integer_Activations (Was);
+
+         Assert (Opened_Quantizing = Quantizing,
+                 "a session opened quantizing did not keep quantizing when "
+                 & "the default changed");
+         Assert (Opened_Quantizing /= Floating,
+                 "the two arithmetics agree to the bit here, so this proves "
+                 & "nothing about which one the session kept");
+
+         L.Close (First);
+         L.Close (Second);
+         L.Close (Third);
+      end;
+
+      B.Free (Image);
+   end A_Session_Keeps_Its_Arithmetic;
+
    --  A file stating what its architecture has no use for is refused by
    --  name: an attention width, a window, a rotation's stretch or an
    --  expert count on Mamba, Mamba2 or RWKV6; a mixture on StableLM; a
@@ -14255,6 +14326,10 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Evaluation_Is_Deterministic'Access,
          "the same token sequence produces identical logits");
+      Register_Routine
+        (T, A_Session_Keeps_Its_Arithmetic'Access,
+         "a session keeps the arithmetic it opened in when the default "
+         & "changes under it");
       Register_Routine
         (T, Unused_Shape_Metadata_Is_Refused'Access,
          "a file stating what its architecture has no use for is refused "

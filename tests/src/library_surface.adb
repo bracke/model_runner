@@ -91,11 +91,6 @@ package body Library_Surface is
       --  own asks the same.
       new String'("Head_Format"),
 
-      --  Which roles of weight round their activations, as the backend was
-      --  last told. The command tells and never asks back; a caller with
-      --  its own engine, or a test restoring what it found, asks.
-      new String'("Integer_Activation_Roles"),
-
       --  How far back a hybrid session may be rewound. The round that
       --  needs the answer asks for the count itself and knows it; a
       --  caller handed a session by somebody else does not, and a rewind

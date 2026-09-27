@@ -120,6 +120,48 @@ package Model_Runner.Backend.CPU is
    --  @param Item Pool to let rest.
    procedure Rest (Item : in out Pool);
 
+   --  Allow the products that quantize their activations to a byte.
+   --
+   --  The process's default, which a product asked without its own roles
+   --  takes. A session takes a copy of it as it opens and hands that to
+   --  every product it asks for, so two sessions may run side by side in
+   --  two arithmetics and telling this again changes no session already
+   --  open -- which it did while every product read it as it ran, the
+   --  arithmetic of one session moving under it when another was set up.
+   --  A format without an integer kernel, or a width that is not a whole
+   --  number of blocks, takes the floating-point path whatever this says.
+   --
+   --  @param Allowed True to quantize activations before a matrix product.
+   procedure Use_Integer_Activations (Allowed : Boolean);
+
+   --  Which roles of weight may quantize their activations.
+   type Role_Set is array (Model_Runner.Tensors.Weight_Role) of Boolean;
+
+   Every_Role : constant Role_Set := [others => True];
+   No_Role    : constant Role_Set := [others => False];
+
+   --  The same telling, by the role a weight plays.
+   --
+   --  A product quantizes its activations when the weight's role is
+   --  allowed. What the choice is for: the error the rounding leaves is
+   --  tolerable in one class of product and not, compounded with another,
+   --  in the next -- Gemma 2 answers its tool tasks with either its
+   --  attention or its feed-forward quantized and not with both -- and the
+   --  role is the model's own division, not a shape that happens to match.
+   --
+   --  @param Roles True for each role whose products quantize.
+   procedure Use_Integer_Activations (Roles : Role_Set);
+
+   --  Report what the last such telling said.
+   --
+   --  @return True when any product quantizes its activations.
+   function Integer_Activations return Boolean;
+
+   --  Report it by role.
+   --
+   --  @return The roles whose products quantize.
+   function Integer_Activation_Roles return Role_Set;
+
    --  Compute a matrix-vector product across the workers.
    --
    --  Every row of Weight is computed exactly once, by exactly one worker,
@@ -131,12 +173,16 @@ package Model_Runner.Backend.CPU is
    --  @param Vector Input vector of Weight's column width.
    --  @param Target Output vector of Weight's row count.
    --  @param Status Success, Backend_Closed or Backend_Worker_Failed.
+   --  @param Roles The roles whose products quantize their activations:
+   --    the asking session's own, or the process's default where it names
+   --    none.
    procedure Mat_Vec
      (Item   : in out Pool;
       Weight : Model_Runner.Tensors.View;
       Vector : Model_Runner.Tensors.Real_Array_Access;
       Target : Model_Runner.Tensors.Real_Array_Access;
-      Status : out Model_Runner.Errors.Error_Info);
+      Status : out Model_Runner.Errors.Error_Info;
+      Roles   : Role_Set := Integer_Activation_Roles);
 
    --  Compute a matrix-vector product on a possibly absent pool.
    --
@@ -149,12 +195,16 @@ package Model_Runner.Backend.CPU is
    --  @param Vector Input vector.
    --  @param Target Output vector.
    --  @param Status Success or a backend diagnostic.
+   --  @param Roles The roles whose products quantize their activations:
+   --    the asking session's own, or the process's default where it names
+   --    none.
    procedure Dispatch
      (Item   : Pool_Reference;
       Weight : Model_Runner.Tensors.View;
       Vector : Model_Runner.Tensors.Real_Array_Access;
       Target : Model_Runner.Tensors.Real_Array_Access;
-      Status : out Model_Runner.Errors.Error_Info);
+      Status : out Model_Runner.Errors.Error_Info;
+      Roles   : Role_Set := Integer_Activation_Roles);
 
    --  Several matrix products against one input vector, in one job.
    --
@@ -172,12 +222,16 @@ package Model_Runner.Backend.CPU is
    --  @param Vector The input every one of them reads.
    --  @param Into Where each one's answer goes, in the same order.
    --  @param Status Success, Backend_Closed or Backend_Worker_Failed.
+   --  @param Roles The roles whose products quantize their activations:
+   --    the asking session's own, or the process's default where it names
+   --    none.
    procedure Dispatch_Group
      (Item    : Pool_Reference;
       Weights : Model_Runner.Tensors.View_Group;
       Vector  : Model_Runner.Tensors.Real_Array_Access;
       Into    : Model_Runner.Tensors.Target_Group;
-      Status  : out Model_Runner.Errors.Error_Info);
+      Status  : out Model_Runner.Errors.Error_Info;
+      Roles   : Role_Set := Integer_Activation_Roles);
 
    --  Matrix product against several input vectors at once.
    --
@@ -192,13 +246,17 @@ package Model_Runner.Backend.CPU is
    --  @param Count Number of input vectors.
    --  @param Target Count output vectors laid end to end.
    --  @param Status Success, Backend_Closed or Backend_Worker_Failed.
+   --  @param Roles The roles whose products quantize their activations:
+   --    the asking session's own, or the process's default where it names
+   --    none.
    procedure Mat_Mul
      (Item    : in out Pool;
       Weight  : Model_Runner.Tensors.View;
       Vectors : Model_Runner.Tensors.Real_Array_Access;
       Count   : Element_Count;
       Target  : Model_Runner.Tensors.Real_Array_Access;
-      Status  : out Model_Runner.Errors.Error_Info);
+      Status  : out Model_Runner.Errors.Error_Info;
+      Roles   : Role_Set := Integer_Activation_Roles);
 
    --  Run a batched product on a pool that may be absent.
    --
@@ -208,13 +266,17 @@ package Model_Runner.Backend.CPU is
    --  @param Count Number of input vectors.
    --  @param Target Output vectors.
    --  @param Status Success or a backend error.
+   --  @param Roles The roles whose products quantize their activations:
+   --    the asking session's own, or the process's default where it names
+   --    none.
    procedure Dispatch_Batch
      (Item    : Pool_Reference;
       Weight  : Model_Runner.Tensors.View;
       Vectors : Model_Runner.Tensors.Real_Array_Access;
       Count   : Element_Count;
       Target  : Model_Runner.Tensors.Real_Array_Access;
-      Status  : out Model_Runner.Errors.Error_Info);
+      Status  : out Model_Runner.Errors.Error_Info;
+      Roles   : Role_Set := Integer_Activation_Roles);
 
    --  Workers to open a pool with on a machine of a given size.
    --
@@ -300,13 +362,17 @@ package Model_Runner.Backend.CPU is
    --    is what Supers_Vectors says of the format that will read them.
    --  @param Ok True when the rows are packed; False where the pool does
    --    not quantize, the width cannot be packed, or there was no room.
+   --  @param Roles The roles whose products quantize their activations:
+   --    the asking session's own, or the process's default where it names
+   --    none.
    procedure Pack
      (Item    : in out Packed_Rows;
       Vectors : Model_Runner.Tensors.Real_Array_Access;
       Count   : Element_Count;
       Columns : Element_Count;
       Super   : Boolean;
-      Ok      : out Boolean);
+      Ok      : out Boolean;
+      Roles   : Role_Set := Integer_Activation_Roles);
 
    --  Give the packed rows back.
    --
@@ -385,45 +451,6 @@ package Model_Runner.Backend.CPU is
    --  @return A team, or null.
    function Sharing
      (Item : Pool_Reference) return Model_Runner.Shares.Team_Access;
-
-   --  Allow the products that quantize their activations to a byte.
-   --
-   --  Told rather than asked, and told once before any product is dispatched,
-   --  for the same reason Use_Wide_Decoders is: what this selects is
-   --  arithmetic, and a run must not change its arithmetic part way through.
-   --  A format without an integer kernel, or a width that is not a whole
-   --  number of blocks, takes the floating-point path whatever this says.
-   --
-   --  @param Allowed True to quantize activations before a matrix product.
-   procedure Use_Integer_Activations (Allowed : Boolean);
-
-   --  Which roles of weight may quantize their activations.
-   type Role_Set is array (Model_Runner.Tensors.Weight_Role) of Boolean;
-
-   Every_Role : constant Role_Set := [others => True];
-   No_Role    : constant Role_Set := [others => False];
-
-   --  The same telling, by the role a weight plays.
-   --
-   --  A product quantizes its activations when the weight's role is
-   --  allowed. What the choice is for: the error the rounding leaves is
-   --  tolerable in one class of product and not, compounded with another,
-   --  in the next -- Gemma 2 answers its tool tasks with either its
-   --  attention or its feed-forward quantized and not with both -- and the
-   --  role is the model's own division, not a shape that happens to match.
-   --
-   --  @param Roles True for each role whose products quantize.
-   procedure Use_Integer_Activations (Roles : Role_Set);
-
-   --  Report what the last such telling said.
-   --
-   --  @return True when any product quantizes its activations.
-   function Integer_Activations return Boolean;
-
-   --  Report it by role.
-   --
-   --  @return The roles whose products quantize.
-   function Integer_Activation_Roles return Role_Set;
 
 private
 

@@ -573,6 +573,31 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A session keeps the arithmetic it opened in.** Whether the processor's
+  products quantize their activations was one process-wide setting, read by
+  every product as it ran, so two sessions evaluated side by side -- which the
+  library allows -- shared it: setting up the second changed the first's
+  arithmetic part way through its run, and the write raced the reads. Each
+  session now takes the setting as it opens and hands it to its products;
+  the setting itself is held behind a lock.
+
+- **A damaged PNG is refused, not decoded wrongly.** Chunk checksums were
+  skipped, so a palette or header changed on disk decoded to the wrong
+  picture; they are checked now. A header stating a width or height past
+  what a number holds raised instead of refusing, and a picture or stream too
+  large for memory escaped `Images.Decode` as an exception; both are now a
+  status (`IO_Image_Unreadable`, or `Memory_Allocation_Failed`), and nothing
+  is left allocated.
+
+- **Crops and resampling at the edges.** `Images.Crop` of a rectangle wholly
+  outside the picture could raise rather than return an empty raster, and
+  `Images.Resample` let a failed allocation escape and leak its half-made
+  result; both return an empty raster now.
+
+- **A damaged memory file leaves no notes.** The agent's store could raise on
+  a length too long for a number, and a file damaged part way kept the notes
+  before the damage; it is now read whole or not at all.
+
 - **A file stating what its architecture has no use for is refused.** An
   attention width, a sliding window, a rotation stretch or an expert count on
   Mamba, Mamba2 or RWKV6; a mixture on StableLM; a window on Jamba or
