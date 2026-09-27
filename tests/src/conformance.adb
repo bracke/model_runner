@@ -16,7 +16,6 @@ with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
 with Model_Runner.Backend.Reference;
-with Tiny_Model;
 
 package body Conformance is
 
@@ -558,6 +557,11 @@ package body Conformance is
            and then Model_Runner.Backend."/="
                       (Backend, Model_Runner.Backend.Backend_Device);
       begin
+         --  Asked for, whatever becomes of it below: every way out of this
+         --  procedure that is not a comparison made has to be counted as
+         --  something else, and the count of asks is what that is held to.
+         Result.Requested := Result.Requested + 1;
+
          --  A model that attends both ways has no single-token evaluation
          --  and no way to take a text in pieces: a position cannot be
          --  computed before the text it reads exists, and the engine
@@ -1147,7 +1151,7 @@ package body Conformance is
                for Format in Tiny_Model.Weight_Format loop
                   --  A short sweep crosses binary32 alone; the count below
                   --  is the same arithmetic over one format.
-                  if Short_Sweep and then Format /= Tiny_Model.F32 then
+                  if not Crosses (Format, Short_Sweep) then
                      goto Next_Format;
                   end if;
 
@@ -1507,6 +1511,14 @@ package body Conformance is
          if Device_Ready then
             for Which_Arch in Crossed'Range loop
                for Format of Device_Formats loop
+                  --  The short sweep's binary32 alone, here as above. The
+                  --  cache arms below ride on the first device format,
+                  --  which is binary32, and the mixture after the loop
+                  --  is built in it, so both still run in a short sweep.
+                  if not Crosses (Format, Short_Sweep) then
+                     goto Next_Device_Format;
+                  end if;
+
                   Since := Ada.Calendar.Clock;
 
                   --  Room for the tiled sequence, which the default
@@ -1633,6 +1645,8 @@ package body Conformance is
                   end if;
 
                   B.Free (Image);
+
+                  <<Next_Device_Format>>
                end loop;
 
                --  And the mixture shape, on the device, for every
@@ -1703,9 +1717,8 @@ package body Conformance is
 
          declare
             Formats : constant Natural :=
-              (if Short_Sweep then 1
-               else Tiny_Model.Weight_Format'Pos
-                      (Tiny_Model.Weight_Format'Last) + 1);
+              Tiny_Model.Weight_Format'Pos (Tiny_Model.Weight_Format'Last)
+              + 1;
             Backends : constant Natural := Swept'Length;
             Repacks : constant Natural :=
               L.Repack_Mode'Pos (L.Repack_Mode'Last) + 1;
@@ -1779,19 +1792,26 @@ package body Conformance is
               - Formats * Lossy_Skipped * Per_Model
               + Also_Ran;
 
-            Result.Formats := Formats;
+            --  What the sweep crossed, which a short one says it did.
+            Result.Formats := (if Short_Sweep then 1 else Formats);
             Result.Architectures := Arches;
             Result.Shapes := Shapes;
             Result.On_Device := On_Device;
-            Result.Wanted := Expected;
+            --  The full sweep is held to that arithmetic, an account of
+            --  the cross product written apart from the loops that make
+            --  it. The short one makes a subset of it -- binary32 alone,
+            --  on both arms -- that the arithmetic does not describe, and
+            --  is held to the comparisons it asked for instead: still an
+            --  account a silently skipped comparison falls short of.
+            Result.Wanted :=
+              (if Short_Sweep then Result.Requested else Expected);
 
             --  Every comparison the loops ask for is either made or counted
             --  as one this architecture has not got. A sweep that ran fewer
             --  and said nothing is what this arithmetic exists to catch, so
             --  the ones it declines have to be in the total rather than
             --  quietly missing from it.
-            Result.Ran :=
-              Result.Sequences + Result.Not_Applicable = Expected;
+            Result.Ran := Accounted (Result);
          end;
       end;
 

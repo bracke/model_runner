@@ -1,3 +1,5 @@
+with Tiny_Model;
+
 --  Conformance of the engine against the independent reference.
 --
 --  The engine and Reference_Transformer compute the same logits by different
@@ -240,8 +242,36 @@ package Conformance is
       --  so that a run which came up short can say by how much: "compared
       --  nothing" was all the gate could report, whatever the shortfall.
       Wanted     : Natural := 0;
+
+      --  Comparisons the sweep actually asked for: one for every time the
+      --  comparison was called, counted before it can answer that there is
+      --  nothing to compare, fail to prepare, or decline. What a short
+      --  sweep holds itself to, since its asks are a subset of the full
+      --  cross product that the full sweep's own arithmetic describes.
+      Requested  : Natural := 0;
       Ran        : Boolean := False;
    end record;
+
+   --  Whether a sweep crosses weights of this format: every format for
+   --  the full sweep, binary32 alone for the short one -- on the
+   --  processor's arm and the device's alike.
+   --
+   --  @param Format Weight format.
+   --  @param Short_Sweep Whether the sweep is the short one.
+   --  @return True when the sweep builds and compares that format.
+   function Crosses
+     (Format : Tiny_Model.Weight_Format; Short_Sweep : Boolean)
+      return Boolean
+   is (not Short_Sweep or else Tiny_Model."=" (Format, Tiny_Model.F32));
+
+   --  Whether every comparison asked for is accounted for: made, or
+   --  counted as one the architecture has nothing to compare for.
+   --
+   --  @param Item Report to classify.
+   --  @return True when the sequences and the inapplicable ones together
+   --    are the ones wanted.
+   function Accounted (Item : Report) return Boolean
+   is (Item.Sequences + Item.Not_Applicable = Item.Wanted);
 
    --  Report whether every compared logit was within tolerance.
    --
@@ -259,9 +289,11 @@ package Conformance is
    --  the device alone, one long enough for its tile kernels.
    --
    --  @param Result Totals, including the worst differences observed.
-   --  @param Short_Sweep Cross binary32 weights alone -- every architecture,
-   --    shape, backend, repacking and cache still, at a twenty-third of the
-   --    sweep -- for a runner that cannot spend the hours the whole takes.
+   --  @param Short_Sweep Cross binary32 weights alone, on the processor's
+   --    arm and the device's -- every architecture, shape, backend,
+   --    repacking and cache still -- for a runner that cannot spend the
+   --    hours the whole takes. Its completeness is held to the comparisons
+   --    it asked for, where the full sweep's is held to its own arithmetic.
    procedure Run (Result : out Report; Short_Sweep : Boolean := False);
 
 end Conformance;
