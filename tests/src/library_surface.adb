@@ -85,6 +85,12 @@ package body Library_Surface is
       --  showing where a picture's rows stand asks the same.
       new String'("Turned_By"),
 
+      --  The format a model's head is read in. The command lightens a
+      --  draft's head and has no reason to ask back; the suite asks to see
+      --  the four bits taken, and a caller that lightened a head of its
+      --  own asks the same.
+      new String'("Head_Format"),
+
       --  Which roles of weight round their activations, as the backend was
       --  last told. The command tells and never asks back; a caller with
       --  its own engine, or a test restoring what it found, asks.

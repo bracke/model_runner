@@ -728,6 +728,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A draft model's head is read at four bits.** A draft's output head is
+  the widest product of its token -- half of Gemma 3 270M's, 262,144 rows
+  -- and what it says is only a proposal the model drafted for checks, so
+  when a draft loads its head is written again as Q4_0 in a copy of its
+  own. The run writes what it wrote; gemma-3-4b drafted by the 270M goes
+  from 40.4 to 43.4 tokens a second greedy and 40.7 to 44.2 sampled, with
+  as many proposals taken.
+
 - **A group of five, six or seven heads reads its cache once.** A generated
   token's attention bundled a group's heads into one workgroup only where
   two, four or eight divided the group; the Qwen2.5 family has groups of

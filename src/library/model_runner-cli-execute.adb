@@ -3103,6 +3103,20 @@ package body Model_Runner.CLI.Execute is
                   return;
                end if;
 
+               --  A draft's head at four bits: what it proposes is
+               --  checked token by token, so this changes how many are
+               --  taken and never what the run writes. A head that will
+               --  not go is left as the file has it.
+               if E.Is_Ok (Condition) then
+                  declare
+                     Lighter : E.Error_Info;
+                  begin
+                     L.Lighten_Head
+                       (Draft_Model,
+                        Model_Runner.Platform.Core_Count, Lighter);
+                  end;
+               end if;
+
                if Asked and then not Numbers_Alike (Draft_Model, Prepared)
                then
                   Fail (Draft_Mismatch (L.Config (Draft_Model).Vocabulary,

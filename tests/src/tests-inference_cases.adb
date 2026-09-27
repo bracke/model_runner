@@ -1468,6 +1468,72 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Evaluation_Is_Deterministic;
 
+   --  A draft's head written again at four bits reads nearly what the
+   --  file's did: the head says Q4_0 afterwards, and a token's logits
+   --  move by less than a tenth of their largest -- where a scale of the
+   --  wrong sign, nibbles in the wrong halves or a block laid out wrong
+   --  would move them by as much as they are. Asked twice, the second
+   --  changes nothing: the head is already four bits.
+   procedure A_Lightened_Head_Reads_Nearly_The_Same
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Model_Runner.GGUF.Tensor_Type;
+
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image, Format => Tiny_Model.Q8_0);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+         Before, After : Logit_Vector;
+         Largest, Moved : N.Real := 0.0;
+      begin
+         Start (Under);
+         Assert (L.Head_Format (Under.Ready) = Model_Runner.GGUF.Type_Q8_0,
+                 "the fixture's head is not eight-bit");
+
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "session did not open");
+         L.Evaluate (Live, Under.Ready, 4, Before, Status => Status);
+         Assert (E.Is_Ok (Status), "evaluation failed before");
+         L.Close (Live);
+
+         L.Lighten_Head (Under.Ready, 2, Status);
+         Assert (E.Is_Ok (Status), "the head would not lighten");
+         Assert (L.Head_Format (Under.Ready) = Model_Runner.GGUF.Type_Q4_0,
+                 "the head is not four-bit after");
+
+         L.Lighten_Head (Under.Ready, 2, Status);
+         Assert (E.Is_Ok (Status)
+                 and then L.Head_Format (Under.Ready)
+                            = Model_Runner.GGUF.Type_Q4_0,
+                 "a second lightening changed something");
+
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "session did not open after");
+         L.Evaluate (Live, Under.Ready, 4, After, Status => Status);
+         Assert (E.Is_Ok (Status), "evaluation failed after");
+         L.Close (Live);
+
+         for Index in Before'Range loop
+            Largest := N.Real'Max (Largest, abs Before (Index));
+            Moved := N.Real'Max (Moved, abs (After (Index) - Before (Index)));
+         end loop;
+
+         Assert (Largest > 0.0, "the logits were all zero");
+         Assert (Moved > 0.0, "four bits read exactly as eight");
+         Assert (Moved <= 0.1 * Largest,
+                 "the logits moved" & N.Real'Image (Moved)
+                 & " against a largest of" & N.Real'Image (Largest));
+      end;
+
+      B.Free (Image);
+   end A_Lightened_Head_Reads_Nearly_The_Same;
+
    --  The logits written where the caller keeps them are the logits the
    --  array form hands back, to the bit, token after token; and a row the
    --  form cannot fill -- none, or one of another length -- is refused as
@@ -13969,6 +14035,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Evaluation_Is_Deterministic'Access,
          "the same token sequence produces identical logits");
+      Register_Routine
+        (T, A_Lightened_Head_Reads_Nearly_The_Same'Access,
+         "a draft's head written again at four bits reads nearly the same");
       Register_Routine
         (T, Logits_Written_In_Place_Are_The_Logits'Access,
          "the logits written where the caller keeps them are the logits");

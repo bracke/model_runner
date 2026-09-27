@@ -944,6 +944,34 @@ package Model_Runner.Llama is
    --  Nothing asked, which is what a caller who names none of these means.
    No_Rotary_Request : constant Rotary_Request := (others => <>);
 
+   --  Write a draft model's output head again at four bits a weight.
+   --
+   --  A draft's head is the widest product of its token -- half of Gemma
+   --  3 270M's, a vocabulary of 262,144 against a width of 640 -- and what
+   --  the head says is only ever a proposal: the model it drafts for
+   --  checks every token, so a coarser head changes how many are taken
+   --  and never what the run writes. Re-encoded as the legacy four-bit
+   --  kind, block by block from the decoded rows, into a copy the model
+   --  owns; the embedding a tied head shares is left as it is. A head
+   --  already at four bits or fewer, or one whose width is not whole
+   --  blocks, is left alone.
+   --
+   --  @param Item Prepared model, used only to draft.
+   --  @param Threads Workers to encode with.
+   --  @param Status Success, or why the copy could not be made; the head
+   --    is then the file's own, as before.
+   procedure Lighten_Head
+     (Item    : in out Model;
+      Threads : Positive := 1;
+      Status  : out Model_Runner.Errors.Error_Info);
+
+   --  The format the output head is read in, which Lighten_Head changes.
+   --
+   --  @param Item Prepared model.
+   --  @return The head's tensor type.
+   function Head_Format
+     (Item : Model) return Model_Runner.GGUF.Tensor_Type;
+
    --  Load, validate and prepare a model from an open byte source.
    --
    --  The source must stay open for the life of the model.
@@ -2404,6 +2432,9 @@ private
       --  own bytes, and the file's arena stays mapped for whatever was not
       --  repacked.
       Repacked    : Model_Runner.Bytes.Byte_Array_Access := null;
+
+      --  The output head at four bits, for a model that only drafts.
+      Light_Head  : Model_Runner.Bytes.Byte_Array_Access := null;
 
       --  What every resolved matrix is called, against where it lives.
       --

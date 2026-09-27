@@ -3015,6 +3015,228 @@ package body Model_Runner.Llama is
        then Item.Settings.Embedding_Mul
        else 1.0);
 
+   ------------------
+   -- Lighten_Head --
+   ------------------
+
+   procedure Lighten_Head
+     (Item    : in out Model;
+      Threads : Positive := 1;
+      Status  : out E.Error_Info)
+   is
+      use type Model_Runner.GGUF.Tensor_Type;
+      use type Interfaces.Unsigned_16;
+
+      Head : constant T.View := Item.Output;
+
+      --  The legacy four-bit block: a binary16 scale and thirty-two
+      --  nibbles, eighteen bytes.
+      Block_Width : constant := 32;
+      Block_Bytes : constant := 18;
+
+      Blocks : constant Element_Count := Head.Columns / Block_Width;
+      Row_Bytes : constant B.Byte_Count := B.Byte_Count (Blocks) * Block_Bytes;
+      Needed : constant B.Byte_Count :=
+        Row_Bytes * B.Byte_Count (Head.Rows);
+   begin
+      Status := E.Success;
+
+      if Item.Light_Head /= null
+        or else Head.Rows = 0
+        or else Head.Columns mod Block_Width /= 0
+        or else Head.Format not in Model_Runner.GGUF.Type_F32
+                                 | Model_Runner.GGUF.Type_F16
+                                 | Model_Runner.GGUF.Type_BF16
+                                 | Model_Runner.GGUF.Type_Q8_0
+                                 | Model_Runner.GGUF.Type_Q6_K
+                                 | Model_Runner.GGUF.Type_Q5_K
+                                 | Model_Runner.GGUF.Type_Q5_0
+                                 | Model_Runner.GGUF.Type_Q5_1
+      then
+         return;
+      end if;
+
+      Mem.Check_Allocation
+        (Item.Accounting, Mem.Converted_Weights,
+         Interfaces.Unsigned_64 (Needed), Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      B.Allocate (Needed, Item.Light_Head);
+      if Item.Light_Head = null then
+         Status := E.Make (E.Memory_Allocation_Failed);
+         return;
+      end if;
+
+      Mem.Record_Allocation
+        (Item.Accounting, Mem.Converted_Weights,
+         Interfaces.Unsigned_64 (Needed));
+
+      declare
+         Target : B.Byte_Array renames Item.Light_Head.all;
+
+         protected Trouble is
+            procedure Note (Reason : E.Error_Info);
+            function Reason return E.Error_Info;
+         private
+            Bad : E.Error_Info := E.Success;
+         end Trouble;
+
+         protected body Trouble is
+            procedure Note (Reason : E.Error_Info) is
+            begin
+               if E.Is_Ok (Bad) then
+                  Bad := Reason;
+               end if;
+            end Note;
+
+            function Reason return E.Error_Info is (Bad);
+         end Trouble;
+
+         --  Rows First .. Last decoded and written again, a block at a
+         --  time the way the reference encoder writes one: the scale is
+         --  the value of largest magnitude over minus eight, with its
+         --  sign, and each weight the nearest of sixteen steps of it, the
+         --  first sixteen in the low nibbles and the last in the high.
+         procedure Encode (First, Last : Element_Count) is
+            Row    : N.Real_Array (0 .. Head.Columns - 1);
+            Status : E.Error_Info;
+         begin
+            for Which in First .. Last loop
+               T.Dequantize_Row (Head, Which, Row, Status);
+               if E.Is_Error (Status) then
+                  Trouble.Note (Status);
+                  return;
+               end if;
+
+               for Block in 0 .. Blocks - 1 loop
+                  declare
+                     At_Byte : constant B.Byte_Count :=
+                       Target'First + B.Byte_Count (Which) * Row_Bytes
+                       + B.Byte_Count (Block) * Block_Bytes;
+                     From    : constant Element_Count := Block * Block_Width;
+                     Largest : Real := 0.0;
+                     Signed  : Real := 0.0;
+                  begin
+                     for J in 0 .. Block_Width - 1 loop
+                        if abs Row (From + Element_Count (J)) > Largest then
+                           Largest := abs Row (From + Element_Count (J));
+                           Signed := Row (From + Element_Count (J));
+                        end if;
+                     end loop;
+
+                     declare
+                        Scale   : constant Real := Signed / (-8.0);
+                        Inverse : constant Real :=
+                          (if Scale /= 0.0 then 1.0 / Scale else 0.0);
+                        Bits    : constant Interfaces.Unsigned_16 :=
+                          Interfaces.Unsigned_16 (N.To_Half (Scale));
+
+                        function Step (Value : Real) return B.Byte is
+                          (B.Byte
+                             (Integer'Min
+                                (15,
+                                 Integer'Max
+                                   (0,
+                                    Integer
+                                      (Real'Truncation
+                                         (Value * Inverse + 8.5))))));
+                     begin
+                        Target (At_Byte) :=
+                          B.Byte (Bits and 16#FF#);
+                        Target (At_Byte + 1) :=
+                          B.Byte (Interfaces.Shift_Right (Bits, 8));
+
+                        for J in 0 .. 15 loop
+                           Target (At_Byte + 2 + B.Byte_Count (J)) :=
+                             Step (Row (From + Element_Count (J)))
+                             or Interfaces.Shift_Left
+                                  (Step (Row (From + Element_Count (J) + 16)),
+                                   4);
+                        end loop;
+                     end;
+                  end;
+               end loop;
+            end loop;
+         end Encode;
+
+         Workers : constant Positive :=
+           Positive'Min (Threads, Positive'Max (1, Natural (Head.Rows / 4096)));
+         Share   : constant Element_Count :=
+           (Head.Rows + Element_Count (Workers) - 1)
+           / Element_Count (Workers);
+
+         task type Encoder is
+            entry Start (First, Last : Element_Count);
+         end Encoder;
+
+         task body Encoder is
+            From, To : Element_Count;
+         begin
+            accept Start (First, Last : Element_Count) do
+               From := First;
+               To := Last;
+            end Start;
+            Encode (From, To);
+         exception
+            when others =>
+               Trouble.Note (E.Make (E.Internal_Invariant_Violated));
+         end Encoder;
+      begin
+         declare
+            Team : array (1 .. Workers) of Encoder;
+         begin
+            for Index in Team'Range loop
+               declare
+                  First : constant Element_Count :=
+                    Element_Count (Index - 1) * Share;
+               begin
+                  Team (Index).Start
+                    (First,
+                     Element_Count'Min (Head.Rows - 1, First + Share - 1));
+               end;
+            end loop;
+         end;
+
+         Status := Trouble.Reason;
+      end;
+
+      if E.Is_Ok (Status) then
+         declare
+            Fresh : T.View;
+         begin
+            T.Make
+              (Format  => Model_Runner.GGUF.Type_Q4_0,
+               Rows    => Head.Rows,
+               Columns => Head.Columns,
+               Data    => Item.Light_Head,
+               Offset  => 0,
+               Result  => Fresh,
+               Status  => Status);
+            if E.Is_Ok (Status) then
+               Fresh.Role := Head.Role;
+               Item.Output := Fresh;
+               return;
+            end if;
+         end;
+      end if;
+
+      --  Whatever went wrong, the head is the file's own again.
+      Mem.Record_Release
+        (Item.Accounting, Mem.Converted_Weights,
+         Interfaces.Unsigned_64 (Needed));
+      B.Free (Item.Light_Head);
+   end Lighten_Head;
+
+   -----------------
+   -- Head_Format --
+   -----------------
+
+   function Head_Format
+     (Item : Model) return Model_Runner.GGUF.Tensor_Type
+   is (Item.Output.Format);
+
    -------------
    -- Prepare --
    -------------
@@ -11967,6 +12189,12 @@ package body Model_Runner.Llama is
       --  for it to be wrong about.
       Release_Weights (Item);
       B.Free (Item.Repacked);
+      if Item.Light_Head /= null then
+         Mem.Record_Release
+           (Item.Accounting, Mem.Converted_Weights,
+            Interfaces.Unsigned_64 (Item.Light_Head.all'Length));
+         B.Free (Item.Light_Head);
+      end if;
       Item.Embeddings := T.Empty_View;
       Item.Output := T.Empty_View;
       Item.Settings := (others => <>);
