@@ -44,6 +44,54 @@ package body Model_Runner.Images is
       E.Add_Text (Status, "detail", Detail, E.Param_Identifier);
    end Refuse;
 
+   --  The other way a decoder ends: the picture's bytes, or what they
+   --  unpack to, did not fit in memory. Said as that, with the file's
+   --  name, rather than escaping as an exception from a procedure whose
+   --  contract is a status.
+   procedure Refuse_Memory (Status : out E.Error_Info; Name : String) is
+   begin
+      Status := E.Make (E.Memory_Allocation_Failed);
+      E.Add_Text (Status, "path", Name, E.Param_Path);
+   end Refuse_Memory;
+
+   --  The CRC-32 a PNG chunk carries: the reflected polynomial 16#EDB88320#,
+   --  started at all ones and inverted at the end, over the chunk's type
+   --  and data.
+   type CRC_Table is array (Interfaces.Unsigned_8) of Interfaces.Unsigned_32;
+
+   function Make_CRC_Table return CRC_Table is
+      Table : CRC_Table;
+   begin
+      for N in CRC_Table'Range loop
+         declare
+            C : Interfaces.Unsigned_32 := Interfaces.Unsigned_32 (N);
+         begin
+            for K in 1 .. 8 loop
+               if (C and 1) /= 0 then
+                  C := 16#EDB8_8320# xor Interfaces.Shift_Right (C, 1);
+               else
+                  C := Interfaces.Shift_Right (C, 1);
+               end if;
+            end loop;
+            Table (N) := C;
+         end;
+      end loop;
+      return Table;
+   end Make_CRC_Table;
+
+   CRC_Of_Byte : constant CRC_Table := Make_CRC_Table;
+
+   function CRC_32 (Bytes : B.Byte_Array) return Interfaces.Unsigned_32 is
+      C : Interfaces.Unsigned_32 := 16#FFFF_FFFF#;
+   begin
+      for Value of Bytes loop
+         C := CRC_Of_Byte
+                (Interfaces.Unsigned_8 (C and 16#FF#) xor Value)
+              xor Interfaces.Shift_Right (C, 8);
+      end loop;
+      return C xor 16#FFFF_FFFF#;
+   end CRC_32;
+
    --  A raster of the given size, its pixels zeroed, or an empty one when
    --  the size is beyond what a picture may hold or the allocation failed.
    procedure Make (Width, Height : Natural; Result : out Raster) is
@@ -83,34 +131,44 @@ package body Model_Runner.Images is
       Height : Positive;
       Result : out Raster)
    is
-      Columns : constant Integer :=
-        Integer'Min (Width, Source.Width - Left);
-      Rows    : constant Integer :=
-        Integer'Min (Height, Source.Height - Top);
    begin
       Result := (others => <>);
-      if Source.Pixels = null or else Columns <= 0 or else Rows <= 0 then
+
+      --  Outside the picture, asked before anything is subtracted from its
+      --  edges: a corner past the edge is an empty crop, not a width below
+      --  zero.
+      if Source.Pixels = null
+        or else Left >= Source.Width
+        or else Top >= Source.Height
+      then
          return;
       end if;
 
-      Make (Columns, Rows, Result);
-      if Result.Pixels = null then
-         return;
-      end if;
+      declare
+         Columns : constant Positive :=
+           Positive'Min (Width, Source.Width - Left);
+         Rows    : constant Positive :=
+           Positive'Min (Height, Source.Height - Top);
+      begin
+         Make (Columns, Rows, Result);
+         if Result.Pixels = null then
+            return;
+         end if;
 
-      for Y in 0 .. Rows - 1 loop
-         declare
-            From : constant B.Byte_Count :=
-              3 * (B.Byte_Count (Top + Y) * B.Byte_Count (Source.Width)
-                   + B.Byte_Count (Left));
-            Into : constant B.Byte_Count :=
-              3 * B.Byte_Count (Y) * B.Byte_Count (Columns);
-            Span : constant B.Byte_Count := 3 * B.Byte_Count (Columns);
-         begin
-            Result.Pixels.all (Into .. Into + Span - 1) :=
-              Source.Pixels.all (From .. From + Span - 1);
-         end;
-      end loop;
+         for Y in 0 .. Rows - 1 loop
+            declare
+               From : constant B.Byte_Count :=
+                 3 * (B.Byte_Count (Top + Y) * B.Byte_Count (Source.Width)
+                      + B.Byte_Count (Left));
+               Into : constant B.Byte_Count :=
+                 3 * B.Byte_Count (Y) * B.Byte_Count (Columns);
+               Span : constant B.Byte_Count := 3 * B.Byte_Count (Columns);
+            begin
+               Result.Pixels.all (Into .. Into + Span - 1) :=
+                 Source.Pixels.all (From .. From + Span - 1);
+            end;
+         end loop;
+      end;
    end Crop;
 
    ------------------
@@ -229,8 +287,8 @@ package body Model_Runner.Images is
       Palette_Size  : Natural := 0;
 
       --  The deflated bytes, gathered from every IDAT chunk in order.
-      Deflated      : Z_Bytes_Access :=
-        new Zlib.Byte_Array (0 .. Natural (Data'Length));
+      --  Allocated below, where a failure can be answered.
+      Deflated      : Z_Bytes_Access := null;
       Deflated_Last : Integer := -1;
 
       Cursor : B.Byte_Index := Data'First + 8;
@@ -244,6 +302,12 @@ package body Model_Runner.Images is
    begin
       Result := (others => <>);
       Status := E.Success;
+
+      if Data'Length > Max_File_Bytes then
+         Refuse ("png size");
+         return;
+      end if;
+      Deflated := new Zlib.Byte_Array (0 .. Natural (Data'Length));
 
       while Cursor + 8 <= Data'Last + 1 loop
          declare
@@ -262,13 +326,42 @@ package body Model_Runner.Images is
                return;
             end if;
 
+            --  The chunk's checksum, over its type and its data, before
+            --  anything in it is believed. A damaged palette or header
+            --  inflates and filters as well as a sound one does -- the
+            --  compressed stream's own check covers the image data and
+            --  nothing else -- and decodes to the wrong picture.
+            if CRC_32 (Data (Cursor + 4 .. Body_At + B.Byte_Count (Length) - 1))
+              /= Big_Endian (Body_At + B.Byte_Count (Length))
+            then
+               Refuse ("png checksum");
+               return;
+            end if;
+
             if Kind = "IHDR" then
                if Length /= 13 then
                   Refuse ("png header");
                   return;
                end if;
-               Width  := Natural (Big_Endian (Body_At));
-               Height := Natural (Big_Endian (Body_At + 4));
+               --  The size as the file states it, four bytes each, held
+               --  to what a picture may be before either is taken as a
+               --  number of pixels: a width of 16#FFFF_FFFF# is not one.
+               declare
+                  Wide : constant Interfaces.Unsigned_32 :=
+                    Big_Endian (Body_At);
+                  Tall : constant Interfaces.Unsigned_32 :=
+                    Big_Endian (Body_At + 4);
+               begin
+                  if Wide = 0 or else Tall = 0
+                    or else Long_Long_Integer (Wide) * Long_Long_Integer (Tall)
+                            > Max_Pixels
+                  then
+                     Refuse ("png size");
+                     return;
+                  end if;
+                  Width  := Natural (Wide);
+                  Height := Natural (Tall);
+               end;
                Depth  := Natural (Data (Body_At + 8));
                Colour := Natural (Data (Body_At + 9));
                Interlaced := Data (Body_At + 12) = 1;
@@ -289,9 +382,12 @@ package body Model_Runner.Images is
                   Refuse ("png colour type");
                   return;
                end if;
-               if Width = 0 or else Height = 0
-                 or else Long_Long_Integer (Width) * Long_Long_Integer (Height)
-                         > Max_Pixels
+               --  And a scanline's bits, which the filters count in whole
+               --  numbers: a line of the widest picture at sixteen bits a
+               --  sample of four samples is past what one holds.
+               if Long_Long_Integer (Width) * Long_Long_Integer (Channels)
+                  * Long_Long_Integer (Depth) + 7
+                  > Long_Long_Integer (Natural'Last)
                then
                   Refuse ("png size");
                   return;
@@ -557,7 +653,19 @@ package body Model_Runner.Images is
             return;
          end if;
          Free (Deflated);
+      exception
+         when Storage_Error =>
+            Free (Rows);
+            Free (Unfiltered);
+            raise;
       end;
+   exception
+      --  The deflated bytes, what they inflate to or the pixels did not
+      --  fit: a status, as the contract says, and nothing left held.
+      when Storage_Error =>
+         Free (Deflated);
+         Free (Result);
+         Refuse_Memory (Status, Name);
    end Decode_PNG;
 
    ----------
@@ -570,14 +678,22 @@ package body Model_Runner.Images is
       Result : out Raster;
       Status : out E.Error_Info)
    is
-      Input   : Jpeglib.Streams.Byte_Array_Access :=
-        new Jpeglib.Streams.Byte_Array (1 .. Natural (Data'Length));
+      Input   : Jpeglib.Streams.Byte_Array_Access := null;
       Source  : aliased Jpeglib.Streams.Memory_Source;
       Decoder : Jpeglib.Decoding.Decoder;
       Outcome : Jpeglib.Results.Result;
+
+      --  Whether the decoder holds anything a failure has to give back.
+      Started : Boolean := False;
    begin
       Result := (others => <>);
       Status := E.Success;
+
+      if Data'Length > Max_File_Bytes then
+         Refuse (Status, Name, "jpeg size");
+         return;
+      end if;
+      Input := new Jpeglib.Streams.Byte_Array (1 .. Natural (Data'Length));
 
       for Index in Input'Range loop
          Input (Index) :=
@@ -591,10 +707,12 @@ package body Model_Runner.Images is
          (Output_Format => Jpeglib.Images.RGB_24,
           Apply_Exif_Orientation => True,
           others => <>));
+      Started := True;
 
       Outcome := Jpeglib.Decoding.Read_Header (Decoder);
       if not Jpeglib.Results.Succeeded (Outcome) then
          Jpeglib.Decoding.Finalize (Decoder);
+         Started := False;
          Free (Input);
          Refuse (Status, Name,
                  "jpeg " & Jpeglib.Errors.Error_Code'Image
@@ -613,6 +731,7 @@ package body Model_Runner.Images is
                    > Max_Pixels
          then
             Jpeglib.Decoding.Finalize (Decoder);
+            Started := False;
             Free (Input);
             Refuse (Status, Name, "jpeg size");
             return;
@@ -665,6 +784,7 @@ package body Model_Runner.Images is
                  (Jpeglib.Errors.Internal_Invariant_Failed);
             end if;
             Jpeglib.Decoding.Finalize (Decoder);
+            Started := False;
             Free (Input);
             if not Jpeglib.Results.Succeeded (Outcome) then
                Free (Output);
@@ -685,8 +805,24 @@ package body Model_Runner.Images is
                  B.Byte (Output (Index));
             end loop;
             Free (Output);
+         exception
+            --  The decoding task's stack is sized for the picture, and a
+            --  stack the host will not give is a task that does not start.
+            when Storage_Error | Tasking_Error =>
+               Free (Output);
+               raise;
          end;
       end;
+   exception
+      --  The bytes, the samples or the stack did not fit: a status, as the
+      --  contract says, and nothing left held.
+      when Storage_Error | Tasking_Error =>
+         if Started then
+            Jpeglib.Decoding.Finalize (Decoder);
+         end if;
+         Free (Input);
+         Free (Result);
+         Refuse_Memory (Status, Name);
    end Decode_JPEG;
 
    ---------
@@ -1020,6 +1156,17 @@ package body Model_Runner.Images is
          return;
       end if;
 
+      --  The horizontal pass's rows are Width pixels by Source.Height,
+      --  which neither picture's own bound limits: held to the same bound,
+      --  in arithmetic wide enough to say so, and past it this is the
+      --  allocation that failed.
+      if Long_Long_Integer (Width) * Long_Long_Integer (Source.Height)
+        > Max_Pixels
+      then
+         Free (Result);
+         return;
+      end if;
+
       declare
          --  The horizontal pass: Source.Height rows of Width pixels,
          --  each a byte's worth, as PIL keeps them between its passes.
@@ -1028,22 +1175,52 @@ package body Model_Runner.Images is
          procedure Free is new Ada.Unchecked_Deallocation
            (Row_Values, Row_Values_Access);
 
-         Across : Row_Values_Access :=
-           new Row_Values (0 .. 3 * Width * Source.Height - 1);
-         Taps   : Weight_Array (0 .. Max_Taps - 1);
-         Fixed  : Fixed_Array (0 .. Max_Taps - 1);
+         --  And the taps, whose count grows with the shrink: on the heap,
+         --  since a picture shrunk far enough asks for more of them than a
+         --  stack frame holds.
+         type Weight_Array_Access is access Weight_Array;
+         type Fixed_Array_Access is access Fixed_Array;
+         procedure Free is new Ada.Unchecked_Deallocation
+           (Weight_Array, Weight_Array_Access);
+         procedure Free is new Ada.Unchecked_Deallocation
+           (Fixed_Array, Fixed_Array_Access);
+
+         Across : Row_Values_Access := null;
+         Taps   : Weight_Array_Access := null;
+         Fixed  : Fixed_Array_Access := null;
          First, Count : Natural;
+
+         --  Everything this pass holds given back, and the result with
+         --  it: an allocation that failed is an empty raster, as the
+         --  contract says, and not a raster left half made.
+         procedure Give_Up is
+         begin
+            Free (Across);
+            Free (Taps);
+            Free (Fixed);
+            Free (Result);
+         end Give_Up;
       begin
+         begin
+            Across := new Row_Values (0 .. 3 * Width * Source.Height - 1);
+            Taps := new Weight_Array (0 .. Max_Taps - 1);
+            Fixed := new Fixed_Array (0 .. Max_Taps - 1);
+         exception
+            when Storage_Error =>
+               Give_Up;
+               return;
+         end;
+
          for X in 0 .. Width - 1 loop
-            Weights_For (X, Source.Width, Width, First, Taps, Count);
-            Fix (Taps, Count, Fixed);
+            Weights_For (X, Source.Width, Width, First, Taps.all, Count);
+            Fix (Taps.all, Count, Fixed.all);
             for Y in 0 .. Source.Height - 1 loop
                for C in 0 .. 2 loop
                   declare
                      Sum : Long_Long_Integer := 0;
                   begin
                      for Tap in 0 .. Count - 1 loop
-                        Sum := Sum + Fixed (Tap)
+                        Sum := Sum + Fixed.all (Tap)
                           * Long_Long_Integer
                               (Source.Pixels
                                  (3 * (B.Byte_Count (Y)
@@ -1051,24 +1228,24 @@ package body Model_Runner.Images is
                                        + B.Byte_Count (First + Tap))
                                   + B.Byte_Count (C)));
                      end loop;
-                     Across (3 * (Y * Width + X) + C) := Weight (Clipped (Sum));
+                     Across.all (3 * (Y * Width + X) + C) := Weight (Clipped (Sum));
                   end;
                end loop;
             end loop;
          end loop;
 
          for Y in 0 .. Height - 1 loop
-            Weights_For (Y, Source.Height, Height, First, Taps, Count);
-            Fix (Taps, Count, Fixed);
+            Weights_For (Y, Source.Height, Height, First, Taps.all, Count);
+            Fix (Taps.all, Count, Fixed.all);
             for X in 0 .. Width - 1 loop
                for C in 0 .. 2 loop
                   declare
                      Sum : Long_Long_Integer := 0;
                   begin
                      for Tap in 0 .. Count - 1 loop
-                        Sum := Sum + Fixed (Tap)
+                        Sum := Sum + Fixed.all (Tap)
                           * Long_Long_Integer
-                              (Across (3 * ((First + Tap) * Width + X) + C));
+                              (Across.all (3 * ((First + Tap) * Width + X) + C));
                      end loop;
                      Result.Pixels
                        (3 * (B.Byte_Count (Y) * B.Byte_Count (Width)
@@ -1080,6 +1257,8 @@ package body Model_Runner.Images is
          end loop;
 
          Free (Across);
+         Free (Taps);
+         Free (Fixed);
       end;
    end Resample;
 

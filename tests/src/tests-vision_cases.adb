@@ -77,6 +77,40 @@ package body Tests.Vision_Cases is
                   (3 * (B.Byte_Count (Y) * B.Byte_Count (Item.Width)
                         + B.Byte_Count (X)) + B.Byte_Count (Channel))));
 
+   --  Four bytes, most significant first, as PNG writes every number.
+   function Big (Value : Interfaces.Unsigned_32) return B.Byte_Array is
+      use Interfaces;
+   begin
+      return [B.Byte (Shift_Right (Value, 24) and 16#FF#),
+              B.Byte (Shift_Right (Value, 16) and 16#FF#),
+              B.Byte (Shift_Right (Value, 8) and 16#FF#),
+              B.Byte (Value and 16#FF#)];
+   end Big;
+
+   --  The CRC-32 a PNG chunk carries, a bit at a time: written here from
+   --  the specification rather than shared with the reader's table, so the
+   --  two computing the same number is evidence rather than an echo.
+   function PNG_CRC (Bytes : B.Byte_Array) return Interfaces.Unsigned_32 is
+      use Interfaces;
+      C : Unsigned_32 := 16#FFFF_FFFF#;
+   begin
+      for Value of Bytes loop
+         C := C xor Unsigned_32 (Value);
+         for Bit in 1 .. 8 loop
+            C := (if (C and 1) = 1
+                  then Shift_Right (C, 1) xor 16#EDB8_8320#
+                  else Shift_Right (C, 1));
+         end loop;
+      end loop;
+      return C xor 16#FFFF_FFFF#;
+   end PNG_CRC;
+
+   --  One chunk: its length, its type, its data and the checksum over the
+   --  type and the data.
+   function Chunk (Kind : String; Data : B.Byte_Array) return B.Byte_Array
+   is (Big (Interfaces.Unsigned_32 (Data'Length)) & Bytes_Of (Kind) & Data
+       & Big (PNG_CRC (Bytes_Of (Kind) & Data)));
+
    --  A PNG written with stored deflate blocks, which needs no
    --  compressor: the signature, a header, the palette where there is
    --  one, the scanlines -- a filter byte and the samples -- in one
@@ -89,16 +123,6 @@ package body Tests.Vision_Cases is
       Interlaced    : Boolean := False) return B.Byte_Array
    is
       use Interfaces;
-
-      function Big (Value : Unsigned_32) return B.Byte_Array
-      is ([B.Byte (Shift_Right (Value, 24) and 16#FF#),
-           B.Byte (Shift_Right (Value, 16) and 16#FF#),
-           B.Byte (Shift_Right (Value, 8) and 16#FF#),
-           B.Byte (Value and 16#FF#)]);
-
-      function Chunk (Kind : String; Data : B.Byte_Array) return B.Byte_Array
-      is (Big (Unsigned_32 (Data'Length)) & Bytes_Of (Kind) & Data
-          & Big (0));
 
       --  The zlib stream: the header, then stored blocks of at most 65535
       --  bytes each, then the Adler-32 checksum, which the reader here
@@ -268,6 +292,45 @@ package body Tests.Vision_Cases is
               "a two-bit palette was read wrongly");
       Images.Free (Picture);
 
+      --  The same picture with one bit of its palette changed after the
+      --  checksum was written: the image data's own check still holds,
+      --  so without the chunk's the picture decoded in the wrong colours.
+      declare
+         Sound : constant B.Byte_Array :=
+           Stored_PNG (3, 1, 2, 3, [0, 2#01_10_11_00#],
+                       Palette => [0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255]);
+
+         --  The signature, the header chunk, then the palette's length
+         --  and type: its first byte of data.
+         Palette_At : constant B.Byte_Count := Sound'First + 8 + 25 + 8;
+         Damaged    : B.Byte_Array := Sound;
+         use type Interfaces.Unsigned_8;
+      begin
+         Damaged (Palette_At + 3) := Damaged (Palette_At + 3) xor 16#01#;
+         Images.Decode (Damaged, "test", Picture, Status);
+         Assert (Status.Code = E.IO_Image_Unreadable
+                   and then Picture.Pixels = null,
+                 "a palette changed after its checksum was read");
+      end;
+
+      --  A header naming a width no picture has, its checksum sound: a
+      --  status, not an exception out of a procedure whose contract is
+      --  one.
+      declare
+         Huge : constant B.Byte_Array :=
+           [16#89#, 16#50#, 16#4E#, 16#47#, 16#0D#, 16#0A#, 16#1A#, 16#0A#]
+           & Chunk ("IHDR",
+                    Big (16#FFFF_FFFF#) & Big (1) & [8, 2, 0, 0, 0])
+           & Chunk ("IDAT", [16#78#, 16#01#, 1, 0, 0, 16#FF#, 16#FF#])
+           & Chunk ("IEND", [1 .. 0 => 0]);
+      begin
+         Images.Decode (Huge, "test", Picture, Status);
+         Assert (Status.Code = E.IO_Image_Unreadable
+                   and then Picture.Pixels = null,
+                 "a header wider than any picture was not refused: "
+                 & E.Error_Code'Image (Status.Code));
+      end;
+
       Images.Decode
         (Stored_PNG (4, 1, 1, 0, [0, 2#1010_0000#]), "test", Picture, Status);
       Assert (E.Is_Ok (Status) and then Pixel (Picture, 0, 0, 0) = 255
@@ -425,6 +488,36 @@ package body Tests.Vision_Cases is
          Images.Crop (Source, 5, 0, 1, 1, Piece);
          Assert (Piece.Pixels = null,
                  "a crop outside the picture was not empty");
+
+         --  Wholly past the edge, not only at it: a corner beyond the
+         --  width or the height is an empty crop, however far beyond.
+         Images.Crop (Source, 6, 0, 1, 1, Piece);
+         Assert (Piece.Pixels = null and then Piece.Width = 0,
+                 "a crop starting past the right edge was not empty");
+         Images.Crop (Source, 0, 3, 1, 1, Piece);
+         Assert (Piece.Pixels = null and then Piece.Height = 0,
+                 "a crop starting below the bottom edge was not empty");
+         Images.Crop (Source, Natural'Last, Natural'Last, 1, 1, Piece);
+         Assert (Piece.Pixels = null,
+                 "a crop at the far end of the numbers was not empty");
+
+         --  A resampling whose intermediate rows -- the wanted width by
+         --  the source's height -- are past what a picture may hold comes
+         --  back empty, as a failed allocation does, rather than raising
+         --  or leaving its result half made.
+         declare
+            Tall : Images.Raster;
+         begin
+            Tall.Width := 1;
+            Tall.Height := 65_536;
+            Tall.Pixels := new B.Byte_Array'(0 .. 3 * 65_536 - 1 => 7);
+            Images.Resample (Tall, 2_000, 1, Piece);
+            Assert (Piece.Pixels = null and then Piece.Width = 0
+                      and then Piece.Height = 0,
+                    "a resampling past what a picture may hold was not "
+                    & "empty");
+            Images.Free (Tall);
+         end;
          Images.Free (Source);
       end;
    end Pictures_Decode_And_Resample;

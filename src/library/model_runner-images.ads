@@ -46,8 +46,9 @@ package Model_Runner.Images is
    --
    --  @param Path The file.
    --  @param Result The pixels, or an empty raster on failure.
-   --  @param Status Success, IO_Open_Failed, IO_File_Too_Large or
-   --    IO_Image_Unreadable, the last naming what the decoder objected to.
+   --  @param Status Success, IO_Open_Failed, IO_File_Too_Large,
+   --    IO_Image_Unreadable, the last naming what the decoder objected to,
+   --    or Memory_Allocation_Failed, as Decode says.
    procedure Load
      (Path   : String;
       Result : out Raster;
@@ -59,7 +60,10 @@ package Model_Runner.Images is
    --  @param Data The file's bytes.
    --  @param Name What to call the picture in a diagnostic.
    --  @param Result The pixels, or an empty raster on failure.
-   --  @param Status Success or IO_Image_Unreadable.
+   --  @param Status Success; IO_Image_Unreadable, naming what the decoder
+   --    objected to -- a damaged chunk, a size no picture has, a stream
+   --    that does not inflate; or Memory_Allocation_Failed, where the
+   --    bytes or the pixels they decode to did not fit.
    procedure Decode
      (Data   : Model_Runner.Bytes.Byte_Array;
       Name   : String;
