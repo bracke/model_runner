@@ -11858,6 +11858,16 @@ for a Qwen2.5-14B fine-tune: Steelman-14B Q4_K_M, 256 tokens of Ada, went from
 `--draft-model qwen2.5-coder-0.5b-instruct-q8_0.gguf --draft-tokens 3`, 64 per
 cent of proposals accepted.
 
+With no draft option named, `run` looks for one itself. A dense model of two
+gigabytes a token or more, with no next-token block of its own, takes the
+largest file in the model store (`models-dir`, `MODEL_RUNNER_MODELS`) that is
+of its architecture, at most an eighth of its size, and numbers its tokens as
+it does, and drafts three a round with it; the run says which on standard
+error. `--draft-tokens 0` turns it off, and a draft that will not load leaves
+the run to draft as it would have without one. Finding it reads each
+candidate's header, not its weights; loading it is the same second or so a
+named `--draft-model` costs.
+
 What it saves is passes over the big model's weights: however many proposals
 are accepted, they cost one pass. What it costs is the draft model's own
 passes, one per proposal, and the output projection once per checked position

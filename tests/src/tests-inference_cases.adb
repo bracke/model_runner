@@ -1,3 +1,8 @@
+with Model_Runner.GGUF.Containers;
+with Model_Runner.GGUF.Shards;
+with Model_Runner.Drafts;
+with Ada.Directories;
+with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 with Ada.Text_IO;
 
@@ -5743,6 +5748,98 @@ package body Tests.Inference_Cases is
       B.Free (Padded);
       B.Free (Small);
    end A_Draft_With_Fewer_Tokens_Keeps_The_Target;
+
+   ---------------------------------------------
+   -- A_Draft_Is_Found_Among_The_Stored_Models --
+   ---------------------------------------------
+
+   --  A run with no draft named takes one out of the model store: the
+   --  largest file there of the model's architecture, small enough, whose
+   --  tokens are the model's text. Here a padded target, a store holding
+   --  its unpadded twin and a byte-pair model of the same size whose
+   --  tokens are other text: the twin is found, and a store holding only
+   --  the other finds nothing.
+   procedure A_Draft_Is_Found_Among_The_Stored_Models
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Store  : constant String := "obj/draft-store";
+      Other  : constant String := "obj/draft-store-other";
+      Target_Path : constant String := "obj/draft-target.gguf";
+
+      Padded, Small, Foreign : B.Byte_Array_Access;
+
+      procedure Put (Path : String; Image : B.Byte_Array) is
+         use Ada.Streams.Stream_IO;
+         File : File_Type;
+         Data : Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (Image'Length))
+           with Import, Address => Image (Image'First)'Address;
+      begin
+         Create (File, Out_File, Path);
+         Write (File, Data);
+         Close (File);
+      end Put;
+
+      procedure Fresh (Directory : String) is
+      begin
+         if Ada.Directories.Exists (Directory) then
+            Ada.Directories.Delete_Tree (Directory);
+         end if;
+         Ada.Directories.Create_Path (Directory);
+      end Fresh;
+   begin
+      Tiny_Model.Build (Padded, Padding => 8);
+      Tiny_Model.Build (Small);
+      Tiny_Model.Build (Foreign, Byte_Pair => True);
+
+      Fresh (Store);
+      Fresh (Other);
+      Put (Target_Path, Padded.all);
+      Put (Store & "/twin.gguf", Small.all);
+      Put (Store & "/foreign.gguf", Foreign.all);
+      Put (Other & "/foreign.gguf", Foreign.all);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Padded.all;
+         Target : aliased Harness (Held'Access);
+         Set    : Model_Runner.GGUF.Shards.Shard_Set;
+         Parsed : Model_Runner.GGUF.Containers.Container;
+         Status : E.Error_Info;
+      begin
+         Start (Target);
+         Model_Runner.GGUF.Shards.Open_Model
+           (Set, Parsed, Target_Path, Status => Status);
+         Assert (E.Is_Ok (Status), "the target file would not open");
+
+         declare
+            Found : constant String :=
+              Model_Runner.Drafts.Find
+                (Store, Target_Path, Parsed, L.Vocabulary (Target.Ready).all,
+                 Share => 1, Least => 0);
+            None  : constant String :=
+              Model_Runner.Drafts.Find
+                (Other, Target_Path, Parsed, L.Vocabulary (Target.Ready).all,
+                 Share => 1, Least => 0);
+         begin
+            Assert (Ada.Strings.Fixed.Tail (Found, 9) = "twin.gguf",
+                    "the store's draft was not found: '" & Found & "'");
+            Assert (None = "",
+                    "a model of other tokens was taken for a draft: " & None);
+         end;
+
+         Model_Runner.GGUF.Containers.Close (Parsed);
+         Model_Runner.GGUF.Shards.Close (Set);
+      end;
+
+      Ada.Directories.Delete_Tree (Store);
+      Ada.Directories.Delete_Tree (Other);
+      Ada.Directories.Delete_File (Target_Path);
+      B.Free (Padded);
+      B.Free (Small);
+      B.Free (Foreign);
+   end A_Draft_Is_Found_Among_The_Stored_Models;
 
    ------------------------------------
    -- Drafting_Runs_On_A_Device --
@@ -12950,6 +13047,10 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Adapters_Stack_And_Come_Off_Again'Access,
          "adapters stack, and a scale of minus one takes one off again");
+      Register_Routine
+        (T, A_Draft_Is_Found_Among_The_Stored_Models'Access,
+         "a run with no draft named finds one among the stored models: the "
+         & "file whose tokens are the model's, and not one of other tokens");
       Register_Routine
         (T, A_Draft_With_Fewer_Tokens_Keeps_The_Target'Access,
          "a draft whose vocabulary stops short of the target's drafts for "

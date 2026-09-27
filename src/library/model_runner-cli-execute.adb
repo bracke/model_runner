@@ -10,6 +10,7 @@ with Ada.Unchecked_Deallocation;
 with Interfaces;
 
 with Model_Runner.Byte_Sources.Files;
+with Model_Runner.Drafts;
 with Model_Runner.GGUF.Shards;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
@@ -2502,6 +2503,11 @@ package body Model_Runner.CLI.Execute is
    Next_Draft_Bytes  : constant Float := 2.0 * 1024.0 ** 3;
    Next_Draft_Tokens : constant := 3;
 
+   --  Proposals a round for a draft the run found in the model store:
+   --  three read best for Steelman-14B with Qwen2.5-Coder-0.5B, 12.75
+   --  tokens a second against 12.0, 11.8 and 11.3 for four, five and six.
+   Store_Draft_Tokens : constant := 3;
+
    ---------------------
    -- Resolved_Backend --
    ---------------------
@@ -2691,6 +2697,11 @@ package body Model_Runner.CLI.Execute is
       Draft_Session   : aliased L.Session;
       Draft_Ready     : Boolean := False;
 
+      --  The draft Drafts.Find found, when none was named, and whether the
+      --  run drafts with it.
+      Auto_Draft   : T.Bounded := T.Empty;
+      Auto_Drafted : Boolean := False;
+
       --  A model loaded only to embed with, for the agent's retrieve tool,
       --  when --embed-model named one. Held here so it outlives the loop.
       Embed_Source    : Shards.Shard_Set;
@@ -2709,9 +2720,6 @@ package body Model_Runner.CLI.Execute is
       function Numbers_Alike
         (Draft, Target : L.Model) return Boolean
       is
-         --  Qwen2 against Qwen2.5 differ in nineteen; a draft with another
-         --  tokenizer differs in nearly every one.
-         Unlike_Most : constant := 64;
 
          Drafts  : constant access constant Model_Runner.Tokenizer.Vocabulary :=
            L.Vocabulary (Draft);
@@ -2741,7 +2749,7 @@ package body Model_Runner.CLI.Execute is
             end if;
          end loop;
 
-         return Differ <= Unlike_Most;
+         return Model_Runner.Drafts.Alike_Enough (Differ, Size);
       end Numbers_Alike;
 
       --  Two models that do not number their tokens alike.
@@ -3032,39 +3040,91 @@ package body Model_Runner.CLI.Execute is
          --  two models comparable at all: a proposal is a token identifier,
          --  so two models that number their tokens differently would be
          --  agreeing about numbers rather than about text.
-         if not T.Is_Empty (Item.Draft_Path) then
-            Load (Item, Screen, Draft_Source, Draft_Container, Draft_Model,
-                  True, null, Cancel'Unchecked_Access, Condition,
-                  Instead => T.To_String (Item.Draft_Path));
-            if E.Is_Error (Condition) then
-               Fail (Condition);
-               return;
-            end if;
+         --  And where none was named and nothing else would draft -- a
+         --  dense model of Next_Draft_Bytes a token or more, with no block
+         --  past its stack -- a draft out of the model store, when one
+         --  there numbers its tokens as this one does; see Drafts.Find. Found, it is said so
+         --  and loaded as a named one is; one that will not load or open
+         --  leaves the run to draft as it would have without it, since
+         --  nobody asked for it.
+         if T.Is_Empty (Item.Draft_Path)
+           and then not Item.Draft_Lookup
+           and then not Item.Draft_Tokens_Set
+           and then Item.Draft_Tokens > 0
+           and then L.Config (Prepared).Experts = 0
+           and then not L.Drafts_Next (Session)
+           and then L.Token_Bytes (Prepared) >= Next_Draft_Bytes
+           and then L.Vocabulary (Prepared) /= null
+         then
+            Auto_Draft :=
+              T.To_Bounded
+                (Model_Runner.Drafts.Find
+                   (Model_Runner.Platform.Models_Directory,
+                    Model_Runner.Platform.Resolve_Model_Path
+                      (Resolve_Alias (T.To_String (Item.Model_Path))),
+                    Container, L.Vocabulary (Prepared).all));
+         end if;
 
-            if not Numbers_Alike (Draft_Model, Prepared) then
-               Fail (Draft_Mismatch (L.Config (Draft_Model).Vocabulary,
-                                     L.Config (Prepared).Vocabulary));
-               return;
-            end if;
+         if not T.Is_Empty (Item.Draft_Path)
+           or else not T.Is_Empty (Auto_Draft)
+         then
+            declare
+               Asked : constant Boolean := not T.Is_Empty (Item.Draft_Path);
+            begin
+               Load (Item, Screen, Draft_Source, Draft_Container, Draft_Model,
+                     True, null, Cancel'Unchecked_Access, Condition,
+                     Instead =>
+                       (if Asked then T.To_String (Item.Draft_Path)
+                        else T.To_String (Auto_Draft)));
 
-            --  The same worker pool. A draft that runs serial while the
-              --  model it drafts for runs across seven workers is a draft
-              --  paying seven times what it should for every proposal, and
-              --  the run measures as though drafting were hopeless when
-              --  what was hopeless was the arrangement. The two never
-              --  evaluate at once -- a round proposes, then checks -- so
-              --  one pool serves both.
-            L.Open
-              (Draft_Session, Draft_Model, Item.Context_Size,
-               Session_Bounds => Session_Bounds (Item),
-               Workers => Team, Cache => Item.Cache, Status => Condition,
-               Values => Item.Values, Paged => Session_Paging (Item));
-            if E.Is_Error (Condition) then
-               Fail (Condition);
-               return;
-            end if;
+               if Asked and then E.Is_Error (Condition) then
+                  Fail (Condition);
+                  return;
+               end if;
 
-            Draft_Ready := True;
+               if Asked and then not Numbers_Alike (Draft_Model, Prepared)
+               then
+                  Fail (Draft_Mismatch (L.Config (Draft_Model).Vocabulary,
+                                        L.Config (Prepared).Vocabulary));
+                  return;
+               end if;
+
+               --  The same worker pool. A draft that runs serial while the
+               --  model it drafts for runs across seven workers is a draft
+               --  paying seven times what it should for every proposal, and
+               --  the run measures as though drafting were hopeless when
+               --  what was hopeless was the arrangement. The two never
+               --  evaluate at once -- a round proposes, then checks -- so
+               --  one pool serves both.
+               if E.Is_Ok (Condition)
+                 and then (Asked or else Numbers_Alike (Draft_Model, Prepared))
+               then
+                  L.Open
+                    (Draft_Session, Draft_Model, Item.Context_Size,
+                     Session_Bounds => Session_Bounds (Item),
+                     Workers => Team, Cache => Item.Cache, Status => Condition,
+                     Values => Item.Values, Paged => Session_Paging (Item));
+                  if E.Is_Error (Condition) and then Asked then
+                     Fail (Condition);
+                     return;
+                  end if;
+
+                  Draft_Ready := E.Is_Ok (Condition);
+               end if;
+
+               if not Asked then
+                  Condition := E.Success;
+                  Auto_Drafted := Draft_Ready;
+                  if Draft_Ready then
+                     Pres.Put_Note
+                       (Screen, "cli.note.draft_from_store",
+                        [Loc.Named
+                           ("model",
+                            Ada.Directories.Simple_Name
+                              (T.To_String (Auto_Draft)))]);
+                  end if;
+               end if;
+            end;
          end if;
 
          --  A model to embed with for the agent's retrieve tool, loaded like
@@ -4112,6 +4172,7 @@ package body Model_Runner.CLI.Execute is
                     (if Request.Draft_From_Next
                        and then not Item.Draft_Tokens_Set
                      then Next_Draft_Tokens
+                     elsif Auto_Drafted then Store_Draft_Tokens
                      elsif Draft_Ready or else Item.Draft_Lookup
                        or else Request.Draft_From_Next
                      then Item.Draft_Tokens else 0);
