@@ -728,6 +728,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A group of five, six or seven heads reads its cache once.** A generated
+  token's attention bundled a group's heads into one workgroup only where
+  two, four or eight divided the group; the Qwen2.5 family has groups of
+  five (14B, 32B), six (1.5B) and seven (7B, 0.5B), and each of their heads
+  read the group's keys and values on its own. The four-at-a-time bundle is
+  now made at those widths too. Same tokens; after a 1,300-token prompt
+  Steelman-14B 7.02 -> 7.23 tokens a second, qwen2.5-coder-0.5B 92.1 ->
+  95.7.
+
 - **A short cache is attended to by every subgroup, not one.** A generated
   token's attention dealt a tile of cached positions to its subgroups in
   runs of sixty-four, so a tile the cache does not fill -- every tile of a

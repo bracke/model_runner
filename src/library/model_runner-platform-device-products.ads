@@ -100,6 +100,19 @@ package Model_Runner.Platform.Device.Products is
    --  asks nothing of the bases and widths.
    Pair_Bundle : constant := 2;
 
+   --  And a bundle the width of a whole group, for a group of five, six
+   --  or seven -- the Qwen2.5 family's: fourteen and thirty-two billion
+   --  give five heads a group, seven and a half billion seven, one and a
+   --  half six -- which neither four nor eight divides. A head a
+   --  workgroup read its group's keys and values once for every head of
+   --  it; bundled, once. The four-at-a-time compilation, told the width
+   --  through the same constant as the bundle of eight.
+   Whole_Least : constant := 5;
+   Whole_Most  : constant := 7;
+
+   type Whole_Lines is
+     array (Whole_Least .. Whole_Most) of System.Address;
+
    --  And the fewest cached positions the exact bundle is bound over: a
    --  short cache is a few workgroups doing little each, and a head a
    --  workgroup is more workgroups.
@@ -2799,6 +2812,7 @@ private
       Exact_Bundle_Line : System.Address := System.Null_Address;
       Eight_Bundle_Line : System.Address := System.Null_Address;
       Pair_Bundle_Line  : System.Address := System.Null_Address;
+      Whole_Bundle_Line : Whole_Lines := [others => System.Null_Address];
 
       --  The half-precision bundle at eight heads, for a token attending
       --  out of the copy, and whether a token does.

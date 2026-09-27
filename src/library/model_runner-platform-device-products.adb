@@ -622,6 +622,12 @@ package body Model_Runner.Platform.Device.Products is
          and then Item.Exact_Bundle_Line /= Null_Handle
          and then Group_Size mod Head_Bundle = 0
        then Head_Bundle
+       --  A group of five, six or seven, bundled whole.
+       elsif Fours_Fit (Head_Size, Value_Size, K_Base, V_Base,
+                        KV_Width, V_Width)
+         and then Group_Size in Whole_Lines'Range
+         and then Item.Whole_Bundle_Line (Group_Size) /= Null_Handle
+       then Group_Size
        elsif Item.Pair_Bundle_Line /= Null_Handle
          and then Group_Size mod Pair_Bundle = 0
        then Pair_Bundle
@@ -674,6 +680,12 @@ package body Model_Runner.Platform.Device.Products is
                      K_Base, V_Base, KV_Width, V_Width, Span)
                   = Wide_Bundle
        then Item.Eight_Bundle_Line
+       elsif not Rounding
+         and then Exact_Bundle
+                    (Item, Positions, Head_Size, Value_Size, Group_Size,
+                     K_Base, V_Base, KV_Width, V_Width, Span)
+                  in Whole_Lines'Range
+       then Item.Whole_Bundle_Line (Group_Size)
        elsif not Rounding
          and then Exact_Bundle
                     (Item, Positions, Head_Size, Value_Size, Group_Size,
@@ -3826,6 +3838,18 @@ package body Model_Runner.Platform.Device.Products is
                   Item.Eight_Bundle_Line := Made;
                end if;
 
+               --  And at the width of each whole group neither four nor
+               --  eight divides.
+               for Width in Whole_Lines'Range loop
+                  Value := C.unsigned (Width);
+
+                  if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                             Null_Handle, Made'Access) = 0
+                  then
+                     Item.Whole_Bundle_Line (Width) := Made;
+                  end if;
+               end loop;
+
                Request.Stage.Specialized := Null_Handle;
             end;
          end if;
@@ -4554,6 +4578,9 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Exact_Bundle_Line, "vkDestroyPipeline");
       Give_Back (Item.Eight_Bundle_Line, "vkDestroyPipeline");
       Give_Back (Item.Pair_Bundle_Line, "vkDestroyPipeline");
+      for Line of Item.Whole_Bundle_Line loop
+         Give_Back (Line, "vkDestroyPipeline");
+      end loop;
       Give_Back (Item.Eight_Halved_Line, "vkDestroyPipeline");
       Give_Back (Item.Merge_Line, "vkDestroyPipeline");
       Give_Back (Item.Thin_Line, "vkDestroyPipeline");

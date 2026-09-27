@@ -1,6 +1,7 @@
 with Ada.Unchecked_Conversion;
 with Ada.Unchecked_Deallocation;
 with Ada.Numerics.Elementary_Functions;
+with Ada.Numerics.Long_Elementary_Functions;
 with Ada.Strings.Fixed;
 with Ada.Text_IO;
 
@@ -6257,6 +6258,168 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end A_Listed_Mixture_Says_What_The_Gathered_One_Says;
 
+   ---------------------------------------------------
+   -- A_Whole_Group_Bundle_Attends_As_A_Host_Does --
+   ---------------------------------------------------
+
+   --  One query against a cache of three hundred positions, in groups of
+   --  five, six and seven heads -- the widths bundled whole, which neither
+   --  four nor eight divides -- against the same attention worked out
+   --  here. Sixty-four components, so the four-at-a-time bundle is the one
+   --  bound; two groups, so a bundle that read the wrong group's keys or
+   --  answered the wrong heads is seen. Held to a tolerance: the device
+   --  sums in its own order.
+   procedure A_Whole_Group_Bundle_Attends_As_A_Host_Does
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Head_Size : constant := 64;
+      Groups    : constant := 2;
+      Positions : constant := 300;
+      Scale     : constant := 0.125;
+
+      KV_Span : constant N.Element_Count := Groups * Head_Size;
+      Room    : constant N.Element_Count :=
+        N.Element_Count (Positions) * KV_Span;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+
+      Found  : Boolean;
+      Ready  : Boolean;
+      Ok     : Boolean;
+
+      Cache : N.Real_Array (0 .. Room * 2 - 1);
+   begin
+      Devices.Open (Held, Found);
+
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Devices.Open (Opened, Held, 1, Ready);
+
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Open (Engine, Opened, Ready);
+
+      if not Ready then
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      for Index in Cache'Range loop
+         Cache (Index) := N.Real (Index mod 13) / 13.0 - 0.5
+           + N.Real (Index mod 29) / 97.0;
+      end loop;
+
+      Products.Reserve (Engine, Cache'Length, Cache'Length, Ok);
+      Assert (Ok, "no room for the cache");
+      Products.Put_Cache (Engine, 0, Cache, Ok);
+      Assert (Ok, "the cache would not be written");
+
+      for Group in Products.Whole_Least .. Products.Whole_Most loop
+         declare
+            Heads : constant Natural := Group * Groups;
+            Span  : constant N.Element_Count :=
+              N.Element_Count (Heads) * Head_Size;
+
+            Query  : N.Real_Array (0 .. Span - 1);
+            Answer : N.Real_Array (0 .. Span - 1) := [others => 0.0];
+            Worst  : Long_Float := 0.0;
+            Steps  : Products.Sequence;
+            Added, Halted : Boolean;
+         begin
+            for Index in Query'Range loop
+               Query (Index) := N.Real (Index mod 7) / 7.0 - 0.25
+                 + N.Real (Index mod 11) / 50.0;
+            end loop;
+
+            Products.Open_Sequence (Steps);
+            Products.Add_Attention
+              (Steps,
+               Heads => Heads, Head_Size => Head_Size,
+               Value_Size => Head_Size, Group_Size => Group,
+               First => 0, Last => Positions - 1,
+               K_Base => 0, V_Base => Room,
+               KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+               Scale => Scale, Cap => 0.0, Added => Added);
+            Assert (Added, "a sequence would not take a group of"
+                    & Group'Image);
+
+            Products.Run (Engine, Steps, Query, 1, Answer, Ok, Halted);
+            Assert (Ok, "a group of" & Group'Image & " was refused");
+
+            for Head in 0 .. Heads - 1 loop
+               declare
+                  Of_Group : constant N.Element_Count :=
+                    N.Element_Count (Head / Group) * Head_Size;
+                  Scores   : array (0 .. Positions - 1) of Long_Float;
+                  Top      : Long_Float := Long_Float'First;
+                  Sum      : Long_Float := 0.0;
+               begin
+                  for Pos in Scores'Range loop
+                     Scores (Pos) := 0.0;
+                     for C in 0 .. Head_Size - 1 loop
+                        Scores (Pos) := Scores (Pos)
+                          + Long_Float
+                              (Query (N.Element_Count (Head) * Head_Size
+                                      + N.Element_Count (C)))
+                          * Long_Float
+                              (Cache (N.Element_Count (Pos) * KV_Span
+                                      + Of_Group + N.Element_Count (C)));
+                     end loop;
+                     Scores (Pos) := Scores (Pos) * Scale;
+                     Top := Long_Float'Max (Top, Scores (Pos));
+                  end loop;
+
+                  for Pos in Scores'Range loop
+                     Scores (Pos) :=
+                       Ada.Numerics.Long_Elementary_Functions.Exp
+                         (Scores (Pos) - Top);
+                     Sum := Sum + Scores (Pos);
+                  end loop;
+
+                  for C in 0 .. Head_Size - 1 loop
+                     declare
+                        Want : Long_Float := 0.0;
+                     begin
+                        for Pos in Scores'Range loop
+                           Want := Want + Scores (Pos) / Sum
+                             * Long_Float
+                                 (Cache (Room + N.Element_Count (Pos) * KV_Span
+                                         + Of_Group + N.Element_Count (C)));
+                        end loop;
+
+                        Worst := Long_Float'Max
+                          (Worst,
+                           abs (Want
+                                - Long_Float
+                                    (Answer (N.Element_Count (Head) * Head_Size
+                                             + N.Element_Count (C)))));
+                     end;
+                  end loop;
+               end;
+            end loop;
+
+            Assert (Worst <= 1.0e-5,
+                    "a group of" & Group'Image & " attends"
+                    & Long_Float'Image (Worst) & " away from the host");
+         end;
+      end loop;
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Whole_Group_Bundle_Attends_As_A_Host_Does;
+
    ------------------------------------------------
    -- A_Split_Attention_Says_What_One_Piece_Says --
    ------------------------------------------------
@@ -8631,6 +8794,10 @@ package body Tests.Backend_Cases is
         (T, Device_Reads_The_Host_Memory_When_Asked'Access,
          "a device asked to read the weights where they lie gives the same "
          & "answers as one handed a copy");
+      Register_Routine
+        (T, A_Whole_Group_Bundle_Attends_As_A_Host_Does'Access,
+         "a group of five, six or seven heads bundled whole attends as the "
+         & "host works it out");
       Register_Routine
         (T, Device_Decodes_Every_Format_It_Claims'Access,
          "the device decodes every format it claims, as the processor does");
