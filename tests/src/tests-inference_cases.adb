@@ -5992,6 +5992,262 @@ package body Tests.Inference_Cases is
       Model_Runner.Backend.Device.Close;
    end Drafting_Runs_On_A_Device;
 
+   --------------------------------------------------
+   -- A_Paged_Window_Slides_As_A_Block_Slides --
+   --------------------------------------------------
+
+   --  A paged session on a sliding-window model says, past the ring its
+   --  window keeps, what a session in a block says.
+   --
+   --  A window layer keeps its window and a batch's worth of cells, and when
+   --  a position passes them the window slides: the host moves the kept rows
+   --  down and a block has them sent over. A paged session's pages kept the
+   --  rows where they were, and the next token read the moved cells there:
+   --  gemma-3-4b past 1,536 positions went on in fragments, Gemma 3 270M
+   --  past 1,024. Here a deep fixture with a window of eight -- a ring of
+   --  eight and a batch -- a batch past it, and a few tokens after.
+   --
+   --  Skipped where there is no device.
+   procedure A_Paged_Window_Slides_As_A_Block_Slides
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Image : B.Byte_Array_Access;
+      Ready : Boolean;
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready);
+
+      if not Ready then
+         return;
+      end if;
+
+      Tiny_Model.Build
+        (Image, Format => Tiny_Model.Q4_K, Room => 640, Window => 8);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Item   : Containers.Container;
+         Model  : aliased L.Model;
+         Status : E.Error_Info;
+
+         function After (Paged : Boolean) return N.Real_Array is
+            Live   : L.Session;
+            Words  : constant access constant Vocab.Vocabulary :=
+              L.Vocabulary (Model);
+            A      : constant Vocab.Token_Id := Vocab.Find (Words.all, "a");
+            Bee    : constant Vocab.Token_Id := Vocab.Find (Words.all, "b");
+            Tokens : Vocab.Token_Array (1 .. 500);
+            Logits : N.Real_Array
+              (0 .. N.Element_Count (L.Config (Model).Vocabulary) - 1);
+            Local  : E.Error_Info;
+         begin
+            for Index in Tokens'Range loop
+               Tokens (Index) := (if Index mod 3 = 0 then A else Bee);
+            end loop;
+            Tokens (1) := Vocab.Beginning_Token (Words.all);
+
+            L.Open (Live, Model, 640, Status => Local, Paged => Paged);
+            Assert (E.Is_Ok (Local), "the session did not open");
+
+            L.Evaluate_Batch (Live, Model, Tokens, Logits, Status => Local);
+            Assert (E.Is_Ok (Local), "the batch failed");
+
+            for Step in 1 .. 30 loop
+               L.Evaluate
+                 (Live, Model, (if Step mod 2 = 0 then A else Bee), Logits,
+                  Status => Local);
+               Assert (E.Is_Ok (Local), "a token after the batch failed");
+            end loop;
+
+            L.Close (Live);
+            return Logits;
+         end After;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse
+           (Item, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+         L.Prepare
+           (Model, Item, Source,
+            Backend => Model_Runner.Backend.Backend_Device,
+            Status  => Status);
+         Assert (E.Is_Ok (Status), "the device would not take the fixture");
+
+         declare
+            Blocks : constant N.Real_Array := After (False);
+            Pages  : constant N.Real_Array := After (True);
+            Worst  : N.Real := 0.0;
+         begin
+            Assert (Model_Runner.Backend.Device.Layers_Whole > 0,
+                    "no layer of the deep fixture went whole on the device");
+            for Index in Pages'Range loop
+               Worst := N.Real'Max (Worst, abs (Pages (Index) - Blocks (Index)));
+            end loop;
+            Assert (Worst <= 1.0E-3,
+                    "past the window's ring, pages differ from a block by"
+                    & N.Real'Image (Worst));
+         end;
+
+         L.Close (Model, Status);
+         Containers.Close (Item);
+      end;
+
+      B.Free (Image);
+      Model_Runner.Backend.Device.Close;
+   end A_Paged_Window_Slides_As_A_Block_Slides;
+
+   ------------------------------------------------------
+   -- A_Draft_Of_Smaller_Pages_Is_Paged_Beside_Its_Model --
+   ------------------------------------------------------
+
+   --  A draft whose pages are smaller than its model's is paged beside it,
+   --  and the run says what the same run says in blocks.
+   --
+   --  The page pool serves one size, and a session whose page was not that
+   --  size was refused pages and attended on the host: Gemma 3 270M's page
+   --  is a quarter of gemma-3-4b's, and the drafted run read 17.0 tokens a
+   --  second paged where blocks read 19.8. A smaller page now takes a slot
+   --  of the held size and uses its front. Here a model of heads twice as
+   --  wide as its draft's.
+   --
+   --  Skipped where there is no device.
+   procedure A_Draft_Of_Smaller_Pages_Is_Paged_Beside_Its_Model
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Gen renames Model_Runner.Generation;
+
+      Wide, Narrow : B.Byte_Array_Access;
+      Ready : Boolean;
+
+      Prompt : constant String := "abab";
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready);
+
+      if not Ready then
+         return;
+      end if;
+
+      Tiny_Model.Build
+        (Wide, Format => Tiny_Model.Q4_K, End_Token => 15, Room => 128,
+         Head_Factor => 2);
+      Tiny_Model.Build
+        (Narrow, Format => Tiny_Model.Q4_K, End_Token => 15, Room => 128);
+
+      declare
+         Held_Target : aliased constant B.Byte_Array := Wide.all;
+         Held_Draft  : aliased constant B.Byte_Array := Narrow.all;
+         Target_Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held_Target'Access);
+         Draft_Source  : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held_Draft'Access);
+         Target_Item, Draft_Item : Containers.Container;
+
+         Target : aliased L.Model;
+         Draft  : aliased L.Model;
+
+         Status : E.Error_Info;
+
+         type Said is array (1 .. 256) of Vocab.Token_Id;
+
+         procedure Turn
+           (Paged    : Boolean;
+            Tokens   : out Said;
+            Length   : out Natural)
+         is
+            Live    : L.Session;
+            Second  : aliased L.Session;
+            Request : Gen.Request;
+            Stop    : Model_Runner.Stops.Set;
+            Outcome : Gen.Result;
+            Local   : E.Error_Info;
+         begin
+            L.Open (Live, Target, 128, Status => Local, Paged => Paged);
+            Assert (E.Is_Ok (Local), "the session did not open");
+            L.Open (Second, Draft, 128, Status => Local, Paged => Paged);
+            Assert (E.Is_Ok (Local), "the draft session did not open");
+
+            Model_Runner.Stops.Open (Stop);
+            Request.Max_Tokens := 40;
+            Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+            Request.Seed := 5;
+            Request.Has_Seed := True;
+            Request.Add_Beginning := True;
+            Request.Draft_Tokens := 3;
+
+            Gen.Generate
+              (Target, Live, Prompt, Request, Stop, null, null,
+               null, null, null, null,
+               Draft => Draft'Unchecked_Access,
+               Draft_Session => Second'Unchecked_Access,
+               Outcome => Outcome);
+
+            Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                    "the run failed: "
+                    & E.Error_Code'Image (Outcome.Error.Code));
+
+            if Paged then
+               Assert (L.Holds_Pages (Live) and then L.Holds_Pages (Second),
+                       "a session of the pair held no pages: model "
+                       & Boolean'Image (L.Holds_Pages (Live)) & ", draft "
+                       & Boolean'Image (L.Holds_Pages (Second)));
+            end if;
+
+            Tokens := [others => Vocab.No_Token];
+            Length := Natural'Min (L.Position (Live), Said'Length);
+            for Index in 1 .. Length loop
+               Tokens (Index) := L.Committed_Token (Live, Index - 1);
+            end loop;
+
+            Model_Runner.Stops.Close (Stop);
+            L.Close (Second);
+            L.Close (Live);
+         end Turn;
+
+         In_Blocks, In_Pages : Said;
+         Blocks_Last, Pages_Last : Natural;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse
+           (Target_Item, Target_Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the model fixture did not parse");
+         Model_Runner.GGUF.Containers.Reader.Parse
+           (Draft_Item, Draft_Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the draft fixture did not parse");
+
+         L.Prepare
+           (Target, Target_Item, Target_Source,
+            Backend => Model_Runner.Backend.Backend_Device,
+            Status  => Status);
+         Assert (E.Is_Ok (Status), "the device would not take the model");
+         L.Prepare
+           (Draft, Draft_Item, Draft_Source,
+            Backend => Model_Runner.Backend.Backend_Device,
+            Status  => Status);
+         Assert (E.Is_Ok (Status), "the draft would not prepare");
+
+         Turn (False, In_Blocks, Blocks_Last);
+         Turn (True, In_Pages, Pages_Last);
+
+         Assert (Pages_Last = Blocks_Last and then In_Pages = In_Blocks,
+                 "a model and its smaller-paged draft said something else "
+                 & "paged than in blocks");
+
+         L.Close (Target, Status);
+         L.Close (Draft, Status);
+         Containers.Close (Target_Item);
+         Containers.Close (Draft_Item);
+      end;
+
+      B.Free (Wide);
+      B.Free (Narrow);
+      Model_Runner.Backend.Device.Close;
+   end A_Draft_Of_Smaller_Pages_Is_Paged_Beside_Its_Model;
+
    ---------------------------------------------------
    -- A_Shift_On_The_Device_Reaches_Its_Cache_Copy --
    ---------------------------------------------------
@@ -13474,6 +13730,14 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Adapters_Stack_And_Come_Off_Again'Access,
          "adapters stack, and a scale of minus one takes one off again");
+      Register_Routine
+        (T, A_Paged_Window_Slides_As_A_Block_Slides'Access,
+         "a paged session on a sliding-window model says, past the ring its "
+         & "window keeps, what a session in a block says");
+      Register_Routine
+        (T, A_Draft_Of_Smaller_Pages_Is_Paged_Beside_Its_Model'Access,
+         "a draft whose pages are smaller than its model's is paged beside "
+         & "it, and the run says what the same run says in blocks");
       Register_Routine
         (T, A_Shift_On_The_Device_Reaches_Its_Cache_Copy'Access,
          "a paged session shifted on the device says, a token later, what "

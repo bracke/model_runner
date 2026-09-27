@@ -8207,9 +8207,16 @@ package body Model_Runner.Llama is
             then Packed_Page_Layout (Item.all).Span
             else Element_Count (Page_Positions) * Page_Row (Item.all));
       begin
+         --  A smaller page takes a slot of the held size and uses the front
+         --  of it: its tables hold bases, which a slot's is, and a slot is
+         --  found again by dividing by the held size. A larger one would
+         --  overrun its slot, and is refused while any are held. Gemma 3
+         --  4B's page is four times its 270M draft's: refused, the draft
+         --  attended on the host and the drafted run read 17.0 tokens a
+         --  second where blocks read 19.8.
          if not Item.Paged_In
            and then Pages_In_Use > 0
-           and then Want /= Page_Elements
+           and then Want > Page_Elements
          then
             return;
          end if;
@@ -12544,6 +12551,10 @@ package body Model_Runner.Llama is
         Element_Count (Settings.KV_Heads * Settings.Value_Size);
       Width    : constant Element_Count :=
         Element_Count (Settings.Window);
+
+      --  Whether any layer's rows moved down, which a paged session's
+      --  pages do not follow.
+      Slid : Boolean := False;
    begin
       if Item.Cells = null or else Settings.Window = 0 then
          return;
@@ -12714,10 +12725,23 @@ package body Model_Runner.Llama is
                   end if;
 
                   Item.Origin.all (Layer) := Start;
+                  Slid := Slid or else Moved > 0;
                end;
             end if;
          end;
       end loop;
+
+      --  A block has its moved rows sent over above; a paged session's
+      --  pages kept the rows where they were, and the next token read them
+      --  at the cells the window had moved: gemma-3-4b past 1,536 positions
+      --  (its window of 1,024 and a batch) went on in fragments, Gemma 3
+      --  270M past 1,024. Given back, they are taken again at the next pass
+      --  and written from the host's copy, which the moves made current --
+      --  once a batch's worth of positions, which is how often the window
+      --  slides.
+      if Slid and then Item.Paged and then Item.Paged_In then
+         Release_Session_Pages (Item'Unchecked_Access);
+      end if;
    end Make_Room;
 
    procedure Snapshot

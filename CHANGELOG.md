@@ -573,6 +573,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Gemma 3 no longer loses the thread past its window on the device.** A
+  sliding-window layer moves its kept positions down as the window slides,
+  and a paged session -- the device's default -- kept them where they were:
+  gemma-3-4b went on in fragments past about 1,500 positions. And a draft
+  model whose pages are smaller than its model's is now paged beside it:
+  gemma-3-4b drafted by Gemma 3 270M after a long prompt, 17.0 -> 19.6
+  tokens a second.
+
 - **A paged cache no longer copies itself whole as it grows.** Each step up
   of a paged cache made the device's buffer again at the exact new size and
   copied the whole cache into it; a model and its draft model stepped up
