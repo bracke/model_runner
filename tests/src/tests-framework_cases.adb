@@ -3400,7 +3400,8 @@ package body Tests.Framework_Cases is
       Task_Project (Store, "bootstrap-policy",
                     "set bootstrap.sources = notes/*.txt" & LF
                     & "set bootstrap.propose = imports, requirements" & LF
-                    & "scalar bootstrap.import = candidate" & LF);
+                    & "scalar bootstrap.import = candidate" & LF
+                    & "scalar task.derived_kind = analysis" & LF);
       Dirs.Create_Path (Fresh_Root (Store) & "/notes");
       Put_File (Fresh_Root (Store) & "/README.md", "The tool SHALL be ignored here." & LF);
       Put_File (Fresh_Root (Store) & "/notes/io.txt",
@@ -3418,6 +3419,27 @@ package body Tests.Framework_Cases is
               and then Nt.List (Store, Nt.Requirement, "accepted").Is_Empty,
               "bootstrap made what its policy does not let it, or accepted an import: "
               & Code_Of (Status));
+
+      --  An import accepted is followed as any accepted requirement is.
+      declare
+         Screen   : Model_Runner.Presentation.Console;
+         Imported : constant String := Nt.List (Store, Nt.Requirement).First_Element;
+      begin
+         Nt.Move (Store, Change, Nt.Requirement, Imported, "accepted", Tr.Ordinary_Only, Status);
+         S.Commit (Store, Change, Status);
+         Model_Runner.CLI.Intents.Move_Along (Store, Screen);
+         declare
+            Followed : Boolean := False;
+            Defined  : R.Item;
+         begin
+            for Id of Tk.List (Store) loop
+               Tk.Definition (Store, Id, Defined, Status);
+               Followed := Followed
+                 or else Ada.Strings.Fixed.Index (R.Get (Defined, "requirements"), Imported) > 0;
+            end loop;
+            Assert (Followed, "an accepted import was not followed by its task");
+         end;
+      end;
       S.Close (Store);
    end Bootstrap_Follows_Its_Policy;
 
@@ -6057,6 +6079,41 @@ package body Tests.Framework_Cases is
       S.Commit (Store, Change, Status);
       Assert (Has (Cs.Ready_With_Open_Dependency, To_String (Second)),
               "a task held ready with an open dependency went unseen");
+      S.Close (Store);
+
+      --  A task complete without the evidence its gates want; a field value
+      --  its schema no longer takes; a role granting beyond the project.
+      Change := S.No_Changes;
+      Task_Project (Store, "consistency-gates",
+                    "set task.gates = verification" & LF
+                    & "map permission.role.helper.use_network =" & LF);
+      declare
+         Planned  : Model_Runner.Framework.Configurations.Change_Plan;
+         One      : Model_Runner.Framework.Configurations.Value_Maps.Map;
+         Revision : Natural;
+         Third    : Unbounded_String;
+      begin
+         Tk.Create (Store, Change, Fields ("Look", "analysis", "estimate", "2h"), "user", "",
+                    First, Status);
+         Tk.Create (Store, Change, Fields ("Build", "implementation", "component", "x"),
+                    "user", "", Third, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Third), "accepted", "", Status => Status);
+         Tk.Move (Store, Change, To_String (Third), "running", "", Status => Status);
+         Tk.Move (Store, Change, To_String (Third), "verification", "", Status => Status);
+         Tk.Move (Store, Change, To_String (Third), "complete", "", Status => Status,
+                  Gates_Passed => True);
+         S.Commit (Store, Change, Status);
+         One.Include ("map.task_field.estimate", "number");
+         Model_Runner.Framework.Configurations.Plan_Change (Store, One, Planned, Status);
+         Model_Runner.Framework.Configurations.Reconfigure (Store, Planned, Revision, Status);
+         Assert (Has (Cs.Completed_Without_Gate, To_String (Third)),
+                 "a task complete with no evidence its gates want went unseen");
+         Assert (Has (Cs.Invalid_Task_Field, To_String (First)),
+                 "a field value its schema does not take went unseen");
+         Assert (Has (Cs.Permission_Widening, "role.helper"),
+                 "a role granting beyond the project went unseen");
+      end;
       S.Close (Store);
    end Consistency_Sees_Components_And_Readiness;
 

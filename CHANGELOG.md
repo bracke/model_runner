@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The consistency check sees more.** A complete task whose kind is
+  verified and that has no evidence, or whose children are not done; a
+  task field whose value its schema no longer takes; and a role granting
+  beyond the project's maximum, as a kind already was.
+- **Bootstrap moves the project along.** What `/bootstrap` imports as
+  accepted is followed as any accepted requirement is: its tasks derived
+  and readiness worked out at once (`CLI.Intents.Move_Along`).
 - **use_network and execute_external_process mean something.** Checks an
   agent runs, and a configured agent command, are kept off the network
   (where the host can) unless the agent's permissions grant use_network; an

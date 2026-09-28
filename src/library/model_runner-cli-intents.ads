@@ -28,6 +28,16 @@ package Model_Runner.CLI.Intents is
       Words  : Model_Runner.Framework.Name_Lists.Vector;
       Screen : in out Model_Runner.Presentation.Console);
 
+   --  Move the project along after a change to what it says: derive what
+   --  accepted requirements imply, work out readiness, and say what that
+   --  did -- as every requirement change is followed.
+   --
+   --  @param Store The project's state.
+   --  @param Screen Where to say it.
+   procedure Move_Along
+     (Store  : in out Model_Runner.Framework.Stores.Store;
+      Screen : in out Model_Runner.Presentation.Console);
+
    --  What waits to be accepted or rejected in the registers, as
    --  KIND:ID -- requirement, specification or decision.
    --

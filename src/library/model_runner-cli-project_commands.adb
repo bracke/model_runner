@@ -995,6 +995,10 @@ package body Model_Runner.CLI.Project_Commands is
             [Loc.Named ("count", Image (Report.Created)),
              Loc.Named ("total", Image (Report.Existing)),
              Loc.Named ("extra", Image (Report.Issues))]);
+
+         --  What it imported as accepted is followed as any accepted
+         --  requirement is: its tasks derived, readiness worked out.
+         Model_Runner.CLI.Intents.Move_Along (Store, Screen);
       end Bootstrap;
 
       --  A change to the settings: what it changes and reaches, and then,

@@ -244,6 +244,19 @@ package body Model_Runner.Framework.Consistency is
                                     Found (Invalid_Task_Field, Id,
                                            Field (Field'First + 6 .. Field'Last)
                                            & " is not a field of " & Kind);
+                                 elsif Field'Length > 6
+                                   and then Field (Field'First .. Field'First + 5) = "field."
+                                   and then Tasks.Field_Problem
+                                              (Item, Field (Field'First + 6 .. Field'Last),
+                                               Records.Get (Defined, Field)) /= ""
+                                 then
+                                    --  Its value, held to its schema as it
+                                    --  stands now.
+                                    Found (Invalid_Task_Field, Id,
+                                           Field (Field'First + 6 .. Field'Last) & ": "
+                                           & Tasks.Field_Problem
+                                               (Item, Field (Field'First + 6 .. Field'Last),
+                                                Records.Get (Defined, Field)));
                                  end if;
                               end;
                            end loop;
@@ -396,7 +409,9 @@ package body Model_Runner.Framework.Consistency is
          end;
       end loop;
 
-      --  A complete task whose verification failed.
+      --  A complete task whose gates did not hold: verification that
+      --  failed or was never run where its kind is verified, or a child
+      --  that is not done.
       for Id of Tasks.List (Item, "complete") loop
          declare
             Profile  : constant String := Verification.Profile_Of (Item, Id);
@@ -404,14 +419,34 @@ package body Model_Runner.Framework.Consistency is
               (if Profile = "" then "" else Verification.Latest (Item, Id, Profile));
             Value    : Records.Item;
             Read     : E.Error_Info;
+            Defined  : Records.Item;
+            Got      : E.Error_Info;
          begin
-            if Evidence /= "" then
-               Stores.Read (Item, Verification_Area, Evidence, Value, Read);
-               if Records.Get (Value, "passed") /= "true" then
+            Tasks.Definition (Item, Id, Defined, Got);
+            declare
+               Gates : constant Name_Lists.Vector :=
+                 Tasks.Gate_Names (Item, Records.Get (Defined, "kind"));
+            begin
+               if Evidence /= "" then
+                  Stores.Read (Item, Verification_Area, Evidence, Value, Read);
+                  if Records.Get (Value, "passed") /= "true" then
+                     Found (Completed_Without_Gate, Id,
+                            "it is complete and " & Evidence & " did not pass");
+                  end if;
+               elsif Profile /= "" and then Gates.Contains ("verification") then
                   Found (Completed_Without_Gate, Id,
-                         "it is complete and " & Evidence & " did not pass");
+                         "it is complete and no evidence of " & Profile & " was ever taken");
                end if;
-            end if;
+               if Gates.Contains ("children") then
+                  for Child of Tasks.Children (Item, Id) loop
+                     if Tasks.State_Of (Item, Child) not in "complete" | "cancelled" | "rejected" then
+                        Found (Completed_Without_Gate, Id,
+                               "it is complete and its child " & Child & " is "
+                               & Tasks.State_Of (Item, Child));
+                     end if;
+                  end loop;
+               end if;
+            end;
          end;
       end loop;
 
@@ -463,6 +498,48 @@ package body Model_Runner.Framework.Consistency is
                end if;
             end;
          end loop;
+
+         --  And the roles, which the configuration names as it grants them.
+         declare
+            Config : Records.Item;
+            Read   : E.Error_Info;
+            Roles  : Name_Lists.Vector;
+            Prefix : constant String := "map.permission.role.";
+         begin
+            Configurations.Read (Item, Config, Read);
+            for Index in 1 .. Records.Field_Count (Config) loop
+               declare
+                  Name : constant String := Records.Field_Name (Config, Index);
+               begin
+                  if Name'Length > Prefix'Length
+                    and then Name (Name'First .. Name'First + Prefix'Length - 1) = Prefix
+                  then
+                     declare
+                        Rest : constant String := Name (Name'First + Prefix'Length .. Name'Last);
+                        Dot  : constant Natural := Ada.Strings.Fixed.Index (Rest, ".");
+                        Role : constant String :=
+                          (if Dot = 0 then Rest else Rest (Rest'First .. Dot - 1));
+                     begin
+                        if not Roles.Contains (Role) then
+                           Roles.Append (Role);
+                        end if;
+                     end;
+                  end if;
+               end;
+            end loop;
+            for Role of Roles loop
+               declare
+                  Level : constant Permissions.Permission_Set :=
+                    Permissions.Level_Of (Item, "role." & Role, Present);
+                  Wider : constant String := Permissions.Widening (Level, Project);
+               begin
+                  if Present and then Wider /= "" then
+                     Found (Permission_Widening, "role." & Role,
+                            "it grants " & Wider & " beyond the project's maximum");
+                  end if;
+               end;
+            end loop;
+         end;
       end;
 
       return Result;
