@@ -3822,6 +3822,113 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Schemas_Retention_Adapter_And_Slots;
 
+   --  An agent that writes source and its documentation both.
+   type Documenting_Agent is new Wk.Agent_Runner with null record;
+
+   overriding procedure Run
+     (Self        : Documenting_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding procedure Run
+     (Self        : Documenting_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path);
+   begin
+      Dirs.Create_Path (Project & "/src");
+      Dirs.Create_Path (Project & "/docs");
+      Put_File (Project & "/src/greet.adb", "procedure Greet is begin null; end;");
+      Put_File (Project & "/docs/greet.md", "Greet greets.");
+      Answer := To_Unbounded_String ("status: done" & LF & "summary: greet, documented");
+      Status := E.Success;
+   end Run;
+
+   --  An agent says more than done or not: it proposes a task of another
+   --  kind, a decision, a specification and a dependency -- each kept as a
+   --  proposal, none asserted -- and asks for its work to be checked while
+   --  it is blocked. And the gates a project names are the ones a task
+   --  passes: its work present, traced, documented, and a profile of the
+   --  project's own passed.
+   procedure Claims_And_Gates
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Done   : Wk.Report;
+
+      procedure Work (Runner : Wk.Agent_Runner'Class; Title : String) is
+         Id : Unbounded_String;
+      begin
+         Tk.Create (Store, Change, Fields (Title, "analysis"), "user", "", Id, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Wk.Execute (Store, To_String (Id), Runner, Cx.Profile (Store, ""), Done, Status);
+      end Work;
+   begin
+      Task_Project
+        (Store, "claims-gates",
+         "set execution.allowed = test" & LF
+         & "profile checks = exists: test -d ." & LF
+         & "scalar verification.default = checks" & LF
+         & "scalar gate.tidy = checks" & LF
+         & "set task.gates = verification, implementation_present, traceability_sufficient,"
+         & " documentation_current, tidy" & LF);
+
+      Work (Scripted_Agent'(File => Null_Unbounded_String,
+                            Answer => To_Unbounded_String
+                              ("status: blocked" & LF & "summary: needs a choice" & LF
+                               & "proposed_tasks: Write the manual; kind=implementation;"
+                               & " component=docs" & LF
+                               & "decisions: Use one binary. It keeps installs simple." & LF
+                               & "specifications: The tool reads UTF-8." & LF
+                               & "waits_for: TASK-999" & LF
+                               & "verify: yes"),
+                            Broken => False),
+            "Claims");
+      Assert (To_String (Done.Final_State) = "blocked"
+              and then Length (Done.Evidence_Id) > 0
+              and then Natural (Done.Proposed.Length) = 3
+              and then Done.Waits_For.Contains ("TASK-999"),
+              "the agent's claims were not each taken as a proposal: "
+              & To_String (Done.Final_State) & Natural'Image (Natural (Done.Proposed.Length)));
+      declare
+         Defined : R.Item;
+      begin
+         Tk.Definition (Store, Done.Proposed.First_Element, Defined, Status);
+         Assert (R.Get (Defined, "kind") = "implementation" and then R.Get (Defined, "component") = "docs"
+                 and then Tk.State_Of (Store, Done.Proposed.First_Element) = "candidate",
+                 "a proposed task did not keep its own kind and component");
+      end;
+      Assert ((for some Id of Done.Proposed => Id'Length > 4 and then Id (Id'First .. Id'First + 3) = "DEC-")
+              and then (for some Id of Done.Proposed =>
+                          Id'Length > 5 and then Id (Id'First .. Id'First + 4) = "SPEC-"),
+              "a proposed decision or specification was not made");
+
+      --  Source alone is not documented.
+      Work (Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                            Answer => To_Unbounded_String ("status: done" & LF & "summary: x"),
+                            Broken => False),
+            "Undocumented");
+      Assert (To_String (Done.Final_State) = "blocked"
+              and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "documentation_current") > 0,
+              "source changed without documentation passed its gates: " & To_String (Done.Reason));
+
+      --  Source and documentation both, and every gate passes.
+      Work (Documenting_Agent'(null record), "Documented");
+      Assert (To_String (Done.Final_State) = "complete",
+              "work that passed every named gate did not complete: " & To_String (Done.Reason));
+      S.Close (Store);
+   end Claims_And_Gates;
+
    --  What the project is meant to be is managed without a model: a
    --  requirement proposed, accepted -- and its task derived at once --
    --  revised and linked; a decision proposed, accepted, made to govern a
@@ -5153,6 +5260,9 @@ package body Tests.Framework_Cases is
         (T, Recursion_Stays_Bounded'Access,
          "children stay within limits and permissions, failures and"
          & " cancellation are seen");
+      Register_Routine
+        (T, Claims_And_Gates'Access,
+         "an agent's claims are proposals, and the gates a project names are kept");
       Register_Routine
         (T, Intent_Is_Managed_And_Components_Held'Access,
          "intent is managed without a model, and a component is held while written");

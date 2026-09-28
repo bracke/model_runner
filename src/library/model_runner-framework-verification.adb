@@ -789,6 +789,16 @@ package body Model_Runner.Framework.Verification is
                   Passed => Passed,
                   Reason => To_Unbounded_String (if Passed then "" else Reason)));
       end Judge;
+      --  The files the task's work changed, as the harness saw them.
+      function Changed_Files return Name_Lists.Vector is
+         State  : Records.Item;
+         Status : E.Error_Info;
+      begin
+         Stores.Read (Item, Tasks_Area, Task_Id & ".state", State, Status);
+         return Lines_Of (Records.Get (State, "changed_files"));
+      end Changed_Files;
+
+      Changed : constant Name_Lists.Vector := Changed_Files;
    begin
       Tasks.Definition (Item, Task_Id, Defined, Read);
       for Name of Tasks.Gate_Names (Item, Records.Get (Defined, "kind")) loop
@@ -842,6 +852,68 @@ package body Model_Runner.Framework.Verification is
                Open : constant String := Workspaces.Active_For (Item, Task_Id);
             begin
                Judge (Name, Open = "", Open & " has not been taken into the project");
+            end;
+         elsif Name = "implementation_present" then
+            Judge (Name, not Changed.Is_Empty, "its work changed no file");
+         elsif Name = "traceability_sufficient" then
+            --  Each requirement it serves reaches something that implements
+            --  or tests it: a link of its own, or the files this task changed.
+            declare
+               Loose : Unbounded_String;
+            begin
+               for Requirement of Lines_Of (Records.Get (Defined, "requirements")) loop
+                  if Changed.Is_Empty
+                    and then Intent.Links (Item, Intent.Requirement, Requirement,
+                                           Intent.Implementation).Is_Empty
+                    and then Intent.Links (Item, Intent.Requirement, Requirement,
+                                           Intent.Test).Is_Empty
+                  then
+                     Append (Loose, (if Loose = Null_Unbounded_String then "" else ", ")
+                             & Requirement);
+                  end if;
+               end loop;
+               Judge (Name, Loose = Null_Unbounded_String,
+                      "nothing traces " & To_String (Loose)
+                      & " to what implements or tests it");
+            end;
+         elsif Name = "documentation_current" then
+            --  Source changed goes with documentation changed.
+            declare
+               use type Repository.File_Role;
+               Source_Changed : Boolean := False;
+               Docs_Changed   : Boolean := False;
+            begin
+               for Path of Changed loop
+                  Source_Changed := Source_Changed
+                    or else Repository.Role_Of (Path) = Repository.Source;
+                  Docs_Changed := Docs_Changed
+                    or else Repository.Role_Of (Path) = Repository.Documentation;
+               end loop;
+               Judge (Name, not Source_Changed or else Docs_Changed,
+                      "its work changed source and no documentation");
+            end;
+         elsif Records.Get (Config (Item), "scalar.gate." & Name) /= "" then
+            --  A gate the project defines: a profile that has passed, for
+            --  this task, and still applies.
+            declare
+               Profile  : constant String := Records.Get (Config (Item), "scalar.gate." & Name);
+               Evidence : constant String := Latest (Item, Task_Id, Profile);
+               Value    : Records.Item;
+               Status   : E.Error_Info;
+               Reasons  : Name_Lists.Vector;
+            begin
+               if Evidence = "" then
+                  Judge (Name, False, "profile " & Profile & " has not been run for it");
+               else
+                  Stores.Read (Item, Verification_Area, Evidence, Value, Status);
+                  if Records.Get (Value, "passed") /= "true" then
+                     Judge (Name, False, Evidence & " did not pass");
+                  elsif not Is_Current (Item, Evidence, Reasons) then
+                     Judge (Name, False, Reasons.First_Element);
+                  else
+                     Judge (Name, True, "");
+                  end if;
+               end if;
             end;
          else
             Judge (Name, False, "no gate is called " & Name);

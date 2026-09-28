@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Agents say more.** The work contract takes `decisions:` and
+  `specifications:` (proposed entries of those registers, where the agent
+  may propose), `waits_for:` (a dependency said and kept, not asserted),
+  and `verify: yes` (evidence taken even when the status is not done).
+  `proposed_tasks:` lines may carry `; kind=K; component=C; depends_on=T`,
+  so a candidate is its own and not a copy of the task that found it.
+- **Completion gates a project names.** Beside verification, children,
+  no_blocking_issue and integration: `implementation_present`,
+  `traceability_sufficient`, `documentation_current`, and any `NAME` whose
+  `scalar gate.NAME` names a profile that must have passed for the task
+  and still apply.
+
 - **Requirements, decisions and specifications in the session.** `/req`,
   `/decision` and `/spec` (`CLI.Intents`) list, show and manage their
   registers: new, accept, reject, reconsider, obsolete, block, unblock,

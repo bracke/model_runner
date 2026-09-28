@@ -211,7 +211,19 @@ requirement derives its task, for the project's own component when the
 requirement is the whole project's. Bare `/accept` and `/reject` decide the
 one candidate waiting, whatever it is, and name the commands when there are
 several. An agent writing a component in the project itself holds it:
-another task of that component is not ready until it is done. The same commands run
+another task of that component is not ready until it is done.
+
+An agent's answer can say more than done or not. `proposed_tasks:` lines may
+name their own `kind=` and `component=` (`Write the manual; kind=
+documentation`); `decisions:` and `specifications:` become proposed entries
+of those registers; `waits_for:` says which task this one should wait for,
+kept as said until `/task depend` makes it so; and `verify: yes` has the
+work checked whatever the status. All of it is proposal until a person
+accepts it. A project names the gates a task must pass (`set task.gates`,
+or `task.gates.KIND`): beside verification, children, no blocking issue and
+integration, `implementation_present`, `traceability_sufficient`,
+`documentation_current`, and any gate of its own that `scalar gate.NAME`
+ties to a profile. The same commands run
 outside a session too -- `model_runner init|task|repo|work`, with
 `--set NAME=VALUE` for the words -- for scripts.
 

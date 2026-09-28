@@ -96,7 +96,11 @@ package body Model_Runner.Framework.Invocations is
           & "changed_files?" & ASCII.LF
           & "issues?" & ASCII.LF
           & "proposed_tasks?" & ASCII.LF
-          & "parts?"));
+          & "parts?" & ASCII.LF
+          & "decisions?" & ASCII.LF
+          & "specifications?" & ASCII.LF
+          & "waits_for?" & ASCII.LF
+          & "verify? = yes|no"));
 
    function Name_Of (Item : Contract) return String
    is (To_String (Item.Name));

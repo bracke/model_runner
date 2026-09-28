@@ -9,6 +9,7 @@ with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Files;
+with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Invocations;
 with Model_Runner.Framework.Leases;
 with Model_Runner.Framework.Records;
@@ -53,8 +54,13 @@ package body Model_Runner.Framework.Work is
        & " why. Two other statuses are for rare cases: issue, for a problem"
        & " found outside the task, and blocked, for a decision only a person"
        & " can make. Further work you found goes in proposed_tasks:, one a"
-       & " line. If the task is too large to do as one, say blocked and name"
-       & " the parts it should be split into under parts:, one a line." & ASCII.LF);
+       & " line, each as TITLE; kind=K; component=C where it is another's."
+       & " If the task is too large to do as one, say blocked and name the"
+       & " parts it should be split into under parts:, one a line. A decision"
+       & " or specification you would propose goes under decisions: or"
+       & " specifications:, a task this one should wait for under waits_for:,"
+       & " and verify: yes asks for your work to be checked whatever the"
+       & " status." & ASCII.LF);
 
    --  The fields of a tab-separated line.
    function Fields_Of (Text : String) return Name_Lists.Vector is
@@ -69,6 +75,20 @@ package body Model_Runner.Framework.Work is
       end loop;
       return Result;
    end Fields_Of;
+
+   --  The parts of a line between separators.
+   function Split_On (Text : String; Separator : Character) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+      Start  : Natural := Text'First;
+   begin
+      for Index in Text'First .. Text'Last + 1 loop
+         if Index > Text'Last or else Text (Index) = Separator then
+            Result.Append (Text (Start .. Index - 1));
+            Start := Index + 1;
+         end if;
+      end loop;
+      return Result;
+   end Split_On;
 
    --  A list written with commas, as one written a line an item.
    function Replaced (Text : String) return String is
@@ -1008,6 +1028,7 @@ package body Model_Runner.Framework.Work is
       --  Where the agent writes: the project, or its workspace, as its
       --  kind says, else the project.
       Kind     : constant String := Kind_Of (Item, Task_Id);
+      use type Intent.Intent_Kind;
       Isolated : constant Boolean :=
         (if Tasks.Kind_Policy (Item, Kind, "isolation") /= ""
          then Tasks.Kind_Policy (Item, Kind, "isolation")
@@ -1354,17 +1375,42 @@ package body Model_Runner.Framework.Work is
          Tasks.Definition (Item, Task_Id, Defined, Held);
          for Line of Proposed loop
             declare
-               Title  : constant String := Trim (Line);
+               --  TITLE, then as it may say, ; kind=K ; component=C ;
+               --  depends_on=TASK -- a candidate's own, not assumed from this
+               --  task; it is proposal data until a person accepts it.
+               Parts_Of : constant Name_Lists.Vector := Split_On (Line, ';');
+               Title  : constant String :=
+                 (if Parts_Of.Is_Empty then "" else Trim (Parts_Of.First_Element));
                Fields : Tasks.Field_Map;
                Made   : Unbounded_String;
+
+               function Said_Of (Name, Default : String) return String is
+               begin
+                  for Part of Parts_Of loop
+                     declare
+                        Bare  : constant String := Trim (Part);
+                        Equal : constant Natural := Ada.Strings.Fixed.Index (Bare, "=");
+                     begin
+                        if Equal > Bare'First and then Trim (Bare (Bare'First .. Equal - 1)) = Name
+                        then
+                           return Trim (Bare (Equal + 1 .. Bare'Last));
+                        end if;
+                     end;
+                  end loop;
+                  return Default;
+               end Said_Of;
             begin
                if Title = "" or else Title = "-" then
                   null;
                elsif May_Propose then
                   Fields.Include ("title", Title);
-                  Fields.Include ("kind", Records.Get (Defined, "kind"));
-                  if Records.Get (Defined, "component") /= "" then
-                     Fields.Include ("component", Records.Get (Defined, "component"));
+                  Fields.Include ("kind", Said_Of ("kind", Records.Get (Defined, "kind")));
+                  if Said_Of ("component", Records.Get (Defined, "component")) /= "" then
+                     Fields.Include
+                       ("component", Said_Of ("component", Records.Get (Defined, "component")));
+                  end if;
+                  if Said_Of ("depends_on", "") /= "" then
+                     Fields.Include ("depends_on", Said_Of ("depends_on", ""));
                   end if;
                   Fields.Include ("notes", "proposed working on " & Task_Id);
                   Tasks.Create
@@ -1412,6 +1458,52 @@ package body Model_Runner.Framework.Work is
             end;
          end loop;
 
+         --  Decisions and specifications it proposes: entries in their
+         --  registers, proposed or candidate, that govern nothing until a
+         --  person accepts them.
+         for Register in Intent.Specification .. Intent.Decision loop
+            if Register /= Intent.Requirement then
+               for Line of Lines_Of
+                 (Invocations.Claim
+                    (Said, (if Register = Intent.Decision then "decisions" else "specifications")))
+               loop
+                  declare
+                     Text  : constant String := Trim (Line);
+                     Stop  : constant Natural := Ada.Strings.Fixed.Index (Text, ". ");
+                     Title : constant String :=
+                       (if Stop in Text'First .. Text'First + 70 then Text (Text'First .. Stop)
+                        elsif Text'Length > 70 then Text (Text'First .. Text'First + 69)
+                        else Text);
+                     Made  : Unbounded_String;
+                  begin
+                     if Text = "" or else Text = "-" then
+                        null;
+                     elsif May_Propose then
+                        Intent.Propose
+                          (Item, Change, Register, "", Title, Text, "",
+                           To_String (Result.Agent_Id), "", "project", Made, Held);
+                        if E.Is_Ok (Held) then
+                           Result.Proposed.Append (To_String (Made));
+                        else
+                           Append (Kept_Back, ASCII.LF & "proposed: " & Text);
+                        end if;
+                     else
+                        Append (Kept_Back, ASCII.LF & "proposed: " & Text);
+                     end if;
+                  end;
+               end loop;
+            end if;
+         end loop;
+
+         --  Tasks it says this one should wait for: said, and kept, never
+         --  asserted -- a person makes the dependency with task depend.
+         for Line of Lines_Of (Invocations.Claim (Said, "waits_for")) loop
+            if Trim (Line) not in "" | "-" then
+               Append (Kept_Back, ASCII.LF & "waits for: " & Trim (Line));
+               Result.Waits_For.Append (Trim (Line));
+            end if;
+         end loop;
+
          declare
             Found : constant String := Invocations.Claim (Said, "issues") & To_String (Kept_Back);
             Issue : Results.Result :=
@@ -1433,6 +1525,31 @@ package body Model_Runner.Framework.Work is
             return;
          end if;
       end;
+
+      --  Not done, it says, but asks for its work to be checked: the
+      --  evidence is taken and kept, and the task still goes where the
+      --  answer says.
+      if To_String (Result.Claimed) /= "done"
+        and then Invocations.Claim (Said, "verify") = "yes"
+      then
+         declare
+            Chosen : constant Verification.Choice :=
+              Verification.Choose (Item, Task_Id, Result.Changed_Files);
+            Passed : Boolean;
+         begin
+            if To_String (Chosen.Profile) /= "" then
+               Verification.Run_Profile
+                 (Item, Change, To_String (Chosen.Profile), Task_Id, Result.Evidence_Id, Passed,
+                  Held, Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For));
+               if E.Is_Ok (Held) then
+                  Stores.Commit (Item, Change, Status);
+               else
+                  Change := Stores.No_Changes;
+                  Result.Evidence_Id := Null_Unbounded_String;
+               end if;
+            end if;
+         end;
+      end if;
 
       if To_String (Result.Claimed) in "blocked" | "issue" then
          Conclude ("blocked", To_String (Result.Summary), "completed");

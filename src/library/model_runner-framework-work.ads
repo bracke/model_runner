@@ -249,8 +249,13 @@ package Model_Runner.Framework.Work is
       --  its result and summary.
       Children      : Name_Lists.Vector;
 
-      --  The candidate tasks made from the work it proposed.
+      --  The candidate tasks, decisions and specifications made from what it
+      --  proposed.
       Proposed      : Name_Lists.Vector;
+
+      --  The tasks it says this one should wait for: kept as said, not
+      --  made so.
+      Waits_For     : Name_Lists.Vector;
 
       --  How widely it was verified -- certain_tests, component_tests or
       --  full_suite -- and why.
