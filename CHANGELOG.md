@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **What a model is told, and each call to it, recorded (Phase H).**
+  Model profiles come from the configuration (`map model.ID = context=N,
+  reserve=N, tools=yes, ...`). A context is built for a task from the
+  harness's rules, the configuration, the Effective Task, the requirements
+  and decisions at their revisions, accepted specifications, runtime state
+  and source from the repository -- mandatory items whatever they cost, the
+  rest by priority while they fit, the same text once -- and refused when
+  what is mandatory does not fit. The Context Manifest records what went
+  in, what did not and why, whether retrieval was semantic or textual,
+  and is named by its content, so the same state builds the same manifest.
+  Invocations are records of their own, started and ended once; a retry
+  is a new one. An answer is held to a result contract by field and word.
+  `task context ID` builds and keeps one. Two more `MR-FRAMEWORK` codes.
+
 - **The repository, read without a model (Phase G).** A scan walks the
   project -- leaving out version control, the project state, build output
   and hidden files -- and gives each file a language and a role. Language
@@ -17731,7 +17745,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 211 diagnostic
+- Localization through `messages`, with a catalog entry for all 213 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

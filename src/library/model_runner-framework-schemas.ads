@@ -48,6 +48,10 @@ package Model_Runner.Framework.Schemas is
    --  The derived graph of the repository's files, units and symbols.
    Repository_Schema : constant String := "index.repository";
 
+   --  A context manifest, and a call made to a model.
+   Manifest_Record_Schema : constant String := "context.manifest";
+   Invocation_Schema      : constant String := "model.invocation";
+
    --  One event.
    Event_Schema : constant String := "event.record";
 

@@ -11,10 +11,12 @@ with Model_Runner.Framework.Authority;
 with Model_Runner.Framework.Bootstrap;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Consistency;
+with Model_Runner.Framework.Context;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Facts;
 with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Intent;
+with Model_Runner.Framework.Invocations;
 with Model_Runner.Framework.Leases;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
@@ -1951,6 +1953,10 @@ package body Tests.Framework_Cases is
               & Code_Of (Status));
    end Task_Project;
 
+   --  The directory a store's project is in.
+   function Fresh_Root (Store : S.Store) return String
+   is (Dirs.Containing_Directory (S.Root (Store)));
+
    function Fields
      (Title, Kind : String; Extra_Name, Extra_Value : String := "")
       return Tk.Field_Map
@@ -2419,6 +2425,163 @@ package body Tests.Framework_Cases is
    end Repository_Is_Scanned;
 
    ---------------------------------------------------------------------------
+   --  Context and invocations.
+   ---------------------------------------------------------------------------
+
+   package Cx renames Model_Runner.Framework.Context;
+   package Iv renames Model_Runner.Framework.Invocations;
+
+   --  A context holds what is mandatory whatever it costs, the rest by
+   --  priority while it fits, the same text once, and is the same manifest
+   --  when built again from the same state.
+   procedure Contexts_Are_Budgeted
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store   : S.Store;
+      Status  : E.Error_Info;
+      Change  : S.Transaction;
+      Req     : Unbounded_String;
+      Id      : Unbounded_String;
+      One     : Cx.Built;
+      Two     : Cx.Built;
+      Profile : Cx.Model_Profile;
+      Given   : Tk.Field_Map;
+      Big     : constant String (1 .. 4000) := [others => 'x'];
+   begin
+      Task_Project
+        (Store, "context",
+         "map model.small = context=900, reserve=100, tools=yes, class=laptop"
+         & LF & "map model.tiny = context=120, reserve=100" & LF);
+      Dirs.Create_Path (Fresh_Root (Store) & "/src");
+      Put_File (Fresh_Root (Store) & "/src/parser.adb", Big);
+      Put_File (Fresh_Root (Store) & "/src/parser_copy.adb", Big);
+      Nt.Propose (Store, Change, Nt.Requirement, "PARSER", "Read",
+                  "It SHALL read.", "a test reads", "user", "", "parser", Req,
+                  Status);
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted",
+               Tr.Ordinary_Only, Status);
+      S.Commit (Store, Change, Status);
+      Given := Fields ("Parse", "implementation", "component", "parser");
+      Given.Include ("requirements", To_String (Req));
+      Tk.Create (Store, Change, Given, "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "a task to build context for was not made");
+
+      Profile := Cx.Profile (Store, "small");
+      Assert (Profile.Context_Limit = 900 and then Profile.Output_Reserve = 100
+              and then Profile.Tools and then To_String (Profile.Resource_Class)
+                                              = "laptop",
+              "a model profile was not read from the configuration");
+      Assert (Cx.Profile (Store, "").Context_Limit = 8192,
+              "the default profile is not the default");
+      Assert (Cx.Estimate ("abcdefgh") = 2, "a text's cost is not estimated");
+
+      Cx.Build (Store, To_String (Id), Profile, One, Status);
+      Assert (E.Is_Ok (Status), "a context was not built: " & Code_Of (Status));
+      Assert (Cx.Cost (One) <= 800 and then Cx.Excluded_Count (One) >= 2,
+              "a context went over its budget, or left nothing out");
+      declare
+         Has_Requirement : Boolean := False;
+      begin
+         for Index in 1 .. Cx.Included_Count (One) loop
+            Has_Requirement := Has_Requirement
+              or else To_String (Cx.Included_At (One, Index).Id)
+                      = To_String (Req) & "@1";
+         end loop;
+         Assert (Has_Requirement,
+                 "the requirement served at its revision was left out");
+      end;
+      Assert (not Cx.Semantic (One), "a context without a graph claims one");
+
+      Cx.Build (Store, To_String (Id), Cx.Profile (Store, ""), Two, Status);
+      Assert (Cx.Excluded_Count (Two) = 1,
+              "the same source twice was not given once: "
+              & Natural'Image (Cx.Excluded_Count (Two)));
+      Cx.Build (Store, To_String (Id), Profile, Two, Status);
+      Assert (Cx.Manifest_Id (Two) = Cx.Manifest_Id (One)
+              and then Cx.Rendered (Two) = Cx.Rendered (One),
+              "one context built twice is two");
+
+      Cx.Keep (Store, Change, One, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status)
+              and then S.Exists (Store, F.Invocations_Area,
+                                 "manifest." & Cx.Manifest_Id (One)),
+              "a manifest was not kept: " & Code_Of (Status));
+      Cx.Keep (Store, Change, One, Status);
+      Assert (S.Change_Count (Change) = 0, "a manifest was kept twice");
+
+      Cx.Build (Store, To_String (Id), Cx.Profile (Store, "tiny"), Two, Status);
+      Assert (Status.Code = E.Framework_Context_Overflow,
+              "a context whose mandatory part does not fit was built");
+      Cx.Build (Store, "TASK-NONE-001", Profile, Two, Status);
+      Assert (Status.Code = E.Framework_Not_Found,
+              "a context was built for no task");
+      S.Close (Store);
+   end Contexts_Are_Budgeted;
+
+   --  A call is recorded when it starts and ends once; an answer is held to
+   --  its contract.
+   procedure Invocations_Are_Recorded
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      First  : Unbounded_String;
+      Second : Unbounded_String;
+      Said   : Iv.Claims;
+   begin
+      Task_Project (Store, "invocations");
+      Iv.Start (Store, Change, "AGENT-1", "TASK-1", "1", "default", "CTX-1",
+                "none", Iv.Work_Claim, First, Status);
+      Assert (E.Is_Ok (Status) and then To_String (First) = "INV-000001",
+              "an invocation was not given its identifier");
+      S.Commit (Store, Change, Status);
+      Assert (Iv.State_Of (Store, To_String (First)) = "started",
+              "a started call is not recorded as started");
+
+      Iv.Finish (Store, Change, To_String (First), Iv.Failed,
+                 (Prompt_Tokens => 10, Output_Tokens => 2, Seconds => 1), "",
+                 "the model stopped", Status);
+      S.Commit (Store, Change, Status);
+      Assert (Iv.State_Of (Store, To_String (First)) = "failed",
+              "a failed call is not recorded as failed");
+      Iv.Finish (Store, Change, To_String (First), Iv.Completed, (others => 0),
+                 "", "", Status);
+      Assert (Status.Code = E.Framework_Transition_Invalid,
+              "an ended call was ended again");
+
+      --  The retry is a call of its own.
+      Iv.Start (Store, Change, "AGENT-1", "TASK-1", "1", "default", "CTX-1",
+                "none", Iv.Work_Claim, Second, Status);
+      Assert (To_String (Second) = "INV-000002", "a retry did not get a new record");
+      S.Close (Store);
+
+      Iv.Hold (Iv.Work_Claim,
+               "Here is what I did." & LF & "status: Done" & LF
+               & "summary: added the reader" & LF & "and its test" & LF
+               & "changed_files: src/reader.adb", Said, Status);
+      Assert (E.Is_Ok (Status) and then Iv.Claim (Said, "status") = "done"
+              and then Iv.Claim (Said, "summary")
+                       = "added the reader" & LF & "and its test"
+              and then Iv.Claim (Said, "issues") = "",
+              "an answer keeping to its contract was not read: "
+              & Code_Of (Status));
+      Iv.Hold (Iv.Work_Claim, "status: finished" & LF & "summary: x", Said,
+               Status);
+      Assert (Status.Code = E.Framework_Contract_Violation,
+              "a status that is none of the contract's words was taken");
+      Iv.Hold (Iv.Work_Claim, "status: done", Said, Status);
+      Assert (Status.Code = E.Framework_Contract_Violation,
+              "an answer missing a required field was taken");
+      Assert (Iv.Name_Of (Iv.Contract_Of ("mine", "answer")) = "mine",
+              "a contract does not know its name");
+   end Invocations_Are_Recorded;
+
+   ---------------------------------------------------------------------------
    -- Register_Tests --
    ---------------------------------------------------------------------------
 
@@ -2521,6 +2684,13 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Parents_Wait_For_Children'Access,
          "a parent waits for its children and goes back to work after them");
+      Register_Routine
+        (T, Contexts_Are_Budgeted'Access,
+         "a context is budgeted by priority, deduplicated and reproducible");
+      Register_Routine
+        (T, Invocations_Are_Recorded'Access,
+         "a model call is recorded once ended and its answer held to a"
+         & " contract");
       Register_Routine
         (T, Repository_Is_Scanned'Access,
          "a scan finds files, units, symbols and references, and says how");

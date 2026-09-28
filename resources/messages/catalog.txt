@@ -155,7 +155,7 @@ en.help.init.quiet =   --quiet                 suppress progress, notes and warn
 en.help.init.verbose =   --verbose               report progress and detail on standard error
 en.help.init.locale =   --locale NAME           locale for program messages
 en.help.init.color =   --color=MODE            colour output: {value}
-en.help.task.usage = Usage: model_runner task [list|new TITLE|accept ID|reject ID|cancel ID|show ID|derive] [options]
+en.help.task.usage = Usage: model_runner task [list|new TITLE|accept ID|reject ID|cancel ID|show ID|context ID|derive] [options]
 en.help.task.summary = Manage the project's persistent tasks. list shows each with its state, ready shown as one; new creates a candidate from --set fields, asking a terminal for what its kind requires; accept, reject and cancel move one; show prints the effective task; derive makes the tasks accepted requirements imply. Tasks that became ready are named after each change.
 en.help.task.options = Options:
 en.help.task.set =   --set NAME=VALUE        give the new task's field NAME its value; repeatable
@@ -362,6 +362,8 @@ en.cli.task.derived = derived {name}
 en.cli.task.ready = {name} became ready
 en.cli.task.choose_kind = Select the kind of task:
 en.cli.task.cancelled = no task was created
+en.cli.task.context = {name}: {count} items, about {total} tokens, {extra} left out, retrieval {value}
+en.cli.task.context_item =   {name}
 en.cli.repo.summary = {count} files and {total} relations; graph {value}
 en.cli.repo.file = {path}  {value}  {detail}
 en.cli.repo.symbol = {name}  {value}  {path}
@@ -701,6 +703,8 @@ en.error.framework.lease_held = {name} is held by {detail} until {value}
 en.error.framework.task_kind_unknown = {name} is not a kind of task: {detail}
 en.error.framework.dependency_cycle = {name} cannot wait for that: {detail}
 en.error.framework.task_not_ready = {name} cannot move yet: {detail}
+en.error.framework.context_overflow = the context for {name} does not fit its model: {detail}
+en.error.framework.contract_violation = the answer does not keep to {name}: {detail}
 en.error.internal.invariant_violated = internal invariant violated
 en.error.internal.unexpected_exception = unexpected internal failure
 en.error.internal.not_implemented = not implemented in this build
@@ -809,7 +813,7 @@ da.help.init.quiet =   --quiet                 undertryk status, noter og advars
 da.help.init.verbose =   --verbose               vis status og detaljer på standardfejl
 da.help.init.locale =   --locale NAVN           sprog for programmets beskeder
 da.help.init.color =   --color=TILSTAND        farvet output: {value}
-da.help.task.usage = Brug: model_runner task [list|new TITEL|accept ID|reject ID|cancel ID|show ID|derive] [tilvalg]
+da.help.task.usage = Brug: model_runner task [list|new TITEL|accept ID|reject ID|cancel ID|show ID|context ID|derive] [tilvalg]
 da.help.task.summary = Styr projektets vedvarende opgaver. list viser hver med dens tilstand, klar vist som en; new opretter en kandidat fra --set-felter og spørger en terminal om det dens slags kræver; accept, reject og cancel flytter en; show viser den effektive opgave; derive laver de opgaver accepterede krav medfører. Opgaver der blev klar nævnes efter hver ændring.
 da.help.task.options = Tilvalg:
 da.help.task.set =   --set NAVN=VÆRDI        giv den nye opgaves felt NAVN sin værdi; kan gentages
@@ -1161,6 +1165,8 @@ da.cli.task.derived = afledte {name}
 da.cli.task.ready = {name} blev klar
 da.cli.task.choose_kind = Vælg opgavens slags:
 da.cli.task.cancelled = ingen opgave blev oprettet
+da.cli.task.context = {name}: {count} elementer, omkring {total} tokens, {extra} udeladt, genfinding {value}
+da.cli.task.context_item =   {name}
 da.cli.repo.summary = {count} filer og {total} relationer; graf {value}
 da.cli.repo.file = {path}  {value}  {detail}
 da.cli.repo.symbol = {name}  {value}  {path}
@@ -1387,6 +1393,8 @@ da.error.framework.lease_held = {name} holdes af {detail} indtil {value}
 da.error.framework.task_kind_unknown = {name} er ikke en slags opgave: {detail}
 da.error.framework.dependency_cycle = {name} kan ikke vente på det: {detail}
 da.error.framework.task_not_ready = {name} kan ikke flyttes endnu: {detail}
+da.error.framework.context_overflow = konteksten for {name} passer ikke til dens model: {detail}
+da.error.framework.contract_violation = svaret overholder ikke {name}: {detail}
 
 # Pseudo-locale. Generated from the English entries: every letter
 # outside a {placeholder} or a protocol token is accented and the
@@ -1747,6 +1755,8 @@ qps.cli.task.derived = ⟦ðéŕívéð {name}⟧
 qps.cli.task.ready = ⟦{name} béçámé ŕéáðý⟧
 qps.cli.task.choose_kind = ⟦Séĺéçŧ ŧhé kíñð óf ŧáßk:⟧
 qps.cli.task.cancelled = ⟦ñó ŧáßk wáß çŕéáŧéð⟧
+qps.cli.task.context = ⟦{name}: {count} íŧémß, ábóúŧ {total} ŧókéñß, {extra} ĺéfŧ óúŧ, ŕéŧŕíéváĺ {value}⟧
+qps.cli.task.context_item = ⟦  {name}⟧
 qps.cli.repo.summary = ⟦{count} fíĺéß áñð {total} ŕéĺáŧíóñß; gŕáph {value}⟧
 qps.cli.repo.file = ⟦{path}  {value}  {detail}⟧
 qps.cli.repo.symbol = ⟦{name}  {value}  {path}⟧
@@ -2067,6 +2077,8 @@ qps.error.framework.lease_held = ⟦{name} íß héĺð bý {detail} úñŧíĺ 
 qps.error.framework.task_kind_unknown = ⟦{name} íß ñóŧ á kíñð óf ŧáßk: {detail}⟧
 qps.error.framework.dependency_cycle = ⟦{name} çáññóŧ wáíŧ fóŕ ŧháŧ: {detail}⟧
 qps.error.framework.task_not_ready = ⟦{name} çáññóŧ móvé ýéŧ: {detail}⟧
+qps.error.framework.context_overflow = ⟦ŧhé çóñŧéxŧ fóŕ {name} ðóéß ñóŧ fíŧ íŧß móðéĺ: {detail}⟧
+qps.error.framework.contract_violation = ⟦ŧhé áñßwéŕ ðóéß ñóŧ kéép ŧó {name}: {detail}⟧
 qps.error.internal.invariant_violated = ⟦íñŧéŕñáĺ íñváŕíáñŧ víóĺáŧéð⟧
 qps.error.internal.unexpected_exception = ⟦úñéxpéçŧéð íñŧéŕñáĺ fáíĺúŕé⟧
 qps.error.internal.not_implemented = ⟦ñóŧ ímpĺéméñŧéð íñ ŧhíß búíĺð⟧

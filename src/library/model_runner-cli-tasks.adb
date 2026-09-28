@@ -4,6 +4,7 @@ with Ada.Strings.Unbounded;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.Errors;
 with Model_Runner.Framework;
+with Model_Runner.Framework.Context;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
@@ -252,6 +253,50 @@ package body Model_Runner.CLI.Tasks is
          end loop;
       end Show;
 
+      --  The context a model would be given for the task, kept so that
+      --  what it was can be looked up by its identifier afterwards.
+      procedure Show_Context is
+         Built : Model_Runner.Framework.Context.Built;
+      begin
+         if not Needs_Task then
+            return;
+         end if;
+         Model_Runner.Framework.Context.Build
+           (Store, Argument, Model_Runner.Framework.Context.Profile (Store, ""),
+            Built, Outcome);
+         if E.Is_Ok (Outcome) then
+            Model_Runner.Framework.Context.Keep (Store, Change, Built, Outcome);
+         end if;
+         if E.Is_Ok (Outcome) then
+            S.Commit (Store, Change, Outcome);
+         end if;
+         if E.Is_Error (Outcome) then
+            Fail (Outcome);
+            return;
+         end if;
+
+         Pres.Put_Message
+           (Screen, "cli.task.context",
+            [Loc.Named ("name", Model_Runner.Framework.Context.Manifest_Id (Built)),
+             Loc.Named ("count", T.Image (Long_Long_Integer
+                          (Model_Runner.Framework.Context.Included_Count (Built)))),
+             Loc.Named ("total", T.Image (Long_Long_Integer
+                          (Model_Runner.Framework.Context.Cost (Built)))),
+             Loc.Named ("extra", T.Image (Long_Long_Integer
+                          (Model_Runner.Framework.Context.Excluded_Count (Built)))),
+             Loc.Named ("value",
+                        (if Model_Runner.Framework.Context.Semantic (Built)
+                         then "semantic" else "textual"))]);
+         for Index in 1 .. Model_Runner.Framework.Context.Included_Count (Built) loop
+            Pres.Put_Message
+              (Screen, "cli.task.context_item",
+               [Loc.Named
+                  ("name",
+                   To_String (Model_Runner.Framework.Context.Included_At
+                                (Built, Index).Id))]);
+         end loop;
+      end Show_Context;
+
       procedure Derive is
          Made : Model_Runner.Framework.Name_Lists.Vector;
       begin
@@ -288,6 +333,8 @@ package body Model_Runner.CLI.Tasks is
          Move ("cancelled");
       elsif Action = "show" then
          Show;
+      elsif Action = "context" then
+         Show_Context;
       else
          Derive;
       end if;

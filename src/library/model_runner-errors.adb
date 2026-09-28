@@ -229,6 +229,7 @@ package body Model_Runner.Errors is
             | Conversation_System_Unsupported
             | Tools_Not_In_Template
             | Framework_Format_Unsupported
+            | Framework_Context_Overflow
             | Internal_Not_Implemented =>
             return Recovery_Unsupported;
 

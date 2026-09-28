@@ -300,6 +300,8 @@ ordinal is never reused, not because they might appear.
 | `MR-FRAMEWORK-0022` | `error.framework.task_kind_unknown` | recovery_user_correctable | 2 | raised |
 | `MR-FRAMEWORK-0023` | `error.framework.dependency_cycle` | recovery_user_correctable | 2 | raised |
 | `MR-FRAMEWORK-0024` | `error.framework.task_not_ready` | recovery_user_correctable | 2 | raised |
+| `MR-FRAMEWORK-0025` | `error.framework.context_overflow` | recovery_unsupported | 4 | raised |
+| `MR-FRAMEWORK-0026` | `error.framework.contract_violation` | recovery_user_correctable | 6 | raised |
 
 ## INTERNAL
 

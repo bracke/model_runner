@@ -377,6 +377,10 @@ package Model_Runner.Errors is
       Framework_Dependency_Cycle,
       Framework_Task_Not_Ready,
 
+      --  What a model is told, and what it answers.
+      Framework_Context_Overflow,
+      Framework_Contract_Violation,
+
       --  Internal invariants.
       Internal_Invariant_Violated,
       Internal_Unexpected_Exception,
