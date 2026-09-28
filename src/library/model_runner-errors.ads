@@ -381,6 +381,9 @@ package Model_Runner.Errors is
       Framework_Context_Overflow,
       Framework_Contract_Violation,
 
+      --  What the harness may run.
+      Framework_Execution_Refused,
+
       --  Internal invariants.
       Internal_Invariant_Violated,
       Internal_Unexpected_Exception,

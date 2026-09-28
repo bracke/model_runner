@@ -514,6 +514,7 @@ package body Model_Runner.Errors is
                              | Framework_Input_Missing
                              | Framework_Input_Invalid
                              | Framework_Transition_Invalid
+                             | Framework_Execution_Refused
                              | Framework_Task_Kind_Unknown
                              | Framework_Dependency_Cycle
                              | Framework_Task_Not_Ready

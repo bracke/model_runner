@@ -233,6 +233,22 @@ package body Model_Runner.Framework.Schemas is
           Rule ("result_contract", Text_Field, True),
           Rule ("started_at", Text_Field, True)]),
 
+      (Id      => new String'(Evidence_Schema),
+       Version => 1,
+       Policy  => Preserve_Unknown,
+       Rules   => new Rule_List'
+         [Rule ("profile", Text_Field, True),
+          Rule ("task", Text_Field, True),
+          Rule ("started_at", Text_Field, True),
+          Rule ("ended_at", Text_Field, True),
+          Rule ("repository_revision", Text_Field, True),
+          Rule ("configuration_fingerprint", Text_Field, True),
+          Rule ("passed", Choice_Field, True, "true false "),
+          Rule ("check.*", Text_Field, False),
+          Rule ("diagnostic.*", Text_Field, False),
+          Rule ("requirement.*", Number_Field, False),
+          Rule ("meaning.*", Text_Field, False)]),
+
       (Id      => new String'(Readiness_Schema),
        Version => 1,
        Policy  => Reject_Unknown,

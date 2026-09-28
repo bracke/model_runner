@@ -9,5 +9,6 @@ tags = alire
 fact build_system = Alire
 adapter build = alire
 scalar build.command = alr build
-profile build = alr build
+profile build = build: alr build
+set execution.allowed = alr
 discover alire.toml fact build_system = Alire

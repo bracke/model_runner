@@ -302,6 +302,7 @@ ordinal is never reused, not because they might appear.
 | `MR-FRAMEWORK-0024` | `error.framework.task_not_ready` | recovery_user_correctable | 2 | raised |
 | `MR-FRAMEWORK-0025` | `error.framework.context_overflow` | recovery_unsupported | 4 | raised |
 | `MR-FRAMEWORK-0026` | `error.framework.contract_violation` | recovery_user_correctable | 6 | raised |
+| `MR-FRAMEWORK-0027` | `error.framework.execution_refused` | recovery_user_correctable | 2 | raised |
 
 ## INTERNAL
 

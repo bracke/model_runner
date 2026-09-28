@@ -13,6 +13,7 @@ with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Context;
 with Model_Runner.Framework.Events;
+with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Facts;
 with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Intent;
@@ -26,6 +27,7 @@ with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Templates;
 with Model_Runner.Framework.Transitions;
+with Model_Runner.Framework.Verification;
 with Model_Runner.Text;
 
 package body Tests.Framework_Cases is
@@ -2582,6 +2584,236 @@ package body Tests.Framework_Cases is
    end Invocations_Are_Recorded;
 
    ---------------------------------------------------------------------------
+   --  Verification.
+   ---------------------------------------------------------------------------
+
+   package Ex renames Model_Runner.Framework.Execution;
+   package Vf renames Model_Runner.Framework.Verification;
+
+   --  Only what the policy allows is run, directly, and what it said is
+   --  kept.
+   procedure Execution_Follows_Policy
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Rules  : Ex.Policy;
+      Ran    : Ex.Outcome;
+   begin
+      Task_Project (Store, "execution",
+                    "set execution.allowed = echo" & LF
+                    & "scalar execution.timeout = 20" & LF);
+      Rules := Ex.Policy_Of (Store);
+      Assert (Rules.Allowed.Contains ("echo") and then not Rules.Shell_Allowed
+              and then Rules.Timeout = 20,
+              "the execution policy was not read from the configuration");
+      Assert (Ex.Needs_Shell ("a && b") and then not Ex.Needs_Shell ("alr build"),
+              "a shell's operators are not told from a plain command");
+      Assert (Natural (Ex.Words_Of ("echo 'two words' three").Length) = 3,
+              "quoted words were not kept whole");
+
+      Ex.Run (Store, Change, Rules, "rm -rf src", "", Ran, Status);
+      Assert (Status.Code = E.Framework_Execution_Refused,
+              "a program the policy does not name was run");
+      Ex.Run (Store, Change, Rules, "echo a && echo b", "", Ran, Status);
+      Assert (Status.Code = E.Framework_Execution_Refused,
+              "a shell was used when the policy allows none");
+      Ex.Run (Store, Change, Rules, "echo x", "../elsewhere", Ran, Status);
+      Assert (Status.Code = E.Framework_Execution_Refused,
+              "a command was run outside the project");
+
+      Ex.Run (Store, Change, Rules, "echo hello there", "", Ran, Status);
+      Assert (E.Is_Ok (Status) and then Ran.Started and then Ran.Exit_Status = 0
+              and then Ada.Strings.Fixed.Index (To_String (Ran.Output), "hello there") > 0
+              and then Length (Ran.Raw_Log) > 0,
+              "an allowed command did not run, or its output was lost: "
+              & Code_Of (Status) & Integer'Image (Ran.Exit_Status));
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "the raw output was not kept");
+      S.Close (Store);
+   end Execution_Follows_Policy;
+
+   --  Diagnostics are read out of tools' output, and a profile's checks out
+   --  of its line.
+   procedure Diagnostics_Are_Normalized
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Said : constant Vf.Diagnostic_List :=
+        Vf.Normalize
+          ("gprbuild",
+           "Compile" & LF
+           & "   [Ada]          parser.adb" & LF
+           & "parser.adb:12:7: warning: variable ""X"" is not referenced" & LF
+           & "parser.adb:40:1: (style) multiple blank lines" & LF
+           & "src/io.ads:3:10: missing "";""" & LF
+           & "error: compilation failed" & LF);
+      Checks : constant Vf.Check_List :=
+        Vf.Parse_Profile ("build: alr build; unit in tests: alr build; lint?: gnatcheck");
+   begin
+      Assert (Vf.Length (Said) = 4, "the diagnostics in some output were not all read:"
+              & Natural'Image (Vf.Length (Said)));
+      declare
+         First : constant Vf.Diagnostic := Vf.Element (Said, 1);
+         Third : constant Vf.Diagnostic := Vf.Element (Said, 3);
+      begin
+         Assert (To_String (First.File) = "parser.adb" and then First.Line = 12
+                 and then First.Column = 7
+                 and then To_String (First.Severity) = "warning"
+                 and then To_String (First.Tool) = "gprbuild",
+                 "a warning was not read as one");
+         Assert (To_String (Vf.Element (Said, 2).Severity) = "warning",
+                 "a style message is not a warning");
+         Assert (To_String (Third.Severity) = "error" and then Third.Column = 10,
+                 "an error was not read as one");
+      end;
+
+      Assert (Vf.Length (Checks) = 3
+              and then To_String (Vf.Element (Checks, 2).Directory) = "tests"
+              and then To_String (Vf.Element (Checks, 2).Label) = "unit"
+              and then not Vf.Element (Checks, 3).Required
+              and then To_String (Vf.Element (Checks, 3).Label) = "lint",
+              "a profile's checks were not read");
+   end Diagnostics_Are_Normalized;
+
+   --  A task completes only through its gates; a requirement becomes
+   --  verified from current evidence and stops being so when the evidence
+   --  stops applying.
+   procedure Completion_Needs_Current_Evidence
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store    : S.Store;
+      Status   : E.Error_Info;
+      Change   : S.Transaction;
+      Req      : Unbounded_String;
+      Id       : Unbounded_String;
+      Given    : Tk.Field_Map;
+      Evidence : Unbounded_String;
+      Passed   : Boolean;
+      Changed  : Model_Runner.Framework.Name_Lists.Vector;
+      Held     : Nt.Entity;
+      Reasons  : Model_Runner.Framework.Name_Lists.Vector;
+
+      procedure Move (Next : String) is
+      begin
+         Tk.Move (Store, Change, To_String (Id), Next, "", Status => Status);
+         S.Commit (Store, Change, Status);
+      end Move;
+
+      function Gate_Passes (Name : String) return Boolean is
+         Judged : constant Vf.Gate_List := Vf.Gates (Store, To_String (Id));
+      begin
+         for Index in 1 .. Vf.Length (Judged) loop
+            if To_String (Vf.Element (Judged, Index).Name) = Name then
+               return Vf.Element (Judged, Index).Passed;
+            end if;
+         end loop;
+         return False;
+      end Gate_Passes;
+   begin
+      Task_Project
+        (Store, "completion",
+         "set execution.allowed = echo" & LF
+         & "set execution.allowed = false" & LF
+         & "profile checks = say: echo src/a.adb:1:1: warning: fine" & LF
+         & "profile broken = fail: false" & LF);
+      Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.", "",
+                  "user", "", "io", Req, Status);
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted",
+               Tr.Ordinary_Only, Status);
+      S.Commit (Store, Change, Status);
+      Given := Fields ("Read", "implementation", "component", "io");
+      Given.Include ("requirements", To_String (Req));
+      Tk.Create (Store, Change, Given, "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Move ("accepted");
+      Move ("running");
+      Move ("verification");
+
+      Assert (Vf.Profile_Of (Store, To_String (Id)) = "tests",
+              "the task's kind did not choose its profile");
+      Assert (not Gate_Passes ("verification"),
+              "a task never verified passed its verification gate");
+      Vf.Complete_Task (Store, Change, To_String (Id), Status);
+      Assert (Status.Code = E.Framework_Task_Not_Ready,
+              "a task completed without passing its gates");
+
+      Vf.Run_Profile (Store, Change, "nonsense", To_String (Id), Evidence, Passed,
+                      Status);
+      Assert (Status.Code = E.Framework_Not_Found, "a profile nobody defined was run");
+      Vf.Run_Profile (Store, Change, "broken", To_String (Id), Evidence, Passed, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then not Passed, "a failing check passed");
+
+      Vf.Run_Profile (Store, Change, "checks", To_String (Id), Evidence, Passed, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then Passed
+              and then Vf.Length (Vf.Diagnostics_Of (Store, To_String (Evidence))) = 1,
+              "a passing profile's evidence was not kept with its diagnostics: "
+              & Code_Of (Status));
+      Assert (Vf.Is_Current (Store, To_String (Evidence), Reasons),
+              "fresh evidence is not current");
+      Assert (Vf.Latest (Store, To_String (Id), "checks") = To_String (Evidence),
+              "the latest evidence was not found");
+      S.Close (Store);
+
+      --  The task's own profile, pointed at the passing checks.
+      Task_Project
+        (Store, "completion-gates",
+         "set execution.allowed = echo" & LF
+         & "profile passing = say: echo all good" & LF
+         & "scalar verification.default = passing" & LF);
+      Change := S.No_Changes;
+      Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.", "",
+                  "user", "", "io", Req, Status);
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted",
+               Tr.Ordinary_Only, Status);
+      S.Commit (Store, Change, Status);
+      Given := Fields ("Look", "analysis");
+      Given.Include ("requirements", To_String (Req));
+      Tk.Create (Store, Change, Given, "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Move ("accepted");
+      Move ("running");
+      Move ("verification");
+      Vf.Run_Profile (Store, Change, "passing", To_String (Id), Evidence, Passed,
+                      Status);
+      S.Commit (Store, Change, Status);
+      Assert (Gate_Passes ("verification") and then Gate_Passes ("children")
+              and then Gate_Passes ("no_blocking_issue"),
+              "a verified task did not pass its gates");
+
+      Vf.Complete_Task (Store, Change, To_String (Id), Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then Tk.State_Of (Store, To_String (Id)) = "complete",
+              "a task passing its gates did not complete: " & Code_Of (Status));
+      Nt.Read (Store, Nt.Requirement, To_String (Req), Held, Status);
+      Assert (To_String (Held.State) = "implemented",
+              "completing a task verified its requirement by itself");
+
+      Vf.Reevaluate_Requirements (Store, Change, Changed, Status);
+      S.Commit (Store, Change, Status);
+      Nt.Read (Store, Nt.Requirement, To_String (Req), Held, Status);
+      Assert (To_String (Held.State) = "verified" and then Natural (Changed.Length) = 1,
+              "a requirement with current evidence was not verified");
+
+      --  A file changes: the evidence no longer applies.
+      Put_File (Fresh_Root (Store) & "/changed.txt", "new");
+      Assert (not Vf.Is_Current (Store, To_String (Evidence), Reasons)
+              and then not Reasons.Is_Empty,
+              "evidence still applies after the files changed");
+      Vf.Reevaluate_Requirements (Store, Change, Changed, Status);
+      S.Commit (Store, Change, Status);
+      Nt.Read (Store, Nt.Requirement, To_String (Req), Held, Status);
+      Assert (To_String (Held.State) = "implemented",
+              "a requirement stayed verified on evidence that no longer applies");
+      S.Close (Store);
+   end Completion_Needs_Current_Evidence;
+
+   ---------------------------------------------------------------------------
    -- Register_Tests --
    ---------------------------------------------------------------------------
 
@@ -2684,6 +2916,16 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Parents_Wait_For_Children'Access,
          "a parent waits for its children and goes back to work after them");
+      Register_Routine
+        (T, Execution_Follows_Policy'Access,
+         "only what the policy allows is run, directly, and its output kept");
+      Register_Routine
+        (T, Diagnostics_Are_Normalized'Access,
+         "diagnostics and a profile's checks are read out of text");
+      Register_Routine
+        (T, Completion_Needs_Current_Evidence'Access,
+         "a task completes by its gates and a requirement verifies by current"
+         & " evidence");
       Register_Routine
         (T, Contexts_Are_Budgeted'Access,
          "a context is budgeted by priority, deduplicated and reproducible");

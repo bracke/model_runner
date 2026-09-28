@@ -1,0 +1,225 @@
+with Ada.Calendar;
+with Ada.Directories;
+with Ada.Strings.Fixed;
+
+with Hostkit.Fs;
+with Hostkit.Process;
+
+with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Files;
+with Model_Runner.Framework.Records;
+with Model_Runner.Framework.Results;
+with Model_Runner.Framework.Templates;
+with Model_Runner.Platform;
+
+package body Model_Runner.Framework.Execution is
+
+   use Ada.Strings.Unbounded;
+   use type Ada.Calendar.Time;
+
+   package E renames Model_Runner.Errors;
+
+   function Trim (Text : String) return String
+   is (Ada.Strings.Fixed.Trim (Text, Ada.Strings.Both));
+
+   ---------------
+   -- Policy_Of --
+   ---------------
+
+   function Policy_Of (Item : Stores.Store) return Policy is
+      Config : Records.Item;
+      Status : E.Error_Info;
+      Result : Policy;
+
+      function Count (Text : String; Default : Positive) return Positive
+      is (if Text'Length in 1 .. 9 and then (for all Char of Text => Char in '0' .. '9')
+            and then Natural'Value (Text) > 0
+          then Natural'Value (Text) else Default);
+   begin
+      Configurations.Read (Item, Config, Status);
+      if E.Is_Error (Status) then
+         return Result;
+      end if;
+      Result.Allowed := Lines_Of (Records.Get (Config, "set.execution.allowed"));
+      Result.Shell_Allowed :=
+        Records.Get (Config, "scalar.execution.shell") = "allowed";
+      for Name of Lines_Of (Records.Get (Config, "set.execution.environment")) loop
+         Append (Result.Environment, Name & ",");
+      end loop;
+      Result.Timeout := Count (Records.Get (Config, "scalar.execution.timeout"), 600);
+      Result.Output_Limit :=
+        Count (Records.Get (Config, "scalar.execution.output_limit"), 1024 * 1024);
+      Result.Network := Records.Get (Config, "scalar.execution.network") = "allowed";
+      return Result;
+   end Policy_Of;
+
+   -----------------
+   -- Needs_Shell --
+   -----------------
+
+   function Needs_Shell (Command : String) return Boolean
+   is (for some Char of Command => Char in '&' | '|' | ';' | '<' | '>' | '$' | '`'
+                                         | '*' | '?' | '(' | ')');
+
+   --------------
+   -- Words_Of --
+   --------------
+
+   function Words_Of (Command : String) return Name_Lists.Vector is
+      Result  : Name_Lists.Vector;
+      Current : Unbounded_String;
+      Quote   : Character := ' ';
+      Started : Boolean := False;
+   begin
+      for Char of Command loop
+         if Quote /= ' ' then
+            if Char = Quote then
+               Quote := ' ';
+            else
+               Append (Current, Char);
+            end if;
+         elsif Char in '"' | ''' then
+            Quote := Char;
+            Started := True;
+         elsif Char in ' ' | ASCII.HT then
+            if Started then
+               Result.Append (To_String (Current));
+               Current := Null_Unbounded_String;
+               Started := False;
+            end if;
+         else
+            Append (Current, Char);
+            Started := True;
+         end if;
+      end loop;
+      if Started then
+         Result.Append (To_String (Current));
+      end if;
+      return Result;
+   end Words_Of;
+
+   ---------
+   -- Run --
+   ---------
+
+   procedure Run
+     (Item      : Stores.Store;
+      Change    : in out Stores.Transaction;
+      Rules     : Policy;
+      Command   : String;
+      Directory : String;
+      Result    : out Outcome;
+      Status    : out Model_Runner.Errors.Error_Info)
+   is
+      Project : constant String :=
+        Ada.Directories.Containing_Directory (Stores.Root (Item));
+      Words   : constant Name_Lists.Vector := Words_Of (Command);
+      Shell   : constant Boolean := Needs_Shell (Command);
+
+      procedure Refuse (Detail : String) is
+      begin
+         Status := E.Make (E.Framework_Execution_Refused);
+         E.Add_Text (Status, "name", Command);
+         E.Add_Text (Status, "detail", Detail);
+      end Refuse;
+   begin
+      Result := (Command   => To_Unbounded_String (Command),
+                 Directory => To_Unbounded_String (Directory),
+                 others    => <>);
+      Status := E.Success;
+
+      if Words.Is_Empty then
+         Refuse ("there is nothing to run");
+         return;
+      elsif Directory /= "" and then not Templates.Is_Project_Path (Directory) then
+         Refuse (Directory & " is not a directory inside the project");
+         return;
+      elsif Shell and then not Rules.Shell_Allowed then
+         Refuse ("it needs a shell, and the policy does not allow one");
+         return;
+      elsif not Shell
+        and then not Rules.Allowed.Contains
+                       (Ada.Directories.Simple_Name (Words.First_Element))
+      then
+         Refuse (Words.First_Element & " is not a program the policy allows");
+         return;
+      end if;
+
+      declare
+         Scratch   : constant String :=
+           Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "runtime"), "exec");
+         Output    : constant String := Hostkit.Fs.Join (Scratch, "output");
+         Where     : constant String :=
+           (if Directory = "" then Project else Hostkit.Fs.Join (Project, Directory));
+         Arguments : Hostkit.String_Vectors.Vector;
+         Began     : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+         Happened  : Hostkit.Process.Process_Outcome;
+         Text      : Unbounded_String;
+         Read      : E.Error_Info;
+         Program   : constant String := "env";
+      begin
+         if not Files.Make_Directory (Scratch) then
+            Files.Write_Failed (Scratch, Status);
+            return;
+         end if;
+
+         --  Only what the policy passes: env starts from nothing.
+         Arguments.Append (To_Unbounded_String ("-i"));
+         for Assignment of Lines_Of
+                             (Model_Runner.Platform.Passed_Environment
+                                (To_String (Rules.Environment)))
+         loop
+            Arguments.Append (To_Unbounded_String (Assignment));
+         end loop;
+         if Shell then
+            Arguments.Append (To_Unbounded_String ("sh"));
+            Arguments.Append (To_Unbounded_String ("-c"));
+            Arguments.Append (To_Unbounded_String (Command));
+         else
+            for Word of Words loop
+               Arguments.Append (To_Unbounded_String (Word));
+            end loop;
+         end if;
+
+         Happened :=
+           Hostkit.Process.Run_Captured
+             (Program           => Program,
+              Arguments         => Arguments,
+              Working_Directory => Where,
+              Stdin_Path        => Hostkit.Fs.Null_Device,
+              Stdout_Path       => Output,
+              Stderr_Path       => Output,
+              Timeout_Ms        => Rules.Timeout * 1000);
+
+         Result.Started := Happened.Started;
+         Result.Timed_Out := Happened.Timed_Out;
+         Result.Exit_Status := Happened.Exit_Status;
+         Result.Seconds := Natural (Ada.Calendar.Clock - Began);
+
+         if Ada.Directories.Exists (Output) then
+            Files.Read_Text (Output, Text, Read);
+            Files.Discard (Output);
+         end if;
+
+         --  The whole of it kept; a limit's worth of it read.
+         declare
+            Raw : Results.Result :=
+              (Kind       => Results.Verification,
+               Producer   => To_Unbounded_String ("execution"),
+               Summary    => To_Unbounded_String ("output of " & Command),
+               Payload    => Text,
+               Provenance => To_Unbounded_String
+                               (Trim (Directory) & ": " & Command),
+               others     => <>);
+         begin
+            Results.Add (Item, Change, Raw, Status);
+            Result.Raw_Log := Raw.Id;
+         end;
+         Result.Output :=
+           (if Length (Text) <= Rules.Output_Limit then Text
+            else Unbounded_Slice (Text, Length (Text) - Rules.Output_Limit + 1,
+                                  Length (Text)));
+      end;
+   end Run;
+
+end Model_Runner.Framework.Execution;

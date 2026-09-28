@@ -7,6 +7,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Deciding without a model whether work is done (Phase I).** Every
+  external program runs through one execution layer: only programs the
+  configuration's `execution.allowed` names, directly unless
+  `execution.shell = allowed`, inside the project, with nothing on
+  standard input, only `PATH`, `HOME` and the variables
+  `execution.environment` names, under a deadline, with the whole output
+  kept as a result. Verification profiles are `profile NAME = LABEL:
+  COMMAND; LABEL in DIR: COMMAND; LABEL?: optional`; a run reads GNAT and
+  GCC output into diagnostics and is kept as immutable evidence against the
+  repository's fingerprint, the configuration's and the requirements'
+  meanings. Evidence is current only while those are. A task completes
+  through its gates -- current passing evidence, children done, nothing
+  blocking -- and a requirement verifies from its tasks' current evidence
+  and falls back to implemented when that evidence stops applying. `task
+  verify ID` and `task complete ID`. One more `MR-FRAMEWORK` code.
+
 - **What a model is told, and each call to it, recorded (Phase H).**
   Model profiles come from the configuration (`map model.ID = context=N,
   reserve=N, tools=yes, ...`). A context is built for a task from the
@@ -17745,7 +17761,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 213 diagnostic
+- Localization through `messages`, with a catalog entry for all 214 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

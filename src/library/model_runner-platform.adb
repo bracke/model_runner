@@ -1,3 +1,5 @@
+with Ada.Strings.Fixed;
+with Ada.Strings.Unbounded;
 with Ada.Directories;
 with Ada.Environment_Variables;
 with System.Multiprocessors;
@@ -211,6 +213,40 @@ package body Model_Runner.Platform is
       when others =>
          return Conventional;
    end Catalog_Path;
+
+   ------------------------
+   -- Passed_Environment --
+   ------------------------
+
+   function Passed_Environment (Names : String) return String is
+      Result : Ada.Strings.Unbounded.Unbounded_String;
+      Start  : Natural := Names'First;
+
+      procedure Pass (Name : String) is
+      begin
+         if Name /= "" and then Environment_Exists (Name) then
+            Ada.Strings.Unbounded.Append
+              (Result, Name & "=" & Environment_Value (Name) & ASCII.LF);
+         end if;
+      end Pass;
+   begin
+      Pass ("PATH");
+      Pass ("HOME");
+      for Index in Names'First .. Names'Last + 1 loop
+         if Index > Names'Last or else Names (Index) = ',' then
+            declare
+               Name : constant String :=
+                 Ada.Strings.Fixed.Trim (Names (Start .. Index - 1), Ada.Strings.Both);
+            begin
+               if Name not in "PATH" | "HOME" then
+                  Pass (Name);
+               end if;
+            end;
+            Start := Index + 1;
+         end if;
+      end loop;
+      return Ada.Strings.Unbounded.To_String (Result);
+   end Passed_Environment;
 
    -----------------------------------
    -- Installed_Templates_Directory --

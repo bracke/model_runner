@@ -161,6 +161,14 @@ package Model_Runner.Platform is
    --    there is no settings file's place.
    function User_Templates_Directory return String;
 
+   --  The environment a project's checks are run with: PATH and HOME, and
+   --  whichever of the named variables are set, as NAME=VALUE a line. The
+   --  rest of this program's environment is not passed on.
+   --
+   --  @param Names More variables to pass, separated by commas.
+   --  @return The assignments.
+   function Passed_Environment (Names : String) return String;
+
    --  Make the directory a path is written into, and its parents, where
    --  they are not there. A path in a directory that exists, and one the
    --  directory cannot be made for, are both left to the write to report.

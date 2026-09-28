@@ -2695,7 +2695,8 @@ package body Model_Runner.CLI.Options is
                elsif Operands = 2 and then Result.Kind = Command_Task then
                   --  task ACTION: one of the things the command does.
                   if Argument not in "list" | "new" | "accept" | "reject"
-                                   | "cancel" | "show" | "context" | "derive"
+                                   | "cancel" | "show" | "context" | "verify"
+                                   | "complete" | "derive"
                   then
                      Fail (E.CLI_Unexpected_Operand, "", Argument);
                      return;

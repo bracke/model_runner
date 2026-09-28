@@ -5,6 +5,9 @@ with Model_Runner.CLI.Choosers;
 with Model_Runner.Errors;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Context;
+with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Intent;
+with Model_Runner.Framework.Verification;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
@@ -61,6 +64,15 @@ package body Model_Runner.CLI.Tasks is
       Report  : S.Recovery_Report;
       Outcome : E.Error_Info;
       Change  : S.Transaction;
+
+      --  A profile as the configuration writes it.
+      function Profile_Text (Name : String) return String is
+         Config : R.Item;
+         Read   : E.Error_Info;
+      begin
+         Model_Runner.Framework.Configurations.Read (Store, Config, Read);
+         return R.Get (Config, "profile." & Name);
+      end Profile_Text;
 
       procedure Fail (Condition : E.Error_Info) is
       begin
@@ -297,6 +309,124 @@ package body Model_Runner.CLI.Tasks is
          end loop;
       end Show_Context;
 
+      --  Run the task's verification profile, keep the evidence and say
+      --  what it found.
+      procedure Verify is
+         Profile  : constant String :=
+           Model_Runner.Framework.Verification.Profile_Of (Store, Argument);
+         Evidence : Unbounded_String;
+         Passed   : Boolean;
+      begin
+         if not Needs_Task then
+            return;
+         end if;
+         if Profile = "" then
+            Outcome := E.Make (E.Framework_Not_Found);
+            E.Add_Text (Outcome, "name", "the verification profile of " & Argument);
+            Fail (Outcome);
+            return;
+         end if;
+         Model_Runner.Framework.Verification.Run_Profile
+           (Store, Change, Profile, Argument, Evidence, Passed, Outcome);
+         if E.Is_Ok (Outcome) then
+            Commit;
+         end if;
+         if E.Is_Error (Outcome) then
+            Fail (Outcome);
+            return;
+         end if;
+
+         declare
+            Said : constant Model_Runner.Framework.Verification.Diagnostic_List :=
+              Model_Runner.Framework.Verification.Diagnostics_Of
+                (Store, To_String (Evidence));
+         begin
+            for Index in 1 .. Model_Runner.Framework.Verification.Length (Said) loop
+               declare
+                  One : constant Model_Runner.Framework.Verification.Diagnostic :=
+                    Model_Runner.Framework.Verification.Element (Said, Index);
+               begin
+                  Pres.Put_Message
+                    (Screen, "cli.task.diagnostic",
+                     [Loc.Named ("path", To_String (One.File) & ":"
+                                 & T.Image (Long_Long_Integer (One.Line))),
+                      Loc.Named ("severity", To_String (One.Severity)),
+                      Loc.Named ("detail", To_String (One.Message))]);
+               end;
+            end loop;
+            Pres.Put_Message
+              (Screen, "cli.task.verified",
+               [Loc.Named ("name", To_String (Evidence)),
+                Loc.Named ("value", (if Passed then "passed" else "failed")),
+                Loc.Named ("count", T.Image (Long_Long_Integer
+                             (Model_Runner.Framework.Verification.Length
+                                (Model_Runner.Framework.Verification.Parse_Profile
+                                   (Profile_Text (Profile)))))),
+                Loc.Named ("total", T.Image (Long_Long_Integer
+                             (Model_Runner.Framework.Verification.Length (Said))))]);
+         end;
+         if not Passed then
+            Status := E.Exit_Input_Output;
+         end if;
+      end Verify;
+
+      --  Complete a task through its gates, then work out which
+      --  requirements that verified.
+      procedure Complete is
+         Changed : Model_Runner.Framework.Name_Lists.Vector;
+         Judged  : constant Model_Runner.Framework.Verification.Gate_List :=
+           Model_Runner.Framework.Verification.Gates (Store, Argument);
+      begin
+         if not Needs_Task then
+            return;
+         end if;
+         for Index in 1 .. Model_Runner.Framework.Verification.Length (Judged) loop
+            declare
+               One : constant Model_Runner.Framework.Verification.Gate :=
+                 Model_Runner.Framework.Verification.Element (Judged, Index);
+            begin
+               Pres.Put_Message
+                 (Screen, "cli.task.gate",
+                  [Loc.Named ("name", To_String (One.Name)),
+                   Loc.Named ("detail", (if One.Passed then "passed"
+                                         else To_String (One.Reason)))]);
+            end;
+         end loop;
+
+         Model_Runner.Framework.Verification.Complete_Task
+           (Store, Change, Argument, Outcome);
+         if E.Is_Ok (Outcome) then
+            S.Commit (Store, Change, Outcome);
+         end if;
+         if E.Is_Ok (Outcome) then
+            Model_Runner.Framework.Verification.Reevaluate_Requirements
+              (Store, Change, Changed, Outcome);
+         end if;
+         if E.Is_Ok (Outcome) then
+            Commit;
+         end if;
+         if E.Is_Error (Outcome) then
+            Fail (Outcome);
+            return;
+         end if;
+         Pres.Put_Message
+           (Screen, "cli.task.moved",
+            [Loc.Named ("name", Argument), Loc.Named ("value", "complete")]);
+         for Requirement of Changed loop
+            declare
+               Held : Model_Runner.Framework.Intent.Entity;
+               Read : E.Error_Info;
+            begin
+               Model_Runner.Framework.Intent.Read
+                 (Store, Model_Runner.Framework.Intent.Requirement, Requirement, Held, Read);
+               Pres.Put_Message
+                 (Screen, "cli.task.requirement",
+                  [Loc.Named ("name", Requirement),
+                   Loc.Named ("value", To_String (Held.State))]);
+            end;
+         end loop;
+      end Complete;
+
       procedure Derive is
          Made : Model_Runner.Framework.Name_Lists.Vector;
       begin
@@ -335,6 +465,10 @@ package body Model_Runner.CLI.Tasks is
          Show;
       elsif Action = "context" then
          Show_Context;
+      elsif Action = "verify" then
+         Verify;
+      elsif Action = "complete" then
+         Complete;
       else
          Derive;
       end if;

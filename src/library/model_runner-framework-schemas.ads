@@ -52,6 +52,9 @@ package Model_Runner.Framework.Schemas is
    Manifest_Record_Schema : constant String := "context.manifest";
    Invocation_Schema      : constant String := "model.invocation";
 
+   --  What a verification run found, kept as it was.
+   Evidence_Schema : constant String := "verification.evidence";
+
    --  One event.
    Event_Schema : constant String := "event.record";
 

@@ -12,5 +12,5 @@ adapter test = aunit
 directory tests
 list verification.full = build
 list verification.full = tests
-profile tests = cd tests && alr build && bin/tests
+profile tests = build: alr build; tests in tests: alr build
 scalar task.profile.implementation = tests

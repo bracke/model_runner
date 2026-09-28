@@ -1,0 +1,720 @@
+with Ada.Characters.Handling;
+with Ada.Directories;
+with Ada.Strings.Fixed;
+
+with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Events;
+with Model_Runner.Framework.Execution;
+with Model_Runner.Framework.Intent;
+with Model_Runner.Framework.Records;
+with Model_Runner.Framework.Repository;
+with Model_Runner.Framework.Schemas;
+with Model_Runner.Framework.Tasks;
+with Model_Runner.Framework.Transitions;
+with Model_Runner.Platform;
+
+package body Model_Runner.Framework.Verification is
+
+   use Ada.Strings.Unbounded;
+
+   package E renames Model_Runner.Errors;
+
+   Tab : constant Character := ASCII.HT;
+
+   function Trim (Text : String) return String
+   is (Ada.Strings.Fixed.Trim (Text, Ada.Strings.Both));
+
+   function Image (Value : Natural) return String
+   is (Trim (Natural'Image (Value)));
+
+   function Lower (Text : String) return String
+   renames Ada.Characters.Handling.To_Lower;
+
+   function Starts (Text, Prefix : String) return Boolean
+   is (Text'Length >= Prefix'Length
+       and then Text (Text'First .. Text'First + Prefix'Length - 1) = Prefix);
+
+   function Pad (Value : Natural; Width : Positive) return String is
+      Plain : constant String := Image (Value);
+   begin
+      return [1 .. Integer'Max (0, Width - Plain'Length) => '0'] & Plain;
+   end Pad;
+
+   function Length (From : Check_List) return Natural
+   is (Natural (From.Items.Length));
+
+   function Length (From : Diagnostic_List) return Natural
+   is (Natural (From.Items.Length));
+
+   function Length (From : Gate_List) return Natural
+   is (Natural (From.Items.Length));
+
+   function Element (From : Check_List; Index : Positive) return Check
+   is (From.Items (Index));
+
+   function Element (From : Diagnostic_List; Index : Positive) return Diagnostic
+   is (From.Items (Index));
+
+   function Element (From : Gate_List; Index : Positive) return Gate
+   is (From.Items (Index));
+
+   function Config (Item : Stores.Store) return Records.Item is
+      Value  : Records.Item;
+      Status : E.Error_Info;
+   begin
+      Configurations.Read (Item, Value, Status);
+      return (if E.Is_Ok (Status) then Value else Records.Create ("", 1, "", 0));
+   end Config;
+
+   -------------------
+   -- Parse_Profile --
+   -------------------
+
+   function Parse_Profile (Text : String) return Check_List is
+      Result : Check_List;
+      Start  : Natural := Text'First;
+   begin
+      for Index in Text'First .. Text'Last + 1 loop
+         if Index > Text'Last or else Text (Index) in ';' | ASCII.LF then
+            declare
+               Part  : constant String := Trim (Text (Start .. Index - 1));
+               Colon : constant Natural := Ada.Strings.Fixed.Index (Part, ":");
+            begin
+               if Part /= "" then
+                  declare
+                     Head    : constant String :=
+                       (if Colon = 0 then "check" else Trim (Part (Part'First .. Colon - 1)));
+                     Command : constant String :=
+                       (if Colon = 0 then Part else Trim (Part (Colon + 1 .. Part'Last)));
+                     Inside  : constant Natural := Ada.Strings.Fixed.Index (Head, " in ");
+                     Label   : constant String :=
+                       (if Inside = 0 then Head else Trim (Head (Head'First .. Inside - 1)));
+                  begin
+                     Result.Items.Append
+                       (Check'(Label     => To_Unbounded_String
+                                              (if Label (Label'Last) = '?'
+                                               then Label (Label'First .. Label'Last - 1)
+                                               else Label),
+                               Command   => To_Unbounded_String (Command),
+                               Directory => To_Unbounded_String
+                                              (if Inside = 0 then ""
+                                               else Trim (Head (Inside + 4 .. Head'Last))),
+                               Required  => Label (Label'Last) /= '?'));
+                  end;
+               end if;
+            end;
+            Start := Index + 1;
+         end if;
+      end loop;
+      return Result;
+   end Parse_Profile;
+
+   ---------------
+   -- Normalize --
+   ---------------
+
+   function Normalize (Tool : String; Output : String) return Diagnostic_List is
+      Result : Diagnostic_List;
+
+      --  A number at the front of a text, and what follows its colon.
+      procedure Number
+        (Text  : String;
+         Value : out Natural;
+         Rest  : out Natural)
+      is
+         Index : Natural := Text'First;
+      begin
+         Value := 0;
+         Rest := 0;
+         while Index <= Text'Last and then Text (Index) in '0' .. '9' loop
+            if Value < 100_000_000 then
+               Value := Value * 10 + (Character'Pos (Text (Index)) - Character'Pos ('0'));
+            end if;
+            Index := Index + 1;
+         end loop;
+         if Index > Text'First and then Index <= Text'Last and then Text (Index) = ':'
+         then
+            Rest := Index + 1;
+         end if;
+      end Number;
+
+      procedure Found (File : String; Line, Column : Natural; Said : String) is
+         Message  : constant String := Trim (Said);
+         Severity : constant String :=
+           (if Starts (Lower (Message), "warning:") or else Starts (Message, "(style)")
+            then "warning"
+            elsif Starts (Lower (Message), "note:") or else Starts (Lower (Message), "info:")
+            then "note"
+            else "error");
+         Body_Text : constant String :=
+           (if Starts (Lower (Message), "warning:") then Trim (Message (Message'First + 8 .. Message'Last))
+            elsif Starts (Lower (Message), "error:") then Trim (Message (Message'First + 6 .. Message'Last))
+            elsif Starts (Lower (Message), "note:") then Trim (Message (Message'First + 5 .. Message'Last))
+            else Message);
+      begin
+         Result.Items.Append
+           (Diagnostic'(Tool     => To_Unbounded_String (Tool),
+                        Severity => To_Unbounded_String (Severity),
+                        File     => To_Unbounded_String (File),
+                        Line     => Line,
+                        Column   => Column,
+                        Message  => To_Unbounded_String (Body_Text)));
+      end Found;
+   begin
+      for Raw of Lines_Of (Output) loop
+         declare
+            Line  : constant String := Trim (Raw);
+            Colon : constant Natural := Ada.Strings.Fixed.Index (Line, ":");
+         begin
+            if Colon > Line'First and then Colon < Line'Last
+              and then Line (Colon + 1) in '0' .. '9'
+              and then Ada.Strings.Fixed.Index (Line (Line'First .. Colon - 1), " ") = 0
+            then
+               declare
+                  At_Line, At_Column : Natural;
+                  After_Line, After_Column : Natural;
+               begin
+                  Number (Line (Colon + 1 .. Line'Last), At_Line, After_Line);
+                  if After_Line > 0 then
+                     Number (Line (After_Line .. Line'Last), At_Column, After_Column);
+                     if After_Column > 0 then
+                        Found (Line (Line'First .. Colon - 1), At_Line, At_Column,
+                               Line (After_Column .. Line'Last));
+                     else
+                        Found (Line (Line'First .. Colon - 1), At_Line, 0,
+                               Line (After_Line .. Line'Last));
+                     end if;
+                  end if;
+               end;
+            elsif Starts (Lower (Line), "error:") or else Starts (Lower (Line), "warning:")
+            then
+               Found ("", 0, 0, Line);
+            end if;
+         end;
+      end loop;
+      return Result;
+   end Normalize;
+
+   ----------------
+   -- Profile_Of --
+   ----------------
+
+   function Profile_Of (Item : Stores.Store; Task_Id : String) return String is
+      Settings : constant Records.Item := Config (Item);
+      Defined  : Records.Item;
+      Status   : E.Error_Info;
+   begin
+      Tasks.Definition (Item, Task_Id, Defined, Status);
+      if E.Is_Ok (Status) then
+         declare
+            By_Kind : constant String :=
+              Records.Get (Settings, "scalar.task.profile." & Records.Get (Defined, "kind"));
+         begin
+            if By_Kind /= "" then
+               return By_Kind;
+            end if;
+         end;
+      end if;
+      return Records.Get (Settings, "scalar.verification.default");
+   end Profile_Of;
+
+   --  What evidence is checked against: the files as they are now.
+   function Repository_Now (Item : Stores.Store) return String
+   is (Repository.Graph_Fingerprint
+         (Repository.Scan (Ada.Directories.Containing_Directory (Stores.Root (Item)))));
+
+   -----------------
+   -- Run_Profile --
+   -----------------
+
+   procedure Run_Profile
+     (Item     : Stores.Store;
+      Change   : in out Stores.Transaction;
+      Profile  : String;
+      Task_Id  : String;
+      Evidence : out Ada.Strings.Unbounded.Unbounded_String;
+      Passed   : out Boolean;
+      Status   : out Model_Runner.Errors.Error_Info)
+   is
+      Settings : constant Records.Item := Config (Item);
+      Text     : constant String := Records.Get (Settings, "profile." & Profile);
+      Checks   : constant Check_List := Parse_Profile (Text);
+      Rules    : constant Execution.Policy := Execution.Policy_Of (Item);
+      Number   : Natural;
+      Diagnostics : Natural := 0;
+   begin
+      Evidence := Null_Unbounded_String;
+      Passed := False;
+
+      if Text = "" then
+         Status := E.Make (E.Framework_Not_Found);
+         E.Add_Text (Status, "name", "profile " & Profile);
+         return;
+      end if;
+
+      Stores.Allocate_Number (Item, Change, "VER", "", Number, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      Evidence := To_Unbounded_String ("VER-" & Pad (Number, 6));
+
+      declare
+         Value : Records.Item :=
+           Records.Create (Schemas.Evidence_Schema, 1, To_String (Evidence), 1);
+      begin
+         Records.Set (Value, "task", Task_Id);
+         Records.Set (Value, "profile", Profile);
+         Records.Set (Value, "started_at", Timestamp);
+         Records.Set (Value, "repository_revision", Repository_Now (Item));
+         Records.Set (Value, "workspace_revision", Repository_Now (Item));
+         Records.Set (Value, "configuration_revision", Image (Records.Revision (Settings)));
+         Records.Set
+           (Value, "configuration_fingerprint",
+            Records.Get (Settings, "configuration_fingerprint"));
+         Records.Set
+           (Value, "environment_fingerprint",
+            Fingerprint (Model_Runner.Platform.Passed_Environment
+                           (To_String (Rules.Environment))));
+         Records.Set (Value, "network", (if Rules.Network then "allowed" else "not allowed"));
+
+         if Task_Id /= "" then
+            declare
+               View : Records.Item;
+               Read : E.Error_Info;
+            begin
+               Tasks.Effective (Item, Task_Id, View, Read);
+               Records.Set (Value, "generation", Records.Get (View, "runtime.generation"));
+               for Requirement of Lines_Of (Records.Get (View, "definition.requirements")) loop
+                  declare
+                     Held : Intent.Entity;
+                  begin
+                     Intent.Read (Item, Intent.Requirement, Requirement, Held, Read);
+                     if E.Is_Ok (Read) then
+                        Records.Set (Value, "requirement." & Requirement,
+                                     Image (Held.Revision));
+                        Records.Set (Value, "meaning." & Requirement,
+                                     To_String (Held.Meaning));
+                     end if;
+                  end;
+               end loop;
+            end;
+         end if;
+
+         Passed := True;
+         for Index in 1 .. Length (Checks) loop
+            declare
+               Next    : constant Check := Element (Checks, Index);
+               Ran     : Execution.Outcome;
+               Good    : Boolean;
+               Program : constant Name_Lists.Vector :=
+                 Execution.Words_Of (To_String (Next.Command));
+            begin
+               Execution.Run
+                 (Item, Change, Rules, To_String (Next.Command),
+                  To_String (Next.Directory), Ran, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+               Good := Ran.Started and then not Ran.Timed_Out and then Ran.Exit_Status = 0;
+               if Next.Required and then not Good then
+                  Passed := False;
+               end if;
+
+               Records.Set
+                 (Value, "check." & Pad (Index, 4),
+                  To_String (Next.Label) & Tab & To_String (Next.Command) & Tab
+                  & Integer'Image (Ran.Exit_Status) & Tab & Image (Ran.Seconds) & Tab
+                  & (if Good then "passed" elsif Ran.Timed_Out then "timed out"
+                     else "failed")
+                  & Tab & (if Next.Required then "required" else "optional")
+                  & Tab & To_String (Ran.Raw_Log));
+
+               declare
+                  Said : constant Diagnostic_List :=
+                    Normalize ((if Program.Is_Empty then "" else Program.First_Element),
+                               To_String (Ran.Output));
+               begin
+                  for Place in 1 .. Length (Said) loop
+                     declare
+                        One : constant Diagnostic := Element (Said, Place);
+                     begin
+                        Diagnostics := Diagnostics + 1;
+                        Records.Set
+                          (Value, "diagnostic." & Pad (Diagnostics, 5),
+                           To_String (One.Tool) & Tab & To_String (One.Severity) & Tab
+                           & To_String (One.File) & Tab & Image (One.Line) & Tab
+                           & Image (One.Column) & Tab & To_String (One.Message));
+                     end;
+                  end loop;
+               end;
+            end;
+         end loop;
+
+         Records.Set (Value, "passed", (if Passed then "true" else "false"));
+         Records.Set (Value, "ended_at", Timestamp);
+         Stores.Put (Change, Verification_Area, To_String (Evidence), Value);
+      end;
+   end Run_Profile;
+
+   --------------------
+   -- Diagnostics_Of --
+   --------------------
+
+   function Diagnostics_Of
+     (Item     : Stores.Store;
+      Evidence : String) return Diagnostic_List
+   is
+      Result : Diagnostic_List;
+      Value  : Records.Item;
+      Status : E.Error_Info;
+   begin
+      Stores.Read (Item, Verification_Area, Evidence, Value, Status);
+      if E.Is_Error (Status) then
+         return Result;
+      end if;
+      for Index in 1 .. Records.Field_Count (Value) loop
+         declare
+            Field : constant String := Records.Field_Name (Value, Index);
+         begin
+            if Starts (Field, "diagnostic.") then
+               declare
+                  Text  : constant String := Records.Get (Value, Field);
+                  Parts : Name_Lists.Vector;
+                  Start : Natural := Text'First;
+               begin
+                  for Place in Text'First .. Text'Last + 1 loop
+                     if Place > Text'Last or else Text (Place) = Tab then
+                        Parts.Append (Text (Start .. Place - 1));
+                        Start := Place + 1;
+                     end if;
+                  end loop;
+                  if Natural (Parts.Length) = 6 then
+                     Result.Items.Append
+                       (Diagnostic'(Tool     => To_Unbounded_String (Parts (1)),
+                                    Severity => To_Unbounded_String (Parts (2)),
+                                    File     => To_Unbounded_String (Parts (3)),
+                                    Line     => Natural'Value (Parts (4)),
+                                    Column   => Natural'Value (Parts (5)),
+                                    Message  => To_Unbounded_String (Parts (6))));
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+      return Result;
+   end Diagnostics_Of;
+
+   ----------------
+   -- Is_Current --
+   ----------------
+
+   function Is_Current
+     (Item     : Stores.Store;
+      Evidence : String;
+      Reasons  : out Name_Lists.Vector) return Boolean
+   is
+      Value    : Records.Item;
+      Status   : E.Error_Info;
+      Settings : constant Records.Item := Config (Item);
+   begin
+      Reasons.Clear;
+      Stores.Read (Item, Verification_Area, Evidence, Value, Status);
+      if E.Is_Error (Status) then
+         Reasons.Append (Evidence & " is not there");
+         return False;
+      end if;
+
+      if Records.Get (Value, "repository_revision") /= Repository_Now (Item) then
+         Reasons.Append ("the files have changed since " & Evidence);
+      end if;
+      if Records.Get (Value, "configuration_fingerprint")
+           /= Records.Get (Settings, "configuration_fingerprint")
+      then
+         Reasons.Append ("the configuration has changed since " & Evidence);
+      end if;
+      for Index in 1 .. Records.Field_Count (Value) loop
+         declare
+            Field : constant String := Records.Field_Name (Value, Index);
+         begin
+            if Starts (Field, "requirement.") then
+               declare
+                  Id   : constant String := Field (Field'First + 12 .. Field'Last);
+                  Held : Intent.Entity;
+                  Read : E.Error_Info;
+               begin
+                  Intent.Read (Item, Intent.Requirement, Id, Held, Read);
+                  --  What matters is what it means: a move through its
+                  --  lifecycle is a revision too, and changes nothing the
+                  --  evidence was gathered against.
+                  if E.Is_Error (Read)
+                    or else To_String (Held.Meaning)
+                            /= Records.Get (Value, "meaning." & Id)
+                  then
+                     Reasons.Append (Id & " has changed its meaning since " & Evidence);
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+      return Reasons.Is_Empty;
+   end Is_Current;
+
+   ------------
+   -- Latest --
+   ------------
+
+   function Latest
+     (Item    : Stores.Store;
+      Task_Id : String;
+      Profile : String) return String
+   is
+      Result : Unbounded_String;
+   begin
+      for Name of Stores.Names (Item, Verification_Area) loop
+         declare
+            Value  : Records.Item;
+            Status : E.Error_Info;
+         begin
+            Stores.Read (Item, Verification_Area, Name, Value, Status);
+            if E.Is_Ok (Status) and then Records.Get (Value, "task") = Task_Id
+              and then Records.Get (Value, "profile") = Profile
+            then
+               Result := To_Unbounded_String (Name);
+            end if;
+         end;
+      end loop;
+      return To_String (Result);
+   end Latest;
+
+   -----------
+   -- Gates --
+   -----------
+
+   function Gates (Item : Stores.Store; Task_Id : String) return Gate_List is
+      Result   : Gate_List;
+      Settings : constant Records.Item := Config (Item);
+      Named    : Name_Lists.Vector := Lines_Of (Records.Get (Settings, "set.task.gates"));
+
+      procedure Judge (Name : String; Passed : Boolean; Reason : String) is
+      begin
+         Result.Items.Append
+           (Gate'(Name   => To_Unbounded_String (Name),
+                  Passed => Passed,
+                  Reason => To_Unbounded_String (if Passed then "" else Reason)));
+      end Judge;
+   begin
+      if Named.Is_Empty then
+         Named.Append ("verification");
+         Named.Append ("children");
+         Named.Append ("no_blocking_issue");
+      end if;
+
+      for Name of Named loop
+         if Name = "verification" then
+            declare
+               Profile  : constant String := Profile_Of (Item, Task_Id);
+               Evidence : constant String :=
+                 (if Profile = "" then "" else Latest (Item, Task_Id, Profile));
+               Value    : Records.Item;
+               Status   : E.Error_Info;
+               Reasons  : Name_Lists.Vector;
+            begin
+               if Profile = "" then
+                  Judge (Name, False, "no verification profile applies to it");
+               elsif Evidence = "" then
+                  Judge (Name, False, "profile " & Profile & " has not been run for it");
+               else
+                  Stores.Read (Item, Verification_Area, Evidence, Value, Status);
+                  if Records.Get (Value, "passed") /= "true" then
+                     Judge (Name, False, Evidence & " did not pass");
+                  elsif not Is_Current (Item, Evidence, Reasons) then
+                     Judge (Name, False, Reasons.First_Element);
+                  else
+                     Judge (Name, True, "");
+                  end if;
+               end if;
+            end;
+         elsif Name = "children" then
+            declare
+               Open : Unbounded_String;
+            begin
+               for Child of Tasks.Children (Item, Task_Id) loop
+                  if Tasks.State_Of (Item, Child) not in "complete" | "cancelled" then
+                     Append (Open, (if Open = Null_Unbounded_String then "" else ", ") & Child);
+                  end if;
+               end loop;
+               Judge (Name, Open = Null_Unbounded_String,
+                      "these children are not done: " & To_String (Open));
+            end;
+         elsif Name = "no_blocking_issue" then
+            declare
+               Value  : Records.Item;
+               Status : E.Error_Info;
+            begin
+               Stores.Read (Item, Tasks_Area, Task_Id & ".state", Value, Status);
+               Judge (Name, E.Is_Ok (Status) and then Records.Get (Value, "blocking_reasons") = "",
+                      "it is blocked: " & Records.Get (Value, "blocking_reasons"));
+            end;
+         else
+            Judge (Name, False, "no gate is called " & Name);
+         end if;
+      end loop;
+      return Result;
+   end Gates;
+
+   -------------------
+   -- Complete_Task --
+   -------------------
+
+   procedure Complete_Task
+     (Item    : Stores.Store;
+      Change  : in out Stores.Transaction;
+      Task_Id : String;
+      Status  : out Model_Runner.Errors.Error_Info)
+   is
+      Judged : constant Gate_List := Gates (Item, Task_Id);
+      Failed : Unbounded_String;
+      Defined : Records.Item;
+   begin
+      for Next of Judged.Items loop
+         if not Next.Passed then
+            Append (Failed, (if Failed = Null_Unbounded_String then "" else "; ")
+                            & To_String (Next.Name) & ": " & To_String (Next.Reason));
+         end if;
+      end loop;
+      if Failed /= Null_Unbounded_String then
+         Status := E.Make (E.Framework_Task_Not_Ready);
+         E.Add_Text (Status, "name", Task_Id);
+         E.Add_Text (Status, "detail", To_String (Failed));
+         return;
+      end if;
+
+      Tasks.Move (Item, Change, Task_Id, "complete", "", Gates_Passed => True,
+                  Status => Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      --  The requirements it served are implemented now; whether they are
+      --  verified is worked out from evidence, not from this.
+      Tasks.Definition (Item, Task_Id, Defined, Status);
+      for Requirement of Lines_Of (Records.Get (Defined, "requirements")) loop
+         declare
+            Held : Intent.Entity;
+            Read : E.Error_Info;
+         begin
+            Intent.Read (Item, Intent.Requirement, Requirement, Held, Read);
+            if E.Is_Ok (Read) and then To_String (Held.State) = "accepted" then
+               Intent.Move (Item, Change, Intent.Requirement, Requirement, "implemented",
+                            Transitions.Ordinary_Only, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+         end;
+      end loop;
+      Status := E.Success;
+   end Complete_Task;
+
+   -----------------------------
+   -- Reevaluate_Requirements --
+   -----------------------------
+
+   procedure Reevaluate_Requirements
+     (Item    : Stores.Store;
+      Change  : in out Stores.Transaction;
+      Changed : out Name_Lists.Vector;
+      Status  : out Model_Runner.Errors.Error_Info)
+   is
+      Everything : constant Name_Lists.Vector := Tasks.List (Item);
+
+      --  The evidence that shows a requirement verified now, or nothing
+      --  when something is missing.
+      function Supporting (Requirement : String) return String is
+         Found : Unbounded_String;
+         Any   : Boolean := False;
+      begin
+         for Id of Everything loop
+            declare
+               Defined : Records.Item;
+               Read    : E.Error_Info;
+               State   : constant String := Tasks.State_Of (Item, Id);
+            begin
+               Tasks.Definition (Item, Id, Defined, Read);
+               if E.Is_Ok (Read)
+                 and then Lines_Of (Records.Get (Defined, "requirements")).Contains (Requirement)
+                 and then State not in "cancelled" | "rejected"
+               then
+                  Any := True;
+                  if State /= "complete" then
+                     return "";
+                  end if;
+                  declare
+                     Evidence : constant String :=
+                       Latest (Item, Id, Profile_Of (Item, Id));
+                     Value    : Records.Item;
+                     Reasons  : Name_Lists.Vector;
+                  begin
+                     if Evidence = "" then
+                        return "";
+                     end if;
+                     Stores.Read (Item, Verification_Area, Evidence, Value, Read);
+                     if Records.Get (Value, "passed") /= "true"
+                       or else not Is_Current (Item, Evidence, Reasons)
+                     then
+                        return "";
+                     end if;
+                     Append (Found, (if Found = Null_Unbounded_String then "" else ", ")
+                                    & Evidence);
+                  end;
+               end if;
+            end;
+         end loop;
+         return (if Any then To_String (Found) else "");
+      end Supporting;
+
+      Event : Unbounded_String;
+   begin
+      Changed.Clear;
+      Status := E.Success;
+
+      for Requirement of Intent.List (Item, Intent.Requirement, "implemented") loop
+         declare
+            Evidence : constant String := Supporting (Requirement);
+            Value    : Records.Item;
+            Staged   : Boolean;
+         begin
+            if Evidence /= "" then
+               Intent.Move (Item, Change, Intent.Requirement, Requirement, "verified",
+                            Transitions.Ordinary_Only, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+               Stores.Pending (Change, Requirements_Area, Requirement, Value, Staged);
+               Records.Set (Value, "verified_by", Evidence);
+               Stores.Put (Change, Requirements_Area, Requirement, Value);
+               Changed.Append (Requirement);
+            end if;
+         end;
+      end loop;
+
+      for Requirement of Intent.List (Item, Intent.Requirement, "verified") loop
+         if Supporting (Requirement) = "" then
+            Intent.Move (Item, Change, Intent.Requirement, Requirement, "implemented",
+                         [Transitions.Ordinary => True, Transitions.Invalidation => True,
+                          others => False],
+                         Status);
+            if E.Is_Ok (Status) then
+               Events.Emit
+                 (Item, Change, Events.Requirement_Verification_Invalidated,
+                  Requirement, "its evidence no longer applies", Event, Status);
+            end if;
+            if E.Is_Error (Status) then
+               return;
+            end if;
+            Changed.Append (Requirement);
+         end if;
+      end loop;
+   end Reevaluate_Requirements;
+
+end Model_Runner.Framework.Verification;
