@@ -1,5 +1,6 @@
 with Ada.Strings.Unbounded;
 
+with Model_Runner.Cancellation;
 with Model_Runner.CLI.Options;
 with Model_Runner.Errors;
 with Model_Runner.Framework.Work;
@@ -36,13 +37,15 @@ with Model_Runner.Stops;
 --  harness makes and answers for.
 package Model_Runner.CLI.Project_Commands is
 
-   --  An agent that is the session's own model, already loaded.
+   --  An agent that is the session's own model, already loaded. Cancel, when
+   --  it is set, stops it and every child it made at the next token.
    type Session_Agent
      (Prepared : not null access Model_Runner.Llama.Model;
       Session  : not null access Model_Runner.Llama.Session;
       Stop_Set : not null access constant Model_Runner.Stops.Set;
       Screen   : not null access Model_Runner.Presentation.Console;
-      Item     : not null access constant Model_Runner.CLI.Options.Command)
+      Item     : not null access constant Model_Runner.CLI.Options.Command;
+      Cancel   : Model_Runner.Cancellation.Token_Reference)
    is new Model_Runner.Framework.Work.Parenting_Runner with null record;
 
    --  Run the agent without children: a fresh conversation holding the

@@ -1,3 +1,5 @@
+with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 with Ada.Unchecked_Deallocation;
 
 package body Model_Runner.Tools is
@@ -1497,6 +1499,68 @@ package body Model_Runner.Tools is
                   Index := Index + 1;
                end if;
             end loop;
+         end if;
+
+         --  The same call dressed as the offer was: a <name> and then its
+         --  <arguments> object, as a model that saw its tools inside <tools>
+         --  writes them back. Read only where nothing else was, and only an
+         --  object that closes where its tag says.
+         if Syntax = Open_JSON and then Item.Used = 0 then
+            declare
+               Name_Opens : constant String := "<name>";
+               Name_Shuts : constant String := "</name>";
+               Args_Opens : constant String := "<arguments>";
+               Args_Shuts : constant String := "</arguments>";
+
+               --  Where a mark next appears from a place, or 0.
+               function Next (Mark : String; From : Positive) return Natural is
+               begin
+                  for At_Index in From .. Reply'Last loop
+                     if Marks (At_Index, Mark) then
+                        return At_Index;
+                     end if;
+                  end loop;
+                  return 0;
+               end Next;
+
+               function Trimmed (Text : String) return String
+               is (Ada.Strings.Fixed.Trim
+                     (Text, Ada.Strings.Maps.To_Set (" " & ASCII.LF & ASCII.CR & ASCII.HT),
+                      Ada.Strings.Maps.To_Set (" " & ASCII.LF & ASCII.CR & ASCII.HT)));
+            begin
+               Index := Reply'First;
+               while Index <= Reply'Last loop
+                  declare
+                     N_Open : constant Natural := Next (Name_Opens, Index);
+                     N_Shut : constant Natural :=
+                       (if N_Open = 0 then 0 else Next (Name_Shuts, N_Open));
+                     A_Open : constant Natural :=
+                       (if N_Shut = 0 then 0 else Next (Args_Opens, N_Shut));
+                     A_Shut : constant Natural :=
+                       (if A_Open = 0 then 0 else Next (Args_Shuts, A_Open));
+                  begin
+                     exit when A_Shut = 0;
+                     declare
+                        Name : constant String :=
+                          Trimmed (Reply (N_Open + Name_Opens'Length .. N_Shut - 1));
+                        Args : constant String :=
+                          Trimmed (Reply (A_Open + Args_Opens'Length .. A_Shut - 1));
+                     begin
+                        --  Between the name and its arguments only space.
+                        if Name /= "" and then Args'Length >= 2
+                          and then Args (Args'First) = '{' and then Args (Args'Last) = '}'
+                          and then Trimmed (Reply (N_Shut + Name_Shuts'Length .. A_Open - 1)) = ""
+                        then
+                           Store (Name, Args);
+                           if E.Is_Error (Status) then
+                              return;
+                           end if;
+                        end if;
+                     end;
+                     Index := A_Shut + Args_Shuts'Length;
+                  end;
+               end loop;
+            end;
          end if;
 
       when Function_XML =>

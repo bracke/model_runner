@@ -1,3 +1,4 @@
+with Model_Runner.Errors;
 with Model_Runner.Framework.Stores;
 
 --  What an agent may do, as capabilities with scope.
@@ -17,8 +18,13 @@ with Model_Runner.Framework.Stores;
 --  max_children=N, separated by commas; an empty value grants the
 --  capability without limit. A project that says nothing gets the least
 --  that work needs: reading and writing source and specifications,
---  running builds and tests, and making at most two children one level
---  down.
+--  running builds and tests, proposing tasks, and making at most two
+--  children one level down.
+--
+--  A task may narrow what its agent gets further with a permissions field:
+--  CAPABILITY or CAPABILITY: CONSTRAINTS, separated by semicolons, as
+--  write_source: roots=src/parser/; run_tests: profiles=quick. What it does
+--  not name, its agent may not do.
 package Model_Runner.Framework.Permissions is
 
    --  What may be done.
@@ -93,12 +99,38 @@ package Model_Runner.Framework.Permissions is
    --  @param Kind The task's kind; empty for none.
    --  @param Role The agent's role; empty for none.
    --  @param Runtime What the run itself restricts to.
+   --  @param Task_Level The task's own restriction, as its permissions field
+   --    writes it; empty for none. One that does not read restricts to
+   --    nothing.
    --  @return The effective permissions.
    function Effective
      (Item    : Stores.Store;
       Kind    : String;
       Role    : String;
-      Runtime : Permission_Set := Unrestricted) return Permission_Set;
+      Runtime : Permission_Set := Unrestricted;
+      Task_Level : String := "") return Permission_Set;
+
+   --  A task's own restriction, as its permissions field writes it.
+   --
+   --  @param Text The field.
+   --  @param Result What it allows.
+   --  @param Status Framework_Schema_Violation naming a word that is no
+   --    capability.
+   procedure Restriction
+     (Text   : String;
+      Result : out Permission_Set;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  Whether a capability is granted for a verification profile.
+   --
+   --  @param Set The permissions.
+   --  @param Item The capability.
+   --  @param Profile The profile.
+   --  @return True when it is granted and its profiles, if any, name it.
+   function Allows_Profile
+     (Set     : Permission_Set;
+      Item    : Capability;
+      Profile : String) return Boolean;
 
    --  Whether a capability is granted at a path.
    --

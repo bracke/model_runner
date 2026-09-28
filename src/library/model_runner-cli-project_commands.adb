@@ -63,9 +63,10 @@ package body Model_Runner.CLI.Project_Commands is
 
    --  The tools the work's agents may call; each is offered only where the
    --  agent's permissions give it.
-   Allowed_Tools : constant array (1 .. 4) of Word_Access :=
+   Allowed_Tools : constant array (1 .. 5) of Word_Access :=
      [new String'("read_file"), new String'("write_file"),
-      new String'("list_directory"), new String'("delegate")];
+      new String'("list_directory"), new String'("delegate"),
+      new String'("run_checks")];
 
    function Image (Value : Natural) return String
    is (T.Image (Long_Long_Integer (Value)));
@@ -145,6 +146,28 @@ package body Model_Runner.CLI.Project_Commands is
 
    type Host_Access is access all Wk.Child_Host'Class;
 
+   --  Whether a path stays inside the project: relative, and never climbing
+   --  out of it.
+   function Inside (Path : String) return Boolean is
+      Start : Natural := Path'First;
+   begin
+      if Path'Length > 0
+        and then (Path (Path'First) in '/' | '\' | '~'
+                  or else (Path'Length > 1 and then Path (Path'First + 1) = ':'))
+      then
+         return False;
+      end if;
+      for Index in Path'First .. Path'Last + 1 loop
+         if Index > Path'Last or else Path (Index) in '/' | '\' then
+            if Path (Start .. Index - 1) = ".." then
+               return False;
+            end if;
+            Start := Index + 1;
+         end if;
+      end loop;
+      return True;
+   end Inside;
+
    --  One tool as a model reads it.
    function Tool (Name, Description, Parameters : String) return String
    is ("{""type"": ""function"", ""function"": {""name"": """ & Name
@@ -164,6 +187,14 @@ package body Model_Runner.CLI.Project_Commands is
        & ", "
        & Tool ("list_directory", "List the entries of a directory.",
                Strings ("""path"": {""type"": ""string""}", """path"""))
+       & (if Host /= null and then Host.May_Check (Host.Task_Profile)
+          then ", "
+               & Tool ("run_checks",
+                       "Build and test the project as the task will be verified,"
+                       & " and get back whether it passes and, if not, what the"
+                       & " failing checks reported.",
+                       "{""type"": ""object"", ""properties"": {}}")
+          else "")
        & (if Host = null or else Host.May (Pm.Write_Source)
           then ", "
                & Tool ("write_file", "Write text to a file, replacing it.",
@@ -277,6 +308,7 @@ package body Model_Runner.CLI.Project_Commands is
             Seeds       => Seeds'Unchecked_Access,
             Max_Steps   => (if Root then 24 else 16),
             Max_Total_Tokens => Budget,
+            Cancel      => Self.Cancel,
             Tool_Syntax => Syntax,
             Thinking    => Self.Item.Thinking,
             Approve     => Guard'Unchecked_Access,
@@ -302,7 +334,9 @@ package body Model_Runner.CLI.Project_Commands is
       Conv.Close (Messages);
       Model_Runner.Tools.Close (Offered);
 
-      if Outcome.Reason /= Model_Runner.Agent.Answered then
+      if Outcome.Reason = Model_Runner.Agent.Cancelled then
+         Status := E.Make (E.Generation_Cancelled);
+      elsif Outcome.Reason /= Model_Runner.Agent.Answered then
          Status :=
            (if E.Is_Error (Outcome.Error) then Outcome.Error
             else E.Make (E.Generation_Invalid_Request));
@@ -390,16 +424,38 @@ package body Model_Runner.CLI.Project_Commands is
       end Put;
 
       Found : Boolean;
+      Path  : constant String :=
+        Model_Runner.Tools.Builtin.Text_Argument (Arguments, "path", Found);
+
+      --  Whether the agent now working may read or write there: inside the
+      --  project, and within its source or specification grants.
+      function May (Reading : Boolean) return Boolean
+      is (Inside (Path)
+          and then (Self.Host = null
+                    or else Self.Host.May
+                              ((if Reading then Pm.Read_Source else Pm.Write_Source), Path)
+                    or else Self.Host.May
+                              ((if Reading then Pm.Read_Specs else Pm.Write_Specs), Path)));
    begin
       if Named = "delegate" then
          Put (Delegate (Self, Arguments));
-      elsif Named = "write_file" and then Self.Host /= null
-        and then not Self.Host.May
-                       (Pm.Write_Source,
-                        Model_Runner.Tools.Builtin.Text_Argument (Arguments, "path", Found))
-      then
-         Put ("error: you may not write "
-              & Model_Runner.Tools.Builtin.Text_Argument (Arguments, "path", Found));
+      elsif Named = "run_checks" then
+         if Self.Host = null then
+            Put ("error: no checks can be run here");
+         else
+            declare
+               Report : Unbounded_String;
+               Ran    : E.Error_Info;
+            begin
+               Self.Host.Run_Checks (Self.Host.Task_Profile, Report, Ran);
+               Put (if E.Is_Ok (Ran) then To_String (Report)
+                    else "error: the checks were not run: " & Refusal (Ran));
+            end;
+         end if;
+      elsif Named in "read_file" | "list_directory" and then not May (Reading => True) then
+         Put ("error: you may not read " & Path);
+      elsif Named = "write_file" and then not May (Reading => False) then
+         Put ("error: you may not write " & Path);
       else
          Model_Runner.Tools.Builtin.Run
            (Model_Runner.Tools.Builtin.Instance (Self), Named, Arguments, Result, Last,

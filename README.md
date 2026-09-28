@@ -110,7 +110,21 @@ at most two, one level down), gives it a context of its own, keeps its
 result and tells the parent only that. A required child that fails is run
 once more; if it still fails the task is blocked (`scalar
 agents.on_child_failure = fail` fails it instead), and cancelling a task
-cancels its agent's children. The same commands run
+cancels its agent's children.
+
+What an agent may do is checked as it does it. Its file tools stay inside
+the project and within its `read_source`/`read_specs` and
+`write_source`/`write_specs` grants; `run_checks` builds and tests the
+project as the task will be verified, where `run_build`, `run_tests` or
+`run_static_analysis` covers the profile; and a workspace is taken in for
+it only with `request_integration`. A task can narrow its agent further
+with a `permissions` field -- `/task new "..." "permissions=write_source:
+roots=src/parser/; run_tests"` -- and what that does not name, the agent
+may not do. Work an agent proposes becomes candidate tasks where it may
+`propose_tasks` (by default it may), and an issue where it may not.
+Ctrl-C stops a reply or a `/work` as it runs: the invocation and its
+agents are recorded cancelled and the task is set aside, blocked, until
+it is accepted again. The same commands run
 outside a session too -- `model_runner init|task|repo|work`, with
 `--set NAME=VALUE` for the words -- for scripts.
 

@@ -226,7 +226,8 @@ package body Model_Runner.CLI.Interactive is
       Session  : in out L.Session;
       Rules    : Model_Runner.Generation.Grammar_Reference := null;
       Tools    : access constant Model_Runner.Tools.Definitions := null;
-      Status   : out Natural)
+      Status   : out Natural;
+      Cancel   : Model_Runner.Cancellation.Token_Reference := null)
    is
       Bounds : constant Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
@@ -241,7 +242,7 @@ package body Model_Runner.CLI.Interactive is
       Worker    : Model_Runner.CLI.Project_Commands.Session_Agent
         (Prepared'Unchecked_Access, Session'Unchecked_Access,
          Stop_Set'Unchecked_Access, Screen'Unchecked_Access,
-         Asked_For'Unchecked_Access);
+         Asked_For'Unchecked_Access, Cancel);
       Sink     : aliased Pres.Standard_Output_Sink;
       Clock    : aliased Model_Runner.Clocks.System_Clock;
       Seeds    : aliased Model_Runner.Entropy.Host_Source;
@@ -643,7 +644,7 @@ package body Model_Runner.CLI.Interactive is
             Observer => null,
             Time     => Clock'Unchecked_Access,
             Seeds    => Seeds'Unchecked_Access,
-            Cancel   => null,
+            Cancel   => Cancel,
             Pictures => Pictures,
             Outcome  => Last_Result);
 
@@ -850,6 +851,11 @@ package body Model_Runner.CLI.Interactive is
                declare
                   Line : constant String := Room (1 .. Stop);
                begin
+                  --  An interrupt stops what the line starts, not one typed
+                  --  before it.
+                  if Model_Runner.Cancellation."/=" (Cancel, null) then
+                     Cancel.Reset;
+                  end if;
                   Offer (Typing, Line, Effect);
                   case Effect is
                      when Is_Command =>

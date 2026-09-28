@@ -1433,8 +1433,9 @@ package body Tests.Tools_Cases is
    --  carries arguments; an object with a name and nothing else is text,
    --  as is a brace in prose, and neither is an error. A reply that wrote
    --  the envelope is read once, not once as an envelope and again as an
-   --  open object. And read as Tool_Call_JSON, the open shapes are text,
-   --  so no other format's reading changes.
+   --  open object. A call written back in the shape the offer took -- a
+   --  <name> and its <arguments> -- is read too. And read as Tool_Call_JSON,
+   --  the open shapes are text, so no other format's reading changes.
    procedure Open_JSON_Calls_Parse
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -1456,7 +1457,22 @@ package body Tests.Tools_Cases is
       Text_Only : constant String :=
         "The set {1, 2} and {""name"": ""Paris""} and {""arguments"": {}} "
         & "and {not json} are all text.";
+      Tagged_Call : constant String :=
+        "<tools>" & LF & "  <tool>" & LF & "    <name>write_file</name>" & LF
+        & "    <arguments>{""path"": ""a.txt"", ""content"": ""x""}</arguments>" & LF
+        & "  </tool>" & LF & "  <tool>" & LF & "    <name>run_checks</name>" & LF
+        & "    <arguments>{}</arguments>" & LF & "  </tool>" & LF & "</tools>";
    begin
+      --  The call dressed as the offer was: each <name> with its
+      --  <arguments> object.
+      Tools.Read_Calls (Asked, Tagged_Call, Status, Syntax => Tools.Open_JSON);
+      Assert (E.Is_Ok (Status) and then Tools.Count (Asked) = 2
+              and then Tools.Called (Asked, 1) = "write_file"
+              and then Tools.Arguments (Asked, 1) = "{""path"": ""a.txt"", ""content"": ""x""}"
+              and then Tools.Called (Asked, 2) = "run_checks",
+              "the tagged calls were not read:" & Natural'Image (Tools.Count (Asked)));
+      Tools.Close (Asked);
+
       Tools.Read_Calls (Asked, Bare, Status, Syntax => Tools.Open_JSON);
       Assert (E.Is_Ok (Status), "the bare object would not read");
       Assert (Tools.Count (Asked) = 1, "the bare object was not one call");

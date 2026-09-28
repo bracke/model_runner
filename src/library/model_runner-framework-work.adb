@@ -54,6 +54,36 @@ package body Model_Runner.Framework.Work is
        & " can make. Further work you found goes in proposed_tasks:, one a"
        & " line." & ASCII.LF);
 
+   --  The fields of a tab-separated line.
+   function Fields_Of (Text : String) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+      Start  : Natural := Text'First;
+   begin
+      for Index in Text'First .. Text'Last + 1 loop
+         if Index > Text'Last or else Text (Index) = ASCII.HT then
+            Result.Append (Text (Start .. Index - 1));
+            Start := Index + 1;
+         end if;
+      end loop;
+      return Result;
+   end Fields_Of;
+
+   --  A list written with commas, as one written a line an item.
+   function Replaced (Text : String) return String is
+      Result : String := Text;
+   begin
+      for C of Result loop
+         if C = ',' then
+            C := ASCII.LF;
+         end if;
+      end loop;
+      return Result;
+   end Replaced;
+
+   --  Whether a run was stopped by whoever started it.
+   function Interrupted (Ran : E.Error_Info) return Boolean
+   is (E."=" (Ran.Code, E.Generation_Cancelled));
+
    --  A scalar of the configuration.
    function Scalar (Item : Stores.Store; Name : String) return String is
       Config : Records.Item;
@@ -271,6 +301,135 @@ package body Model_Runner.Framework.Work is
       return E.Is_Ok (Status) and then Permissions.Allows (Held.Allowed, What, Path);
    end May;
 
+   ------------------
+   -- Task_Profile --
+   ------------------
+
+   function Task_Profile (Host : Child_Host) return String
+   is (Verification.Profile_Of (Host.Item.all, To_String (Host.Task_Id)));
+
+   ---------------
+   -- May_Check --
+   ---------------
+
+   function May_Check (Host : Child_Host; Profile : String) return Boolean is
+      Held   : Agents.Agent;
+      Status : E.Error_Info;
+      Named  : constant String := Ada.Characters.Handling.To_Lower (Profile);
+      Needed : constant Permissions.Capability :=
+        (if Ada.Strings.Fixed.Index (Named, "build") > 0 then Permissions.Run_Build
+         elsif Ada.Strings.Fixed.Index (Named, "analysis") > 0
+           or else Ada.Strings.Fixed.Index (Named, "lint") > 0
+         then Permissions.Run_Static_Analysis
+         else Permissions.Run_Tests);
+   begin
+      if Host.Apart or else Profile = "" then
+         return False;
+      end if;
+      Agents.Read (Host.Item.all, Current (Host), Held, Status);
+      return E.Is_Ok (Status)
+        and then Permissions.Allows_Profile (Held.Allowed, Needed, Profile);
+   end May_Check;
+
+   ----------------
+   -- Run_Checks --
+   ----------------
+
+   procedure Run_Checks
+     (Host    : in out Child_Host;
+      Profile : String;
+      Report  : out Ada.Strings.Unbounded.Unbounded_String;
+      Status  : out Model_Runner.Errors.Error_Info)
+   is
+      Change   : Stores.Transaction;
+      Evidence : Unbounded_String;
+      Passed   : Boolean;
+      Value    : Records.Item;
+      Read     : E.Error_Info;
+
+      --  The last lines of a text, enough to see an error by.
+      function Tail (Text : String; Count : Positive) return String is
+         Seen : Natural := 0;
+      begin
+         for Index in reverse Text'Range loop
+            if Text (Index) = ASCII.LF and then Index < Text'Last then
+               Seen := Seen + 1;
+               if Seen = Count then
+                  return Text (Index + 1 .. Text'Last);
+               end if;
+            end if;
+         end loop;
+         return Text;
+      end Tail;
+   begin
+      Report := Null_Unbounded_String;
+      if not May_Check (Host, Profile) then
+         Status := E.Make (E.Framework_Permission_Denied);
+         E.Add_Text (Status, "name", Current (Host));
+         E.Add_Text (Status, "detail", "it may not run the profile " & Profile);
+         return;
+      end if;
+      declare
+         Project : constant String :=
+           Ada.Directories.Containing_Directory (Stores.Root (Host.Item.all));
+         Before  : constant Configurations.Value_Maps.Map := Snapshot (Project);
+      begin
+         Verification.Run_Profile
+           (Host.Item.all, Change, Profile, "", Evidence, Passed, Status);
+         if E.Is_Ok (Status) then
+            Stores.Commit (Host.Item.all, Change, Status);
+         end if;
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         --  A build writes files of its own; they are the checks', not the
+         --  agent's.
+         declare
+            After : constant Configurations.Value_Maps.Map := Snapshot (Project);
+         begin
+            for Position in After.Iterate loop
+               declare
+                  Path : constant String := Configurations.Value_Maps.Key (Position);
+                  Now  : constant String := Configurations.Value_Maps.Element (Position);
+               begin
+                  if not Before.Contains (Path) or else Before (Path) /= Now then
+                     Host.Written.Append (Path & ASCII.HT & Now);
+                  end if;
+               end;
+            end loop;
+         end;
+      end;
+
+      Report := To_Unbounded_String
+        (Profile & (if Passed then " passed" else " failed") & ", "
+         & To_String (Evidence));
+      Stores.Read (Host.Item.all, Verification_Area, To_String (Evidence), Value, Read);
+      for Index in 1 .. Records.Field_Count (Value) loop
+         declare
+            Field : constant String := Records.Field_Name (Value, Index);
+            Parts : constant Name_Lists.Vector :=
+              (if Field'Length > 6 and then Field (Field'First .. Field'First + 5) = "check."
+               then Fields_Of (Records.Get (Value, Field)) else Name_Lists.Empty_Vector);
+         begin
+            if Natural (Parts.Length) >= 7 then
+               Append (Report, ASCII.LF & Parts (1) & ": " & Parts (5));
+               if Parts (5) /= "passed" and then Parts (6) = "required" then
+                  declare
+                     Log  : Results.Result;
+                     Held : E.Error_Info;
+                  begin
+                     Results.Read (Host.Item.all, Parts (7), Log, Held);
+                     if E.Is_Ok (Held) then
+                        Append (Report, ASCII.LF & Tail (To_String (Log.Payload), 30));
+                     end if;
+                  end;
+               end if;
+            end if;
+         end;
+      end loop;
+   end Run_Checks;
+
    -----------
    -- Spend --
    -----------
@@ -441,7 +600,15 @@ package body Model_Runner.Framework.Work is
             Provenance => Child.Parent,
             others     => <>);
          Results.Add (Host.Item.all, Change, Kept, Status);
-         if E.Is_Ok (Status) then
+         if E.Is_Ok (Status) and then Interrupted (Ran) then
+            --  Stopped by whoever started the work: cancelled, with what it
+            --  made, and not run again.
+            declare
+               Stopped : Name_Lists.Vector;
+            begin
+               Agents.Cancel (Host.Item.all, Change, Id, Stopped, Status);
+            end;
+         elsif E.Is_Ok (Status) then
             Agents.Finish
               (Host.Item.all, Change, Id, Good, To_String (Kept.Id), To_String (Why), Status);
          end if;
@@ -450,7 +617,8 @@ package body Model_Runner.Framework.Work is
          end if;
          Host.Open.Delete_Last;
 
-         Retry := not Good and then Agents."=" (Child.Need, Agents.Required)
+         Retry := not Good and then not Interrupted (Ran)
+           and then Agents."=" (Child.Need, Agents.Required)
            and then Runs_Before (Id) < Retries;
          Told := To_Unbounded_String
            (Id & " (" & Ada.Characters.Handling.To_Lower (Agents.Obligation'Image (Child.Need))
@@ -546,7 +714,8 @@ package body Model_Runner.Framework.Work is
          Tasks.Definition (Item, Task_Id, Defined, Status);
          Agents.Start_Root
            (Item, Change, Task_Id, "worker", Records.Get (Defined, "kind"),
-            Result.Agent_Id, Status);
+            Result.Agent_Id, Status,
+            Restriction => Records.Get (Defined, "permissions"));
       end;
       if E.Is_Error (Status) then
          return;
@@ -618,6 +787,7 @@ package body Model_Runner.Framework.Work is
          Prompt  : constant String :=
            Hostkit.Fs.Join (Scratch, "prompt-" & To_String (Result.Agent_Id) & ".txt");
          Before  : constant Configurations.Value_Maps.Map := Snapshot (To_String (Place));
+         By_Checks : Name_Lists.Vector;
       begin
          if Files.Make_Directory (Scratch) then
             Files.Write_Text
@@ -633,6 +803,7 @@ package body Model_Runner.Framework.Work is
             Host : Child_Host (Item'Access);
          begin
             Host.Task_Id := To_Unbounded_String (Task_Id);
+            Host.Apart := Isolated;
             Host.Open.Append (To_String (Result.Agent_Id));
             if Runner in Parenting_Runner'Class then
                Parenting_Runner'Class (Runner).Run_Parenting
@@ -641,6 +812,7 @@ package body Model_Runner.Framework.Work is
                Runner.Run (Prompt, To_String (Place), Answer, Ran);
             end if;
             Abandon (Host);
+            By_Checks := Host.Written;
          end;
          for Line of Lines_Of (Agents.Child_Results (Item, To_String (Result.Agent_Id))) loop
             Result.Children.Append (Line);
@@ -655,8 +827,10 @@ package body Model_Runner.Framework.Work is
                declare
                   Path : constant String := Configurations.Value_Maps.Key (Position);
                begin
-                  if not Before.Contains (Path)
-                    or else Before (Path) /= Configurations.Value_Maps.Element (Position)
+                  if (not Before.Contains (Path)
+                      or else Before (Path) /= Configurations.Value_Maps.Element (Position))
+                    and then not By_Checks.Contains
+                                   (Path & ASCII.HT & Configurations.Value_Maps.Element (Position))
                   then
                      Result.Changed_Files.Append (Path);
                   end if;
@@ -684,7 +858,9 @@ package body Model_Runner.Framework.Work is
          Results.Add (Item, Change, Kept, Status);
          Invocations.Finish
            (Item, Change, To_String (Result.Invocation_Id),
-            (if E.Is_Ok (Ran) then Invocations.Completed else Invocations.Failed),
+            (if E.Is_Ok (Ran) then Invocations.Completed
+             elsif Interrupted (Ran) then Invocations.Cancelled
+             else Invocations.Failed),
             (Prompt_Tokens => Context.Cost (Built), others => 0),
             To_String (Kept.Id),
             (if E.Is_Ok (Ran) then "" else E.Error_Code'Image (Ran.Code)), Status);
@@ -707,7 +883,14 @@ package body Model_Runner.Framework.Work is
          return;
       end if;
 
-      if E.Is_Error (Ran) then
+      --  Stopped by whoever started it: the agent and what it made are
+      --  cancelled, and the task is put aside, not failed -- nothing is
+      --  known against it -- until it is accepted again.
+      if Interrupted (Ran) then
+         Stop_Children (Item, Change, To_String (Result.Agent_Id));
+         Conclude ("blocked", "its work was cancelled", "cancelled");
+         return;
+      elsif E.Is_Error (Ran) then
          Conclude ("failed", "the agent could not be run: " & E.Error_Code'Image (Ran.Code),
                    "failed");
          return;
@@ -721,6 +904,7 @@ package body Model_Runner.Framework.Work is
          Agents.Read (Item, To_String (Result.Agent_Id), Held_Agent, Held);
          for Path of Result.Changed_Files loop
             if not Permissions.Allows (Held_Agent.Allowed, Permissions.Write_Source, Path)
+              and then not Permissions.Allows (Held_Agent.Allowed, Permissions.Write_Specs, Path)
             then
                Append (Denied, (if Denied = Null_Unbounded_String then "" else ", ") & Path);
             end if;
@@ -743,23 +927,96 @@ package body Model_Runner.Framework.Work is
       Result.Claimed := To_Unbounded_String (Invocations.Claim (Said, "status"));
       Result.Summary := To_Unbounded_String (Invocations.Claim (Said, "summary"));
 
-      --  Issues and proposed work are kept, not acted on: an agent does
-      --  not enlarge its task.
+      --  A change it says it made and did not is a claim the files refute:
+      --  whatever else it did, its answer cannot be taken.
+      if To_String (Result.Claimed) = "done" then
+         declare
+            Missing : Unbounded_String;
+         begin
+            for Line of Lines_Of (Replaced (Invocations.Claim (Said, "changed_files"))) loop
+               declare
+                  Named : constant String := Trim (Line);
+                  Path  : constant String :=
+                    (if Named'Length > 2 and then Named (Named'First .. Named'First + 1) = "./"
+                     then Named (Named'First + 2 .. Named'Last) else Named);
+               begin
+                  if Path not in "" | "-" | "none" and then not Result.Changed_Files.Contains (Path)
+                  then
+                     Append (Missing, (if Missing = Null_Unbounded_String then "" else ", ") & Path);
+                  end if;
+               end;
+            end loop;
+            if Missing /= Null_Unbounded_String then
+               Conclude ("failed", "it says it changed " & To_String (Missing)
+                         & ", which did not change", "failed");
+               return;
+            end if;
+         end;
+      end if;
+
+      --  An agent does not enlarge its task. Work it found beyond it
+      --  becomes candidate tasks, one a line, where it may propose them --
+      --  a person still accepts them -- and is kept as an issue where it may
+      --  not; issues are kept either way.
       declare
-         Found : constant String :=
-           Invocations.Claim (Said, "issues")
-           & (if Invocations.Claim (Said, "proposed_tasks") = "" then ""
-              else ASCII.LF & "proposed: " & Invocations.Claim (Said, "proposed_tasks"));
-         Issue : Results.Result :=
-           (Kind       => Results.Task_Proposal,
-            Producer   => Result.Agent_Id,
-            Summary    => To_Unbounded_String ("issues found working on " & Task_Id),
-            Payload    => To_Unbounded_String (Found),
-            Provenance => Result.Invocation_Id,
-            others     => <>);
+         Proposed  : constant Name_Lists.Vector :=
+           Lines_Of (Invocations.Claim (Said, "proposed_tasks"));
+         Held_Root : Agents.Agent;
+         Defined   : Records.Item;
+         May_Propose : Boolean;
+         Kept_Back : Unbounded_String;
       begin
-         if Trim (Found) /= "" then
-            Results.Add (Item, Change, Issue, Status);
+         Agents.Read (Item, To_String (Result.Agent_Id), Held_Root, Held);
+         May_Propose := E.Is_Ok (Held)
+           and then Permissions.Allows (Held_Root.Allowed, Permissions.Propose_Tasks);
+         Tasks.Definition (Item, Task_Id, Defined, Held);
+         for Line of Proposed loop
+            declare
+               Title  : constant String := Trim (Line);
+               Fields : Tasks.Field_Map;
+               Made   : Unbounded_String;
+            begin
+               if Title = "" or else Title = "-" then
+                  null;
+               elsif May_Propose then
+                  Fields.Include ("title", Title);
+                  Fields.Include ("kind", Records.Get (Defined, "kind"));
+                  if Records.Get (Defined, "component") /= "" then
+                     Fields.Include ("component", Records.Get (Defined, "component"));
+                  end if;
+                  Fields.Include ("notes", "proposed working on " & Task_Id);
+                  Tasks.Create
+                    (Item, Change, Fields, To_String (Result.Agent_Id), "agent", Made, Held);
+                  if E.Is_Ok (Held) then
+                     Result.Proposed.Append (To_String (Made));
+                  else
+                     Append (Kept_Back, ASCII.LF & "proposed: " & Title);
+                  end if;
+               else
+                  Append (Kept_Back, ASCII.LF & "proposed: " & Title);
+               end if;
+            end;
+         end loop;
+
+         declare
+            Found : constant String := Invocations.Claim (Said, "issues") & To_String (Kept_Back);
+            Issue : Results.Result :=
+              (Kind       => Results.Task_Proposal,
+               Producer   => Result.Agent_Id,
+               Summary    => To_Unbounded_String ("issues found working on " & Task_Id),
+               Payload    => To_Unbounded_String (Found),
+               Provenance => Result.Invocation_Id,
+               others     => <>);
+         begin
+            if Trim (Found) /= "" then
+               Results.Add (Item, Change, Issue, Status);
+            end if;
+         end;
+         if E.Is_Ok (Status) then
+            Stores.Commit (Item, Change, Status);
+         end if;
+         if E.Is_Error (Status) then
+            return;
          end if;
       end;
 
@@ -802,6 +1059,21 @@ package body Model_Runner.Framework.Work is
                       "completed");
             return;
          end if;
+
+         --  The harness takes it in for the agent only when the agent may
+         --  ask for that.
+         declare
+            Held_Root : Agents.Agent;
+         begin
+            Agents.Read (Item, To_String (Result.Agent_Id), Held_Root, Held);
+            if E.Is_Error (Held)
+              or else not Permissions.Allows (Held_Root.Allowed, Permissions.Request_Integration)
+            then
+               Conclude ("", To_String (Result.Workspace_Id) & " waits to be taken in: its"
+                         & " agent may not request integration", "completed");
+               return;
+            end if;
+         end;
          declare
             Taken : Name_Lists.Vector;
          begin

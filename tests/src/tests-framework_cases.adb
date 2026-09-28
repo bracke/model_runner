@@ -3504,9 +3504,100 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Writes_Stay_In_Bounds;
 
+   --  A task narrows what its agent may do, and no further than it says;
+   --  a restriction that does not read is refused; a grant scoped to
+   --  profiles covers only those; and work an agent proposes becomes
+   --  candidate tasks where it may propose, and an issue where it may not.
+   procedure Permissions_And_Proposals_Reach_The_Work
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Done   : Wk.Report;
+      Level  : Pm.Permission_Set;
+      Checks : constant String :=
+        "set execution.allowed = test" & LF
+        & "profile checks = exists: test -f src/hello.adb" & LF
+        & "scalar verification.default = checks" & LF;
+      Proposing : constant String :=
+        "status: done" & LF & "summary: wrote hello" & LF
+        & "proposed_tasks: Test hello" & LF & "Document hello";
+
+      function Contains (Text, Part : String) return Boolean
+      is (Ada.Strings.Fixed.Index (Text, Part) > 0);
+
+      procedure Work (Answer : String; Extra_Name, Extra_Value : String := "") is
+         Id : Unbounded_String;
+      begin
+         Tk.Create (Store, Change, Fields ("Hello", "analysis", Extra_Name, Extra_Value),
+                    "user", "", Id, Status);
+         Assert (E.Is_Ok (Status), "a task was not made: " & Code_Of (Status));
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Wk.Execute (Store, To_String (Id),
+                     Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                                     Answer => To_Unbounded_String (Answer),
+                                     Broken => False),
+                     Cx.Profile (Store, ""), Done, Status);
+      end Work;
+   begin
+      Pm.Restriction ("write_source: roots=src/parser/; run_tests: profiles=quick", Level,
+                      Status);
+      Assert (E.Is_Ok (Status)
+              and then Pm.Allows (Level, Pm.Write_Source, "src/parser/a.adb")
+              and then not Pm.Allows (Level, Pm.Write_Source, "src/b.adb")
+              and then not Pm.Allows (Level, Pm.Read_Source)
+              and then Pm.Allows_Profile (Level, Pm.Run_Tests, "quick")
+              and then not Pm.Allows_Profile (Level, Pm.Run_Tests, "full"),
+              "a task's restriction was not read as written");
+      Pm.Restriction ("write_everything", Level, Status);
+      Assert (Status.Code = E.Framework_Schema_Violation,
+              "a restriction naming no capability was taken");
+
+      Task_Project (Store, "narrowed", Checks);
+      declare
+         Id : Unbounded_String;
+      begin
+         Tk.Create (Store, Change, Fields ("Bad", "analysis", "permissions", "fly"),
+                    "user", "", Id, Status);
+         Assert (Status.Code = E.Framework_Schema_Violation,
+                 "a task was made with a restriction that does not read");
+      end;
+
+      --  Its own restriction keeps its agent out of src/.
+      Work ("status: done" & LF & "summary: x", "permissions", "write_source: roots=lib/");
+      Assert (To_String (Done.Final_State) = "failed"
+              and then Contains (To_String (Done.Reason), "may not write"),
+              "a task's own restriction did not narrow its agent: "
+              & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+
+      --  What it proposes becomes candidates.
+      Work (Proposing);
+      Assert (To_String (Done.Final_State) = "complete"
+              and then Natural (Done.Proposed.Length) = 2
+              and then Tk.State_Of (Store, Done.Proposed.First_Element) = "candidate",
+              "proposed work did not become candidate tasks");
+      S.Close (Store);
+
+      --  Where it may not propose, it is an issue and nothing more.
+      Task_Project
+        (Store, "no-proposals",
+         Checks & "map permission.project.write_source =" & LF
+         & "map permission.project.run_tests =" & LF);
+      Work (Proposing);
+      Assert (To_String (Done.Final_State) = "complete" and then Done.Proposed.Is_Empty
+              and then Natural (Tk.List (Store, "candidate").Length) = 0,
+              "an agent that may not propose made candidate tasks");
+      S.Close (Store);
+   end Permissions_And_Proposals_Reach_The_Work;
+
    --  An agent that asks for children through the host, as a plan says.
    type Parent_Plan is
-     (Helped, Fails_Twice, Fails_Then_Good, Optional_Fails, Left_Open, Denied);
+     (Helped, Fails_Twice, Fails_Then_Good, Optional_Fails, Left_Open, Denied,
+      Checks_First, Interrupted);
 
    type Scripted_Parent is new Wk.Parenting_Runner with record
       Plan : Parent_Plan := Helped;
@@ -3544,10 +3635,12 @@ package body Tests.Framework_Cases is
       Answer      : out Unbounded_String;
       Status      : out E.Error_Info)
    is
-      pragma Unreferenced (Self, Prompt_Path);
+      pragma Unreferenced (Prompt_Path);
    begin
+      --  Each plan writes something of its own, so each one changes it.
       Dirs.Create_Path (Project & "/src");
-      Put_File (Project & "/src/hello.adb", "procedure Hello is begin null; end;");
+      Put_File (Project & "/src/hello.adb",
+                "procedure Hello is begin null; end; -- " & Parent_Plan'Image (Self.Plan));
       Answer := To_Unbounded_String (Parent_Done);
       Status := E.Success;
    end Run;
@@ -3602,6 +3695,30 @@ package body Tests.Framework_Cases is
             Assert (not Retry, "an optional child was run again");
          when Left_Open =>
             Ask ("required", Child_Done, Close => False);
+         when Checks_First =>
+            --  Before the file is written its check fails, and says why.
+            Assert (Children.May_Check (Children.Task_Profile),
+                    "an agent may not run its own task's checks");
+            Assert (not Children.May_Check (""), "an agent may run no profile at all");
+            declare
+               Report : Unbounded_String;
+               Ran    : E.Error_Info;
+            begin
+               Children.Run_Checks (Children.Task_Profile, Report, Ran);
+               Assert (E.Is_Ok (Ran)
+                       and then Ada.Strings.Fixed.Index (To_String (Report), "failed") > 0
+                       and then Ada.Strings.Fixed.Index (To_String (Report), "exists") > 0,
+                       "the checks' report does not say what failed: " & To_String (Report));
+            end;
+         when Interrupted =>
+            --  Stopped while its child works: both are cancelled.
+            Ask ("required", Child_Done, Close => False);
+            Children.Close_Child
+              ("", 3, E.Make (E.Generation_Cancelled), Parent_Told, Retry);
+            Assert (not Retry, "an interrupted child was run again");
+            Answer := Null_Unbounded_String;
+            Status := E.Make (E.Generation_Cancelled);
+            return;
       end case;
       Children.Spend (5);
       Run (Self, Prompt_Path, Project, Answer, Status);
@@ -3623,8 +3740,8 @@ package body Tests.Framework_Cases is
       Change : S.Transaction;
       Done   : Wk.Report;
       Checks : constant String :=
-        "set execution.allowed = test" & LF
-        & "profile checks = exists: test -f src/hello.adb" & LF
+        "set execution.allowed = test" & LF & "set execution.allowed = touch" & LF
+        & "profile checks = exists: test -f src/hello.adb; stamp: touch src/stamp.ads" & LF
         & "scalar verification.default = checks" & LF;
 
       function Contains (Text, Part : String) return Boolean
@@ -3678,6 +3795,28 @@ package body Tests.Framework_Cases is
               and then Contains (Done.Children.First_Element, "failed")
               and then Contains (Done.Children.First_Element, "stopped before"),
               "a child left open went missing: " & To_String (Done.Reason));
+
+      Dirs.Delete_File (Fresh_Root (Store) & "/src/hello.adb");
+      Work (Checks_First);
+      Assert (To_String (Done.Final_State) = "complete",
+              "a task that ran its checks first did not complete: " & To_String (Done.Reason));
+      Assert (Done.Changed_Files.Contains ("src/hello.adb")
+              and then not Done.Changed_Files.Contains ("src/stamp.ads"),
+              "what the checks wrote was put on the agent");
+
+      Work (Interrupted);
+      Assert (To_String (Done.Final_State) = "blocked"
+              and then Contains (To_String (Done.Reason), "cancelled")
+              and then Iv.State_Of (Store, To_String (Done.Invocation_Id)) = "cancelled"
+              and then Contains (Done.Children.First_Element, "cancelled"),
+              "an interrupted run was not recorded as cancelled: "
+              & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+      declare
+         Held : Ag.Agent;
+      begin
+         Ag.Read (Store, To_String (Done.Agent_Id), Held, Status);
+         Assert (To_String (Held.Status) = "cancelled", "the interrupted agent was not cancelled");
+      end;
 
       --  Cancelling a task cancels what its agent made.
       declare
@@ -3912,6 +4051,9 @@ package body Tests.Framework_Cases is
         (T, Recursion_Stays_Bounded'Access,
          "children stay within limits and permissions, failures and"
          & " cancellation are seen");
+      Register_Routine
+        (T, Permissions_And_Proposals_Reach_The_Work'Access,
+         "a task narrows its agent, and proposed work becomes candidates where permitted");
       Register_Routine
         (T, Children_Work_Within_Their_Parent'Access,
          "a working agent's children are made, run and answered for by the harness");

@@ -5,6 +5,7 @@ with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Leases;
+with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Schemas;
 
 package body Model_Runner.Framework.Tasks is
@@ -20,11 +21,11 @@ package body Model_Runner.Framework.Tasks is
    Deriver         : constant String := "task-derivation";
 
    --  The fields every task may have, whatever its kind.
-   Core : constant array (1 .. 9) of access constant String :=
+   Core : constant array (1 .. 10) of access constant String :=
      [new String'("title"), new String'("kind"), new String'("component"),
       new String'("requirements"), new String'("depends_on"),
       new String'("priority"), new String'("acceptance"),
-      new String'("parent"), new String'("notes")];
+      new String'("parent"), new String'("notes"), new String'("permissions")];
 
    function Is_Core (Name : String) return Boolean
    is (for some Field of Core => Field.all = Name);
@@ -273,6 +274,19 @@ package body Model_Runner.Framework.Tasks is
                Status := E.Make (E.Framework_Name_Invalid);
                E.Add_Text (Status, "value", Name);
                return;
+            elsif Name = "permissions" then
+               --  A restriction that does not read is refused here, where it
+               --  can still be put right, rather than left to narrow its
+               --  agent to nothing.
+               declare
+                  Ignored : Model_Runner.Framework.Permissions.Permission_Set;
+               begin
+                  Model_Runner.Framework.Permissions.Restriction
+                    (Configurations.Value_Maps.Element (Position), Ignored, Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+               end;
             end if;
          end;
       end loop;

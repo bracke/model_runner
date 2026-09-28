@@ -7,6 +7,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **What an agent may do is checked as it does it.** In `/work`, reading
+  and writing stay inside the project and within the working agent's
+  source and specification grants, checked at each call. A new
+  `run_checks` tool builds and tests the project as the task will be
+  verified, where `run_build`, `run_tests` or `run_static_analysis` covers
+  the profile (profile scopes now count), so a model sees the compiler's
+  errors before it answers. Automatic integration of a workspace needs
+  `request_integration`. A task may narrow its agent with a `permissions`
+  field, `CAPABILITY[: constraints]; ...`, refused when it does not read.
+- **Proposed work becomes candidate tasks.** An agent's `proposed_tasks`
+  lines are made candidate tasks (origin `agent`) where it may
+  `propose_tasks` -- granted by default -- and kept as an issue where it
+  may not. `work` lists them.
+- **Ctrl-C in the session.** An interrupt stops a reply, or a `/work` and
+  every child it made, at the next token; the invocation and the agents
+  are recorded cancelled and the task is blocked with "its work was
+  cancelled" until it is accepted again. Bare `/cancel` says so. Before,
+  an interrupt in `run --interactive` was caught and ignored.
+- **A change claimed and not made fails the task.** A `done` answer whose
+  `changed_files` names a file that did not change is refuted by the
+  files, whatever the verification says; what the checks themselves wrote
+  (a build's `config/`) is not put on the agent. Calls written back as
+  `<name>`/`<arguments>` tags, as Steelman writes them, are read.
+
 - **Child agents do work.** An agent on `/work` may hand a part of its
   task to a helper with the `delegate` tool (task, role, and whether it is
   required, optional or advisory). The harness makes the child within its

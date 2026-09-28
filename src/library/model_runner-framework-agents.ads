@@ -69,6 +69,8 @@ package Model_Runner.Framework.Agents is
    --  @param Task_Id The task.
    --  @param Role Its role.
    --  @param Kind The task's kind, for its permissions.
+   --  @param Restriction The task's own permissions field, which narrows
+   --    them further.
    --  @param Id The agent.
    --  @param Status Framework_Limit_Exceeded when too many agents run.
    procedure Start_Root
@@ -78,7 +80,8 @@ package Model_Runner.Framework.Agents is
       Role    : String;
       Kind    : String;
       Id      : out Ada.Strings.Unbounded.Unbounded_String;
-      Status  : out Model_Runner.Errors.Error_Info);
+      Status  : out Model_Runner.Errors.Error_Info;
+      Restriction : String := "");
 
    --  Make a child of an agent.
    --

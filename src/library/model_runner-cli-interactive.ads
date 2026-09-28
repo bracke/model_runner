@@ -1,3 +1,4 @@
+with Model_Runner.Cancellation;
 with Model_Runner.CLI.Options;
 with Model_Runner.Generation;
 with Model_Runner.Llama;
@@ -174,6 +175,8 @@ package Model_Runner.CLI.Interactive is
    --  @param Tools The tools offered to the model, or null. They are
    --    rendered into every turn by the template, and they are what /tool
    --    answers.
+   --  @param Cancel What an interrupt sets, or null: it stops the reply or
+   --    the /work being made, and the session goes on.
    procedure Run
      (Item     : Model_Runner.CLI.Options.Command;
       Screen   : in out Model_Runner.Presentation.Console;
@@ -181,7 +184,8 @@ package Model_Runner.CLI.Interactive is
       Session  : in out Model_Runner.Llama.Session;
       Rules    : Model_Runner.Generation.Grammar_Reference := null;
       Tools    : access constant Model_Runner.Tools.Definitions := null;
-      Status   : out Natural);
+      Status   : out Natural;
+      Cancel   : Model_Runner.Cancellation.Token_Reference := null);
 
 private
 

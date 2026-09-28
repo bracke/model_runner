@@ -3398,7 +3398,7 @@ package body Model_Runner.CLI.Execute is
               (Item, Screen, Prepared, Session,
                (if Rules_Ready then Rules'Unchecked_Access else null),
                (if Tools_Ready then Offered'Unchecked_Access else null),
-               Status);
+               Status, Cancel'Unchecked_Access);
             Cleanup;
             return;
          end if;

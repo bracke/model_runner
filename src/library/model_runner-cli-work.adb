@@ -379,6 +379,9 @@ package body Model_Runner.CLI.Work is
          for Child of Done.Children loop
             Say ("cli.work.child", Child, "");
          end loop;
+         for Candidate of Done.Proposed loop
+            Say ("cli.work.proposed", Candidate, "");
+         end loop;
          if Done.Claimed /= Null_Unbounded_String then
             Say ("cli.work.claimed", To_String (Done.Claimed), To_String (Done.Summary));
          end if;

@@ -123,6 +123,37 @@ package Model_Runner.Framework.Work is
       What : Permissions.Capability;
       Path : String := "") return Boolean;
 
+   --  The verification profile the task is checked with.
+   --
+   --  @param Host The host.
+   --  @return Its name, or "" when none applies.
+   function Task_Profile (Host : Child_Host) return String;
+
+   --  Whether the agent now working may run a verification profile: run_build
+   --  for a profile whose name says build, run_static_analysis for one that
+   --  says analysis or lint, run_tests for any other -- each within its
+   --  profiles -- and only where it works in the project itself, not in a
+   --  workspace of its own the checks would not see.
+   --
+   --  @param Host The host.
+   --  @param Profile The profile.
+   --  @return True when it may.
+   function May_Check (Host : Child_Host; Profile : String) return Boolean;
+
+   --  Run a verification profile for the agent now working, and say how it
+   --  went: each check, and for one that failed what it reported. The
+   --  evidence is kept, as any other.
+   --
+   --  @param Host The host.
+   --  @param Profile The profile.
+   --  @param Report What the agent is told.
+   --  @param Status A failure to run it at all.
+   procedure Run_Checks
+     (Host    : in out Child_Host;
+      Profile : String;
+      Report  : out Ada.Strings.Unbounded.Unbounded_String;
+      Status  : out Model_Runner.Errors.Error_Info);
+
    --  Count tokens the agent now working generated against its budget.
    --
    --  @param Host The host.
@@ -175,6 +206,9 @@ package Model_Runner.Framework.Work is
       --  The agent's children, one a line: each one's need, how it ended,
       --  its result and summary.
       Children      : Name_Lists.Vector;
+
+      --  The candidate tasks made from the work it proposed.
+      Proposed      : Name_Lists.Vector;
    end record;
 
    --  Put back the tasks whose agents stopped without finishing: a running
@@ -251,6 +285,13 @@ private
 
    type Child_Host (Item : not null access Stores.Store) is tagged limited record
       Task_Id : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  Whether the agents write in a workspace apart from the project.
+      Apart   : Boolean := False;
+
+      --  What the checks run for the agents wrote, path and fingerprint
+      --  separated by a tab: the agents' changes are what is left.
+      Written : Name_Lists.Vector;
 
       --  The root, then each child still open, innermost last.
       Open    : Name_Lists.Vector;

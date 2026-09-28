@@ -2,7 +2,6 @@ with Ada.Characters.Handling;
 with Ada.Strings.Unbounded;
 with Ada.Strings.Fixed;
 
-with Model_Runner.Errors;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Records;
 
@@ -43,6 +42,39 @@ package body Model_Runner.Framework.Permissions is
       return Result;
    end Parts;
 
+   --  A grant as its constraints are written: roots=A|B, deny=C|D,
+   --  profiles=P|Q, max_depth=N, max_children=N, separated by commas.
+   function Constrained (Text : String) return Grant is
+      Result : Grant := (Granted => True, others => <>);
+   begin
+      for Pair of Parts (Text, ',') loop
+         declare
+            Equal : constant Natural := Ada.Strings.Fixed.Index (Pair, "=");
+            Key   : constant String :=
+              (if Equal = 0 then Pair else Trim (Pair (Pair'First .. Equal - 1)));
+            Value : constant String :=
+              (if Equal = 0 then "" else Trim (Pair (Equal + 1 .. Pair'Last)));
+            Count : constant Natural :=
+              (if Value'Length in 1 .. 9
+                 and then (for all C of Value => C in '0' .. '9')
+               then Natural'Value (Value) else Natural'Last);
+         begin
+            if Key = "roots" then
+               Result.Roots := Parts (Value, '|');
+            elsif Key = "deny" then
+               Result.Deny := Parts (Value, '|');
+            elsif Key = "profiles" then
+               Result.Profiles := Parts (Value, '|');
+            elsif Key = "max_depth" then
+               Result.Max_Depth := Count;
+            elsif Key = "max_children" then
+               Result.Max_Children := Count;
+            end if;
+         end;
+      end loop;
+      return Result;
+   end Constrained;
+
    --------------
    -- Level_Of --
    --------------
@@ -68,37 +100,73 @@ package body Model_Runner.Framework.Permissions is
          begin
             if Records.Has (Config, Field) then
                Present := True;
-               Result (Item_Kind).Granted := True;
-               for Pair of Parts (Records.Get (Config, Field), ',') loop
-                  declare
-                     Equal : constant Natural := Ada.Strings.Fixed.Index (Pair, "=");
-                     Key   : constant String :=
-                       (if Equal = 0 then Pair else Trim (Pair (Pair'First .. Equal - 1)));
-                     Value : constant String :=
-                       (if Equal = 0 then "" else Trim (Pair (Equal + 1 .. Pair'Last)));
-                     Count : constant Natural :=
-                       (if Value'Length in 1 .. 9
-                          and then (for all C of Value => C in '0' .. '9')
-                        then Natural'Value (Value) else Natural'Last);
-                  begin
-                     if Key = "roots" then
-                        Result (Item_Kind).Roots := Parts (Value, '|');
-                     elsif Key = "deny" then
-                        Result (Item_Kind).Deny := Parts (Value, '|');
-                     elsif Key = "profiles" then
-                        Result (Item_Kind).Profiles := Parts (Value, '|');
-                     elsif Key = "max_depth" then
-                        Result (Item_Kind).Max_Depth := Count;
-                     elsif Key = "max_children" then
-                        Result (Item_Kind).Max_Children := Count;
-                     end if;
-                  end;
-               end loop;
+               Result (Item_Kind) := Constrained (Records.Get (Config, Field));
             end if;
          end;
       end loop;
       return Result;
    end Level_Of;
+
+   --  The capability a word names, if any.
+   procedure Named
+     (Text  : String;
+      Found : out Boolean;
+      Which : out Capability) is
+   begin
+      Found := False;
+      Which := Capability'First;
+      for Item_Kind in Capability loop
+         if Word (Item_Kind) = Ada.Characters.Handling.To_Lower (Trim (Text)) then
+            Found := True;
+            Which := Item_Kind;
+            return;
+         end if;
+      end loop;
+   end Named;
+
+   ------------------
+   -- Restriction --
+   ------------------
+
+   procedure Restriction
+     (Text   : String;
+      Result : out Permission_Set;
+      Status : out Model_Runner.Errors.Error_Info) is
+   begin
+      Result := Nothing;
+      Status := E.Success;
+      for Entry_Text of Parts (Text, ';') loop
+         declare
+            Colon : constant Natural := Ada.Strings.Fixed.Index (Entry_Text, ":");
+            Name  : constant String :=
+              (if Colon = 0 then Entry_Text else Entry_Text (Entry_Text'First .. Colon - 1));
+            Found : Boolean;
+            Which : Capability;
+         begin
+            Named (Name, Found, Which);
+            if not Found then
+               Status := E.Make (E.Framework_Schema_Violation);
+               E.Add_Text (Status, "name", "permissions");
+               E.Add_Text (Status, "detail", "no capability is called " & Trim (Name));
+               Result := Nothing;
+               return;
+            end if;
+            Result (Which) :=
+              Constrained (if Colon = 0 then "" else Entry_Text (Colon + 1 .. Entry_Text'Last));
+         end;
+      end loop;
+   end Restriction;
+
+   --------------------
+   -- Allows_Profile --
+   --------------------
+
+   function Allows_Profile
+     (Set     : Permission_Set;
+      Item    : Capability;
+      Profile : String) return Boolean
+   is (Set (Item).Granted
+       and then (Set (Item).Profiles.Is_Empty or else Set (Item).Profiles.Contains (Profile)));
 
    --  The narrower of two sets of prefixes: each prefix that lies inside
    --  one of the other's. Empty stands for everything.
@@ -182,7 +250,8 @@ package body Model_Runner.Framework.Permissions is
      (Item    : Stores.Store;
       Kind    : String;
       Role    : String;
-      Runtime : Permission_Set := Unrestricted) return Permission_Set
+      Runtime : Permission_Set := Unrestricted;
+      Task_Level : String := "") return Permission_Set
    is
       Present : Boolean;
       Project : Permission_Set := Level_Of (Item, "project", Present);
@@ -190,8 +259,8 @@ package body Model_Runner.Framework.Permissions is
    begin
       --  Least privilege, and enough to work: a project that says nothing
       --  lets its agents read and write source and specifications, run
-      --  builds and tests, and hand a part of their work to at most two
-      --  children one level down, and nothing more.
+      --  builds and tests, propose tasks, and hand a part of their work to
+      --  at most two children one level down, and nothing more.
       if not Present then
          Project := Nothing;
          for Item_Kind in Read_Source .. Run_Tests loop
@@ -199,6 +268,7 @@ package body Model_Runner.Framework.Permissions is
          end loop;
          Project (Create_Children) :=
            (Granted => True, Max_Depth => 1, Max_Children => 2, others => <>);
+         Project (Propose_Tasks).Granted := True;
       end if;
       Result := Intersect (Project, Runtime);
 
@@ -218,6 +288,17 @@ package body Model_Runner.Framework.Permissions is
             if Present then
                Result := Intersect (Result, Level);
             end if;
+         end;
+      end if;
+      if Trim (Task_Level) /= "" then
+         declare
+            Level  : Permission_Set;
+            Status : E.Error_Info;
+         begin
+            --  A restriction that does not read restricts to nothing: it was
+            --  meant to narrow, and guessing at it could only widen.
+            Restriction (Task_Level, Level, Status);
+            Result := Intersect (Result, Level);
          end;
       end if;
       return Result;
