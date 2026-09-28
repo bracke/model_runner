@@ -25,7 +25,11 @@ package Model_Runner.Framework.Consistency is
       Unknown_Task_Reference,
       Cyclic_Dependency,
       Invalid_Task_Kind,
-      Invalid_Task_Field);
+      Invalid_Task_Field,
+      Missing_Symbol,
+      Stale_Verification,
+      Completed_Without_Gate,
+      Workspace_Assignment);
 
    --  One thing found wrong.
    type Finding is record

@@ -1,4 +1,6 @@
 with Ada.Characters.Handling;
+with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 
 with Model_Runner.Errors;
 with Model_Runner.Framework.Authority;
@@ -6,6 +8,9 @@ with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Leases;
 with Model_Runner.Framework.Records;
+with Model_Runner.Framework.Repository;
+with Model_Runner.Framework.Verification;
+with Model_Runner.Framework.Workspaces;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Text;
 
@@ -252,6 +257,104 @@ package body Model_Runner.Framework.Consistency is
          for Id of Tasks.Cycles (Item) loop
             Found (Cyclic_Dependency, Id,
                    "its dependencies or its parents come back to it");
+         end loop;
+      end;
+
+      --  Traceability to symbols the repository does not have, as far as
+      --  a kept graph says.
+      declare
+         Graph : Repository.Graph;
+         Read  : E.Error_Info;
+      begin
+         Repository.Load (Item, Graph, Read);
+         if E.Is_Ok (Read) then
+            for Id of Intent.List (Item, Intent.Requirement) loop
+               for Target of Intent.Links (Item, Intent.Requirement, Id,
+                                           Intent.Implementation)
+               loop
+                  if Ada.Strings.Fixed.Index (Target, "/") = 0
+                    and then Repository.Find_Symbols (Graph, Target).Is_Empty
+                  then
+                     Found (Missing_Symbol, Id,
+                            "it is implemented by " & Target
+                            & ", which the repository does not declare");
+                  end if;
+               end loop;
+            end loop;
+         end if;
+      end;
+
+      --  Verification that no longer applies, still counted.
+      for Id of Intent.List (Item, Intent.Requirement, "verified") loop
+         declare
+            Value : Records.Item;
+            Read  : E.Error_Info;
+         begin
+            Stores.Read (Item, Requirements_Area, Id, Value, Read);
+            for Evidence of Lines_Of
+              (Ada.Strings.Fixed.Translate
+                 (Records.Get (Value, "verified_by"),
+                  Ada.Strings.Maps.To_Mapping (",", [1 => ASCII.LF])))
+            loop
+               declare
+                  Reasons : Name_Lists.Vector;
+                  Named   : constant String :=
+                    Ada.Strings.Fixed.Trim (Evidence, Ada.Strings.Both);
+               begin
+                  if not Verification.Is_Current (Item, Named, Reasons) then
+                     Found (Stale_Verification, Id,
+                            Named & " no longer applies: " & Reasons.First_Element);
+                  end if;
+               end;
+            end loop;
+         end;
+      end loop;
+
+      --  A complete task whose verification failed.
+      for Id of Tasks.List (Item, "complete") loop
+         declare
+            Profile  : constant String := Verification.Profile_Of (Item, Id);
+            Evidence : constant String :=
+              (if Profile = "" then "" else Verification.Latest (Item, Id, Profile));
+            Value    : Records.Item;
+            Read     : E.Error_Info;
+         begin
+            if Evidence /= "" then
+               Stores.Read (Item, Verification_Area, Evidence, Value, Read);
+               if Records.Get (Value, "passed") /= "true" then
+                  Found (Completed_Without_Gate, Id,
+                         "it is complete and " & Evidence & " did not pass");
+               end if;
+            end if;
+         end;
+      end loop;
+
+      --  One active workspace a task, and none for a task not being worked.
+      declare
+         Owners : Name_Lists.Vector;
+      begin
+         for Name of Stores.Names (Item, Workspaces_Area) loop
+            declare
+               Held : Workspaces.Workspace;
+               Read : E.Error_Info;
+            begin
+               Workspaces.Read (Item, Name, Held, Read);
+               if E.Is_Ok (Read) and then To_String (Held.Status) = "active" then
+                  if Owners.Contains (To_String (Held.Task_Id)) then
+                     Found (Workspace_Assignment, Name,
+                            To_String (Held.Task_Id) & " has more than one workspace");
+                  end if;
+                  Owners.Append (To_String (Held.Task_Id));
+                  if Tasks.State_Of (Item, To_String (Held.Task_Id))
+                       not in "running" | "verification"
+                  then
+                     Found (Workspace_Assignment, Name,
+                            To_String (Held.Task_Id) & " is "
+                            & Tasks.State_Of (Item, To_String (Held.Task_Id))
+                            & " and still has a workspace");
+                  end if;
+               end if;
+            end;
          end loop;
       end;
 

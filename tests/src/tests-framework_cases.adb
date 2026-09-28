@@ -26,6 +26,7 @@ with Model_Runner.Framework.Schemas;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Templates;
+with Model_Runner.Framework.Traceability;
 with Model_Runner.Framework.Transitions;
 with Model_Runner.Framework.Verification;
 with Model_Runner.Framework.Work;
@@ -2822,6 +2823,16 @@ package body Tests.Framework_Cases is
       Assert (not Vf.Is_Current (Store, To_String (Evidence), Reasons)
               and then not Reasons.Is_Empty,
               "evidence still applies after the files changed");
+      declare
+         Findings : constant Cn.Finding_List := Cn.Check (Store);
+         Stale    : Boolean := False;
+         use type Cn.Finding_Kind;
+      begin
+         for Index in 1 .. Cn.Length (Findings) loop
+            Stale := Stale or else Cn.Element (Findings, Index).Kind = Cn.Stale_Verification;
+         end loop;
+         Assert (Stale, "a verification that no longer applies was not found");
+      end;
       Vf.Reevaluate_Requirements (Store, Change, Changed, Status);
       S.Commit (Store, Change, Status);
       Nt.Read (Store, Nt.Requirement, To_String (Req), Held, Status);
@@ -3045,6 +3056,17 @@ package body Tests.Framework_Cases is
       Put_File (Fresh_Root (Store) & "/src/shared.adb", "three");
       Assert (Ws.Conflicts (Store, To_String (Made.Id)).Contains ("src/shared.adb"),
               "a file changed on both sides was not a conflict");
+      declare
+         Findings : constant Cn.Finding_List := Cn.Check (Store);
+         Misplaced : Boolean := False;
+         use type Cn.Finding_Kind;
+      begin
+         for Index in 1 .. Cn.Length (Findings) loop
+            Misplaced := Misplaced
+              or else Cn.Element (Findings, Index).Kind = Cn.Workspace_Assignment;
+         end loop;
+         Assert (Misplaced, "a workspace for a task nobody works on was not found");
+      end;
       Ws.Integrate (Store, Change, To_String (Made.Id), True, Taken, Status);
       Assert (Status.Code = E.Framework_Integration_Conflict,
               "a conflicting workspace was taken in");
@@ -3060,6 +3082,125 @@ package body Tests.Framework_Cases is
       end;
       S.Close (Store);
    end Workspaces_Isolate_And_Integrate;
+
+   ---------------------------------------------------------------------------
+   --  Traceability and impact.
+   ---------------------------------------------------------------------------
+
+   package Tc renames Model_Runner.Framework.Traceability;
+
+   --  A change is followed through the graph to what it reaches, each with
+   --  the weakest confidence on the way, and the tests chosen widen as the
+   --  confidence falls.
+   procedure Impact_Is_Traced (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Rp.Confidence;
+      use type Tc.Scope;
+      Store   : S.Store;
+      Status  : E.Error_Info;
+      Change  : S.Transaction;
+      Req     : Unbounded_String;
+      Id      : Unbounded_String;
+      Given   : Tk.Field_Map;
+      Graph   : Tc.Graph;
+      Changed : Model_Runner.Framework.Name_Lists.Vector;
+      Reach   : Tc.Impact;
+      Chosen  : Tc.Selection;
+
+      function Reached (Id_Text : String; Sure : out Rp.Confidence) return Boolean is
+      begin
+         for Index in 1 .. Tc.Length (Reach) loop
+            if To_String (Tc.Element (Reach, Index).Id) = Id_Text then
+               Sure := Tc.Element (Reach, Index).Sure;
+               return True;
+            end if;
+         end loop;
+         Sure := Rp.Uncertain;
+         return False;
+      end Reached;
+
+      --  Whether a node is reached, however surely.
+      function Has (Id_Text : String) return Boolean is
+         Ignored : Rp.Confidence;
+      begin
+         return Reached (Id_Text, Ignored);
+      end Has;
+
+      Sure : Rp.Confidence;
+   begin
+      Task_Project (Store, "impact");
+      Dirs.Create_Path (Fresh_Root (Store) & "/src");
+      Dirs.Create_Path (Fresh_Root (Store) & "/tests");
+      Put_File (Fresh_Root (Store) & "/src/parser.ads",
+                "package Parser is" & LF & "   procedure Next;" & LF & "end Parser;" & LF);
+      Put_File (Fresh_Root (Store) & "/src/parser.adb",
+                "package body Parser is" & LF & "   procedure Next is null;" & LF
+                & "end Parser;" & LF);
+      Put_File (Fresh_Root (Store) & "/src/main.adb",
+                "with Parser;" & LF & "procedure Main is" & LF & "begin" & LF
+                & "   Parser.Next;" & LF & "end Main;" & LF);
+      Put_File (Fresh_Root (Store) & "/tests/parser_tests.adb",
+                "with Parser;" & LF & "procedure Parser_Tests is" & LF & "begin" & LF
+                & "   null;" & LF & "end Parser_Tests;" & LF);
+      Put_File (Fresh_Root (Store) & "/NOTES.txt", "notes");
+
+      Nt.Propose (Store, Change, Nt.Requirement, "PARSER", "Next", "It SHALL advance.",
+                  "", "user", "", "parser", Req, Status);
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted",
+               Tr.Ordinary_Only, Status);
+      S.Commit (Store, Change, Status);
+      Given := Fields ("Next", "implementation", "component", "parser");
+      Given.Include ("requirements", To_String (Req));
+      Tk.Create (Store, Change, Given, "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+
+      Graph := Tc.Build (Store, Rp.Scan (Fresh_Root (Store)));
+      Assert (Tc.Edge_Count (Graph) > 0
+              and then not Tc.Touching (Graph, To_String (Req) & "@1").Is_Empty,
+              "the traceability graph does not reach the requirement");
+      declare
+         One : constant Tc.Edge :=
+           Tc.Edge_At (Graph, Natural'Value
+                         (Tc.Touching (Graph, To_String (Req) & "@1").First_Element));
+         use type Rp.Derivation;
+      begin
+         Assert (One.Source = Rp.Explicit and then Length (One.Record_Of) > 0,
+                 "a recorded edge does not say it was recorded, or where");
+      end;
+
+      Changed.Append ("src/parser.ads");
+      Reach := Tc.Impact_Of (Graph, Changed);
+      Assert (Reached ("unit:Parser", Sure) and then Sure = Rp.Certain,
+              "the changed unit was not reached");
+      Assert (Has ("symbol:Parser.Next"),
+              "a changed symbol was not reached");
+      Assert (Has ("unit:Main"), "a dependent was not reached");
+      Assert (Has ("file:src/parser.adb"), "the unit's body was not reached");
+      Assert (Reached ("file:tests/parser_tests.adb", Sure) and then Sure = Rp.Certain,
+              "the test depending on the unit was not certainly reached");
+      Assert (Reached ("component:parser", Sure) and then Sure = Rp.Probable,
+              "a component reached by name did not stay probable");
+      Assert (Has (To_String (Id)), "the task was not reached");
+      Assert (Has (To_String (Req) & "@1"), "the requirement was not reached");
+
+      Chosen := Tc.Select_Tests (Store, Reach);
+      Assert (Chosen.Tests.Contains ("tests/parser_tests.adb"),
+              "the affected test was not chosen");
+
+      Changed.Clear;
+      Changed.Append ("NOTES.txt");
+      Chosen := Tc.Select_Tests (Store, Tc.Impact_Of (Graph, Changed));
+      Assert (Chosen.Width = Tc.Full_Suite,
+              "a change nobody knows the reach of was not tested in full");
+      S.Close (Store);
+
+      Task_Project (Store, "impact-narrow", "scalar verification.escalation = narrow" & LF);
+      Chosen := Tc.Select_Tests (Store, Tc.Impact_Of (Graph, Changed));
+      Assert (Chosen.Width = Tc.Certain_Tests,
+              "a narrow policy still widened the tests");
+      S.Close (Store);
+   end Impact_Is_Traced;
 
    ---------------------------------------------------------------------------
    -- Register_Tests --
@@ -3164,6 +3305,10 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Parents_Wait_For_Children'Access,
          "a parent waits for its children and goes back to work after them");
+      Register_Routine
+        (T, Impact_Is_Traced'Access,
+         "a change is traced to what it reaches, and the tests widen with"
+         & " doubt");
       Register_Routine
         (T, Workspaces_Isolate_And_Integrate'Access,
          "workspace work is isolated, integrated by right, and verified after");

@@ -2715,7 +2715,7 @@ package body Model_Runner.CLI.Options is
                elsif Operands = 2 and then Result.Kind = Command_Repo then
                   --  repo ACTION: what to ask of the repository.
                   if Argument not in "scan" | "tree" | "sym" | "refs" | "deps"
-                                   | "users"
+                                   | "users" | "impact" | "trace"
                   then
                      Fail (E.CLI_Unexpected_Operand, "", Argument);
                      return;

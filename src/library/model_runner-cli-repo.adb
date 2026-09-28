@@ -6,6 +6,7 @@ with Model_Runner.Errors;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Stores;
+with Model_Runner.Framework.Traceability;
 with Model_Runner.Localization;
 with Model_Runner.Text;
 
@@ -20,6 +21,7 @@ package body Model_Runner.CLI.Repo is
    package Rp renames Model_Runner.Framework.Repository;
    package S renames Model_Runner.Framework.Stores;
    package T renames Model_Runner.Text;
+   package Tr renames Model_Runner.Framework.Traceability;
 
    function Image (Value : Natural) return String
    is (Ada.Strings.Fixed.Trim (Natural'Image (Value), Ada.Strings.Both));
@@ -92,10 +94,14 @@ package body Model_Runner.CLI.Repo is
    begin
       Status := E.Exit_Success;
 
-      if Action in "sym" | "refs" | "deps" | "users" and then Argument = "" then
+      if Action in "sym" | "refs" | "deps" | "users" | "impact" | "trace"
+        and then Argument = ""
+      then
          Outcome := E.Make (E.Framework_Input_Missing);
-         E.Add_Text (Outcome, "name", (if Action in "deps" | "users"
-                                       then "unit" else "symbol"));
+         E.Add_Text (Outcome, "name", (if Action in "deps" | "users" then "unit"
+                                       elsif Action = "impact" then "file"
+                                       elsif Action = "trace" then "node"
+                                       else "symbol"));
          Fail (Outcome);
          return;
       end if;
@@ -164,6 +170,69 @@ package body Model_Runner.CLI.Repo is
                      [Loc.Named ("name", Name), Loc.Named ("path", Place)]);
                end loop;
             end loop;
+         end;
+
+      elsif Action in "impact" | "trace" then
+         declare
+            Store  : S.Store;
+            Report : S.Recovery_Report;
+         begin
+            S.Open (Store, Directory, Report, Outcome);
+            if E.Is_Error (Outcome) then
+               Fail (Outcome);
+               return;
+            end if;
+            declare
+               Graph : constant Tr.Graph := Tr.Build (Store, Found);
+            begin
+               if Action = "trace" then
+                  for Place of Tr.Touching (Graph, Argument) loop
+                     declare
+                        One : constant Tr.Edge := Tr.Edge_At (Graph, Natural'Value (Place));
+                     begin
+                        Pres.Put_Message
+                          (Screen, "cli.repo.edge",
+                           [Loc.Named ("name", To_String (One.From)),
+                            Loc.Named ("value", To_String (One.Kind)),
+                            Loc.Named ("other", To_String (One.To)),
+                            Loc.Named ("detail",
+                                       Ada.Characters.Handling.To_Lower
+                                         (Rp.Derivation'Image (One.Source) & ", "
+                                          & Rp.Confidence'Image (One.Sure)))]);
+                     end;
+                  end loop;
+               else
+                  declare
+                     Changed : Model_Runner.Framework.Name_Lists.Vector;
+                     Reach   : Tr.Impact;
+                     Chosen  : Tr.Selection;
+                  begin
+                     Changed.Append (Argument);
+                     Reach := Tr.Impact_Of (Graph, Changed);
+                     for Index in 1 .. Tr.Length (Reach) loop
+                        declare
+                           One : constant Tr.Reached := Tr.Element (Reach, Index);
+                        begin
+                           Pres.Put_Message
+                             (Screen, "cli.repo.reached",
+                              [Loc.Named ("value", To_String (One.Kind)),
+                               Loc.Named ("name", To_String (One.Id)),
+                               Loc.Named ("detail",
+                                          Ada.Characters.Handling.To_Lower
+                                            (Rp.Confidence'Image (One.Sure)))]);
+                        end;
+                     end loop;
+                     Chosen := Tr.Select_Tests (Store, Reach);
+                     Pres.Put_Message
+                       (Screen, "cli.repo.selection",
+                        [Loc.Named ("value",
+                                    Ada.Characters.Handling.To_Lower
+                                      (Tr.Scope'Image (Chosen.Width))),
+                         Loc.Named ("detail", To_String (Chosen.Reason))]);
+                  end;
+               end if;
+            end;
+            S.Close (Store);
          end;
 
       else

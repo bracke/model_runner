@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Traceability and change impact, computed conservatively (Phase L).**
+  The traceability graph joins requirement revisions to the tasks that
+  serve them and the evidence that verified them, tasks to the files their
+  work changed, decisions and specifications to components, and the
+  repository's files, units and symbols -- every edge saying whether it was
+  recorded or derived and how sure it is. Impact follows a change to the
+  symbols, direct and transitive dependents, components, requirements,
+  tasks, specifications and tests it reaches, each with the weakest
+  confidence on the way. Test selection widens with doubt: certainly
+  affected tests, then the component's, then the full suite -- the last
+  whenever anything is uncertain or a change reaches nothing known.
+  `repo impact FILE` and `repo trace NODE`. The consistency check adds
+  missing symbols, stale verification, completion without a passing gate
+  and misassigned workspaces.
+
 - **Work written apart and taken in by right (Phase K).** With `scalar
   work.isolation = workspace` an agent writes in a workspace of its own --
   a Git worktree when the project is a Git repository, a copy of its files

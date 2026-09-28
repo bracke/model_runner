@@ -20,9 +20,9 @@ package body Library_Surface is
       --  ask, which later phases bring. Until they arrive, the suite asks.
       new String'("Add_Dependency"),
 
-      --  A graph's relations one at a time, which the impact analysis of
-      --  a later phase walks; the repo command answers by kind instead.
-      new String'("Relation_At"),
+      --  How large a traceability graph is. The trace command lists the
+      --  edges touching one node; a caller walking the whole graph asks.
+      new String'("Edge_Count"),
 
       new String'("Block_On_Children"),
       new String'("Current_Version"),
