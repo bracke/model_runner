@@ -99,6 +99,11 @@ package Model_Runner.Framework.Templates is
       Maximum     : Natural := Natural'Last;
       Max_Length  : Natural := Natural'Last;
       Pattern     : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  Where its choices come from, when the project has them rather than
+      --  the template: directories, the project's own directories, or
+      --  files PATTERN, its files at the top that match. Empty for none.
+      Provider    : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    --  One composed declaration.

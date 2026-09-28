@@ -1093,6 +1093,39 @@ package body Tests.Framework_Cases is
          Assert (Checked.Code = E.Framework_Input_Invalid, "a value off the pattern was taken");
          Cf.Check_Input (Tp.Input_At (Made, 2), "v1.2.3.4.5", Checked);
          Assert (Checked.Code = E.Framework_Input_Invalid, "a value too long was taken");
+
+         --  Choices the project provides: its directories, nothing hidden.
+         declare
+            Where    : constant String := Fresh ("provided");
+            Offering : Tp.Template;
+            Holding2 : Tp.Registry;
+            Made2    : Tp.Composition;
+         begin
+            Dirs.Create_Path (Where & "/src");
+            Dirs.Create_Path (Where & "/lib");
+            Dirs.Create_Path (Where & "/.git");
+            Tp.Parse ("template = p" & LF & "name = P" & LF & "version = 1" & LF
+                      & "input root" & LF & "  type = text" & LF
+                      & "  provider = directories" & LF, "memory", Offering, Status);
+            Tp.Add (Holding2, Offering);
+            Tp.Compose (Holding2, "p", Made2, Status);
+            declare
+               Given : constant Tp.Input_Declaration :=
+                 Cf.Resolved (Tp.Input_At (Made2, 1), Where);
+            begin
+               Assert (To_String (Given.Choices) = "lib, src",
+                       "an input's provider did not offer the project's directories: "
+                       & To_String (Given.Choices));
+               Cf.Check_Input (Given, "docs", Checked);
+               Assert (Checked.Code = E.Framework_Input_Invalid,
+                       "a value none of the provided choices was taken");
+            end;
+            Tp.Parse ("template = q" & LF & "name = Q" & LF & "version = 1" & LF
+                      & "input root" & LF & "  provider = elsewhere" & LF, "memory", Offering,
+                      Status);
+            Assert (Status.Code = E.Framework_Template_Invalid,
+                    "a provider nobody knows was taken");
+         end;
       end;
 
       Given.Include ("project_name", "not an identifier");
@@ -2078,6 +2111,18 @@ package body Tests.Framework_Cases is
          return Total;
       end Count_Of;
    begin
+      declare
+         Said : constant Bs.Output_List :=
+           Bs.Scan ("docs/facts.md",
+                    "Fact: build_system = Alire" & LF & "Fact: nothing here" & LF);
+      begin
+         Assert (Bs.Length (Said) = 2
+                 and then Bs."=" (Bs.Element (Said, 1).Kind, Bs.Discovered_Fact)
+                 and then To_String (Bs.Element (Said, 1).Key) = "build_system"
+                 and then To_String (Bs.Element (Said, 1).Text) = "Alire"
+                 and then Bs."=" (Bs.Element (Said, 2).Kind, Bs.Issue),
+                 "a document's facts were not read, or one that does not read not said");
+      end;
       Assert (Count_Of (Bs.Specification_Candidate) = 1
               and then Count_Of (Bs.Imported_Item) = 1
               and then Count_Of (Bs.Requirement_Candidate) = 2
@@ -2491,6 +2536,14 @@ package body Tests.Framework_Cases is
                  & R.Get (View, "runtime.accepted_by"));
       end;
       Assert (Tk.Cycles (Store).Is_Empty, "a cycle was found where none is");
+      declare
+         View : R.Item;
+      begin
+         Tk.Effective (Store, Made.First_Element, View, Status);
+         Assert (Ada.Strings.Fixed.Index (R.Get (View, "permissions"), [1 => ASCII.LF]) = 0
+                 and then Ada.Strings.Fixed.Index (R.Get (View, "permissions"), "; ") > 0,
+                 "a task's permissions were not shown on one line");
+      end;
       S.Close (Store);
 
       --  The policy names the classes it accepts: here what an agent

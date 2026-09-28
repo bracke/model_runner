@@ -249,7 +249,7 @@ package body Model_Runner.CLI.Init is
             for Index in 1 .. Tp.Input_Count (Composed) loop
                declare
                   Declared : constant Tp.Input_Declaration :=
-                    Tp.Input_At (Composed, Index);
+                    Cf.Resolved (Tp.Input_At (Composed, Index), Directory);
                   Got      : Boolean;
                begin
                   if To_String (Declared.Id) = Missing then

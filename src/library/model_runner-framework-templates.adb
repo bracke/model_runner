@@ -278,6 +278,13 @@ package body Model_Runner.Framework.Templates is
                end if;
             elsif Key = "pattern" then
                Held.Pattern := Right;
+            elsif Key = "provider" then
+               if Said = "directories" or else (Said'Length > 6 and then Said (Said'First .. Said'First + 5) = "files ")
+               then
+                  Held.Provider := Right;
+               else
+                  Refuse ("an input's provider is directories or files PATTERN, not " & Said);
+               end if;
             elsif Key in "required" | "secret" | "persist" then
                if not Truth (Said, Flag) then
                   Refuse (Key & " is true or false");

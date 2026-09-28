@@ -107,6 +107,58 @@ package body Model_Runner.Framework.Configurations is
    -- Check_Input --
    -----------------
 
+   package Sorting is new Name_Lists.Generic_Sorting;
+
+   --------------
+   -- Resolved --
+   --------------
+
+   function Resolved
+     (Declared          : Templates.Input_Declaration;
+      Project_Directory : String) return Templates.Input_Declaration
+   is
+      Result   : Templates.Input_Declaration := Declared;
+      Provider : constant String := To_String (Declared.Provider);
+      Found    : Unbounded_String;
+      Names    : Name_Lists.Vector;
+      Search   : Ada.Directories.Search_Type;
+      Item     : Ada.Directories.Directory_Entry_Type;
+      use type Ada.Directories.File_Kind;
+   begin
+      if Provider = "" or else not Ada.Directories.Exists (Project_Directory) then
+         return Result;
+      end if;
+      Ada.Directories.Start_Search
+        (Search, Project_Directory,
+         (if Provider = "directories" then "" else Provider (Provider'First + 6 .. Provider'Last)),
+         [Ada.Directories.Directory     => Provider = "directories",
+          Ada.Directories.Ordinary_File => Provider /= "directories",
+          others                        => False]);
+      while Ada.Directories.More_Entries (Search) loop
+         Ada.Directories.Get_Next_Entry (Search, Item);
+         declare
+            Name : constant String := Ada.Directories.Simple_Name (Item);
+         begin
+            --  Nothing hidden, the project's state and version control
+            --  among it.
+            if Name'Length > 0 and then Name (Name'First) /= '.' then
+               Names.Append (Name);
+            end if;
+         end;
+      end loop;
+      Ada.Directories.End_Search (Search);
+      Sorting.Sort (Names);
+      for Name of Names loop
+         Append (Found, (if Found = Null_Unbounded_String then "" else ", ") & Name);
+      end loop;
+      Result.Kind := Templates.Choice_Input;
+      Result.Choices := Found;
+      return Result;
+   exception
+      when others =>
+         return Result;
+   end Resolved;
+
    --  Whether a text matches a pattern: * any run of characters, ? any
    --  one, anything else itself.
    function Matches (Text, Pattern : String) return Boolean is
@@ -332,7 +384,7 @@ package body Model_Runner.Framework.Configurations is
       for Index in 1 .. Templates.Input_Count (Composed) loop
          declare
             Declared : constant Templates.Input_Declaration :=
-              Templates.Input_At (Composed, Index);
+              Resolved (Templates.Input_At (Composed, Index), Project_Directory);
             Id       : constant String := To_String (Declared.Id);
             Value    : Unbounded_String;
             Has      : Boolean := True;

@@ -1036,11 +1036,15 @@ package body Model_Runner.Framework.Tasks is
          function Or_Else (First, Second, Last : String) return String
          is (if First /= "" then First elsif Second /= "" then Second else Last);
       begin
+         --  On one line, as a task's permissions field writes them: each
+         --  capability and its constraints, a semicolon between.
          Records.Set
            (Value, "permissions",
-            Model_Runner.Framework.Permissions.Image
-              (Model_Runner.Framework.Permissions.Effective
-                 (Item, Kind, "worker", Task_Level => Records.Get (Defined, "permissions"))));
+            Joined (Lines_Of (Model_Runner.Framework.Permissions.Image
+                                (Model_Runner.Framework.Permissions.Effective
+                                   (Item, Kind, "worker",
+                                    Task_Level => Records.Get (Defined, "permissions")))),
+                    "; "));
          Records.Set
            (Value, "workspace_policy",
             Or_Else (Kind_Policy (Item, Kind, "isolation"),

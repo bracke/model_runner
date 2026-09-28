@@ -7,6 +7,11 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Last small gaps.** Bootstrap reads `Fact: KEY = VALUE` lines as
+  discovered facts, one that does not read an issue; a template input may
+  take its choices from the project (`provider = directories` or
+  `provider = files PATTERN`, resolved by `Configurations.Resolved`); and
+  `task show` prints a task's permissions on one line.
 - **A structured error names what it is about.** With `--format json`, an
   error record carries each of the condition's named values as a field of
   its own -- the missing input's name, a path, an offset -- beside its code

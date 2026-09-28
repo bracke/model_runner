@@ -83,9 +83,10 @@ package Model_Runner.Framework.Bootstrap is
    --  a requirement by its identifier -- REQ-IO-003: text -- is an item the
    --  document has accepted, and is imported. Any other line with SHALL or
    --  MUST in capitals is a requirement candidate; a line starting
-   --  Decision: is a decision candidate; a normative line said twice is an
-   --  issue. Identifiers are given under a key made from the document's
-   --  name.
+   --  Decision: is a decision candidate; a line Fact: KEY = VALUE is a
+   --  discovered fact, and one that does not read an issue; a normative
+   --  line said twice is an issue. Identifiers are given under a key made
+   --  from the document's name.
    --
    --  @param Path The document's path, which provenance keys start with.
    --  @param Text Its text.

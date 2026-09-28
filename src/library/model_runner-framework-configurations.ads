@@ -95,6 +95,17 @@ package Model_Runner.Framework.Configurations is
       Result            : out Plan;
       Status            : out Model_Runner.Errors.Error_Info);
 
+   --  An input as a project makes it: where it has a provider, its choices
+   --  are what the provider finds in the project -- its directories, or its
+   --  files at the top that match -- and it is a choice among them.
+   --
+   --  @param Declared The input.
+   --  @param Project_Directory The project.
+   --  @return The input, its choices filled in.
+   function Resolved
+     (Declared          : Templates.Input_Declaration;
+      Project_Directory : String) return Templates.Input_Declaration;
+
    --  Whether a value is one an input takes.
    --
    --  @param Declared The input.

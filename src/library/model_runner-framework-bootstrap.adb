@@ -129,6 +129,32 @@ package body Model_Runner.Framework.Bootstrap is
             return;
          end if;
 
+         --  Fact: KEY = VALUE -- something the document says the project is.
+         if Item'Length > 5 and then Item (Item'First .. Item'First + 4) = "Fact:" then
+            declare
+               Said  : constant String := Trim (Item (Item'First + 5 .. Item'Last));
+               Equal : constant Natural := Ada.Strings.Fixed.Index (Said, "=");
+               Name  : constant String :=
+                 (if Equal = 0 then "" else Trim (Said (Said'First .. Equal - 1)));
+               Value : constant String :=
+                 (if Equal = 0 then "" else Trim (Said (Equal + 1 .. Said'Last)));
+            begin
+               if Name /= "" and then Value /= "" and then Facts.Is_Key (Name) then
+                  Append
+                    (Result,
+                     (Kind       => Discovered_Fact,
+                      Provenance => To_Unbounded_String (Path & "#fact:" & Name),
+                      Key        => To_Unbounded_String (Name),
+                      Title      => To_Unbounded_String (Name),
+                      Text       => To_Unbounded_String (Value),
+                      Source     => To_Unbounded_String (Path)));
+               else
+                  Found (Issue, Path & "#" & Item, "a fact that does not read", Item);
+               end if;
+            end;
+            return;
+         end if;
+
          if Colon > Item'First
            and then Identifiers.Is_Valid (Item (Item'First .. Colon - 1))
            and then Item'Length > 4
