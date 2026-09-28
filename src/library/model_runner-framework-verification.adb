@@ -392,7 +392,8 @@ package body Model_Runner.Framework.Verification is
       Status   : out Model_Runner.Errors.Error_Info;
       Given    : Name_Lists.Vector := Name_Lists.Empty_Vector;
       Stands_For : String := "";
-      Offline  : Boolean := False)
+      Offline  : Boolean := False;
+      Workspace : String := "")
    is
       Settings : constant Records.Item := Config (Item);
       Text     : constant String := Records.Get (Settings, "profile." & Profile);
@@ -542,7 +543,7 @@ package body Model_Runner.Framework.Verification is
                   Tries := Tries + 1;
                   Execution.Run
                     (Item, Change, Own, Filled (To_String (Next.Command)),
-                     Filled (To_String (Next.Directory)), Ran, Status);
+                     Filled (To_String (Next.Directory)), Ran, Status, Base => Workspace);
                   if E.Is_Error (Status) then
                      return;
                   end if;
@@ -613,7 +614,14 @@ package body Model_Runner.Framework.Verification is
          --  its own -- Alire's config/ is one -- and evidence taken before
          --  it would be out of date the moment it was recorded.
          Records.Set (Value, "repository_revision", Repository_Now (Item));
-         Records.Set (Value, "workspace_revision", Repository_Now (Item));
+         Records.Set
+           (Value, "workspace_revision",
+            (if Workspace = "" then Repository_Now (Item)
+             else Repository.Graph_Fingerprint
+                    (Repository.Scan (Workspace, Repository.Roots_Of (Item)))));
+         if Workspace /= "" then
+            Records.Set (Value, "workspace", Workspace);
+         end if;
          Records.Set (Value, "passed", (if Passed then "true" else "false"));
          Records.Set (Value, "ended_at", Timestamp);
          Stores.Put (Change, Verification_Area, To_String (Evidence), Value);
@@ -698,7 +706,9 @@ package body Model_Runner.Framework.Verification is
          return False;
       end if;
 
-      if Records.Get (Value, "repository_revision") /= Repository_Now (Item) then
+      if Records.Get (Value, "workspace") /= "" then
+         Reasons.Append (Evidence & " was taken in a workspace, before its work was taken in");
+      elsif Records.Get (Value, "repository_revision") /= Repository_Now (Item) then
          Reasons.Append ("the files have changed since " & Evidence);
       end if;
       if Records.Get (Value, "configuration_fingerprint")

@@ -346,12 +346,34 @@ package body Model_Runner.Framework.Bootstrap is
                   if Intent.Find_By_Provenance
                        (Item, Intent.Requirement, Provenance) /= ""
                   then
-                     Result.Existing := Result.Existing + 1;
+                     --  The same item again: as it was, or what its line
+                     --  now says, as its next revision.
+                     declare
+                        Held    : Intent.Entity;
+                        Known   : constant String :=
+                          Intent.Find_By_Provenance (Item, Intent.Requirement, Provenance);
+                        Effect  : Intent.Impact;
+                     begin
+                        Intent.Read (Item, Intent.Requirement, Known, Held, Status);
+                        if E.Is_Ok (Status) and then Held.Text /= Next.Text then
+                           Intent.Revise
+                             (Item, Change, Intent.Requirement, Known, Field (Next.Title),
+                              Field (Next.Text), To_String (Held.Criteria), Effect, Status);
+                           if E.Is_Ok (Status) then
+                              Result.Created := Result.Created + 1;
+                           end if;
+                        else
+                           Result.Existing := Result.Existing + 1;
+                        end if;
+                     end;
                   else
+                     --  Under the identifier the document gives it.
                      Intent.Propose
                        (Item, Change, Intent.Requirement, Field (Next.Key),
                         Field (Next.Title), Field (Next.Text), "",
-                        Field (Next.Source), Provenance, "project", Id, Status);
+                        Field (Next.Source), Provenance, "project", Id, Status,
+                        Given => Provenance (Ada.Strings.Fixed.Index (Provenance, "#") + 1
+                                             .. Provenance'Last));
                      if E.Is_Ok (Status) and then Accept_Imports then
                         Intent.Move
                           (Item, Change, Intent.Requirement, To_String (Id),

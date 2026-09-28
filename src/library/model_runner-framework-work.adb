@@ -1943,11 +1943,43 @@ package body Model_Runner.Framework.Work is
       --  harness when the configuration says so, otherwise left waiting for
       --  whoever has the right.
       if Isolated then
-         if Work_Setting (Item, "integrate") /= "automatic" then
-            Conclude ("", To_String (Result.Workspace_Id) & " waits to be taken in",
-                      "completed");
-            return;
-         end if;
+         --  Checked where it was written, before anyone takes it in: the
+         --  evidence says how it stands, and only work that passed is taken
+         --  in on its own.
+         declare
+            Chosen : constant Verification.Choice :=
+              Verification.Choose (Item, Task_Id, Result.Changed_Files);
+            Space  : Workspaces.Workspace;
+            Passed : Boolean := True;
+            Said   : Unbounded_String;
+         begin
+            Workspaces.Read (Item, To_String (Result.Workspace_Id), Space, Held);
+            if E.Is_Ok (Held) and then To_String (Chosen.Profile) /= "" then
+               Verification.Run_Profile
+                 (Item, Change, To_String (Chosen.Profile), Task_Id, Result.Evidence_Id, Passed,
+                  Held, Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For),
+                  Workspace => To_String (Space.Path));
+               if E.Is_Ok (Held) then
+                  Stores.Commit (Item, Change, Held);
+               else
+                  Change := Stores.No_Changes;
+                  Passed := False;
+               end if;
+               Said := To_Unbounded_String
+                 ("; checked in it: " & (if Passed then "passed" else "did not pass")
+                  & (if Result.Evidence_Id = Null_Unbounded_String then ""
+                     else " (" & To_String (Result.Evidence_Id) & ")"));
+            end if;
+            if Work_Setting (Item, "integrate") /= "automatic" then
+               Conclude ("", To_String (Result.Workspace_Id) & " waits to be taken in"
+                         & To_String (Said), "completed");
+               return;
+            elsif not Passed then
+               Conclude ("", To_String (Result.Workspace_Id) & " waits to be taken in"
+                         & To_String (Said) & ", so it is not taken in on its own", "completed");
+               return;
+            end if;
+         end;
 
          --  The harness takes it in for the agent only when the agent may
          --  ask for that.

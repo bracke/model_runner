@@ -2112,8 +2112,25 @@ package body Tests.Framework_Cases is
       Assert (Natural (Nt.List (Store, Nt.Requirement).Length) = 4
               and then Nt.Find_By_Provenance
                          (Store, Nt.Requirement, "docs/parser.md#REQ-PARSE-003")
-                       /= "",
-              "the requirements bootstrap made are not the ones it found");
+                       = "REQ-PARSE-003",
+              "the requirements bootstrap made are not the ones it found, under"
+              & " the identifier the document gives");
+
+      --  The imported line changed: its next revision, not another item.
+      Bs.Apply (Store, Change,
+                Bs.Scan ("docs/parser.md",
+                         "- REQ-PARSE-003: Input is read in one pass, and never twice." & LF),
+                Report, Status);
+      S.Commit (Store, Change, Status);
+      declare
+         Held : Nt.Entity;
+      begin
+         Nt.Read (Store, Nt.Requirement, "REQ-PARSE-003", Held, Status);
+         Assert (E.Is_Ok (Status) and then Report.Created = 1 and then Held.Revision = 2
+                 and then Ada.Strings.Fixed.Index (To_String (Held.Text), "never twice") > 0
+                 and then Natural (Nt.List (Store, Nt.Requirement).Length) = 4,
+                 "a changed imported line was not revised: " & Code_Of (Status));
+      end;
 
       --  A discovered fact, made once.
       declare
@@ -4424,6 +4441,25 @@ package body Tests.Framework_Cases is
               & To_String (Done.Final_State) & " " & To_String (Done.Reason));
       Assert (not Dirs.Exists (Fresh_Root (Store) & "/src/hello.adb"),
               "work written in a workspace reached the project before integration");
+
+      --  Checked where it was written, before it was taken in: evidence of
+      --  the workspace, which never stands for the project.
+      declare
+         Taken_There : R.Item;
+         Reasons     : Model_Runner.Framework.Name_Lists.Vector;
+      begin
+         S.Read (Store, Model_Runner.Framework.Verification_Area, To_String (Done.Evidence_Id),
+                 Taken_There, Status);
+         Assert (E.Is_Ok (Status) and then R.Get (Taken_There, "passed") = "true"
+                 and then R.Get (Taken_There, "workspace") /= ""
+                 and then R.Get (Taken_There, "workspace_revision")
+                          /= R.Get (Taken_There, "repository_revision")
+                 and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "checked in it: passed") > 0,
+                 "isolated work was not checked in its workspace: " & To_String (Done.Reason));
+         Assert (not Vf.Is_Current (Store, To_String (Done.Evidence_Id), Reasons)
+                 and then Ada.Strings.Fixed.Index (Reasons.First_Element, "workspace") > 0,
+                 "evidence of a workspace stood for the project");
+      end;
       Assert (Ws.Changes (Store, To_String (Done.Workspace_Id)).Contains ("src/hello.adb")
               and then Ws.Active_For (Store, To_String (Id)) = To_String (Done.Workspace_Id),
               "the workspace's change was not seen");

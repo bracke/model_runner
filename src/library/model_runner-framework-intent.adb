@@ -3,6 +3,7 @@ with Ada.Strings.Fixed;
 
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Events;
+with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Schemas;
 
@@ -256,14 +257,38 @@ package body Model_Runner.Framework.Intent is
       Provenance : String;
       Scope      : String;
       Id         : out Ada.Strings.Unbounded.Unbounded_String;
-      Status     : out Model_Runner.Errors.Error_Info)
+      Status     : out Model_Runner.Errors.Error_Info;
+      Given      : String := "")
    is
       Event : Unbounded_String;
+
+      --  Whether something has an identifier already, in the state or in
+      --  this transaction.
+      function Taken (Name : String) return Boolean is
+         Held   : Records.Item;
+         Staged : Boolean;
+      begin
+         Stores.Pending (Change, Area_Of (Kind), Name, Held, Staged);
+         return Staged or else Stores.Exists (Item, Area_Of (Kind), Name);
+      end Taken;
    begin
-      Stores.Allocate_Identifier
-        (Item, Change, Namespace (Kind), Key, Id, Status);
-      if E.Is_Error (Status) then
-         return;
+      Status := E.Success;
+      if Given /= "" and then Identifiers.Is_Valid (Given)
+        and then Given'Length > Namespace (Kind)'Length
+        and then Given (Given'First .. Given'First + Namespace (Kind)'Length) = Namespace (Kind) & "-"
+        and then not Taken (Given)
+      then
+         Id := To_Unbounded_String (Given);
+      else
+         --  Made, and made again past any a source gave that has the number.
+         loop
+            Stores.Allocate_Identifier
+              (Item, Change, Namespace (Kind), Key, Id, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+            exit when not Taken (To_String (Id));
+         end loop;
       end if;
 
       declare

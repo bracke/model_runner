@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Imported items keep their identifiers.** An item a document gives its
+  own identifier, as REQ-PARSE-003, is kept under it where nothing has it
+  yet (`Intent.Propose ... Given`), and a made identifier is never one
+  something already has; the line changed, bootstrap revises the item
+  rather than passing it over.
+- **Isolated work is checked in its workspace.** Before work written apart
+  is taken in, its verification is run in the workspace
+  (`Verification.Run_Profile ... Workspace`): the evidence names the
+  workspace and its own revision, never counts as the project's, and only
+  work that passed there is taken in on its own.
 - **The consistency check sees more.** A complete task whose kind is
   verified and that has no evidence, or whose children are not done; a
   task field whose value its schema no longer takes; and a role granting

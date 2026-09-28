@@ -139,6 +139,9 @@ package Model_Runner.Framework.Intent is
    --  @param Scope "project" or a component's name.
    --  @param Id Its identifier.
    --  @param Status Framework_Identifier_Invalid when the key makes none.
+   --  @param Given The identifier a source already gives it, kept where it
+   --    is one of this kind's and nothing has it yet; otherwise one is
+   --    made. A made one is never one something already has.
    procedure Propose
      (Item       : Stores.Store;
       Change     : in out Stores.Transaction;
@@ -151,7 +154,8 @@ package Model_Runner.Framework.Intent is
       Provenance : String;
       Scope      : String;
       Id         : out Ada.Strings.Unbounded.Unbounded_String;
-      Status     : out Model_Runner.Errors.Error_Info);
+      Status     : out Model_Runner.Errors.Error_Info;
+      Given      : String := "");
 
    --  Read an entity's current revision.
    --

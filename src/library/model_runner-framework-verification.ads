@@ -158,6 +158,9 @@ package Model_Runner.Framework.Verification is
    --    run in its place; its evidence then counts for that profile.
    --  @param Offline Whether it runs for an agent without use_network, its
    --    commands kept off the network where the host can do that.
+   --  @param Workspace A workspace's tree to run it in rather than the
+   --    project: the work before it is taken in. Its evidence says so and
+   --    names the tree's own revision, and never counts as the project's.
    procedure Run_Profile
      (Item     : Stores.Store;
       Change   : in out Stores.Transaction;
@@ -168,7 +171,8 @@ package Model_Runner.Framework.Verification is
       Status   : out Model_Runner.Errors.Error_Info;
       Given    : Name_Lists.Vector := Name_Lists.Empty_Vector;
       Stands_For : String := "";
-      Offline  : Boolean := False);
+      Offline  : Boolean := False;
+      Workspace : String := "");
 
    --  How widely a task's work is verified, and with what.
    type Choice is record
