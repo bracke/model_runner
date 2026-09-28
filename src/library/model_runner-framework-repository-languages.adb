@@ -472,7 +472,7 @@ package body Model_Runner.Framework.Repository.Languages is
                                           or else Is_Mark (Tokens (Ahead + 1), ","))
                               then
                                  Relate (Into, Extends, Typed, To_String (Tokens (Ahead).Text),
-                                         Explicit, Certain, Where (Path, Tokens (Ahead).Line));
+                                         Explicit, Probable, Where (Path, Tokens (Ahead).Line));
                               end if;
                            end loop;
                         end if;
@@ -799,7 +799,7 @@ package body Model_Runner.Framework.Repository.Languages is
                   begin
                      if Second /= Null_Unbounded_String then
                         Relate (Into, Implements_Interface, Unit & "." & Last_Of (Second),
-                                To_String (First), Explicit, Certain, Where (Path, Here.Line));
+                                To_String (First), Explicit, Probable, Where (Path, Here.Line));
                         Next := (U ("impl"), U (Last_Of (Second)), First);
                      elsif First /= Null_Unbounded_String then
                         Next := (U ("impl"), U (Last_Of (First)), Null_Unbounded_String);
@@ -826,7 +826,7 @@ package body Model_Runner.Framework.Repository.Languages is
                      if In_Impl and then Said = "fn"
                        and then Opened.Last_Element.Trait /= Null_Unbounded_String
                      then
-                        Relate (Into, Overrides, Full, Name, Explicit, Certain,
+                        Relate (Into, Overrides, Full, Name, Explicit, Uncertain,
                                 Where (Path, Tokens (Index + 1).Line));
                      end if;
                   end if;
@@ -1034,7 +1034,7 @@ package body Model_Runner.Framework.Repository.Languages is
                                                  (Bases (Part .. At_Index - 1), Ada.Strings.Both));
                                  begin
                                     if Base /= "" and then Base not in "object" | "metaclass" then
-                                       Relate (Into, Extends, Full, Base, Explicit, Certain,
+                                       Relate (Into, Extends, Full, Base, Explicit, Probable,
                                                Where (Path, Line_Number));
                                     end if;
                                  end;

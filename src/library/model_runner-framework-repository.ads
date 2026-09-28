@@ -22,7 +22,9 @@ with Model_Runner.Framework.Stores;
 --  Every relation says how it was derived and how sure that is: a with
 --  clause is explicit and certain, a file named after its unit is a naming
 --  convention and probable, a name that matches a symbol is a heuristic
---  and uncertain. The graph is derived state, kept in the indexes and made
+--  and uncertain. What a name in the text names is not resolved, so an
+--  instantiation, a derivation or an interface taken on, though written
+--  out, is probable rather than certain. The graph is derived state, kept in the indexes and made
 --  again whenever it is asked for and missing or stale.
 package Model_Runner.Framework.Repository is
 
@@ -50,7 +52,9 @@ package Model_Runner.Framework.Repository is
       --  A type that takes on an interface: ... and I.
       Implements_Interface,
 
-      --  An operation that replaces the one it inherits: overriding.
+      --  An operation that replaces the one it inherits: overriding. The
+      --  relation names the operation, not the ancestor it came from, which
+      --  is not worked out, and is uncertain for that.
       Overrides,
 
       --  A use of a procedure or function followed by its call: a name

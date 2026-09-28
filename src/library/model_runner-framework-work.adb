@@ -871,8 +871,10 @@ package body Model_Runner.Framework.Work is
            Ada.Directories.Containing_Directory (Stores.Root (Host.Item.all));
          Before  : constant Configurations.Value_Maps.Map := Snapshot (Project, Repository.Roots_Of (Host.Item.all));
       begin
+         --  Off the network unless the agent may use it.
          Verification.Run_Profile
-           (Host.Item.all, Change, Profile, "", Evidence, Passed, Status);
+           (Host.Item.all, Change, Profile, "", Evidence, Passed, Status,
+            Offline => not May (Host, Permissions.Use_Network, ""));
          if E.Is_Ok (Status) then
             Stores.Commit (Host.Item.all, Change, Status);
          end if;

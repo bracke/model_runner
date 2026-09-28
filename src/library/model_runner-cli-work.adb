@@ -37,10 +37,11 @@ package body Model_Runner.CLI.Work is
 
    --  The tools an agent working on a task is not given: no shell, no
    --  network, no delegation, nobody to ask.
-   Denied : constant array (1 .. 8) of access constant String :=
-     [new String'("shell"), new String'("run_python"), new String'("http_get"),
-      new String'("web_search"), new String'("sql"), new String'("delegate"),
-      new String'("ask_user"), new String'("retrieve")];
+   --  Refused outright; a program or the network are its where its
+   --  permissions grant them, which its file tools' guard holds it to.
+   Denied : constant array (1 .. 4) of access constant String :=
+     [new String'("sql"), new String'("delegate"), new String'("ask_user"),
+      new String'("retrieve")];
 
    --  A whole file, or nothing when it cannot be read.
    function Whole (Path : String) return String is
@@ -257,10 +258,21 @@ package body Model_Runner.CLI.Work is
          else Written (Written'First .. Marker - 1) & Prompt_Path
               & Written (Marker + 9 .. Written'Last));
    begin
-      Model_Runner.Framework.Execution.Run
-        (Self.Store.all, Change, Model_Runner.Framework.Execution.Policy_Of (Self.Store.all),
-         Command, "", Ran, Status,
-         Base => (if Project = Project_Root then "" else Project));
+      --  The command is the agent: off the network unless it may use it.
+      declare
+         Rules : Model_Runner.Framework.Execution.Policy :=
+           Model_Runner.Framework.Execution.Policy_Of (Self.Store.all);
+      begin
+         Rules.No_Network := Rules.No_Network
+           or else not Model_Runner.Framework.Permissions.Allows
+                         (Model_Runner.Framework.Permissions.Value
+                            (Whole (Model_Runner.Framework.Permissions.Permissions_Beside
+                                      (Prompt_Path))),
+                          Model_Runner.Framework.Permissions.Use_Network);
+         Model_Runner.Framework.Execution.Run
+           (Self.Store.all, Change, Rules, Command, "", Ran, Status,
+            Base => (if Project = Project_Root then "" else Project));
+      end;
       if E.Is_Ok (Status) then
          S.Commit (Self.Store.all, Change, Status);
       end if;

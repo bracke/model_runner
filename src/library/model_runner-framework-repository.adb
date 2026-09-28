@@ -592,7 +592,10 @@ package body Model_Runner.Framework.Repository is
                         (Kind => Instantiates,
                          From => To_Unbounded_String
                                    (Unit & "." & To_String (Tokens (At_Index + 1).Text)),
-                         To => Made, Source => Explicit, Sure => Certain,
+                         --  Said in the text; what the name names is not
+                         --  resolved -- a use clause or a renaming could
+                         --  make it another -- so probable.
+                         To => Made, Source => Explicit, Sure => Probable,
                          Where => To_Unbounded_String (Path & ":" & Image (Here.Line)), Origin => <>));
                   end if;
                end;
@@ -625,7 +628,7 @@ package body Model_Runner.Framework.Repository is
                                  (Kind => (if Is_Word (Tokens (Ahead), "new") then Extends
                                            else Implements_Interface),
                                   From => To_Unbounded_String (Typed), To => Other,
-                                  Source => Explicit, Sure => Certain,
+                                  Source => Explicit, Sure => Probable,
                                   Where => To_Unbounded_String
                                              (Path & ":" & Image (Tokens (Ahead).Line)), Origin => <>));
                            end if;
@@ -644,7 +647,10 @@ package body Model_Runner.Framework.Repository is
                   (Kind => Overrides,
                    From => To_Unbounded_String
                              (Unit & "." & To_String (Tokens (At_Index + 2).Text)),
-                   To => Tokens (At_Index + 2).Text, Source => Explicit, Sure => Certain,
+                   --  That it overrides is said; which ancestor's
+                   --  operation it overrides is not worked out, so the
+                   --  name alone, and uncertain.
+                   To => Tokens (At_Index + 2).Text, Source => Explicit, Sure => Uncertain,
                    Where => To_Unbounded_String (Path & ":" & Image (Here.Line)), Origin => <>));
             end if;
          end;

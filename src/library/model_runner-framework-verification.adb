@@ -391,7 +391,8 @@ package body Model_Runner.Framework.Verification is
       Passed   : out Boolean;
       Status   : out Model_Runner.Errors.Error_Info;
       Given    : Name_Lists.Vector := Name_Lists.Empty_Vector;
-      Stands_For : String := "")
+      Stands_For : String := "";
+      Offline  : Boolean := False)
    is
       Settings : constant Records.Item := Config (Item);
       Text     : constant String := Records.Get (Settings, "profile." & Profile);
@@ -417,12 +418,13 @@ package body Model_Runner.Framework.Verification is
          return To_String (Result);
       end Filled;
       Checks   : constant Check_List := Parse_Profile (Text);
-      Rules    : constant Execution.Policy := Execution.Policy_Of (Item);
+      Rules    : Execution.Policy := Execution.Policy_Of (Item);
       Number   : Natural;
       Diagnostics : Natural := 0;
    begin
       Evidence := Null_Unbounded_String;
       Passed := False;
+      Rules.No_Network := Rules.No_Network or else Offline;
 
       if Text = "" then
          Status := E.Make (E.Framework_Not_Found);

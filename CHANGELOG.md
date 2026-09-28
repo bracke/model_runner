@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **use_network and execute_external_process mean something.** Checks an
+  agent runs, and a configured agent command, are kept off the network
+  (where the host can) unless the agent's permissions grant use_network; an
+  agent process the harness starts may run a program (`shell`,
+  `run_python`) only with execute_external_process and reach the network
+  (`http_get`, `web_search`) only with use_network.
+- **Adapters claim only the certainty they have.** An instantiation, a
+  derivation or an interface taken on is probable, since the name in the
+  text is not resolved, and an override uncertain, since which ancestor's
+  operation it replaces is not worked out -- in Ada, C++, Rust and Python.
 - **Payloads kept apart are whole and collected.** A payload file is
   written beside itself and renamed over, one a crash cut short is written
   again when its result is stored again, and `Results.Collect_Payloads`,

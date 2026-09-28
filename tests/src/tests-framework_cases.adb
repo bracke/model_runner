@@ -3340,6 +3340,23 @@ package body Tests.Framework_Cases is
             Assert (Ada.Strings.Fixed.Index (Said (1 .. Last), "4") > 0,
                     "a confined agent process lost a tool that reaches nothing: "
                     & Said (1 .. Last));
+
+            --  A program runs only where execute_external_process is granted.
+            Env.Set (Pm.Agent_Root_Variable, Root);
+            Env.Set (Pm.Agent_Permissions_Variable, Pm.Image (Pm.Value ("read_source")));
+            Model_Runner.Tools.Builtin.Run
+              (Runner, "shell", "{""command"": ""echo ran-it""}", Said, Last, Status);
+            Assert (Ada.Strings.Fixed.Index (Said (1 .. Last), "execute_external_process") > 0,
+                    "a confined agent ran a program it was not granted: " & Said (1 .. Last));
+            Env.Set (Pm.Agent_Permissions_Variable,
+                     Pm.Image (Pm.Value ("read_source" & ASCII.LF & "execute_external_process")));
+            Model_Runner.Tools.Builtin.Run
+              (Runner, "shell", "{""command"": ""echo ran-it""}", Said, Last, Status);
+            Env.Clear (Pm.Agent_Root_Variable);
+            Env.Clear (Pm.Agent_Permissions_Variable);
+            Assert (Ada.Strings.Fixed.Index (Said (1 .. Last), "ran-it") > 0,
+                    "a confined agent granted execute_external_process could not run one: "
+                    & Said (1 .. Last));
          end;
 
          --  The harness's own program: only PATH, HOME and what is given.
@@ -5183,7 +5200,18 @@ package body Tests.Framework_Cases is
                    & "end Shapes;" & LF);
          Found := Rp.Scan (Root);
          for Index in 1 .. Rp.Relation_Count (Found) loop
-            Kinds (Rp.Relation_At (Found, Index).Kind) := True;
+            declare
+               use type Rp.Confidence;
+               One : constant Rp.Relation := Rp.Relation_At (Found, Index);
+            begin
+               Kinds (One.Kind) := True;
+               --  Names in the text are not resolved: no more than probable,
+               --  and which operation is overridden not known at all.
+               Assert ((One.Kind not in Rp.Instantiates | Rp.Extends | Rp.Implements_Interface
+                        or else One.Sure = Rp.Probable)
+                       and then (One.Kind /= Rp.Overrides or else One.Sure = Rp.Uncertain),
+                       "the adapter claimed a certainty it does not have");
+            end;
          end loop;
          Assert (Kinds (Rp.Instantiates) and then Kinds (Rp.Extends)
                  and then Kinds (Rp.Implements_Interface) and then Kinds (Rp.Overrides),

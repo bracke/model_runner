@@ -1051,13 +1051,32 @@ package body Model_Runner.Tools.Builtin is
          return "";
       elsif Named not in "read_file" | "write_file" | "list_directory" then
          --  Held where it works, it has the file tools and those that reach
-         --  nothing: a tool that reads a whole folder, runs a program or
-         --  goes to the network would take it past what they check.
-         return (if Named in "calculator" | "string_length" | "reverse_text" | "lookup"
-                           | "base64_encode" | "base64_decode" | "now"
-                           | "memory_put" | "memory_get"
-                 then ""
-                 else "an agent the harness started does not use " & Named);
+         --  nothing; a program it runs or the network it reaches only where
+         --  its permissions grant execute_external_process or use_network.
+         --  A tool that reads a whole folder would take it past what the
+         --  file tools check, and is never its.
+         declare
+            Allowed : constant Pm.Permission_Set :=
+              (if Env.Exists (Pm.Agent_Permissions_Variable)
+               then Pm.Value (Env.Value (Pm.Agent_Permissions_Variable))
+               else Pm.Nothing);
+         begin
+            return (if Named in "calculator" | "string_length" | "reverse_text" | "lookup"
+                              | "base64_encode" | "base64_decode" | "now"
+                              | "memory_put" | "memory_get"
+                    then ""
+                    elsif Named in "shell" | "run_python"
+                      and then Pm.Allows (Allowed, Pm.Execute_External_Process)
+                    then ""
+                    elsif Named in "http_get" | "web_search"
+                      and then Pm.Allows (Allowed, Pm.Use_Network)
+                    then ""
+                    else "an agent the harness started does not use " & Named
+                         & (if Named in "shell" | "run_python"
+                            then " without execute_external_process"
+                            elsif Named in "http_get" | "web_search"
+                            then " without use_network" else ""));
+         end;
       end if;
       return Pm.Path_Refusal
         (Env.Value (Pm.Agent_Root_Variable), Path,

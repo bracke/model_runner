@@ -156,6 +156,8 @@ package Model_Runner.Framework.Verification is
    --    evidence.
    --  @param Stands_For The task's own profile, when this narrower one is
    --    run in its place; its evidence then counts for that profile.
+   --  @param Offline Whether it runs for an agent without use_network, its
+   --    commands kept off the network where the host can do that.
    procedure Run_Profile
      (Item     : Stores.Store;
       Change   : in out Stores.Transaction;
@@ -165,7 +167,8 @@ package Model_Runner.Framework.Verification is
       Passed   : out Boolean;
       Status   : out Model_Runner.Errors.Error_Info;
       Given    : Name_Lists.Vector := Name_Lists.Empty_Vector;
-      Stands_For : String := "");
+      Stands_For : String := "";
+      Offline  : Boolean := False);
 
    --  How widely a task's work is verified, and with what.
    type Choice is record
