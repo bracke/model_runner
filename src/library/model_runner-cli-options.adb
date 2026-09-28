@@ -2702,7 +2702,8 @@ package body Model_Runner.CLI.Options is
                   if Argument not in "list" | "new" | "accept" | "reject"
                                    | "cancel" | "show" | "context" | "verify"
                                    | "complete" | "integrate" | "derive" | "step"
-                                   | "plan"
+                                   | "plan" | "reopen" | "reconsider" | "edit"
+                                   | "depend" | "split"
                   then
                      Fail (E.CLI_Unexpected_Operand, "", Argument);
                      return;
@@ -2728,6 +2729,14 @@ package body Model_Runner.CLI.Options is
                then
                   --  The task, or a new one's title.
                   Result.Action_Argument := T.To_Bounded (Argument);
+
+               elsif Operands > 3 and then Result.Kind = Command_Task
+                 and then T.To_String (Result.Action) in "depend" | "split"
+               then
+                  --  What the task waits for, or its parts' titles: the rest
+                  --  of the words, as they were given.
+                  Result.Action_Argument := T.To_Bounded
+                    (T.To_String (Result.Action_Argument) & " " & Argument);
 
                elsif Operands = 2 and then Result.Kind = Command_Models then
                   if Argument = "remove" or else Argument = "rm" then

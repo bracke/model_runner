@@ -350,6 +350,12 @@ package body Model_Runner.Framework.Context is
          end;
       end loop;
 
+      --  What governs the work, above the configuration, and every override
+      --  and conflict: the model is told what holds, not left to guess.
+      Offer (Task_Id & "#authority", "authority", High,
+             Fields_Of (View, "authority.") & Fields_Of (View, "override.")
+             & Fields_Of (View, "conflict."));
+
       --  Where the task stands: which attempt this is.
       Offer (Task_Id & "#runtime", "runtime", High,
              "attempt: " & Records.Get (View, "runtime.generation"));
@@ -509,6 +515,8 @@ package body Model_Runner.Framework.Context is
             return "Where the task stands";
          elsif Kind = "configuration" then
             return "The project's configuration";
+         elsif Kind = "authority" then
+            return "What governs the work";
          elsif Kind = "helped" then
             return "The task it works on, " & Id (Id'First .. Ada.Strings.Fixed.Index (Id, "#") - 1);
          elsif Kind = "brief" then

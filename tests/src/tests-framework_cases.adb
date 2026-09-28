@@ -3633,6 +3633,144 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Permissions_And_Proposals_Reach_The_Work;
 
+   --  A task is revised as a new revision of its definition, never in its
+   --  kind; split, its parent waits on its parts unless the project lets it
+   --  coordinate; an ended task is reopened, and a rejected one
+   --  reconsidered, only when that is granted. Its Effective Task says what
+   --  governs it, what it may do, where it writes, what bounds it and what
+   --  it must pass -- each by its kind where the kind says -- and what
+   --  governs it reaches the model's context.
+   procedure Tasks_Are_Revised_Split_And_Reopened
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store   : S.Store;
+      Status  : E.Error_Info;
+      Change  : S.Transaction;
+      A, B, C, D, Decision : Unbounded_String;
+      Made    : Model_Runner.Framework.Name_Lists.Vector;
+      Defined : R.Item;
+      View    : R.Item;
+      Parts   : Model_Runner.Framework.Name_Lists.Vector;
+
+      procedure Make (Id : out Unbounded_String; Title : String; Accept_It : Boolean := True) is
+      begin
+         Tk.Create (Store, Change, Fields (Title, "analysis"), "user", "", Id, Status);
+         S.Commit (Store, Change, Status);
+         if Accept_It then
+            Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+            S.Commit (Store, Change, Status);
+         end if;
+      end Make;
+
+      procedure Configure (Name, Value : String) is
+         Changes  : Cf.Value_Maps.Map;
+         Planned  : Cf.Change_Plan;
+         Revision : Natural;
+      begin
+         Changes.Include (Name, Value);
+         Cf.Plan_Change (Store, Changes, Planned, Status);
+         Cf.Reconfigure (Store, Planned, Revision, Status);
+      end Configure;
+
+      Revise_Fields : Tk.Field_Map;
+      Granted       : Model_Runner.Framework.Transitions.Permissions :=
+        Model_Runner.Framework.Transitions.Ordinary_Only;
+   begin
+      Task_Project (Store, "lifecycle-more");
+
+      --  Revised, not re-kinded.
+      Make (A, "First");
+      Revise_Fields.Include ("title", "First, better");
+      Tk.Revise (Store, Change, To_String (A), Revise_Fields, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Definition (Store, To_String (A), Defined, Status);
+      Assert (R.Get (Defined, "title") = "First, better" and then R.Revision (Defined) = 2,
+              "a task was not revised as its next revision");
+      Revise_Fields.Clear;
+      Revise_Fields.Include ("kind", "implementation");
+      Tk.Revise (Store, Change, To_String (A), Revise_Fields, Status);
+      Assert (Status.Code = E.Framework_Schema_Violation, "a task's kind was revised");
+      Change := S.No_Changes;
+
+      --  Split: the parent waits on its parts.
+      Parts.Append ("One part");
+      Parts.Append ("The other");
+      Tk.Decompose (Store, Change, To_String (A), Parts, Made, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then Natural (Made.Length) = 2
+              and then Tk.State_Of (Store, To_String (A)) = "blocked"
+              and then Tk.Children (Store, To_String (A)).Contains (Made.First_Element),
+              "a split task did not wait on its parts: " & Code_Of (Status));
+
+      --  Unless its kind lets it coordinate.
+      Configure ("scalar.task.coordination.analysis", "parent_runs");
+      Make (B, "Coordinator");
+      Tk.Decompose (Store, Change, To_String (B), Parts, Made, Status);
+      S.Commit (Store, Change, Status);
+      Assert (Tk.State_Of (Store, To_String (B)) = "accepted",
+              "a coordinating parent was blocked");
+
+      --  Reopened and reconsidered only when granted.
+      Make (C, "Done once");
+      Tk.Move (Store, Change, To_String (C), "running", "", Status => Status);
+      Tk.Move (Store, Change, To_String (C), "verification", "", Status => Status);
+      Tk.Move (Store, Change, To_String (C), "complete", "", Gates_Passed => True, Status => Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (C), "accepted", "", Status => Status);
+      Assert (E.Is_Error (Status), "a complete task was reopened without a grant");
+      Change := S.No_Changes;
+      Granted (Model_Runner.Framework.Transitions.Reopen) := True;
+      Tk.Move (Store, Change, To_String (C), "accepted", "reopened", Granted, Status => Status);
+      S.Commit (Store, Change, Status);
+      Assert (Tk.State_Of (Store, To_String (C)) = "accepted", "a granted reopen did not happen");
+      Make (D, "Turned down", Accept_It => False);
+      Tk.Move (Store, Change, To_String (D), "rejected", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Granted := Model_Runner.Framework.Transitions.Ordinary_Only;
+      Granted (Model_Runner.Framework.Transitions.Reconsideration) := True;
+      Tk.Move (Store, Change, To_String (D), "candidate", "reconsidered", Granted, Status => Status);
+      S.Commit (Store, Change, Status);
+      Assert (Tk.State_Of (Store, To_String (D)) = "candidate",
+              "a granted reconsideration did not happen");
+
+      --  Per kind: its gates and its policies.
+      Configure ("set.task.gates.analysis", "verification");
+      Configure ("scalar.task.isolation.analysis", "workspace");
+      Assert (Natural (Tk.Gate_Names (Store, "analysis").Length) = 1
+              and then Natural (Tk.Gate_Names (Store, "implementation").Length) = 4
+              and then Tk.Kind_Policy (Store, "analysis", "isolation") = "workspace",
+              "a kind's own gates or policies were not read");
+
+      --  What governs it, in its Effective Task and its context.
+      Nt.Propose (Store, Change, Nt.Decision, "", "Default checks",
+                  "Tasks are checked with checks.", "", "user", "", "project", Decision, Status);
+      Nt.Govern (Store, Change, Nt.Decision, To_String (Decision),
+                 "scalar.verification.default", "checks", "CONFIG", Status);
+      Nt.Move (Store, Change, Nt.Decision, To_String (Decision), "accepted",
+               Model_Runner.Framework.Transitions.Ordinary_Only, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Effective (Store, To_String (C), View, Status);
+      Assert (Ada.Strings.Fixed.Index
+                (R.Get (View, "authority.scalar.verification.default"), To_String (Decision)) > 0
+              and then R.Get (View, "workspace_policy") = "workspace"
+              and then R.Get (View, "gates") = "verification"
+              and then R.Get (View, "resource.max_steps") = "24"
+              and then Ada.Strings.Fixed.Index (R.Get (View, "permissions"), "write_source") > 0,
+              "the Effective Task does not say what governs and bounds it: ["
+              & R.Get (View, "authority.scalar.verification.default") & "] ["
+              & R.Get (View, "workspace_policy") & "] [" & R.Get (View, "gates") & "] ["
+              & R.Get (View, "resource.max_steps") & "] [" & R.Get (View, "permissions") & "]");
+      declare
+         Built : Cx.Built;
+      begin
+         Cx.Build (Store, To_String (C), Cx.Profile (Store, ""), Built, Status);
+         Assert (Ada.Strings.Fixed.Index (Cx.Rendered (Built), "What governs the work") > 0,
+                 "what governs the work did not reach the context");
+      end;
+      S.Close (Store);
+   end Tasks_Are_Revised_Split_And_Reopened;
+
    --  How widely work is verified follows what it changed and the
    --  project's policy: with nothing narrower configured the whole profile
    --  runs and says why; where the policy tests narrowly and names a
@@ -4397,6 +4535,9 @@ package body Tests.Framework_Cases is
         (T, Recursion_Stays_Bounded'Access,
          "children stay within limits and permissions, failures and"
          & " cancellation are seen");
+      Register_Routine
+        (T, Tasks_Are_Revised_Split_And_Reopened'Access,
+         "tasks are revised, split and reopened, and their kind and authority reach them");
       Register_Routine
         (T, Verification_Follows_What_Changed'Access,
          "how widely work is verified follows what it changed and the policy");

@@ -611,8 +611,8 @@ package body Model_Runner.Framework.Verification is
 
    function Gates (Item : Stores.Store; Task_Id : String) return Gate_List is
       Result   : Gate_List;
-      Settings : constant Records.Item := Config (Item);
-      Named    : Name_Lists.Vector := Lines_Of (Records.Get (Settings, "set.task.gates"));
+      Defined  : Records.Item;
+      Read     : E.Error_Info;
 
       procedure Judge (Name : String; Passed : Boolean; Reason : String) is
       begin
@@ -622,14 +622,8 @@ package body Model_Runner.Framework.Verification is
                   Reason => To_Unbounded_String (if Passed then "" else Reason)));
       end Judge;
    begin
-      if Named.Is_Empty then
-         Named.Append ("verification");
-         Named.Append ("children");
-         Named.Append ("no_blocking_issue");
-         Named.Append ("integration");
-      end if;
-
-      for Name of Named loop
+      Tasks.Definition (Item, Task_Id, Defined, Read);
+      for Name of Tasks.Gate_Names (Item, Records.Get (Defined, "kind")) loop
          if Name = "verification" then
             declare
                Profile  : constant String := Profile_Of (Item, Task_Id);

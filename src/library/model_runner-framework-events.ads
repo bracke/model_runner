@@ -39,6 +39,7 @@ package Model_Runner.Framework.Events is
       Task_Completed,
       Task_Failed,
       Task_Cancelled,
+      Task_Revised,
       Source_Changed,
       Build_Completed,
       Test_Completed,

@@ -197,7 +197,8 @@ package body Model_Runner.Framework.Agents is
       Kind    : String;
       Id      : out Ada.Strings.Unbounded.Unbounded_String;
       Status  : out Model_Runner.Errors.Error_Info;
-      Restriction : String := "")
+      Restriction : String := "";
+      Budget  : Natural := 0)
    is
       Bounds : constant Limits := Limits_Of (Item);
    begin
@@ -212,7 +213,7 @@ package body Model_Runner.Framework.Agents is
              Task_Id => To_Unbounded_String (Task_Id),
              Depth   => 0,
              Need    => Required,
-             Budget  => Bounds.Token_Budget,
+             Budget  => (if Budget > 0 then Budget else Bounds.Token_Budget),
              Allowed => Permissions.Effective
                           (Item, Kind, Role, Task_Level => Restriction),
              others  => <>),

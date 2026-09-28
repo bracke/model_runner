@@ -324,7 +324,8 @@ package body Model_Runner.CLI.Project_Commands is
             Sink        => Sink'Unchecked_Access,
             Time        => Clock'Unchecked_Access,
             Seeds       => Seeds'Unchecked_Access,
-            Max_Steps   => (if Root then 24 else 16),
+            Max_Steps   => (if Root and then Host /= null then Host.Steps
+                            elsif Root then 24 else 16),
             Max_Total_Tokens => Budget,
             Cancel      => Self.Cancel,
             Tool_Syntax => Syntax,

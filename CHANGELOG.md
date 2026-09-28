@@ -7,6 +7,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Task lifecycle.** `/task edit` revises a task's definition as a new
+  revision (`Task_Revised`), refusing its kind, parent and dependencies and
+  any task being worked; `/task depend` adds a dependency, refusing a cycle;
+  `/task split` decomposes a task into children and blocks the parent on
+  them unless `scalar task.coordination[.KIND] = parent_runs`; `/task
+  reopen` and `/task reconsider` are the explicit acts the reopen and
+  reconsideration transitions need.
+- **The Effective Task says what governs and bounds it.** Every statement
+  above the configuration that governs a setting, each explicit override
+  and each unresolved conflict; the derived permissions; the workspace
+  policy; the token budget and step limit; the completion gates. What
+  governs it is offered to the model as "What governs the work".
+- **Task kinds set their own policies.** `scalar task.isolation.KIND`,
+  `task.token_budget.KIND`, `task.max_steps.KIND` (the session's step
+  limit), `task.coordination.KIND` and `set task.gates.KIND`, each falling
+  back to the project's; child-agent and proposal policy are the kind's
+  permission level, as before.
+
 - **Verification follows the change.** After a task's work, the changed
   files are traced to what they reach and tests are selected by confidence
   and `scalar verification.escalation`; a narrower scope runs the profile the

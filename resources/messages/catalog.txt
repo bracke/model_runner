@@ -156,7 +156,7 @@ en.help.init.quiet =   --quiet                 suppress progress, notes and warn
 en.help.init.verbose =   --verbose               report progress and detail on standard error
 en.help.init.locale =   --locale NAME           locale for program messages
 en.help.init.color =   --color=MODE            colour output: {value}
-en.help.task.usage = Usage: model_runner task [list|new TITLE|accept ID|reject ID|cancel ID|show ID|context ID|verify ID|complete ID|integrate ID|derive|step|plan] [options]
+en.help.task.usage = Usage: model_runner task [list|new TITLE|accept ID|reject ID|cancel ID|reopen ID|reconsider ID|edit ID|depend ID ON|split ID TITLE; TITLE|show ID|context ID|verify ID|complete ID|integrate ID|derive|step|plan] [options]
 en.help.task.summary = Manage the project's persistent tasks. list shows each with its state, ready shown as one; new creates a candidate from --set fields, asking a terminal for what its kind requires; accept, reject and cancel move one; show prints the effective task; derive makes the tasks accepted requirements imply. Tasks that became ready are named after each change.
 en.help.task.options = Options:
 en.help.task.set =   --set NAME=VALUE        give the new task's field NAME its value; repeatable
@@ -311,7 +311,7 @@ en.cli.interactive.help.bootstrap = /bootstrap [FILE]  read documents for requir
 en.cli.interactive.help.state = /state            where the project stands
 en.cli.interactive.help.config = /config           the project's resolved configuration
 en.cli.interactive.help.reconfigure = /reconfigure NAME=VALUE ...  change settings: see what it reaches, then confirm
-en.cli.interactive.help.task = /task [ACTION]     list and manage tasks: new, accept, reject, show, derive, plan
+en.cli.interactive.help.task = /task [ACTION]     list and manage tasks: new, accept, reject, edit, depend, split, reopen, reconsider, show, derive, plan
 en.cli.interactive.help.accept = /accept           accept the one candidate waiting
 en.cli.interactive.help.reject = /reject           reject the one candidate waiting
 en.cli.interactive.help.work = /work [TASK]      run a ready task on this model, verify and complete it
@@ -385,6 +385,8 @@ en.cli.task.item = {name}  [{value}]  {detail}
 en.cli.task.none = there are no tasks
 en.cli.task.created = created {name}: {detail}
 en.cli.task.moved = {name} is {value}
+en.cli.task.depends = {name} waits for {value}
+en.cli.task.revised = {name} is revised
 en.cli.task.field = {name}: {value}
 en.cli.task.derived = derived {name}
 en.cli.task.ready = {name} became ready
@@ -896,7 +898,7 @@ da.help.init.quiet =   --quiet                 undertryk status, noter og advars
 da.help.init.verbose =   --verbose               vis status og detaljer på standardfejl
 da.help.init.locale =   --locale NAVN           sprog for programmets beskeder
 da.help.init.color =   --color=TILSTAND        farvet output: {value}
-da.help.task.usage = Brug: model_runner task [list|new TITEL|accept ID|reject ID|cancel ID|show ID|context ID|verify ID|complete ID|integrate ID|derive|step|plan] [tilvalg]
+da.help.task.usage = Brug: model_runner task [list|new TITEL|accept ID|reject ID|cancel ID|reopen ID|reconsider ID|edit ID|depend ID PÅ|split ID TITEL; TITEL|show ID|context ID|verify ID|complete ID|integrate ID|derive|step|plan] [tilvalg]
 da.help.task.summary = Styr projektets vedvarende opgaver. list viser hver med dens tilstand, klar vist som en; new opretter en kandidat fra --set-felter og spørger en terminal om det dens slags kræver; accept, reject og cancel flytter en; show viser den effektive opgave; derive laver de opgaver accepterede krav medfører. Opgaver der blev klar nævnes efter hver ændring.
 da.help.task.options = Tilvalg:
 da.help.task.set =   --set NAVN=VÆRDI        giv den nye opgaves felt NAVN sin værdi; kan gentages
@@ -1209,7 +1211,7 @@ da.cli.interactive.help.bootstrap = /bootstrap [FIL]   læs dokumenter for krav 
 da.cli.interactive.help.state = /state            hvor projektet står
 da.cli.interactive.help.config = /config           projektets afklarede konfiguration
 da.cli.interactive.help.reconfigure = /reconfigure NAVN=VÆRDI ...  ændr indstillinger: se hvad det rækker til, og bekræft
-da.cli.interactive.help.task = /task [HANDLING]   vis og styr opgaver: new, accept, reject, show, derive, plan
+da.cli.interactive.help.task = /task [HANDLING]   vis og styr opgaver: new, accept, reject, edit, depend, split, reopen, reconsider, show, derive, plan
 da.cli.interactive.help.accept = /accept           accepter den ene ventende kandidat
 da.cli.interactive.help.reject = /reject           afvis den ene ventende kandidat
 da.cli.interactive.help.work = /work [OPGAVE]    kør en klar opgave på denne model, verificér og fuldfør den
@@ -1270,6 +1272,8 @@ da.cli.task.item = {name}  [{value}]  {detail}
 da.cli.task.none = der er ingen opgaver
 da.cli.task.created = oprettede {name}: {detail}
 da.cli.task.moved = {name} er {value}
+da.cli.task.depends = {name} venter på {value}
+da.cli.task.revised = {name} er revideret
 da.cli.task.field = {name}: {value}
 da.cli.task.derived = afledte {name}
 da.cli.task.ready = {name} blev klar
@@ -1717,7 +1721,7 @@ qps.help.init.quiet = ⟦  --quiet                 ßúppŕéßß pŕógŕéßß
 qps.help.init.verbose = ⟦  --verbose               ŕépóŕŧ pŕógŕéßß áñð ðéŧáíĺ óñ ßŧáñðáŕð éŕŕóŕ⟧
 qps.help.init.locale = ⟦  --locale NAME           ĺóçáĺé fóŕ pŕógŕám méßßágéß⟧
 qps.help.init.color = ⟦  --color=MODE            çóĺóúŕ óúŧpúŧ: {value}⟧
-qps.help.task.usage = ⟦Úßágé: móðéĺ_ŕúññéŕ ŧáßk [ĺíßŧ|ñéw TITLE|áççépŧ ID|ŕéjéçŧ ID|çáñçéĺ ID|ßhów ID|ðéŕívé] [ópŧíóñß]⟧
+qps.help.task.usage = ⟦Úßágé: móðéĺ_ŕúññéŕ ŧáßk [ĺíßŧ|ñéw TITLE|áççépŧ ID|ŕéjéçŧ ID|çáñçéĺ ID|ŕéópéñ ID|ŕéçóñßíðéŕ ID|éðíŧ ID|ðépéñð ID ON|ßþĺíŧ ID TITLE; TITLE|ßhów ID|ðéŕívé] [ópŧíóñß]⟧
 qps.help.task.summary = ⟦Máñágé ŧhé pŕójéçŧ'ß péŕßíßŧéñŧ ŧáßkß. ĺíßŧ ßhówß éáçh wíŧh íŧß ßŧáŧé, ŕéáðý ßhówñ áß óñé; ñéw çŕéáŧéß á çáñðíðáŧé fŕóm --set fíéĺðß, áßkíñg á ŧéŕmíñáĺ fóŕ wháŧ íŧß kíñð ŕéqúíŕéß; áççépŧ, ŕéjéçŧ áñð çáñçéĺ móvé óñé; ßhów pŕíñŧß ŧhé éfféçŧívé ŧáßk; ðéŕívé mákéß ŧhé ŧáßkß áççépŧéð ŕéqúíŕéméñŧß ímpĺý. Ŧáßkß ŧháŧ béçámé ŕéáðý áŕé ñáméð áfŧéŕ éáçh çháñgé.⟧
 qps.help.task.options = ⟦Ópŧíóñß:⟧
 qps.help.task.set = ⟦  --set NAME=VALUE        gívé ŧhé ñéw ŧáßk'ß fíéĺð NAME íŧß váĺúé; ŕépéáŧábĺé⟧
@@ -1868,7 +1872,7 @@ qps.cli.interactive.help.bootstrap = ⟦/bootstrap [FILE]  ŕéáð ðóçúmé�
 qps.cli.interactive.help.state = ⟦/state            whéŕé ŧhé pŕójéçŧ ßŧáñðß⟧
 qps.cli.interactive.help.config = ⟦/config           ŧhé pŕójéçŧ'ß ŕéßóĺvéð çóñfígúŕáŧíóñ⟧
 qps.cli.interactive.help.reconfigure = ⟦/reconfigure NAME=VALUE ...  çháñgé ßéŧŧíñgß: ßéé wháŧ íŧ ŕéáçhéß, ŧhéñ çóñfíŕm⟧
-qps.cli.interactive.help.task = ⟦/task [ACTION]     ĺíßŧ áñð máñágé ŧáßkß: ñéw, áççépŧ, ŕéjéçŧ, ßhów, ðéŕívé, pĺáñ⟧
+qps.cli.interactive.help.task = ⟦/task [ACTION]     ĺíßŧ áñð máñágé ŧáßkß: ñéw, áççépŧ, ŕéjéçŧ, éðíŧ, ðépéñð, ßþĺíŧ, ŕéópéñ, ŕéçóñßíðéŕ, ßhów, ðéŕívé, pĺáñ⟧
 qps.cli.interactive.help.accept = ⟦/accept           áççépŧ ŧhé óñé çáñðíðáŧé wáíŧíñg⟧
 qps.cli.interactive.help.reject = ⟦/reject           ŕéjéçŧ ŧhé óñé çáñðíðáŧé wáíŧíñg⟧
 qps.cli.interactive.help.work = ⟦/work [TASK]      ŕúñ á ŕéáðý ŧáßk óñ ŧhíß móðéĺ, véŕífý áñð çómpĺéŧé íŧ⟧
@@ -1942,6 +1946,8 @@ qps.cli.task.item = ⟦{name}  [{value}]  {detail}⟧
 qps.cli.task.none = ⟦ŧhéŕé áŕé ñó ŧáßkß⟧
 qps.cli.task.created = ⟦çŕéáŧéð {name}: {detail}⟧
 qps.cli.task.moved = ⟦{name} íß {value}⟧
+qps.cli.task.depends = ⟦{name} wáíŧß fóŕ {value}⟧
+qps.cli.task.revised = ⟦{name} íß ŕévíßéð⟧
 qps.cli.task.field = ⟦{name}: {value}⟧
 qps.cli.task.derived = ⟦ðéŕívéð {name}⟧
 qps.cli.task.ready = ⟦{name} béçámé ŕéáðý⟧

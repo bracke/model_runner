@@ -71,6 +71,8 @@ package Model_Runner.Framework.Agents is
    --  @param Kind The task's kind, for its permissions.
    --  @param Restriction The task's own permissions field, which narrows
    --    them further.
+   --  @param Budget The tokens it may generate; 0 for the project's
+   --    agents.token_budget.
    --  @param Id The agent.
    --  @param Status Framework_Limit_Exceeded when too many agents run.
    procedure Start_Root
@@ -81,7 +83,8 @@ package Model_Runner.Framework.Agents is
       Kind    : String;
       Id      : out Ada.Strings.Unbounded.Unbounded_String;
       Status  : out Model_Runner.Errors.Error_Info;
-      Restriction : String := "");
+      Restriction : String := "";
+      Budget  : Natural := 0);
 
    --  Make a child of an agent.
    --

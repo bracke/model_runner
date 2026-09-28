@@ -139,6 +139,13 @@ package Model_Runner.Framework.Work is
       What : Permissions.Capability;
       Path : String := "") return Boolean;
 
+   --  How many model turns the root agent may take: the task kind's scalar
+   --  task.max_steps.KIND, else agents.max_steps, else 24.
+   --
+   --  @param Host The host.
+   --  @return The limit.
+   function Steps (Host : Child_Host) return Positive;
+
    --  The verification profile the task is checked with.
    --
    --  @param Host The host.
@@ -357,6 +364,9 @@ private
       --  Open.
       Calls   : Name_Lists.Vector;
       Opened  : Time_Vectors.Vector;
+
+      --  How many turns the root may take.
+      Max_Steps   : Natural := 24;
 
       --  What the root generated, and how long its conversation came to be.
       Root_Out    : Natural := 0;

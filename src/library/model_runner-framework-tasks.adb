@@ -1,6 +1,7 @@
 with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 
+with Model_Runner.Framework.Authority;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Intent;
@@ -784,6 +785,76 @@ package body Model_Runner.Framework.Tasks is
          end if;
       end;
 
+      --  What governs the work: each statement that stands above the
+      --  configuration -- instructions, decisions, specifications -- and
+      --  every explicit override and conflict, whatever its standing.
+      declare
+         use type Authority.Level;
+         use type Authority.Relation;
+         Resolved : constant Authority.Resolution :=
+           Authority.Resolve (Authority.Gather (Item));
+         function Word (Standing : Authority.Level) return String
+         is (Ada.Characters.Handling.To_Lower (Authority.Level'Image (Standing)));
+      begin
+         for Index in 1 .. Authority.Governing_Count (Resolved) loop
+            declare
+               One : constant Authority.Statement := Authority.Governing_At (Resolved, Index);
+            begin
+               if One.Standing <= Authority.Project_Specification then
+                  Records.Set
+                    (Value, "authority." & To_String (One.Subject),
+                     Word (One.Standing) & " " & To_String (One.Source)
+                     & ": " & To_String (One.Value));
+               end if;
+            end;
+         end loop;
+         for Index in 1 .. Authority.Length (Resolved) loop
+            declare
+               One     : constant Authority.Standing_Of := Authority.Element (Resolved, Index);
+               Subject : constant String := To_String (One.Governing.Subject);
+            begin
+               if One.Relation = Authority.Explicit_Override then
+                  Records.Set
+                    (Value, "override." & Subject,
+                     To_String (One.Governing.Source) & " overrides "
+                     & To_String (One.Other.Source));
+               elsif One.Relation = Authority.Conflict then
+                  Records.Set
+                    (Value, "conflict." & Subject,
+                     To_String (One.Governing.Source) & " and " & To_String (One.Other.Source)
+                     & " disagree, and nothing says which holds");
+               end if;
+            end;
+         end loop;
+      end;
+
+      --  What an agent on it may do, when it must stop, where it writes, and
+      --  what it must pass to complete.
+      declare
+         Kind : constant String := Records.Get (Defined, "kind");
+         function Or_Else (First, Second, Last : String) return String
+         is (if First /= "" then First elsif Second /= "" then Second else Last);
+      begin
+         Records.Set
+           (Value, "permissions",
+            Model_Runner.Framework.Permissions.Image
+              (Model_Runner.Framework.Permissions.Effective
+                 (Item, Kind, "worker", Task_Level => Records.Get (Defined, "permissions"))));
+         Records.Set
+           (Value, "workspace_policy",
+            Or_Else (Kind_Policy (Item, Kind, "isolation"),
+                     Records.Get (Settings, "scalar.work.isolation"), "project"));
+         Records.Set
+           (Value, "resource.token_budget",
+            Or_Else (Kind_Policy (Item, Kind, "token_budget"),
+                     Records.Get (Settings, "scalar.agents.token_budget"), "200000"));
+         Records.Set
+           (Value, "resource.max_steps",
+            Or_Else (Kind_Policy (Item, Kind, "max_steps"),
+                     Records.Get (Settings, "scalar.agents.max_steps"), "24"));
+         Records.Set (Value, "gates", Joined (Gate_Names (Item, Kind), ", "));
+      end;
+
       Records.Set (Value, "fingerprint", Records.Fingerprint_Of (Value));
    end Effective;
 
@@ -1009,6 +1080,191 @@ package body Model_Runner.Framework.Tasks is
          end if;
       end;
    end Add_Dependency;
+
+   -----------------
+   -- Kind_Policy --
+   -----------------
+
+   function Kind_Policy (Item : Stores.Store; Kind, Name : String) return String
+   is (Records.Get (Config (Item), "scalar.task." & Name & "." & Kind));
+
+   ----------------
+   -- Gate_Names --
+   ----------------
+
+   function Gate_Names (Item : Stores.Store; Kind : String) return Name_Lists.Vector is
+      Settings : constant Records.Item := Config (Item);
+      Result   : Name_Lists.Vector := Split (Records.Get (Settings, "set.task.gates." & Kind));
+   begin
+      if Result.Is_Empty then
+         Result := Split (Records.Get (Settings, "set.task.gates"));
+      end if;
+      if Result.Is_Empty then
+         Result.Append ("verification");
+         Result.Append ("children");
+         Result.Append ("no_blocking_issue");
+         Result.Append ("integration");
+      end if;
+      return Result;
+   end Gate_Names;
+
+   ------------
+   -- Revise --
+   ------------
+
+   procedure Revise
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Id     : String;
+      Fields : Field_Map;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Value  : Records.Item;
+      Staged : Boolean;
+      Now    : constant String := State_Of (Item, Id);
+      Event  : Unbounded_String;
+   begin
+      Status := E.Success;
+      if Now not in "candidate" | "accepted" | "blocked" | "failed" then
+         Status := E.Make (E.Framework_Transition_Invalid);
+         E.Add_Text (Status, "name", Id);
+         E.Add_Text (Status, "value", Now);
+         E.Add_Text (Status, "expected", "candidate, accepted, blocked or failed");
+         E.Add_Text (Status, "detail", "a task is revised only while it is not being worked");
+         return;
+      end if;
+
+      Stores.Pending (Change, Tasks_Area, Id, Value, Staged);
+      if not Staged then
+         Definition (Item, Id, Value, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         Records.Set_Revision (Value, Records.Revision (Value) + 1);
+      end if;
+
+      declare
+         Kind    : constant String := Records.Get (Value, "kind");
+         Allowed : constant Name_Lists.Vector := Allowed_Fields (Item, Kind);
+      begin
+         for Position in Fields.Iterate loop
+            declare
+               Name  : constant String := Configurations.Value_Maps.Key (Position);
+               Given : constant String := Trim (Configurations.Value_Maps.Element (Position));
+               Field : constant String := (if Is_Core (Name) then Name else "field." & Name);
+            begin
+               if Name in "kind" | "parent" | "depends_on" then
+                  Status := E.Make (E.Framework_Schema_Violation);
+                  E.Add_Text (Status, "name", Name);
+                  E.Add_Text (Status, "detail", "it is not revised; "
+                              & (if Name = "kind" then "make a task of the other kind"
+                                 elsif Name = "parent" then "split the parent instead"
+                                 else "add a dependency instead"));
+                  return;
+               elsif not Is_Core (Name) and then not Allowed.Contains (Name) then
+                  Status := E.Make (E.Framework_Schema_Violation);
+                  E.Add_Text (Status, "name", Name);
+                  E.Add_Text (Status, "detail", "no field of a " & Kind & " task is called so");
+                  return;
+               elsif Name = "title" and then Given = "" then
+                  Status := E.Make (E.Framework_Schema_Violation);
+                  E.Add_Text (Status, "name", Name);
+                  E.Add_Text (Status, "detail", "a task keeps a title");
+                  return;
+               elsif Name = "permissions" and then Given /= "" then
+                  declare
+                     Ignored : Model_Runner.Framework.Permissions.Permission_Set;
+                  begin
+                     Model_Runner.Framework.Permissions.Restriction (Given, Ignored, Status);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
+                  end;
+               elsif Name = "requirements" then
+                  for Requirement of Split (Given) loop
+                     if not Stores.Exists (Item, Requirements_Area, Requirement) then
+                        Status := E.Make (E.Framework_Not_Found);
+                        E.Add_Text (Status, "name", Requirement);
+                        return;
+                     end if;
+                  end loop;
+               end if;
+
+               if Given = "" then
+                  Records.Remove (Value, Field);
+               else
+                  Records.Set
+                    (Value, Field,
+                     (if Name = "requirements" then Joined (Split (Given), [1 => ASCII.LF])
+                      else Given));
+               end if;
+            end;
+         end loop;
+      end;
+
+      Stores.Put (Change, Tasks_Area, Id, Value);
+      Events.Emit (Item, Change, Events.Task_Revised, Id,
+                   "revision" & Natural'Image (Records.Revision (Value)), Event, Status);
+   end Revise;
+
+   ---------------
+   -- Decompose --
+   ---------------
+
+   procedure Decompose
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Parent : String;
+      Titles : Name_Lists.Vector;
+      Made   : out Name_Lists.Vector;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Defined : Records.Item;
+   begin
+      Made.Clear;
+      Definition (Item, Parent, Defined, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      declare
+         Kind : constant String := Records.Get (Defined, "kind");
+      begin
+         for Title of Titles loop
+            declare
+               Fields : Field_Map;
+               Child  : Unbounded_String;
+            begin
+               Fields.Include ("title", Title);
+               Fields.Include ("kind", Kind);
+               Fields.Include ("parent", Parent);
+               if Records.Get (Defined, "component") /= "" then
+                  Fields.Include ("component", Records.Get (Defined, "component"));
+               end if;
+               Create (Item, Change, Fields, "user", "decomposition of " & Parent, Child, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+               Made.Append (To_String (Child));
+            end;
+         end loop;
+
+         --  Its work is theirs now, unless the project lets it coordinate.
+         declare
+            Coordination : constant String :=
+              (if Kind_Policy (Item, Kind, "coordination") /= ""
+               then Kind_Policy (Item, Kind, "coordination")
+               else Records.Get (Config (Item), "scalar.task.coordination"));
+         begin
+            if Coordination /= "parent_runs" and then State_Of (Item, Parent) = "accepted"
+              and then not Made.Is_Empty
+            then
+               Move (Item, Change, Parent, "blocked",
+                     Children_Reason & Joined (Made, ", "), Status => Status);
+            end if;
+         end;
+      end;
+   end Decompose;
 
    ------------
    -- Cycles --

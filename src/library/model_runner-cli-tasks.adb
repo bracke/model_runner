@@ -13,6 +13,7 @@ with Model_Runner.Framework.Work;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
+with Model_Runner.Framework.Transitions;
 with Model_Runner.Localization;
 with Model_Runner.Text;
 
@@ -247,6 +248,140 @@ package body Model_Runner.CLI.Tasks is
            (Screen, "cli.task.moved",
             [Loc.Named ("name", Argument), Loc.Named ("value", Next)]);
       end Move;
+
+      --  The first word of the argument, and what follows it.
+      function First_Word return String is
+         Space : constant Natural := Ada.Strings.Fixed.Index (Argument, " ");
+      begin
+         return (if Space = 0 then Argument else Argument (Argument'First .. Space - 1));
+      end First_Word;
+
+      function After_First return String is
+         Space : constant Natural := Ada.Strings.Fixed.Index (Argument, " ");
+      begin
+         return (if Space = 0 then ""
+                 else Ada.Strings.Fixed.Trim (Argument (Space + 1 .. Argument'Last),
+                                              Ada.Strings.Both));
+      end After_First;
+
+      --  Reopen an ended task, or reconsider a rejected one: moves only an
+      --  explicit act allows, its history kept.
+      procedure Move_Granted (Next : String; Grant : Model_Runner.Framework.Transitions.Permission) is
+         Granted : Model_Runner.Framework.Transitions.Permissions :=
+           Model_Runner.Framework.Transitions.Ordinary_Only;
+      begin
+         if not Needs_Task then
+            return;
+         end if;
+         Granted (Grant) := True;
+         Tk.Move (Store, Change, Argument, Next,
+                  (if Next = "accepted" then "reopened" else "reconsidered"),
+                  Granted, Status => Outcome);
+         if E.Is_Ok (Outcome) then
+            Commit;
+         end if;
+         if E.Is_Error (Outcome) then
+            Fail (Outcome);
+            return;
+         end if;
+         Pres.Put_Message
+           (Screen, "cli.task.moved", [Loc.Named ("name", Argument), Loc.Named ("value", Next)]);
+      end Move_Granted;
+
+      --  One task waits for another: task depend TASK ON.
+      procedure Depend is
+      begin
+         if First_Word = "" or else After_First = "" then
+            Outcome := E.Make (E.Framework_Input_Missing);
+            E.Add_Text (Outcome, "name", "the task and the task it waits for");
+            Fail (Outcome);
+            return;
+         end if;
+         Tk.Add_Dependency (Store, Change, First_Word, After_First, Outcome);
+         if E.Is_Ok (Outcome) then
+            Commit;
+         end if;
+         if E.Is_Error (Outcome) then
+            Fail (Outcome);
+            return;
+         end if;
+         Pres.Put_Message
+           (Screen, "cli.task.depends", [Loc.Named ("name", First_Word),
+                                         Loc.Named ("value", After_First)]);
+      end Depend;
+
+      --  A task revised: task edit TASK with NAME=VALUE for each field.
+      procedure Edit is
+         Fields : Tk.Field_Map;
+      begin
+         if not Needs_Task then
+            return;
+         end if;
+         for Index in 1 .. Item.Input_Count loop
+            declare
+               Pair : constant String := T.To_String (Item.Inputs (Index));
+               Cut  : constant Natural := Ada.Strings.Fixed.Index (Pair, "=");
+            begin
+               if Cut > Pair'First then
+                  Fields.Include (Pair (Pair'First .. Cut - 1), Pair (Cut + 1 .. Pair'Last));
+               end if;
+            end;
+         end loop;
+         Tk.Revise (Store, Change, Argument, Fields, Outcome);
+         if E.Is_Ok (Outcome) then
+            Commit;
+         end if;
+         if E.Is_Error (Outcome) then
+            Fail (Outcome);
+            return;
+         end if;
+         Pres.Put_Message (Screen, "cli.task.revised", [Loc.Named ("name", Argument)]);
+      end Edit;
+
+      --  A task decomposed: task split TASK FIRST TITLE; SECOND TITLE.
+      procedure Split_Task is
+         Titles : Model_Runner.Framework.Name_Lists.Vector;
+         Made   : Model_Runner.Framework.Name_Lists.Vector;
+         Rest   : constant String := After_First;
+         Start  : Natural := Rest'First;
+      begin
+         for Index in Rest'First .. Rest'Last + 1 loop
+            if Index > Rest'Last or else Rest (Index) = ';' then
+               declare
+                  Title : constant String :=
+                    Ada.Strings.Fixed.Trim (Rest (Start .. Index - 1), Ada.Strings.Both);
+               begin
+                  if Title /= "" then
+                     Titles.Append (Title);
+                  end if;
+               end;
+               Start := Index + 1;
+            end if;
+         end loop;
+         if First_Word = "" or else Titles.Is_Empty then
+            Outcome := E.Make (E.Framework_Input_Missing);
+            E.Add_Text (Outcome, "name", "the task and its parts' titles, separated by ;");
+            Fail (Outcome);
+            return;
+         end if;
+         Tk.Decompose (Store, Change, First_Word, Titles, Made, Outcome);
+         if E.Is_Ok (Outcome) then
+            Commit;
+         end if;
+         if E.Is_Error (Outcome) then
+            Fail (Outcome);
+            return;
+         end if;
+         for Index in 1 .. Natural (Made.Length) loop
+            Pres.Put_Message (Screen, "cli.task.created",
+                              [Loc.Named ("name", Made (Index)),
+                               Loc.Named ("detail", Titles (Index))]);
+         end loop;
+         Pres.Put_Message
+           (Screen, "cli.task.moved",
+            [Loc.Named ("name", First_Word),
+             Loc.Named ("value", Tk.State_Of (Store, First_Word))]);
+      end Split_Task;
 
       procedure Show is
          View : R.Item;
@@ -538,6 +673,16 @@ package body Model_Runner.CLI.Tasks is
          end if;
       elsif Action = "cancel" then
          Move ("cancelled");
+      elsif Action = "reopen" then
+         Move_Granted ("accepted", Model_Runner.Framework.Transitions.Reopen);
+      elsif Action = "reconsider" then
+         Move_Granted ("candidate", Model_Runner.Framework.Transitions.Reconsideration);
+      elsif Action = "depend" then
+         Depend;
+      elsif Action = "edit" then
+         Edit;
+      elsif Action = "split" then
+         Split_Task;
       elsif Action = "show" then
          Show;
       elsif Action = "context" then

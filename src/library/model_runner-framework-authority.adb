@@ -203,4 +203,18 @@ package body Model_Runner.Framework.Authority is
    function Element (From : Resolution; Index : Positive) return Standing_Of
    is (From.Standings (Index));
 
+   ---------------------
+   -- Governing_Count --
+   ---------------------
+
+   function Governing_Count (From : Resolution) return Natural
+   is (Natural (From.Governing.Length));
+
+   ------------------
+   -- Governing_At --
+   ------------------
+
+   function Governing_At (From : Resolution; Index : Positive) return Statement
+   is (From.Governing (Index));
+
 end Model_Runner.Framework.Authority;

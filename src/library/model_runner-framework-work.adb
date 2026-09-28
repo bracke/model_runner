@@ -85,6 +85,20 @@ package body Model_Runner.Framework.Work is
    function Interrupted (Ran : E.Error_Info) return Boolean
    is (E."=" (Ran.Code, E.Generation_Cancelled));
 
+   --  A task's kind.
+   function Kind_Of (Item : Stores.Store; Task_Id : String) return String is
+      Defined : Records.Item;
+      Status  : E.Error_Info;
+   begin
+      Tasks.Definition (Item, Task_Id, Defined, Status);
+      return Records.Get (Defined, "kind");
+   end Kind_Of;
+
+   --  A number a policy gives, or a default.
+   function Number_Of (Text : String; Default : Natural) return Natural
+   is (if Text'Length in 1 .. 9 and then (for all C of Text => C in '0' .. '9')
+       then Natural'Value (Text) else Default);
+
    --  A scalar of the configuration.
    function Scalar (Item : Stores.Store; Name : String) return String is
       Config : Records.Item;
@@ -503,6 +517,13 @@ package body Model_Runner.Framework.Work is
       Agents.Read (Host.Item.all, Current (Host), Held, Status);
       return E.Is_Ok (Status) and then Permissions.Allows (Held.Allowed, What, Path);
    end May;
+
+   -----------
+   -- Steps --
+   -----------
+
+   function Steps (Host : Child_Host) return Positive
+   is (Positive'Max (1, Host.Max_Steps));
 
    ------------------
    -- Task_Profile --
@@ -945,8 +966,13 @@ package body Model_Runner.Framework.Work is
       --  What the call used, as the agent reports it.
       Used    : Invocations.Usage;
 
-      --  Where the agent writes: the project, or its workspace.
-      Isolated : constant Boolean := Work_Setting (Item, "isolation") = "workspace";
+      --  Where the agent writes: the project, or its workspace, as its
+      --  kind says, else the project.
+      Kind     : constant String := Kind_Of (Item, Task_Id);
+      Isolated : constant Boolean :=
+        (if Tasks.Kind_Policy (Item, Kind, "isolation") /= ""
+         then Tasks.Kind_Policy (Item, Kind, "isolation")
+         else Work_Setting (Item, "isolation")) = "workspace";
       Place    : Unbounded_String := To_Unbounded_String (Project);
 
       --  End the work with the task moved and the agent recorded.
@@ -993,7 +1019,8 @@ package body Model_Runner.Framework.Work is
          Agents.Start_Root
            (Item, Change, Task_Id, "worker", Records.Get (Defined, "kind"),
             Result.Agent_Id, Status,
-            Restriction => Records.Get (Defined, "permissions"));
+            Restriction => Records.Get (Defined, "permissions"),
+            Budget      => Number_Of (Tasks.Kind_Policy (Item, Kind, "token_budget"), 0));
       end;
       if E.Is_Error (Status) then
          return;
@@ -1083,6 +1110,10 @@ package body Model_Runner.Framework.Work is
             Host.Task_Id := To_Unbounded_String (Task_Id);
             Host.Apart := Isolated;
             Host.Model := Model;
+            Host.Max_Steps := Number_Of
+              ((if Tasks.Kind_Policy (Item, Kind, "max_steps") /= ""
+                then Tasks.Kind_Policy (Item, Kind, "max_steps")
+                else Scalar (Item, "agents.max_steps")), 24);
             Host.Open.Append (To_String (Result.Agent_Id));
             Host.Calls.Append (To_String (Result.Invocation_Id));
             Host.Opened.Append (Ada.Calendar.Clock);

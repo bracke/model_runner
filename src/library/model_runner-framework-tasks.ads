@@ -241,6 +241,65 @@ package Model_Runner.Framework.Tasks is
       On     : String;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  A kind's own policy, where it has one: the configuration's scalar
+   --  task.NAME.KIND -- isolation, token_budget, max_steps, coordination --
+   --  which a caller falls back from to the project's.
+   --
+   --  @param Item The store.
+   --  @param Kind The task kind.
+   --  @param Name The policy.
+   --  @return Its value, or "" when the kind says nothing.
+   function Kind_Policy (Item : Stores.Store; Kind, Name : String) return String;
+
+   --  The gates a task of a kind must pass to complete: the configuration's
+   --  set task.gates.KIND, else set task.gates, else verification,
+   --  children, no_blocking_issue and integration.
+   --
+   --  @param Item The store.
+   --  @param Kind The task kind.
+   --  @return Their names, in order.
+   function Gate_Names (Item : Stores.Store; Kind : String) return Name_Lists.Vector;
+
+   --  Revise what a task is: the next revision of its definition, with the
+   --  fields given changed -- a field given empty is taken away. Its kind,
+   --  its parent and what it depends on are not changed this way, and a
+   --  task that is running, in verification or ended is not revised at all.
+   --  What a revision may hold is checked as a new task's is.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Id The task.
+   --  @param Fields The fields and their new values.
+   --  @param Status Framework_Transition_Invalid for a task in a state that
+   --    is not revised, Framework_Schema_Violation for a field it cannot
+   --    have, Framework_Not_Found for a requirement that is not there.
+   procedure Revise
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Id     : String;
+      Fields : Field_Map;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  Decompose a task into child tasks, one for each title, of its kind and
+   --  component and recording it as their parent. An accepted parent is
+   --  then blocked on them, its work theirs -- unless the project's
+   --  coordination policy (scalar task.coordination, or task.coordination.KIND)
+   --  is parent_runs, which leaves it to run beside them.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Parent The task.
+   --  @param Titles The children's titles.
+   --  @param Made The children.
+   --  @param Status Framework_Not_Found when the parent is not there.
+   procedure Decompose
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Parent : String;
+      Titles : Name_Lists.Vector;
+      Made   : out Name_Lists.Vector;
+      Status : out Model_Runner.Errors.Error_Info);
+
    --  Tasks whose dependencies, directly or through others, come back to
    --  themselves, or whose parents do.
    --

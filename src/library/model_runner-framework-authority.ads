@@ -98,6 +98,19 @@ package Model_Runner.Framework.Authority is
       Subject : String;
       Found   : out Boolean) return Statement;
 
+   --  How many subjects a resolution has a governing statement for.
+   --
+   --  @param From What resolving found.
+   --  @return The count.
+   function Governing_Count (From : Resolution) return Natural;
+
+   --  The statement governing one of them, in the order resolved.
+   --
+   --  @param From What resolving found.
+   --  @param Index 1 .. Governing_Count.
+   --  @return It.
+   function Governing_At (From : Resolution; Index : Positive) return Statement;
+
    --  How many standings a resolution holds.
    --
    --  @param From What resolving found.

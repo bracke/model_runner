@@ -152,7 +152,21 @@ anything uncertain is verified in full. The evidence says what was chosen
 and why. `/check consistency` lists what does not hold together in the
 project's state -- the spec's list, including a task whose component the
 project does not have and one held ready while what it depends on is open --
-and opening a project says how much there is. The same commands run
+and opening a project says how much there is.
+
+A task is revised with `/task edit TASK NAME=VALUE ...` -- a new revision of
+its definition; its kind, parent and dependencies have their own commands --
+made to wait with `/task depend TASK ON`, and split with `/task split TASK
+First part; Second part`: the parts are its children, and the parent waits
+on them, blocked, unless the project's `scalar task.coordination` (or
+`task.coordination.KIND`) is `parent_runs`. An ended task comes back only by
+`/task reopen`, a rejected one by `/task reconsider`. A task's kind may set
+its own policies -- `scalar task.isolation.KIND`, `task.token_budget.KIND`,
+`task.max_steps.KIND`, `set task.gates.KIND`, and its permission level for
+children and proposals -- and its Effective Task (`/task show`) says what
+governs it, with every override and conflict, what it may do, where it
+writes, what bounds it and which gates it must pass; what governs it is put
+in front of the model too. The same commands run
 outside a session too -- `model_runner init|task|repo|work`, with
 `--set NAME=VALUE` for the words -- for scripts.
 

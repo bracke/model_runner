@@ -13,17 +13,15 @@ package body Library_Surface is
    --  The codec's other half.
    Held : constant Text_List :=
      [
-      --  The project state's operations its commands do not reach yet:
-      --  decomposing a task into children and wiring dependencies between
-      --  tasks are what planning agents do, and the schema version and an
-      --  area's portability are what a migration and a repository policy
-      --  ask, which later phases bring. Until they arrive, the suite asks.
-      new String'("Add_Dependency"),
-
       --  How large a traceability graph is. The trace command lists the
       --  edges touching one node; a caller walking the whole graph asks.
       new String'("Edge_Count"),
 
+      --  The project state's operations its commands do not reach yet:
+      --  blocking a parent on children made some other way than by a
+      --  split, which blocks it as it makes them; and the schema version
+      --  and an area's portability, which a migration and a repository
+      --  policy ask. Until they arrive, the suite asks.
       new String'("Block_On_Children"),
       new String'("Current_Version"),
       new String'("Portability_Of"),
