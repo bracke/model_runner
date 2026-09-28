@@ -6,7 +6,6 @@ with Ada.Strings.Unbounded;
 
 with Hostkit;
 with Hostkit.Fs;
-with Hostkit.Process;
 
 with Model_Runner.CLI.Choosers;
 with Model_Runner.Errors;
@@ -14,6 +13,7 @@ with Model_Runner.Framework;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Context;
 with Model_Runner.Framework.Execution;
+with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Orchestration;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
@@ -85,13 +85,15 @@ package body Model_Runner.CLI.Work is
       Answer      : out Unbounded_String;
       Status      : out E.Error_Info)
    is
-      Arguments : Hostkit.String_Vectors.Vector;
+      package Pm renames Model_Runner.Framework.Permissions;
+      Arguments : Model_Runner.Framework.Name_Lists.Vector;
       Output    : constant String := Prompt_Path & ".answer";
-      Happened  : Hostkit.Process.Process_Outcome;
+      Happened  : Model_Runner.Framework.Execution.Outcome;
+      Given     : Model_Runner.Framework.Name_Lists.Vector;
 
       procedure Add (Word : String) is
       begin
-         Arguments.Append (To_Unbounded_String (Word));
+         Arguments.Append (Word);
       end Add;
    begin
       Answer := Null_Unbounded_String;
@@ -111,15 +113,26 @@ package body Model_Runner.CLI.Work is
          Add (Tool.all);
       end loop;
 
-      Happened :=
-        Hostkit.Process.Run_Captured
-          (Program           => Hostkit.Fs.Own_Executable,
-           Arguments         => Arguments,
-           Working_Directory => Project,
-           Stdin_Path        => Hostkit.Fs.Null_Device,
-           Stdout_Path       => Output,
-           Stderr_Path       => Hostkit.Fs.Null_Device,
-           Timeout_Ms        => Self.Timeout * 1000);
+      --  Held to the tree it works in and to its permissions, which its
+      --  file tools read; what it may do was written beside its prompt,
+      --  and none written is nothing granted.
+      Given.Append (Pm.Agent_Root_Variable & "=" & Project);
+      Given.Append (Pm.Agent_Permissions_Variable & "=" & Whole (Pm.Permissions_Beside (Prompt_Path)));
+      Model_Runner.Framework.Execution.Run_Harness
+        (Project   => Ada.Directories.Containing_Directory
+                        (Ada.Directories.Containing_Directory
+                           (Ada.Directories.Containing_Directory
+                              (Ada.Directories.Containing_Directory (Prompt_Path)))),
+         Program   => Hostkit.Fs.Own_Executable,
+         Arguments => Arguments,
+         Directory => Project,
+         Output    => Output,
+         Timeout   => Positive'Max (1, Self.Timeout),
+         Result    => Happened,
+         Passed    => "LANG,LC_ALL,XDG_DATA_HOME,XDG_CONFIG_HOME,XDG_CACHE_HOME,XDG_RUNTIME_DIR,"
+                      & "MODEL_RUNNER_MODELS,MODEL_RUNNER_CONFIG,MODEL_RUNNER_LOCALE,"
+                      & Pm.Sandbox_Variable,
+         Added     => Given);
 
       Answer := To_Unbounded_String (Whole (Output));
       if Ada.Directories.Exists (Output) then

@@ -167,6 +167,40 @@ package Model_Runner.Framework.Permissions is
       Item : Capability;
       Path : String := "") return Boolean;
 
+   --  An agent the harness starts as a process of its own is told where it
+   --  works and what it may do by these, and its file tools hold it to
+   --  them as the session's hold its agents: the tree, and the agent's
+   --  permissions as Image writes them.
+   Agent_Root_Variable        : constant String := "MODEL_RUNNER_AGENT_ROOT";
+   Agent_Permissions_Variable : constant String := "MODEL_RUNNER_AGENT_PERMISSIONS";
+
+   --  What the harness passes such an agent: the file, beside its prompt,
+   --  that holds its permissions.
+   --
+   --  @param Prompt_Path The agent's prompt.
+   --  @return The file's path.
+   function Permissions_Beside (Prompt_Path : String) return String;
+
+   --  Why an agent's file tool may not touch a path, or nothing when it
+   --  may. The path is relative to the tree the agent works in and stays
+   --  there, every link on the way followed; the project's state is the
+   --  harness's and neither read nor written, whatever a grant says, since
+   --  it changes only through the harness's own transactions; version
+   --  control is not written; and what is left must be within the source or
+   --  specification grants of the set.
+   --
+   --  @param Root The tree the agent works in: the project, or its
+   --    workspace.
+   --  @param Path The path the tool was given.
+   --  @param Writing Whether the tool writes.
+   --  @param Allowed The agent's permissions.
+   --  @return The refusal, as the agent is told it, or "".
+   function Path_Refusal
+     (Root    : String;
+      Path    : String;
+      Writing : Boolean;
+      Allowed : Permission_Set := Unrestricted) return String;
+
    --  Whether one set gives anything the other does not: a capability, a
    --  root outside the other's, a profile, a larger limit.
    --

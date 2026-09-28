@@ -95,4 +95,40 @@ package Model_Runner.Framework.Execution is
       Status    : out Model_Runner.Errors.Error_Info;
       Base      : String := "");
 
+   --  One of the harness's own programs -- git, or this program started as
+   --  an agent -- run the same way as a project's command: nothing on its
+   --  standard input, only PATH, HOME, the variables named and the
+   --  assignments given, under a deadline, and a line in the project's
+   --  harness log saying what ran, where, for how long and how it ended.
+   --  It is not the project's policy that allows it: the harness needs it,
+   --  and a project that listed git or model_runner would be letting its
+   --  checks run them too.
+   --
+   --  @param Project The project, whose state keeps the log; "" when the
+   --    directory is not one yet.
+   --  @param Program The program, found on PATH or given whole.
+   --  @param Arguments Its arguments.
+   --  @param Directory Where it runs.
+   --  @param Output The file its standard output is written to.
+   --  @param Timeout Seconds it may take.
+   --  @param Result What became of it; Output there is left empty.
+   --  @param Passed More variables to pass, separated by commas.
+   --  @param Added NAME=VALUE assignments to give it.
+   procedure Run_Harness
+     (Project   : String;
+      Program   : String;
+      Arguments : Name_Lists.Vector;
+      Directory : String;
+      Output    : String;
+      Timeout   : Positive;
+      Result    : out Outcome;
+      Passed    : String := "";
+      Added     : Name_Lists.Vector := Name_Lists.Empty_Vector);
+
+   --  The harness log's file in a project's state.
+   --
+   --  @param Project The project.
+   --  @return Its path.
+   function Harness_Log (Project : String) return String;
+
 end Model_Runner.Framework.Execution;

@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Agents stay out of the state.** `Permissions.Path_Refusal` refuses an
+  agent's file tool the project's state (read or write, links followed),
+  writes to `.git`, and paths outside its tree or grants. The session's
+  tools use it, and so do the built-in file tools of an agent process the
+  harness starts, told its tree and permissions by
+  `MODEL_RUNNER_AGENT_ROOT` and `MODEL_RUNNER_AGENT_PERMISSIONS`.
+- **Harness programs through the execution layer.** `Execution.Run_Harness`
+  runs git and the agent process with a clean environment, no input and a
+  deadline, logging each run in `runtime/harness.log`; nothing else in the
+  framework starts a process.
 - **Derived indexes.** `Framework.Indexes` builds requirements, decisions,
   tasks, components, symbols, tests, traceability, dependency and search
   indexes, each saying what it was built from; `init` builds them and a

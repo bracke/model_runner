@@ -1382,6 +1382,21 @@ package body Model_Runner.Framework.Work is
          if Files.Make_Directory (Scratch) then
             Files.Write_Text
               (Prompt, Context.Rendered (Built) & Instructions, Status);
+
+            --  What the agent may do, for a runner that starts it as a
+            --  process of its own to hold it to.
+            if E.Is_Ok (Status) then
+               declare
+                  Root_Agent : Agents.Agent;
+                  Read       : E.Error_Info;
+               begin
+                  Agents.Read (Item, To_String (Result.Agent_Id), Root_Agent, Read);
+                  Files.Write_Text
+                    (Permissions.Permissions_Beside (Prompt),
+                     (if E.Is_Ok (Read) then Permissions.Image (Root_Agent.Allowed) else ""),
+                     Status);
+               end;
+            end if;
          else
             Files.Write_Failed (Scratch, Status);
          end if;
@@ -1437,6 +1452,7 @@ package body Model_Runner.Framework.Work is
             Result.Children.Append (Line);
          end loop;
          Files.Discard (Prompt);
+         Files.Discard (Permissions.Permissions_Beside (Prompt));
 
          --  What changed is what the files say, not what the answer says.
          declare

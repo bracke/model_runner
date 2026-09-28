@@ -24,6 +24,7 @@ with Model_Runner.Framework.Context;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Facts;
+with Model_Runner.Tools.Builtin;
 with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Indexes;
 with Model_Runner.Framework.Intent;
@@ -150,6 +151,23 @@ package body Tests.Framework_Cases is
       String'Write (Ada.Streams.Stream_IO.Stream (File), Content);
       Ada.Streams.Stream_IO.Close (File);
    end Put_File;
+
+   --  A whole file, or nothing when it is not there.
+   function Read_Whole (Path : String) return String is
+      File : Ada.Streams.Stream_IO.File_Type;
+   begin
+      if not Dirs.Exists (Path) then
+         return "";
+      end if;
+      Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Path);
+      declare
+         Text : String (1 .. Natural (Ada.Streams.Stream_IO.Size (File)));
+      begin
+         String'Read (Ada.Streams.Stream_IO.Stream (File), Text);
+         Ada.Streams.Stream_IO.Close (File);
+         return Text;
+      end;
+   end Read_Whole;
 
    --  A condition's code and the text of its parameters, for a message
    --  that says what went wrong and not only that something did.
@@ -2980,6 +2998,89 @@ package body Tests.Framework_Cases is
               "an index does not say what the state and the repository hold");
       S.Close (Store);
    end Indexes_Are_Derived;
+
+   --  An agent's file tools never reach the project's state, whatever its
+   --  grants, nor write version control -- in a session, and in a process
+   --  of its own; and the harness's own programs run with only what it
+   --  passes them, and are logged.
+   procedure Agents_Stay_Out_Of_The_State
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Pm renames Model_Runner.Framework.Permissions;
+      package Ex renames Model_Runner.Framework.Execution;
+      package Env renames Ada.Environment_Variables;
+      Store : S.Store;
+   begin
+      Task_Project (Store, "state-guard");
+      declare
+         Root : constant String := Dirs.Full_Name (Fresh_Root (Store));
+         Link : constant String := Root & "/state-link";
+         Gone : Boolean;
+      begin
+         Assert (Pm.Path_Refusal (Root, ".model_runner/tasks/TASK-001.rec", Writing => True) /= ""
+                 and then Pm.Path_Refusal (Root, "./.model_runner/config/x", Writing => False) /= ""
+                 and then Pm.Path_Refusal (Root, ".git/config", Writing => True) /= ""
+                 and then Pm.Path_Refusal (Root, ".git/config", Writing => False) = ""
+                 and then Pm.Path_Refusal (Root, "src/new.adb", Writing => True) = ""
+                 and then Pm.Path_Refusal (Root, "../x", Writing => False) /= "",
+                 "an agent's path into the state or version control was allowed");
+         Assert (Pm.Path_Refusal (Root, "src/new.adb", True, Pm.Value ("write_source roots=docs/"))
+                 = "you may not write src/new.adb",
+                 "the grants did not narrow what may be written");
+         if Hostkit.Fs.Create_Link (Root & "/.model_runner", Link) then
+            Assert (Pm.Path_Refusal (Root, "state-link/tasks/x", Writing => True) /= "",
+                    "a link into the state was followed");
+            Gone := Hostkit.Fs.Delete_Link (Link);
+         end if;
+         pragma Unreferenced (Gone);
+
+         --  In a process of its own: the file tools hold it where the
+         --  harness said, and nowhere when it said nothing.
+         declare
+            Runner : Model_Runner.Tools.Builtin.Instance;
+            Said   : String (1 .. 4096);
+            Last   : Natural;
+            Status : E.Error_Info;
+         begin
+            Env.Set (Pm.Agent_Root_Variable, Root);
+            Env.Set (Pm.Agent_Permissions_Variable, Pm.Image (Pm.Unrestricted));
+            Model_Runner.Tools.Builtin.Run
+              (Runner, "write_file", "{""path"": "".model_runner/evil"", ""content"": ""x""}",
+               Said, Last, Status);
+            Env.Clear (Pm.Agent_Root_Variable);
+            Env.Clear (Pm.Agent_Permissions_Variable);
+            Assert (Ada.Strings.Fixed.Index (Said (1 .. Last), "error:") = 1
+                    and then not Dirs.Exists (".model_runner/evil")
+                    and then not Dirs.Exists (Root & "/.model_runner/evil"),
+                    "a confined agent process wrote the state: " & Said (1 .. Last));
+         end;
+
+         --  The harness's own program: only PATH, HOME and what is given.
+         declare
+            Output : constant String := Root & "/harness-env.txt";
+            Ran    : Ex.Outcome;
+            Text   : Unbounded_String;
+            Read   : E.Error_Info;
+         begin
+            Env.Set ("MODEL_RUNNER_TEST_SECRET", "kept");
+            Ex.Run_Harness (Root, "env", Model_Runner.Framework.Name_Lists.Empty_Vector, Root, Output,
+                            30, Ran, Added => Model_Runner.Framework.Name_Lists.To_Vector
+                                                ("GIVEN_HERE=yes", 1));
+            Env.Clear ("MODEL_RUNNER_TEST_SECRET");
+            Text := To_Unbounded_String (Read_Whole (Output));
+            Assert (Ran.Started and then Ran.Exit_Status = 0
+                    and then Index (Text, "GIVEN_HERE=yes") > 0
+                    and then Index (Text, "MODEL_RUNNER_TEST_SECRET") = 0,
+                    "a harness program got more, or less, than it was given");
+            Assert (Dirs.Exists (Ex.Harness_Log (Root))
+                    and then Ada.Strings.Fixed.Index (Read_Whole (Ex.Harness_Log (Root)), "env") > 0,
+                    "a harness program was not logged");
+            pragma Unreferenced (Read);
+         end;
+      end;
+      S.Close (Store);
+   end Agents_Stay_Out_Of_The_State;
 
    ---------------------------------------------------------------------------
    --  Context and invocations.
@@ -6201,6 +6302,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Indexes_Are_Derived'Access,
          "the derived indexes are made at init and known to be stale when they are");
+      Register_Routine
+        (T, Agents_Stay_Out_Of_The_State'Access,
+         "agents never reach the project's state, and harness programs get only what is passed");
       Register_Routine
         (T, Derivation_Is_Idempotent'Access,
          "a requirement derives its task once, however often derivation"

@@ -1,3 +1,5 @@
+with Hostkit.Fs;
+with Ada.Directories;
 with Ada.Environment_Variables;
 with Ada.Characters.Handling;
 with Ada.Strings.Unbounded;
@@ -477,5 +479,92 @@ package body Model_Runner.Framework.Permissions is
       end loop;
       return Result;
    end Value;
+
+   function Permissions_Beside (Prompt_Path : String) return String
+   is (Prompt_Path & ".permissions");
+
+   ------------------
+   -- Path_Refusal --
+   ------------------
+
+   function Path_Refusal
+     (Root    : String;
+      Path    : String;
+      Writing : Boolean;
+      Allowed : Permission_Set := Unrestricted) return String
+   is
+      Outside : constant String :=
+        Path & " is outside the project; paths are relative to it, as src/main.adb";
+      Parts   : Name_Lists.Vector;
+      Start   : Natural := Path'First;
+
+      function Under (Real, Base : String) return Boolean
+      is (Real = Base
+          or else (Real'Length > Base'Length
+                   and then Real (Real'First .. Real'First + Base'Length - 1) = Base
+                   and then Real (Real'First + Base'Length) in '/' | '\'));
+   begin
+      if Path'Length > 0
+        and then (Path (Path'First) in '/' | '\' | '~'
+                  or else (Path'Length > 1 and then Path (Path'First + 1) = ':'))
+      then
+         return Outside;
+      end if;
+      for Index in Path'First .. Path'Last + 1 loop
+         if Index > Path'Last or else Path (Index) in '/' | '\' then
+            if Index > Start and then Path (Start .. Index - 1) /= "." then
+               Parts.Append (Path (Start .. Index - 1));
+            end if;
+            Start := Index + 1;
+         end if;
+      end loop;
+      if Parts.Contains ("..") then
+         return Outside;
+      elsif not Parts.Is_Empty and then Parts.First_Element = State_Directory then
+         return Path & " is the project's state, which only the harness reads and writes";
+      elsif Writing and then Parts.Contains (".git") then
+         return Path & " is version control, which only the harness writes";
+      end if;
+
+      --  Inside once every link on the way is followed: what of the path
+      --  there is already, resolved, lies in the tree as the tree resolves,
+      --  and not in the state.
+      declare
+         Base    : constant String := Hostkit.Fs.Real_Path (Root);
+         Nearest : Unbounded_String :=
+           To_Unbounded_String (Hostkit.Fs.Join (Root, (if Path = "" then "." else Path)));
+      begin
+         while not Ada.Directories.Exists (To_String (Nearest))
+           and then To_String (Nearest)'Length > Root'Length
+         loop
+            Nearest := To_Unbounded_String (Ada.Directories.Containing_Directory (To_String (Nearest)));
+         end loop;
+         declare
+            Real : constant String := Hostkit.Fs.Real_Path (To_String (Nearest));
+         begin
+            if Base = "" or else Real = "" or else not Under (Real, Base) then
+               return Outside;
+            elsif Under (Real, Hostkit.Fs.Join (Base, State_Directory)) then
+               return Path & " is the project's state, which only the harness reads and writes";
+            end if;
+         end;
+      exception
+         when others =>
+            return Outside;
+      end;
+
+      if Writing
+        and then not Allows (Allowed, Write_Source, Path)
+        and then not Allows (Allowed, Write_Specs, Path)
+      then
+         return "you may not write " & Path;
+      elsif not Writing
+        and then not Allows (Allowed, Read_Source, Path)
+        and then not Allows (Allowed, Read_Specs, Path)
+      then
+         return "you may not read " & Path;
+      end if;
+      return "";
+   end Path_Refusal;
 
 end Model_Runner.Framework.Permissions;

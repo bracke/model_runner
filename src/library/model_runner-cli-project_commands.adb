@@ -1,4 +1,3 @@
-with Hostkit.Fs;
 with Ada.Text_IO;
 with Ada.Characters.Handling;
 with Ada.Directories;
@@ -168,54 +167,10 @@ package body Model_Runner.CLI.Project_Commands is
       end if;
    end On_Result;
 
-   --  Whether a path stays inside the project: relative, and never climbing
-   --  out of it.
-   function Within_Project (Path : String) return Boolean is
-      Start : Natural := Path'First;
-   begin
-      if Path'Length > 0
-        and then (Path (Path'First) in '/' | '\' | '~'
-                  or else (Path'Length > 1 and then Path (Path'First + 1) = ':'))
-      then
-         return False;
-      end if;
-      for Index in Path'First .. Path'Last + 1 loop
-         if Index > Path'Last or else Path (Index) in '/' | '\' then
-            if Path (Start .. Index - 1) = ".." then
-               return False;
-            end if;
-            Start := Index + 1;
-         end if;
-      end loop;
-      --  Written inside, and inside once every link on the way is followed:
-      --  what of it there is already, resolved, lies in the project as the
-      --  project itself resolves. A link out of the project is out of it.
-      declare
-         Root    : constant String := Hostkit.Fs.Real_Path (".");
-         Nearest : Unbounded_String := To_Unbounded_String (if Path = "" then "." else Path);
-      begin
-         while not Ada.Directories.Exists (To_String (Nearest))
-           and then Ada.Strings.Fixed.Index (To_String (Nearest), "/") > 0
-         loop
-            Nearest := To_Unbounded_String
-              (To_String (Nearest)
-                 (To_String (Nearest)'First
-                  .. Ada.Strings.Fixed.Index (To_String (Nearest), "/", Ada.Strings.Backward) - 1));
-         end loop;
-         if not Ada.Directories.Exists (To_String (Nearest)) then
-            Nearest := To_Unbounded_String (".");
-         end if;
-         declare
-            Real : constant String := Hostkit.Fs.Real_Path (To_String (Nearest));
-         begin
-            return Root /= ""
-              and then (Real = Root
-                        or else (Real'Length > Root'Length
-                                 and then Real (Real'First .. Real'First + Root'Length - 1) = Root
-                                 and then Real (Real'First + Root'Length) in '/' | '\'));
-         end;
-      end;
-   end Within_Project;
+   --  Whether a path is one an agent's file tools may reach: inside the
+   --  project once every link is followed, and not its state.
+   function Within_Project (Path : String) return Boolean
+   is (Pm.Path_Refusal (".", Path, Writing => False) = "");
 
    --  One tool as a model reads it.
    function Tool (Name, Description, Parameters : String) return String
@@ -522,9 +477,10 @@ package body Model_Runner.CLI.Project_Commands is
                     else "error: the checks were not run: " & Refusal (Ran));
             end;
          end if;
-      elsif Named in "read_file" | "list_directory" | "write_file" and then not Within_Project (Path) then
-         Put ("error: " & Path & " is outside the project; paths are relative to it,"
-              & " as src/main.adb");
+      elsif Named in "read_file" | "list_directory" | "write_file"
+        and then Pm.Path_Refusal (".", Path, Writing => Named = "write_file") /= ""
+      then
+         Put ("error: " & Pm.Path_Refusal (".", Path, Writing => Named = "write_file"));
       elsif Named in "read_file" | "list_directory" and then not May (Reading => True) then
          Put ("error: you may not read " & Path);
       elsif Named = "write_file" and then not May (Reading => False) then

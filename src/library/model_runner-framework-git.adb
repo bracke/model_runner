@@ -2,9 +2,9 @@ with Ada.Directories;
 
 with Hostkit;
 with Hostkit.Fs;
-with Hostkit.Process;
 
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Records;
 
@@ -70,27 +70,20 @@ package body Model_Runner.Framework.Git is
 
    function Status_Of (Project_Directory : String) return Status_Report is
       Result    : Status_Report;
-      Arguments : Hostkit.String_Vectors.Vector;
+      Arguments : Name_Lists.Vector;
       --  Outside the project, or Git would see the file it writes to.
       Output    : constant String :=
         Hostkit.Fs.Join (Hostkit.Fs.Temp_Directory,
                          "model_runner-git-status-" & Fingerprint (Project_Directory) & ".txt");
-      Happened  : Hostkit.Process.Process_Outcome;
+      Happened  : Execution.Outcome;
       Text      : Unbounded_String;
       Read      : E.Error_Info;
    begin
-      Arguments.Append (To_Unbounded_String ("status"));
-      Arguments.Append (To_Unbounded_String ("--porcelain=v1"));
-      Arguments.Append (To_Unbounded_String ("--branch"));
-      Happened :=
-        Hostkit.Process.Run_Captured
-          (Program           => "git",
-           Arguments         => Arguments,
-           Working_Directory => Project_Directory,
-           Stdin_Path        => Hostkit.Fs.Null_Device,
-           Stdout_Path       => Output,
-           Stderr_Path       => Hostkit.Fs.Null_Device,
-           Timeout_Ms        => 60_000);
+      Arguments.Append ("status");
+      Arguments.Append ("--porcelain=v1");
+      Arguments.Append ("--branch");
+      Execution.Run_Harness
+        (Project_Directory, "git", Arguments, Project_Directory, Output, 60, Happened);
       if Ada.Directories.Exists (Output) then
          Files.Read_Text (Output, Text, Read);
          Files.Discard (Output);

@@ -1,6 +1,7 @@
 with Ada.Calendar.Formatting;
 with Ada.Characters.Handling;
 with Ada.Directories;
+with Ada.Environment_Variables;
 with Ada.Streams.Stream_IO;
 with Ada.Unchecked_Deallocation;
 
@@ -9,6 +10,7 @@ with GNAT.OS_Lib;
 with Http_Client.Clients;
 with Http_Client.Errors;
 
+with Model_Runner.Framework.Permissions;
 with Model_Runner.Tools.DOC;
 with Model_Runner.Tools.OOXML;
 with Model_Runner.Tools.PDF;
@@ -1035,6 +1037,28 @@ package body Model_Runner.Tools.Builtin is
       end;
    end Capture;
 
+   --  Why a file tool may not reach its path when the harness started this
+   --  program as an agent and said where it works and what it may do, or
+   --  nothing when it may -- and always nothing when the harness did not:
+   --  a person's own run reaches what the person can.
+   function Confinement (Named, Args : String) return String is
+      package Pm renames Model_Runner.Framework.Permissions;
+      package Env renames Ada.Environment_Variables;
+      Have : Boolean;
+      Path : constant String := Text_Argument (Args, "path", Have);
+   begin
+      if not Env.Exists (Pm.Agent_Root_Variable) then
+         return "";
+      end if;
+      return Pm.Path_Refusal
+        (Env.Value (Pm.Agent_Root_Variable), Path,
+         Writing => Named = "write_file",
+         Allowed =>
+           (if Env.Exists (Pm.Agent_Permissions_Variable)
+            then Pm.Value (Env.Value (Pm.Agent_Permissions_Variable))
+            else Pm.Nothing));
+   end Confinement;
+
    function Read_File (Args : String) return String is
       Have : Boolean;
       Path : constant String := Text_Argument (Args, "path", Have);
@@ -1873,6 +1897,10 @@ package body Model_Runner.Tools.Builtin is
             return Memory_Put (Self, Arguments);
          elsif Named = "memory_get" then
             return Memory_Get (Self, Arguments);
+         elsif Named in "read_file" | "write_file" | "list_directory"
+           and then Confinement (Named, Arguments) /= ""
+         then
+            return "error: " & Confinement (Named, Arguments);
          elsif Named = "read_file" then
             return Read_File (Arguments);
          elsif Named = "write_file" then

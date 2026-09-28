@@ -256,7 +256,15 @@ depends on it and tests it. A task that is proposed starts as a candidate
 unless `set task.auto_accept` names its class -- its kind, or where it came
 from: `user`, `requirement_derivation`, `agent`, `verification_engine` --
 and every acceptance, rejection and other move records who made it: the
-person at the terminal, the policy, or the agent. `init` builds the derived indexes -- requirements, decisions, tasks,
+person at the terminal, the policy, or the agent. An agent's file tools never read or write the project's state, whatever
+its grants -- it changes only through the harness's transactions -- nor
+write `.git`; links are followed before that is judged. The same guard
+holds an agent the harness starts as a process of its own (`/work` from the
+shell): its tree and permissions go with it, and its file tools refuse the
+rest. Git and that agent process run through the execution layer like a
+project's checks -- no standard input, only PATH, HOME and what is passed,
+a deadline -- and each run is a line in `.model_runner/runtime/harness.log`.
+`init` builds the derived indexes -- requirements, decisions, tasks,
 components, symbols, tests, traceability, dependencies and a search index
 of names -- and opening a session builds them again when what they were
 built from has moved on. `/sandbox RESTRICTION` confines every agent the

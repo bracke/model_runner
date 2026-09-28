@@ -1,5 +1,7 @@
 with Ada.Calendar;
+with Ada.Calendar.Formatting;
 with Ada.Directories;
+with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 
 with Hostkit.Fs;
@@ -237,5 +239,95 @@ package body Model_Runner.Framework.Execution is
                                   Length (Text)));
       end;
    end Run;
+
+   -----------------
+   -- Harness_Log --
+   -----------------
+
+   function Harness_Log (Project : String) return String
+   is (Hostkit.Fs.Join
+         (Hostkit.Fs.Join (Hostkit.Fs.Join (Project, State_Directory), "runtime"), "harness.log"));
+
+   -----------------
+   -- Run_Harness --
+   -----------------
+
+   procedure Run_Harness
+     (Project   : String;
+      Program   : String;
+      Arguments : Name_Lists.Vector;
+      Directory : String;
+      Output    : String;
+      Timeout   : Positive;
+      Result    : out Outcome;
+      Passed    : String := "";
+      Added     : Name_Lists.Vector := Name_Lists.Empty_Vector)
+   is
+      Words    : Hostkit.String_Vectors.Vector;
+      Command  : Unbounded_String := To_Unbounded_String (Program);
+      Began    : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+      Happened : Hostkit.Process.Process_Outcome;
+   begin
+      --  Only what is passed: env starts from nothing.
+      Words.Append (To_Unbounded_String ("-i"));
+      for Assignment of Lines_Of (Model_Runner.Platform.Passed_Environment (Passed)) loop
+         Words.Append (To_Unbounded_String (Assignment));
+      end loop;
+      for Assignment of Added loop
+         Words.Append (To_Unbounded_String (Assignment));
+      end loop;
+      Words.Append (To_Unbounded_String (Program));
+      for Word of Arguments loop
+         Words.Append (To_Unbounded_String (Word));
+         Append (Command, " " & Word);
+      end loop;
+
+      Happened :=
+        Hostkit.Process.Run_Captured
+          (Program           => "env",
+           Arguments         => Words,
+           Working_Directory => Directory,
+           Stdin_Path        => Hostkit.Fs.Null_Device,
+           Stdout_Path       => Output,
+           Stderr_Path       => Hostkit.Fs.Null_Device,
+           Timeout_Ms        => Timeout * 1000);
+      Result := (Command     => Command,
+                 Directory   => To_Unbounded_String (Directory),
+                 Started     => Happened.Started,
+                 Timed_Out   => Happened.Timed_Out,
+                 Exit_Status => Happened.Exit_Status,
+                 Seconds     => Natural (Ada.Calendar.Clock - Began),
+                 others      => <>);
+
+      --  Said where the project keeps its runtime, when it has one.
+      if Project /= ""
+        and then Ada.Directories.Exists (Ada.Directories.Containing_Directory (Harness_Log (Project)))
+      then
+         declare
+            use Ada.Streams.Stream_IO;
+            File : File_Type;
+            Line : constant String :=
+              Ada.Calendar.Formatting.Image (Began) & ASCII.HT & Directory & ASCII.HT
+              & To_String (Command) & ASCII.HT
+              & (if not Happened.Started then "not started"
+                 elsif Happened.Timed_Out then "timed out"
+                 else "exit" & Integer'Image (Happened.Exit_Status))
+              & ASCII.HT & Trim (Natural'Image (Result.Seconds)) & "s" & ASCII.LF;
+         begin
+            if Ada.Directories.Exists (Harness_Log (Project)) then
+               Open (File, Append_File, Harness_Log (Project));
+            else
+               Create (File, Out_File, Harness_Log (Project));
+            end if;
+            String'Write (Stream (File), Line);
+            Close (File);
+         exception
+            when others =>
+               if Is_Open (File) then
+                  Close (File);
+               end if;
+         end;
+      end if;
+   end Run_Harness;
 
 end Model_Runner.Framework.Execution;

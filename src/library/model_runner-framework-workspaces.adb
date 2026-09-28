@@ -4,10 +4,10 @@ with Ada.Strings.Fixed;
 
 with Hostkit;
 with Hostkit.Fs;
-with Hostkit.Process;
 
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Events;
+with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
@@ -74,23 +74,18 @@ package body Model_Runner.Framework.Workspaces is
       Output    : String;
       Worked    : out Boolean) return String
    is
-      Arguments : Hostkit.String_Vectors.Vector;
-      Happened  : Hostkit.Process.Process_Outcome;
+      Happened  : Execution.Outcome;
       Text      : Unbounded_String;
       Status    : E.Error_Info;
    begin
-      for Word of Words loop
-         Arguments.Append (To_Unbounded_String (Word));
-      end loop;
-      Happened :=
-        Hostkit.Process.Run_Captured
-          (Program           => "git",
-           Arguments         => Arguments,
-           Working_Directory => Directory,
-           Stdin_Path        => Hostkit.Fs.Null_Device,
-           Stdout_Path       => Output,
-           Stderr_Path       => Hostkit.Fs.Null_Device,
-           Timeout_Ms        => 120_000);
+      --  The project a workspace's git is run for keeps the log: the one
+      --  whose state the directory is in, or the directory itself.
+      Execution.Run_Harness
+        ((if Ada.Strings.Fixed.Index (Directory, "/" & State_Directory & "/") > 0
+          then Directory (Directory'First
+                          .. Ada.Strings.Fixed.Index (Directory, "/" & State_Directory & "/") - 1)
+          else Directory),
+         "git", Words, Directory, Output, 120, Happened);
       Worked := Happened.Started and then not Happened.Timed_Out
         and then Happened.Exit_Status = 0;
       if Dirs.Exists (Output) then
