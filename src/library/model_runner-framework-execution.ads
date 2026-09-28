@@ -1,5 +1,6 @@
 with Ada.Strings.Unbounded;
 
+with Model_Runner.Cancellation;
 with Model_Runner.Errors;
 with Model_Runner.Framework.Stores;
 
@@ -33,9 +34,25 @@ package Model_Runner.Framework.Execution is
       --  part, where a check says its evidence need not keep it all.
       Keep_Whole    : Boolean := True;
 
-      --  Whether a check may use the network. Recorded with what ran; the
-      --  host does not enforce it.
+      --  Whether a check may use the network, as recorded with what ran;
+      --  and whether the policy denies it outright (scalar
+      --  execution.network = denied), which, where the host can take the
+      --  network away from one program, it is.
       Network       : Boolean := False;
+      No_Network    : Boolean := False;
+
+      --  Limits on each command, zero for none: its memory, processor
+      --  time, processes and the size of a file it writes. Where a limit is
+      --  asked for and cannot be set, the command is refused rather than
+      --  run without it.
+      Memory_MB     : Natural := 0;
+      CPU_Seconds   : Natural := 0;
+      Processes     : Natural := 0;
+      File_MB       : Natural := 0;
+
+      --  How many commands may run at once across every harness working
+      --  on the project; zero for no bound.
+      Process_Slots : Natural := 0;
    end record;
 
    --  What became of a command.
@@ -52,7 +69,20 @@ package Model_Runner.Framework.Execution is
 
       --  The result the whole output is kept as.
       Raw_Log     : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  Whether it was stopped because the run was cancelled.
+      Cancelled   : Boolean := False;
+
+      --  Whether the network was taken away from it.
+      Isolated    : Boolean := False;
    end record;
+
+   --  The token whose cancellation stops a running command: set by whoever
+   --  runs the harness -- a session routes Ctrl-C to it -- and asked while
+   --  every command waits, which is then stopped as a deadline stops it.
+   --
+   --  @param Token The token; null for none.
+   procedure Watch (Token : Model_Runner.Cancellation.Token_Reference);
 
    --  The project's policy, from its configuration.
    --
@@ -84,7 +114,9 @@ package Model_Runner.Framework.Execution is
    --  @param Base The tree the directory is in: empty for the project, or
    --    a workspace's tree, which must be one of the project's.
    --  @param Status Framework_Execution_Refused when the policy does not
-   --    allow it; a success whatever the command itself returned.
+   --    allow it or a limit it asks for cannot be set,
+   --    Framework_Limit_Exceeded when every process slot is taken; a
+   --    success whatever the command itself returned.
    procedure Run
      (Item      : Stores.Store;
       Change    : in out Stores.Transaction;

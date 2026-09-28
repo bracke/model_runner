@@ -11,6 +11,7 @@ with Interfaces;
 
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Drafts;
+with Model_Runner.Framework.Execution;
 with Model_Runner.GGUF.Shards;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
@@ -2814,6 +2815,7 @@ package body Model_Runner.CLI.Execute is
             Model_Runner.Platform.Signals.Remove;
             Attached := False;
          end if;
+         Model_Runner.Framework.Execution.Watch (null);
          Model_Runner.Stops.Close (Stop_Set);
          Model_Runner.Grammar.Close (Rules);
          Rules_Ready := False;
@@ -2931,6 +2933,10 @@ package body Model_Runner.CLI.Execute is
          --  Route an interrupt to a clean cancellation for the duration of the
          --  run. Loading and generation both observe it at bounded intervals.
          Model_Runner.Platform.Signals.Install (Cancel'Unchecked_Access, Attached);
+
+         --  A command the harness runs for the session -- a check, a build --
+         --  is stopped by the same interrupt.
+         Model_Runner.Framework.Execution.Watch (Cancel'Unchecked_Access);
 
          --  Brain floats and an adapter are refused together rather than
          --  merged and rounded: what a merge adds is a small difference to

@@ -92,7 +92,12 @@ package Model_Runner.Framework.Invocations is
    --  @param Tool_Policy The tools it may use, as words.
    --  @param Rules The result contract.
    --  @param Id The invocation's identifier, INV- and a number.
-   --  @param Status A failure allocating it.
+   --  @param Status A failure allocating it; Framework_Limit_Exceeded when
+   --    the task's execution generation has made as many calls as scalar
+   --    agents.max_invocations allows, its root's and every child's
+   --    together.
+   --  @param Resource_Class The model's memory or resource class, where
+   --    it is known.
    procedure Start
      (Item        : Stores.Store;
       Change      : in out Stores.Transaction;
@@ -104,7 +109,8 @@ package Model_Runner.Framework.Invocations is
       Tool_Policy : String;
       Rules       : Contract;
       Id          : out Ada.Strings.Unbounded.Unbounded_String;
-      Status      : out Model_Runner.Errors.Error_Info);
+      Status      : out Model_Runner.Errors.Error_Info;
+      Resource_Class : String := "");
 
    --  Record how a call ended.
    --

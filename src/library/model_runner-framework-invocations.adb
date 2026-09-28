@@ -191,11 +191,51 @@ package body Model_Runner.Framework.Invocations is
       Tool_Policy : String;
       Rules       : Contract;
       Id          : out Ada.Strings.Unbounded.Unbounded_String;
-      Status      : out Model_Runner.Errors.Error_Info)
+      Status      : out Model_Runner.Errors.Error_Info;
+      Resource_Class : String := "")
    is
       Number : Natural;
    begin
       Id := Null_Unbounded_String;
+
+      --  No more calls for one execution generation than the policy
+      --  allows: a recursion of children cannot spend more than its root.
+      declare
+         Config : Records.Item;
+         Read   : E.Error_Info;
+      begin
+         Stores.Read (Item, Config_Area, "resolved", Config, Read);
+         declare
+            Text  : constant String := Records.Get (Config, "scalar.agents.max_invocations");
+            Limit : constant Natural :=
+              (if Text'Length in 1 .. 6 and then (for all C of Text => C in '0' .. '9')
+               then Natural'Value (Text) else 0);
+            Made  : Natural := 0;
+         begin
+            if Limit > 0 and then Task_Id /= "" then
+               for Name of Stores.Names (Item, Invocations_Area) loop
+                  declare
+                     Held : Records.Item;
+                  begin
+                     Stores.Read (Item, Invocations_Area, Name, Held, Read);
+                     if E.Is_Ok (Read) and then Records.Get (Held, "task") = Task_Id
+                       and then Records.Get (Held, "generation") = Generation
+                     then
+                        Made := Made + 1;
+                     end if;
+                  end;
+               end loop;
+               if Made >= Limit then
+                  Status := E.Make (E.Framework_Limit_Exceeded);
+                  E.Add_Text (Status, "name", "model invocations");
+                  E.Add_Text (Status, "detail", "all" & Natural'Image (Limit)
+                              & " calls of this execution of " & Task_Id & " are made");
+                  return;
+               end if;
+            end if;
+         end;
+      end;
+
       Stores.Allocate_Number (Item, Change, "INV", "", Number, Status);
       if E.Is_Error (Status) then
          return;
@@ -216,6 +256,9 @@ package body Model_Runner.Framework.Invocations is
          Records.Set (Value, "tool_policy", Tool_Policy);
          Records.Set (Value, "result_contract", To_String (Rules.Name));
          Records.Set (Value, "started_at", Timestamp);
+         if Resource_Class /= "" then
+            Records.Set (Value, "resource_class", Resource_Class);
+         end if;
          Stores.Put (Change, Invocations_Area, To_String (Id), Value);
       end;
    end Start;

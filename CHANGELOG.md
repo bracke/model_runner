@@ -7,6 +7,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Commands can be cancelled and limited.** A session's Ctrl-C now stops
+  the command the harness is waiting on (`Execution.Watch`); `scalar
+  execution.max_memory_mb`, `max_cpu_seconds`, `max_processes` and
+  `max_file_mb` limit each command through `prlimit`, and a command is
+  refused rather than run unlimited where it is not there; `scalar
+  execution.network = denied` takes the network away where the host lets
+  `unshare` do so, and the raw log says whether it did.
+- **Resources are accounted.** `scalar execution.process_slots` bounds how
+  many commands run at once across every harness on the project, a slot a
+  gone process held being taken back; `scalar agents.max_invocations`
+  bounds the model calls of one execution of a task, root and children
+  together, blocking it deterministically when spent; each call records
+  the model's resource class where it is known.
 - **The selector follows a resize.** While it waits for a key it watches
   the window, and redraws at the new size at once rather than at the next
   key.

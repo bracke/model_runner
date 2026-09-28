@@ -1,3 +1,4 @@
+with Ada.Calendar;
 with Ada.Text_IO;
 with Hostkit;
 with Interfaces;
@@ -9,6 +10,7 @@ with Ada.Strings.Unbounded;
 
 with AUnit.Assertions;
 
+with Model_Runner.Cancellation;
 with Model_Runner.CLI.Intents;
 with Model_Runner.CLI.Options;
 with Model_Runner.CLI.Project_Commands;
@@ -3553,9 +3555,9 @@ package body Tests.Framework_Cases is
       Second : Unbounded_String;
       Said   : Iv.Claims;
    begin
-      Task_Project (Store, "invocations");
+      Task_Project (Store, "invocations", "scalar agents.max_invocations = 2" & LF);
       Iv.Start (Store, Change, "AGENT-1", "TASK-1", "1", "default", "CTX-1",
-                "none", Iv.Work_Claim, First, Status);
+                "none", Iv.Work_Claim, First, Status, Resource_Class => "model 700 MiB");
       Assert (E.Is_Ok (Status) and then To_String (First) = "INV-000001",
               "an invocation was not given its identifier");
       S.Commit (Store, Change, Status);
@@ -3577,6 +3579,18 @@ package body Tests.Framework_Cases is
       Iv.Start (Store, Change, "AGENT-1", "TASK-1", "1", "default", "CTX-1",
                 "none", Iv.Work_Claim, Second, Status);
       Assert (To_String (Second) = "INV-000002", "a retry did not get a new record");
+      S.Commit (Store, Change, Status);
+
+      --  Two calls is all this execution of the task may make; the next
+      --  generation starts again.
+      Iv.Start (Store, Change, "AGENT-2", "TASK-1", "1", "default", "CTX-1",
+                "none", Iv.Work_Claim, Second, Status);
+      Assert (Status.Code = E.Framework_Limit_Exceeded,
+              "a call past the policy's bound was made");
+      Change := S.No_Changes;
+      Iv.Start (Store, Change, "AGENT-3", "TASK-1", "2", "default", "CTX-1",
+                "none", Iv.Work_Claim, Second, Status);
+      Assert (E.Is_Ok (Status), "a new execution did not get calls of its own");
       S.Close (Store);
 
       Iv.Hold (Iv.Work_Claim,
@@ -3649,6 +3663,64 @@ package body Tests.Framework_Cases is
               & Code_Of (Status) & Integer'Image (Ran.Exit_Status));
       S.Commit (Store, Change, Status);
       Assert (E.Is_Ok (Status), "the raw output was not kept");
+
+      --  Limits set on each command where prlimit is there to set them.
+      Rules.Memory_MB := 512;
+      Rules.CPU_Seconds := 10;
+      Ex.Run (Store, Change, Rules, "echo limited", "", Ran, Status);
+      Assert ((E.Is_Ok (Status) and then Ran.Exit_Status = 0
+               and then Hostkit.Process.Locate ("prlimit") /= "")
+              or else (Status.Code = E.Framework_Execution_Refused
+                       and then Hostkit.Process.Locate ("prlimit") = ""),
+              "a limited command was neither run within its limits nor refused: "
+              & Code_Of (Status));
+      Rules.Memory_MB := 0;
+      Rules.CPU_Seconds := 0;
+      Change := S.No_Changes;
+
+      --  No network where the policy denies it: taken away where the host
+      --  can, and the command still runs either way.
+      Rules.No_Network := True;
+      Ex.Run (Store, Change, Rules, "echo apart", "", Ran, Status);
+      Assert (E.Is_Ok (Status) and then Ran.Exit_Status = 0
+              and then Index (Ran.Output, "apart") > 0,
+              "a command denied the network did not run: " & Code_Of (Status));
+      Rules.No_Network := False;
+      Change := S.No_Changes;
+
+      --  One process slot, held by a process that is running: nothing more
+      --  runs; held by one that is gone, it is taken back.
+      Rules.Process_Slots := 1;
+      Dirs.Create_Path (S.Root (Store) & "/runtime/slots");
+      Put_File (S.Root (Store) & "/runtime/slots/process-1",
+                Ada.Strings.Fixed.Trim (Integer'Image (Hostkit.Host.Own_Process_Id),
+                                        Ada.Strings.Both));
+      Ex.Run (Store, Change, Rules, "echo slot", "", Ran, Status);
+      Assert (Status.Code = E.Framework_Limit_Exceeded, "a command ran with no slot free");
+      Put_File (S.Root (Store) & "/runtime/slots/process-1", "999999999");
+      Ex.Run (Store, Change, Rules, "echo slot", "", Ran, Status);
+      Assert (E.Is_Ok (Status) and then Ran.Exit_Status = 0
+              and then not Dirs.Exists (S.Root (Store) & "/runtime/slots/process-1"),
+              "a slot a gone process held was not taken back, or not given back: "
+              & Code_Of (Status));
+      Rules.Process_Slots := 0;
+      Change := S.No_Changes;
+
+      --  A cancelled run stops the command it waits on.
+      declare
+         Token : aliased Model_Runner.Cancellation.Token;
+         use type Ada.Calendar.Time;
+         Began : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+      begin
+         Rules.Allowed.Append ("sleep");
+         Token.Request;
+         Ex.Watch (Token'Unchecked_Access);
+         Ex.Run (Store, Change, Rules, "sleep 20", "", Ran, Status);
+         Ex.Watch (null);
+         Assert (E.Is_Ok (Status) and then Ran.Cancelled
+                 and then Ada.Calendar.Clock - Began < 10.0,
+                 "a cancelled run did not stop its command");
+      end;
       S.Close (Store);
    end Execution_Follows_Policy;
 
