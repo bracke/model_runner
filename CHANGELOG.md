@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Requirements, decisions and specifications in the session.** `/req`,
+  `/decision` and `/spec` (`CLI.Intents`) list, show and manage their
+  registers: new, accept, reject, reconsider, obsolete, block, unblock,
+  revise, link, supersede and govern. Each change runs the project's
+  routine progression, so an accepted requirement derives its task at once;
+  a project-wide requirement's task gets the project's component
+  (`set components`' first, else the project's name). Bare `/accept` and
+  `/reject` cover candidates of every register, and list the exact
+  commands when several wait.
+- **A component is held while it is written.** Work that writes in the
+  project itself takes a lease on its task's component
+  (`Tasks.Component_Lease`), released when the work ends, is cancelled or
+  is recovered; a task whose component another agent holds is not ready,
+  with the reason, so `/work` cannot start it.
+
 - **The project commands for a program.** `--format json` on `init`,
   `task`, `repo` and `work`: one JSON object a line, each message's key,
   named values and text, errors with their code. `task list` filters by

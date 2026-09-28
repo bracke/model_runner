@@ -197,7 +197,21 @@ agent's tool calls can be bounded (`scalar agents.max_tool_calls`, or
 (`work.max_workspaces`); the standard-development template asks where work
 is written, `project` or `workspace`. The Ada adapter also records
 instantiations, derivations, the interfaces a type takes on, overriding
-and calls. The same commands run
+and calls.
+
+What the project is meant to be is managed in the session too. `/req`,
+`/decision` and `/spec` list their register, show an entry by its
+identifier, and take `new TITLE "text=..." "criteria=..." scope=...`,
+`accept`, `reject`, `reconsider`, `obsolete`, `block`, `unblock`, `revise ID
+"text=..."`, `link ID RELATION TARGET` and, for decisions and
+specifications, `govern ID SETTING RULING` and `supersede OLD NEW`. Nothing
+proposed -- by a person, or found by `/bootstrap` -- governs until it is
+accepted, and each change moves the project along at once: an accepted
+requirement derives its task, for the project's own component when the
+requirement is the whole project's. Bare `/accept` and `/reject` decide the
+one candidate waiting, whatever it is, and name the commands when there are
+several. An agent writing a component in the project itself holds it:
+another task of that component is not ready until it is done. The same commands run
 outside a session too -- `model_runner init|task|repo|work`, with
 `--set NAME=VALUE` for the words -- for scripts.
 

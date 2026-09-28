@@ -554,6 +554,19 @@ package body Model_Runner.Framework.Tasks is
          end if;
       end;
 
+      --  Its component, where another agent is writing it in the project
+      --  itself: two writers in one place is what isolation is for.
+      declare
+         Component : constant String := Records.Get (Defined, "component");
+         Writer    : constant String :=
+           (if Component = "" then "" else Leases.Holder (Item, Component_Lease (Component)));
+      begin
+         if Writer /= "" then
+            Result.Reasons.Append
+              ("its component " & Component & " is being written by " & Writer);
+         end if;
+      end;
+
       Result.Ready := Result.Reasons.Is_Empty;
       return Result;
    end Ready_In;
@@ -887,6 +900,13 @@ package body Model_Runner.Framework.Tasks is
         Records.Get (Settings, "scalar.task.auto_accept") = "true";
       Listed    : constant Events.Event_List := Events.Since (Item, 0);
 
+      --  The component that is the whole project: the first the
+      --  configuration lists, else the project's name.
+      Project_Component : constant String :=
+        (if not Split (Records.Get (Settings, "set.components")).Is_Empty
+         then Split (Records.Get (Settings, "set.components")).First_Element
+         else Records.Get (Settings, "input.project_name"));
+
       --  The keys of the derivations already made.
       Done : Name_Lists.Vector;
 
@@ -956,6 +976,12 @@ package body Model_Runner.Framework.Tasks is
                            Fields.Include ("requirements", Requirement);
                            if To_String (Held.Scope) /= "project" then
                               Fields.Include ("component", To_String (Held.Scope));
+                           elsif Project_Component /= ""
+                             and then Required_Fields (Item, Kind).Contains ("component")
+                           then
+                              --  A requirement of the whole project, for a kind
+                              --  that needs a component: the project's own.
+                              Fields.Include ("component", Project_Component);
                            end if;
                            Create
                              (Item, Change, Fields, "requirement_derivation",

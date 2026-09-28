@@ -6,6 +6,7 @@ with Ada.Strings.Fixed;
 
 with Model_Runner.Agent;
 with Model_Runner.CLI.Init;
+with Model_Runner.CLI.Intents;
 with Model_Runner.CLI.Repo;
 with Model_Runner.CLI.Tasks;
 with Model_Runner.CLI.Work;
@@ -63,7 +64,8 @@ package body Model_Runner.CLI.Project_Commands is
       new String'("/reject"), new String'("/work"), new String'("/cancel"),
       new String'("/check"), new String'("/req"), new String'("/result"),
       new String'("/tree"), new String'("/sym"), new String'("/refs"),
-      new String'("/impact"), new String'("/trace"), new String'("/reconfigure")];
+      new String'("/impact"), new String'("/trace"), new String'("/reconfigure"),
+      new String'("/decision"), new String'("/spec")];
 
    --  The tools the work's agents may call; each is offered only where the
    --  agent's permissions give it.
@@ -640,6 +642,8 @@ package body Model_Runner.CLI.Project_Commands is
       Pres.Put_Note (Screen, "cli.interactive.help.cancel");
       Pres.Put_Note (Screen, "cli.interactive.help.check");
       Pres.Put_Note (Screen, "cli.interactive.help.req");
+      Pres.Put_Note (Screen, "cli.interactive.help.decision");
+      Pres.Put_Note (Screen, "cli.interactive.help.spec");
       Pres.Put_Note (Screen, "cli.interactive.help.result");
       Pres.Put_Note (Screen, "cli.interactive.help.tree");
       Pres.Put_Note (Screen, "cli.interactive.help.sym");
@@ -833,34 +837,6 @@ package body Model_Runner.CLI.Project_Commands is
             end;
          end loop;
       end Show_Config;
-
-      procedure Show_Requirement (Store : in out S.Store) is
-         Held : Nt.Entity;
-         Read : E.Error_Info;
-      begin
-         if Argument (1) = "" then
-            for Id of Nt.List (Store, Nt.Requirement) loop
-               Nt.Read (Store, Nt.Requirement, Id, Held, Read);
-               Pres.Put_Message
-                 (Screen, "cli.task.item",
-                  [Loc.Named ("name", Id), Loc.Named ("value", To_String (Held.State)),
-                   Loc.Named ("detail", To_String (Held.Title))]);
-            end loop;
-            return;
-         end if;
-         Nt.Read (Store, Nt.Requirement, Argument (1), Held, Read);
-         if E.Is_Error (Read) then
-            Pres.Report (Screen, Read);
-            return;
-         end if;
-         Field ("title", To_String (Held.Title));
-         Field ("state", To_String (Held.State));
-         Field ("revision", Image (Held.Revision));
-         Field ("scope", To_String (Held.Scope));
-         Field ("text", To_String (Held.Text));
-         Field ("criteria", To_String (Held.Criteria));
-         Field ("source", To_String (Held.Source));
-      end Show_Requirement;
 
       procedure Show_Result (Store : in out S.Store) is
          Held : Model_Runner.Framework.Results.Result;
@@ -1113,23 +1089,59 @@ package body Model_Runner.CLI.Project_Commands is
 
       --  The one candidate waiting, if there is exactly one.
       procedure Decide (Store : in out S.Store) is
-         Waiting : constant Names.Vector := Tk.List (Store, "candidate");
+         Tasks_Waiting : constant Names.Vector := Tk.List (Store, "candidate");
+         Intent_Waiting : constant Names.Vector := Model_Runner.CLI.Intents.Pending (Store);
+         Waiting : Names.Vector := Tasks_Waiting;
          Listed  : Unbounded_String;
       begin
+         Waiting.Append (Intent_Waiting);
          if Waiting.Is_Empty then
             Pres.Put_Note (Screen, "cli.project.no_pending");
          elsif Natural (Waiting.Length) > 1 then
-            for Id of Waiting loop
-               Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ") & Id);
+            --  Each as the command that decides it.
+            for Id of Tasks_Waiting loop
+               Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ")
+                       & "/task accept " & Id);
+            end loop;
+            for Which of Intent_Waiting loop
+               declare
+                  Colon : constant Natural := Ada.Strings.Fixed.Index (Which, ":");
+                  Kind  : constant String := Which (Which'First .. Colon - 1);
+               begin
+                  Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ")
+                          & (if Kind = "requirement" then "/req"
+                             elsif Kind = "decision" then "/decision" else "/spec")
+                          & " accept " & Which (Colon + 1 .. Which'Last));
+               end;
             end loop;
             Pres.Put_Note
               (Screen, "cli.project.pending_many", [Loc.Named ("detail", To_String (Listed))]);
-         else
+         elsif Intent_Waiting.Is_Empty then
             Command.Action := T.To_Bounded (if Word = "/accept" then "accept" else "reject");
             Command.Action_Argument := T.To_Bounded (Waiting.First_Element);
             Command.Kind := Opt.Command_Task;
+         else
+            --  A requirement, specification or decision: decided here.
+            Model_Runner.CLI.Intents.Decide
+              (Store, Intent_Waiting.First_Element, Word = "/accept", Screen);
          end if;
       end Decide;
+
+      --  /req, /decision and /spec: the registers of what the project is
+      --  meant to be.
+      procedure Intent_Command (Store : in out S.Store) is
+         After : Names.Vector;
+      begin
+         for Index in 2 .. Natural (All_Words.Length) loop
+            After.Append (All_Words (Index));
+         end loop;
+         Model_Runner.CLI.Intents.Run
+           (Store,
+            (if Word = "/req" then Nt.Requirement
+             elsif Word = "/decision" then Nt.Decision
+             else Nt.Specification),
+            After, Screen);
+      end Intent_Command;
    begin
       for Index in 2 .. Natural (All_Words.Length) loop
          declare
@@ -1186,8 +1198,8 @@ package body Model_Runner.CLI.Project_Commands is
          With_Store (State'Access);
       elsif Word = "/config" then
          With_Store (Show_Config'Access);
-      elsif Word = "/req" then
-         With_Store (Show_Requirement'Access);
+      elsif Word in "/req" | "/decision" | "/spec" then
+         With_Store (Intent_Command'Access);
       elsif Word = "/result" then
          With_Store (Show_Result'Access);
       elsif Word = "/check" then

@@ -86,6 +86,15 @@ package body Model_Runner.Framework.Work is
    function Interrupted (Ran : E.Error_Info) return Boolean
    is (E."=" (Ran.Code, E.Generation_Cancelled));
 
+   --  A task's component.
+   function Component_Of (Item : Stores.Store; Task_Id : String) return String is
+      Defined : Records.Item;
+      Status  : E.Error_Info;
+   begin
+      Tasks.Definition (Item, Task_Id, Defined, Status);
+      return Records.Get (Defined, "component");
+   end Component_Of;
+
    --  A task's kind.
    function Kind_Of (Item : Stores.Store; Task_Id : String) return String is
       Defined : Records.Item;
@@ -250,6 +259,10 @@ package body Model_Runner.Framework.Work is
                   Agent_State (Item, Change, Agent, "failed", "it stopped without finishing");
                end if;
                Leases.Release (Item, Change, Lease_Of (Id), Agent, Status);
+               if E.Is_Ok (Status) and then Component_Of (Item, Id) /= "" then
+                  Leases.Release
+                    (Item, Change, Tasks.Component_Lease (Component_Of (Item, Id)), Agent, Status);
+               end if;
 
                --  Blocked, unless the project says otherwise.
                if E.Is_Ok (Status) and then Scalar (Item, "recovery.running") = "failed" then
@@ -1015,6 +1028,12 @@ package body Model_Runner.Framework.Work is
          Agent_State (Item, Change, To_String (Result.Agent_Id), Agent_End, Reason);
          Leases.Release
            (Item, Change, Lease_Of (Task_Id), To_String (Result.Agent_Id), Status);
+         if E.Is_Ok (Status) and then not Isolated and then Component_Of (Item, Task_Id) /= ""
+         then
+            Leases.Release
+              (Item, Change, Tasks.Component_Lease (Component_Of (Item, Task_Id)),
+               To_String (Result.Agent_Id), Status);
+         end if;
          if E.Is_Ok (Status) then
             Stores.Commit (Item, Change, Status);
          end if;
@@ -1054,6 +1073,14 @@ package body Model_Runner.Framework.Work is
       Leases.Acquire
         (Item, Change, Lease_Of (Task_Id), To_String (Result.Agent_Id),
          Lease_Seconds (Item), Status);
+
+      --  Writing in the project itself, it holds its component too, so no
+      --  other agent writes the same component meanwhile.
+      if E.Is_Ok (Status) and then not Isolated and then Component_Of (Item, Task_Id) /= "" then
+         Leases.Acquire
+           (Item, Change, Tasks.Component_Lease (Component_Of (Item, Task_Id)),
+            To_String (Result.Agent_Id), Lease_Seconds (Item), Status);
+      end if;
       if E.Is_Ok (Status) then
          Tasks.Move (Item, Change, Task_Id, "running", "", Status => Status);
       end if;
@@ -1652,6 +1679,10 @@ package body Model_Runner.Framework.Work is
          Stop_Children (Item, Change, Agent);
          Agent_State (Item, Change, Agent, "cancelled", "the task was cancelled");
          Leases.Release (Item, Change, Lease_Of (Task_Id), Agent, Status);
+         if E.Is_Ok (Status) and then Component_Of (Item, Task_Id) /= "" then
+            Leases.Release
+              (Item, Change, Tasks.Component_Lease (Component_Of (Item, Task_Id)), Agent, Status);
+         end if;
          if Status.Code = E.Framework_Lease_Held then
             Status := E.Success;
          end if;

@@ -7,6 +7,7 @@ with Ada.Strings.Unbounded;
 
 with AUnit.Assertions;
 
+with Model_Runner.CLI.Intents;
 with Model_Runner.CLI.Options;
 with Model_Runner.CLI.Work;
 with Model_Runner.Errors;
@@ -2012,6 +2013,15 @@ package body Tests.Framework_Cases is
               & Code_Of (Status));
    end Task_Project;
 
+   --  A task's definition, read.
+   function Definition_Of (Store : S.Store; Id : String) return R.Item is
+      Value  : R.Item;
+      Status : E.Error_Info;
+   begin
+      Tk.Definition (Store, Id, Value, Status);
+      return Value;
+   end Definition_Of;
+
    --  The directory a store's project is in.
    function Fresh_Root (Store : S.Store) return String
    is (Dirs.Containing_Directory (S.Root (Store)));
@@ -3812,6 +3822,181 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Schemas_Retention_Adapter_And_Slots;
 
+   --  What the project is meant to be is managed without a model: a
+   --  requirement proposed, accepted -- and its task derived at once --
+   --  revised and linked; a decision proposed, accepted, made to govern a
+   --  setting and superseded; a candidate specification decided by the
+   --  bare accept. And an agent writing a component in the project itself
+   --  holds it: a task of the same component is not ready meanwhile, and
+   --  the hold goes when the work ends.
+   procedure Intent_Is_Managed_And_Components_Held
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package In_CLI renames Model_Runner.CLI.Intents;
+      Store   : aliased S.Store;
+      Status  : E.Error_Info;
+      Change  : S.Transaction;
+      Catalog : aliased Model_Runner.Localization.Catalog;
+      Screen  : Model_Runner.Presentation.Console;
+      Held    : Nt.Entity;
+      Done    : Wk.Report;
+
+      procedure Say (Kind : Nt.Intent_Kind; Line : String) is
+         Words : Model_Runner.Framework.Name_Lists.Vector;
+         Start : Natural := Line'First;
+      begin
+         for Index in Line'First .. Line'Last + 1 loop
+            if Index > Line'Last or else Line (Index) = '|' then
+               Words.Append (Line (Start .. Index - 1));
+               Start := Index + 1;
+            end if;
+         end loop;
+         In_CLI.Run (Store, Kind, Words, Screen);
+      end Say;
+
+      --  What a register holds now, to tell the entry a new one made.
+      Known : array (Nt.Intent_Kind) of Model_Runner.Framework.Name_Lists.Vector;
+
+      --  The entry that appeared since this was last asked.
+      function First_Of (Kind : Nt.Intent_Kind) return String is
+         Listed : constant Model_Runner.Framework.Name_Lists.Vector := Nt.List (Store, Kind);
+      begin
+         for Id of Listed loop
+            if not Known (Kind).Contains (Id) then
+               Known (Kind) := Listed;
+               return Id;
+            end if;
+         end loop;
+         return (if Listed.Is_Empty then "" else Listed.Last_Element);
+      end First_Of;
+   begin
+      Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+      Model_Runner.Presentation.Open
+        (Screen, Catalog'Unchecked_Access, Model_Runner.CLI.Options.Color_Never,
+         (Output_Is_Terminal => False, Error_Is_Terminal => False,
+          Input_Is_Terminal  => False, Colour_Suppressed => True),
+         Model_Runner.CLI.Options.Quiet);
+      Task_Project (Store, "intent-commands", "scalar task.derived_kind = analysis" & LF);
+      for Kind in Nt.Intent_Kind loop
+         Known (Kind) := Nt.List (Store, Kind);
+      end loop;
+
+      --  A requirement, through its life.
+      Say (Nt.Requirement, "new|Read the input|text=The program reads its input.|criteria=It reads a file.");
+      declare
+         Req : constant String := First_Of (Nt.Requirement);
+      begin
+         Nt.Read (Store, Nt.Requirement, Req, Held, Status);
+         Assert (E.Is_Ok (Status) and then To_String (Held.State) = "candidate"
+                 and then To_String (Held.Criteria) = "It reads a file.",
+                 "a requirement was not proposed as a candidate: [" & Req & "] "
+                 & Code_Of (Status) & " " & To_String (Held.State) & " ["
+                 & To_String (Held.Criteria) & "]");
+         Assert (In_CLI.Pending (Store).Contains ("requirement:" & Req),
+                 "a candidate requirement is not pending");
+         Say (Nt.Requirement, "accept|" & Req);
+         Nt.Read (Store, Nt.Requirement, Req, Held, Status);
+         Assert (To_String (Held.State) = "accepted"
+                 and then (for some Id of Tk.List (Store) =>
+                             Ada.Strings.Fixed.Index
+                               (Model_Runner.Framework.Records.Get
+                                  (Definition_Of (Store, Id), "requirements"), Req) > 0),
+                 "an accepted requirement did not derive its task");
+         declare
+            Before : constant Natural := Held.Revision;
+         begin
+            Say (Nt.Requirement, "revise|" & Req & "|criteria=It reads a file and standard input.");
+            Nt.Read (Store, Nt.Requirement, Req, Held, Status);
+            Assert (Held.Revision > Before
+                    and then To_String (Held.Criteria) = "It reads a file and standard input.",
+                    "a requirement was not revised");
+         end;
+         Say (Nt.Requirement, "link|" & Req & "|test|tests/input");
+         Assert (Nt.Links (Store, Nt.Requirement, Req, Nt.Test).Contains ("tests/input"),
+                 "a requirement was not linked");
+      end;
+
+      --  A decision: accepted, governing, superseded.
+      Say (Nt.Decision, "new|Build with Alire|text=Alire builds it.");
+      declare
+         First : constant String := First_Of (Nt.Decision);
+      begin
+         Say (Nt.Decision, "accept|" & First);
+         Say (Nt.Decision, "govern|" & First & "|scalar.build.command|alr build");
+         Say (Nt.Decision, "new|Build with gprbuild|text=gprbuild builds it.");
+         declare
+            Second : constant String := First_Of (Nt.Decision);
+         begin
+            Say (Nt.Decision, "supersede|" & First & "|" & Second);
+            Nt.Read (Store, Nt.Decision, First, Held, Status);
+            Assert (To_String (Held.State) = "superseded"
+                    and then To_String (Held.Superseded_By) = Second,
+                    "a decision was not superseded: " & To_String (Held.State));
+         end;
+      end;
+
+      --  A candidate specification, by the bare accept.
+      Say (Nt.Specification, "new|The interface|text=It has one command.");
+      declare
+         Spec : constant String := First_Of (Nt.Specification);
+      begin
+         In_CLI.Decide (Store, "specification:" & Spec, True, Screen);
+         Nt.Read (Store, Nt.Specification, Spec, Held, Status);
+         Assert (To_String (Held.State) = "accepted", "a specification was not accepted");
+      end;
+      S.Close (Store);
+
+      --  A component held while it is written.
+      Task_Project (Store, "component-held", "set execution.allowed = test" & LF);
+      declare
+         First, Second : Unbounded_String;
+         Changes  : Cf.Value_Maps.Map;
+         Planned  : Cf.Change_Plan;
+         Revision : Natural;
+      begin
+         Changes.Include ("profile.tests", "exists: test -f src/hello.adb");
+         Cf.Plan_Change (Store, Changes, Planned, Status);
+         Cf.Reconfigure (Store, Planned, Revision, Status);
+         Tk.Create (Store, Change, Fields ("One", "implementation", "component", "demo"),
+                    "user", "", First, Status);
+         Tk.Create (Store, Change, Fields ("Two", "implementation", "component", "demo"),
+                    "user", "", Second, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (First), "accepted", "", Status => Status);
+         Tk.Move (Store, Change, To_String (Second), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Ls.Acquire (Store, Change, Tk.Component_Lease ("demo"), "AG-OTHER", 600, Status);
+         S.Commit (Store, Change, Status);
+         Assert (not Tk.Ready (Store, To_String (Second)).Ready
+                 and then (for some Reason of Tk.Ready (Store, To_String (Second)).Reasons =>
+                             Ada.Strings.Fixed.Index (Reason, "being written") > 0),
+                 "a task was ready while its component was being written");
+         Wk.Execute (Store, To_String (Second),
+                     Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                                     Answer => To_Unbounded_String
+                                       ("status: done" & LF & "summary: x"),
+                                     Broken => False),
+                     Cx.Profile (Store, ""), Done, Status);
+         Assert (Status.Code = E.Framework_Task_Not_Ready,
+                 "work started on a component another agent was writing");
+         Ls.Release (Store, Change, Tk.Component_Lease ("demo"), "AG-OTHER", Status);
+         S.Commit (Store, Change, Status);
+         Wk.Execute (Store, To_String (First),
+                     Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                                     Answer => To_Unbounded_String
+                                       ("status: done" & LF & "summary: x" & LF
+                                        & "changed_files: src/hello.adb"),
+                                     Broken => False),
+                     Cx.Profile (Store, ""), Done, Status);
+         Assert (To_String (Done.Final_State) = "complete"
+                 and then Ls.Holder (Store, Tk.Component_Lease ("demo")) = "",
+                 "the component was still held after the work ended: "
+                 & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+      end;
+      S.Close (Store);
+   end Intent_Is_Managed_And_Components_Held;
+
    --  Properties, not examples. The task lifecycle allows exactly the moves
    --  the specification lists, the reopen and reconsideration ones only
    --  when granted -- every pair of states, both ways. And over dependency
@@ -4968,6 +5153,9 @@ package body Tests.Framework_Cases is
         (T, Recursion_Stays_Bounded'Access,
          "children stay within limits and permissions, failures and"
          & " cancellation are seen");
+      Register_Routine
+        (T, Intent_Is_Managed_And_Components_Held'Access,
+         "intent is managed without a model, and a component is held while written");
       Register_Routine
         (T, Schemas_Retention_Adapter_And_Slots'Access,
          "schemas migrate, results retire, the adapter traces derivation, slots bound work");
