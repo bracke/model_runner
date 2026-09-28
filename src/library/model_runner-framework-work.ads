@@ -354,6 +354,19 @@ package Model_Runner.Framework.Work is
       Task_Id : String;
       Status  : out Model_Runner.Errors.Error_Info);
 
+   --  What the state says about how a task came to be where it is, as
+   --  question and answer, one a line -- the questions a completed task
+   --  must answer without a conversation: the revisions that applied, why
+   --  it could start, what the model was told and which model it was, what
+   --  changed and where, what verified it and with which tools, what
+   --  justified its completion, what integration took its work in, and
+   --  what its requirements' verification became.
+   --
+   --  @param Item The store.
+   --  @param Task_Id The task.
+   --  @return The answers, as QUESTION: ANSWER.
+   function Audit (Item : Stores.Store; Task_Id : String) return Name_Lists.Vector;
+
    --  What a child is told after its context: how to answer.
    --
    --  @return The text.

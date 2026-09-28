@@ -232,7 +232,20 @@ declare, which tests bear on it, and what the last attempt left -- the
 previous answer and what its verification found wrong -- so a retry knows
 why it is one. And work is bounded in time: `scalar agents.max_seconds`, or
 `task.max_seconds.KIND`, else the task's lease, for the agent and its
-children together; past it the task is set aside, blocked, not failed. The same commands run
+children together; past it the task is set aside, blocked, not failed.
+
+A task answers for itself: `/task audit TASK` says, from the records alone,
+which requirement and definition revisions applied, why it could start (kept
+when it did -- its state, what it waited for, that nothing held it or its
+component), which decisions applied, what context the model got and which
+model it was, what changed and where, what verified it and with which tool
+versions, what completed it, and where its requirements stand now. What of
+the project's state goes into Git is `scalar repository.state_policy`:
+`portable`, the default, commits what travels with the project and leaves
+out what belongs to one machine or can be built again; `local` leaves out all
+of it; `all` commits all of it -- kept as the state's own `.gitignore`. And
+`/git` asks Git how the project stands: the branch, and each changed path
+with the tasks whose work changed it. The same commands run
 outside a session too -- `model_runner init|task|repo|work`, with
 `--set NAME=VALUE` for the words -- for scripts.
 

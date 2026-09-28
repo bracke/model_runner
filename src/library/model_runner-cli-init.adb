@@ -4,6 +4,7 @@ with Model_Runner.Errors;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Templates;
@@ -290,6 +291,16 @@ package body Model_Runner.CLI.Init is
       for Kept of Done.Kept_Files loop
          Pres.Put_Note (Screen, "cli.init.kept", [Loc.Named ("path", Kept)]);
       end loop;
+
+      --  What of the state goes into the repository, as the policy says.
+      declare
+         Written : Boolean;
+      begin
+         Model_Runner.Framework.Git.Keep_Policy (Store, Written, Outcome);
+         if E.Is_Error (Outcome) then
+            Pres.Report (Screen, Outcome);
+         end if;
+      end;
 
       Pres.Put_Message
         (Screen, "cli.init.done",

@@ -17,13 +17,11 @@ package body Library_Surface is
       --  edges touching one node; a caller walking the whole graph asks.
       new String'("Edge_Count"),
 
-      --  The project state's operations its commands do not reach yet:
+      --  The project state's operation its commands do not reach yet:
       --  blocking a parent on children made some other way than by a
-      --  split, which blocks it as it makes them; and an area's
-      --  portability, which a repository policy asks. Until it arrives,
+      --  split, which blocks it as it makes them. Until something does,
       --  the suite asks.
       new String'("Block_On_Children"),
-      new String'("Portability_Of"),
 
       --  How a schema's records are carried to its next version. Every
       --  schema is still at its first, so nothing registers a step yet;

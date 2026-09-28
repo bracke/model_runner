@@ -9,6 +9,7 @@ with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Files;
+with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Invocations;
 with Model_Runner.Framework.Leases;
@@ -118,6 +119,38 @@ package body Model_Runner.Framework.Work is
    --  Whether a run was stopped by whoever started it.
    function Interrupted (Ran : E.Error_Info) return Boolean
    is (E."=" (Ran.Code, E.Generation_Cancelled));
+
+   --  Why a task could start, as it stood when it did: what it waited for
+   --  and what state that was in, that nothing held it or its component,
+   --  and what it was to be checked by -- kept, because afterwards the
+   --  state that said so is gone.
+   function Admission (Item : Stores.Store; Task_Id : String; Isolated : Boolean) return String is
+      Defined : Records.Item;
+      Status  : E.Error_Info;
+      Text    : Unbounded_String;
+   begin
+      Tasks.Definition (Item, Task_Id, Defined, Status);
+      Append (Text, "it was " & Tasks.State_Of (Item, Task_Id) & " and ready");
+      declare
+         Waits : constant Name_Lists.Vector := Lines_Of (Records.Get (Defined, "depends_on"));
+      begin
+         if Waits.Is_Empty then
+            Append (Text, "; it waited for nothing");
+         else
+            for Other of Waits loop
+               Append (Text, "; " & Other & " was " & Tasks.State_Of (Item, Other));
+            end loop;
+         end if;
+      end;
+      Append (Text, "; no agent held it");
+      Append (Text, (if Isolated then "; it was to write in a workspace of its own"
+                     elsif Records.Get (Defined, "component") = "" then "; it named no component"
+                     else "; no agent was writing " & Records.Get (Defined, "component")));
+      Append (Text, "; kind " & Records.Get (Defined, "kind")
+              & ", definition revision" & Natural'Image (Records.Revision (Defined))
+              & ", checked by " & Verification.Profile_Of (Item, Task_Id));
+      return To_String (Text);
+   end Admission;
 
    --  A task's component.
    function Component_Of (Item : Stores.Store; Task_Id : String) return String is
@@ -490,6 +523,17 @@ package body Model_Runner.Framework.Work is
          end loop;
       end;
 
+      --  What of the state goes into the repository, as the policy says.
+      declare
+         Written : Boolean;
+         Kept    : E.Error_Info;
+      begin
+         Git.Keep_Policy (Item, Written, Kept);
+         if Written then
+            Said.Append ("wrote the state's .gitignore for its repository policy");
+         end if;
+      end;
+
       --  Results the project keeps only for a while, let go of.
       declare
          Removed : Natural;
@@ -543,6 +587,121 @@ package body Model_Runner.Framework.Work is
        ("child_result",
         "status = done|failed" & ASCII.LF & "summary" & ASCII.LF
         & "findings?" & ASCII.LF & "changed_files?");
+
+   -----------
+   -- Audit --
+   -----------
+
+   function Audit (Item : Stores.Store; Task_Id : String) return Name_Lists.Vector is
+      Result  : Name_Lists.Vector;
+      Defined : Records.Item;
+      State   : Records.Item;
+      Call    : Records.Item;
+      Plan    : Records.Item;
+      Proof   : Records.Item;
+      Status  : E.Error_Info;
+
+      procedure Say (Question, Answer : String) is
+      begin
+         Result.Append (Question & ": " & (if Answer = "" then "(nothing recorded)" else Answer));
+      end Say;
+
+      --  The fields of a record whose names start with a prefix, as
+      --  NAME VALUE, joined.
+      function Fields_With (Value : Records.Item; Prefix : String) return String is
+         Text : Unbounded_String;
+      begin
+         for Index in 1 .. Records.Field_Count (Value) loop
+            declare
+               Field : constant String := Records.Field_Name (Value, Index);
+            begin
+               if Field'Length > Prefix'Length
+                 and then Field (Field'First .. Field'First + Prefix'Length - 1) = Prefix
+               then
+                  Append (Text, (if Text = Null_Unbounded_String then "" else ", ")
+                          & Field (Field'First + Prefix'Length .. Field'Last) & " "
+                          & Records.Get (Value, Field));
+               end if;
+            end;
+         end loop;
+         return To_String (Text);
+      end Fields_With;
+
+      --  The last invocation made for the task.
+      function Last_Call return String is
+         Found : Unbounded_String;
+      begin
+         for Name of Stores.Names (Item, Invocations_Area) loop
+            if Name'Length > 4 and then Name (Name'First .. Name'First + 3) = "INV-" then
+               declare
+                  Value : Records.Item;
+                  Read  : E.Error_Info;
+               begin
+                  Stores.Read (Item, Invocations_Area, Name, Value, Read);
+                  if E.Is_Ok (Read) and then Records.Get (Value, "task") = Task_Id
+                    and then Records.Get (Value, "result_contract") = "work_claim"
+                  then
+                     Found := To_Unbounded_String (Name);
+                  end if;
+               end;
+            end if;
+         end loop;
+         return To_String (Found);
+      end Last_Call;
+
+      Invocation : constant String := Last_Call;
+   begin
+      Tasks.Definition (Item, Task_Id, Defined, Status);
+      Stores.Read (Item, Tasks_Area, Task_Id & ".state", State, Status);
+      if Invocation /= "" then
+         Stores.Read (Item, Invocations_Area, Invocation, Call, Status);
+         Stores.Read (Item, Invocations_Area, "manifest." & Records.Get (Call, "context_manifest"),
+                      Plan, Status);
+      end if;
+      if Records.Get (State, "current_verification") /= "" then
+         Stores.Read (Item, Verification_Area, Records.Get (State, "current_verification"),
+                      Proof, Status);
+      end if;
+
+      Say ("requirement revisions", Fields_With (Plan, "applies.REQ"));
+      Say ("task definition revision", Natural'Image (Records.Revision (Defined)));
+      Say ("why it could start", Records.Get (State, "admission"));
+      Say ("decisions", Fields_With (Plan, "applies.DEC"));
+      Say ("context", Records.Get (Call, "context_manifest")
+           & (if Records.Get (Plan, "rendered") = "" then ""
+              else ", rendered as " & Records.Get (Plan, "rendered")));
+      Say ("model", Records.Get (Call, "model_profile")
+           & (if Invocation = "" then "" else ", in " & Invocation));
+      Say ("files changed", Records.Get (State, "changed_files"));
+      Say ("workspace", Records.Get (State, "current_workspace"));
+      Say ("verification", Records.Get (State, "current_verification")
+           & (if Records.Get (Proof, "profile") = "" then ""
+              else ", profile " & Records.Get (Proof, "profile")
+                   & (if Records.Get (Proof, "passed") = "true" then ", passed" else ", failed")));
+      Say ("tool versions", Fields_With (Proof, "tool."));
+      Say ("completion", (if Tasks.State_Of (Item, Task_Id) = "complete"
+                          then "its gates passed on " & Records.Get (State, "current_verification")
+                          else "it is " & Tasks.State_Of (Item, Task_Id)));
+      Say ("integration", (if Records.Get (State, "current_workspace") = ""
+                           then "none: it wrote in the project itself"
+                           else "the workspace " & Records.Get (State, "current_workspace")));
+      declare
+         Became : Unbounded_String;
+      begin
+         for Requirement of Lines_Of (Records.Get (Defined, "requirements")) loop
+            declare
+               Held : Intent.Entity;
+               Read : E.Error_Info;
+            begin
+               Intent.Read (Item, Intent.Requirement, Requirement, Held, Read);
+               Append (Became, (if Became = Null_Unbounded_String then "" else ", ")
+                       & Requirement & " " & To_String (Held.State));
+            end;
+         end loop;
+         Say ("requirements now", To_String (Became));
+      end;
+      return Result;
+   end Audit;
 
    ------------------------
    -- Child_Instructions --
@@ -1132,6 +1291,7 @@ package body Model_Runner.Framework.Work is
          Tasks.Move (Item, Change, Task_Id, "running", "", Status => Status);
       end if;
       if E.Is_Ok (Status) then
+         Annotate (Item, Change, Task_Id, "admission", Admission (Item, Task_Id, Isolated));
          Annotate (Item, Change, Task_Id, "active_agent", To_String (Result.Agent_Id));
          Stores.Commit (Item, Change, Status);
       end if;

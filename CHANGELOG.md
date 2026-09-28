@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A task answers for itself.** When work starts, why the task could start
+  is recorded (`admission`: its state, its dependencies' states, that no
+  agent held it or its component, its kind, definition revision and
+  profile). `/task audit TASK` (`Work.Audit`) answers the specification's
+  auditability questions from state, manifests, evidence and results.
+- **Git.** `scalar repository.state_policy` (`portable`, `local`, `all`)
+  decides which state classes are committed, kept as the state root's
+  `.gitignore` by `Git.Keep_Policy` at init, on opening and on
+  reconfiguration. `/git` (`Git.Status_Of`) reports the branch and each
+  changed path with the tasks that changed it, asked of Git, not a model.
+
 - **`/work` in the session runs the task it is given again.** Since the
   text selector, the session handed `/work` the words after its first
   argument rather than from it, so `/work TASK-X` opened the chooser

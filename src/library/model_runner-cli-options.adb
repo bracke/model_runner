@@ -2727,7 +2727,7 @@ package body Model_Runner.CLI.Options is
                                    | "cancel" | "show" | "context" | "verify"
                                    | "complete" | "integrate" | "derive" | "step"
                                    | "plan" | "reopen" | "reconsider" | "edit"
-                                   | "depend" | "split"
+                                   | "depend" | "split" | "audit"
                   then
                      Fail (E.CLI_Unexpected_Operand, "", Argument);
                      return;

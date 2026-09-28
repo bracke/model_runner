@@ -707,6 +707,19 @@ package body Model_Runner.CLI.Tasks is
          end if;
       elsif Action = "cancel" then
          Move ("cancelled");
+      elsif Action = "audit" then
+         if Needs_Task then
+            for Line of Model_Runner.Framework.Work.Audit (Store, Argument) loop
+               declare
+                  Colon : constant Natural := Ada.Strings.Fixed.Index (Line, ": ");
+               begin
+                  Pres.Put_Message
+                    (Screen, "cli.task.field",
+                     [Loc.Named ("name", Line (Line'First .. Colon - 1)),
+                      Loc.Named ("value", Line (Colon + 2 .. Line'Last))]);
+               end;
+            end loop;
+         end if;
       elsif Action = "reopen" then
          Move_Granted ("accepted", Model_Runner.Framework.Transitions.Reopen);
       elsif Action = "reconsider" then

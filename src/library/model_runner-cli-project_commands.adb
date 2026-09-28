@@ -18,6 +18,7 @@ with Model_Runner.Framework.Agents;
 with Model_Runner.Framework.Bootstrap;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Consistency;
+with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Records;
@@ -65,7 +66,7 @@ package body Model_Runner.CLI.Project_Commands is
       new String'("/check"), new String'("/req"), new String'("/result"),
       new String'("/tree"), new String'("/sym"), new String'("/refs"),
       new String'("/impact"), new String'("/trace"), new String'("/reconfigure"),
-      new String'("/decision"), new String'("/spec")];
+      new String'("/decision"), new String'("/spec"), new String'("/git")];
 
    --  The tools the work's agents may call; each is offered only where the
    --  agent's permissions give it.
@@ -639,6 +640,7 @@ package body Model_Runner.CLI.Project_Commands is
       Pres.Put_Note (Screen, "cli.interactive.help.bootstrap");
       Pres.Put_Note (Screen, "cli.interactive.help.state");
       Pres.Put_Note (Screen, "cli.interactive.help.config");
+      Pres.Put_Note (Screen, "cli.interactive.help.git");
       Pres.Put_Note (Screen, "cli.interactive.help.reconfigure");
       Pres.Put_Note (Screen, "cli.interactive.help.task");
       Pres.Put_Note (Screen, "cli.interactive.help.accept");
@@ -1088,9 +1090,60 @@ package body Model_Runner.CLI.Project_Commands is
                                                                   Loc.Named ("value", "")]);
             end loop;
          end;
+         declare
+            Written : Boolean;
+         begin
+            Model_Runner.Framework.Git.Keep_Policy (Store, Written, Read);
+            if E.Is_Error (Read) then
+               Pres.Report (Screen, Read);
+            end if;
+         end;
          Pres.Put_Message
            (Screen, "cli.project.reconfigure.done", [Loc.Named ("count", Image (Revision))]);
       end Reconfigure;
+
+      --  How the project stands in Git, asked of Git: the branch, and each
+      --  changed path with the tasks whose work changed it.
+      procedure Git_Status (Store : in out S.Store) is
+         Said : constant Model_Runner.Framework.Git.Status_Report :=
+           Model_Runner.Framework.Git.Status_Of (Here);
+      begin
+         if not Said.Found then
+            Pres.Put_Note (Screen, "cli.project.git.none");
+            return;
+         end if;
+         Pres.Put_Message
+           (Screen, "cli.project.git.branch", [Loc.Named ("name", To_String (Said.Branch))]);
+         for Line of Said.Changes loop
+            declare
+               Path : constant String := Line (Line'First + 3 .. Line'Last);
+               By   : Unbounded_String;
+            begin
+               for Id of Tk.List (Store) loop
+                  declare
+                     State : R.Item;
+                     Read  : E.Error_Info;
+                  begin
+                     S.Read (Store, Model_Runner.Framework.Tasks_Area, Id & ".state", State, Read);
+                     if E.Is_Ok (Read)
+                       and then Model_Runner.Framework.Lines_Of
+                                  (R.Get (State, "changed_files")).Contains (Path)
+                     then
+                        Append (By, (if By = Null_Unbounded_String then "" else ", ") & Id);
+                     end if;
+                  end;
+               end loop;
+               Pres.Put_Message
+                 (Screen, "cli.task.item",
+                  [Loc.Named ("name", Path),
+                   Loc.Named ("value", Line (Line'First .. Line'First + 1)),
+                   Loc.Named ("detail", To_String (By))]);
+            end;
+         end loop;
+         if Said.Changes.Is_Empty then
+            Pres.Put_Note (Screen, "cli.project.git.clean");
+         end if;
+      end Git_Status;
 
       --  The one candidate waiting, if there is exactly one.
       procedure Decide (Store : in out S.Store) is
@@ -1211,6 +1264,8 @@ package body Model_Runner.CLI.Project_Commands is
          With_Store (Check'Access);
       elsif Word = "/bootstrap" then
          With_Store (Bootstrap'Access);
+      elsif Word = "/git" then
+         With_Store (Git_Status'Access);
       elsif Word = "/reconfigure" then
          With_Store (Reconfigure'Access);
       end if;

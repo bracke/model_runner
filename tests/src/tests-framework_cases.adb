@@ -1,3 +1,5 @@
+with Ada.Text_IO;
+with Hostkit;
 with Interfaces;
 with Ada.Environment_Variables;
 with Ada.Directories;
@@ -24,6 +26,7 @@ with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Facts;
 with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Intent;
+with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Invocations;
 with Model_Runner.Framework.Leases;
 with Model_Runner.Framework.Orchestration;
@@ -4912,6 +4915,128 @@ package body Tests.Framework_Cases is
       Run (Self, Prompt_Path, Project, Answer, Status);
    end Run_Parenting;
 
+   --  A completed task answers for itself from the records alone -- why it
+   --  could start among them -- and what of the state goes into Git is the
+   --  project's policy, kept as the state's own .gitignore; Git is asked,
+   --  not guessed, how the project stands.
+   procedure Audit_Policy_And_Git
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store   : aliased S.Store;
+      Status  : E.Error_Info;
+      Change  : S.Transaction;
+      Id      : Unbounded_String;
+      Done    : Wk.Report;
+      Written : Boolean;
+      Text    : Unbounded_String;
+
+      function Answer (Lines : Model_Runner.Framework.Name_Lists.Vector; Question : String)
+        return String is
+      begin
+         for Line of Lines loop
+            if Line'Length > Question'Length + 1
+              and then Line (Line'First .. Line'First + Question'Length) = Question & ":"
+            then
+               return Line (Line'First + Question'Length + 2 .. Line'Last);
+            end if;
+         end loop;
+         return "";
+      end Answer;
+
+      function Ignore_File return String is
+         File : Ada.Text_IO.File_Type;
+      begin
+         Text := Null_Unbounded_String;
+         Ada.Text_IO.Open (File, Ada.Text_IO.In_File, S.Root (Store) & "/.gitignore");
+         while not Ada.Text_IO.End_Of_File (File) loop
+            Append (Text, Ada.Text_IO.Get_Line (File) & LF);
+         end loop;
+         Ada.Text_IO.Close (File);
+         return To_String (Text);
+      end Ignore_File;
+
+      function Has (Whole, Part : String) return Boolean
+      is (Ada.Strings.Fixed.Index (Whole, Part) > 0);
+   begin
+      Task_Project
+        (Store, "audit",
+         "set execution.allowed = test" & LF
+         & "profile checks = exists: test -f src/hello.adb" & LF
+         & "scalar verification.default = checks" & LF);
+      Tk.Create (Store, Change, Fields ("Audited", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Execute (Store, To_String (Id),
+                  Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                                  Answer => To_Unbounded_String ("status: done" & LF & "summary: x"),
+                                  Broken => False),
+                  Cx.Profile (Store, ""), Done, Status);
+      declare
+         Said : constant Model_Runner.Framework.Name_Lists.Vector :=
+           Wk.Audit (Store, To_String (Id));
+      begin
+         Assert (Has (Answer (Said, "why it could start"), "it was accepted and ready")
+                 and then Has (Answer (Said, "why it could start"), "no agent held it")
+                 and then Has (Answer (Said, "files changed"), "src/hello.adb")
+                 and then Has (Answer (Said, "verification"), "passed")
+                 and then Has (Answer (Said, "context"), "CTX-")
+                 and then Has (Answer (Said, "completion"), "its gates passed"),
+                 "the task did not answer for itself: " & Answer (Said, "why it could start"));
+      end;
+
+      --  The policy, kept.
+      Model_Runner.Framework.Git.Keep_Policy (Store, Written, Status);
+      Assert (E.Is_Ok (Status)
+              and then Has (Ignore_File, "/runtime/") and then Has (Ignore_File, "/indexes/")
+              and then not Has (Ignore_File, "/tasks/") and then not Has (Ignore_File, "/config/"),
+              "the portable policy does not keep what travels and leave out what does not");
+      Model_Runner.Framework.Git.Keep_Policy (Store, Written, Status);
+      Assert (not Written, "an unchanged policy was written again");
+      declare
+         Changes  : Cf.Value_Maps.Map;
+         Planned  : Cf.Change_Plan;
+         Revision : Natural;
+      begin
+         Changes.Include ("scalar.repository.state_policy", "local");
+         Cf.Plan_Change (Store, Changes, Planned, Status);
+         Cf.Reconfigure (Store, Planned, Revision, Status);
+         Model_Runner.Framework.Git.Keep_Policy (Store, Written, Status);
+         Assert (Written and then Has (Ignore_File, "*" & LF),
+                 "the local policy does not keep the state out");
+         Changes.Clear;
+         Changes.Include ("scalar.repository.state_policy", "sometimes");
+         Cf.Plan_Change (Store, Changes, Planned, Status);
+         Cf.Reconfigure (Store, Planned, Revision, Status);
+         Model_Runner.Framework.Git.Keep_Policy (Store, Written, Status);
+         Assert (Status.Code = E.Framework_Schema_Violation, "a policy that is none was taken");
+      end;
+
+      --  Git, asked.
+      declare
+         Root     : constant String := Dirs.Full_Name (Fresh ("git-status"));
+         Args     : Hostkit.String_Vectors.Vector;
+         Exit_Code : Integer;
+      begin
+         Args.Append (To_Unbounded_String ("init"));
+         Args.Append (To_Unbounded_String ("-q"));
+         Args.Append (To_Unbounded_String (Root));
+         if Hostkit.Process.Run ("git", Args, Exit_Code) and then Exit_Code = 0 then
+            Put_File (Root & "/new.txt", "x");
+            declare
+               Said : constant Model_Runner.Framework.Git.Status_Report :=
+                 Model_Runner.Framework.Git.Status_Of (Root);
+            begin
+               Assert (Said.Found and then Length (Said.Branch) > 0
+                       and then Said.Changes.Contains ("?? new.txt"),
+                       "Git's own view of the project was not read");
+            end;
+         end if;
+      end;
+      S.Close (Store);
+   end Audit_Policy_And_Git;
+
    --  /work as typed in a session: by its identifier, and by words of its
    --  title, runs the task on the agent the session hands it.
    procedure Session_Work_Line_Runs_The_Task
@@ -5407,6 +5532,9 @@ package body Tests.Framework_Cases is
         (T, Recursion_Stays_Bounded'Access,
          "children stay within limits and permissions, failures and"
          & " cancellation are seen");
+      Register_Routine
+        (T, Audit_Policy_And_Git'Access,
+         "a task answers for itself, the repository policy is kept, Git is asked");
       Register_Routine
         (T, Session_Work_Line_Runs_The_Task'Access,
          "/work typed in a session runs the task by identifier or by title");
