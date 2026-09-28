@@ -160,17 +160,49 @@ package Model_Runner.Framework.Repository is
    --  @return Its language, or the empty string for none this knows.
    function Language_Of (Path : String) return String;
 
+   --  Where a project's files are, as its configuration says: the
+   --  directories a scan leaves out, and those whose files are tests or
+   --  documentation. An entry is a directory's name, found at any depth,
+   --  or a path within the project, as src/generated; one that starts
+   --  with * is part of a file's name, as *_test. for parser_test.go. A
+   --  hidden file or directory is always left out, the project state and
+   --  version control with it.
+   type Roots is record
+      Skip          : Name_Lists.Vector;
+      Tests         : Name_Lists.Vector;
+      Documentation : Name_Lists.Vector;
+   end record;
+
+   --  The roots a configuration that names none has: build output and
+   --  dependencies left out; test, tests and testsuite, and *_test.,
+   --  tests; doc and docs documentation.
+   --
+   --  @return The roots.
+   function Default_Roots return Roots;
+
+   --  The project's roots: set repository.skip, repository.tests and
+   --  repository.documentation from the resolved configuration, each the
+   --  default where the configuration does not set it.
+   --
+   --  @param Item The store.
+   --  @return The roots.
+   function Roots_Of (Item : Stores.Store) return Roots;
+
    --  What a file's place says it is for.
    --
    --  @param Path The file, within the project.
+   --  @param Within The project's roots.
    --  @return Its role.
-   function Role_Of (Path : String) return File_Role;
+   function Role_Of (Path : String; Within : Roots := Default_Roots) return File_Role;
 
    --  Walk a project and read every file into a graph.
    --
    --  @param Project_Directory The project.
+   --  @param Within The project's roots.
    --  @return The graph.
-   function Scan (Project_Directory : String) return Graph;
+   function Scan
+     (Project_Directory : String;
+      Within            : Roots := Default_Roots) return Graph;
 
    --  Keep a graph in the project state's indexes, replacing the last.
    --
@@ -196,11 +228,14 @@ package Model_Runner.Framework.Repository is
    --  @param Project_Directory The project.
    --  @param Kept The graph as it was last made; an empty one reads all.
    --  @param Read_Again How many files had to be read.
+   --  @param Within The project's roots; a kept file whose role they
+   --    change is read again.
    --  @return The graph.
    function Refresh
      (Project_Directory : String;
       Kept              : Graph;
-      Read_Again        : out Natural) return Graph;
+      Read_Again        : out Natural;
+      Within            : Roots := Default_Roots) return Graph;
 
    --  The project's graph as it is now: the kept one brought up to date,
    --  not kept -- for a reader that only reads the store.

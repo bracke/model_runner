@@ -57,7 +57,12 @@ package Model_Runner.Framework.Templates is
       Task_Kind_Setting,
       Schema_Setting,
       File_Setting,
-      Fact_Setting);
+      Fact_Setting,
+
+      --  A statement of the project's or its language's baseline, which
+      --  governs a subject nothing higher speaks to: baseline
+      --  project.SUBJECT or baseline language.SUBJECT.
+      Baseline_Setting);
 
    --  What an input holds, which is how it is checked.
    type Input_Kind is

@@ -2,9 +2,11 @@ with Ada.Calendar;
 with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 
 with Hostkit.Fs;
 
+with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Schemas;
@@ -59,6 +61,27 @@ package body Model_Runner.Framework.Repository is
 
    function Image (Value : Natural) return String
    is (Ada.Strings.Fixed.Trim (Natural'Image (Value), Ada.Strings.Both));
+
+   --  The words of a list, parted by spaces, commas or lines.
+   function Split (Text : String) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+      Start  : Natural := Text'First;
+   begin
+      for Index in Text'First .. Text'Last + 1 loop
+         if Index > Text'Last or else Text (Index) in ' ' | ',' | ASCII.LF | ASCII.CR | ASCII.HT then
+            if Index > Start then
+               Result.Append (Text (Start .. Index - 1));
+            end if;
+            Start := Index + 1;
+         end if;
+      end loop;
+      return Result;
+   end Split;
+
+   --  A path without the slashes around it.
+   function Trim_Slashes (Path : String) return String
+   is (Ada.Strings.Fixed.Trim
+         (Path, Ada.Strings.Maps.To_Set ("/"), Ada.Strings.Maps.To_Set ("/")));
 
    function Six (Value : Natural) return String is
       Plain : constant String := Image (Value);
@@ -185,7 +208,65 @@ package body Model_Runner.Framework.Repository is
    -- Role_Of --
    -------------
 
-   function Role_Of (Path : String) return File_Role is
+   -------------------
+   -- Default_Roots --
+   -------------------
+
+   function Default_Roots return Roots
+   is (Skip          => Split ("obj bin lib alire node_modules target build _build"),
+       Tests         => Split ("test tests testsuite *_test."),
+       Documentation => Split ("doc docs"));
+
+   --------------
+   -- Roots_Of --
+   --------------
+
+   function Roots_Of (Item : Stores.Store) return Roots is
+      Result : Roots := Default_Roots;
+      Config : Records.Item;
+      Status : E.Error_Info;
+
+      procedure Take (Name : String; Into : in out Name_Lists.Vector) is
+         Given : constant Name_Lists.Vector :=
+           Split (Records.Get (Config, "set.repository." & Name));
+      begin
+         if not Given.Is_Empty then
+            Into := Given;
+         end if;
+      end Take;
+   begin
+      Configurations.Read (Item, Config, Status);
+      if E.Is_Ok (Status) then
+         Take ("skip", Result.Skip);
+         Take ("tests", Result.Tests);
+         Take ("documentation", Result.Documentation);
+      end if;
+      return Result;
+   end Roots_Of;
+
+   --  Whether a path within the project is one a root names.
+   function Named_By (Listed : Name_Lists.Vector; Path : String) return Boolean is
+      Name : constant String := "/" & Lower (Path) & "/";
+   begin
+      for Root of Listed loop
+         declare
+            Given : constant String := Lower (Root);
+         begin
+            if Given'Length > 1 and then Given (Given'First) = '*' then
+               if Ada.Strings.Fixed.Index (Name, Given (Given'First + 1 .. Given'Last)) > 0 then
+                  return True;
+               end if;
+            elsif Given /= ""
+              and then Ada.Strings.Fixed.Index (Name, "/" & Trim_Slashes (Given) & "/") > 0
+            then
+               return True;
+            end if;
+         end;
+      end loop;
+      return False;
+   end Named_By;
+
+   function Role_Of (Path : String; Within : Roots := Default_Roots) return File_Role is
       Name : constant String := "/" & Lower (Path);
 
       function Has (Part : String) return Boolean
@@ -193,11 +274,9 @@ package body Model_Runner.Framework.Repository is
 
       Language : constant String := Language_Of (Path);
    begin
-      if Has ("/test/") or else Has ("/tests/") or else Has ("_test.")
-        or else Has ("/testsuite/")
-      then
+      if Named_By (Within.Tests, Path) then
          return Test;
-      elsif Language = "Markdown" or else Has ("/docs/") or else Has ("/doc/")
+      elsif Language = "Markdown" or else Named_By (Within.Documentation, Path)
       then
          return Documentation;
       elsif Language in "GPR" | "TOML" | "JSON" | "Shell"
@@ -722,16 +801,20 @@ package body Model_Runner.Framework.Repository is
    --  Scanning.
    ---------------------------------------------------------------------------
 
-   function Skipped (Name : String) return Boolean
+   --  Whether a scan leaves a file or directory out: a hidden one, or one
+   --  the roots skip.
+   function Skipped (Name, Relative : String; Within : Roots) return Boolean
    is (Name'Length = 0 or else Name (Name'First) = '.'
-       or else Name in "obj" | "bin" | "lib" | "alire" | "node_modules"
-                     | "target" | "build" | "_build");
+       or else Named_By (Within.Skip, Relative));
 
    ----------
    -- Scan --
    ----------
 
-   function Scan (Project_Directory : String) return Graph is
+   function Scan
+     (Project_Directory : String;
+      Within            : Roots := Default_Roots) return Graph
+   is
       Result   : Graph;
       Ada_Read : Ada_Adapter;
       Plain    : Generic_Adapter;
@@ -746,7 +829,10 @@ package body Model_Runner.Framework.Repository is
          Dirs.Start_Search (Search, Directory, "");
          while Dirs.More_Entries (Search) loop
             Dirs.Get_Next_Entry (Search, Found);
-            if not Skipped (Dirs.Simple_Name (Found)) then
+            if not Skipped
+              (Dirs.Simple_Name (Found),
+               (if Prefix = "" then "" else Prefix & "/") & Dirs.Simple_Name (Found), Within)
+            then
                Names.Append (Dirs.Simple_Name (Found));
             end if;
          end loop;
@@ -776,7 +862,7 @@ package body Model_Runner.Framework.Repository is
                        (Result,
                         (Path        => To_Unbounded_String (Relative),
                          Language    => To_Unbounded_String (Language_Of (Relative)),
-                         Role        => Role_Of (Relative),
+                         Role        => Role_Of (Relative, Within),
                          Fingerprint => To_Unbounded_String
                                           (Fingerprint (To_String (Text))),
                          Stamp       => To_Unbounded_String (Stamp_Of (Full))));
@@ -817,7 +903,8 @@ package body Model_Runner.Framework.Repository is
    function Refresh
      (Project_Directory : String;
       Kept              : Graph;
-      Read_Again        : out Natural) return Graph
+      Read_Again        : out Natural;
+      Within            : Roots := Default_Roots) return Graph
    is
       Result   : Graph;
       Ada_Read : Ada_Adapter;
@@ -840,7 +927,10 @@ package body Model_Runner.Framework.Repository is
          Dirs.Start_Search (Search, Directory, "");
          while Dirs.More_Entries (Search) loop
             Dirs.Get_Next_Entry (Search, Found);
-            if not Skipped (Dirs.Simple_Name (Found)) then
+            if not Skipped
+              (Dirs.Simple_Name (Found),
+               (if Prefix = "" then "" else Prefix & "/") & Dirs.Simple_Name (Found), Within)
+            then
                Names.Append (Dirs.Simple_Name (Found));
             end if;
          end loop;
@@ -923,6 +1013,7 @@ package body Model_Runner.Framework.Repository is
             if Held = 0 or else Length (Kept.Files (Held).Stamp) = 0
               or else To_String (Kept.Files (Held).Stamp) /= Now_Stamps (Index)
               or else Recent (Now_Stamps (Index))
+              or else Kept.Files (Held).Role /= Role_Of (Now_Paths (Index), Within)
             then
                Changed.Append (Now_Paths (Index));
             end if;
@@ -952,7 +1043,7 @@ package body Model_Runner.Framework.Repository is
                     (Result,
                      (Path        => To_Unbounded_String (Path),
                       Language    => To_Unbounded_String (Language_Of (Path)),
-                      Role        => Role_Of (Path),
+                      Role        => Role_Of (Path, Within),
                       Fingerprint => To_Unbounded_String (Fingerprint (Text)),
                       Stamp       => To_Unbounded_String (Now_Stamps (Index))));
                   if Language_Of (Path) = "Ada" then
@@ -1036,7 +1127,8 @@ package body Model_Runner.Framework.Repository is
       Read_Again : Natural;
    begin
       Load (Item, Kept, Read);
-      return Refresh (Ada.Directories.Containing_Directory (Stores.Root (Item)), Kept, Read_Again);
+      return Refresh (Ada.Directories.Containing_Directory (Stores.Root (Item)), Kept, Read_Again,
+                      Roots_Of (Item));
    end Now;
 
    -------------
@@ -1056,7 +1148,7 @@ package body Model_Runner.Framework.Repository is
       Status := E.Success;
       Load (Item, Kept, Read);
       Found := Refresh (Ada.Directories.Containing_Directory (Stores.Root (Item)), Kept,
-                        Read_Again);
+                        Read_Again, Roots_Of (Item));
       if Read_Again > 0 or else E.Is_Error (Read)
         or else Natural (Found.Files.Length) /= Natural (Kept.Files.Length)
       then

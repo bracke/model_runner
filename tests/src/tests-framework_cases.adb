@@ -990,6 +990,10 @@ package body Tests.Framework_Cases is
                 & "file ../outside = no" & LF, "memory", Value, Status);
       Assert (Status.Code = E.Framework_Template_Invalid,
               "a file outside the project was declared");
+      Tp.Parse ("template = x" & LF & "name = X" & LF & "version = 1" & LF
+                & "baseline tests = yes" & LF, "memory", Value, Status);
+      Assert (Status.Code = E.Framework_Template_Invalid,
+              "a baseline of neither the project nor its language was declared");
    end Template_Conflicts_Are_Refused;
 
    --  Inputs are given, found or defaulted, checked, and asked for by name
@@ -1893,7 +1897,9 @@ package body Tests.Framework_Cases is
    begin
       Tp.Add (Registry, Parsed ("template = t" & LF & "name = T" & LF
                                 & "version = 1" & LF
-                                & "scalar build.command = make" & LF));
+                                & "scalar build.command = make" & LF
+                                & "baseline project.tests = a change comes with its test" & LF
+                                & "baseline language.ada.style = style checks are clean" & LF));
       Tp.Compose (Registry, "t", Composed, Status);
       Cf.Prepare (Composed, Project, Given, Planned, Status);
       Cf.Initialize (Store, Project, Planned, Done, Status);
@@ -1907,8 +1913,21 @@ package body Tests.Framework_Cases is
       S.Commit (Store, Change, Status);
       Assert (E.Is_Ok (Status), "a governing decision was not committed: "
               & Code_Of (Status));
-      Assert (Au.Count (Au.Gather (Store)) = 2,
-              "the decision and the setting were not both gathered");
+      Assert (Au.Count (Au.Gather (Store)) = 4,
+              "the decision, the setting and the baselines were not all gathered");
+      declare
+         use type Au.Level;
+         Resolved : constant Au.Resolution := Au.Resolve (Au.Gather (Store));
+         Found    : Boolean;
+         Also     : Boolean;
+         Project  : constant Au.Statement := Au.Governing (Resolved, "tests", Found);
+         Language : constant Au.Statement := Au.Governing (Resolved, "ada.style", Also);
+      begin
+         Assert (Found and then Also and then Project.Standing = Au.Project_Baseline
+                 and then Language.Standing = Au.Language_Baseline
+                 and then To_String (Language.Value) = "style checks are clean",
+                 "a baseline does not stand at its level");
+      end;
 
       Findings := Cn.Check (Store);
       Assert (Conflicted, "a decision contradicting the configuration without"
@@ -2359,7 +2378,14 @@ package body Tests.Framework_Cases is
       --  rejection say who it was.
       Change := S.No_Changes;
       Task_Project (Store, "acceptance-by-class",
-                    "set task.auto_accept = agent" & LF);
+                    "set task.auto_accept = agent" & LF
+                    & "baseline project.tests = a change comes with its test" & LF
+                    & "set repository.tests = checks" & LF);
+      Assert (Model_Runner.Framework.Repository.Roots_Of (Store).Tests
+              = Model_Runner.Framework.Name_Lists.To_Vector ("checks", 1)
+              and then Model_Runner.Framework.Repository.Roots_Of (Store).Skip
+                       = Model_Runner.Framework.Repository.Default_Roots.Skip,
+              "the configuration's roots were not taken, or the defaults not kept");
       declare
          Fields   : Tk.Field_Map;
          Proposed : Unbounded_String;
@@ -2390,6 +2416,9 @@ package body Tests.Framework_Cases is
                  and then R.Get (View, "runtime.accepted_by") = Tr.User
                  and then R.Get (View, "runtime.moved_by") = Tr.User,
                  "an acceptance does not say who accepted");
+         Assert (Ada.Strings.Fixed.Index (R.Get (View, "authority.tests"), "project_baseline") = 1,
+                 "the project baseline does not govern the task: "
+                 & R.Get (View, "authority.tests"));
          Tk.Effective (Store, To_String (Other), View, Status);
          Assert (R.Get (View, "runtime.rejected_by") = Tr.User,
                  "a rejection does not say who rejected");
@@ -2624,6 +2653,23 @@ package body Tests.Framework_Cases is
                  and then Rp.Dependents_Of (Built, "lib").First_Element = "app"
                  and then Rp.Relation_Count (Built) = 2,
                  "a graph built by an adapter is not queried as one");
+      end;
+
+      --  The roots the configuration gives say what is a test and what a
+      --  scan leaves out.
+      declare
+         Mine : Rp.Roots := Rp.Default_Roots;
+      begin
+         Mine.Tests := Model_Runner.Framework.Name_Lists.To_Vector ("checks", 1);
+         Mine.Skip.Append ("tests");
+         Assert (Rp.Role_Of ("checks/a.adb", Mine) = Rp.Test
+                 and then Rp.Role_Of ("tests/a.adb", Mine) /= Rp.Test
+                 and then Rp.Role_Of ("tests/a.adb") = Rp.Test
+                 and then Rp.Role_Of ("src/io_test.go") = Rp.Test,
+                 "a test was not where the roots say");
+         Assert (Rp.File_Count (Rp.Scan (Project, Mine)) + 1
+                 = Rp.File_Count (Rp.Scan (Project)),
+                 "a directory the roots skip was scanned");
       end;
 
       --  The file tools stay inside the project, a link out of it included.

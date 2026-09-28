@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Baselines.** A template's `baseline project.SUBJECT = TEXT` and
+  `baseline language.SUBJECT = TEXT` fill the project- and language-baseline
+  levels of authority; a governing baseline is in the Effective Task. The
+  standard-development and Ada templates state some.
+- **Repository roots from the configuration.** `set repository.skip`,
+  `repository.tests` and `repository.documentation` say what a scan leaves
+  out and which files are tests or documentation; `Repository.Roots_Of`
+  reads them, the defaults filling what is not set, and every scan, refresh,
+  snapshot and workspace copy uses them.
 - **Automatic acceptance by task class.** `set task.auto_accept` lists the
   classes the policy accepts -- a task kind, or the creator's class:
   `user`, `requirement_derivation`, `agent`, `verification_engine`; the

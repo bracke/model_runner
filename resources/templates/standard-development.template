@@ -13,6 +13,18 @@ task_kind documentation = component?, notes?
 task_kind analysis = component?, notes?, question?
 scalar task.derived_kind = implementation
 
+# Where the project's files are: what a scan leaves out, and what is a test
+# or documentation. A name is a directory at any depth, a path is one place,
+# and *text is part of a file's name.
+set repository.skip = obj bin lib alire node_modules target build _build
+set repository.tests = test tests testsuite *_test.
+set repository.documentation = doc docs
+
+# What any work here is held to where nothing the project says speaks to it.
+baseline project.tests = a change in behaviour comes with a test that shows it
+baseline project.documentation = a change in what a user sees changes what the user reads
+baseline project.scope = work changes only what its task is about
+
 # Where agents write: in the project itself, or each in a workspace of its
 # own taken in by integration -- which is what lets two work at once.
 input work_isolation

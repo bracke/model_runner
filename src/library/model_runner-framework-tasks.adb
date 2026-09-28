@@ -846,6 +846,7 @@ package body Model_Runner.Framework.Tasks is
 
       --  What governs the work: each statement that stands above the
       --  configuration -- instructions, decisions, specifications -- and
+      --  each baseline that governs what nothing higher speaks to, and
       --  every explicit override and conflict, whatever its standing.
       declare
          use type Authority.Level;
@@ -859,7 +860,9 @@ package body Model_Runner.Framework.Tasks is
             declare
                One : constant Authority.Statement := Authority.Governing_At (Resolved, Index);
             begin
-               if One.Standing <= Authority.Project_Specification then
+               if One.Standing <= Authority.Project_Specification
+                 or else One.Standing in Authority.Project_Baseline | Authority.Language_Baseline
+               then
                   Records.Set
                     (Value, "authority." & To_String (One.Subject),
                      Word (One.Standing) & " " & To_String (One.Source)

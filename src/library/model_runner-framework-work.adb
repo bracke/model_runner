@@ -578,8 +578,11 @@ package body Model_Runner.Framework.Work is
    end Recover_On_Opening;
 
    --  Every file's fingerprint, by path.
-   function Snapshot (Project : String) return Configurations.Value_Maps.Map is
-      Found  : constant Repository.Graph := Repository.Scan (Project);
+   function Snapshot
+     (Project : String;
+      Within  : Repository.Roots) return Configurations.Value_Maps.Map
+   is
+      Found  : constant Repository.Graph := Repository.Scan (Project, Within);
       Result : Configurations.Value_Maps.Map;
    begin
       for Index in 1 .. Repository.File_Count (Found) loop
@@ -849,7 +852,7 @@ package body Model_Runner.Framework.Work is
       declare
          Project : constant String :=
            Ada.Directories.Containing_Directory (Stores.Root (Host.Item.all));
-         Before  : constant Configurations.Value_Maps.Map := Snapshot (Project);
+         Before  : constant Configurations.Value_Maps.Map := Snapshot (Project, Repository.Roots_Of (Host.Item.all));
       begin
          Verification.Run_Profile
            (Host.Item.all, Change, Profile, "", Evidence, Passed, Status);
@@ -863,7 +866,7 @@ package body Model_Runner.Framework.Work is
          --  A build writes files of its own; they are the checks', not the
          --  agent's.
          declare
-            After : constant Configurations.Value_Maps.Map := Snapshot (Project);
+            After : constant Configurations.Value_Maps.Map := Snapshot (Project, Repository.Roots_Of (Host.Item.all));
          begin
             for Position in After.Iterate loop
                declare
@@ -1364,7 +1367,7 @@ package body Model_Runner.Framework.Work is
            Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "runtime"), "exec");
          Prompt  : constant String :=
            Hostkit.Fs.Join (Scratch, "prompt-" & To_String (Result.Agent_Id) & ".txt");
-         Before  : constant Configurations.Value_Maps.Map := Snapshot (To_String (Place));
+         Before  : constant Configurations.Value_Maps.Map := Snapshot (To_String (Place), Repository.Roots_Of (Item));
          By_Checks : Name_Lists.Vector;
       begin
          if Files.Make_Directory (Scratch) then
@@ -1428,7 +1431,7 @@ package body Model_Runner.Framework.Work is
 
          --  What changed is what the files say, not what the answer says.
          declare
-            After : constant Configurations.Value_Maps.Map := Snapshot (To_String (Place));
+            After : constant Configurations.Value_Maps.Map := Snapshot (To_String (Place), Repository.Roots_Of (Item));
          begin
             for Position in After.Iterate loop
                declare

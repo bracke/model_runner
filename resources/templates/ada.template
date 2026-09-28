@@ -11,3 +11,8 @@ set source.extensions = .ads
 set source.extensions = .adb
 adapter language = ada
 directory src
+
+# What Ada work is held to where nothing the project says speaks to it.
+baseline language.ada.contracts = state what a subprogram needs and gives as Pre and Post where they can be checked, not only in comments
+baseline language.ada.exceptions = raise for what the caller cannot prevent; report what it can as a result it must look at
+baseline language.ada.style = the compiler's style and warning switches are clean

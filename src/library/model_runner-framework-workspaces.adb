@@ -43,8 +43,8 @@ package body Model_Runner.Framework.Workspaces is
    end Sorted;
 
    --  Every file's fingerprint in a tree, by path.
-   function Snapshot (Directory : String) return Maps.Map is
-      Found  : constant Repository.Graph := Repository.Scan (Directory);
+   function Snapshot (Directory : String; Within : Repository.Roots) return Maps.Map is
+      Found  : constant Repository.Graph := Repository.Scan (Directory, Within);
       Result : Maps.Map;
    begin
       for Index in 1 .. Repository.File_Count (Found) loop
@@ -125,8 +125,8 @@ package body Model_Runner.Framework.Workspaces is
    end Words;
 
    --  Copy the files of one tree into another, as a scan finds them.
-   function Copy_Tree (From, Into : String) return Boolean is
-      Found : constant Repository.Graph := Repository.Scan (From);
+   function Copy_Tree (From, Into : String; Within : Repository.Roots) return Boolean is
+      Found : constant Repository.Graph := Repository.Scan (From, Within);
    begin
       if not Files.Make_Directory (Into) then
          return False;
@@ -259,7 +259,7 @@ package body Model_Runner.Framework.Workspaces is
          end if;
 
          if not Worked then
-            if not Copy_Tree (Project, Tree) then
+            if not Copy_Tree (Project, Tree, Repository.Roots_Of (Item)) then
                Failed ("the project's files cannot be copied", Status);
                return;
             end if;
@@ -267,7 +267,7 @@ package body Model_Runner.Framework.Workspaces is
          end if;
 
          declare
-            Baseline : constant Maps.Map := Snapshot (Tree);
+            Baseline : constant Maps.Map := Snapshot (Tree, Repository.Roots_Of (Item));
             Value    : Records.Item := Records.Create (Schemas.Workspace_Schema, 1, Id, 1);
             Count    : Natural := 0;
          begin
@@ -394,7 +394,7 @@ package body Model_Runner.Framework.Workspaces is
       end if;
       declare
          Baseline : constant Maps.Map := Baseline_Of (Item, Id);
-         Now      : constant Maps.Map := Snapshot (To_String (Held.Path));
+         Now      : constant Maps.Map := Snapshot (To_String (Held.Path), Repository.Roots_Of (Item));
       begin
          for Position in Now.Iterate loop
             if not Baseline.Contains (Maps.Key (Position))

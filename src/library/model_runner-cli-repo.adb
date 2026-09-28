@@ -27,6 +27,24 @@ package body Model_Runner.CLI.Repo is
    function Image (Value : Natural) return String
    is (Ada.Strings.Fixed.Trim (Natural'Image (Value), Ada.Strings.Both));
 
+   --  The roots of the project in a directory: its configuration's, or
+   --  the defaults for a directory that has no project state.
+   function Roots_In (Directory : String) return Rp.Roots is
+      Store   : S.Store;
+      Report  : S.Recovery_Report;
+      Outcome : E.Error_Info;
+      Result  : Rp.Roots := Rp.Default_Roots;
+   begin
+      if S.Is_Initialized (Directory) then
+         S.Open (Store, Directory, Report, Outcome);
+         if E.Is_Ok (Outcome) then
+            Result := Rp.Roots_Of (Store);
+         end if;
+         S.Close (Store);
+      end if;
+      return Result;
+   end Roots_In;
+
    ---------
    -- Run --
    ---------
@@ -43,7 +61,7 @@ package body Model_Runner.CLI.Repo is
         (if T.Is_Empty (Item.Action) then "scan"
          else T.To_String (Item.Action));
       Argument  : constant String := T.To_String (Item.Action_Argument);
-      Found     : constant Rp.Graph := Rp.Scan (Directory);
+      Found     : constant Rp.Graph := Rp.Scan (Directory, Roots_In (Directory));
       Outcome   : E.Error_Info;
 
       procedure Fail (Condition : E.Error_Info) is

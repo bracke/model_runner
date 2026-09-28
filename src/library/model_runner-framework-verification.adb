@@ -978,12 +978,13 @@ package body Model_Runner.Framework.Verification is
                use type Repository.File_Role;
                Source_Changed : Boolean := False;
                Docs_Changed   : Boolean := False;
+               Roots          : constant Repository.Roots := Repository.Roots_Of (Item);
             begin
                for Path of Changed loop
                   Source_Changed := Source_Changed
-                    or else Repository.Role_Of (Path) = Repository.Source;
+                    or else Repository.Role_Of (Path, Roots) = Repository.Source;
                   Docs_Changed := Docs_Changed
-                    or else Repository.Role_Of (Path) = Repository.Documentation;
+                    or else Repository.Role_Of (Path, Roots) = Repository.Documentation;
                end loop;
                Judge (Name, not Source_Changed or else Docs_Changed,
                       "its work changed source and no documentation");

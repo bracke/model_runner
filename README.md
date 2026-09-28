@@ -256,7 +256,12 @@ depends on it and tests it. A task that is proposed starts as a candidate
 unless `set task.auto_accept` names its class -- its kind, or where it came
 from: `user`, `requirement_derivation`, `agent`, `verification_engine` --
 and every acceptance, rejection and other move records who made it: the
-person at the terminal, the policy, or the agent. The repository graph is brought up to date
+person at the terminal, the policy, or the agent. Templates state baselines -- `baseline project.SUBJECT = ...` and
+`baseline language.SUBJECT = ...` -- the two lowest standings of authority,
+which govern what nothing higher speaks to and reach the task's context.
+Where the files are is configuration too: `set repository.skip`,
+`repository.tests` and `repository.documentation` name directories, paths
+or `*` name parts, and the standard templates set them. The repository graph is brought up to date
 rather than made again: only a file whose size or time changed is read,
 and only the references that could see it are found again. A file tool's
 path stays inside the project with its links resolved, so a link out of

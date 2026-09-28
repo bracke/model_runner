@@ -136,6 +136,11 @@ package body Model_Runner.Framework.Templates is
       return Result;
    end Split;
 
+   --  Whether a text begins with another.
+   function Starts (Text, Prefix : String) return Boolean
+   is (Text'Length >= Prefix'Length
+       and then Text (Text'First .. Text'First + Prefix'Length - 1) = Prefix);
+
    ---------------
    -- Kind_Word --
    ---------------
@@ -316,6 +321,10 @@ package body Model_Runner.Framework.Templates is
                       else not Is_Key (Key))
                then
                   Refuse (Key & " is not a key");
+               elsif Kind = Baseline_Setting
+                 and then not Starts (Key, "project.") and then not Starts (Key, "language.")
+               then
+                  Refuse (Key & " is not a project. or language. baseline");
                else
                   Value.Settings.Append
                     (Setting'(Kind     => Kind,

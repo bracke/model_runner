@@ -9,6 +9,11 @@ package body Model_Runner.Framework.Authority is
 
    package E renames Model_Runner.Errors;
 
+   --  Whether a text begins with another.
+   function Starts (Text, Prefix : String) return Boolean
+   is (Text'Length >= Prefix'Length
+       and then Text (Text'First .. Text'First + Prefix'Length - 1) = Prefix);
+
    ------------
    -- Append --
    ------------
@@ -84,6 +89,22 @@ package body Model_Runner.Framework.Authority is
             declare
                Field : constant String := Records.Field_Name (Config, Index);
             begin
+               --  A baseline's subject is what follows its level.
+               if Starts (Field, "baseline.project.") or else Starts (Field, "baseline.language.") then
+                  declare
+                     Project : constant Boolean := Starts (Field, "baseline.project.");
+                     Rest    : constant String :=
+                       Field (Field'First + (if Project then 17 else 18) .. Field'Last);
+                  begin
+                     Append
+                       (Result,
+                        (Standing  => (if Project then Project_Baseline else Language_Baseline),
+                         Source    => To_Unbounded_String ("CONFIG"),
+                         Subject   => To_Unbounded_String (Rest),
+                         Value     => To_Unbounded_String (Records.Get (Config, Field)),
+                         Overrides => Null_Unbounded_String));
+                  end;
+               end if;
                for Prefix of Governed loop
                   if Field'Length > Prefix'Length
                     and then Field (Field'First .. Field'First + Prefix'Length - 1)
