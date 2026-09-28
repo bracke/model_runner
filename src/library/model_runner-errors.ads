@@ -384,6 +384,11 @@ package Model_Runner.Errors is
       --  What the harness may run.
       Framework_Execution_Refused,
 
+      --  Workspaces, and taking their work in.
+      Framework_Workspace_Failed,
+      Framework_Integration_Refused,
+      Framework_Integration_Conflict,
+
       --  Internal invariants.
       Internal_Invariant_Violated,
       Internal_Unexpected_Exception,

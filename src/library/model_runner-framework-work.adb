@@ -13,6 +13,7 @@ with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Schemas;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Verification;
+with Model_Runner.Framework.Workspaces;
 
 package body Model_Runner.Framework.Work is
 
@@ -43,6 +44,15 @@ package body Model_Runner.Framework.Work is
        & "changed_files: the files you changed, separated by commas" & ASCII.LF
        & "issues: anything you found that is outside the task" & ASCII.LF
        & "proposed_tasks: further work the project needs, one a line" & ASCII.LF);
+
+   --  A setting of the configuration's work.
+   function Work_Setting (Item : Stores.Store; Name : String) return String is
+      Config : Records.Item;
+      Status : E.Error_Info;
+   begin
+      Configurations.Read (Item, Config, Status);
+      return Records.Get (Config, "scalar.work." & Name);
+   end Work_Setting;
 
    --  How long an agent holds its task before it must have finished.
    function Lease_Seconds (Item : Stores.Store) return Positive is
@@ -202,6 +212,10 @@ package body Model_Runner.Framework.Work is
       Said    : Invocations.Claims;
       Held    : E.Error_Info;
 
+      --  Where the agent writes: the project, or its workspace.
+      Isolated : constant Boolean := Work_Setting (Item, "isolation") = "workspace";
+      Place    : Unbounded_String := To_Unbounded_String (Project);
+
       --  End the work with the task moved and the agent recorded.
       procedure Conclude (Next, Reason, Agent_End : String) is
       begin
@@ -290,12 +304,36 @@ package body Model_Runner.Framework.Work is
          return;
       end if;
 
+      --  Its own copy to write in, when the project isolates work.
+      if Isolated then
+         declare
+            Made : Workspaces.Workspace;
+         begin
+            Workspaces.Create
+              (Item, Change, Task_Id, To_String (Result.Agent_Id),
+               Generation_Of (Item, Task_Id), Work_Setting (Item, "backend") /= "copy",
+               Made, Held);
+            if E.Is_Error (Held) then
+               Change := Stores.No_Changes;
+               Conclude ("blocked", "its workspace cannot be made", "failed");
+               return;
+            end if;
+            Result.Workspace_Id := Made.Id;
+            Place := Made.Path;
+            Annotate (Item, Change, Task_Id, "current_workspace", To_String (Made.Id));
+            Stores.Commit (Item, Change, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+         end;
+      end if;
+
       declare
          Scratch : constant String :=
            Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "runtime"), "exec");
          Prompt  : constant String :=
            Hostkit.Fs.Join (Scratch, "prompt-" & To_String (Result.Agent_Id) & ".txt");
-         Before  : constant Configurations.Value_Maps.Map := Snapshot (Project);
+         Before  : constant Configurations.Value_Maps.Map := Snapshot (To_String (Place));
       begin
          if Files.Make_Directory (Scratch) then
             Files.Write_Text
@@ -307,12 +345,12 @@ package body Model_Runner.Framework.Work is
             return;
          end if;
 
-         Runner.Run (Prompt, Project, Answer, Ran);
+         Runner.Run (Prompt, To_String (Place), Answer, Ran);
          Files.Discard (Prompt);
 
          --  What changed is what the files say, not what the answer says.
          declare
-            After : constant Configurations.Value_Maps.Map := Snapshot (Project);
+            After : constant Configurations.Value_Maps.Map := Snapshot (To_String (Place));
          begin
             for Position in After.Iterate loop
                declare
@@ -413,6 +451,33 @@ package body Model_Runner.Framework.Work is
          return;
       end if;
 
+      --  Work written apart is taken in before it is verified: by the
+      --  harness when the configuration says so, otherwise left waiting for
+      --  whoever has the right.
+      if Isolated then
+         if Work_Setting (Item, "integrate") /= "automatic" then
+            Conclude ("", To_String (Result.Workspace_Id) & " waits to be taken in",
+                      "completed");
+            return;
+         end if;
+         declare
+            Taken : Name_Lists.Vector;
+         begin
+            Workspaces.Integrate
+              (Item, Change, To_String (Result.Workspace_Id), True, Taken, Held);
+            if E.Is_Error (Held) then
+               Change := Stores.No_Changes;
+               Conclude ("blocked", "its workspace cannot be taken in: "
+                         & E.Error_Code'Image (Held.Code), "completed");
+               return;
+            end if;
+            Stores.Commit (Item, Change, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+         end;
+      end if;
+
       declare
          Profile : constant String := Verification.Profile_Of (Item, Task_Id);
          Passed  : Boolean := False;
@@ -458,6 +523,69 @@ package body Model_Runner.Framework.Work is
       end;
    end Execute;
 
+   -------------
+   -- Take_In --
+   -------------
+
+   procedure Take_In
+     (Item    : in out Stores.Store;
+      Task_Id : String;
+      Result  : out Report;
+      Status  : out Model_Runner.Errors.Error_Info)
+   is
+      Change : Stores.Transaction;
+      Id     : constant String := Workspaces.Active_For (Item, Task_Id);
+      Taken  : Name_Lists.Vector;
+      Passed : Boolean := False;
+      Held   : E.Error_Info;
+   begin
+      Result := (Task_Id => To_Unbounded_String (Task_Id), others => <>);
+      if Id = "" then
+         Status := E.Make (E.Framework_Not_Found);
+         E.Add_Text (Status, "name", "a workspace of " & Task_Id);
+         return;
+      end if;
+      Result.Workspace_Id := To_Unbounded_String (Id);
+
+      Workspaces.Integrate (Item, Change, Id, True, Taken, Status);
+      if E.Is_Ok (Status) then
+         Stores.Commit (Item, Change, Status);
+      end if;
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      Result.Changed_Files := Taken;
+
+      --  The project as it is now is what is verified.
+      Verification.Run_Profile
+        (Item, Change, Verification.Profile_Of (Item, Task_Id), Task_Id,
+         Result.Evidence_Id, Passed, Held);
+      if E.Is_Ok (Held) then
+         Stores.Commit (Item, Change, Status);
+      else
+         Change := Stores.No_Changes;
+      end if;
+
+      if E.Is_Ok (Held) and then Passed then
+         Verification.Complete_Task (Item, Change, Task_Id, Held);
+         if E.Is_Ok (Held) then
+            Verification.Reevaluate_Requirements (Item, Change, Result.Requirements, Status);
+            if E.Is_Ok (Status) then
+               Stores.Commit (Item, Change, Status);
+            end if;
+         else
+            Change := Stores.No_Changes;
+         end if;
+      end if;
+
+      if E.Is_Error (Held) or else not Passed then
+         Result.Reason := To_Unbounded_String
+           (if E.Is_Error (Held) then E.Error_Code'Image (Held.Code)
+            else To_String (Result.Evidence_Id) & " did not pass");
+      end if;
+      Result.Final_State := To_Unbounded_String (Tasks.State_Of (Item, Task_Id));
+   end Take_In;
+
    ------------
    -- Cancel --
    ------------
@@ -474,6 +602,14 @@ package body Model_Runner.Framework.Work is
       if E.Is_Error (Status) then
          return;
       end if;
+      --  Work written apart for it is not taken in.
+      declare
+         Open : constant String := Workspaces.Active_For (Item, Task_Id);
+      begin
+         if Open /= "" then
+            Workspaces.Abandon (Item, Change, Open, Status);
+         end if;
+      end;
       if Agent /= "" then
          Agent_State (Item, Change, Agent, "cancelled", "the task was cancelled");
          Leases.Release (Item, Change, Lease_Of (Task_Id), Agent, Status);

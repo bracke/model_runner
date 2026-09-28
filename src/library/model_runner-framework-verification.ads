@@ -164,7 +164,8 @@ package Model_Runner.Framework.Verification is
       Profile : String) return String;
 
    --  A task's completion gates: the configuration's set task.gates, by
-   --  default verification, children and no_blocking_issue.
+   --  default verification, children, no_blocking_issue and integration --
+   --  no workspace of its work left untaken.
    --
    --  @param Item The store.
    --  @param Task_Id The task.

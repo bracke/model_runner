@@ -8,6 +8,7 @@ with Model_Runner.Framework.Context;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Verification;
+with Model_Runner.Framework.Work;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
@@ -427,6 +428,32 @@ package body Model_Runner.CLI.Tasks is
          end loop;
       end Complete;
 
+      --  Take a task's workspace in, and verify and complete it.
+      procedure Integrate is
+         Done : Model_Runner.Framework.Work.Report;
+      begin
+         if not Needs_Task then
+            return;
+         end if;
+         Model_Runner.Framework.Work.Take_In (Store, Argument, Done, Outcome);
+         if E.Is_Error (Outcome) then
+            Fail (Outcome);
+            return;
+         end if;
+         Pres.Put_Message
+           (Screen, "cli.task.integrated",
+            [Loc.Named ("name", To_String (Done.Workspace_Id)),
+             Loc.Named ("count", T.Image (Long_Long_Integer
+                          (Natural (Done.Changed_Files.Length))))]);
+         Pres.Put_Message
+           (Screen, "cli.task.moved",
+            [Loc.Named ("name", Argument),
+             Loc.Named ("value", To_String (Done.Final_State))]);
+         if To_String (Done.Final_State) /= "complete" then
+            Status := E.Exit_Input_Output;
+         end if;
+      end Integrate;
+
       procedure Derive is
          Made : Model_Runner.Framework.Name_Lists.Vector;
       begin
@@ -459,6 +486,18 @@ package body Model_Runner.CLI.Tasks is
          Move ("accepted");
       elsif Action = "reject" then
          Move ("rejected");
+      elsif Action = "cancel"
+        and then Model_Runner.Framework.Tasks.State_Of (Store, Argument) = "running"
+      then
+         --  Its agent is stopped and its lease let go with it.
+         Model_Runner.Framework.Work.Cancel (Store, Argument, Outcome);
+         if E.Is_Error (Outcome) then
+            Fail (Outcome);
+         else
+            Pres.Put_Message
+              (Screen, "cli.task.moved",
+               [Loc.Named ("name", Argument), Loc.Named ("value", "cancelled")]);
+         end if;
       elsif Action = "cancel" then
          Move ("cancelled");
       elsif Action = "show" then
@@ -469,6 +508,8 @@ package body Model_Runner.CLI.Tasks is
          Verify;
       elsif Action = "complete" then
          Complete;
+      elsif Action = "integrate" then
+         Integrate;
       else
          Derive;
       end if;

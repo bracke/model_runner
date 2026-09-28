@@ -29,6 +29,7 @@ with Model_Runner.Framework.Templates;
 with Model_Runner.Framework.Transitions;
 with Model_Runner.Framework.Verification;
 with Model_Runner.Framework.Work;
+with Model_Runner.Framework.Workspaces;
 with Model_Runner.Text;
 
 package body Tests.Framework_Cases is
@@ -2963,6 +2964,103 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Work_Runs_A_Task_Through;
 
+   package Ws renames Model_Runner.Framework.Workspaces;
+
+   --  Work written in a workspace stays out of the project until it is
+   --  taken in; taking it in needs the right and refuses a conflict; and
+   --  what is verified afterwards is the project as integrated.
+   procedure Workspaces_Isolate_And_Integrate
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Id     : Unbounded_String;
+      Other  : Unbounded_String;
+      Done   : Wk.Report;
+      Made   : Ws.Workspace;
+      Taken  : Model_Runner.Framework.Name_Lists.Vector;
+      Good   : constant String := "status: done" & LF & "summary: wrote hello";
+      use type Ws.Backend;
+   begin
+      Task_Project
+        (Store, "workspaces",
+         "set execution.allowed = test" & LF
+         & "profile checks = exists: test -f src/hello.adb" & LF
+         & "scalar verification.default = checks" & LF
+         & "scalar work.isolation = workspace" & LF
+         & "scalar work.backend = copy" & LF);
+      Dirs.Create_Path (Fresh_Root (Store) & "/src");
+      Put_File (Fresh_Root (Store) & "/src/shared.adb", "one");
+      Tk.Create (Store, Change, Fields ("Hello", "analysis"), "user", "", Id, Status);
+      Tk.Create (Store, Change, Fields ("Other", "analysis"), "user", "", Other, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      Tk.Move (Store, Change, To_String (Other), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+
+      Wk.Execute (Store, To_String (Id),
+                  Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                                  Answer => To_Unbounded_String (Good), Broken => False),
+                  Cx.Profile (Store, ""), Done, Status);
+      Assert (E.Is_Ok (Status) and then To_String (Done.Final_State) = "verification"
+              and then Length (Done.Workspace_Id) > 0,
+              "isolated work did not wait to be taken in: " & Code_Of (Status) & " "
+              & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+      Assert (not Dirs.Exists (Fresh_Root (Store) & "/src/hello.adb"),
+              "work written in a workspace reached the project before integration");
+      Assert (Ws.Changes (Store, To_String (Done.Workspace_Id)).Contains ("src/hello.adb")
+              and then Ws.Active_For (Store, To_String (Id)) = To_String (Done.Workspace_Id),
+              "the workspace's change was not seen");
+      declare
+         Judged : constant Vf.Gate_List := Vf.Gates (Store, To_String (Id));
+         Blocked_By_Integration : Boolean := False;
+      begin
+         for Index in 1 .. Vf.Length (Judged) loop
+            Blocked_By_Integration := Blocked_By_Integration
+              or else (To_String (Vf.Element (Judged, Index).Name) = "integration"
+                       and then not Vf.Element (Judged, Index).Passed);
+         end loop;
+         Assert (Blocked_By_Integration,
+                 "a task with work not taken in passed its integration gate");
+      end;
+
+      Ws.Integrate (Store, Change, To_String (Done.Workspace_Id), False, Taken, Status);
+      Assert (Status.Code = E.Framework_Integration_Refused,
+              "work was taken in without the right to integrate");
+
+      Wk.Take_In (Store, To_String (Id), Done, Status);
+      Assert (E.Is_Ok (Status) and then To_String (Done.Final_State) = "complete"
+              and then Dirs.Exists (Fresh_Root (Store) & "/src/hello.adb"),
+              "taken in and verified on the project, the task did not complete: "
+              & Code_Of (Status) & " " & To_String (Done.Reason));
+
+      --  A second workspace, changed where the project changes too.
+      Ws.Create (Store, Change, To_String (Other), "AG-TEST", "1", False, Made, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then Made.Kind = Ws.File_Copy,
+              "a copy workspace was not made");
+      Put_File (To_String (Made.Path) & "/src/shared.adb", "two");
+      Put_File (Fresh_Root (Store) & "/src/shared.adb", "three");
+      Assert (Ws.Conflicts (Store, To_String (Made.Id)).Contains ("src/shared.adb"),
+              "a file changed on both sides was not a conflict");
+      Ws.Integrate (Store, Change, To_String (Made.Id), True, Taken, Status);
+      Assert (Status.Code = E.Framework_Integration_Conflict,
+              "a conflicting workspace was taken in");
+      declare
+         Held : Ws.Workspace;
+      begin
+         Ws.Abandon (Store, Change, To_String (Made.Id), Status);
+         S.Commit (Store, Change, Status);
+         Ws.Read (Store, To_String (Made.Id), Held, Status);
+         Assert (To_String (Held.Status) = "abandoned"
+                 and then not Dirs.Exists (To_String (Made.Path)),
+                 "an abandoned workspace was not removed");
+      end;
+      S.Close (Store);
+   end Workspaces_Isolate_And_Integrate;
+
    ---------------------------------------------------------------------------
    -- Register_Tests --
    ---------------------------------------------------------------------------
@@ -3066,6 +3164,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Parents_Wait_For_Children'Access,
          "a parent waits for its children and goes back to work after them");
+      Register_Routine
+        (T, Workspaces_Isolate_And_Integrate'Access,
+         "workspace work is isolated, integrated by right, and verified after");
       Register_Routine
         (T, Work_Runs_A_Task_Through'Access,
          "one task runs from ready through verification to where it ends");

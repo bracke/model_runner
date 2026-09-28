@@ -11,6 +11,7 @@ with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Schemas;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Transitions;
+with Model_Runner.Framework.Workspaces;
 with Model_Runner.Platform;
 
 package body Model_Runner.Framework.Verification is
@@ -507,6 +508,7 @@ package body Model_Runner.Framework.Verification is
          Named.Append ("verification");
          Named.Append ("children");
          Named.Append ("no_blocking_issue");
+         Named.Append ("integration");
       end if;
 
       for Name of Named loop
@@ -554,6 +556,12 @@ package body Model_Runner.Framework.Verification is
                Stores.Read (Item, Tasks_Area, Task_Id & ".state", Value, Status);
                Judge (Name, E.Is_Ok (Status) and then Records.Get (Value, "blocking_reasons") = "",
                       "it is blocked: " & Records.Get (Value, "blocking_reasons"));
+            end;
+         elsif Name = "integration" then
+            declare
+               Open : constant String := Workspaces.Active_For (Item, Task_Id);
+            begin
+               Judge (Name, Open = "", Open & " has not been taken into the project");
             end;
          else
             Judge (Name, False, "no gate is called " & Name);

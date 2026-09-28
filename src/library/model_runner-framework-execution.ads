@@ -77,6 +77,8 @@ package Model_Runner.Framework.Execution is
    --  @param Command What to run.
    --  @param Directory Where, inside the project; empty for its top.
    --  @param Result What became of it.
+   --  @param Base The tree the directory is in: empty for the project, or
+   --    a workspace's tree, which must be one of the project's.
    --  @param Status Framework_Execution_Refused when the policy does not
    --    allow it; a success whatever the command itself returned.
    procedure Run
@@ -86,6 +88,7 @@ package Model_Runner.Framework.Execution is
       Command   : String;
       Directory : String;
       Result    : out Outcome;
-      Status    : out Model_Runner.Errors.Error_Info);
+      Status    : out Model_Runner.Errors.Error_Info;
+      Base      : String := "");
 
 end Model_Runner.Framework.Execution;

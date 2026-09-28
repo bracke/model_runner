@@ -2701,7 +2701,7 @@ package body Model_Runner.CLI.Options is
                   --  task ACTION: one of the things the command does.
                   if Argument not in "list" | "new" | "accept" | "reject"
                                    | "cancel" | "show" | "context" | "verify"
-                                   | "complete" | "derive"
+                                   | "complete" | "integrate" | "derive"
                   then
                      Fail (E.CLI_Unexpected_Operand, "", Argument);
                      return;

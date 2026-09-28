@@ -151,8 +151,9 @@ package body Model_Runner.CLI.Work is
       Answer      : out Unbounded_String;
       Status      : out E.Error_Info)
    is
-      pragma Unreferenced (Project);
       Change  : S.Transaction;
+      Project_Root : constant String :=
+        Ada.Directories.Containing_Directory (S.Root (Self.Store.all));
       Ran     : Model_Runner.Framework.Execution.Outcome;
       Written : constant String := To_String (Self.Command);
       Marker  : constant Natural := Ada.Strings.Fixed.Index (Written, "${prompt}");
@@ -163,7 +164,8 @@ package body Model_Runner.CLI.Work is
    begin
       Model_Runner.Framework.Execution.Run
         (Self.Store.all, Change, Model_Runner.Framework.Execution.Policy_Of (Self.Store.all),
-         Command, "", Ran, Status);
+         Command, "", Ran, Status,
+         Base => (if Project = Project_Root then "" else Project));
       if E.Is_Ok (Status) then
          S.Commit (Self.Store.all, Change, Status);
       end if;

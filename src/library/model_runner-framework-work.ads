@@ -6,6 +6,12 @@ with Model_Runner.Framework.Stores;
 
 --  One task, run from ready to done by one agent.
 --
+--  A project whose configuration says scalar work.isolation = workspace
+--  has its agents write in a workspace of their own, taken into the
+--  project only by integration: by the harness at once when scalar
+--  work.integrate = automatic, and otherwise by whoever has the right,
+--  through Take_In. Verification then runs on the project as integrated.
+--
 --  Work on a task is a sequence the harness holds, not the agent: take a
 --  lease on the task for a new agent record and start a new execution
 --  generation; build the task's context and keep its manifest; record the
@@ -47,6 +53,9 @@ package Model_Runner.Framework.Work is
       Invocation_Id : Ada.Strings.Unbounded.Unbounded_String;
       Manifest_Id   : Ada.Strings.Unbounded.Unbounded_String;
       Evidence_Id   : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  The workspace the agent wrote in, when the project isolates work.
+      Workspace_Id  : Ada.Strings.Unbounded.Unbounded_String;
 
       --  What the agent claimed, and what the files show it changed.
       Claimed       : Ada.Strings.Unbounded.Unbounded_String;
@@ -92,8 +101,25 @@ package Model_Runner.Framework.Work is
       Result  : out Report;
       Status  : out Model_Runner.Errors.Error_Info);
 
+   --  Take a task's workspace into the project, then verify the project as
+   --  it now is and complete the task through its gates. Whoever asks is
+   --  taken to have the right to integrate.
+   --
+   --  @param Item The store.
+   --  @param Task_Id The task, in verification with a workspace waiting.
+   --  @param Result What it did.
+   --  @param Status Framework_Not_Found when the task has no workspace
+   --    waiting, Framework_Integration_Conflict naming the files in
+   --    conflict.
+   procedure Take_In
+     (Item    : in out Stores.Store;
+      Task_Id : String;
+      Result  : out Report;
+      Status  : out Model_Runner.Errors.Error_Info);
+
    --  Stop the work on a running task: its agent is recorded cancelled, its
-   --  lease let go, and the task cancelled.
+   --  lease let go, a workspace written for it abandoned, and the task
+   --  cancelled.
    --
    --  @param Item The store.
    --  @param Task_Id The task.

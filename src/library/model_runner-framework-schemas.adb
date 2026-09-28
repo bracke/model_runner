@@ -257,6 +257,18 @@ package body Model_Runner.Framework.Schemas is
           Rule ("task", Identifier_Field, True),
           Rule ("started_at", Text_Field, True)]),
 
+      (Id      => new String'(Workspace_Schema),
+       Version => 1,
+       Policy  => Preserve_Unknown,
+       Rules   => new Rule_List'
+         [Rule ("backend", Choice_Field, True, "git_worktree file_copy "),
+          Rule ("path", Text_Field, True),
+          Rule ("base", Text_Field, True),
+          Rule ("agent", Text_Field, True),
+          Rule ("task", Identifier_Field, True),
+          Rule ("status", Choice_Field, True, "active integrated abandoned "),
+          Rule ("baseline.*", Text_Field, False)]),
+
       (Id      => new String'(Readiness_Schema),
        Version => 1,
        Policy  => Reject_Unknown,

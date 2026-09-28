@@ -156,7 +156,7 @@ en.help.init.quiet =   --quiet                 suppress progress, notes and warn
 en.help.init.verbose =   --verbose               report progress and detail on standard error
 en.help.init.locale =   --locale NAME           locale for program messages
 en.help.init.color =   --color=MODE            colour output: {value}
-en.help.task.usage = Usage: model_runner task [list|new TITLE|accept ID|reject ID|cancel ID|show ID|context ID|verify ID|complete ID|derive] [options]
+en.help.task.usage = Usage: model_runner task [list|new TITLE|accept ID|reject ID|cancel ID|show ID|context ID|verify ID|complete ID|integrate ID|derive] [options]
 en.help.task.summary = Manage the project's persistent tasks. list shows each with its state, ready shown as one; new creates a candidate from --set fields, asking a terminal for what its kind requires; accept, reject and cancel move one; show prints the effective task; derive makes the tasks accepted requirements imply. Tasks that became ready are named after each change.
 en.help.task.options = Options:
 en.help.task.set =   --set NAME=VALUE        give the new task's field NAME its value; repeatable
@@ -378,6 +378,7 @@ en.cli.task.verified = {name}: {value}, {count} checks, {total} diagnostics
 en.cli.task.diagnostic = {path}  {severity}  {detail}
 en.cli.task.gate = {name}: {detail}
 en.cli.task.requirement = {name} is {value}
+en.cli.task.integrated = {name} took in {count} files
 en.cli.repo.summary = {count} files and {total} relations; graph {value}
 en.cli.repo.file = {path}  {value}  {detail}
 en.cli.repo.symbol = {name}  {value}  {path}
@@ -730,6 +731,9 @@ en.error.framework.task_not_ready = {name} cannot move yet: {detail}
 en.error.framework.context_overflow = the context for {name} does not fit its model: {detail}
 en.error.framework.contract_violation = the answer does not keep to {name}: {detail}
 en.error.framework.execution_refused = {name} is not run: {detail}
+en.error.framework.workspace_failed = a workspace cannot be made: {detail}
+en.error.framework.integration_refused = {name} is not taken in without the right to integrate
+en.error.framework.integration_conflict = {name} conflicts with the project in {detail}
 en.error.internal.invariant_violated = internal invariant violated
 en.error.internal.unexpected_exception = unexpected internal failure
 en.error.internal.not_implemented = not implemented in this build
@@ -839,7 +843,7 @@ da.help.init.quiet =   --quiet                 undertryk status, noter og advars
 da.help.init.verbose =   --verbose               vis status og detaljer på standardfejl
 da.help.init.locale =   --locale NAVN           sprog for programmets beskeder
 da.help.init.color =   --color=TILSTAND        farvet output: {value}
-da.help.task.usage = Brug: model_runner task [list|new TITEL|accept ID|reject ID|cancel ID|show ID|context ID|verify ID|complete ID|derive] [tilvalg]
+da.help.task.usage = Brug: model_runner task [list|new TITEL|accept ID|reject ID|cancel ID|show ID|context ID|verify ID|complete ID|integrate ID|derive] [tilvalg]
 da.help.task.summary = Styr projektets vedvarende opgaver. list viser hver med dens tilstand, klar vist som en; new opretter en kandidat fra --set-felter og spørger en terminal om det dens slags kræver; accept, reject og cancel flytter en; show viser den effektive opgave; derive laver de opgaver accepterede krav medfører. Opgaver der blev klar nævnes efter hver ændring.
 da.help.task.options = Tilvalg:
 da.help.task.set =   --set NAVN=VÆRDI        giv den nye opgaves felt NAVN sin værdi; kan gentages
@@ -1206,6 +1210,7 @@ da.cli.task.verified = {name}: {value}, {count} tjek, {total} diagnoser
 da.cli.task.diagnostic = {path}  {severity}  {detail}
 da.cli.task.gate = {name}: {detail}
 da.cli.task.requirement = {name} er {value}
+da.cli.task.integrated = {name} tog {count} filer ind
 da.cli.repo.summary = {count} filer og {total} relationer; graf {value}
 da.cli.repo.file = {path}  {value}  {detail}
 da.cli.repo.symbol = {name}  {value}  {path}
@@ -1445,6 +1450,9 @@ da.error.framework.task_not_ready = {name} kan ikke flyttes endnu: {detail}
 da.error.framework.context_overflow = konteksten for {name} passer ikke til dens model: {detail}
 da.error.framework.contract_violation = svaret overholder ikke {name}: {detail}
 da.error.framework.execution_refused = {name} køres ikke: {detail}
+da.error.framework.workspace_failed = et arbejdsområde kan ikke laves: {detail}
+da.error.framework.integration_refused = {name} tages ikke ind uden retten til at integrere
+da.error.framework.integration_conflict = {name} er i konflikt med projektet i {detail}
 
 # Pseudo-locale. Generated from the English entries: every letter
 # outside a {placeholder} or a protocol token is accented and the
@@ -1821,6 +1829,7 @@ qps.cli.task.verified = ⟦{name}: {value}, {count} çhéçkß, {total} ðíág�
 qps.cli.task.diagnostic = ⟦{path}  {severity}  {detail}⟧
 qps.cli.task.gate = ⟦{name}: {detail}⟧
 qps.cli.task.requirement = ⟦{name} íß {value}⟧
+qps.cli.task.integrated = ⟦{name} ŧóók íñ {count} fíĺéß⟧
 qps.cli.repo.summary = ⟦{count} fíĺéß áñð {total} ŕéĺáŧíóñß; gŕáph {value}⟧
 qps.cli.repo.file = ⟦{path}  {value}  {detail}⟧
 qps.cli.repo.symbol = ⟦{name}  {value}  {path}⟧
@@ -2154,6 +2163,9 @@ qps.error.framework.task_not_ready = ⟦{name} çáññóŧ móvé ýéŧ: {deta
 qps.error.framework.context_overflow = ⟦ŧhé çóñŧéxŧ fóŕ {name} ðóéß ñóŧ fíŧ íŧß móðéĺ: {detail}⟧
 qps.error.framework.contract_violation = ⟦ŧhé áñßwéŕ ðóéß ñóŧ kéép ŧó {name}: {detail}⟧
 qps.error.framework.execution_refused = ⟦{name} íß ñóŧ ŕúñ: {detail}⟧
+qps.error.framework.workspace_failed = ⟦á wóŕkßpáçé çáññóŧ bé máðé: {detail}⟧
+qps.error.framework.integration_refused = ⟦{name} íß ñóŧ ŧákéñ íñ wíŧhóúŧ ŧhé ŕíghŧ ŧó íñŧégŕáŧé⟧
+qps.error.framework.integration_conflict = ⟦{name} çóñfĺíçŧß wíŧh ŧhé pŕójéçŧ íñ {detail}⟧
 qps.error.internal.invariant_violated = ⟦íñŧéŕñáĺ íñváŕíáñŧ víóĺáŧéð⟧
 qps.error.internal.unexpected_exception = ⟦úñéxpéçŧéð íñŧéŕñáĺ fáíĺúŕé⟧
 qps.error.internal.not_implemented = ⟦ñóŧ ímpĺéméñŧéð íñ ŧhíß búíĺð⟧

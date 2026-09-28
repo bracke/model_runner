@@ -58,6 +58,9 @@ package Model_Runner.Framework.Schemas is
    --  An agent: who worked on which task, and how it ended.
    Agent_Schema : constant String := "runtime.agent";
 
+   --  A workspace an agent writes in.
+   Workspace_Schema : constant String := "runtime.workspace";
+
    --  One event.
    Event_Schema : constant String := "event.record";
 

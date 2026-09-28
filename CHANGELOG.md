@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Work written apart and taken in by right (Phase K).** With `scalar
+  work.isolation = workspace` an agent writes in a workspace of its own --
+  a Git worktree when the project is a Git repository, a copy of its files
+  otherwise -- whose files as made are its baseline. What the agent
+  changed is what differs from the baseline, and a conflict is a file the
+  project changed too. Taking the work in needs its own right: automatic
+  when `work.integrate = automatic`, otherwise `task integrate ID`; a
+  conflict is refused by name, and the verification that follows runs on
+  the project as integrated. A task's gates include integration; a
+  cancelled task's workspace is abandoned. Milestone 4's conditions are
+  each a test. Three more `MR-FRAMEWORK` codes.
+
 - **`model_runner work` runs one task from ready to done (Phase J).** An
   agent record takes a lease on the task and starts a new execution
   generation; the task's context is built and its manifest kept; the model
@@ -17775,7 +17787,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 214 diagnostic
+- Localization through `messages`, with a catalog entry for all 217 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

@@ -109,10 +109,14 @@ package body Model_Runner.Framework.Execution is
       Command   : String;
       Directory : String;
       Result    : out Outcome;
-      Status    : out Model_Runner.Errors.Error_Info)
+      Status    : out Model_Runner.Errors.Error_Info;
+      Base      : String := "")
    is
+      Workspaces_Root : constant String :=
+        Hostkit.Fs.Join (Stores.Root (Item), "workspaces");
       Project : constant String :=
-        Ada.Directories.Containing_Directory (Stores.Root (Item));
+        (if Base = "" then Ada.Directories.Containing_Directory (Stores.Root (Item))
+         else Base);
       Words   : constant Name_Lists.Vector := Words_Of (Command);
       Shell   : constant Boolean := Needs_Shell (Command);
 
@@ -130,6 +134,13 @@ package body Model_Runner.Framework.Execution is
 
       if Words.Is_Empty then
          Refuse ("there is nothing to run");
+         return;
+      elsif Base /= ""
+        and then (Base'Length <= Workspaces_Root'Length
+                  or else Base (Base'First .. Base'First + Workspaces_Root'Length - 1)
+                          /= Workspaces_Root)
+      then
+         Refuse (Base & " is not one of the project's workspaces");
          return;
       elsif Directory /= "" and then not Templates.Is_Project_Path (Directory) then
          Refuse (Directory & " is not a directory inside the project");

@@ -303,6 +303,9 @@ ordinal is never reused, not because they might appear.
 | `MR-FRAMEWORK-0025` | `error.framework.context_overflow` | recovery_unsupported | 4 | raised |
 | `MR-FRAMEWORK-0026` | `error.framework.contract_violation` | recovery_user_correctable | 6 | raised |
 | `MR-FRAMEWORK-0027` | `error.framework.execution_refused` | recovery_user_correctable | 2 | raised |
+| `MR-FRAMEWORK-0028` | `error.framework.workspace_failed` | recovery_user_correctable | 6 | raised |
+| `MR-FRAMEWORK-0029` | `error.framework.integration_refused` | recovery_user_correctable | 2 | raised |
+| `MR-FRAMEWORK-0030` | `error.framework.integration_conflict` | recovery_user_correctable | 6 | raised |
 
 ## INTERNAL
 
