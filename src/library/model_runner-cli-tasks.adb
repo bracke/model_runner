@@ -698,20 +698,20 @@ package body Model_Runner.CLI.Tasks is
          Move ("accepted");
       elsif Action = "reject" then
          Move ("rejected");
-      elsif Action = "cancel"
-        and then Model_Runner.Framework.Tasks.State_Of (Store, Argument) = "running"
-      then
-         --  Its agent is stopped and its lease let go with it.
-         Model_Runner.Framework.Work.Cancel (Store, Argument, Outcome);
-         if E.Is_Error (Outcome) then
-            Fail (Outcome);
-         else
-            Pres.Put_Message
-              (Screen, "cli.task.moved",
-               [Loc.Named ("name", Argument), Loc.Named ("value", "cancelled")]);
-         end if;
       elsif Action = "cancel" then
-         Move ("cancelled");
+         --  Whatever its state, what it holds goes with it: its agent,
+         --  children, leases and workspace.
+         if Needs_Task then
+            Model_Runner.Framework.Work.Cancel
+              (Store, Argument, Outcome, Actor => Model_Runner.Framework.Transitions.User);
+            if E.Is_Error (Outcome) then
+               Fail (Outcome);
+            else
+               Pres.Put_Message
+                 (Screen, "cli.task.moved",
+                  [Loc.Named ("name", Argument), Loc.Named ("value", "cancelled")]);
+            end if;
+         end if;
       elsif Action = "audit" then
          if Needs_Task then
             for Line of Model_Runner.Framework.Work.Audit (Store, Argument) loop

@@ -3839,6 +3839,36 @@ package body Tests.Framework_Cases is
       S.Commit (Store, Change, Status);
       Assert (E.Is_Ok (Status) and then Taken.Contains ("src/parser.ads"),
               "work taken in anyway was not taken in: " & Code_Of (Status));
+
+      --  A task waiting in verification with its workspace, cancelled: the
+      --  workspace goes with it, and who cancelled it is kept.
+      declare
+         Third : Unbounded_String;
+         Place : Unbounded_String;
+         Held  : Ws.Workspace;
+         View  : R.Item;
+      begin
+         Tk.Create (Store, Change, Fields ("Third", "analysis"), "user", "", Third, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Third), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Wk.Execute (Store, To_String (Third),
+                     Scripted_Agent'(File => To_Unbounded_String ("src/third.adb"),
+                                     Answer => To_Unbounded_String (Good), Broken => False),
+                     Cx.Profile (Store, ""), Done, Status);
+         Place := Done.Workspace_Id;
+         Assert (To_String (Done.Final_State) = "verification" and then Length (Place) > 0,
+                 "the third task did not wait in verification with a workspace");
+         Wk.Cancel (Store, To_String (Third), Status, Actor => Tr.User);
+         Ws.Read (Store, To_String (Place), Held, Status);
+         Tk.Effective (Store, To_String (Third), View, Status);
+         Assert (Tk.State_Of (Store, To_String (Third)) = "cancelled"
+                 and then To_String (Held.Status) = "abandoned"
+                 and then Ws.Active_For (Store, To_String (Third)) = ""
+                 and then R.Get (View, "runtime.moved_by") = Tr.User,
+                 "cancelling a task in verification kept its workspace: "
+                 & To_String (Held.Status));
+      end;
       S.Close (Store);
    end Workspaces_Isolate_And_Integrate;
 
@@ -3903,11 +3933,18 @@ package body Tests.Framework_Cases is
                 "with Parser;" & LF & "procedure Parser_Tests is" & LF & "begin" & LF
                 & "   null;" & LF & "end Parser_Tests;" & LF);
       Put_File (Fresh_Root (Store) & "/NOTES.txt", "notes");
+      Put_File (Fresh_Root (Store) & "/tests/acceptance.adb",
+                "procedure Acceptance is" & LF & "begin" & LF & "   null;" & LF
+                & "end Acceptance;" & LF);
 
       Nt.Propose (Store, Change, Nt.Requirement, "PARSER", "Next", "It SHALL advance.",
                   "", "user", "", "parser", Req, Status);
       Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted",
                Tr.Ordinary_Only, Status);
+
+      --  A test the requirement names, which nothing in the code links to.
+      Nt.Link (Store, Change, Nt.Requirement, To_String (Req), Nt.Test,
+               "tests/acceptance.adb", Status);
       S.Commit (Store, Change, Status);
       Given := Fields ("Next", "implementation", "component", "parser");
       Given.Include ("requirements", To_String (Req));
@@ -3946,6 +3983,8 @@ package body Tests.Framework_Cases is
       Chosen := Tc.Select_Tests (Store, Reach);
       Assert (Chosen.Tests.Contains ("tests/parser_tests.adb"),
               "the affected test was not chosen");
+      Assert (Chosen.Tests.Contains ("tests/acceptance.adb"),
+              "the test a reached requirement names was not chosen");
 
       --  From a symbol rather than a file: what refers to it is reached.
       Changed.Clear;

@@ -344,18 +344,22 @@ package Model_Runner.Framework.Work is
       Status  : out Model_Runner.Errors.Error_Info;
       Semantic_Accepted : Boolean := False);
 
-   --  Stop the work on a running task: its agent and every child of it
-   --  still going are recorded cancelled, its lease let go, a workspace
-   --  written for it abandoned, and the task cancelled.
+   --  Cancel a task, and let go of what it holds whatever its state: its
+   --  agent and every child of it still going are recorded cancelled, its
+   --  leases let go, a workspace written for it abandoned -- one that
+   --  waits in verification, or is kept while the task is blocked, as much
+   --  as a running one's.
    --
    --  @param Item The store.
    --  @param Task_Id The task.
    --  @param Status Framework_Transition_Invalid when it is not in a state
    --    that can be cancelled.
+   --  @param Actor Who cancelled it, as Transitions.Apply keeps it.
    procedure Cancel
      (Item    : in out Stores.Store;
       Task_Id : String;
-      Status  : out Model_Runner.Errors.Error_Info);
+      Status  : out Model_Runner.Errors.Error_Info;
+      Actor   : String := "");
 
    --  What the state says about how a task came to be where it is, as
    --  question and answer, one a line -- the questions a completed task

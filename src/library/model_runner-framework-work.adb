@@ -2016,12 +2016,13 @@ package body Model_Runner.Framework.Work is
    procedure Cancel
      (Item    : in out Stores.Store;
       Task_Id : String;
-      Status  : out Model_Runner.Errors.Error_Info)
+      Status  : out Model_Runner.Errors.Error_Info;
+      Actor   : String := "")
    is
       Change : Stores.Transaction;
       Agent  : constant String := Holder_Record (Item, Task_Id);
    begin
-      Tasks.Move (Item, Change, Task_Id, "cancelled", "", Status => Status);
+      Tasks.Move (Item, Change, Task_Id, "cancelled", "", Status => Status, Actor => Actor);
       if E.Is_Error (Status) then
          return;
       end if;

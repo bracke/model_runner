@@ -310,9 +310,10 @@ package body Model_Runner.Framework.Traceability is
       --  to what depends on it, from a symbol to what refers to it, from a
       --  file to the tasks that changed it and the components it belongs
       --  to, and from anything to the requirements and specifications that
-      --  reach it.
+      --  reach it; and forward from a requirement to the tests it names,
+      --  which are its explicitly and before any a dependency finds.
       function Forward (Kind : String) return Boolean
-      is (Kind in "contains" | "implements" | "declares");
+      is (Kind in "contains" | "implements" | "declares" | "tested_by");
 
       --  A file and its units reach each other either way: a changed spec
       --  reaches its body, and a dependent unit reaches its files, tests
@@ -363,17 +364,16 @@ package body Model_Runner.Framework.Traceability is
 
             function Kind_Of return String is
             begin
+               --  A test by its place, or by a requirement naming it one.
+               for Next of From.Edges loop
+                  if (To_String (Next.From) = Node and then To_String (Next.Kind) = "is_test")
+                    or else (To_String (Next.To) = Node and then To_String (Next.Kind) = "tested_by")
+                  then
+                     return "test";
+                  end if;
+               end loop;
                if Node'Length > 5 and then Node (Node'First .. Node'First + 4) = "file:" then
-                  declare
-                     Is_Test : Boolean := False;
-                  begin
-                     for Next of From.Edges loop
-                        Is_Test := Is_Test
-                          or else (To_String (Next.From) = Node
-                                   and then To_String (Next.Kind) = "is_test");
-                     end loop;
-                     return (if Is_Test then "test" else "file");
-                  end;
+                  return "file";
                elsif Node'Length > 5 and then Node (Node'First .. Node'First + 4) = "unit:" then
                   return "unit";
                elsif Node'Length > 7 and then Node (Node'First .. Node'First + 6) = "symbol:" then
@@ -442,8 +442,13 @@ package body Model_Runner.Framework.Traceability is
 
       for Next of From.Items loop
          if To_String (Next.Kind) = "test" then
-            Result.Tests.Append (Ada.Strings.Fixed.Tail
-                                   (To_String (Next.Id), Length (Next.Id) - 5));
+            --  file:PATH or symbol:NAME, as the test is known.
+            declare
+               Id    : constant String := To_String (Next.Id);
+               Colon : constant Natural := Ada.Strings.Fixed.Index (Id, ":");
+            begin
+               Result.Tests.Append (Id (Colon + 1 .. Id'Last));
+            end;
             if Next.Sure /= Repository.Certain then
                Partial := True;
             end if;

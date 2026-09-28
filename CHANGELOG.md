@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Explicit test links choose tests.** Impact follows a reached
+  requirement's `tested_by` links to the tests it names, which are chosen
+  whether or not any dependency reaches them.
+- **Cancelling frees what a task holds, in any state.** `task cancel` goes
+  through `Work.Cancel` whatever the state: a workspace waiting in
+  verification or kept while blocked is abandoned, its agent's children
+  stopped, its leases let go, and who cancelled it recorded.
 - **Agents stay out of the state.** `Permissions.Path_Refusal` refuses an
   agent's file tool the project's state (read or write, links followed),
   writes to `.git`, and paths outside its tree or grants. The session's
