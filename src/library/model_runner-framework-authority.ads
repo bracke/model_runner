@@ -2,6 +2,7 @@ private with Ada.Containers.Vectors;
 
 with Ada.Strings.Unbounded;
 
+with Model_Runner.Errors;
 with Model_Runner.Framework.Stores;
 
 --  Which statement about a subject governs, and how the others stand to it.
@@ -72,9 +73,52 @@ package Model_Runner.Framework.Authority is
    --  @return The count.
    function Count (From : Statement_List) return Natural;
 
-   --  Every statement the project state makes: accepted decisions and
-   --  specifications that govern a subject, and the resolved
-   --  configuration's settings.
+   --  Give an explicit instruction: a person's word on a subject, which
+   --  governs it above every decision, specification and setting while it
+   --  stands, and which says what it overrides when it overrides something.
+   --  Kept, with who gave it and when, until it is withdrawn.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Subject What it is about, as a decision's governs names it.
+   --  @param Value What it says.
+   --  @param Overrides The source it overrides, or "".
+   --  @param Given_By Who gave it.
+   --  @param Id Its identifier, INSTR-number.
+   --  @param Status Framework_Input_Missing for no subject or value.
+   procedure Instruct
+     (Item      : Stores.Store;
+      Change    : in out Stores.Transaction;
+      Subject   : String;
+      Value     : String;
+      Overrides : String;
+      Given_By  : String;
+      Id        : out Ada.Strings.Unbounded.Unbounded_String;
+      Status    : out Model_Runner.Errors.Error_Info);
+
+   --  Withdraw an instruction: it stops governing, and stays on record.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Id The instruction.
+   --  @param By Who withdrew it.
+   --  @param Status Framework_Not_Found when there is no standing one.
+   procedure Withdraw
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Id     : String;
+      By     : String;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  The instructions standing, each as ID: SUBJECT = VALUE.
+   --
+   --  @param Item The store.
+   --  @return Them, in the order given.
+   function Standing_Instructions (Item : Stores.Store) return Name_Lists.Vector;
+
+   --  Every statement the project state makes: standing instructions,
+   --  accepted decisions and specifications that govern a subject, the
+   --  resolved configuration's settings and the baselines.
    --
    --  @param Item The store.
    --  @return The statements.

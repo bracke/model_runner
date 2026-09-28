@@ -316,6 +316,7 @@ en.cli.interactive.help.state = /state            where the project stands
 en.cli.interactive.help.config = /config           the project's resolved configuration
 en.cli.interactive.help.git = /git              how the project stands in Git, and which tasks changed what
 en.cli.interactive.help.sandbox = /sandbox [R|off]  confine every agent this session starts, as a task's permissions field writes it
+en.cli.interactive.help.instruct = /instruct [S = V]  a standing instruction of yours: above every other source; withdraw ID ends it
 en.cli.interactive.help.reconfigure = /reconfigure NAME=VALUE ...  change settings: see what it reaches, then confirm
 en.cli.interactive.help.task = /task [ACTION]     list and manage tasks: new, accept, reject, edit, depend, split, reopen, reconsider, show, audit, derive, plan
 en.cli.interactive.help.accept = /accept           accept the one candidate waiting
@@ -447,6 +448,7 @@ en.cli.project.git.clean = nothing has changed since the last commit
 en.cli.project.git.none = the project is not in a Git repository git can read
 en.cli.project.sandbox.none = agents are confined only by the project's permissions
 en.cli.project.sandbox.set = agents are confined to {value}
+en.cli.project.instruct.none = no instruction of yours stands
 en.cli.project.consistency = what does not hold together in the project's state: {count}
 en.cli.repo.summary = {count} files and {total} relations; graph {value}
 en.cli.repo.file = {path}  {value}  {detail}
@@ -1238,6 +1240,7 @@ da.cli.interactive.help.state = /state            hvor projektet står
 da.cli.interactive.help.config = /config           projektets afklarede konfiguration
 da.cli.interactive.help.git = /git              hvordan projektet står i Git, og hvilke opgaver ændrede hvad
 da.cli.interactive.help.sandbox = /sandbox [R|off]  begræns hver agent denne session starter, som en opgaves permissions-felt skriver det
+da.cli.interactive.help.instruct = /instruct [S = V]  en stående instruks fra dig: over alle andre kilder; withdraw ID ophæver den
 da.cli.interactive.help.reconfigure = /reconfigure NAVN=VÆRDI ...  ændr indstillinger: se hvad det rækker til, og bekræft
 da.cli.interactive.help.task = /task [HANDLING]   vis og styr opgaver: new, accept, reject, edit, depend, split, reopen, reconsider, show, audit, derive, plan
 da.cli.interactive.help.accept = /accept           accepter den ene ventende kandidat
@@ -1356,6 +1359,7 @@ da.cli.project.git.clean = intet er ændret siden sidste commit
 da.cli.project.git.none = projektet er ikke i et Git-repository som git kan læse
 da.cli.project.sandbox.none = agenter begrænses kun af projektets tilladelser
 da.cli.project.sandbox.set = agenter er begrænset til {value}
+da.cli.project.instruct.none = ingen instruks fra dig står ved magt
 da.cli.project.consistency = hvad der ikke hænger sammen i projektets tilstand: {count}
 da.cli.repo.summary = {count} filer og {total} relationer; graf {value}
 da.cli.repo.file = {path}  {value}  {detail}
@@ -1921,6 +1925,7 @@ qps.cli.interactive.help.state = ⟦/state            whéŕé ŧhé pŕójéç�
 qps.cli.interactive.help.config = ⟦/config           ŧhé pŕójéçŧ'ß ŕéßóĺvéð çóñfígúŕáŧíóñ⟧
 qps.cli.interactive.help.git = ⟦/git              hów ŧhé þŕójéçŧ ßŧáñðß íñ Gíŧ, áñð whíçh ŧáßkß çháñgéð wháŧ⟧
 qps.cli.interactive.help.sandbox = ⟦/sandbox [R|off]  çóñfíñé éµéŕý ágéñŧ ŧhíß ßéßßíóñ ßŧáŕŧß, áß á ŧáßk'ß þéŕɱíßßíóñß fíéĺð wŕíŧéß íŧ⟧
+qps.cli.interactive.help.instruct = ⟦/instruct [S = V]  á ßŧáñðíñg íñßŧŕúçŧíóñ óf ýóúŕß: áƀóµé éµéŕý óŧhéŕ ßóúŕçé; wíŧhðŕáw ÍÐ éñðß íŧ⟧
 qps.cli.interactive.help.reconfigure = ⟦/reconfigure NAME=VALUE ...  çháñgé ßéŧŧíñgß: ßéé wháŧ íŧ ŕéáçhéß, ŧhéñ çóñfíŕm⟧
 qps.cli.interactive.help.task = ⟦/task [ACTION]     ĺíßŧ áñð máñágé ŧáßkß: ñéw, áççépŧ, ŕéjéçŧ, éðíŧ, ðépéñð, ßþĺíŧ, ŕéópéñ, ŕéçóñßíðéŕ, ßhów, ðéŕívé, pĺáñ⟧
 qps.cli.interactive.help.accept = ⟦/accept           áççépŧ ŧhé óñé çáñðíðáŧé wáíŧíñg⟧
@@ -2052,6 +2057,7 @@ qps.cli.project.git.clean = ⟦ñóŧhíñg háß çháñgéð ßíñçé ŧhé 
 qps.cli.project.git.none = ⟦ŧhé þŕójéçŧ íß ñóŧ íñ á Gíŧ ŕéþóßíŧóŕý gíŧ çáñ ŕéáð⟧
 qps.cli.project.sandbox.none = ⟦ágéñŧß áŕé çóñfíñéð óñĺý ƀý ŧhé þŕóĵéçŧ'ß þéŕɱíßßíóñß⟧
 qps.cli.project.sandbox.set = ⟦ágéñŧß áŕé çóñfíñéð ŧó {value}⟧
+qps.cli.project.instruct.none = ⟦ñó íñßŧŕúçŧíóñ óf ýóúŕß ßŧáñðß⟧
 qps.cli.project.consistency = ⟦wháŧ ðóéß ñóŧ hóĺð ŧógéŧhéŕ íñ ŧhé pŕójéçŧ'ß ßŧáŧé: {count}⟧
 qps.cli.repo.summary = ⟦{count} fíĺéß áñð {total} ŕéĺáŧíóñß; gŕáph {value}⟧
 qps.cli.repo.file = ⟦{path}  {value}  {detail}⟧

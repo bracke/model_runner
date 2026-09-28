@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Human instructions govern.** `/instruct SUBJECT = VALUE [overriding
+  SOURCE]` gives a standing instruction, kept with who gave it and when;
+  it enters authority resolution at the top level, above decisions,
+  specifications and configuration, and reaches every task's effective
+  view. `/instruct` lists them and `/instruct withdraw ID` ends one.
+  Overrides follow a chain: overriding a decision overrides what it
+  overrode.
+- **A bootstrap policy.** `set bootstrap.sources` names the documents
+  (files, or `DIR/PATTERN`), `set bootstrap.propose` the kinds bootstrap
+  may make, and `scalar bootstrap.import = candidate` has an item a
+  document numbers itself proposed rather than accepted; the standard
+  template states the defaults.
 - **init confirms where policy says so, and checks what it made.** A
   template's `scalar init.confirm = yes` has a terminal asked before
   anything is written, and anything else refused unless given

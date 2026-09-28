@@ -264,7 +264,11 @@ shell): its tree and permissions go with it, and its file tools refuse the
 rest. Git and that agent process run through the execution layer like a
 project's checks -- no standard input, only PATH, HOME and what is passed,
 a deadline -- and each run is a line in `.model_runner/runtime/harness.log`.
-A template can ask for confirmation before `init` writes anything
+`/instruct build.command = alr build --release overriding DEC-003` puts a
+person's word above every decision, specification and setting on that
+subject until `/instruct withdraw INSTR-001`. What `/bootstrap` reads and
+may make is the project's bootstrap policy (`set bootstrap.sources`,
+`set bootstrap.propose`, `scalar bootstrap.import`). A template can ask for confirmation before `init` writes anything
 (`scalar init.confirm = yes`; the generic template does): a terminal is
 asked, and a script passes `--set confirm=yes`. `/reconfigure` checks the
 whole new configuration, says which derived state it invalidates, and

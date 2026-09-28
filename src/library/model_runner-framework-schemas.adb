@@ -121,6 +121,19 @@ package body Model_Runner.Framework.Schemas is
          [Rule ("entries", Number_Field, True),
           Rule ("entity.*", Text_Field, False)]),
 
+      (Id      => new String'(Instruction_Schema),
+       Version => 1,
+       Policy  => Reject_Unknown,
+       Rules   => new Rule_List'
+         [Rule ("subject", Text_Field, True),
+          Rule ("value", Text_Field, True),
+          Rule ("overrides", Text_Field, False),
+          Rule ("state", Text_Field, True),
+          Rule ("given_by", Text_Field, True),
+          Rule ("given_at", Text_Field, True),
+          Rule ("withdrawn_by", Text_Field, False),
+          Rule ("withdrawn_at", Text_Field, False)]),
+
       (Id      => new String'(Derived_Index_Schema),
        Version => 1,
        Policy  => Reject_Unknown,

@@ -42,6 +42,10 @@ package Model_Runner.Framework.Schemas is
    --  A specification, requirement or decision.
    Intent_Schema : constant String := "intent.entity";
 
+   --  An explicit instruction a person gave, which outranks everything
+   --  else about its subject while it stands.
+   Instruction_Schema : constant String := "authority.instruction";
+
    --  A task's definition, and its runtime state.
    Task_Definition_Schema : constant String := "task.definition";
    Task_Runtime_Schema    : constant String := "task.runtime";

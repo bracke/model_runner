@@ -92,8 +92,21 @@ package Model_Runner.Framework.Bootstrap is
    --  @return What it says.
    function Scan (Path : String; Text : String) return Output_List;
 
+   --  The documents the project's bootstrap policy reads: each entry of
+   --  set bootstrap.sources is a file, or a directory and a pattern for the
+   --  files in it, as docs/*.md, all within the project. Without the
+   --  setting, the Markdown at the top and in docs.
+   --
+   --  @param Item The store.
+   --  @return Their paths within the project, sorted, each once.
+   function Documents (Item : Stores.Store) return Name_Lists.Vector;
+
    --  Apply what was found, making only what the state does not already
-   --  hold.
+   --  hold, and only what the bootstrap policy lets it make: set
+   --  bootstrap.propose names the kinds made -- facts, imports,
+   --  requirements, decisions, specifications, issues; all without it --
+   --  and scalar bootstrap.import = candidate has an item a document gives
+   --  its own identifier proposed rather than accepted.
    --
    --  @param Item The store.
    --  @param Change The transaction.

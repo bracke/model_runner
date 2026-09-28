@@ -15,6 +15,7 @@ with Model_Runner.Conversation;
 with Model_Runner.Entropy;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Agents;
+with Model_Runner.Framework.Authority;
 with Model_Runner.Framework.Bootstrap;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Consistency;
@@ -25,6 +26,7 @@ with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
+with Model_Runner.Framework.Transitions;
 with Model_Runner.Framework.Verification;
 with Model_Runner.Generation;
 with Model_Runner.Localization;
@@ -67,7 +69,7 @@ package body Model_Runner.CLI.Project_Commands is
       new String'("/tree"), new String'("/sym"), new String'("/refs"),
       new String'("/impact"), new String'("/trace"), new String'("/reconfigure"),
       new String'("/decision"), new String'("/spec"), new String'("/git"),
-      new String'("/sandbox")];
+      new String'("/sandbox"), new String'("/instruct")];
 
    --  The tools the work's agents may call; each is offered only where the
    --  agent's permissions give it.
@@ -627,6 +629,7 @@ package body Model_Runner.CLI.Project_Commands is
       Pres.Put_Note (Screen, "cli.interactive.help.config");
       Pres.Put_Note (Screen, "cli.interactive.help.git");
       Pres.Put_Note (Screen, "cli.interactive.help.sandbox");
+      Pres.Put_Note (Screen, "cli.interactive.help.instruct");
       Pres.Put_Note (Screen, "cli.interactive.help.reconfigure");
       Pres.Put_Note (Screen, "cli.interactive.help.task");
       Pres.Put_Note (Screen, "cli.interactive.help.accept");
@@ -953,29 +956,11 @@ package body Model_Runner.CLI.Project_Commands is
          Change : S.Transaction;
          Found  : Model_Runner.Framework.Bootstrap.Output_List;
          Report : Model_Runner.Framework.Bootstrap.Report;
-         Files  : Names.Vector := Positional;
-
-         procedure Gather (Directory, Prefix : String) is
-            Search : Ada.Directories.Search_Type;
-            Item   : Ada.Directories.Directory_Entry_Type;
-         begin
-            if not Ada.Directories.Exists (Directory) then
-               return;
-            end if;
-            Ada.Directories.Start_Search
-              (Search, Directory, "*.md",
-               [Ada.Directories.Ordinary_File => True, others => False]);
-            while Ada.Directories.More_Entries (Search) loop
-               Ada.Directories.Get_Next_Entry (Search, Item);
-               Files.Append (Prefix & Ada.Directories.Simple_Name (Item));
-            end loop;
-            Ada.Directories.End_Search (Search);
-         end Gather;
+         --  The documents named, or those the bootstrap policy reads.
+         Files  : constant Names.Vector :=
+           (if Positional.Is_Empty then Model_Runner.Framework.Bootstrap.Documents (Store)
+            else Positional);
       begin
-         if Files.Is_Empty then
-            Gather (Here, "");
-            Gather ("docs", "docs/");
-         end if;
          for Path of Files loop
             declare
                Scanned : constant Model_Runner.Framework.Bootstrap.Output_List :=
@@ -1144,6 +1129,72 @@ package body Model_Runner.CLI.Project_Commands is
          end if;
       end Git_Status;
 
+      --  A person's explicit word on a subject, above every other source:
+      --  given, withdrawn, or those standing listed.
+      procedure Instruct (Store : in out S.Store) is
+         package Au renames Model_Runner.Framework.Authority;
+         Change : S.Transaction;
+         Said   : Unbounded_String;
+         Id     : Unbounded_String;
+      begin
+         for Index in 2 .. Natural (All_Words.Length) loop
+            Append (Said, (if Index = 2 then "" else " ") & All_Words (Index));
+         end loop;
+         if Said = Null_Unbounded_String then
+            for Line of Au.Standing_Instructions (Store) loop
+               Pres.Put_Message (Screen, "cli.task.field",
+                                 [Loc.Named ("name", Line (Line'First .. Ada.Strings.Fixed.Index (Line, ":") - 1)),
+                                  Loc.Named ("value", Line (Ada.Strings.Fixed.Index (Line, ":") + 2 .. Line'Last))]);
+            end loop;
+            if Au.Standing_Instructions (Store).Is_Empty then
+               Pres.Put_Note (Screen, "cli.project.instruct.none");
+            end if;
+            return;
+         elsif Argument (1) = "withdraw" then
+            Au.Withdraw (Store, Change, Argument (2), Model_Runner.Framework.Transitions.User,
+                         Outcome);
+            if E.Is_Ok (Outcome) then
+               S.Commit (Store, Change, Outcome);
+            end if;
+            if E.Is_Error (Outcome) then
+               Pres.Report (Screen, Outcome);
+            else
+               Pres.Put_Message (Screen, "cli.task.moved",
+                                 [Loc.Named ("name", Argument (2)),
+                                  Loc.Named ("value", "withdrawn")]);
+            end if;
+            return;
+         end if;
+         declare
+            Text      : constant String := To_String (Said);
+            Equals    : constant Natural := Ada.Strings.Fixed.Index (Text, "=");
+            Overrides : constant Natural := Ada.Strings.Fixed.Index (Text, " overriding ");
+            Subject   : constant String :=
+              (if Equals = 0 then "" else Ada.Strings.Fixed.Trim (Text (Text'First .. Equals - 1), Ada.Strings.Both));
+            Value     : constant String :=
+              (if Equals = 0 then ""
+               else Ada.Strings.Fixed.Trim
+                      (Text (Equals + 1 .. (if Overrides > Equals then Overrides - 1 else Text'Last)),
+                       Ada.Strings.Both));
+            Over      : constant String :=
+              (if Overrides > Equals then Ada.Strings.Fixed.Trim (Text (Overrides + 12 .. Text'Last), Ada.Strings.Both)
+               else "");
+         begin
+            Au.Instruct (Store, Change, Subject, Value, Over,
+                         Model_Runner.Framework.Transitions.User, Id, Outcome);
+            if E.Is_Ok (Outcome) then
+               S.Commit (Store, Change, Outcome);
+            end if;
+            if E.Is_Error (Outcome) then
+               Pres.Report (Screen, Outcome);
+            else
+               Pres.Put_Message (Screen, "cli.task.created",
+                                 [Loc.Named ("name", To_String (Id)),
+                                  Loc.Named ("detail", Subject & " = " & Value)]);
+            end if;
+         end;
+      end Instruct;
+
       --  The one candidate waiting, if there is exactly one.
       procedure Decide (Store : in out S.Store) is
          Tasks_Waiting : constant Names.Vector := Tk.List (Store, "candidate");
@@ -1265,6 +1316,8 @@ package body Model_Runner.CLI.Project_Commands is
          With_Store (Bootstrap'Access);
       elsif Word = "/git" then
          With_Store (Git_Status'Access);
+      elsif Word = "/instruct" then
+         With_Store (Instruct'Access);
       elsif Word = "/sandbox" then
          --  The run's own confinement, below every other level: it needs
          --  no project, and lasts until changed or the session ends.

@@ -1963,6 +1963,40 @@ package body Tests.Framework_Cases is
       S.Commit (Store, Change, Status);
       Findings := Cn.Check (Store);
       Assert (not Conflicted, "an explicit override was reported as a conflict");
+
+      --  A person's instruction outranks the decision while it stands, and
+      --  says which it overrides; withdrawn, the decision governs again.
+      declare
+         use type Au.Level;
+         Given : Unbounded_String;
+         First : Unbounded_String;
+         Found : Boolean;
+      begin
+         Au.Instruct (Store, Change, "scalar.build.command", "alr build --release",
+                      To_String (Id), "user tester", Given, Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status)
+                 and then Au.Governing (Au.Resolve (Au.Gather (Store)), "scalar.build.command", Found)
+                          .Standing = Au.Human_Instruction
+                 and then Natural (Au.Standing_Instructions (Store).Length) = 1,
+                 "a standing instruction did not govern: " & Code_Of (Status));
+         Findings := Cn.Check (Store);
+         Assert (not Conflicted, "an instruction naming what it overrides was a conflict");
+         First := Given;
+         Au.Instruct (Store, Change, "", "x", "", "user", Given, Status);
+         Assert (Status.Code = E.Framework_Input_Missing, "an instruction about nothing was given");
+         Change := S.No_Changes;
+         Au.Withdraw (Store, Change, To_String (Given), "user tester", Status);
+         Assert (Status.Code = E.Framework_Not_Found, "an instruction nobody gave was withdrawn");
+         Change := S.No_Changes;
+         Au.Withdraw (Store, Change, To_String (First), "user tester", Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status)
+                 and then Au.Standing_Instructions (Store).Is_Empty
+                 and then Au.Governing (Au.Resolve (Au.Gather (Store)), "scalar.build.command", Found)
+                          .Standing = Au.Project_Decision,
+                 "a withdrawn instruction still governed: " & Code_Of (Status));
+      end;
       S.Close (Store);
    end Authority_Conflicts_Are_Found;
 
@@ -3081,6 +3115,42 @@ package body Tests.Framework_Cases is
       end;
       S.Close (Store);
    end Agents_Stay_Out_Of_The_State;
+
+   --  Bootstrap reads what its policy names, makes only the kinds it lets
+   --  it, and proposes rather than accepts an import when it says so.
+   procedure Bootstrap_Follows_Its_Policy
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      Report : Bs.Report;
+      Found  : Bs.Output_List;
+   begin
+      Task_Project (Store, "bootstrap-policy",
+                    "set bootstrap.sources = notes/*.txt" & LF
+                    & "set bootstrap.propose = imports, requirements" & LF
+                    & "scalar bootstrap.import = candidate" & LF);
+      Dirs.Create_Path (Fresh_Root (Store) & "/notes");
+      Put_File (Fresh_Root (Store) & "/README.md", "The tool SHALL be ignored here." & LF);
+      Put_File (Fresh_Root (Store) & "/notes/io.txt",
+                "- REQ-IO-001: Input is read once." & LF
+                & "The reader SHALL stop at the end." & LF
+                & "Decision: errors are values." & LF);
+      Assert (Bs.Documents (Store) = Model_Runner.Framework.Name_Lists.To_Vector ("notes/io.txt", 1),
+              "bootstrap did not read what its policy names, and only that");
+      Found := Bs.Scan ("notes/io.txt", Read_Whole (Fresh_Root (Store) & "/notes/io.txt"));
+      Bs.Apply (Store, Change, Found, Report, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status)
+              and then Natural (Nt.List (Store, Nt.Requirement).Length) = 2
+              and then Nt.List (Store, Nt.Decision).Is_Empty
+              and then Nt.List (Store, Nt.Requirement, "accepted").Is_Empty,
+              "bootstrap made what its policy does not let it, or accepted an import: "
+              & Code_Of (Status));
+      S.Close (Store);
+   end Bootstrap_Follows_Its_Policy;
 
    ---------------------------------------------------------------------------
    --  Context and invocations.
@@ -6370,6 +6440,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Agents_Stay_Out_Of_The_State'Access,
          "agents never reach the project's state, and harness programs get only what is passed");
+      Register_Routine
+        (T, Bootstrap_Follows_Its_Policy'Access,
+         "bootstrap reads, makes and accepts what its policy says");
       Register_Routine
         (T, Derivation_Is_Idempotent'Access,
          "a requirement derives its task once, however often derivation"

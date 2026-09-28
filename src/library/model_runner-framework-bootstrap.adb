@@ -3,9 +3,11 @@ with Ada.Directories;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
 
+with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Facts;
 with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Intent;
+with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Transitions;
 
@@ -182,6 +184,88 @@ package body Model_Runner.Framework.Bootstrap is
    -- Apply --
    -----------
 
+   package Sorting is new Name_Lists.Generic_Sorting;
+
+   --  A setting's items, a line or a comma apart.
+   function Items_Of (Text : String) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+   begin
+      for Line of Lines_Of (Ada.Strings.Fixed.Translate
+                              (Text, Ada.Strings.Maps.To_Mapping (",", [1 => ASCII.LF])))
+      loop
+         if Ada.Strings.Fixed.Trim (Line, Ada.Strings.Both) /= "" then
+            Result.Append (Ada.Strings.Fixed.Trim (Line, Ada.Strings.Both));
+         end if;
+      end loop;
+      return Result;
+   end Items_Of;
+
+   --  The resolved configuration, or an empty one.
+   function Settings_Of (Item : Stores.Store) return Records.Item is
+      Value  : Records.Item;
+      Status : E.Error_Info;
+   begin
+      Configurations.Read (Item, Value, Status);
+      return (if E.Is_Ok (Status) then Value else Records.Create ("", 1, "", 0));
+   end Settings_Of;
+
+   ---------------
+   -- Documents --
+   ---------------
+
+   function Documents (Item : Stores.Store) return Name_Lists.Vector is
+      Project : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
+      Listed  : Name_Lists.Vector :=
+        Items_Of (Records.Get (Settings_Of (Item), "set.bootstrap.sources"));
+      Result  : Name_Lists.Vector;
+   begin
+      if Listed.Is_Empty then
+         Listed.Append ("*.md");
+         Listed.Append ("docs/*.md");
+      end if;
+      for Entry_Text of Listed loop
+         declare
+            Given : constant String := Ada.Strings.Fixed.Trim (Entry_Text, Ada.Strings.Both);
+            Slash : constant Natural := Ada.Strings.Fixed.Index (Given, "/", Ada.Strings.Backward);
+            Dir   : constant String := (if Slash = 0 then "" else Given (Given'First .. Slash - 1));
+            Name  : constant String := (if Slash = 0 then Given else Given (Slash + 1 .. Given'Last));
+            Where : constant String := (if Dir = "" then Project else Project & "/" & Dir);
+         begin
+            --  Within the project, and never its state.
+            if Given /= "" and then Given (Given'First) not in '/' | '\'
+              and then Ada.Strings.Fixed.Index (Given, "..") = 0
+              and then Ada.Strings.Fixed.Index (Given, State_Directory) = 0
+              and then Ada.Directories.Exists (Where)
+            then
+               declare
+                  Search : Ada.Directories.Search_Type;
+                  Found  : Ada.Directories.Directory_Entry_Type;
+               begin
+                  Ada.Directories.Start_Search
+                    (Search, Where, Name, [Ada.Directories.Ordinary_File => True, others => False]);
+                  while Ada.Directories.More_Entries (Search) loop
+                     Ada.Directories.Get_Next_Entry (Search, Found);
+                     declare
+                        Path : constant String :=
+                          (if Dir = "" then "" else Dir & "/") & Ada.Directories.Simple_Name (Found);
+                     begin
+                        if not Result.Contains (Path) then
+                           Result.Append (Path);
+                        end if;
+                     end;
+                  end loop;
+                  Ada.Directories.End_Search (Search);
+               exception
+                  when others =>
+                     null;
+               end;
+            end if;
+         end;
+      end loop;
+      Sorting.Sort (Result);
+      return Result;
+   end Documents;
+
    procedure Apply
      (Item   : Stores.Store;
       Change : in out Stores.Transaction;
@@ -191,11 +275,32 @@ package body Model_Runner.Framework.Bootstrap is
    is
       function Field (Text : Unbounded_String) return String
       is (To_String (Text));
+
+      Settings : constant Records.Item := Settings_Of (Item);
+      Kinds    : constant Name_Lists.Vector :=
+        Items_Of (Records.Get (Settings, "set.bootstrap.propose"));
+      Accept_Imports : constant Boolean :=
+        Records.Get (Settings, "scalar.bootstrap.import") /= "candidate";
+
+      --  Whether the policy lets bootstrap make outputs of a kind.
+      function Made (Kind : Output_Kind) return Boolean
+      is (Kinds.Is_Empty
+          or else Kinds.Contains
+                    (case Kind is
+                        when Discovered_Fact         => "facts",
+                        when Imported_Item           => "imports",
+                        when Requirement_Candidate   => "requirements",
+                        when Decision_Candidate      => "decisions",
+                        when Specification_Candidate => "specifications",
+                        when Issue                   => "issues"));
    begin
       Result := (others => <>);
       Status := E.Success;
 
       for Next of Found.Outputs loop
+         if not Made (Next.Kind) then
+            goto Next_Output;
+         end if;
          declare
             Provenance : constant String := Field (Next.Provenance);
             Id         : Unbounded_String;
@@ -247,7 +352,7 @@ package body Model_Runner.Framework.Bootstrap is
                        (Item, Change, Intent.Requirement, Field (Next.Key),
                         Field (Next.Title), Field (Next.Text), "",
                         Field (Next.Source), Provenance, "project", Id, Status);
-                     if E.Is_Ok (Status) then
+                     if E.Is_Ok (Status) and then Accept_Imports then
                         Intent.Move
                           (Item, Change, Intent.Requirement, To_String (Id),
                            "accepted", Transitions.Ordinary_Only, Status);
@@ -287,6 +392,7 @@ package body Model_Runner.Framework.Bootstrap is
                return;
             end if;
          end;
+         <<Next_Output>>
       end loop;
    end Apply;
 

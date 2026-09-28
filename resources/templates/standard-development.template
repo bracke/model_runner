@@ -20,6 +20,14 @@ set repository.skip = obj bin lib alire node_modules target build _build
 set repository.tests = test tests testsuite *_test.
 set repository.documentation = doc docs
 
+# What bootstrap reads, what it may make of it, and whether an item a
+# document gives its own identifier is accepted as the document says or
+# only proposed.
+set bootstrap.sources = *.md
+set bootstrap.sources = docs/*.md
+set bootstrap.propose = facts, imports, requirements, decisions, specifications, issues
+scalar bootstrap.import = accepted
+
 # What any work here is held to where nothing the project says speaks to it.
 baseline project.tests = a change in behaviour comes with a test that shows it
 baseline project.documentation = a change in what a user sees changes what the user reads

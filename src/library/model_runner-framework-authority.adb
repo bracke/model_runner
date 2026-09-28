@@ -1,7 +1,7 @@
-with Model_Runner.Errors;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Records;
+with Model_Runner.Framework.Schemas;
 
 package body Model_Runner.Framework.Authority is
 
@@ -25,6 +25,112 @@ package body Model_Runner.Framework.Authority is
 
    function Count (From : Statement_List) return Natural
    is (Natural (From.Statements.Length));
+
+   Instruction_Prefix : constant String := "instruction.";
+
+   --  The instructions on record, standing or not.
+   function Instruction_Names (Item : Stores.Store) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+   begin
+      for Name of Stores.Names (Item, Project_Area) loop
+         if Starts (Name, Instruction_Prefix) then
+            Result.Append (Name);
+         end if;
+      end loop;
+      return Result;
+   end Instruction_Names;
+
+   --------------
+   -- Instruct --
+   --------------
+
+   procedure Instruct
+     (Item      : Stores.Store;
+      Change    : in out Stores.Transaction;
+      Subject   : String;
+      Value     : String;
+      Overrides : String;
+      Given_By  : String;
+      Id        : out Ada.Strings.Unbounded.Unbounded_String;
+      Status    : out Model_Runner.Errors.Error_Info)
+   is
+   begin
+      Id := Null_Unbounded_String;
+      if Subject = "" or else Value = "" then
+         Status := E.Make (E.Framework_Input_Missing);
+         E.Add_Text (Status, "name", (if Subject = "" then "the subject" else "what it says"));
+         return;
+      end if;
+      Stores.Allocate_Identifier (Item, Change, "INSTR", "", Id, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      declare
+         Value_Record : Records.Item :=
+           Records.Create (Schemas.Instruction_Schema, 1, To_String (Id), 1);
+      begin
+         Records.Set (Value_Record, "subject", Subject);
+         Records.Set (Value_Record, "value", Value);
+         if Overrides /= "" then
+            Records.Set (Value_Record, "overrides", Overrides);
+         end if;
+         Records.Set (Value_Record, "state", "standing");
+         Records.Set (Value_Record, "given_by", (if Given_By = "" then "user" else Given_By));
+         Records.Set (Value_Record, "given_at", Timestamp);
+         Stores.Put (Change, Project_Area, Instruction_Prefix & To_String (Id), Value_Record);
+      end;
+   end Instruct;
+
+   --------------
+   -- Withdraw --
+   --------------
+
+   procedure Withdraw
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Id     : String;
+      By     : String;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Held : Records.Item;
+   begin
+      Stores.Read (Item, Project_Area, Instruction_Prefix & Id, Held, Status);
+      if E.Is_Error (Status) or else Records.Get (Held, "state") /= "standing" then
+         Status := E.Make (E.Framework_Not_Found);
+         E.Add_Text (Status, "name", Id);
+         return;
+      end if;
+      Records.Set_Revision (Held, Records.Revision (Held) + 1);
+      Records.Set (Held, "state", "withdrawn");
+      Records.Set (Held, "withdrawn_by", (if By = "" then "user" else By));
+      Records.Set (Held, "withdrawn_at", Timestamp);
+      Stores.Put (Change, Project_Area, Instruction_Prefix & Id, Held);
+   end Withdraw;
+
+   ---------------------------
+   -- Standing_Instructions --
+   ---------------------------
+
+   function Standing_Instructions (Item : Stores.Store) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+   begin
+      for Name of Instruction_Names (Item) loop
+         declare
+            Held   : Records.Item;
+            Status : E.Error_Info;
+         begin
+            Stores.Read (Item, Project_Area, Name, Held, Status);
+            if E.Is_Ok (Status) and then Records.Get (Held, "state") = "standing" then
+               Result.Append
+                 (Name (Name'First + Instruction_Prefix'Length .. Name'Last) & ": "
+                  & Records.Get (Held, "subject") & " = " & Records.Get (Held, "value")
+                  & (if Records.Get (Held, "overrides") = "" then ""
+                     else " (overriding " & Records.Get (Held, "overrides") & ")"));
+            end if;
+         end;
+      end loop;
+      return Result;
+   end Standing_Instructions;
 
    ------------
    -- Gather --
@@ -75,6 +181,26 @@ package body Model_Runner.Framework.Authority is
          new String'("profile."), new String'("task_kind."),
          new String'("schema.")];
    begin
+      --  A person's standing word first: it outranks all that follows.
+      for Name of Instruction_Names (Item) loop
+         declare
+            Held : Records.Item;
+            Read : E.Error_Info;
+         begin
+            Stores.Read (Item, Project_Area, Name, Held, Read);
+            if E.Is_Ok (Read) and then Records.Get (Held, "state") = "standing" then
+               Append
+                 (Result,
+                  (Standing  => Human_Instruction,
+                   Source    => To_Unbounded_String
+                                  (Name (Name'First + Instruction_Prefix'Length .. Name'Last)),
+                   Subject   => To_Unbounded_String (Records.Get (Held, "subject")),
+                   Value     => To_Unbounded_String (Records.Get (Held, "value")),
+                   Overrides => To_Unbounded_String (Records.Get (Held, "overrides"))));
+            end if;
+         end;
+      end loop;
+
       From_Register
         (Intent.Decision, Decisions_Area, Project_Decision, Project_Decision);
       From_Register
@@ -142,6 +268,26 @@ package body Model_Runner.Framework.Authority is
          end loop;
          return 0;
       end Place_Of;
+
+      --  Whether a statement overrides another, itself or through what it
+      --  overrides: an instruction overriding a decision overrides what the
+      --  decision overrode.
+      function Overrides (Rule, Other : Statement; Depth : Natural := 0) return Boolean is
+      begin
+         if Rule.Overrides = Null_Unbounded_String or else Depth > 8 then
+            return False;
+         elsif Rule.Overrides = Other.Source then
+            return True;
+         end if;
+         for Next of From.Statements loop
+            if Next.Subject = Rule.Subject and then Next.Source = Rule.Overrides
+              and then Overrides (Next, Other, Depth + 1)
+            then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Overrides;
    begin
       --  The governing statement of each subject: the highest standing,
       --  and of equals the first given, so that equals that disagree are
@@ -170,7 +316,7 @@ package body Model_Runner.Framework.Authority is
                      Other     => Next,
                      Relation  =>
                        (if Rule.Value = Next.Value then Agreement
-                        elsif Rule.Overrides = Next.Source then Explicit_Override
+                        elsif Overrides (Rule, Next) then Explicit_Override
                         else Conflict)));
             end if;
          end;
