@@ -106,6 +106,29 @@ package body Model_Runner.Framework.Configurations is
    -- Check_Input --
    -----------------
 
+   --  Whether a text matches a pattern: * any run of characters, ? any
+   --  one, anything else itself.
+   function Matches (Text, Pattern : String) return Boolean is
+   begin
+      if Pattern = "" then
+         return Text = "";
+      elsif Pattern (Pattern'First) = '*' then
+         for Skip in 0 .. Text'Length loop
+            if Matches (Text (Text'First + Skip .. Text'Last),
+                        Pattern (Pattern'First + 1 .. Pattern'Last))
+            then
+               return True;
+            end if;
+         end loop;
+         return False;
+      elsif Text = "" then
+         return False;
+      elsif Pattern (Pattern'First) = '?' or else Pattern (Pattern'First) = Text (Text'First) then
+         return Matches (Text (Text'First + 1 .. Text'Last), Pattern (Pattern'First + 1 .. Pattern'Last));
+      end if;
+      return False;
+   end Matches;
+
    procedure Check_Input
      (Declared : Templates.Input_Declaration;
       Value    : String;
@@ -161,6 +184,24 @@ package body Model_Runner.Framework.Configurations is
                Refuse ("it is not true or false");
             end if;
       end case;
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      --  The rules beyond its type.
+      if Value'Length > Declared.Max_Length then
+         Refuse ("it is longer than" & Natural'Image (Declared.Max_Length) & " characters");
+      elsif Declared.Kind = Templates.Natural_Input
+        and then (Natural'Value (Value) < Declared.Minimum
+                  or else Natural'Value (Value) > Declared.Maximum)
+      then
+         Refuse ("it is not between" & Natural'Image (Declared.Minimum) & " and"
+                 & Natural'Image (Declared.Maximum));
+      elsif Declared.Pattern /= Null_Unbounded_String
+        and then not Matches (Value, To_String (Declared.Pattern))
+      then
+         Refuse ("it does not match " & To_String (Declared.Pattern));
+      end if;
    end Check_Input;
 
    -------------

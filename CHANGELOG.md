@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Large results are kept apart.** A payload over 64 KiB is stored beside
+  the results under its own fingerprint and read only when asked for
+  (`Results.Read ... With_Payload`, `Results.Payload_Size`); `/result`
+  shows provenance and references, and a large payload's size unless
+  `/result ID full`.
+- **Smaller gaps closed.** `scalar task.output_reserve.KIND` gives a kind
+  its own room for the answer, and `/task context` shows the budget; an
+  agent's record keeps its execution generation, workspace, running call
+  and children; traceability edges say when they were worked out; template
+  inputs take `minimum`, `maximum`, `max_length` and `pattern`; a console
+  writing JSON never opens the selector; and an agent `/work` starts from
+  the shell is run with the context size its prompt was budgeted for.
 - **Commands can be cancelled and limited.** A session's Ctrl-C now stops
   the command the harness is waiting on (`Execution.Watch`); `scalar
   execution.max_memory_mb`, `max_cpu_seconds`, `max_processes` and

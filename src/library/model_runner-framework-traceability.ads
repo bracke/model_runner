@@ -37,6 +37,10 @@ package Model_Runner.Framework.Traceability is
 
       --  The record it was read from, where there is one.
       Record_Of  : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  When it was worked out: the graph is derived from the records and
+      --  the repository each time it is built, and its edges with it.
+      Created_At : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    --  The graph.

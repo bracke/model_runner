@@ -90,6 +90,15 @@ package Model_Runner.Framework.Templates is
 
       --  Whether the value is kept in the resolved configuration.
       Persist     : Boolean := True;
+
+      --  Rules a value is held to beyond its type, none where unset: the
+      --  smallest and largest a natural may be, how long a value may be,
+      --  and a pattern it must match, * standing for any run of
+      --  characters and ? for any one.
+      Minimum     : Natural := 0;
+      Maximum     : Natural := Natural'Last;
+      Max_Length  : Natural := Natural'Last;
+      Pattern     : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    --  One composed declaration.

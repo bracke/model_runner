@@ -138,6 +138,14 @@ package Model_Runner.CLI.Choosers is
    --  @return True when Choose would ask.
    function Is_Available return Boolean;
 
+   --  Whether a selector can be put on the terminal for a console: one can,
+   --  and the console is not writing for a program -- a command asked for
+   --  --format json answers, and never asks.
+   --
+   --  @param Screen The console.
+   --  @return True when Choose would ask.
+   function Is_Available (Screen : Model_Runner.Presentation.Console) return Boolean;
+
    --  Ask on the terminal.
    --
    --  @param Screen Where the words come from.

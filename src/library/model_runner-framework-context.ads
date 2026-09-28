@@ -124,6 +124,14 @@ package Model_Runner.Framework.Context is
    --  @return The estimate, in tokens.
    function Cost (From : Built) return Natural;
 
+   --  The room the context had: the model's window less what is kept for
+   --  its answer -- the task kind's own reserve where it has one -- and
+   --  for the tools.
+   --
+   --  @param From The context.
+   --  @return The room, in tokens.
+   function Budget (From : Built) return Natural;
+
    --  How many items went in, and how many did not.
    --
    --  @param From The context.

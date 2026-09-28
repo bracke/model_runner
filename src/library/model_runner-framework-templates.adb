@@ -266,6 +266,18 @@ package body Model_Runner.Framework.Templates is
                Held.Default := Right;
             elsif Key = "choices" then
                Held.Choices := Right;
+            elsif Key in "minimum" | "maximum" | "max_length" then
+               if Said'Length not in 1 .. 9 or else not (for all C of Said => C in '0' .. '9') then
+                  Refuse (Key & " is a whole number");
+               elsif Key = "minimum" then
+                  Held.Minimum := Natural'Value (Said);
+               elsif Key = "maximum" then
+                  Held.Maximum := Natural'Value (Said);
+               else
+                  Held.Max_Length := Natural'Value (Said);
+               end if;
+            elsif Key = "pattern" then
+               Held.Pattern := Right;
             elsif Key in "required" | "secret" | "persist" then
                if not Truth (Said, Flag) then
                   Refuse (Key & " is true or false");

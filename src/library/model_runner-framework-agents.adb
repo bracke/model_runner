@@ -89,6 +89,13 @@ package body Model_Runner.Framework.Agents is
       Result.Result := To_Unbounded_String (Records.Get (Value, "result"));
       Result.Summary := To_Unbounded_String (Records.Get (Value, "summary"));
       Result.Retry_Of := To_Unbounded_String (Records.Get (Value, "retry_of"));
+      Result.Generation := To_Unbounded_String (Records.Get (Value, "generation"));
+      Result.Workspace := To_Unbounded_String (Records.Get (Value, "workspace"));
+      Result.Invocation :=
+        (if Records.Get (Value, "state") = "running"
+         then To_Unbounded_String (Records.Get (Value, "invocation"))
+         else Null_Unbounded_String);
+      Result.Children := To_Unbounded_String (Records.Get (Value, "children"));
       return Result;
    end From_Record;
 
@@ -177,7 +184,42 @@ package body Model_Runner.Framework.Agents is
          if Held.Retry_Of /= Null_Unbounded_String then
             Records.Set (Value, "retry_of", To_String (Held.Retry_Of));
          end if;
+
+         --  The execution of the task it works in.
+         declare
+            Task_State : Records.Item;
+            Read       : E.Error_Info;
+         begin
+            Stores.Read (Item, Tasks_Area, To_String (Held.Task_Id) & ".state", Task_State, Read);
+            if E.Is_Ok (Read) and then Records.Get (Task_State, "generation") /= "" then
+               Records.Set (Value, "generation", Records.Get (Task_State, "generation"));
+            end if;
+         end;
          Stores.Put (Change, Runtime_Area, Prefix & To_String (Id), Value);
+
+         --  Its parent's list of its children.
+         if Held.Parent /= Null_Unbounded_String then
+            declare
+               Owner  : Records.Item;
+               Staged : Boolean;
+               Read   : E.Error_Info;
+            begin
+               Stores.Pending (Change, Runtime_Area, Prefix & To_String (Held.Parent), Owner, Staged);
+               if not Staged then
+                  Stores.Read (Item, Runtime_Area, Prefix & To_String (Held.Parent), Owner, Read);
+                  if E.Is_Ok (Read) then
+                     Records.Set_Revision (Owner, Records.Revision (Owner) + 1);
+                  end if;
+               end if;
+               if Staged or else E.Is_Ok (Read) then
+                  Records.Set
+                    (Owner, "children",
+                     (if Records.Get (Owner, "children") = "" then To_String (Id)
+                      else Records.Get (Owner, "children") & ASCII.LF & To_String (Id)));
+                  Stores.Put (Change, Runtime_Area, Prefix & To_String (Held.Parent), Owner);
+               end if;
+            end;
+         end if;
          Events.Emit (Item, Change, Events.Agent_Spawned, To_String (Id),
                       (if Held.Parent = Null_Unbounded_String then "root"
                        else "child of " & To_String (Held.Parent)),
@@ -447,6 +489,41 @@ package body Model_Runner.Framework.Agents is
          end;
       end if;
    end Finish;
+
+   --------------------
+   -- Record_Holding --
+   --------------------
+
+   procedure Record_Holding
+     (Item       : Stores.Store;
+      Change     : in out Stores.Transaction;
+      Id         : String;
+      Workspace  : String;
+      Invocation : String;
+      Status     : out Model_Runner.Errors.Error_Info)
+   is
+      Value  : Records.Item;
+      Staged : Boolean;
+   begin
+      Status := E.Success;
+      Stores.Pending (Change, Runtime_Area, Prefix & Id, Value, Staged);
+      if not Staged then
+         Stores.Read (Item, Runtime_Area, Prefix & Id, Value, Status);
+         if E.Is_Error (Status) then
+            Status := E.Make (E.Framework_Not_Found);
+            E.Add_Text (Status, "name", Id);
+            return;
+         end if;
+         Records.Set_Revision (Value, Records.Revision (Value) + 1);
+      end if;
+      if Workspace /= "" then
+         Records.Set (Value, "workspace", Workspace);
+      end if;
+      if Invocation /= "" then
+         Records.Set (Value, "invocation", Invocation);
+      end if;
+      Stores.Put (Change, Runtime_Area, Prefix & Id, Value);
+   end Record_Holding;
 
    ------------------
    -- May_Complete --

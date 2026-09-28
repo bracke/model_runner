@@ -280,6 +280,19 @@ package body Model_Runner.Framework.Context is
       end if;
       Status := E.Success;
 
+      --  Room for the answer the task's kind needs: scalar
+      --  task.output_reserve.KIND, where it asks for more or less than the
+      --  model's profile keeps.
+      declare
+         Asked : constant String :=
+           Records.Get (Config, "scalar.task.output_reserve."
+                                & Records.Get (View, "definition.kind"));
+      begin
+         if Asked'Length in 1 .. 7 and then (for all C of Asked => C in '0' .. '9') then
+            Result.Model.Output_Reserve := Natural'Value (Asked);
+         end if;
+      end;
+
       --  The harness's rules, and the project's.
       Offer ("rules", "rules", Mandatory,
              Harness_Rules
@@ -633,6 +646,9 @@ package body Model_Runner.Framework.Context is
       end loop;
       return To_String (Text);
    end Rendered;
+
+   function Budget (From : Built) return Natural
+   is (From.Budget);
 
    function Cost (From : Built) return Natural
    is (From.Cost);

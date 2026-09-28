@@ -69,6 +69,10 @@ package body Model_Runner.CLI.Work is
       Model   : Unbounded_String;
       Steps   : Unbounded_String;
       Timeout : Natural := 1800;
+
+      --  The context the harness budgets its prompt for, which the model
+      --  is run with, so that the two are one; zero leaves it to run.
+      Context : Natural := 0;
    end record;
 
    overriding procedure Run
@@ -107,6 +111,10 @@ package body Model_Runner.CLI.Work is
       if Self.Steps /= Null_Unbounded_String then
          Add ("--max-steps");
          Add (To_String (Self.Steps));
+      end if;
+      if Self.Context > 0 then
+         Add ("--context-size");
+         Add (Ada.Strings.Fixed.Trim (Natural'Image (Self.Context), Ada.Strings.Both));
       end if;
       for Tool of Denied loop
          Add ("--deny-tool");
@@ -318,7 +326,7 @@ package body Model_Runner.CLI.Work is
                return;
             elsif Natural (Matching.Length) = 1 then
                Chosen := To_Unbounded_String (Matching.First_Element);
-            elsif not Model_Runner.CLI.Choosers.Is_Available then
+            elsif not Model_Runner.CLI.Choosers.Is_Available (Screen) then
                Outcome := E.Make (E.Framework_Input_Missing);
                E.Add_Text (Outcome, "name", "one task: " & To_String (Found) & " all match");
                Fail (Outcome);
@@ -331,7 +339,7 @@ package body Model_Runner.CLI.Work is
       end if;
 
       if Chosen = Null_Unbounded_String then
-         if not Model_Runner.CLI.Choosers.Is_Available then
+         if not Model_Runner.CLI.Choosers.Is_Available (Screen) then
             Outcome := E.Make (E.Framework_Input_Missing);
             E.Add_Text (Outcome, "name", "task");
             Fail (Outcome);
@@ -429,7 +437,8 @@ package body Model_Runner.CLI.Work is
                  (Store, To_String (Chosen),
                   Model_Agent'(Model   => To_Unbounded_String (Path),
                                Steps   => To_Unbounded_String (Setting ("steps", "")),
-                               Timeout => 1800),
+                               Timeout => 1800,
+                               Context => Model.Context_Limit),
                   Model, Done, Outcome);
             else
                Outcome := E.Make (E.Framework_Input_Missing);

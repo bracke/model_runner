@@ -171,6 +171,13 @@ package body Model_Runner.Presentation is
       Item.Structured := On;
    end Use_Structured;
 
+   -------------------
+   -- Is_Structured --
+   -------------------
+
+   function Is_Structured (Item : Console) return Boolean
+   is (Item.Structured);
+
    --  A text as a JSON string.
    function Quoted (Text : String) return String is
       Result : Ada.Strings.Unbounded.Unbounded_String;

@@ -54,7 +54,36 @@ package Model_Runner.Framework.Agents is
 
       --  The failed child this one was run again for, or empty.
       Retry_Of    : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  The task's execution generation it works in.
+      Generation  : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  The workspace it writes in, where it has one of its own.
+      Workspace   : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  The model call it is making, while it runs.
+      Invocation  : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  Its children, one a line, in the order they were made.
+      Children    : Ada.Strings.Unbounded.Unbounded_String;
    end record;
+
+   --  Record what an agent holds: the workspace it writes in, and the
+   --  model call it is making. An empty value leaves that one as it is.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Id The agent.
+   --  @param Workspace Its workspace, or "".
+   --  @param Invocation Its call, or "".
+   --  @param Status Framework_Not_Found when there is no such agent.
+   procedure Record_Holding
+     (Item       : Stores.Store;
+      Change     : in out Stores.Transaction;
+      Id         : String;
+      Workspace  : String;
+      Invocation : String;
+      Status     : out Model_Runner.Errors.Error_Info);
 
    --  The project's limits.
    --

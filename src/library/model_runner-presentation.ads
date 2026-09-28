@@ -99,6 +99,12 @@ package Model_Runner.Presentation is
    --  @param On Whether to.
    procedure Use_Structured (Item : in out Console; On : Boolean);
 
+   --  Whether the console writes for a program, as Use_Structured set it.
+   --
+   --  @param Item Console to inspect.
+   --  @return True when it does.
+   function Is_Structured (Item : Console) return Boolean;
+
    --  Report whether styling applies to standard error.
    --
    --  @param Item Console to inspect.

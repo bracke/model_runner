@@ -42,7 +42,8 @@ package body Model_Runner.Framework.Traceability is
                Kind      => To_Unbounded_String (Kind),
                Source    => Source,
                Sure      => Sure,
-               Record_Of => To_Unbounded_String (Record_Of)));
+               Record_Of => To_Unbounded_String (Record_Of),
+               Created_At => Null_Unbounded_String));
    end Link;
 
    --  What an implementation or test link names, as a node.
@@ -233,6 +234,15 @@ package body Model_Runner.Framework.Traceability is
             end if;
          end;
       end loop;
+
+      --  Every edge worked out now.
+      declare
+         Now : constant Unbounded_String := To_Unbounded_String (Timestamp);
+      begin
+         for One of Result.Edges loop
+            One.Created_At := Now;
+         end loop;
+      end;
       return Result;
    end Build;
 

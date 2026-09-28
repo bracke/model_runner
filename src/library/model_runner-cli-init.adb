@@ -40,7 +40,7 @@ package body Model_Runner.CLI.Init is
         (if T.Is_Empty (Item.Project_Directory) then "."
          else T.To_String (Item.Project_Directory));
 
-      Interactive : constant Boolean := Choosers.Is_Available;
+      Interactive : constant Boolean := Choosers.Is_Available (Screen);
 
       Places   : Model_Runner.Framework.Name_Lists.Vector;
       Registry : Tp.Registry;

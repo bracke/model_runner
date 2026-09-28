@@ -1,7 +1,10 @@
 with Ada.Calendar.Formatting;
 with Ada.Calendar;
 with Ada.Characters.Handling;
+with Ada.Directories;
+with Ada.Strings.Fixed;
 
+with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Schemas;
 
@@ -10,6 +13,9 @@ package body Model_Runner.Framework.Results is
    use Ada.Strings.Unbounded;
 
    package E renames Model_Runner.Errors;
+
+   function Trim (Text : String) return String
+   is (Ada.Strings.Fixed.Trim (Text, Ada.Strings.Both));
 
    ---------------
    -- Kind_Word --
@@ -57,6 +63,10 @@ package body Model_Runner.Framework.Results is
    function Identifier_Of (Value : Result) return String
    is ("RES-" & Ada.Characters.Handling.To_Upper
                   (Fingerprint (Content (Value))));
+
+   --  Where a payload kept apart is: beside the results, by its fingerprint.
+   function Payload_Path (Item : Stores.Store; Print : String) return String
+   is (Stores.Root (Item) & "/" & Directory_Name (Results_Area) & "/payloads/" & Print & ".txt");
 
    --  The result a record holds.
    function From_Record (Item : Records.Item) return Result is
@@ -118,10 +128,33 @@ package body Model_Runner.Framework.Results is
          Records.Set (Stored, "producer", To_String (Value.Producer));
          Records.Set (Stored, "created_at", Stamp);
          Records.Set (Stored, "summary", To_String (Value.Summary));
-         Records.Set (Stored, "payload", To_String (Value.Payload));
          Records.Set
            (Stored, "payload_fingerprint",
             Fingerprint (To_String (Value.Payload)));
+         Records.Set (Stored, "payload_size", Trim (Natural'Image (Length (Value.Payload))));
+         if Length (Value.Payload) > Inline_Limit then
+            --  Kept apart, named by what it is: the same payload twice is
+            --  one file, and a result that is never committed leaves only
+            --  a file its fingerprint names.
+            declare
+               Print : constant String := Fingerprint (To_String (Value.Payload));
+               Path  : constant String := Payload_Path (Item, Print);
+            begin
+               if not Ada.Directories.Exists (Path) then
+                  if not Files.Make_Directory (Ada.Directories.Containing_Directory (Path)) then
+                     Files.Write_Failed (Path, Status);
+                     return;
+                  end if;
+                  Files.Write_Text (Path, To_String (Value.Payload), Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+               end if;
+               Records.Set (Stored, "payload_file", Print);
+            end;
+         else
+            Records.Set (Stored, "payload", To_String (Value.Payload));
+         end if;
          Records.Set (Stored, "provenance", To_String (Value.Provenance));
          Records.Set (Stored, "references", To_String (Value.References));
          Stores.Put (Change, Results_Area, Id, Stored);
@@ -134,12 +167,14 @@ package body Model_Runner.Framework.Results is
    ----------
 
    procedure Read
-     (Item   : Stores.Store;
-      Id     : String;
-      Value  : out Result;
-      Status : out Model_Runner.Errors.Error_Info)
+     (Item         : Stores.Store;
+      Id           : String;
+      Value        : out Result;
+      Status       : out Model_Runner.Errors.Error_Info;
+      With_Payload : Boolean := True)
    is
       Stored : Records.Item;
+      Apart  : Boolean;
    begin
       Value := (others => <>);
       Stores.Read (Item, Results_Area, Id, Stored, Status);
@@ -148,6 +183,20 @@ package body Model_Runner.Framework.Results is
       end if;
 
       Value := From_Record (Stored);
+      Apart := Records.Get (Stored, "payload_file") /= "";
+      if Apart and then not With_Payload then
+         --  What it is, without the payload asked not to be read.
+         return;
+      elsif Apart then
+         Files.Read_Text
+           (Payload_Path (Item, Records.Get (Stored, "payload_file")), Value.Payload, Status);
+         if E.Is_Error (Status) then
+            Status := E.Make (E.Framework_Integrity_Failed);
+            E.Add_Text (Status, "path", Directory_Name (Results_Area) & "/payloads/"
+                        & Records.Get (Stored, "payload_file"), E.Param_Path);
+            return;
+         end if;
+      end if;
       if Fingerprint (To_String (Value.Payload))
            /= Records.Get (Stored, "payload_fingerprint")
         or else Identifier_Of (Value) /= Id
@@ -157,6 +206,26 @@ package body Model_Runner.Framework.Results is
                      E.Param_Path);
       end if;
    end Read;
+
+   ------------------
+   -- Payload_Size --
+   ------------------
+
+   function Payload_Size (Item : Stores.Store; Id : String) return Natural is
+      Stored : Records.Item;
+      Status : E.Error_Info;
+   begin
+      Stores.Read (Item, Results_Area, Id, Stored, Status);
+      if E.Is_Error (Status) then
+         return 0;
+      end if;
+      declare
+         Text : constant String := Records.Get (Stored, "payload_size");
+      begin
+         return (if Text'Length in 1 .. 9 and then (for all C of Text => C in '0' .. '9')
+                 then Natural'Value (Text) else Records.Get (Stored, "payload")'Length);
+      end;
+   end Payload_Size;
 
    -----------
    -- Prune --

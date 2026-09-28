@@ -328,6 +328,9 @@ package body Model_Runner.CLI.Choosers is
        and then Model_Runner.Platform.Is_Terminal (2)
        and then Term.Supports_Cursor_Control (Output));
 
+   function Is_Available (Screen : Model_Runner.Presentation.Console) return Boolean
+   is (Is_Available and then not Pres.Is_Structured (Screen));
+
    --  The terminal's own mode, put back however the selector ends.
    type Raw_Guard is new Ada.Finalization.Limited_Controlled with record
       Saved : Term.Mode;
@@ -426,7 +429,7 @@ package body Model_Runner.CLI.Choosers is
                  then Size.Rows - 5 else 10);
       end Window_Rows;
    begin
-      if not Is_Available or else Length (Items) = 0 then
+      if not Is_Available (Screen) or else Length (Items) = 0 then
          return 0;
       end if;
 
@@ -585,7 +588,7 @@ package body Model_Runner.CLI.Choosers is
    begin
       Answer := Null_Unbounded_String;
       Given := False;
-      if not Is_Available then
+      if not Is_Available (Screen) then
          return;
       end if;
 

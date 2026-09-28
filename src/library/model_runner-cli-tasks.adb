@@ -61,7 +61,7 @@ package body Model_Runner.CLI.Tasks is
          else T.To_String (Item.Action));
       Argument  : constant String := T.To_String (Item.Action_Argument);
 
-      Interactive : constant Boolean := Choosers.Is_Available;
+      Interactive : constant Boolean := Choosers.Is_Available (Screen);
 
       Store   : S.Store;
       Report  : S.Recovery_Report;
@@ -468,6 +468,8 @@ package body Model_Runner.CLI.Tasks is
                           (Model_Runner.Framework.Context.Cost (Built)))),
              Loc.Named ("extra", T.Image (Long_Long_Integer
                           (Model_Runner.Framework.Context.Excluded_Count (Built)))),
+             Loc.Named ("detail", T.Image (Long_Long_Integer
+                          (Model_Runner.Framework.Context.Budget (Built)))),
              Loc.Named ("value",
                         (if Model_Runner.Framework.Context.Semantic (Built)
                          then "semantic" else "textual"))]);

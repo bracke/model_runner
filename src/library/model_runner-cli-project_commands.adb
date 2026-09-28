@@ -835,19 +835,29 @@ package body Model_Runner.CLI.Project_Commands is
       end Show_Config;
 
       procedure Show_Result (Store : in out S.Store) is
-         Held : Model_Runner.Framework.Results.Result;
-         Read : E.Error_Info;
+         package Rs renames Model_Runner.Framework.Results;
+         Held  : Rs.Result;
+         Read  : E.Error_Info;
+         Size  : constant Natural := Rs.Payload_Size (Store, Argument (1));
+         --  A large payload is read only when asked for: /result ID full.
+         Whole : constant Boolean := Size <= Rs.Inline_Limit or else Argument (2) = "full";
       begin
-         Model_Runner.Framework.Results.Read (Store, Argument (1), Held, Read);
+         Rs.Read (Store, Argument (1), Held, Read, With_Payload => Whole);
          if E.Is_Error (Read) then
             Pres.Report (Screen, Read);
             return;
          end if;
-         Field ("kind", Model_Runner.Framework.Results.Kind_Word (Held.Kind));
+         Field ("kind", Rs.Kind_Word (Held.Kind));
          Field ("producer", To_String (Held.Producer));
          Field ("created_at", To_String (Held.Created_At));
          Field ("summary", To_String (Held.Summary));
-         Field ("payload", To_String (Held.Payload));
+         Field ("provenance", To_String (Held.Provenance));
+         for Other of Model_Runner.Framework.Lines_Of (To_String (Held.References)) loop
+            Field ("references", Other);
+         end loop;
+         Field ("payload",
+                (if Whole then To_String (Held.Payload)
+                 else "(" & Image (Size) & " bytes; /result " & Argument (1) & " full shows them)"));
       end Show_Result;
 
       --  The project's verification, now, for no task in particular.

@@ -1043,6 +1043,10 @@ package body Model_Runner.Framework.Work is
                To_String (Host.Model.Id), Framework.Context.Manifest_Id (Made), "files",
                Child_Claim, Called, Read,
                Resource_Class => To_String (Host.Model.Resource_Class));
+            if E.Is_Ok (Read) then
+               Agents.Record_Holding
+                 (Host.Item.all, Change, To_String (Child_Id), "", To_String (Called), Read);
+            end if;
          end if;
          if E.Is_Ok (Read) then
             Stores.Commit (Host.Item.all, Change, Read);
@@ -1337,6 +1341,11 @@ package body Model_Runner.Framework.Work is
             Generation_Of (Item, Task_Id), To_String (Model.Id),
             To_String (Result.Manifest_Id), "files", Invocations.Work_Claim,
             Result.Invocation_Id, Status, Resource_Class => To_String (Model.Resource_Class));
+         if E.Is_Ok (Status) then
+            Agents.Record_Holding
+              (Item, Change, To_String (Result.Agent_Id), "", To_String (Result.Invocation_Id),
+               Status);
+         end if;
       end if;
       if E."=" (Status.Code, E.Framework_Limit_Exceeded) then
          --  Out of calls: blocked, deterministically, not run past its bound.
@@ -1361,6 +1370,10 @@ package body Model_Runner.Framework.Work is
               (Item, Change, Task_Id, To_String (Result.Agent_Id),
                Generation_Of (Item, Task_Id), Work_Setting (Item, "backend") /= "copy",
                Made, Held);
+            if E.Is_Ok (Held) then
+               Agents.Record_Holding
+                 (Item, Change, To_String (Result.Agent_Id), To_String (Made.Id), "", Held);
+            end if;
             if E.Is_Error (Held) then
                Change := Stores.No_Changes;
                Conclude ("blocked",

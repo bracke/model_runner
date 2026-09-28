@@ -11,6 +11,7 @@ with Ada.Strings.Unbounded;
 with AUnit.Assertions;
 
 with Model_Runner.Cancellation;
+with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Intents;
 with Model_Runner.CLI.Options;
 with Model_Runner.CLI.Project_Commands;
@@ -1052,6 +1053,33 @@ package body Tests.Framework_Cases is
          Cf.Check_Input (Style, "shout", Checked);
          Assert (Checked.Code = E.Framework_Input_Invalid,
                  "a value none of an input's choices was taken");
+      end;
+
+      --  Rules beyond an input's type: a range, a length, a pattern.
+      declare
+         Ruled   : Tp.Template;
+         Checked : E.Error_Info;
+         Holding : Tp.Registry;
+         Made    : Tp.Composition;
+      begin
+         Tp.Parse ("template = r" & LF & "name = R" & LF & "version = 1" & LF
+                   & "input port" & LF & "  type = natural" & LF
+                   & "  minimum = 1024" & LF & "  maximum = 65535" & LF
+                   & "input tag" & LF & "  type = text" & LF & "  max_length = 8" & LF
+                   & "  pattern = v*.*" & LF, "memory", Ruled, Status);
+         Assert (E.Is_Ok (Status), "input rules were not read: " & Code_Of (Status));
+         Tp.Add (Holding, Ruled);
+         Tp.Compose (Holding, "r", Made, Status);
+         Cf.Check_Input (Tp.Input_At (Made, 1), "80", Checked);
+         Assert (Checked.Code = E.Framework_Input_Invalid, "a number out of range was taken");
+         Cf.Check_Input (Tp.Input_At (Made, 1), "8080", Checked);
+         Assert (E.Is_Ok (Checked), "a number in range was refused");
+         Cf.Check_Input (Tp.Input_At (Made, 2), "v1.2", Checked);
+         Assert (E.Is_Ok (Checked), "a value matching the pattern was refused");
+         Cf.Check_Input (Tp.Input_At (Made, 2), "1.2", Checked);
+         Assert (Checked.Code = E.Framework_Input_Invalid, "a value off the pattern was taken");
+         Cf.Check_Input (Tp.Input_At (Made, 2), "v1.2.3.4.5", Checked);
+         Assert (Checked.Code = E.Framework_Input_Invalid, "a value too long was taken");
       end;
 
       Given.Include ("project_name", "not an identifier");
@@ -3461,7 +3489,8 @@ package body Tests.Framework_Cases is
       Task_Project
         (Store, "context",
          "map model.small = context=900, reserve=100, tools=yes, class=laptop"
-         & LF & "map model.tiny = context=120, reserve=100" & LF);
+         & LF & "map model.tiny = context=120, reserve=100" & LF
+         & "scalar task.output_reserve.analysis = 300" & LF);
       Dirs.Create_Path (Fresh_Root (Store) & "/src");
       Put_File (Fresh_Root (Store) & "/src/parser.adb", Big);
       Put_File (Fresh_Root (Store) & "/src/parser_copy.adb", Big);
@@ -3490,8 +3519,21 @@ package body Tests.Framework_Cases is
       Dirs.Delete_File (S.Root (Store) & "/indexes/repository.rec");
       Cx.Build (Store, To_String (Id), Profile, One, Status);
       Assert (E.Is_Ok (Status), "a context was not built: " & Code_Of (Status));
-      Assert (Cx.Cost (One) <= 800 and then Cx.Excluded_Count (One) >= 2,
+      Assert (Cx.Cost (One) <= 800 and then Cx.Excluded_Count (One) >= 2
+              and then Cx.Budget (One) = 800,
               "a context went over its budget, or left nothing out");
+
+      --  A kind that asks for more room for its answer gets it.
+      declare
+         Looked : Unbounded_String;
+         Three  : Cx.Built;
+      begin
+         Tk.Create (Store, Change, Fields ("Look", "analysis"), "user", "", Looked, Status);
+         S.Commit (Store, Change, Status);
+         Cx.Build (Store, To_String (Looked), Profile, Three, Status);
+         Assert (E.Is_Ok (Status) and then Cx.Budget (Three) = 600,
+                 "a kind's own output reserve was not kept:" & Natural'Image (Cx.Budget (Three)));
+      end;
       declare
          Has_Requirement : Boolean := False;
       begin
@@ -4382,8 +4424,9 @@ package body Tests.Framework_Cases is
                          (Tc.Touching (Graph, To_String (Req) & "@1").First_Element));
          use type Rp.Derivation;
       begin
-         Assert (One.Source = Rp.Explicit and then Length (One.Record_Of) > 0,
-                 "a recorded edge does not say it was recorded, or where");
+         Assert (One.Source = Rp.Explicit and then Length (One.Record_Of) > 0
+                 and then Length (One.Created_At) > 0,
+                 "a recorded edge does not say it was recorded, or where, or when");
       end;
 
       Changed.Append ("src/parser.ads");
@@ -4557,6 +4600,8 @@ package body Tests.Framework_Cases is
       Reason    : Unbounded_String;
       Cancelled : Model_Runner.Framework.Name_Lists.Vector;
       Transcript : Rs.Result;
+      Apart_Search : Dirs.Search_Type;
+      Apart_Entry  : Dirs.Directory_Entry_Type;
    begin
       Task_Project
         (Store, "recursion",
@@ -4596,6 +4641,17 @@ package body Tests.Framework_Cases is
                       Pm.Unrestricted, 50, Grand, Status);
       S.Commit (Store, Change, Status);
       Assert (E.Is_Ok (Status), "a grandchild within depth was refused");
+      declare
+         Held : Ag.Agent;
+      begin
+         Ag.Record_Holding (Store, Change, To_String (First), "WS-000009", "INV-000009", Status);
+         S.Commit (Store, Change, Status);
+         Ag.Read (Store, To_String (First), Held, Status);
+         Assert (To_String (Held.Children) = To_String (Grand)
+                 and then To_String (Held.Workspace) = "WS-000009"
+                 and then To_String (Held.Invocation) = "INV-000009",
+                 "an agent's record does not say what it holds: " & To_String (Held.Children));
+      end;
       Ag.Spawn_Child (Store, Change, To_String (Grand), "deeper", Ag.Required,
                       Pm.Unrestricted, 10, Third, Status);
       Assert (Status.Code = E.Framework_Limit_Exceeded,
@@ -4642,6 +4698,41 @@ package body Tests.Framework_Cases is
                          (Ag.Child_Results (Store, To_String (Root)),
                           "THE WHOLE CONVERSATION") = 0,
               "a parent was given a child's transcript");
+
+      --  A payload too large for its record is kept apart, read when asked
+      --  for, and found out when it is damaged.
+      declare
+         Large : Rs.Result :=
+           (Kind       => Rs.Verification,
+            Producer   => To_Unbounded_String ("execution"),
+            Summary    => To_Unbounded_String ("a long build"),
+            Payload    => To_Unbounded_String (String'(1 .. Rs.Inline_Limit + 10 => 'y')),
+            others     => <>);
+         Back  : Rs.Result;
+         Files_Apart : Model_Runner.Framework.Name_Lists.Vector;
+      begin
+         Change := S.No_Changes;
+         Rs.Add (Store, Change, Large, Status);
+         S.Commit (Store, Change, Status);
+         Rs.Read (Store, To_String (Large.Id), Back, Status, With_Payload => False);
+         Assert (E.Is_Ok (Status) and then Length (Back.Payload) = 0
+                 and then Rs.Payload_Size (Store, To_String (Large.Id)) = Rs.Inline_Limit + 10,
+                 "a large payload was read when it was not asked for");
+         Rs.Read (Store, To_String (Large.Id), Back, Status);
+         Assert (E.Is_Ok (Status) and then Back.Payload = Large.Payload,
+                 "a large payload did not read back whole: " & Code_Of (Status));
+         Dirs.Start_Search (Apart_Search, S.Root (Store) & "/results/payloads", "*.txt");
+         while Dirs.More_Entries (Apart_Search) loop
+            Dirs.Get_Next_Entry (Apart_Search, Apart_Entry);
+            Files_Apart.Append (Dirs.Full_Name (Apart_Entry));
+         end loop;
+         Dirs.End_Search (Apart_Search);
+         Assert (Natural (Files_Apart.Length) = 1, "a large payload was not kept apart");
+         Put_File (Files_Apart.First_Element, "damaged");
+         Rs.Read (Store, To_String (Large.Id), Back, Status);
+         Assert (Status.Code = E.Framework_Integrity_Failed,
+                 "a damaged payload kept apart was returned");
+      end;
 
       --  Cancelling the root takes down what is still going beneath it.
       Ag.Cancel (Store, Change, To_String (Root), Cancelled, Status);
@@ -6231,6 +6322,13 @@ package body Tests.Framework_Cases is
          (Output_Is_Terminal => False, Error_Is_Terminal => False,
           Input_Is_Terminal  => False, Colour_Suppressed => True),
          Model_Runner.CLI.Options.Quiet);
+
+      --  A console writing for a program never asks.
+      Model_Runner.Presentation.Use_Structured (Screen, True);
+      Assert (Model_Runner.Presentation.Is_Structured (Screen)
+              and then not Model_Runner.CLI.Choosers.Is_Available (Screen),
+              "a console writing for a program would ask");
+      Model_Runner.Presentation.Use_Structured (Screen, False);
       Task_Project
         (Store, "session-work",
          "set execution.allowed = test" & LF
