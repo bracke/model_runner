@@ -23,6 +23,10 @@ with Model_Runner.Framework.Stores;
 --  state that says how far it got, and the next one finds a task whose
 --  agent stopped and puts it back rather than leaving it running for ever.
 --
+--  The agent may write only where its permissions say: a file changed
+--  outside its write_source roots, or inside a denied path, fails the task,
+--  and its workspace, if it had one, is not taken in.
+--
 --  What the agent is, is the caller's: the command runs a model, a test runs
 --  a script. The harness gives it the context in a file and takes an answer
 --  back; it never gives it the right to change project state.

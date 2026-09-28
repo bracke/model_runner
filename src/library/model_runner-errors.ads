@@ -389,6 +389,10 @@ package Model_Runner.Errors is
       Framework_Integration_Refused,
       Framework_Integration_Conflict,
 
+      --  What agents may do, and how much of it.
+      Framework_Limit_Exceeded,
+      Framework_Permission_Denied,
+
       --  Internal invariants.
       Internal_Invariant_Violated,
       Internal_Unexpected_Exception,

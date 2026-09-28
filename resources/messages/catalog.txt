@@ -737,6 +737,8 @@ en.error.framework.execution_refused = {name} is not run: {detail}
 en.error.framework.workspace_failed = a workspace cannot be made: {detail}
 en.error.framework.integration_refused = {name} is not taken in without the right to integrate
 en.error.framework.integration_conflict = {name} conflicts with the project in {detail}
+en.error.framework.limit_exceeded = {name} is at its limit: {detail}
+en.error.framework.permission_denied = {name} may not do that: {detail}
 en.error.internal.invariant_violated = internal invariant violated
 en.error.internal.unexpected_exception = unexpected internal failure
 en.error.internal.not_implemented = not implemented in this build
@@ -1459,6 +1461,8 @@ da.error.framework.execution_refused = {name} køres ikke: {detail}
 da.error.framework.workspace_failed = et arbejdsområde kan ikke laves: {detail}
 da.error.framework.integration_refused = {name} tages ikke ind uden retten til at integrere
 da.error.framework.integration_conflict = {name} er i konflikt med projektet i {detail}
+da.error.framework.limit_exceeded = {name} er ved sin grænse: {detail}
+da.error.framework.permission_denied = {name} må ikke gøre det: {detail}
 
 # Pseudo-locale. Generated from the English entries: every letter
 # outside a {placeholder} or a protocol token is accented and the
@@ -2175,6 +2179,8 @@ qps.error.framework.execution_refused = ⟦{name} íß ñóŧ ŕúñ: {detail}�
 qps.error.framework.workspace_failed = ⟦á wóŕkßpáçé çáññóŧ bé máðé: {detail}⟧
 qps.error.framework.integration_refused = ⟦{name} íß ñóŧ ŧákéñ íñ wíŧhóúŧ ŧhé ŕíghŧ ŧó íñŧégŕáŧé⟧
 qps.error.framework.integration_conflict = ⟦{name} çóñfĺíçŧß wíŧh ŧhé pŕójéçŧ íñ {detail}⟧
+qps.error.framework.limit_exceeded = ⟦{name} íß áŧ íŧß ĺímíŧ: {detail}⟧
+qps.error.framework.permission_denied = ⟦{name} máý ñóŧ ðó ŧháŧ: {detail}⟧
 qps.error.internal.invariant_violated = ⟦íñŧéŕñáĺ íñváŕíáñŧ víóĺáŧéð⟧
 qps.error.internal.unexpected_exception = ⟦úñéxpéçŧéð íñŧéŕñáĺ fáíĺúŕé⟧
 qps.error.internal.not_implemented = ⟦ñóŧ ímpĺéméñŧéð íñ ŧhíß búíĺð⟧

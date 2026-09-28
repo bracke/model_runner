@@ -10,6 +10,7 @@ with Model_Runner.Framework;
 with Model_Runner.Framework.Authority;
 with Model_Runner.Framework.Bootstrap;
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Agents;
 with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Context;
 with Model_Runner.Framework.Events;
@@ -19,6 +20,7 @@ with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Invocations;
 with Model_Runner.Framework.Leases;
+with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Results;
@@ -3203,6 +3205,243 @@ package body Tests.Framework_Cases is
    end Impact_Is_Traced;
 
    ---------------------------------------------------------------------------
+   --  Permissions and recursive agents.
+   ---------------------------------------------------------------------------
+
+   package Pm renames Model_Runner.Framework.Permissions;
+   package Ag renames Model_Runner.Framework.Agents;
+   package Rs renames Model_Runner.Framework.Results;
+
+   --  Permissions are capabilities with scope; levels only take away, and
+   --  nothing is granted that nothing grants.
+   procedure Permissions_Only_Narrow
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store   : S.Store;
+      Present : Boolean;
+      Project : Pm.Permission_Set;
+      Kind    : Pm.Permission_Set;
+      Both    : Pm.Permission_Set;
+   begin
+      Task_Project (Store, "permissions-default");
+      Project := Pm.Effective (Store, "", "");
+      Assert (Pm.Allows (Project, Pm.Write_Source, "src/a.adb")
+              and then not Pm.Allows (Project, Pm.Use_Network)
+              and then not Pm.Allows (Project, Pm.Create_Children),
+              "a project that says nothing was not given the least work needs");
+      S.Close (Store);
+
+      Task_Project
+        (Store, "permissions",
+         "map permission.project.write_source = roots=src/|tests/, deny=src/security/" & LF
+         & "map permission.project.run_tests = profiles=quick|full" & LF
+         & "map permission.project.create_children = max_depth=2, max_children=2" & LF
+         & "map permission.kind.analysis.write_source = roots=src/parser/|lib/" & LF
+         & "map permission.kind.analysis.use_network =" & LF);
+      Project := Pm.Level_Of (Store, "project", Present);
+      Assert (Present and then Pm.Allows (Project, Pm.Write_Source, "src/x.adb")
+              and then not Pm.Allows (Project, Pm.Write_Source, "src/security/key.adb")
+              and then not Pm.Allows (Project, Pm.Write_Source, "docs/x.md"),
+              "roots and denied paths were not read");
+      Kind := Pm.Level_Of (Store, "kind.analysis", Present);
+      Both := Pm.Effective (Store, "analysis", "");
+      Assert (Pm.Allows (Both, Pm.Write_Source, "src/parser/a.adb")
+              and then not Pm.Allows (Both, Pm.Write_Source, "lib/b.adb")
+              and then not Pm.Allows (Both, Pm.Write_Source, "src/other.adb"),
+              "a kind's roots did not narrow the project's");
+      Assert (not Pm.Allows (Both, Pm.Use_Network),
+              "a kind granted what the project does not");
+      Assert (Pm.Widening (Kind, Project) = "write_source"
+                or else Pm.Widening (Kind, Project) = "use_network",
+              "a kind reaching past the project was not seen as widening");
+      Assert (Pm.Widening (Both, Project) = "",
+              "an intersection was taken for a widening");
+      declare
+         Back : constant Pm.Permission_Set := Pm.Value (Pm.Image (Both));
+      begin
+         Assert (Pm.Image (Back) = Pm.Image (Both) and then Pm.Word (Pm.Run_Tests) = "run_tests",
+                 "a permission set did not read back as written");
+      end;
+      Assert (Pm.Intersect (Pm.Unrestricted, Pm.Nothing) (Pm.Read_Source).Granted = False,
+              "the intersection with nothing granted something");
+
+      declare
+         Findings : constant Cn.Finding_List := Cn.Check (Store);
+         Widening : Boolean := False;
+         use type Cn.Finding_Kind;
+      begin
+         for Index in 1 .. Cn.Length (Findings) loop
+            Widening := Widening
+              or else Cn.Element (Findings, Index).Kind = Cn.Permission_Widening;
+         end loop;
+         Assert (Widening, "configuration that tries to widen was not found");
+      end;
+      S.Close (Store);
+   end Permissions_Only_Narrow;
+
+   --  Children are made within limits and given no more than their parent;
+   --  a required child's failure is its parent's to see; cancelling goes
+   --  down the tree; and a parent reads its children's results, not their
+   --  transcripts.
+   procedure Recursion_Stays_Bounded
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store     : S.Store;
+      Status    : E.Error_Info;
+      Change    : S.Transaction;
+      Root      : Unbounded_String;
+      First     : Unbounded_String;
+      Second    : Unbounded_String;
+      Third     : Unbounded_String;
+      Grand     : Unbounded_String;
+      Held      : Ag.Agent;
+      Reason    : Unbounded_String;
+      Cancelled : Model_Runner.Framework.Name_Lists.Vector;
+      Transcript : Rs.Result;
+   begin
+      Task_Project
+        (Store, "recursion",
+         "map permission.project.read_source =" & LF
+         & "map permission.project.write_source = roots=src/" & LF
+         & "map permission.project.create_children = max_depth=2, max_children=2" & LF
+         & "scalar agents.max_active = 4" & LF
+         & "scalar agents.token_budget = 1000" & LF);
+      Ag.Start_Root (Store, Change, "TASK-001", "planner", "", Root, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "a root agent was not made: " & Code_Of (Status));
+
+      Ag.Spawn_Child (Store, Change, To_String (Root), "coder", Ag.Required,
+                      Pm.Unrestricted, 300, First, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "a child was not made: " & Code_Of (Status));
+      Ag.Read (Store, To_String (First), Held, Status);
+      Assert (Held.Depth = 1 and then To_String (Held.Parent) = To_String (Root)
+              and then not Pm.Allows (Held.Allowed, Pm.Use_Network)
+              and then not Pm.Allows (Held.Allowed, Pm.Write_Source, "docs/x.md")
+              and then Pm.Allows (Held.Allowed, Pm.Write_Source, "src/x.adb"),
+              "a child asking for everything was given more than its parent");
+
+      Ag.Spawn_Child (Store, Change, To_String (Root), "reviewer", Ag.Optional,
+                      Pm.Unrestricted, 900, Second, Status);
+      Assert (Status.Code = E.Framework_Limit_Exceeded,
+              "a child was given more budget than its parent had left");
+      Ag.Spawn_Child (Store, Change, To_String (Root), "reviewer", Ag.Optional,
+                      Pm.Unrestricted, 100, Second, Status);
+      S.Commit (Store, Change, Status);
+      Ag.Spawn_Child (Store, Change, To_String (Root), "extra", Ag.Advisory,
+                      Pm.Unrestricted, 10, Third, Status);
+      Assert (Status.Code = E.Framework_Limit_Exceeded,
+              "a parent made more children than it may");
+
+      Ag.Spawn_Child (Store, Change, To_String (First), "helper", Ag.Required,
+                      Pm.Unrestricted, 50, Grand, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "a grandchild within depth was refused");
+      Ag.Spawn_Child (Store, Change, To_String (Grand), "deeper", Ag.Required,
+                      Pm.Unrestricted, 10, Third, Status);
+      Assert (Status.Code = E.Framework_Limit_Exceeded,
+              "a child past the depth limit was made");
+
+      Ag.Charge (Store, Change, To_String (Grand), 60, Status);
+      Assert (Status.Code = E.Framework_Limit_Exceeded,
+              "an agent past its budget was not stopped");
+      Change := S.No_Changes;
+
+      --  The optional child fails: the parent is not failed by it.
+      Ag.Finish (Store, Change, To_String (Second), False, "", "could not review", Status);
+      S.Commit (Store, Change, Status);
+      Assert (not Ag.May_Complete (Store, To_String (Root), Reason)
+              and then Ada.Strings.Fixed.Index (To_String (Reason), "still going") > 0,
+              "a parent may complete while a required child is going");
+
+      --  The required child's own child fails: its parent must see it.
+      Ag.Finish (Store, Change, To_String (Grand), False, "", "gave up", Status);
+      S.Commit (Store, Change, Status);
+      Assert (not Ag.May_Complete (Store, To_String (First), Reason)
+              and then Ada.Strings.Fixed.Index (To_String (Reason), "failed") > 0,
+              "a required child's failure did not reach its parent");
+      Ag.Finish (Store, Change, To_String (Grand), True, "", "", Status);
+      Assert (Status.Code = E.Framework_Transition_Invalid,
+              "an agent that ended was ended again");
+
+      --  What a child said on the way stays out of what its parent reads.
+      Transcript :=
+        (Kind       => Rs.Child_Result,
+         Producer   => First,
+         Summary    => To_Unbounded_String ("wrote the reader"),
+         Payload    => To_Unbounded_String ("THE WHOLE CONVERSATION OF THE CHILD"),
+         Provenance => First,
+         others     => <>);
+      Change := S.No_Changes;
+      Rs.Add (Store, Change, Transcript, Status);
+      S.Commit (Store, Change, Status);
+      Assert (Ada.Strings.Fixed.Index (Ag.Child_Results (Store, To_String (Root)),
+                                       To_String (First)) > 0
+              and then Ada.Strings.Fixed.Index
+                         (Ag.Child_Results (Store, To_String (Root)),
+                          "THE WHOLE CONVERSATION") = 0,
+              "a parent was given a child's transcript");
+
+      --  Cancelling the root takes down what is still going beneath it.
+      Ag.Cancel (Store, Change, To_String (Root), Cancelled, Status);
+      S.Commit (Store, Change, Status);
+      Assert (Cancelled.Contains (To_String (Root)) and then Cancelled.Contains (To_String (First))
+              and then not Cancelled.Contains (To_String (Second)),
+              "cancellation did not go down the tree, or reached what had ended");
+      Ag.Read (Store, To_String (First), Held, Status);
+      Assert (To_String (Held.Status) = "cancelled", "a child was left running");
+      Assert (Ag.Limits_Of (Store).Max_Active = 4, "the limits were not read");
+      Assert (Natural (Ag.Children (Store, To_String (Root)).Length) = 2,
+              "a parent does not know its children");
+      S.Close (Store);
+
+      --  A project that grants no children refuses them.
+      Task_Project (Store, "recursion-none");
+      Change := S.No_Changes;
+      Ag.Start_Root (Store, Change, "TASK-001", "worker", "", Root, Status);
+      S.Commit (Store, Change, Status);
+      Ag.Spawn_Child (Store, Change, To_String (Root), "coder", Ag.Required,
+                      Pm.Unrestricted, 10, First, Status);
+      Assert (Status.Code = E.Framework_Permission_Denied,
+              "an agent that may not make children made one");
+      S.Close (Store);
+   end Recursion_Stays_Bounded;
+
+   --  An agent that writes where it may not fails its task.
+   procedure Writes_Stay_In_Bounds
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Id     : Unbounded_String;
+      Done   : Wk.Report;
+   begin
+      Task_Project
+        (Store, "bounds",
+         "map permission.project.write_source = roots=lib/" & LF
+         & "map permission.project.run_tests =" & LF);
+      Tk.Create (Store, Change, Fields ("Hello", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Execute (Store, To_String (Id),
+                  Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                                  Answer => To_Unbounded_String
+                                    ("status: done" & LF & "summary: x"),
+                                  Broken => False),
+                  Cx.Profile (Store, ""), Done, Status);
+      Assert (To_String (Done.Final_State) = "failed"
+              and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "may not write") > 0,
+              "a write outside the agent's roots was accepted: "
+              & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+      S.Close (Store);
+   end Writes_Stay_In_Bounds;
+
+   ---------------------------------------------------------------------------
    -- Register_Tests --
    ---------------------------------------------------------------------------
 
@@ -3305,6 +3544,16 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Parents_Wait_For_Children'Access,
          "a parent waits for its children and goes back to work after them");
+      Register_Routine
+        (T, Permissions_Only_Narrow'Access,
+         "permissions are scoped and every level only narrows");
+      Register_Routine
+        (T, Recursion_Stays_Bounded'Access,
+         "children stay within limits and permissions, failures and"
+         & " cancellation are seen");
+      Register_Routine
+        (T, Writes_Stay_In_Bounds'Access,
+         "an agent writing where it may not fails its task");
       Register_Routine
         (T, Impact_Is_Traced'Access,
          "a change is traced to what it reaches, and the tests widen with"

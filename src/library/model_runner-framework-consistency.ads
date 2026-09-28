@@ -29,7 +29,8 @@ package Model_Runner.Framework.Consistency is
       Missing_Symbol,
       Stale_Verification,
       Completed_Without_Gate,
-      Workspace_Assignment);
+      Workspace_Assignment,
+      Permission_Widening);
 
    --  One thing found wrong.
    type Finding is record

@@ -7,6 +7,7 @@ with Model_Runner.Framework.Authority;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Leases;
+with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Verification;
@@ -353,6 +354,27 @@ package body Model_Runner.Framework.Consistency is
                             & Tasks.State_Of (Item, To_String (Held.Task_Id))
                             & " and still has a workspace");
                   end if;
+               end if;
+            end;
+         end loop;
+      end;
+
+      --  A kind or role that says it may do more than the project allows
+      --  is not given it; it is still configuration that says so.
+      declare
+         Present : Boolean;
+         Project : constant Permissions.Permission_Set :=
+           Permissions.Effective (Item, "", "");
+      begin
+         for Kind of Tasks.Kinds (Item) loop
+            declare
+               Level : constant Permissions.Permission_Set :=
+                 Permissions.Level_Of (Item, "kind." & Kind, Present);
+               Wider : constant String := Permissions.Widening (Level, Project);
+            begin
+               if Present and then Wider /= "" then
+                  Found (Permission_Widening, "kind." & Kind,
+                         "it grants " & Wider & " beyond the project's maximum");
                end if;
             end;
          end loop;

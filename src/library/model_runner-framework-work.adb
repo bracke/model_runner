@@ -3,14 +3,15 @@ with Ada.Strings.Fixed;
 
 with Hostkit.Fs;
 
+with Model_Runner.Framework.Agents;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Invocations;
 with Model_Runner.Framework.Leases;
+with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Results;
-with Model_Runner.Framework.Schemas;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Verification;
 with Model_Runner.Framework.Workspaces;
@@ -24,9 +25,6 @@ package body Model_Runner.Framework.Work is
 
    function Trim (Text : String) return String
    is (Ada.Strings.Fixed.Trim (Text, Ada.Strings.Both));
-
-   function Image (Value : Natural) return String
-   is (Trim (Natural'Image (Value)));
 
    function Lease_Of (Task_Id : String) return String
    is ("task." & Task_Id);
@@ -205,7 +203,6 @@ package body Model_Runner.Framework.Work is
       Change  : Stores.Transaction;
       Project : constant String :=
         Ada.Directories.Containing_Directory (Stores.Root (Item));
-      Number  : Natural;
       Built   : Context.Built;
       Answer  : Unbounded_String;
       Ran     : E.Error_Info;
@@ -251,22 +248,19 @@ package body Model_Runner.Framework.Work is
          end if;
       end;
 
-      --  An agent of its own, holding the task, in a new generation.
-      Stores.Allocate_Number (Item, Change, "AG", "", Number, Status);
+      --  An agent of its own, holding the task, in a new generation, with
+      --  what its task's kind and its role allow.
+      declare
+         Defined : Records.Item;
+      begin
+         Tasks.Definition (Item, Task_Id, Defined, Status);
+         Agents.Start_Root
+           (Item, Change, Task_Id, "worker", Records.Get (Defined, "kind"),
+            Result.Agent_Id, Status);
+      end;
       if E.Is_Error (Status) then
          return;
       end if;
-      Result.Agent_Id := To_Unbounded_String
-        ("AG-" & [1 .. Integer'Max (0, 6 - Image (Number)'Length) => '0'] & Image (Number));
-      declare
-         Agent : Records.Item :=
-           Records.Create (Schemas.Agent_Schema, 1, To_String (Result.Agent_Id), 1);
-      begin
-         Records.Set (Agent, "state", "running");
-         Records.Set (Agent, "task", Task_Id);
-         Records.Set (Agent, "started_at", Timestamp);
-         Stores.Put (Change, Runtime_Area, "agent." & To_String (Result.Agent_Id), Agent);
-      end;
       Leases.Acquire
         (Item, Change, Lease_Of (Task_Id), To_String (Result.Agent_Id),
          Lease_Seconds (Item), Status);
@@ -405,6 +399,28 @@ package body Model_Runner.Framework.Work is
                    "failed");
          return;
       end if;
+
+      --  What it changed must be what it may write, whatever it says.
+      declare
+         Held_Agent : Agents.Agent;
+         Denied     : Unbounded_String;
+      begin
+         Agents.Read (Item, To_String (Result.Agent_Id), Held_Agent, Held);
+         for Path of Result.Changed_Files loop
+            if not Permissions.Allows (Held_Agent.Allowed, Permissions.Write_Source, Path)
+            then
+               Append (Denied, (if Denied = Null_Unbounded_String then "" else ", ") & Path);
+            end if;
+         end loop;
+         if Denied /= Null_Unbounded_String then
+            if Isolated then
+               Workspaces.Abandon (Item, Change, To_String (Result.Workspace_Id), Held);
+            end if;
+            Conclude ("failed", "it changed files it may not write: " & To_String (Denied),
+                      "failed");
+            return;
+         end if;
+      end;
 
       Invocations.Hold (Invocations.Work_Claim, To_String (Answer), Said, Held);
       if E.Is_Error (Held) then

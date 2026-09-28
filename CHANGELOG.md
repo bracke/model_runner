@@ -7,6 +7,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Agents that make agents, kept inside what they were given (Phase M).**
+  Permissions are capabilities with scope -- roots, denied paths, profiles,
+  depth and children limits -- set as `map permission.LEVEL.CAPABILITY`,
+  and what an agent may do is the intersection of the project's maximum,
+  its task kind's, its role's and the run's: every level only narrows, and
+  a project that says nothing gives the least work needs. A child agent is
+  made by the harness within the project's limits of depth, children,
+  active agents and budget, with its parent's permissions intersected with
+  what was asked for, so asking for more gets nothing more. A required
+  child's failure is recorded on its parent, which cannot complete while a
+  required child is going; optional and advisory failures do not fail it.
+  Cancelling an agent cancels what is still going beneath it, and a parent
+  reads its children's results, never their transcripts. `work` fails a
+  task whose agent changed files it may not write, and the consistency
+  check finds configuration that tries to widen. Milestone 5's conditions
+  are each a test. Two more `MR-FRAMEWORK` codes.
+
 - **Traceability and change impact, computed conservatively (Phase L).**
   The traceability graph joins requirement revisions to the tasks that
   serve them and the evidence that verified them, tasks to the files their
@@ -17802,7 +17819,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 217 diagnostic
+- Localization through `messages`, with a catalog entry for all 219 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

@@ -254,6 +254,7 @@ package body Model_Runner.Errors is
             | Template_Variables_Too_Large
             | Tools_Too_Many
             | Tools_Too_Large
+            | Framework_Limit_Exceeded
             | IO_File_Too_Large =>
             return Recovery_Resource_Limited;
 
@@ -516,6 +517,7 @@ package body Model_Runner.Errors is
                              | Framework_Transition_Invalid
                              | Framework_Execution_Refused
                              | Framework_Integration_Refused
+                             | Framework_Permission_Denied
                              | Framework_Task_Kind_Unknown
                              | Framework_Dependency_Cycle
                              | Framework_Task_Not_Ready
