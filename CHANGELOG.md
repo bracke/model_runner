@@ -7,6 +7,26 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`/reconfigure`.** Settings change by an explicit revision: the change is
+  worked out from the current configuration and checked whole -- only
+  settings fields, profiles that read, permissions that name a capability
+  -- its impact is shown, and on confirmation it is committed as a new
+  revision in the history with `Configuration_Changed`. A plan made against
+  an older revision is refused. Requirements and readiness are reevaluated.
+- **Recovery on opening a project.** A session started in a project, and
+  `work`, first put right what an interruption left and say so: the
+  store's own recovery, tasks left running (blocked, or as `scalar
+  recovery.running` says: `failed` or `accepted`), abandoned agents and
+  invocations, workspaces whose directory is gone or whose task ended, and
+  workspace directories with no record (reported, not removed). A lease
+  records the process and host that took it and lets go at once when that
+  process is gone (`Hostkit.Process.Presence_Of`).
+- **The invocation trail.** Child agents get a context manifest
+  (`Context.Build_Brief`) and an invocation of their own; each tool call is
+  noted on the invocation that made it; invocations record the tokens and
+  seconds actually used; and `/work` budgets for the session's model -- its
+  file name, its session's context size, its reply length and its tools.
+
 - **What an agent may do is checked as it does it.** In `/work`, reading
   and writing stay inside the project and within the working agent's
   source and specification grants, checked at each call. A new

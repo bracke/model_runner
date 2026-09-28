@@ -118,6 +118,55 @@ package Model_Runner.Framework.Configurations is
       Done              : out Outcome;
       Status            : out Model_Runner.Errors.Error_Info);
 
+   --  A change to a project's configuration, worked out and not yet made.
+   type Change_Plan is record
+      --  The configuration it starts from, and the one it would make.
+      Before  : Records.Item;
+      After   : Records.Item;
+
+      --  Each field it changes: NAME: OLD -> NEW, with "(none)" for a field
+      --  added or removed.
+      Changed : Name_Lists.Vector;
+
+      --  What the change reaches: what it invalidates, and what it alters
+      --  from now on.
+      Impact  : Name_Lists.Vector;
+   end record;
+
+   --  Work out a change to the configuration: start from the current one,
+   --  apply the changes named -- NAME to a new value, or to "" to remove it --
+   --  and check the whole of what results. Only the settings are changed
+   --  this way: scalar., set., list., map., profile., fact., adapter. and
+   --  task_kind. fields; where the configuration came from and what it wrote
+   --  are the harness's. No template is read: a template's new defaults
+   --  reach a project only when someone names them.
+   --
+   --  @param Item The store.
+   --  @param Changes The fields and their new values.
+   --  @param Result The plan.
+   --  @param Status Framework_Schema_Violation naming a field that cannot be
+   --    changed or a value that does not read; Framework_Name_Invalid for a
+   --    name that is no field name.
+   procedure Plan_Change
+     (Item    : Stores.Store;
+      Changes : Value_Maps.Map;
+      Result  : out Change_Plan;
+      Status  : out Model_Runner.Errors.Error_Info);
+
+   --  Make a planned change: a new revision of the configuration, kept in its
+   --  history, committed at once, with Configuration_Changed emitted.
+   --
+   --  @param Item The store.
+   --  @param Planned The plan.
+   --  @param Revision The new revision.
+   --  @param Status Framework_Revision_Conflict when the configuration
+   --    changed after the plan was made.
+   procedure Reconfigure
+     (Item     : in out Stores.Store;
+      Planned  : Change_Plan;
+      Revision : out Natural;
+      Status   : out Model_Runner.Errors.Error_Info);
+
    --  Read a project's current configuration.
    --
    --  @param Item The store.

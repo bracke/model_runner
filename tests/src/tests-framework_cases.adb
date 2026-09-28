@@ -37,6 +37,8 @@ with Model_Runner.Framework.Verification;
 with Model_Runner.Framework.Work;
 with Model_Runner.Framework.Workspaces;
 with Model_Runner.Localization;
+with Hostkit.Host;
+with Hostkit.Process;
 with Model_Runner.Platform;
 with Model_Runner.Presentation;
 with Model_Runner.Text;
@@ -1449,6 +1451,33 @@ package body Tests.Framework_Cases is
               "a lease that ran out is still held, or not seen as stale");
       Ls.Acquire (Store, Change, "workspace-2", "agent-b", 600, Status);
       Assert (E.Is_Ok (Status), "a stale lease could not be taken over");
+
+      --  One whose process is gone from this machine is stale at once,
+      --  however long it had to run; one of a process still there holds.
+      Assert (Hostkit.Process."=" (Hostkit.Process.Presence_Of (Hostkit.Host.Own_Process_Id),
+                                   Hostkit.Process.Present),
+              "this process is not there");
+      declare
+         Dead : R.Item :=
+           R.Create (Model_Runner.Framework.Schemas.Lease_Schema, 1, "LEASE", 1);
+      begin
+         R.Set (Dead, "resource", "workspace-3");
+         R.Set (Dead, "owner", "died");
+         R.Set (Dead, "acquired_at", "2020-01-01T00:00:00Z");
+         R.Set (Dead, "expires_at", "2999-01-01T00:00:00Z");
+         R.Set (Dead, "process", "2000000000");
+         R.Set (Dead, "host", Hostkit.Host.Node_Name);
+         S.Put (Change, F.Runtime_Area, "lease.workspace-3", Dead);
+         S.Commit (Store, Change, Status);
+      end;
+      Assert (Hostkit.Process."=" (Hostkit.Process.Presence_Of (2_000_000_000),
+                                   Hostkit.Process.Absent)
+              and then Ls.Holder (Store, "workspace-3") = "",
+              "a lease whose process is gone still held");
+      Ls.Acquire (Store, Change, "workspace-4", "agent-c", 600, Status);
+      S.Commit (Store, Change, Status);
+      Assert (Ls.Holder (Store, "workspace-4") = "agent-c",
+              "a lease of a process still running did not hold");
       S.Close (Store);
    end Leases_Run_Out;
 
@@ -2531,6 +2560,16 @@ package body Tests.Framework_Cases is
               and then Cx.Rendered (Two) = Cx.Rendered (One),
               "one context built twice is two");
 
+      --  A child's context: its rules, the task and what it is asked, and
+      --  nothing of the task's own context.
+      Cx.Build_Brief (Store, To_String (Id), Profile, "Help it.", "Look at a.adb", Two, Status);
+      Assert (E.Is_Ok (Status)
+              and then Ada.Strings.Fixed.Index (Cx.Rendered (Two), "What you are asked") > 0
+              and then Ada.Strings.Fixed.Index (Cx.Rendered (Two), "Look at a.adb") > 0
+              and then Cx.Manifest_Id (Two) /= Cx.Manifest_Id (One)
+              and then Cx.Included_Count (Two) = 3,
+              "a child's context was not built of its own: " & Code_Of (Status));
+
       Cx.Keep (Store, Change, One, Status);
       S.Commit (Store, Change, Status);
       Assert (E.Is_Ok (Status)
@@ -3594,6 +3633,168 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Permissions_And_Proposals_Reach_The_Work;
 
+   --  A change to the configuration is worked out first -- what it
+   --  changes and reaches -- and refused where it touches what is not a
+   --  setting or does not read; made, it is a new revision in the history,
+   --  with Configuration_Changed, and what was verified before no longer
+   --  applies; a plan made against an older revision is refused.
+   procedure Configuration_Changes_Explicitly
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store    : S.Store;
+      Status   : E.Error_Info;
+      Change   : S.Transaction;
+      Changes  : Cf.Value_Maps.Map;
+      Planned  : Cf.Change_Plan;
+      Stale    : Cf.Change_Plan;
+      Revision : Natural;
+      Evidence : Unbounded_String;
+      Passed   : Boolean;
+      Reasons  : Model_Runner.Framework.Name_Lists.Vector;
+      Config   : R.Item;
+
+      function Refused (Name, Value : String) return Boolean is
+         One : Cf.Value_Maps.Map;
+         Out_Plan : Cf.Change_Plan;
+         Got : E.Error_Info;
+      begin
+         One.Include (Name, Value);
+         Cf.Plan_Change (Store, One, Out_Plan, Got);
+         return E.Is_Error (Got);
+      end Refused;
+   begin
+      Task_Project
+        (Store, "reconfigure",
+         "set execution.allowed = test" & LF
+         & "profile checks = exists: test -d ." & LF
+         & "scalar verification.default = checks" & LF);
+      Vf.Run_Profile (Store, Change, "checks", "", Evidence, Passed, Status);
+      S.Commit (Store, Change, Status);
+      Assert (Vf.Is_Current (Store, To_String (Evidence), Reasons),
+              "fresh evidence did not apply");
+
+      Assert (Refused ("template_id", "other"), "where the configuration came from was changed");
+      Assert (Refused ("profile.checks", "no colon here"), "a profile that does not read was taken");
+      Assert (Refused ("map.permission.project.fly", ""), "a permission no capability names was taken");
+
+      Changes.Include ("scalar.work.isolation", "workspace");
+      Changes.Include ("set.execution.allowed", "test, alr");
+      Cf.Plan_Change (Store, Changes, Planned, Status);
+      Assert (E.Is_Ok (Status) and then Natural (Planned.Changed.Length) = 2,
+              "the change was not worked out: " & Code_Of (Status));
+      Assert ((for some Line of Planned.Impact => Ada.Strings.Fixed.Index (Line, "work:") = 1)
+              and then (for some Line of Planned.Impact =>
+                          Ada.Strings.Fixed.Index (Line, "evidence:") = 1),
+              "what the change reaches was not said");
+      Cf.Plan_Change (Store, Changes, Stale, Status);
+
+      Cf.Reconfigure (Store, Planned, Revision, Status);
+      Assert (E.Is_Ok (Status) and then Revision = 2,
+              "the change was not made: " & Code_Of (Status) & Natural'Image (Revision));
+      Cf.Read (Store, Config, Status);
+      Assert (R.Revision (Config) = 2
+              and then R.Get (Config, "scalar.work.isolation") = "workspace"
+              and then R.Get (Config, "set.execution.allowed") = "test" & LF & "alr",
+              "the new revision is not what was planned");
+      S.Read (Store, Model_Runner.Framework.Config_Area, "revision-000002", Config, Status);
+      Assert (E.Is_Ok (Status), "the new revision was not kept in the history");
+      declare
+         Seen : constant Ev.Event_List := Ev.Since (Store, 0);
+      begin
+         Assert (To_String (Ev.Element (Seen, Ev.Length (Seen)).Kind_Word)
+                   = Ev.Kind_Name (Ev.Configuration_Changed),
+                 "Configuration_Changed was not emitted");
+      end;
+      Assert (not Vf.Is_Current (Store, To_String (Evidence), Reasons)
+              and then (for some Line of Reasons =>
+                          Ada.Strings.Fixed.Index (Line, "configuration") > 0),
+              "evidence taken under the old configuration still applied");
+
+      Cf.Reconfigure (Store, Stale, Revision, Status);
+      Assert (Status.Code = E.Framework_Revision_Conflict,
+              "a change planned against an older revision was made");
+      S.Close (Store);
+   end Configuration_Changes_Explicitly;
+
+   --  Opening a project puts right what an interruption left: a task left
+   --  running with no one running it, an agent and a call no one is
+   --  running, a workspace whose directory is gone; it says what it cannot
+   --  settle -- a workspace directory with no record -- and a second look
+   --  finds nothing to do.
+   procedure Opening_Recovers
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Said   : Model_Runner.Framework.Name_Lists.Vector;
+      Task_A : Unbounded_String;
+      Agent  : Unbounded_String;
+      Call   : Unbounded_String;
+      Made   : Ws.Workspace;
+
+      function Says (Part : String) return Boolean
+      is (for some Line of Said => Ada.Strings.Fixed.Index (Line, Part) > 0);
+   begin
+      Task_Project (Store, "recovery");
+      Tk.Create (Store, Change, Fields ("Left running", "analysis"), "user", "", Task_A, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Task_A), "accepted", "", Status => Status);
+      Tk.Move (Store, Change, To_String (Task_A), "running", "", Status => Status);
+      Ag.Start_Root (Store, Change, To_String (Task_A), "worker", "analysis", Agent, Status);
+      S.Commit (Store, Change, Status);
+      Iv.Start (Store, Change, To_String (Agent), To_String (Task_A), "1", "p", "CTX-0",
+                "files", Iv.Work_Claim, Call, Status);
+      Ws.Create (Store, Change, To_String (Task_A), To_String (Agent), "1", False, Made, Status);
+      S.Commit (Store, Change, Status);
+      Dirs.Delete_Tree (To_String (Made.Path));
+      Dirs.Create_Path (Dirs.Containing_Directory (S.Root (Store)) & "/.model_runner/workspaces/WS-999999");
+
+      Wk.Recover_On_Opening (Store, (others => <>), Said, Status);
+      Assert (E.Is_Ok (Status), "recovery failed: " & Code_Of (Status));
+      Assert (Says (To_String (Task_A) & " was running")
+              and then Tk.State_Of (Store, To_String (Task_A)) = "blocked",
+              "a task left running was left running");
+      Assert (Iv.State_Of (Store, To_String (Call)) = "failed" and then Says (To_String (Call)),
+              "a call no one was running was not recorded abandoned");
+      Assert (Says (To_String (Made.Id) & ": its directory is gone"),
+              "a workspace whose directory is gone was not reconciled");
+      Assert (Says ("WS-999999 has no record"),
+              "a workspace directory with no record was not reported");
+
+      Dirs.Delete_Tree (Dirs.Containing_Directory (S.Root (Store)) & "/.model_runner/workspaces/WS-999999");
+      Wk.Recover_On_Opening (Store, (others => <>), Said, Status);
+      Assert (E.Is_Ok (Status) and then Said.Is_Empty,
+              "a second look found something to do: "
+              & (if Said.Is_Empty then "" else Said.First_Element));
+
+      --  Where the project says so, such a task is accepted again instead.
+      declare
+         Changes  : Cf.Value_Maps.Map;
+         Planned  : Cf.Change_Plan;
+         Revision : Natural;
+         Task_B   : Unbounded_String;
+         Other    : Unbounded_String;
+      begin
+         Changes.Include ("scalar.recovery.running", "accepted");
+         Cf.Plan_Change (Store, Changes, Planned, Status);
+         Cf.Reconfigure (Store, Planned, Revision, Status);
+         Tk.Create (Store, Change, Fields ("Retried", "analysis"), "user", "", Task_B, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Task_B), "accepted", "", Status => Status);
+         Tk.Move (Store, Change, To_String (Task_B), "running", "", Status => Status);
+         Ag.Start_Root (Store, Change, To_String (Task_B), "worker", "analysis", Other, Status);
+         S.Commit (Store, Change, Status);
+         Wk.Recover_On_Opening (Store, (others => <>), Said, Status);
+         Assert (E.Is_Ok (Status) and then Tk.State_Of (Store, To_String (Task_B)) = "accepted",
+                 "the recovery policy was not followed: "
+                 & Tk.State_Of (Store, To_String (Task_B)) & " " & Code_Of (Status));
+      end;
+      S.Close (Store);
+   end Opening_Recovers;
+
    --  An agent that asks for children through the host, as a plan says.
    type Parent_Plan is
      (Helped, Fails_Twice, Fails_Then_Good, Optional_Fails, Left_Open, Denied,
@@ -3617,6 +3818,9 @@ package body Tests.Framework_Cases is
       Children    : in out Wk.Child_Host'Class;
       Answer      : out Unbounded_String;
       Status      : out E.Error_Info);
+
+   overriding function Profile (Self : Scripted_Parent) return Cx.Model_Profile
+   is ((Id => To_Unbounded_String ("scripted"), Context_Limit => 4096, others => <>));
 
    --  What the parent was last told of a child, and the last refusal.
    Parent_Told   : Unbounded_String;
@@ -3682,6 +3886,7 @@ package body Tests.Framework_Cases is
       case Self.Plan is
          when Helped | Denied =>
             Ask ("required", Child_Done);
+            Children.Note_Call ("read_file", "{""path"": ""src/hello.adb""}", "procedure");
          when Fails_Twice =>
             Ask ("required", Child_Fails);
             Assert (Retry, "a required child that failed was not run again");
@@ -3720,7 +3925,7 @@ package body Tests.Framework_Cases is
             Status := E.Make (E.Generation_Cancelled);
             return;
       end case;
-      Children.Spend (5);
+      Children.Spend (5, Prompt_Tokens => 100);
       Run (Self, Prompt_Path, Project, Answer, Status);
    end Run_Parenting;
 
@@ -3773,6 +3978,37 @@ package body Tests.Framework_Cases is
               and then Contains (To_String (Parent_Told), "it is fine")
               and then not Contains (To_String (Parent_Told), "look at hello"),
               "the parent was not told the child's result, or was told more");
+
+      --  Each agent's call is on record: the child's with a manifest of its
+      --  own, the calls it made, and what it used.
+      declare
+         Root_Call  : R.Item;
+         Child_Call : R.Item;
+         Read       : E.Error_Info;
+      begin
+         S.Read (Store, Model_Runner.Framework.Invocations_Area,
+                 To_String (Done.Invocation_Id), Root_Call, Read);
+         Assert (E.Is_Ok (Read)
+                 and then R.Get (Root_Call, "prompt_tokens") = "100"
+                 and then R.Get (Root_Call, "output_tokens") = "5",
+                 "the root's call does not say what it used: "
+                 & R.Get (Root_Call, "prompt_tokens") & "/"
+                 & R.Get (Root_Call, "output_tokens"));
+         for Name of S.Names (Store, Model_Runner.Framework.Invocations_Area) loop
+            if Name /= To_String (Done.Invocation_Id) and then Name'Length > 4
+              and then Name (Name'First .. Name'First + 3) = "INV-"
+            then
+               S.Read (Store, Model_Runner.Framework.Invocations_Area, Name, Child_Call, Read);
+            end if;
+         end loop;
+         Assert (R.Get (Child_Call, "result_contract") = "child_result"
+                 and then R.Get (Child_Call, "state") = "completed"
+                 and then R.Get (Child_Call, "context_manifest") /= ""
+                 and then R.Get (Child_Call, "output_tokens") = "10",
+                 "the child's call was not recorded with its own manifest");
+         Assert (Contains (R.Get (Root_Call, "call.0001"), "read_file"),
+                 "the root's tool call was not recorded on its call");
+      end;
 
       Work (Fails_Twice);
       Assert (To_String (Done.Final_State) = "blocked"
@@ -4051,6 +4287,12 @@ package body Tests.Framework_Cases is
         (T, Recursion_Stays_Bounded'Access,
          "children stay within limits and permissions, failures and"
          & " cancellation are seen");
+      Register_Routine
+        (T, Configuration_Changes_Explicitly'Access,
+         "the configuration changes by an explicit, validated, recorded revision");
+      Register_Routine
+        (T, Opening_Recovers'Access,
+         "opening a project puts right what an interruption left");
       Register_Routine
         (T, Permissions_And_Proposals_Reach_The_Work'Access,
          "a task narrows its agent, and proposed work becomes candidates where permitted");

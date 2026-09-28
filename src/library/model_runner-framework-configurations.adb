@@ -1,3 +1,4 @@
+with Ada.Strings.Fixed;
 with Ada.Directories;
 
 with Hostkit.Fs;
@@ -5,6 +6,7 @@ with Hostkit.Fs;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Facts;
 with Model_Runner.Framework.Files;
+with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Schemas;
 
 package body Model_Runner.Framework.Configurations is
@@ -583,6 +585,236 @@ package body Model_Runner.Framework.Configurations is
          end;
       end loop;
    end Initialize;
+
+   --  The settings a reconfiguration may change, by the start of their name.
+   Changeable : constant array (1 .. 8) of access constant String :=
+     [new String'("scalar."), new String'("set."), new String'("list."),
+      new String'("map."), new String'("profile."), new String'("fact."),
+      new String'("adapter."), new String'("task_kind.")];
+
+   function Starts (Text, Prefix : String) return Boolean
+   is (Text'Length > Prefix'Length
+       and then Text (Text'First .. Text'First + Prefix'Length - 1) = Prefix);
+
+   --  A list written with commas, as the configuration keeps it: a line an
+   --  item.
+   function Lines_From (Text : String) return String is
+      Result : Unbounded_String;
+   begin
+      for Part of Choices_Of (Text) loop
+         Append (Result, (if Result = Null_Unbounded_String then "" else ASCII.LF & "") & Part);
+      end loop;
+      return To_String (Result);
+   end Lines_From;
+
+   --  A value of several lines, as one: its lines separated by commas.
+   function On_One_Line (Text : String) return String is
+      Result : Unbounded_String;
+   begin
+      for C of Text loop
+         if C = ASCII.LF then
+            Append (Result, ", ");
+         else
+            Append (Result, C);
+         end if;
+      end loop;
+      return To_String (Result);
+   end On_One_Line;
+
+   --  What a change to a field reaches.
+   function Reach (Name : String) return String is
+   begin
+      if Starts (Name, "profile.") or else Starts (Name, "scalar.verification.")
+        or else Starts (Name, "scalar.task.profile.") or else Starts (Name, "set.execution.")
+        or else Starts (Name, "list.verification.")
+      then
+         return "verification: how tasks are checked from now on";
+      elsif Starts (Name, "map.permission.") then
+         return "permissions: what agents started from now on may do";
+      elsif Starts (Name, "task_kind.") then
+         return "tasks of kind " & Name (Name'First + 10 .. Name'Last)
+           & ": the fields new ones may have";
+      elsif Starts (Name, "scalar.work.") or else Starts (Name, "scalar.agents.") then
+         return "work: how agents run tasks from now on";
+      elsif Starts (Name, "list.automation.") then
+         return "automation: what happens on its own after an event";
+      else
+         return "settings: " & Name;
+      end if;
+   end Reach;
+
+   --  Whether a value reads as its field needs.
+   function Problem (Name, Value : String) return String is
+   begin
+      if Starts (Name, "profile.") then
+         declare
+            Start : Natural := Value'First;
+         begin
+            for Index in Value'First .. Value'Last + 1 loop
+               if Index > Value'Last or else Value (Index) = ';' then
+                  declare
+                     Check : constant String :=
+                       Ada.Strings.Fixed.Trim (Value (Start .. Index - 1), Ada.Strings.Both);
+                  begin
+                     if Check /= "" and then Ada.Strings.Fixed.Index (Check, ":") = 0 then
+                        return "a check is written LABEL: COMMAND, not " & Check;
+                     end if;
+                  end;
+                  Start := Index + 1;
+               end if;
+            end loop;
+         end;
+      elsif Starts (Name, "map.permission.") then
+         declare
+            Last_Dot : constant Natural :=
+              Ada.Strings.Fixed.Index (Name, ".", Ada.Strings.Backward);
+            Level    : Permissions.Permission_Set;
+            Read     : E.Error_Info;
+         begin
+            Permissions.Restriction
+              (Name (Last_Dot + 1 .. Name'Last) & ": " & Value, Level, Read);
+            if E.Is_Error (Read) then
+               return "no capability is called " & Name (Last_Dot + 1 .. Name'Last);
+            end if;
+         end;
+      end if;
+      return "";
+   end Problem;
+
+   -----------------
+   -- Plan_Change --
+   -----------------
+
+   procedure Plan_Change
+     (Item    : Stores.Store;
+      Changes : Value_Maps.Map;
+      Result  : out Change_Plan;
+      Status  : out Model_Runner.Errors.Error_Info)
+   is
+      function Refused (Name, Detail : String) return E.Error_Info is
+         Made : E.Error_Info := E.Make (E.Framework_Schema_Violation);
+      begin
+         E.Add_Text (Made, "name", Name);
+         E.Add_Text (Made, "detail", Detail);
+         return Made;
+      end Refused;
+   begin
+      Result := (others => <>);
+      Read (Item, Result.Before, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      Result.After := Result.Before;
+
+      for Position in Changes.Iterate loop
+         declare
+            Name  : constant String := Value_Maps.Key (Position);
+            Given : constant String := Value_Maps.Element (Position);
+            Value : constant String :=
+              (if Starts (Name, "set.") or else Starts (Name, "list.")
+               then Lines_From (Given) else Given);
+            Old   : constant String := Records.Get (Result.Before, Name);
+         begin
+            if not (for some Prefix of Changeable => Starts (Name, Prefix.all)) then
+               Status := Refused (Name, "only the settings can be changed: "
+                                  & "scalar., set., list., map., profile., fact., adapter."
+                                  & " and task_kind. fields");
+               return;
+            elsif not Records.Is_Field_Name (Name) then
+               Status := E.Make (E.Framework_Name_Invalid);
+               E.Add_Text (Status, "value", Name);
+               return;
+            elsif Problem (Name, Value) /= "" then
+               Status := Refused (Name, Problem (Name, Value));
+               return;
+            end if;
+
+            if Value /= Old then
+               if Value = "" then
+                  Records.Remove (Result.After, Name);
+               else
+                  Records.Set (Result.After, Name, Value);
+               end if;
+               Result.Changed.Append
+                 (Name & ": " & (if Old = "" then "(none)" else On_One_Line (Old)) & " -> "
+                  & (if Value = "" then "(none)" else On_One_Line (Value)));
+               if not Result.Impact.Contains (Reach (Name)) then
+                  Result.Impact.Append (Reach (Name));
+               end if;
+            end if;
+         end;
+      end loop;
+
+      --  Evidence is taken against a configuration: any change leaves what
+      --  was verified before to be verified again.
+      if not Result.Changed.Is_Empty then
+         Result.Impact.Append
+           ("evidence: what was verified under revision"
+            & Natural'Image (Records.Revision (Result.Before))
+            & " no longer applies until it is checked again");
+      end if;
+      Records.Set_Revision (Result.After, Records.Revision (Result.Before) + 1);
+      Records.Set
+        (Result.After, "configuration_fingerprint", Configuration_Fingerprint (Result.After));
+   end Plan_Change;
+
+   -----------------
+   -- Reconfigure --
+   -----------------
+
+   procedure Reconfigure
+     (Item     : in out Stores.Store;
+      Planned  : Change_Plan;
+      Revision : out Natural;
+      Status   : out Model_Runner.Errors.Error_Info)
+   is
+      Change : Stores.Transaction;
+      Now    : Records.Item;
+      Event  : Unbounded_String;
+      Number : constant String := Natural'Image (Records.Revision (Planned.After));
+      Padded : constant String :=
+        [1 .. Integer'Max (0, 6 - (Number'Length - 1)) => '0']
+        & Number (Number'First + 1 .. Number'Last);
+      Kept   : Records.Item := Copy (Planned.After, History_Entity);
+   begin
+      Revision := Records.Revision (Planned.Before);
+      if Planned.Changed.Is_Empty then
+         Status := E.Success;
+         return;
+      end if;
+
+      --  Made against the configuration it was planned from, or not at all.
+      Read (Item, Now, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      if Records.Revision (Now) /= Records.Revision (Planned.Before) then
+         Status := E.Make (E.Framework_Revision_Conflict);
+         E.Add_Text (Status, "name", "the configuration");
+         return;
+      end if;
+
+      Stores.Put (Change, Config_Area, Current_Name, Planned.After);
+      --  A record of its own in the history, saying which revision it was.
+      Records.Set (Kept, "configuration_revision", Number (Number'First + 1 .. Number'Last));
+      Stores.Put (Change, Config_Area, "revision-" & Padded, Kept);
+      declare
+         Said : Unbounded_String := To_Unbounded_String ("revision" & Number);
+      begin
+         for Line of Planned.Changed loop
+            Append (Said, ASCII.LF & Line);
+         end loop;
+         Events.Emit
+           (Item, Change, Events.Configuration_Changed, "PROJECT", To_String (Said),
+            Event, Status);
+      end;
+      if E.Is_Ok (Status) then
+         Stores.Commit (Item, Change, Status);
+      end if;
+      if E.Is_Ok (Status) then
+         Revision := Records.Revision (Planned.After);
+      end if;
+   end Reconfigure;
 
    ----------
    -- Read --

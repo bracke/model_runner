@@ -234,12 +234,200 @@ package body Model_Runner.Framework.Work is
                   Agent_State (Item, Change, Agent, "failed", "it stopped without finishing");
                end if;
                Leases.Release (Item, Change, Lease_Of (Id), Agent, Status);
+
+               --  Blocked, unless the project says otherwise.
+               if E.Is_Ok (Status) and then Scalar (Item, "recovery.running") = "failed" then
+                  Tasks.Move (Item, Change, Id, "failed", "its agent stopped without finishing",
+                              Status => Status);
+               elsif E.Is_Ok (Status) and then Scalar (Item, "recovery.running") = "accepted" then
+                  Tasks.Move (Item, Change, Id, "accepted", "", Status => Status);
+               end if;
+               if E.Is_Error (Status) then
+                  return;
+               end if;
                Recovered.Append (Id);
             end;
          end if;
       end loop;
       Stores.Commit (Item, Change, Status);
    end Recover;
+
+   ------------------------
+   -- Recover_On_Opening --
+   ------------------------
+
+   procedure Recover_On_Opening
+     (Item   : in out Stores.Store;
+      Opened : Stores.Recovery_Report;
+      Said   : out Name_Lists.Vector;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Change   : Stores.Transaction;
+      Put_Back : Name_Lists.Vector;
+
+      --  The root of an agent: itself, or the first of its ancestors with no
+      --  parent.
+      function Root_Of (Id : String) return String is
+         Held : Agents.Agent;
+         Read : E.Error_Info;
+      begin
+         Agents.Read (Item, Id, Held, Read);
+         return (if E.Is_Error (Read) or else Held.Parent = Null_Unbounded_String then Id
+                 else Root_Of (To_String (Held.Parent)));
+      end Root_Of;
+
+      --  Whether something is running an agent: its root holds its task.
+      function Live (Id : String) return Boolean is
+         Held : Agents.Agent;
+         Read : E.Error_Info;
+      begin
+         Agents.Read (Item, Id, Held, Read);
+         return E.Is_Ok (Read)
+           and then Leases.Holder (Item, Lease_Of (To_String (Held.Task_Id))) = Root_Of (Id);
+      end Live;
+   begin
+      Said.Clear;
+
+      --  1, 2 and 6: what opening the store did.
+      if Opened.Rolled_Forward > 0 then
+         Said.Append ("finished" & Natural'Image (Opened.Rolled_Forward)
+                      & " committed changes an interruption had left");
+      end if;
+      if Opened.Rolled_Back > 0 then
+         Said.Append ("threw away" & Natural'Image (Opened.Rolled_Back)
+                      & " changes interrupted before they were committed");
+      end if;
+      if Opened.Partials_Removed > 0 then
+         Said.Append ("removed" & Natural'Image (Opened.Partials_Removed)
+                      & " half-written files");
+      end if;
+      if Opened.Index_Rebuilt then
+         Said.Append ("built the entity index again");
+      end if;
+
+      --  3: tasks left running with no one running them.
+      Recover (Item, Put_Back, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      for Id of Put_Back loop
+         Said.Append (Id & " was running with no one running it; it is "
+                      & Tasks.State_Of (Item, Id) & " now");
+      end loop;
+
+      --  4: agents and invocations no one is running any more.
+      for Name of Stores.Names (Item, Runtime_Area) loop
+         if Name'Length > 6 and then Name (Name'First .. Name'First + 5) = "agent." then
+            declare
+               Id   : constant String := Name (Name'First + 6 .. Name'Last);
+               Held : Agents.Agent;
+               Read : E.Error_Info;
+            begin
+               Agents.Read (Item, Id, Held, Read);
+               if E.Is_Ok (Read)
+                 and then To_String (Held.Status) in "created" | "running" | "waiting"
+                 and then not Live (Id)
+               then
+                  Agents.Finish (Item, Change, Id, False, "",
+                                 "abandoned: nothing was running it", Read);
+                  if E.Is_Ok (Read) then
+                     Said.Append (Id & " was abandoned");
+                  end if;
+               end if;
+            end;
+         end if;
+      end loop;
+      for Name of Stores.Names (Item, Invocations_Area) loop
+         if Name'Length > 4 and then Name (Name'First .. Name'First + 3) = "INV-"
+           and then Invocations.State_Of (Item, Name) = "started"
+         then
+            declare
+               Value : Records.Item;
+               Read  : E.Error_Info;
+            begin
+               Stores.Read (Item, Invocations_Area, Name, Value, Read);
+               if E.Is_Ok (Read) and then not Live (Records.Get (Value, "agent")) then
+                  Invocations.Finish
+                    (Item, Change, Name, Invocations.Failed, (others => 0), "",
+                     "abandoned: nothing was running it", Read);
+                  if E.Is_Ok (Read) then
+                     Said.Append (Name & " was abandoned");
+                  end if;
+               end if;
+            end;
+         end if;
+      end loop;
+
+      --  5: workspaces, against their directories and their tasks.
+      declare
+         Home : constant String :=
+           Hostkit.Fs.Join (Stores.Root (Item), "workspaces");
+         Recorded : Name_Lists.Vector;
+      begin
+         for Name of Stores.Names (Item, Workspaces_Area) loop
+            declare
+               Held  : Workspaces.Workspace;
+               Read  : E.Error_Info;
+            begin
+               Workspaces.Read (Item, Name, Held, Read);
+               Recorded.Append (To_String (Held.Id));
+               if E.Is_Ok (Read) and then To_String (Held.Status) = "active" then
+                  declare
+                     Now : constant String := Tasks.State_Of (Item, To_String (Held.Task_Id));
+                  begin
+                     if not Ada.Directories.Exists (To_String (Held.Path)) then
+                        Workspaces.Abandon (Item, Change, To_String (Held.Id), Read);
+                        Said.Append (To_String (Held.Id) & ": its directory is gone; abandoned");
+                     elsif Now in "complete" | "cancelled" | "failed" then
+                        Workspaces.Abandon (Item, Change, To_String (Held.Id), Read);
+                        Said.Append (To_String (Held.Id) & ": its task is " & Now
+                                     & "; abandoned");
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
+         if Ada.Directories.Exists (Home) then
+            declare
+               use Ada.Directories;
+               Search : Search_Type;
+               Found  : Directory_Entry_Type;
+            begin
+               Start_Search (Search, Home, "WS-*", [Directory => True, others => False]);
+               while More_Entries (Search) loop
+                  Get_Next_Entry (Search, Found);
+                  if not Recorded.Contains (Simple_Name (Found)) then
+                     Said.Append ("workspaces/" & Simple_Name (Found)
+                                  & " has no record; it is left for you to remove");
+                  end if;
+               end loop;
+               End_Search (Search);
+            end;
+         end if;
+      end;
+
+      Stores.Commit (Item, Change, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      --  7: readiness and verification, as the state now stands.
+      declare
+         Became : Name_Lists.Vector;
+         Moved  : Name_Lists.Vector;
+      begin
+         Tasks.Recompute_Readiness (Item, Change, Became, Status);
+         if E.Is_Ok (Status) then
+            Verification.Reevaluate_Requirements (Item, Change, Moved, Status);
+         end if;
+         if E.Is_Ok (Status) then
+            Stores.Commit (Item, Change, Status);
+         end if;
+         for Id of Moved loop
+            Said.Append (Id & " changed its verification");
+         end loop;
+      end;
+   end Recover_On_Opening;
 
    --  Every file's fingerprint, by path.
    function Snapshot (Project : String) return Configurations.Value_Maps.Map is
@@ -434,7 +622,11 @@ package body Model_Runner.Framework.Work is
    -- Spend --
    -----------
 
-   procedure Spend (Host : in out Child_Host; Tokens : Natural) is
+   procedure Spend
+     (Host          : in out Child_Host;
+      Tokens        : Natural;
+      Prompt_Tokens : Natural := 0)
+   is
       Change : Stores.Transaction;
       Status : E.Error_Info;
    begin
@@ -442,7 +634,33 @@ package body Model_Runner.Framework.Work is
       --  record says so.
       Agents.Charge (Host.Item.all, Change, Current (Host), Tokens, Status);
       Stores.Commit (Host.Item.all, Change, Status);
+      if Natural (Host.Open.Length) = 1 then
+         Host.Root_Out := Host.Root_Out + Tokens;
+         Host.Root_Prompt := Natural'Max (Host.Root_Prompt, Prompt_Tokens);
+      end if;
    end Spend;
+
+   ---------------
+   -- Note_Call --
+   ---------------
+
+   procedure Note_Call
+     (Host      : in out Child_Host;
+      Named     : String;
+      Arguments : String;
+      Answer    : String)
+   is
+      Change : Stores.Transaction;
+      Status : E.Error_Info;
+   begin
+      if not Host.Calls.Is_Empty then
+         Invocations.Note_Call
+           (Host.Item.all, Change, Host.Calls.Last_Element, Named, Arguments, Answer, Status);
+         if E.Is_Ok (Status) then
+            Stores.Commit (Host.Item.all, Change, Status);
+         end if;
+      end if;
+   end Note_Call;
 
    ----------------
    -- Open_Child --
@@ -462,8 +680,7 @@ package body Model_Runner.Framework.Work is
       Change  : Stores.Transaction;
       Parent  : constant String := Current (Host);
       Owner   : Agents.Agent;
-      Defined : Records.Item;
-      Read    : E.Error_Info;
+      Read    : E.Error_Info := E.Success;
       Named   : constant String := (if Trim (Role) = "" then "helper" else Trim (Role));
       Obliged : constant Agents.Obligation :=
         (if Need = "optional" then Agents.Optional
@@ -500,22 +717,40 @@ package body Model_Runner.Framework.Work is
          return;
       end if;
       Host.Open.Append (To_String (Child_Id));
+      Host.Opened.Append (Ada.Calendar.Clock);
 
-      --  A context of its own: the task it helps with and what it is asked,
-      --  and nothing of the conversation it was asked from.
-      Tasks.Definition (Host.Item.all, To_String (Host.Task_Id), Defined, Read);
-      Context := To_Unbounded_String
-        ("## Rules" & ASCII.LF
-         & "You are helping an agent with one part of its task, as its " & Named
-         & ". You cannot see its conversation, and it will see only your report."
-         & ASCII.LF & ASCII.LF
-         & "## The task it works on, " & To_String (Host.Task_Id) & ASCII.LF
-         & "title: " & Records.Get (Defined, "title") & ASCII.LF
-         & (if Records.Get (Defined, "component") = "" then ""
-            else "component: " & Records.Get (Defined, "component") & ASCII.LF)
-         & ASCII.LF
-         & "## What you are asked" & ASCII.LF & Brief & ASCII.LF & ASCII.LF
-         & Child_Instructions);
+      --  A context of its own -- the task it helps with and what it is
+      --  asked, nothing of the conversation it was asked from -- with its
+      --  manifest kept and its invocation recorded before it is made.
+      declare
+         Made   : Framework.Context.Built;
+         Called : Unbounded_String;
+      begin
+         Framework.Context.Build_Brief
+           (Host.Item.all, To_String (Host.Task_Id), Host.Model,
+            "You are helping an agent with one part of its task, as its " & Named
+            & ". You cannot see its conversation, and it will see only your report.",
+            Brief, Made, Read);
+         if E.Is_Ok (Read) then
+            Framework.Context.Keep (Host.Item.all, Change, Made, Read);
+         end if;
+         if E.Is_Ok (Read) then
+            Invocations.Start
+              (Host.Item.all, Change, To_String (Child_Id), To_String (Host.Task_Id),
+               Generation_Of (Host.Item.all, To_String (Host.Task_Id)),
+               To_String (Host.Model.Id), Framework.Context.Manifest_Id (Made), "files",
+               Child_Claim, Called, Read);
+         end if;
+         if E.Is_Ok (Read) then
+            Stores.Commit (Host.Item.all, Change, Read);
+         end if;
+         Host.Calls.Append (To_String (Called));
+         Context := To_Unbounded_String
+           (Framework.Context.Rendered (Made) & Child_Instructions);
+         if E.Is_Error (Read) then
+            Status := Read;
+         end if;
+      end;
    end Open_Child;
 
    -----------------
@@ -528,7 +763,8 @@ package body Model_Runner.Framework.Work is
       Tokens : Natural;
       Ran    : Model_Runner.Errors.Error_Info;
       Told   : out Ada.Strings.Unbounded.Unbounded_String;
-      Retry  : out Boolean)
+      Retry  : out Boolean;
+      Prompt_Tokens : Natural := 0)
    is
       Change  : Stores.Transaction;
       Status  : E.Error_Info;
@@ -612,10 +848,27 @@ package body Model_Runner.Framework.Work is
             Agents.Finish
               (Host.Item.all, Change, Id, Good, To_String (Kept.Id), To_String (Why), Status);
          end if;
+         --  Its invocation ended, with what it used.
+         if E.Is_Ok (Status) and then Host.Calls.Last_Element /= "" then
+            Invocations.Finish
+              (Host.Item.all, Change, Host.Calls.Last_Element,
+               (if Interrupted (Ran) then Invocations.Cancelled
+                elsif E.Is_Ok (Ran) then Invocations.Completed
+                else Invocations.Failed),
+               (Prompt_Tokens => Prompt_Tokens,
+                Output_Tokens => Tokens,
+                Seconds       =>
+                  Natural (Duration'Max
+                    (0.0, Ada.Calendar."-" (Ada.Calendar.Clock, Host.Opened.Last_Element)))),
+               To_String (Kept.Id),
+               (if E.Is_Ok (Ran) then "" else E.Error_Code'Image (Ran.Code)), Status);
+         end if;
          if E.Is_Ok (Status) then
             Stores.Commit (Host.Item.all, Change, Status);
          end if;
          Host.Open.Delete_Last;
+         Host.Calls.Delete_Last;
+         Host.Opened.Delete_Last;
 
          Retry := not Good and then not Interrupted (Ran)
            and then Agents."=" (Child.Need, Agents.Required)
@@ -641,7 +894,14 @@ package body Model_Runner.Framework.Work is
          Agents.Finish
            (Host.Item.all, Change, Host.Open.Last_Element, False, "",
             "its parent stopped before it answered", Status);
+         if Host.Calls.Last_Element /= "" then
+            Invocations.Finish
+              (Host.Item.all, Change, Host.Calls.Last_Element, Invocations.Failed,
+               (others => 0), "", "its parent stopped before it answered", Status);
+         end if;
          Host.Open.Delete_Last;
+         Host.Calls.Delete_Last;
+         Host.Opened.Delete_Last;
       end loop;
       Stores.Commit (Host.Item.all, Change, Status);
    end Abandon;
@@ -666,6 +926,9 @@ package body Model_Runner.Framework.Work is
       Ran     : E.Error_Info;
       Said    : Invocations.Claims;
       Held    : E.Error_Info;
+
+      --  What the call used, as the agent reports it.
+      Used    : Invocations.Usage;
 
       --  Where the agent writes: the project, or its workspace.
       Isolated : constant Boolean := Work_Setting (Item, "isolation") = "workspace";
@@ -804,7 +1067,10 @@ package body Model_Runner.Framework.Work is
          begin
             Host.Task_Id := To_Unbounded_String (Task_Id);
             Host.Apart := Isolated;
+            Host.Model := Model;
             Host.Open.Append (To_String (Result.Agent_Id));
+            Host.Calls.Append (To_String (Result.Invocation_Id));
+            Host.Opened.Append (Ada.Calendar.Clock);
             if Runner in Parenting_Runner'Class then
                Parenting_Runner'Class (Runner).Run_Parenting
                  (Prompt, To_String (Place), Host, Answer, Ran);
@@ -813,6 +1079,13 @@ package body Model_Runner.Framework.Work is
             end if;
             Abandon (Host);
             By_Checks := Host.Written;
+            Used :=
+              (Prompt_Tokens =>
+                 (if Host.Root_Prompt > 0 then Host.Root_Prompt else Context.Cost (Built)),
+               Output_Tokens => Host.Root_Out,
+               Seconds       =>
+                 Natural (Duration'Max
+                   (0.0, Ada.Calendar."-" (Ada.Calendar.Clock, Host.Opened.First_Element))));
          end;
          for Line of Lines_Of (Agents.Child_Results (Item, To_String (Result.Agent_Id))) loop
             Result.Children.Append (Line);
@@ -861,7 +1134,7 @@ package body Model_Runner.Framework.Work is
             (if E.Is_Ok (Ran) then Invocations.Completed
              elsif Interrupted (Ran) then Invocations.Cancelled
              else Invocations.Failed),
-            (Prompt_Tokens => Context.Cost (Built), others => 0),
+            Used,
             To_String (Kept.Id),
             (if E.Is_Ok (Ran) then "" else E.Error_Code'Image (Ran.Code)), Status);
          Annotate (Item, Change, Task_Id, "last_result", To_String (Kept.Id));

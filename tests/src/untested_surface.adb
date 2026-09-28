@@ -20,6 +20,12 @@ package body Untested_Surface is
    --  wider than its command, which Library_Surface already records; these
    --  are the part of that width nothing exercises either.
    --
+   --  A session's look at its project. Recover_Here opens the project in
+   --  the directory the session was started in and prints what
+   --  Work.Recover_On_Opening says, which its own test asserts; what is left
+   --  is the current directory, which a test would have to change under
+   --  every other case running.
+   --
    --  The agent loop's observer. On_Call, On_Result and On_Step are what
    --  a watcher overrides to be told of each call, each result and each
    --  step, and every `run --agent` drives them through the console's
@@ -70,6 +76,7 @@ package body Untested_Surface is
          | "Is_Power_Of_Two"
          | "Is_Stop_Token"
          | "Is_Terminal"
+         | "Recover_Here"
          | "Is_Valid_Array_Element"
          | "Metadata_Bytes"
          | "Metadata_Element_Kind"

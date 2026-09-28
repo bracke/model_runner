@@ -263,6 +263,56 @@ package body Model_Runner.Framework.Invocations is
       Stores.Put (Change, Invocations_Area, Id, Value);
    end Finish;
 
+   ---------------
+   -- Note_Call --
+   ---------------
+
+   procedure Note_Call
+     (Item      : Stores.Store;
+      Change    : in out Stores.Transaction;
+      Id        : String;
+      Named     : String;
+      Arguments : String;
+      Answer    : String;
+      Status    : out Model_Runner.Errors.Error_Info)
+   is
+      Value  : Records.Item;
+      Staged : Boolean;
+      Calls  : Natural := 0;
+
+      --  The start of a text, on one line.
+      function Start_Of (Text : String) return String is
+         Cut : String := Text (Text'First .. Text'First + Natural'Min (Text'Length, 200) - 1);
+      begin
+         for C of Cut loop
+            if C in ASCII.LF | ASCII.CR | ASCII.HT then
+               C := ' ';
+            end if;
+         end loop;
+         return Cut & (if Text'Length > 200 then "..." else "");
+      end Start_Of;
+   begin
+      Status := E.Success;
+      Stores.Pending (Change, Invocations_Area, Id, Value, Staged);
+      if not Staged then
+         Stores.Read (Item, Invocations_Area, Id, Value, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         Records.Set_Revision (Value, Records.Revision (Value) + 1);
+      end if;
+      for Index in 1 .. Records.Field_Count (Value) loop
+         if Ada.Strings.Fixed.Index (Records.Field_Name (Value, Index), "call.") = 1 then
+            Calls := Calls + 1;
+         end if;
+      end loop;
+      Records.Set
+        (Value, "call." & [1 .. Integer'Max (0, 4 - Image (Calls + 1)'Length) => '0']
+                & Image (Calls + 1),
+         Named & ASCII.HT & Start_Of (Arguments) & ASCII.HT & Start_Of (Answer));
+      Stores.Put (Change, Invocations_Area, Id, Value);
+   end Note_Call;
+
    --------------
    -- State_Of --
    --------------

@@ -3,6 +3,7 @@ with Ada.Strings.Unbounded;
 with Model_Runner.Cancellation;
 with Model_Runner.CLI.Options;
 with Model_Runner.Errors;
+with Model_Runner.Framework.Context;
 with Model_Runner.Framework.Work;
 with Model_Runner.Llama;
 with Model_Runner.Presentation;
@@ -84,6 +85,22 @@ package Model_Runner.CLI.Project_Commands is
       Children    : in out Model_Runner.Framework.Work.Child_Host'Class;
       Answer      : out Ada.Strings.Unbounded.Unbounded_String;
       Status      : out Model_Runner.Errors.Error_Info);
+
+   --  Look at the state of the project in the session's directory, if there
+   --  is one, as the session starts: what an interruption left is put right
+   --  and said, before anything is asked of it.
+   --
+   --  @param Screen Where to write.
+   procedure Recover_Here (Screen : in out Model_Runner.Presentation.Console);
+
+   --  The session's model, as /work budgets a context for it: its file name,
+   --  the session's own context size, the reply length asked for, and the
+   --  tools it is offered.
+   --
+   --  @param Self The agent.
+   --  @return Its profile.
+   overriding function Profile
+     (Self : Session_Agent) return Model_Runner.Framework.Context.Model_Profile;
 
    --  Whether a word is one of the project's commands.
    --

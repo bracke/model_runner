@@ -126,6 +126,26 @@ package Model_Runner.Framework.Invocations is
       Failure   : String;
       Status    : out Model_Runner.Errors.Error_Info);
 
+   --  Record a tool call an invocation made: its name, and the start of its
+   --  arguments and of what it answered, so a call can be traced to the
+   --  agent and invocation that made it.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Id The invocation, started and not ended.
+   --  @param Named The tool.
+   --  @param Arguments Its arguments.
+   --  @param Answer What it answered.
+   --  @param Status Framework_Not_Found when there is no such invocation.
+   procedure Note_Call
+     (Item      : Stores.Store;
+      Change    : in out Stores.Transaction;
+      Id        : String;
+      Named     : String;
+      Arguments : String;
+      Answer    : String;
+      Status    : out Model_Runner.Errors.Error_Info);
+
    --  Where an invocation stands: started, completed, failed or cancelled.
    --
    --  @param Item The store.

@@ -124,7 +124,23 @@ may not do. Work an agent proposes becomes candidate tasks where it may
 `propose_tasks` (by default it may), and an issue where it may not.
 Ctrl-C stops a reply or a `/work` as it runs: the invocation and its
 agents are recorded cancelled and the task is set aside, blocked, until
-it is accepted again. The same commands run
+it is accepted again.
+
+Settings change with `/reconfigure NAME=VALUE ...` -- `scalar.`, `set.`,
+`list.`, `map.`, `profile.`, `fact.`, `adapter.` and `task_kind.` fields,
+`NAME=` to remove one. It shows each change and what it reaches, asks, and
+makes a new revision of the configuration, kept in its history; evidence
+taken under the old one no longer applies, and requirements and readiness
+are worked out again. No template is read on the way.
+
+A session that starts in a project looks at its state first and says what it
+put right: a task whose session died holding it (a lease names its process,
+so a dead one lets go at once) is blocked -- or failed, or accepted again,
+as `scalar recovery.running` says -- and agents, invocations and workspaces
+no one is running are recorded abandoned. Every call is on record: a child
+has an invocation and a context manifest of its own, each tool call is
+noted on the invocation that made it, with what it used, and `/work`
+budgets for the loaded model's own context size. The same commands run
 outside a session too -- `model_runner init|task|repo|work`, with
 `--set NAME=VALUE` for the words -- for scripts.
 

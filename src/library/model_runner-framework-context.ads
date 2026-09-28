@@ -86,6 +86,26 @@ package Model_Runner.Framework.Context is
       Result  : out Built;
       Status  : out Model_Runner.Errors.Error_Info);
 
+   --  Build the context of a child agent: its rules, the task it helps with
+   --  and what it is asked, all mandatory, fitted and fingerprinted as a
+   --  task's is.
+   --
+   --  @param Item The store.
+   --  @param Task_Id The task the child helps with.
+   --  @param Model The profile the context is budgeted for.
+   --  @param Rules What the child is told of itself.
+   --  @param Brief What it is asked, in its parent's words.
+   --  @param Result The context and its manifest.
+   --  @param Status Framework_Context_Overflow when it does not fit.
+   procedure Build_Brief
+     (Item    : Stores.Store;
+      Task_Id : String;
+      Model   : Model_Profile;
+      Rules   : String;
+      Brief   : String;
+      Result  : out Built;
+      Status  : out Model_Runner.Errors.Error_Info);
+
    --  The context's identifier: CTX- and its fingerprint.
    --
    --  @param From The context.

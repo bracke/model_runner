@@ -772,6 +772,10 @@ package body Model_Runner.CLI.Interactive is
          return;
       end if;
 
+      --  A project in the session's directory is looked at before anything
+      --  is asked of it.
+      Model_Runner.CLI.Project_Commands.Recover_Here (Screen);
+
       Model_Runner.Stops.Open (Stop_Set, Bounds);
       for Index in 1 .. Item.Stop_Count loop
          Model_Runner.Stops.Add_String

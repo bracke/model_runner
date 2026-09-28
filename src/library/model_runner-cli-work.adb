@@ -234,13 +234,14 @@ package body Model_Runner.CLI.Work is
       end if;
       Model_Runner.Framework.Configurations.Read (Store, Config, Outcome);
 
-      --  Tasks whose agents stopped go back first, so they can be chosen.
+      --  What an interruption left is put right first, so a task whose
+      --  agent stopped can be chosen again.
       declare
-         Recovered : Model_Runner.Framework.Name_Lists.Vector;
+         Said : Model_Runner.Framework.Name_Lists.Vector;
       begin
-         W.Recover (Store, Recovered, Outcome);
-         for Id of Recovered loop
-            Pres.Put_Note (Screen, "cli.work.recovered", [Loc.Named ("name", Id)]);
+         W.Recover_On_Opening (Store, Report, Said, Outcome);
+         for Line of Said loop
+            Pres.Put_Note (Screen, "cli.project.recovered", [Loc.Named ("detail", Line)]);
          end loop;
       end;
 
@@ -339,8 +340,13 @@ package body Model_Runner.CLI.Work is
 
       loop
          declare
+            --  A runner that knows its model budgets for it; otherwise the
+            --  profile the configuration names.
             Model   : constant Model_Runner.Framework.Context.Model_Profile :=
-              Model_Runner.Framework.Context.Profile (Store, Setting ("profile", ""));
+              (if Given_Runner /= null and then Given_Runner.all in W.Parenting_Runner'Class
+                 and then Setting ("profile", "") = ""
+               then W.Parenting_Runner'Class (Given_Runner.all).Profile
+               else Model_Runner.Framework.Context.Profile (Store, Setting ("profile", "")));
             Command : constant String := R.Get (Config, "scalar.work.agent");
             Path    : constant String := Setting ("model", "");
          begin

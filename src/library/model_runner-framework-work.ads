@@ -1,3 +1,5 @@
+with Ada.Calendar;
+with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
 
 with Model_Runner.Errors;
@@ -98,13 +100,27 @@ package Model_Runner.Framework.Work is
    --  @param Ran A failure to run it at all.
    --  @param Told What its parent is told: the result, not the transcript.
    --  @param Retry Whether it is to be run again, with Retry_Of naming it.
+   --  @param Prompt_Tokens How long its conversation came to be, in tokens.
    procedure Close_Child
      (Host   : in out Child_Host;
       Answer : String;
       Tokens : Natural;
       Ran    : Model_Runner.Errors.Error_Info;
       Told   : out Ada.Strings.Unbounded.Unbounded_String;
-      Retry  : out Boolean);
+      Retry  : out Boolean;
+      Prompt_Tokens : Natural := 0);
+
+   --  Record a tool call the agent now working made, on its invocation.
+   --
+   --  @param Host The host.
+   --  @param Named The tool.
+   --  @param Arguments Its arguments.
+   --  @param Answer What it answered.
+   procedure Note_Call
+     (Host      : in out Child_Host;
+      Named     : String;
+      Arguments : String;
+      Answer    : String);
 
    --  The agent now working: the root, or the innermost open child.
    --
@@ -158,11 +174,22 @@ package Model_Runner.Framework.Work is
    --
    --  @param Host The host.
    --  @param Tokens How many.
-   procedure Spend (Host : in out Child_Host; Tokens : Natural);
+   --  @param Prompt_Tokens How long its conversation came to be.
+   procedure Spend
+     (Host          : in out Child_Host;
+      Tokens        : Natural;
+      Prompt_Tokens : Natural := 0);
 
    --  An agent that can have children: it is given the host they are made
    --  through as it runs.
    type Parenting_Runner is interface and Agent_Runner;
+
+   --  The model it runs, as a context is budgeted for: its own limits, not
+   --  a configured guess.
+   --
+   --  @param Self The runner.
+   --  @return Its profile.
+   function Profile (Self : Parenting_Runner) return Context.Model_Profile is abstract;
 
    --  Run the agent, with children made through Children.
    --
@@ -212,8 +239,10 @@ package Model_Runner.Framework.Work is
    end record;
 
    --  Put back the tasks whose agents stopped without finishing: a running
-   --  task whose lease has run out is blocked, with why, and its agent
-   --  recorded as failed.
+   --  task whose lease has run out is blocked, with why, and its agent and
+   --  every child of it recorded as ended. Where scalar recovery.running
+   --  says failed it is failed instead, and where it says accepted it is
+   --  accepted again, for another try.
    --
    --  @param Item The store.
    --  @param Recovered The tasks put back.
@@ -222,6 +251,26 @@ package Model_Runner.Framework.Work is
      (Item      : in out Stores.Store;
       Recovered : out Name_Lists.Vector;
       Status    : out Model_Runner.Errors.Error_Info);
+
+   --  Everything a project's state needs looked at when it is opened, with
+   --  no conversation to go on: what the store's own recovery did to its
+   --  transactions and index; tasks left running with no one running them
+   --  (Recover); agents and invocations no one is running any more,
+   --  recorded as abandoned; workspaces whose directory is gone or whose
+   --  task has ended, abandoned; readiness and which requirements are
+   --  verified, worked out again. What it cannot settle itself -- a
+   --  workspace directory with no record -- it says, and leaves.
+   --
+   --  @param Item The store.
+   --  @param Opened What opening the store recovered.
+   --  @param Said What it found and did, one a line; empty when there was
+   --    nothing to do.
+   --  @param Status A failure committing it.
+   procedure Recover_On_Opening
+     (Item   : in out Stores.Store;
+      Opened : Stores.Recovery_Report;
+      Said   : out Name_Lists.Vector;
+      Status : out Model_Runner.Errors.Error_Info);
 
    --  Run one task.
    --
@@ -283,6 +332,9 @@ package Model_Runner.Framework.Work is
 
 private
 
+   package Time_Vectors is new Ada.Containers.Vectors (Positive, Ada.Calendar.Time,
+                                                        Ada.Calendar."=");
+
    type Child_Host (Item : not null access Stores.Store) is tagged limited record
       Task_Id : Ada.Strings.Unbounded.Unbounded_String;
 
@@ -292,6 +344,18 @@ private
       --  What the checks run for the agents wrote, path and fingerprint
       --  separated by a tab: the agents' changes are what is left.
       Written : Name_Lists.Vector;
+
+      --  The model contexts are budgeted for.
+      Model   : Context.Model_Profile;
+
+      --  Each open agent's invocation, and when it was opened, in step with
+      --  Open.
+      Calls   : Name_Lists.Vector;
+      Opened  : Time_Vectors.Vector;
+
+      --  What the root generated, and how long its conversation came to be.
+      Root_Out    : Natural := 0;
+      Root_Prompt : Natural := 0;
 
       --  The root, then each child still open, innermost last.
       Open    : Name_Lists.Vector;

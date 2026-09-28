@@ -1,3 +1,8 @@
+with Ada.Strings.Fixed;
+
+with Hostkit.Host;
+with Hostkit.Process;
+
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Schemas;
 
@@ -24,8 +29,30 @@ package body Model_Runner.Framework.Leases is
       end if;
    end Held_Lease;
 
-   function Running (Value : Records.Item) return Boolean
-   is (Records.Get (Value, "expires_at") > Timestamp);
+   --  This process, as a lease names it.
+   function Own_Process return String
+   is (Ada.Strings.Fixed.Trim
+         (Integer'Image (Hostkit.Host.Own_Process_Id), Ada.Strings.Both));
+
+   --  Whether a lease still holds: it has not run out, and the process that
+   --  took it -- where it was taken on this machine -- is not known to be
+   --  gone. A session that died holding a task lets it go at once; where the
+   --  host cannot say, the lease holds until it runs out.
+   function Running (Value : Records.Item) return Boolean is
+      Process : constant String := Records.Get (Value, "process");
+   begin
+      if Records.Get (Value, "expires_at") <= Timestamp then
+         return False;
+      elsif Process = "" or else Records.Get (Value, "host") /= Hostkit.Host.Node_Name
+        or else Process = Own_Process
+      then
+         return True;
+      end if;
+      return Process'Length in 1 .. 9
+        and then (for all C of Process => C in '0' .. '9')
+        and then Hostkit.Process."/=" (Hostkit.Process.Presence_Of (Integer'Value (Process)),
+                                      Hostkit.Process.Absent);
+   end Running;
 
    procedure Refuse
      (Resource : String;
@@ -81,6 +108,8 @@ package body Model_Runner.Framework.Leases is
             (if Found and then Running (Held)
              then Records.Get (Held, "acquired_at") else Timestamp));
          Records.Set (Next, "expires_at", Timestamp_After (Seconds));
+         Records.Set (Next, "process", Own_Process);
+         Records.Set (Next, "host", Hostkit.Host.Node_Name);
          Stores.Put (Change, Runtime_Area, Prefix & Resource, Next);
       end;
    end Acquire;

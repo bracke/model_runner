@@ -1,3 +1,5 @@
+with Ada.Text_IO;
+with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
@@ -59,7 +61,7 @@ package body Model_Runner.CLI.Project_Commands is
       new String'("/reject"), new String'("/work"), new String'("/cancel"),
       new String'("/check"), new String'("/req"), new String'("/result"),
       new String'("/tree"), new String'("/sym"), new String'("/refs"),
-      new String'("/impact"), new String'("/trace")];
+      new String'("/impact"), new String'("/trace"), new String'("/reconfigure")];
 
    --  The tools the work's agents may call; each is offered only where the
    --  agent's permissions give it.
@@ -117,9 +119,21 @@ package body Model_Runner.CLI.Project_Commands is
       return Model_Runner.Agent.Deny;
    end Consider;
 
-   --  What the agent does, shown as it does it.
-   type Watch (Screen : not null access Pres.Console) is
-     limited new Model_Runner.Agent.Observer with null record;
+   package Wk renames Model_Runner.Framework.Work;
+   package Pm renames Model_Runner.Framework.Permissions;
+
+   type Host_Access is access all Wk.Child_Host'Class;
+
+   --  What the agent does, shown as it does it and recorded on its
+   --  invocation.
+   type Watch
+     (Screen : not null access Pres.Console;
+      Host   : Host_Access)
+   is limited new Model_Runner.Agent.Observer with record
+      --  The arguments of the calls asked for and not yet answered, oldest
+      --  first: a reply may ask for several before any is answered.
+      Asked : Names.Vector;
+   end record;
 
    overriding procedure On_Call
      (Self : in out Watch; Named : String; Arguments : String);
@@ -130,21 +144,22 @@ package body Model_Runner.CLI.Project_Commands is
    overriding procedure On_Call
      (Self : in out Watch; Named : String; Arguments : String) is
    begin
+      Self.Asked.Append (Arguments);
       Pres.Put_Tool_Call (Self.Screen.all, Named, Arguments);
    end On_Call;
 
    overriding procedure On_Result
-     (Self : in out Watch; Named : String; Result : String)
-   is
-      pragma Unreferenced (Named);
+     (Self : in out Watch; Named : String; Result : String) is
    begin
       Pres.Put_Tool_Result (Self.Screen.all, Result);
+      if Self.Host /= null then
+         Self.Host.Note_Call
+           (Named, (if Self.Asked.Is_Empty then "" else Self.Asked.First_Element), Result);
+      end if;
+      if not Self.Asked.Is_Empty then
+         Self.Asked.Delete_First;
+      end if;
    end On_Result;
-
-   package Wk renames Model_Runner.Framework.Work;
-   package Pm renames Model_Runner.Framework.Permissions;
-
-   type Host_Access is access all Wk.Child_Host'Class;
 
    --  Whether a path stays inside the project: relative, and never climbing
    --  out of it.
@@ -246,13 +261,14 @@ package body Model_Runner.CLI.Project_Commands is
       Root   : Boolean;
       Answer : out Unbounded_String;
       Tokens : out Natural;
-      Status : out Model_Runner.Errors.Error_Info)
+      Status : out Model_Runner.Errors.Error_Info;
+      Prompt_Tokens : out Natural)
    is
       Messages : Conv.History;
       Offered  : Model_Runner.Tools.Definitions;
       Runner   : Work_Tools (Self'Unchecked_Access, Host);
       Guard    : aliased Fence (Self.Screen);
-      Watcher  : aliased Watch (Self.Screen);
+      Watcher  : aliased Watch (Self.Screen, Host);
       Sink     : aliased Pres.Standard_Output_Sink;
       Clock    : aliased Model_Runner.Clocks.System_Clock;
       Seeds    : aliased Model_Runner.Entropy.Host_Source;
@@ -271,6 +287,7 @@ package body Model_Runner.CLI.Project_Commands is
    begin
       Answer := Null_Unbounded_String;
       Tokens := 0;
+      Prompt_Tokens := 0;
 
       Conv.Open (Messages, Status => Status);
       if E.Is_Ok (Status) then
@@ -316,6 +333,7 @@ package body Model_Runner.CLI.Project_Commands is
             Result      => Outcome);
          Calls := Calls + Outcome.Calls;
          Tokens := Tokens + Outcome.Generated_Tokens;
+         Prompt_Tokens := Natural'Max (Prompt_Tokens, Outcome.Prompt_Tokens);
          exit when Calls > 0 or else Round = 3
            or else Outcome.Reason /= Model_Runner.Agent.Answered;
          Conv.Append
@@ -381,6 +399,7 @@ package body Model_Runner.CLI.Project_Commands is
             Status  : E.Error_Info;
             Answer  : Unbounded_String;
             Tokens  : Natural;
+            Prompt  : Natural;
             Ran     : E.Error_Info;
             Now     : Unbounded_String;
             Retry   : Boolean;
@@ -393,8 +412,10 @@ package body Model_Runner.CLI.Project_Commands is
                  & "error: no helper was made: " & Refusal (Status);
             end if;
             Run_Loop (Self.Agent.all, To_String (Context), Self.Host, Budget,
-                      Root => False, Answer => Answer, Tokens => Tokens, Status => Ran);
-            Self.Host.Close_Child (To_String (Answer), Tokens, Ran, Now, Retry);
+                      Root => False, Answer => Answer, Tokens => Tokens, Status => Ran,
+                      Prompt_Tokens => Prompt);
+            Self.Host.Close_Child (To_String (Answer), Tokens, Ran, Now, Retry,
+                                   Prompt_Tokens => Prompt);
             Told := (if Told = Null_Unbounded_String then Now else Told & ASCII.LF & Now);
             exit when not Retry;
             Retry_Of := Id;
@@ -452,6 +473,9 @@ package body Model_Runner.CLI.Project_Commands is
                     else "error: the checks were not run: " & Refusal (Ran));
             end;
          end if;
+      elsif Named in "read_file" | "list_directory" | "write_file" and then not Inside (Path) then
+         Put ("error: " & Path & " is outside the project; paths are relative to it,"
+              & " as src/main.adb");
       elsif Named in "read_file" | "list_directory" and then not May (Reading => True) then
          Put ("error: you may not read " & Path);
       elsif Named = "write_file" and then not May (Reading => False) then
@@ -475,17 +499,18 @@ package body Model_Runner.CLI.Project_Commands is
       Before : constant String := Ada.Directories.Current_Directory;
       Prompt : constant String := Whole (Prompt_Path);
       Tokens : Natural;
+      Read   : Natural;
    begin
       --  The work is done where the task's files are, and its own
       --  conversation -- and each child's -- is on the session, which the
       --  screen's is read back into afterwards.
       L.Reset (Self.Session.all);
       Ada.Directories.Set_Directory (Project);
-      Run_Loop (Self, Prompt, Host, 0, True, Answer, Tokens, Status);
+      Run_Loop (Self, Prompt, Host, 0, True, Answer, Tokens, Status, Read);
       Ada.Directories.Set_Directory (Before);
       L.Reset (Self.Session.all);
       if Host /= null then
-         Host.Spend (Tokens);
+         Host.Spend (Tokens, Prompt_Tokens => Read);
       end if;
    exception
       when others =>
@@ -494,6 +519,33 @@ package body Model_Runner.CLI.Project_Commands is
          Answer := Null_Unbounded_String;
          Status := E.Make (E.Internal_Unexpected_Exception);
    end Work_On;
+
+   -------------
+   -- Profile --
+   -------------
+
+   overriding function Profile
+     (Self : Session_Agent) return Model_Runner.Framework.Context.Model_Profile
+   is
+      Path : constant String := T.To_String (Self.Item.Model_Path);
+   begin
+      return
+        (Id             => To_Unbounded_String
+                             (if Path = "" then "session"
+                              else Ada.Directories.Simple_Name (Path)),
+         Provider       => To_Unbounded_String ("model_runner"),
+         Context_Limit  => Positive'Max (1, L.Capacity (Self.Session.all)),
+         Output_Reserve => Natural'Max (Self.Item.Max_Tokens, 1024),
+         Tool_Overhead  =>
+           Model_Runner.Framework.Context.Estimate (Offered_Text (null)) + 64,
+         Tools          => True,
+         Structured     => True,
+         Reasoning      => Model_Runner.Templates."=" (Self.Item.Thinking,
+                                                   Model_Runner.Templates.Thinking_On),
+         Streaming      => True,
+         Parallel_Calls => False,
+         Resource_Class => To_Unbounded_String ("local"));
+   end Profile;
 
    ---------
    -- Run --
@@ -524,6 +576,32 @@ package body Model_Runner.CLI.Project_Commands is
       Work_On (Self, Prompt_Path, Project, Children'Unchecked_Access, Answer, Status);
    end Run_Parenting;
 
+   ------------------
+   -- Recover_Here --
+   ------------------
+
+   procedure Recover_Here (Screen : in out Model_Runner.Presentation.Console) is
+      Store  : S.Store;
+      Report : S.Recovery_Report;
+      Status : E.Error_Info;
+      Said   : Names.Vector;
+   begin
+      if not S.Is_Initialized (Here) then
+         return;
+      end if;
+      S.Open (Store, Here, Report, Status);
+      if E.Is_Ok (Status) then
+         Model_Runner.Framework.Work.Recover_On_Opening (Store, Report, Said, Status);
+      end if;
+      if E.Is_Error (Status) then
+         Pres.Report (Screen, Status);
+      end if;
+      for Line of Said loop
+         Pres.Put_Note (Screen, "cli.project.recovered", [Loc.Named ("detail", Line)]);
+      end loop;
+      S.Close (Store);
+   end Recover_Here;
+
    ------------------------
    -- Is_Project_Command --
    ------------------------
@@ -542,6 +620,7 @@ package body Model_Runner.CLI.Project_Commands is
       Pres.Put_Note (Screen, "cli.interactive.help.bootstrap");
       Pres.Put_Note (Screen, "cli.interactive.help.state");
       Pres.Put_Note (Screen, "cli.interactive.help.config");
+      Pres.Put_Note (Screen, "cli.interactive.help.reconfigure");
       Pres.Put_Note (Screen, "cli.interactive.help.task");
       Pres.Put_Note (Screen, "cli.interactive.help.accept");
       Pres.Put_Note (Screen, "cli.interactive.help.reject");
@@ -865,6 +944,87 @@ package body Model_Runner.CLI.Project_Commands is
              Loc.Named ("extra", Image (Report.Issues))]);
       end Bootstrap;
 
+      --  A change to the settings: what it changes and reaches, and then,
+      --  once it is confirmed, a new revision; what was verified is looked at
+      --  again against it.
+      procedure Reconfigure (Store : in out S.Store) is
+         package Cf renames Model_Runner.Framework.Configurations;
+         Changes  : Cf.Value_Maps.Map;
+         Planned  : Cf.Change_Plan;
+         Read     : E.Error_Info;
+         Revision : Natural;
+      begin
+         for Index in 2 .. Natural (All_Words.Length) loop
+            declare
+               Part  : constant String := All_Words (Index);
+               Equal : constant Natural := Ada.Strings.Fixed.Index (Part, "=");
+            begin
+               if Is_Setting (Part) then
+                  Changes.Include (Part (Part'First .. Equal - 1), Part (Equal + 1 .. Part'Last));
+               end if;
+            end;
+         end loop;
+
+         Cf.Plan_Change (Store, Changes, Planned, Read);
+         if E.Is_Error (Read) then
+            Pres.Report (Screen, Read);
+            return;
+         elsif Planned.Changed.Is_Empty then
+            Pres.Put_Note (Screen, "cli.project.reconfigure.nothing");
+            return;
+         end if;
+         for Line of Planned.Changed loop
+            Pres.Put_Message (Screen, "cli.project.reconfigure.changed", [Loc.Named ("name", Line)]);
+         end loop;
+         for Line of Planned.Impact loop
+            Pres.Put_Message (Screen, "cli.project.reconfigure.reaches", [Loc.Named ("name", Line)]);
+         end loop;
+
+         Pres.Put_Message (Screen, "cli.project.reconfigure.confirm", []);
+         declare
+            Answer : constant String :=
+              Ada.Characters.Handling.To_Lower
+                (Ada.Strings.Fixed.Trim (Ada.Text_IO.Get_Line, Ada.Strings.Both));
+         begin
+            if Answer not in "y" | "yes" | "j" | "ja" then
+               Pres.Put_Note (Screen, "cli.project.reconfigure.kept");
+               return;
+            end if;
+         exception
+            when Ada.Text_IO.End_Error =>
+               Pres.Put_Note (Screen, "cli.project.reconfigure.kept");
+               return;
+         end;
+
+         Cf.Reconfigure (Store, Planned, Revision, Read);
+         if E.Is_Error (Read) then
+            Pres.Report (Screen, Read);
+            return;
+         end if;
+         declare
+            Change  : S.Transaction;
+            Moved   : Names.Vector;
+            Became  : Names.Vector;
+         begin
+            Vf.Reevaluate_Requirements (Store, Change, Moved, Read);
+            if E.Is_Ok (Read) then
+               S.Commit (Store, Change, Read);
+            end if;
+            if E.Is_Ok (Read) then
+               Tk.Recompute_Readiness (Store, Change, Became, Read);
+            end if;
+            if E.Is_Ok (Read) then
+               S.Commit (Store, Change, Read);
+            end if;
+            for Requirement of Moved loop
+               Pres.Put_Message (Screen, "cli.work.requirement", [Loc.Named ("name", Requirement),
+                                                                  Loc.Named ("value", "")]);
+            end loop;
+         end;
+         Pres.Put_Message
+           (Screen, "cli.project.reconfigure.done", [Loc.Named ("count", Image (Revision))]);
+      end Reconfigure;
+
       --  The one candidate waiting, if there is exactly one.
       procedure Decide (Store : in out S.Store) is
          Waiting : constant Names.Vector := Tk.List (Store, "candidate");
@@ -948,6 +1108,8 @@ package body Model_Runner.CLI.Project_Commands is
          With_Store (Check'Access);
       elsif Word = "/bootstrap" then
          With_Store (Bootstrap'Access);
+      elsif Word = "/reconfigure" then
+         With_Store (Reconfigure'Access);
       end if;
    end Run;
 

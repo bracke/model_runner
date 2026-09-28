@@ -127,6 +127,92 @@ package body Model_Runner.Framework.Context is
       return Result;
    end Profile;
 
+   --  Fit what is offered to the model's room -- mandatory whatever it
+   --  costs, the rest by priority while it fits, the same text once -- and
+   --  take the fingerprint of everything the manifest says.
+   procedure Settle
+     (Candidates : Item_Vectors.Vector;
+      Task_Id    : String;
+      Result     : in out Built;
+      Status     : in out Model_Runner.Errors.Error_Info) is
+   begin
+      --  Budget: mandatory whatever it costs, the rest by priority while
+      --  it fits, the same text once.
+      Result.Budget :=
+        Natural'Max (0, Result.Model.Context_Limit - Result.Model.Output_Reserve
+                        - Result.Model.Tool_Overhead);
+      declare
+         Seen      : Name_Lists.Vector;
+         Seen_From : Name_Lists.Vector;
+         Chosen    : array (1 .. Natural (Candidates.Length)) of Boolean :=
+           [others => False];
+      begin
+         for Rank in Priority loop
+            for Index in 1 .. Natural (Candidates.Length) loop
+               declare
+                  Next  : Context.Item renames Candidates (Index);
+                  Print : constant String := Fingerprint (To_String (Next.Text));
+                  Cost  : constant Natural := Estimate (To_String (Next.Text));
+               begin
+                  if Next.Rank = Rank then
+                     if Seen.Contains (Print) then
+                        Result.Excluded.Append (Next);
+                        Result.Reasons.Append
+                          ("the same as " & Seen_From.Element (Seen.Find_Index (Print)));
+                     elsif Rank = Mandatory or else Result.Cost + Cost <= Result.Budget then
+                        Chosen (Index) := True;
+                        Result.Cost := Result.Cost + Cost;
+                        Seen.Append (Print);
+                        Seen_From.Append (To_String (Next.Id));
+                     else
+                        Result.Excluded.Append (Next);
+                        Result.Reasons.Append
+                          ("over budget by" & Natural'Image (Result.Cost + Cost - Result.Budget));
+                     end if;
+                  end if;
+               end;
+            end loop;
+
+            if Rank = Mandatory and then Result.Cost > Result.Budget then
+               Status := E.Make (E.Framework_Context_Overflow);
+               E.Add_Text (Status, "name", Task_Id);
+               E.Add_Text
+                 (Status, "detail",
+                  "what it must hold is" & Natural'Image (Result.Cost)
+                  & " tokens and the model has room for" & Natural'Image (Result.Budget));
+               return;
+            end if;
+         end loop;
+
+         --  In the order offered, which is the order they are rendered.
+         for Index in 1 .. Natural (Candidates.Length) loop
+            if Chosen (Index) then
+               Result.Included.Append (Candidates (Index));
+            end if;
+         end loop;
+      end;
+
+      --  The fingerprint of everything the manifest says.
+      declare
+         Text : Unbounded_String;
+      begin
+         Append (Text, Task_Id & "|" & To_String (Result.Generation) & "|"
+                 & To_String (Result.Model.Id) & "|" & Image (Result.Model.Context_Limit) & "|"
+                 & Image (Result.Model.Output_Reserve) & "|" & Image (Result.Config_Revision)
+                 & "|" & To_String (Result.Config_Fingerprint) & "|"
+                 & Boolean'Image (Result.Semantic) & ASCII.LF);
+         for Next of Result.Included loop
+            Append (Text, "+" & To_String (Next.Id) & " "
+                    & Fingerprint (To_String (Next.Text)) & ASCII.LF);
+         end loop;
+         for Index in 1 .. Natural (Result.Excluded.Length) loop
+            Append (Text, "-" & To_String (Result.Excluded (Index).Id) & " "
+                    & Result.Reasons (Index) & ASCII.LF);
+         end loop;
+         Result.Print := To_Unbounded_String (Fingerprint (To_String (Text)));
+      end;
+   end Settle;
+
    -----------
    -- Build --
    -----------
@@ -339,81 +425,65 @@ package body Model_Runner.Framework.Context is
          end if;
       end;
 
-      --  Budget: mandatory whatever it costs, the rest by priority while
-      --  it fits, the same text once.
-      Result.Budget :=
-        Natural'Max (0, Model.Context_Limit - Model.Output_Reserve - Model.Tool_Overhead);
-      declare
-         Seen      : Name_Lists.Vector;
-         Seen_From : Name_Lists.Vector;
-         Chosen    : array (1 .. Natural (Candidates.Length)) of Boolean :=
-           [others => False];
-      begin
-         for Rank in Priority loop
-            for Index in 1 .. Natural (Candidates.Length) loop
-               declare
-                  Next  : Context.Item renames Candidates (Index);
-                  Print : constant String := Fingerprint (To_String (Next.Text));
-                  Cost  : constant Natural := Estimate (To_String (Next.Text));
-               begin
-                  if Next.Rank = Rank then
-                     if Seen.Contains (Print) then
-                        Result.Excluded.Append (Next);
-                        Result.Reasons.Append
-                          ("the same as " & Seen_From.Element (Seen.Find_Index (Print)));
-                     elsif Rank = Mandatory or else Result.Cost + Cost <= Result.Budget then
-                        Chosen (Index) := True;
-                        Result.Cost := Result.Cost + Cost;
-                        Seen.Append (Print);
-                        Seen_From.Append (To_String (Next.Id));
-                     else
-                        Result.Excluded.Append (Next);
-                        Result.Reasons.Append
-                          ("over budget by" & Natural'Image (Result.Cost + Cost - Result.Budget));
-                     end if;
-                  end if;
-               end;
-            end loop;
-
-            if Rank = Mandatory and then Result.Cost > Result.Budget then
-               Status := E.Make (E.Framework_Context_Overflow);
-               E.Add_Text (Status, "name", Task_Id);
-               E.Add_Text
-                 (Status, "detail",
-                  "what it must hold is" & Natural'Image (Result.Cost)
-                  & " tokens and the model has room for" & Natural'Image (Result.Budget));
-               return;
-            end if;
-         end loop;
-
-         --  In the order offered, which is the order they are rendered.
-         for Index in 1 .. Natural (Candidates.Length) loop
-            if Chosen (Index) then
-               Result.Included.Append (Candidates (Index));
-            end if;
-         end loop;
-      end;
-
-      --  The fingerprint of everything the manifest says.
-      declare
-         Text : Unbounded_String;
-      begin
-         Append (Text, Task_Id & "|" & To_String (Result.Generation) & "|"
-                 & To_String (Model.Id) & "|" & Image (Model.Context_Limit) & "|"
-                 & Image (Model.Output_Reserve) & "|" & Image (Result.Config_Revision)
-                 & "|" & To_String (Result.Config_Fingerprint) & "|"
-                 & Boolean'Image (Result.Semantic) & ASCII.LF);
-         for Next of Result.Included loop
-            Append (Text, "+" & To_String (Next.Id) & " "
-                    & Fingerprint (To_String (Next.Text)) & ASCII.LF);
-         end loop;
-         for Index in 1 .. Natural (Result.Excluded.Length) loop
-            Append (Text, "-" & To_String (Result.Excluded (Index).Id) & " "
-                    & Result.Reasons (Index) & ASCII.LF);
-         end loop;
-         Result.Print := To_Unbounded_String (Fingerprint (To_String (Text)));
-      end;
+      Settle (Candidates, Task_Id, Result, Status);
    end Build;
+
+   -----------------
+   -- Build_Brief --
+   -----------------
+
+   procedure Build_Brief
+     (Item    : Stores.Store;
+      Task_Id : String;
+      Model   : Model_Profile;
+      Rules   : String;
+      Brief   : String;
+      Result  : out Built;
+      Status  : out Model_Runner.Errors.Error_Info)
+   is
+      Defined    : Records.Item;
+      Config     : Records.Item;
+      Candidates : Item_Vectors.Vector;
+
+      procedure Offer (Id, Kind : String; Text : String) is
+      begin
+         Candidates.Append
+           (Context.Item'(Id   => To_Unbounded_String (Id),
+                          Kind => To_Unbounded_String (Kind),
+                          Rank => Mandatory,
+                          Text => To_Unbounded_String (Text)));
+      end Offer;
+   begin
+      Result := (Model => Model, others => <>);
+      Result.Task_Id := To_Unbounded_String (Task_Id);
+      Tasks.Definition (Item, Task_Id, Defined, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      declare
+         View : Records.Item;
+      begin
+         Tasks.Effective (Item, Task_Id, View, Status);
+         Result.Generation := To_Unbounded_String (Records.Get (View, "runtime.generation"));
+      end;
+      Configurations.Read (Item, Config, Status);
+      if E.Is_Ok (Status) then
+         Result.Config_Revision := Records.Revision (Config);
+         Result.Config_Fingerprint :=
+           To_Unbounded_String (Records.Get (Config, "configuration_fingerprint"));
+      end if;
+      Status := E.Success;
+
+      --  The child's rules, the task it helps with and what it is asked:
+      --  nothing of the conversation it was asked from.
+      Offer ("rules", "rules", Rules);
+      Offer (Task_Id & "#helped", "helped",
+             "title: " & Records.Get (Defined, "title") & ASCII.LF
+             & (if Records.Get (Defined, "component") = "" then ""
+                else "component: " & Records.Get (Defined, "component") & ASCII.LF));
+      Offer ("brief", "brief", Brief);
+      Settle (Candidates, Task_Id, Result, Status);
+   end Build_Brief;
 
    function Manifest_Id (From : Built) return String
    is ("CTX-" & Ada.Characters.Handling.To_Upper (To_String (From.Print)));
@@ -439,6 +509,10 @@ package body Model_Runner.Framework.Context is
             return "Where the task stands";
          elsif Kind = "configuration" then
             return "The project's configuration";
+         elsif Kind = "helped" then
+            return "The task it works on, " & Id (Id'First .. Ada.Strings.Fixed.Index (Id, "#") - 1);
+         elsif Kind = "brief" then
+            return "What you are asked";
          elsif Kind = "source" then
             return "The file " & Id (Id'First + 5 .. Id'Last);
          else
