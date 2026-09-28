@@ -270,7 +270,8 @@ package body Model_Runner.CLI.Tasks is
          if not Needs_Task then
             return;
          end if;
-         Tk.Move (Store, Change, Argument, Next, "", Status => Outcome);
+         Tk.Move (Store, Change, Argument, Next, "", Status => Outcome,
+                  Actor => Model_Runner.Framework.Transitions.User);
          if E.Is_Ok (Outcome) then
             Commit;
          end if;
@@ -310,7 +311,7 @@ package body Model_Runner.CLI.Tasks is
          Granted (Grant) := True;
          Tk.Move (Store, Change, Argument, Next,
                   (if Next = "accepted" then "reopened" else "reconsidered"),
-                  Granted, Status => Outcome);
+                  Granted, Status => Outcome, Actor => Model_Runner.Framework.Transitions.User);
          if E.Is_Ok (Outcome) then
             Commit;
          end if;

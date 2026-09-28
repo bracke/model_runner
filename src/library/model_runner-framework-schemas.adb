@@ -166,6 +166,9 @@ package body Model_Runner.Framework.Schemas is
           Rule ("ruling", Text_Field, False),
           Rule ("overrides", Text_Field, False),
           Rule ("revision_of", Identifier_Field, False),
+          Rule ("moved_by", Text_Field, False),
+          Rule ("accepted_by", Text_Field, False),
+          Rule ("rejected_by", Text_Field, False),
           Rule ("links.*", Text_Field, False)]),
 
       --  A task's definition: its core fields, and its kind's own as
@@ -196,7 +199,9 @@ package body Model_Runner.Framework.Schemas is
           Rule ("generation", Number_Field, True),
           Rule ("blocking_reasons", Text_Field, False),
           Rule ("current_failure", Text_Field, False),
-          Rule ("accepted_by", Text_Field, False)]),
+          Rule ("moved_by", Text_Field, False),
+          Rule ("accepted_by", Text_Field, False),
+          Rule ("rejected_by", Text_Field, False)]),
 
       (Id      => new String'(Repository_Schema),
        Version => 1,

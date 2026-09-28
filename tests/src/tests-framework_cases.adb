@@ -2342,7 +2342,67 @@ package body Tests.Framework_Cases is
       S.Commit (Store, Change, Status);
       Assert (Tk.State_Of (Store, Made.First_Element) = "accepted",
               "the policy's automatic acceptance was not applied");
+      declare
+         View : R.Item;
+      begin
+         Tk.Effective (Store, Made.First_Element, View, Status);
+         Assert (R.Get (View, "runtime.accepted_by")
+                 = "policy task.auto_accept requirement_derivation",
+                 "an automatic acceptance does not say it was the policy's: "
+                 & R.Get (View, "runtime.accepted_by"));
+      end;
       Assert (Tk.Cycles (Store).Is_Empty, "a cycle was found where none is");
+      S.Close (Store);
+
+      --  The policy names the classes it accepts: here what an agent
+      --  proposes, and not what a person does. A person's acceptance and
+      --  rejection say who it was.
+      Change := S.No_Changes;
+      Task_Project (Store, "acceptance-by-class",
+                    "set task.auto_accept = agent" & LF);
+      declare
+         Fields   : Tk.Field_Map;
+         Proposed : Unbounded_String;
+         Mine     : Unbounded_String;
+         Other    : Unbounded_String;
+         View     : R.Item;
+         Listed   : Ev.Event_List;
+         Named    : Boolean := False;
+      begin
+         Fields.Include ("title", "Look");
+         Fields.Include ("kind", "analysis");
+         Tk.Create (Store, Change, Fields, "AG-000001", "TASK-X", Proposed, Status);
+         Tk.Create (Store, Change, Fields, "user", "", Mine, Status);
+         Tk.Create (Store, Change, Fields, "user", "", Other, Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status)
+                 and then Tk.State_Of (Store, To_String (Proposed)) = "accepted"
+                 and then Tk.State_Of (Store, To_String (Mine)) = "candidate",
+                 "the policy did not accept by class: " & Code_Of (Status));
+
+         Tk.Move (Store, Change, To_String (Mine), "accepted", "",
+                  Status => Status, Actor => Tr.User);
+         Tk.Move (Store, Change, To_String (Other), "rejected", "",
+                  Status => Status, Actor => Tr.User);
+         S.Commit (Store, Change, Status);
+         Tk.Effective (Store, To_String (Mine), View, Status);
+         Assert (Ada.Strings.Fixed.Index (Tr.User, "user") = 1
+                 and then R.Get (View, "runtime.accepted_by") = Tr.User
+                 and then R.Get (View, "runtime.moved_by") = Tr.User,
+                 "an acceptance does not say who accepted");
+         Tk.Effective (Store, To_String (Other), View, Status);
+         Assert (R.Get (View, "runtime.rejected_by") = Tr.User,
+                 "a rejection does not say who rejected");
+         Listed := Ev.Since (Store, 0);
+         for Index in 1 .. Ev.Length (Listed) loop
+            Named := Named
+              or else (Ev.Element (Listed, Index).Kind = Ev.Task_Rejected
+                       and then Ada.Strings.Fixed.Index
+                                  (To_String (Ev.Element (Listed, Index).Detail),
+                                   "by " & Tr.User) > 0);
+         end loop;
+         Assert (Named, "the rejection's event does not name who");
+      end;
       S.Close (Store);
    end Derivation_Is_Idempotent;
 

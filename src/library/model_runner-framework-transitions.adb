@@ -1,3 +1,4 @@
+with Hostkit.Host;
 with Model_Runner.Framework.Records;
 
 package body Model_Runner.Framework.Transitions is
@@ -162,7 +163,8 @@ package body Model_Runner.Framework.Transitions is
       Next    : String;
       Granted : Permissions;
       Kind    : Events.Event_Kind;
-      Status  : out Model_Runner.Errors.Error_Info)
+      Status  : out Model_Runner.Errors.Error_Info;
+      Actor   : String := "")
    is
       Value  : Records.Item;
       Staged : Boolean;
@@ -188,11 +190,33 @@ package body Model_Runner.Framework.Transitions is
          Previous : constant String := Records.Get (Value, "state");
       begin
          Records.Set (Value, "state", Next);
+
+         --  Who moved it; a move nobody is named for names nobody, rather
+         --  than leave the last mover standing for it.
+         if Actor = "" then
+            Records.Remove (Value, "moved_by");
+         else
+            Records.Set (Value, "moved_by", Actor);
+            if Next in "accepted" | "rejected" then
+               Records.Set (Value, Next & "_by", Actor);
+            end if;
+         end if;
          Stores.Put (Change, Where, Name, Value);
          Events.Emit
            (Item, Change, Kind, Records.Entity_Id (Value),
-            Previous & " -> " & Next, Event, Status);
+            Previous & " -> " & Next & (if Actor = "" then "" else " by " & Actor),
+            Event, Status);
       end;
    end Apply;
+
+   ----------
+   -- User --
+   ----------
+
+   function User return String is
+      Name : constant String := Hostkit.Host.Login_Name;
+   begin
+      return (if Name = "" then "user" else "user " & Name);
+   end User;
 
 end Model_Runner.Framework.Transitions;

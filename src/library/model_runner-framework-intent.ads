@@ -155,6 +155,7 @@ package Model_Runner.Framework.Intent is
    --  @param Next The state to move to.
    --  @param Granted The policies the move may use.
    --  @param Status Framework_Transition_Invalid when the move is not one.
+   --  @param Actor Who moved it, as Transitions.Apply keeps it.
    procedure Move
      (Item    : Stores.Store;
       Change  : in out Stores.Transaction;
@@ -162,7 +163,8 @@ package Model_Runner.Framework.Intent is
       Id      : String;
       Next    : String;
       Granted : Transitions.Permissions;
-      Status  : out Model_Runner.Errors.Error_Info);
+      Status  : out Model_Runner.Errors.Error_Info;
+      Actor   : String := "");
 
    --  Change what an entity says, as its next revision, keeping a copy of
    --  the revision it replaces and undoing what the change leaves no

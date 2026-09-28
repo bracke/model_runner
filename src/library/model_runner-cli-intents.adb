@@ -210,7 +210,7 @@ package body Model_Runner.CLI.Intents is
                if Action = "reconsider" then
                   Granted (Tr.Reconsideration) := True;
                end if;
-               Nt.Move (Store, Change, Kind, Word (2), Next, Granted, Status);
+               Nt.Move (Store, Change, Kind, Word (2), Next, Granted, Status, Actor => Tr.User);
                if E.Is_Ok (Status) then
                   S.Commit (Store, Change, Status);
                end if;

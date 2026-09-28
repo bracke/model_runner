@@ -210,6 +210,17 @@ package body Model_Runner.Framework.Tasks is
       return (if E.Is_Ok (Status) then Records.Get (Value, "state") else "");
    end State_Of;
 
+   --  The class of what created a task: an agent's identifier is an agent,
+   --  and anything else is its first word.
+   function Class_Of (Created_By : String) return String is
+      Space : constant Natural := Ada.Strings.Fixed.Index (Created_By, " ");
+      First : constant String :=
+        (if Space = 0 then Created_By else Created_By (Created_By'First .. Space - 1));
+   begin
+      return (if First'Length > 3 and then First (First'First .. First'First + 2) = "AG-"
+              then "agent" else First);
+   end Class_Of;
+
    ------------
    -- Create --
    ------------
@@ -375,6 +386,25 @@ package body Model_Runner.Framework.Tasks is
          Events.Emit
            (Item, Change, Events.Task_Candidate_Created, Task_Id,
             Given ("title"), Event, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         --  Accepted by the policy, when it accepts the task's class.
+         declare
+            Settings : constant Records.Item := Config (Item);
+            Classes  : constant Name_Lists.Vector :=
+              Split (Records.Get (Settings, "set.task.auto_accept"));
+            Class    : constant String := Class_Of (Created_By);
+         begin
+            if Classes.Contains (Class) or else Classes.Contains (Kind)
+              or else (Class = "requirement_derivation"
+                       and then Records.Get (Settings, "scalar.task.auto_accept") = "true")
+            then
+               Move (Item, Change, Task_Id, "accepted", "", Status => Status,
+                     Actor => "policy task.auto_accept " & Class);
+            end if;
+         end;
       end;
    end Create;
 
@@ -407,7 +437,8 @@ package body Model_Runner.Framework.Tasks is
       Reason       : String;
       Granted      : Transitions.Permissions := Transitions.Ordinary_Only;
       Gates_Passed : Boolean := False;
-      Status       : out Model_Runner.Errors.Error_Info)
+      Status       : out Model_Runner.Errors.Error_Info;
+      Actor        : String := "")
    is
       Value : Records.Item;
 
@@ -447,7 +478,7 @@ package body Model_Runner.Framework.Tasks is
 
       Transitions.Apply
         (Item, Change, Lifecycle, Tasks_Area, Id & State_Suffix, Next, Granted,
-         Event_For (Next), Status);
+         Event_For (Next), Status, Actor);
       if E.Is_Error (Status) then
          return;
       end if;
@@ -471,7 +502,7 @@ package body Model_Runner.Framework.Tasks is
       elsif Next = "accepted" then
          Records.Remove (Value, "blocking_reasons");
          Records.Remove (Value, "current_failure");
-         if Reason /= "" then
+         if Actor = "" and then Reason /= "" then
             Records.Set (Value, "accepted_by", Reason);
          end if;
       end if;
@@ -754,6 +785,11 @@ package body Model_Runner.Framework.Tasks is
          Trim (Natural'Image (Records.Revision (Defined))));
       Records.Set (Value, "runtime.state", Records.Get (State, "state"));
       Records.Set (Value, "runtime.generation", Records.Get (State, "generation"));
+      for Field of Name_Lists.Vector'(["moved_by", "accepted_by", "rejected_by"]) loop
+         if Records.Get (State, Field) /= "" then
+            Records.Set (Value, "runtime." & Field, Records.Get (State, Field));
+         end if;
+      end loop;
 
       declare
          Now : constant Readiness := Ready (Item, Id);
@@ -896,8 +932,6 @@ package body Model_Runner.Framework.Tasks is
         (if Records.Get (Settings, "scalar.task.derived_kind") /= ""
          then Records.Get (Settings, "scalar.task.derived_kind")
          else "implementation");
-      Automatic : constant Boolean :=
-        Records.Get (Settings, "scalar.task.auto_accept") = "true";
       Listed    : constant Events.Event_List := Events.Since (Item, 0);
 
       --  The component that is the whole project: the first the
@@ -999,14 +1033,6 @@ package body Model_Runner.Framework.Tasks is
                            Done.Append (Key);
                            Made.Append (To_String (Id));
 
-                           if Automatic then
-                              Move (Item, Change, To_String (Id), "accepted",
-                                    "the policy task.auto_accept",
-                                    Status => Status);
-                              if E.Is_Error (Status) then
-                                 return;
-                              end if;
-                           end if;
                         end if;
                      end;
                   end if;

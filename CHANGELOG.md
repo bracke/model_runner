@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Automatic acceptance by task class.** `set task.auto_accept` lists the
+  classes the policy accepts -- a task kind, or the creator's class:
+  `user`, `requirement_derivation`, `agent`, `verification_engine`; the
+  older `scalar task.auto_accept = true` still means derived tasks.
+- **Who acted.** A state move records its actor as `moved_by`, and as
+  `accepted_by` or `rejected_by`; the event's detail names it too.
+  `/task accept|reject` and the register commands record `user LOGIN`, the
+  policy records itself, and `/task show` lists them.
 - **The repository graph is refreshed, not rescanned.** Each file keeps its
   size and time; `Repository.Refresh` reads again only a new, changed or
   just-written one, drops a removed one, and finds again the references of

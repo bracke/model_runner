@@ -70,7 +70,12 @@ package Model_Runner.Framework.Tasks is
      (Item : Stores.Store;
       Kind : String) return Name_Lists.Vector;
 
-   --  Create a task: its definition, and its runtime state as a candidate.
+   --  Create a task: its definition, and its runtime state as a candidate
+   --  -- or, where the configuration's set task.auto_accept names the
+   --  task's class, accepted, with the policy recorded as who accepted it.
+   --  A class is the task's kind or where it came from: user,
+   --  requirement_derivation, agent, verification_engine. The older scalar
+   --  task.auto_accept = true names requirement_derivation.
    --
    --  @param Item The store.
    --  @param Change The transaction.
@@ -131,6 +136,8 @@ package Model_Runner.Framework.Tasks is
    --  @param Status Framework_Transition_Invalid when the move is not one,
    --    Framework_Task_Not_Ready when a task that is not ready is started or
    --    one whose gates did not pass is completed.
+   --  @param Actor Who moved it: Transitions.User, a policy, an agent;
+   --    kept with the state and in the event.
    procedure Move
      (Item         : Stores.Store;
       Change       : in out Stores.Transaction;
@@ -139,7 +146,8 @@ package Model_Runner.Framework.Tasks is
       Reason       : String;
       Granted      : Transitions.Permissions := Transitions.Ordinary_Only;
       Gates_Passed : Boolean := False;
-      Status       : out Model_Runner.Errors.Error_Info);
+      Status       : out Model_Runner.Errors.Error_Info;
+      Actor        : String := "");
 
    --  Whether a task is ready, worked out from the state as it is.
    --
@@ -211,8 +219,7 @@ package Model_Runner.Framework.Tasks is
    --  meaning at a revision derives one implementation task, and deriving
    --  again -- from a replayed event, or a second run -- finds it and makes
    --  none. A derived task is a candidate unless the configuration's
-   --  scalar task.auto_accept is true, and then its acceptance is recorded
-   --  as the policy's.
+   --  configuration accepts its class, as Create says.
    --
    --  @param Item The store.
    --  @param Change The transaction.

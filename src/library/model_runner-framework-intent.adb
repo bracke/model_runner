@@ -270,11 +270,12 @@ package body Model_Runner.Framework.Intent is
       Id      : String;
       Next    : String;
       Granted : Transitions.Permissions;
-      Status  : out Model_Runner.Errors.Error_Info) is
+      Status  : out Model_Runner.Errors.Error_Info;
+      Actor   : String := "") is
    begin
       Transitions.Apply
         (Item, Change, Machine_Of (Kind), Area_Of (Kind), Id, Next, Granted,
-         Event_For (Kind, Next), Status);
+         Event_For (Kind, Next), Status, Actor);
    end Move;
 
    ------------
