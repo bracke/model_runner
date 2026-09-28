@@ -166,7 +166,17 @@ its own policies -- `scalar task.isolation.KIND`, `task.token_budget.KIND`,
 children and proposals -- and its Effective Task (`/task show`) says what
 governs it, with every override and conflict, what it may do, where it
 writes, what bounds it and which gates it must pass; what governs it is put
-in front of the model too. The same commands run
+in front of the model too.
+
+A project that lists its components (`set components = parser, lexer`) has
+tasks name one of them or none. A profile's check may carry options after
+its label -- `tests[timeout=120, retry=1, severity=warning, keep=summary]?:
+alr build` -- and each check is an event: `Build_Completed`,
+`Test_Completed` or `Test_Failed`. Evidence records each program's
+`--version`, the adapters, the template version and every check's
+parameters, and no longer applies once the environment its checks were
+given has changed -- or, with `scalar verification.toolchain = strict`, once
+a tool answers with another version. The same commands run
 outside a session too -- `model_runner init|task|repo|work`, with
 `--set NAME=VALUE` for the words -- for scripts.
 

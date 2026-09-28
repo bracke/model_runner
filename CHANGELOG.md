@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Components are checked.** Where the configuration lists
+  `set components`, a task created or revised with another component is
+  refused (`Framework_Not_Found`, naming the ones there are).
+- **Check options, events, and fuller evidence.** A check's label may carry
+  `[timeout=S, retry=N, severity=warning, keep=summary]`: its own deadline,
+  retries, a failure recorded without failing the profile, and a raw log
+  cut to its last 4 KB. Each check emits `Build_Completed`,
+  `Test_Completed` or `Test_Failed`. Evidence records each program's
+  version (`tool.PROGRAM`, from `--version`), the adapters and template
+  version, and each check's parameters, severity and tries.
+- **Evidence applies only where it was taken.** A changed environment
+  (the variables the checks are given) makes it stale, and so, under
+  `scalar verification.toolchain = strict`, does a tool reporting another
+  version.
+
 - **Task lifecycle.** `/task edit` revises a task's definition as a new
   revision (`Task_Revised`), refusing its kind, parent and dependencies and
   any task being worked; `/task depend` adds a dependency, refusing a cycle;

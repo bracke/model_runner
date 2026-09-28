@@ -28,11 +28,20 @@ with Model_Runner.Framework.Stores;
 package Model_Runner.Framework.Verification is
 
    --  One check of a profile.
+   --  A check is written LABEL[OPTIONS]? in DIRECTORY: COMMAND, where ?
+   --  makes it optional and OPTIONS, separated by commas, may say
+   --  timeout=SECONDS, retry=TIMES, severity=warning -- a failure recorded
+   --  that does not fail the profile -- and keep=summary, for evidence that
+   --  keeps only the end of its output.
    type Check is record
       Label     : Ada.Strings.Unbounded.Unbounded_String;
       Command   : Ada.Strings.Unbounded.Unbounded_String;
       Directory : Ada.Strings.Unbounded.Unbounded_String;
       Required  : Boolean := True;
+      Timeout   : Natural := 0;
+      Retries   : Natural := 0;
+      Warning   : Boolean := False;
+      Keep_Whole : Boolean := True;
    end record;
 
    --  One thing a tool said.

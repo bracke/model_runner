@@ -89,19 +89,57 @@ package body Model_Runner.Framework.Verification is
                      Command : constant String :=
                        (if Colon = 0 then Part else Trim (Part (Colon + 1 .. Part'Last)));
                      Inside  : constant Natural := Ada.Strings.Fixed.Index (Head, " in ");
-                     Label   : constant String :=
+                     Written : constant String :=
                        (if Inside = 0 then Head else Trim (Head (Head'First .. Inside - 1)));
+                     Optional : constant Boolean :=
+                       Written'Length > 0 and then Written (Written'Last) = '?';
+                     Bare    : constant String :=
+                       (if Optional then Written (Written'First .. Written'Last - 1) else Written);
+                     Opening : constant Natural := Ada.Strings.Fixed.Index (Bare, "[");
+                     Named   : constant String :=
+                       (if Opening > 0 and then Bare (Bare'Last) = ']'
+                        then Trim (Bare (Bare'First .. Opening - 1)) else Bare);
+                     Options : constant String :=
+                       (if Opening > 0 and then Bare (Bare'Last) = ']'
+                        then Bare (Opening + 1 .. Bare'Last - 1) else "");
+                     Made    : Check :=
+                       (Label     => To_Unbounded_String (Named),
+                        Command   => To_Unbounded_String (Command),
+                        Directory => To_Unbounded_String
+                                       (if Inside = 0 then ""
+                                        else Trim (Head (Inside + 4 .. Head'Last))),
+                        Required  => not Optional,
+                        others    => <>);
+                     Start_Option : Natural := Options'First;
                   begin
-                     Result.Items.Append
-                       (Check'(Label     => To_Unbounded_String
-                                              (if Label (Label'Last) = '?'
-                                               then Label (Label'First .. Label'Last - 1)
-                                               else Label),
-                               Command   => To_Unbounded_String (Command),
-                               Directory => To_Unbounded_String
-                                              (if Inside = 0 then ""
-                                               else Trim (Head (Inside + 4 .. Head'Last))),
-                               Required  => Label (Label'Last) /= '?'));
+                     for At_Index in Options'First .. Options'Last + 1 loop
+                        if At_Index > Options'Last or else Options (At_Index) = ',' then
+                           declare
+                              Pair  : constant String := Trim (Options (Start_Option .. At_Index - 1));
+                              Equal : constant Natural := Ada.Strings.Fixed.Index (Pair, "=");
+                              Key   : constant String :=
+                                (if Equal = 0 then Pair else Trim (Pair (Pair'First .. Equal - 1)));
+                              Value : constant String :=
+                                (if Equal = 0 then "" else Trim (Pair (Equal + 1 .. Pair'Last)));
+                              Count : constant Natural :=
+                                (if Value'Length in 1 .. 6
+                                   and then (for all C of Value => C in '0' .. '9')
+                                 then Natural'Value (Value) else 0);
+                           begin
+                              if Key = "timeout" then
+                                 Made.Timeout := Count;
+                              elsif Key = "retry" then
+                                 Made.Retries := Count;
+                              elsif Key = "severity" then
+                                 Made.Warning := Value = "warning";
+                              elsif Key = "keep" then
+                                 Made.Keep_Whole := Value /= "summary";
+                              end if;
+                           end;
+                           Start_Option := At_Index + 1;
+                        end if;
+                     end loop;
+                     Result.Items.Append (Made);
                   end;
                end if;
             end;
@@ -225,6 +263,34 @@ package body Model_Runner.Framework.Verification is
    is (Repository.Graph_Fingerprint
          (Repository.Scan (Ada.Directories.Containing_Directory (Stores.Root (Item)))));
 
+   --  What a program says its version is: the first line of its --version,
+   --  run as any check is; "unknown" where it will not say.
+   function Version_Of
+     (Item    : Stores.Store;
+      Change  : in out Stores.Transaction;
+      Rules   : Execution.Policy;
+      Program : String) return String
+   is
+      Asked  : Execution.Policy := Rules;
+      Ran    : Execution.Outcome;
+      Status : E.Error_Info;
+   begin
+      Asked.Timeout := Positive'Min (Rules.Timeout, 20);
+      Asked.Keep_Whole := False;
+      Execution.Run (Item, Change, Asked, Program & " --version", "", Ran, Status);
+      if E.Is_Error (Status) or else not Ran.Started or else Ran.Exit_Status /= 0 then
+         return "unknown";
+      end if;
+      declare
+         Text : constant String := To_String (Ran.Output);
+         Stop : constant Natural := Ada.Strings.Fixed.Index (Text, [1 => ASCII.LF]);
+         Line : constant String :=
+           Trim (if Stop = 0 then Text else Text (Text'First .. Stop - 1));
+      begin
+         return (if Line = "" then "unknown" else Line);
+      end;
+   end Version_Of;
+
    -----------------
    -- Run_Profile --
    -----------------
@@ -336,23 +402,65 @@ package body Model_Runner.Framework.Verification is
             end;
          end if;
 
+         --  What it was checked with: each program's version, as it says
+         --  it, and the adapters the configuration names.
+         declare
+            Asked : Name_Lists.Vector;
+         begin
+            for Index in 1 .. Length (Checks) loop
+               declare
+                  Words : constant Name_Lists.Vector :=
+                    Execution.Words_Of (To_String (Element (Checks, Index).Command));
+               begin
+                  if not Words.Is_Empty and then not Asked.Contains (Words.First_Element) then
+                     Asked.Append (Words.First_Element);
+                     Records.Set (Value, "tool." & Words.First_Element,
+                                  Version_Of (Item, Change, Rules, Words.First_Element));
+                  end if;
+               end;
+            end loop;
+            for Index in 1 .. Records.Field_Count (Settings) loop
+               declare
+                  Field : constant String := Records.Field_Name (Settings, Index);
+               begin
+                  if Starts (Field, "adapter.") then
+                     Records.Set (Value, Field, Records.Get (Settings, Field));
+                  end if;
+               end;
+            end loop;
+            Records.Set (Value, "template_version", Records.Get (Settings, "template_version"));
+         end;
+
          Passed := True;
          for Index in 1 .. Length (Checks) loop
             declare
                Next    : constant Check := Element (Checks, Index);
                Ran     : Execution.Outcome;
-               Good    : Boolean;
+               Good    : Boolean := False;
+               Tries   : Natural := 0;
                Program : constant Name_Lists.Vector :=
                  Execution.Words_Of (To_String (Next.Command));
+               Own     : Execution.Policy := Rules;
+               Event   : Unbounded_String;
             begin
-               Execution.Run
-                 (Item, Change, Rules, Filled (To_String (Next.Command)),
-                  Filled (To_String (Next.Directory)), Ran, Status);
-               if E.Is_Error (Status) then
-                  return;
+               --  Its own deadline and keeping, and as many tries as it may
+               --  have.
+               if Next.Timeout > 0 then
+                  Own.Timeout := Next.Timeout;
                end if;
-               Good := Ran.Started and then not Ran.Timed_Out and then Ran.Exit_Status = 0;
-               if Next.Required and then not Good then
+               Own.Keep_Whole := Next.Keep_Whole;
+               loop
+                  Tries := Tries + 1;
+                  Execution.Run
+                    (Item, Change, Own, Filled (To_String (Next.Command)),
+                     Filled (To_String (Next.Directory)), Ran, Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+                  Good := Ran.Started and then not Ran.Timed_Out and then Ran.Exit_Status = 0;
+                  exit when Good or else Tries > Next.Retries;
+               end loop;
+               if Next.Required and then not Good and then not Next.Warning then
                   Passed := False;
                end if;
 
@@ -363,7 +471,31 @@ package body Model_Runner.Framework.Verification is
                   & (if Good then "passed" elsif Ran.Timed_Out then "timed out"
                      else "failed")
                   & Tab & (if Next.Required then "required" else "optional")
-                  & Tab & To_String (Ran.Raw_Log));
+                  & Tab & To_String (Ran.Raw_Log)
+                  & Tab & (if Next.Warning then "warning" else "error")
+                  & Tab & Image (Tries));
+               Records.Set
+                 (Value, "parameters." & Pad (Index, 4),
+                  "command=" & Filled (To_String (Next.Command))
+                  & ", directory=" & Filled (To_String (Next.Directory))
+                  & ", timeout=" & Image (Own.Timeout)
+                  & ", retry=" & Image (Next.Retries)
+                  & ", keep=" & (if Next.Keep_Whole then "whole" else "summary"));
+
+               --  What happened, as an event of its own: a build, or a test.
+               Events.Emit
+                 (Item, Change,
+                  (if Ada.Strings.Fixed.Index
+                        (Ada.Characters.Handling.To_Lower (To_String (Next.Label)), "build") > 0
+                   then Events.Build_Completed
+                   elsif Good then Events.Test_Completed
+                   else Events.Test_Failed),
+                  To_String (Evidence),
+                  To_String (Next.Label) & (if Good then " passed" else " failed"),
+                  Event, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
 
                declare
                   Said : constant Diagnostic_List :=
@@ -473,6 +605,42 @@ package body Model_Runner.Framework.Verification is
       then
          Reasons.Append ("the configuration has changed since " & Evidence);
       end if;
+
+      --  The environment its checks were given, as it is passed now.
+      declare
+         Rules : constant Execution.Policy := Execution.Policy_Of (Item);
+      begin
+         if Records.Get (Value, "environment_fingerprint") /= ""
+           and then Records.Get (Value, "environment_fingerprint")
+                      /= Fingerprint (Model_Runner.Platform.Passed_Environment
+                                        (To_String (Rules.Environment)))
+         then
+            Reasons.Append ("the environment has changed since " & Evidence);
+         end if;
+
+         --  The tools, where the policy holds evidence to the toolchain it
+         --  was taken with: each asked again, and any that answers
+         --  differently makes it stale.
+         if Records.Get (Settings, "scalar.verification.toolchain") = "strict" then
+            declare
+               Scratch : Stores.Transaction;
+            begin
+               for Index in 1 .. Records.Field_Count (Value) loop
+                  declare
+                     Field : constant String := Records.Field_Name (Value, Index);
+                  begin
+                     if Starts (Field, "tool.")
+                       and then Version_Of (Item, Scratch, Rules, Field (Field'First + 5 .. Field'Last))
+                                  /= Records.Get (Value, Field)
+                     then
+                        Reasons.Append (Field (Field'First + 5 .. Field'Last)
+                                        & " has changed since " & Evidence);
+                     end if;
+                  end;
+               end loop;
+            end;
+         end if;
+      end;
       for Index in 1 .. Records.Field_Count (Value) loop
          declare
             Field : constant String := Records.Field_Name (Value, Index);

@@ -14,6 +14,9 @@ with Model_Runner.Platform;
 
 package body Model_Runner.Framework.Execution is
 
+   --  How much of a check's output is kept where it says keep=summary.
+   Kept_Tail : constant := 4096;
+
    use Ada.Strings.Unbounded;
    use type Ada.Calendar.Time;
 
@@ -218,7 +221,9 @@ package body Model_Runner.Framework.Execution is
               (Kind       => Results.Verification,
                Producer   => To_Unbounded_String ("execution"),
                Summary    => To_Unbounded_String ("output of " & Command),
-               Payload    => Text,
+               Payload    =>
+                (if Rules.Keep_Whole or else Length (Text) <= Kept_Tail then Text
+                 else Unbounded_Slice (Text, Length (Text) - Kept_Tail + 1, Length (Text))),
                Provenance => To_Unbounded_String
                                (Trim (Directory) & ": " & Command),
                others     => <>);

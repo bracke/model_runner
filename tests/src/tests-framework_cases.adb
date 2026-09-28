@@ -1,3 +1,4 @@
+with Ada.Environment_Variables;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
@@ -3633,6 +3634,96 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Permissions_And_Proposals_Reach_The_Work;
 
+   --  Where the project lists its components a task names one of them or
+   --  none; a check keeps to its own deadline, tries and severity; the
+   --  evidence says which tools and adapters it was taken with and with
+   --  what; each check is an event; and evidence taken in another
+   --  environment, or with another toolchain where the policy asks, no
+   --  longer applies.
+   procedure Components_Checks_And_Evidence
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store    : S.Store;
+      Status   : E.Error_Info;
+      Change   : S.Transaction;
+      Id       : Unbounded_String;
+      Evidence : Unbounded_String;
+      Passed   : Boolean;
+      Value    : R.Item;
+      Reasons  : Model_Runner.Framework.Name_Lists.Vector;
+      Revised  : Tk.Field_Map;
+   begin
+      Task_Project
+        (Store, "components-evidence",
+         "set components = parser, lexer" & LF
+         & "set execution.allowed = test" & LF
+         & "set execution.environment = MR_EVIDENCE_PROBE" & LF
+         & "scalar verification.toolchain = strict" & LF
+         & "profile careful = build[timeout=5, keep=summary]: test -d .;"
+         & " flaky[retry=2, severity=warning]: test -f no-such-file" & LF);
+
+      --  Components.
+      Tk.Create (Store, Change, Fields ("Lex", "implementation", "component", "lexer"),
+                 "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "a listed component was refused: " & Code_Of (Status));
+      Tk.Create (Store, Change, Fields ("Other", "implementation", "component", "nowhere"),
+                 "user", "", Id, Status);
+      Assert (Status.Code = E.Framework_Not_Found, "an unlisted component was taken");
+      Change := S.No_Changes;
+      Tk.Create (Store, Change, Fields ("Lex again", "implementation", "component", "lexer"),
+                 "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Revised.Include ("component", "nowhere");
+      Tk.Revise (Store, Change, To_String (Id), Revised, Status);
+      Assert (Status.Code = E.Framework_Not_Found, "a task was revised to an unlisted component");
+      Change := S.No_Changes;
+
+      --  Checks, evidence, events.
+      Ada.Environment_Variables.Set ("MR_EVIDENCE_PROBE", "one");
+      Vf.Run_Profile (Store, Change, "careful", "", Evidence, Passed, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then Passed,
+              "a failing check of warning severity failed the profile: " & Code_Of (Status));
+      S.Read (Store, Model_Runner.Framework.Verification_Area, To_String (Evidence), Value, Status);
+      Assert (Ada.Strings.Fixed.Index (R.Get (Value, "check.0002"), "warning") > 0
+              and then Ada.Strings.Fixed.Index (R.Get (Value, "check.0002"), ASCII.HT & "3") > 0
+              and then Ada.Strings.Fixed.Index (R.Get (Value, "parameters.0001"), "timeout=5") > 0
+              and then Ada.Strings.Fixed.Index (R.Get (Value, "parameters.0001"), "keep=summary") > 0
+              and then R.Has (Value, "tool.test")
+              and then R.Has (Value, "template_version"),
+              "the evidence does not say how its checks ran and with what: "
+              & R.Get (Value, "check.0002"));
+      declare
+         Seen   : constant Ev.Event_List := Ev.Since (Store, 0);
+         Builds : Natural := 0;
+         Failed : Natural := 0;
+      begin
+         for Index in 1 .. Ev.Length (Seen) loop
+            if To_String (Ev.Element (Seen, Index).Kind_Word) = Ev.Kind_Name (Ev.Build_Completed)
+            then
+               Builds := Builds + 1;
+            elsif To_String (Ev.Element (Seen, Index).Kind_Word) = Ev.Kind_Name (Ev.Test_Failed)
+            then
+               Failed := Failed + 1;
+            end if;
+         end loop;
+         Assert (Builds = 1 and then Failed = 1, "the checks were not each an event");
+      end;
+
+      Assert (Vf.Is_Current (Store, To_String (Evidence), Reasons),
+              "evidence did not apply in the environment and toolchain it was taken with: "
+              & (if Reasons.Is_Empty then "" else Reasons.First_Element));
+      Ada.Environment_Variables.Set ("MR_EVIDENCE_PROBE", "two");
+      Assert (not Vf.Is_Current (Store, To_String (Evidence), Reasons)
+              and then (for some Line of Reasons =>
+                          Ada.Strings.Fixed.Index (Line, "environment") > 0),
+              "evidence still applied in another environment");
+      Ada.Environment_Variables.Clear ("MR_EVIDENCE_PROBE");
+      S.Close (Store);
+   end Components_Checks_And_Evidence;
+
    --  A task is revised as a new revision of its definition, never in its
    --  kind; split, its parent waits on its parts unless the project lets it
    --  coordinate; an ended task is reopened, and a rejected one
@@ -4535,6 +4626,9 @@ package body Tests.Framework_Cases is
         (T, Recursion_Stays_Bounded'Access,
          "children stay within limits and permissions, failures and"
          & " cancellation are seen");
+      Register_Routine
+        (T, Components_Checks_And_Evidence'Access,
+         "components are checked, checks keep their options, evidence says what it ran with");
       Register_Routine
         (T, Tasks_Are_Revised_Split_And_Reopened'Access,
          "tasks are revised, split and reopened, and their kind and authority reach them");

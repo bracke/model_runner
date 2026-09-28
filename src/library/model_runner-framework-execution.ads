@@ -29,6 +29,10 @@ package Model_Runner.Framework.Execution is
       Timeout       : Positive := 600;
       Output_Limit  : Positive := 1024 * 1024;
 
+      --  Whether the whole output is kept as the raw log, or only its last
+      --  part, where a check says its evidence need not keep it all.
+      Keep_Whole    : Boolean := True;
+
       --  Whether a check may use the network. Recorded with what ran; the
       --  host does not enforce it.
       Network       : Boolean := False;

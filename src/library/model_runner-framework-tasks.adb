@@ -31,6 +31,10 @@ package body Model_Runner.Framework.Tasks is
    function Is_Core (Name : String) return Boolean
    is (for some Field of Core => Field.all = Name);
 
+   --  Why a component cannot be named, where the configuration lists the
+   --  project's components and it is not one of them; "" where it can.
+   function Component_Problem (Item : Stores.Store; Component : String) return String;
+
    function Trim (Text : String) return String
    is (Ada.Strings.Fixed.Trim (Text, Ada.Strings.Both));
 
@@ -306,6 +310,12 @@ package body Model_Runner.Framework.Tasks is
             return;
          end if;
       end loop;
+
+      if Component_Problem (Item, Given ("component")) /= "" then
+         Status := E.Make (E.Framework_Not_Found);
+         E.Add_Text (Status, "name", Component_Problem (Item, Given ("component")));
+         return;
+      end if;
 
       declare
          Component : constant String := Given ("component");
@@ -1081,6 +1091,25 @@ package body Model_Runner.Framework.Tasks is
       end;
    end Add_Dependency;
 
+   -----------------------
+   -- Component_Problem --
+   -----------------------
+
+   function Component_Problem (Item : Stores.Store; Component : String) return String is
+      Settings : Records.Item;
+      Status   : E.Error_Info;
+   begin
+      Configurations.Read (Item, Settings, Status);
+      declare
+         Listed : constant Name_Lists.Vector := Split (Records.Get (Settings, "set.components"));
+      begin
+         if Component = "" or else Listed.Is_Empty or else Listed.Contains (Component) then
+            return "";
+         end if;
+         return Component & " is not one of the project's components: " & Joined (Listed, ", ");
+      end;
+   end Component_Problem;
+
    -----------------
    -- Kind_Policy --
    -----------------
@@ -1180,6 +1209,10 @@ package body Model_Runner.Framework.Tasks is
                         return;
                      end if;
                   end;
+               elsif Name = "component" and then Component_Problem (Item, Given) /= "" then
+                  Status := E.Make (E.Framework_Not_Found);
+                  E.Add_Text (Status, "name", Component_Problem (Item, Given));
+                  return;
                elsif Name = "requirements" then
                   for Requirement of Split (Given) loop
                      if not Stores.Exists (Item, Requirements_Area, Requirement) then
