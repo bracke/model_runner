@@ -1,4 +1,3 @@
-with Ada.Directories;
 with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
@@ -268,7 +267,7 @@ package body Model_Runner.Framework.Consistency is
          Settings : Records.Item;
          Read     : E.Error_Info;
          Files    : constant Repository.Graph :=
-           Repository.Scan (Ada.Directories.Containing_Directory (Stores.Root (Item)));
+           Repository.Now (Item);
          Listed   : Name_Lists.Vector;
 
          function Known (Component : String) return Boolean is

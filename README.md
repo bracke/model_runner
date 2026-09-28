@@ -252,7 +252,11 @@ file, line and column, the severity, the tool's own code (`-gnatwu`,
 `E0308`), the name it is about, the other places it points at, and where
 in the kept raw output it was said. `/impact` takes a symbol as well as a
 file -- `/impact Parser.Next`, or just `Next` -- and says what refers to it,
-depends on it and tests it. The same commands run
+depends on it and tests it. The repository graph is brought up to date
+rather than made again: only a file whose size or time changed is read,
+and only the references that could see it are found again. A file tool's
+path stays inside the project with its links resolved, so a link out of
+it is no way out. The same commands run
 outside a session too -- `model_runner init|task|repo|work`, with
 `--set NAME=VALUE` for the words -- for scripts.
 

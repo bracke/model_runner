@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The repository graph is refreshed, not rescanned.** Each file keeps its
+  size and time; `Repository.Refresh` reads again only a new, changed or
+  just-written one, drops a removed one, and finds again the references of
+  the files that can see a changed unit. The graph is the one a scan makes,
+  fingerprint and all. The session start, verification, context and the
+  consistency check use it.
+- **File tools resolve links.** `Within_Project` holds a path inside the
+  project by its real path, the nearest existing part resolved, so a link
+  out of the project is refused. A workspace is removed without following
+  a link out of it.
 - **Fuller diagnostics.** `Verification.Diagnostic` adds the tool's code (a
   trailing `[CODE]`, a word and not a command's argument list), the quoted
   symbol, related places (`at FILE:LINE`, `at line N`) and a raw-output

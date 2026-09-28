@@ -191,4 +191,44 @@ package body Model_Runner.Framework.Files is
          return Result;
    end Files_In;
 
+   -----------------
+   -- Remove_Tree --
+   -----------------
+
+   procedure Remove_Tree (Path : String) is
+      use Ada.Directories;
+      Search : Search_Type;
+      Found  : Directory_Entry_Type;
+      Names  : Name_Lists.Vector;
+   begin
+      if Hostkit.Fs.Is_Link (Path) then
+         declare
+            Gone : constant Boolean := Hostkit.Fs.Delete_Link (Path);
+            pragma Unreferenced (Gone);
+         begin
+            return;
+         end;
+      elsif not Exists (Path) then
+         return;
+      elsif Kind (Path) /= Directory then
+         Delete_File (Path);
+         return;
+      end if;
+      Start_Search (Search, Path, "");
+      while More_Entries (Search) loop
+         Get_Next_Entry (Search, Found);
+         if Simple_Name (Found) not in "." | ".." then
+            Names.Append (Simple_Name (Found));
+         end if;
+      end loop;
+      End_Search (Search);
+      for Name of Names loop
+         Remove_Tree (Hostkit.Fs.Join (Path, Name));
+      end loop;
+      Delete_Directory (Path);
+   exception
+      when others =>
+         null;
+   end Remove_Tree;
+
 end Model_Runner.Framework.Files;

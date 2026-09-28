@@ -72,6 +72,10 @@ package Model_Runner.Framework.Repository is
       Language    : Ada.Strings.Unbounded.Unbounded_String;
       Role        : File_Role := Other;
       Fingerprint : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  Its size and when it last changed, as it was read: what tells a
+      --  later scan whether it must be read again.
+      Stamp       : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    --  One symbol a unit declares.
@@ -97,6 +101,10 @@ package Model_Runner.Framework.Repository is
 
       --  Where it was seen, as path:line, for a reference.
       Where  : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  The file whose reading found it, so that its contributions can be
+      --  taken out and found again when only it changed.
+      Origin : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    --  What a scan found.
@@ -174,6 +182,42 @@ package Model_Runner.Framework.Repository is
      (Item   : Stores.Store;
       Change : in out Stores.Transaction;
       Found  : Graph;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  Bring a graph up to date with the project as it is now, reading only
+   --  what changed: a file whose size and time are those it was read with
+   --  is taken as it was, a changed or new one is read again, a removed one
+   --  taken out, and the references of every file that can see a changed
+   --  unit found again. A file changed in the last two seconds is read
+   --  again whatever its stamp says, since a stamp that fine is not one.
+   --  What comes out is the graph Scan would make -- the same files in the
+   --  same order, the same fingerprint.
+   --
+   --  @param Project_Directory The project.
+   --  @param Kept The graph as it was last made; an empty one reads all.
+   --  @param Read_Again How many files had to be read.
+   --  @return The graph.
+   function Refresh
+     (Project_Directory : String;
+      Kept              : Graph;
+      Read_Again        : out Natural) return Graph;
+
+   --  The project's graph as it is now: the kept one brought up to date,
+   --  not kept -- for a reader that only reads the store.
+   --
+   --  @param Item The store.
+   --  @return The graph.
+   function Now (Item : Stores.Store) return Graph;
+
+   --  The project's graph as it is now: the kept one brought up to date,
+   --  and kept again where that changed it.
+   --
+   --  @param Item The store.
+   --  @param Found The graph.
+   --  @param Status A failure keeping it.
+   procedure Current
+     (Item   : in out Stores.Store;
+      Found  : out Graph;
       Status : out Model_Runner.Errors.Error_Info);
 
    --  The graph kept in the project state.
@@ -311,6 +355,9 @@ private
       Files     : File_Vectors.Vector;
       Symbols   : Symbol_Vectors.Vector;
       Relations : Relation_Vectors.Vector;
+
+      --  The file being read, which every relation added meanwhile is from.
+      Reading   : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
 end Model_Runner.Framework.Repository;

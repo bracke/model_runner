@@ -1,5 +1,4 @@
 with Ada.Characters.Handling;
-with Ada.Directories;
 with Ada.Strings.Fixed;
 
 with Model_Runner.Framework.Configurations;
@@ -349,7 +348,7 @@ package body Model_Runner.Framework.Verification is
    --  What evidence is checked against: the files as they are now.
    function Repository_Now (Item : Stores.Store) return String
    is (Repository.Graph_Fingerprint
-         (Repository.Scan (Ada.Directories.Containing_Directory (Stores.Root (Item)))));
+         (Repository.Now (Item)));
 
    --  What a program says its version is: the first line of its --version,
    --  run as any check is; "unknown" where it will not say.
@@ -821,10 +820,8 @@ package body Model_Runner.Framework.Verification is
             others => <>);
       else
          declare
-            Project : constant String :=
-              Ada.Directories.Containing_Directory (Stores.Root (Item));
             Graph   : constant Traceability.Graph :=
-              Traceability.Build (Item, Repository.Scan (Project));
+              Traceability.Build (Item, Repository.Now (Item));
          begin
             Selected := Traceability.Select_Tests
               (Item, Traceability.Impact_Of (Graph, Changed));

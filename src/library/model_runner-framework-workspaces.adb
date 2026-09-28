@@ -451,7 +451,7 @@ package body Model_Runner.Framework.Workspaces is
          end;
       end if;
       if Dirs.Exists (Home) then
-         Dirs.Delete_Tree (Home);
+         Files.Remove_Tree (Home);
       end if;
    exception
       when others =>

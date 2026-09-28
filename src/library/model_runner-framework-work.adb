@@ -553,6 +553,15 @@ package body Model_Runner.Framework.Work is
          end if;
       end;
 
+      --  6: the repository's graph, brought up to date and kept, so what
+      --  reads it next reads only what changed since.
+      declare
+         Graph : Repository.Graph;
+         Kept  : E.Error_Info;
+      begin
+         Repository.Current (Item, Graph, Kept);
+      end;
+
       --  8: what is still wrong, for someone to settle.
       declare
          Wrong : constant Consistency.Finding_List := Consistency.Check (Item);

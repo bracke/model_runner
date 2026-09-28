@@ -402,11 +402,11 @@ package body Model_Runner.Framework.Context is
            Ada.Directories.Containing_Directory (Stores.Root (Item));
          Wanted  : constant String := Lower (To_String (Component));
       begin
+         --  The kept graph, brought up to date: a stale one would offer the
+         --  files and symbols as they were.
          Repository.Load (Item, Graph, Read);
          Result.Semantic := E.Is_Ok (Read);
-         if not Result.Semantic then
-            Graph := Repository.Scan (Project);
-         end if;
+         Graph := Repository.Now (Item);
 
          if Wanted /= "" then
             for Index in 1 .. Repository.File_Count (Graph) loop

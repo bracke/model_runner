@@ -44,6 +44,7 @@ with Model_Runner.Framework.Verification;
 with Model_Runner.Framework.Work;
 with Model_Runner.Framework.Workspaces;
 with Model_Runner.Localization;
+with Hostkit.Fs;
 with Hostkit.Host;
 with Hostkit.Process;
 with Model_Runner.Platform;
@@ -94,13 +95,41 @@ package body Tests.Framework_Cases is
       return AUnit.Format ("the project state");
    end Name;
 
+   --  Remove a directory and what is in it, a link as a link: Delete_Tree
+   --  follows a link a case left behind into what it points at.
+   procedure Remove_Tree (Path : String) is
+      Search : Dirs.Search_Type;
+      Found  : Dirs.Directory_Entry_Type;
+      Names  : Model_Runner.Framework.Name_Lists.Vector;
+   begin
+      if Hostkit.Fs.Is_Link (Path) then
+         Assert (Hostkit.Fs.Delete_Link (Path), "a link stays: " & Path);
+         return;
+      elsif not Dirs.Exists (Path) then
+         return;
+      elsif Dirs."/=" (Dirs.Kind (Path), Dirs.Directory) then
+         Dirs.Delete_File (Path);
+         return;
+      end if;
+      Dirs.Start_Search (Search, Path, "");
+      while Dirs.More_Entries (Search) loop
+         Dirs.Get_Next_Entry (Search, Found);
+         if Dirs.Simple_Name (Found) not in "." | ".." then
+            Names.Append (Dirs.Simple_Name (Found));
+         end if;
+      end loop;
+      Dirs.End_Search (Search);
+      for Name of Names loop
+         Remove_Tree (Path & "/" & Name);
+      end loop;
+      Dirs.Delete_Directory (Path);
+   end Remove_Tree;
+
    --  A project directory made anew, whatever was there.
    function Fresh (Leaf : String) return String is
       Path : constant String := Scratch & "/" & Leaf;
    begin
-      if Dirs.Exists (Path) then
-         Dirs.Delete_Tree (Path);
-      end if;
+      Remove_Tree (Path);
       Dirs.Create_Path (Path);
       return Path;
    end Fresh;
@@ -2467,6 +2496,45 @@ package body Tests.Framework_Cases is
       Assert (Rp.Graph_Fingerprint (Rp.Scan (Project))
               /= Rp.Graph_Fingerprint (Found),
               "a new file did not change the graph's fingerprint");
+
+      --  Brought up to date, reading only what changed, it is the graph a
+      --  whole scan makes.
+      delay 2.1;
+      declare
+         Whole     : constant Rp.Graph := Rp.Scan (Project);
+         Refreshed : Rp.Graph;
+         Read      : Natural;
+      begin
+         Refreshed := Rp.Refresh (Project, Whole, Read);
+         Assert (Read = 0
+                 and then Rp.Graph_Fingerprint (Refreshed)
+                          = Rp.Graph_Fingerprint (Whole),
+                 "an unchanged tree was read again:" & Natural'Image (Read));
+         Refreshed := Rp.Refresh (Project, Found, Read);
+         Assert (Rp.Graph_Fingerprint (Refreshed) = Rp.Graph_Fingerprint (Whole)
+                 and then Rp.Relation_Count (Refreshed)
+                          = Rp.Relation_Count (Whole),
+                 "a new file was not brought in as a scan would");
+         Put_File (Project & "/src/parser.ads",
+                   "package Parser is" & LF
+                   & "   type Token is null record;" & LF
+                   & "   procedure Next (Item : out Token);" & LF
+                   & "   procedure Skip;" & LF
+                   & "   Limit : constant := 3;" & LF
+                   & "end Parser;" & LF);
+         Refreshed := Rp.Refresh (Project, Whole, Read);
+         Again := Rp.Scan (Project);
+         Assert (Rp.Graph_Fingerprint (Refreshed) = Rp.Graph_Fingerprint (Again)
+                 and then Rp.Relation_Count (Refreshed)
+                          = Rp.Relation_Count (Again)
+                 and then Rp.Symbol_Count (Refreshed) = Rp.Symbol_Count (Again)
+                 and then Rp.File_Count (Refreshed) = Rp.File_Count (Again)
+                 and then Rp.References_To (Refreshed, "Parser.Next")
+                          = Rp.References_To (Again, "Parser.Next"),
+                 "a changed spec was not brought in as a scan would");
+         Assert (Read >= 1 and then Read < Rp.File_Count (Again),
+                 "the refresh read more than changed:" & Natural'Image (Read));
+      end;
       Assert (Rp.Language_Of ("x.rs") = "Rust"
               and then Rp.Role_Of ("Makefile") = Rp.Build
               and then Rp.Role_Of ("notes.txt") = Rp.Other
@@ -2481,7 +2549,8 @@ package body Tests.Framework_Cases is
          Rp.Add_File (Built, (Path => To_Unbounded_String ("lib.c"),
                               Language => To_Unbounded_String ("C"),
                               Role => Rp.Source,
-                              Fingerprint => To_Unbounded_String ("0")));
+                              Fingerprint => To_Unbounded_String ("0"),
+                              others => <>));
          Rp.Add_Symbol (Built, (Name => To_Unbounded_String ("lib.open"),
                                 Kind => To_Unbounded_String ("function"),
                                 Path => To_Unbounded_String ("lib.c"),
@@ -2489,11 +2558,40 @@ package body Tests.Framework_Cases is
          Rp.Add_Relation
            (Built, (Kind => Rp.Depends_On, From => To_Unbounded_String ("app"),
                     To => To_Unbounded_String ("lib"), Source => Rp.Build_Metadata,
-                    Sure => Rp.Probable, Where => Null_Unbounded_String));
+                    Sure => Rp.Probable, Where => Null_Unbounded_String,
+                    others => <>));
          Assert (Rp.Find_Symbols (Built, "open").First_Element = "lib.open"
                  and then Rp.Dependents_Of (Built, "lib").First_Element = "app"
                  and then Rp.Relation_Count (Built) = 2,
                  "a graph built by an adapter is not queried as one");
+      end;
+
+      --  The file tools stay inside the project, a link out of it included.
+      --  The link points at a directory of its own, so that nothing that
+      --  follows it can harm anything else.
+      declare
+         package Pc renames Model_Runner.CLI.Project_Commands;
+         Away : constant String :=
+           Hostkit.Fs.Create_Temporary_Directory ("model-runner-away");
+         Link : constant String := Scratch & "/away";
+         Gone : Boolean;
+      begin
+         Assert (Pc.Within_Project ("src/none.adb")
+                 and then not Pc.Within_Project ("../x")
+                 and then not Pc.Within_Project ("src/../../x")
+                 and then not Pc.Within_Project ("/etc/passwd"),
+                 "a path was placed wrongly inside or outside the project");
+         if Away /= "" then
+            Gone := Hostkit.Fs.Delete_Link (Link);
+            if Hostkit.Fs.Create_Link (Away, Link) then
+               Assert (not Pc.Within_Project (Link & "/x")
+                       and then not Pc.Within_Project (Link),
+                       "a link out of the project was followed");
+               Gone := Hostkit.Fs.Delete_Link (Link);
+            end if;
+            Dirs.Delete_Directory (Away);
+         end if;
+         pragma Unreferenced (Gone);
       end;
    end Repository_Is_Scanned;
 

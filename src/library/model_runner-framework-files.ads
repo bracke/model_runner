@@ -68,6 +68,16 @@ private package Model_Runner.Framework.Files is
    --  @return False when it is there and could not be removed.
    function Delete_If_Present (Path : String) return Boolean;
 
+   --  Remove a directory and everything in it without ever following a
+   --  link: a link is removed as a link, wherever it points, and only a
+   --  directory that is one is gone into. Ada.Directories.Delete_Tree
+   --  follows a link to a directory and empties what it points at -- a
+   --  workspace checked out with a link to somewhere else would take that
+   --  somewhere with it.
+   --
+   --  @param Path The directory.
+   procedure Remove_Tree (Path : String);
+
    --  Remove a file when it is there and can be; one that stays is derived
    --  and is found wanting when it is next read.
    --

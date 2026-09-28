@@ -102,6 +102,15 @@ package Model_Runner.CLI.Project_Commands is
    overriding function Profile
      (Self : Session_Agent) return Model_Runner.Framework.Context.Model_Profile;
 
+   --  Whether a path the agent names stays in the project in the session's
+   --  directory: relative, never climbing out, and -- links followed --
+   --  still inside it. A file not there yet is judged by the nearest part
+   --  of its path that is.
+   --
+   --  @param Path The path, relative to the project.
+   --  @return True when it stays inside.
+   function Within_Project (Path : String) return Boolean;
+
    --  Whether a word is one of the project's commands.
    --
    --  @param Word The word as typed, slash included.

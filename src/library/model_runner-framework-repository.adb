@@ -1,3 +1,4 @@
+with Ada.Calendar;
 with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Strings.Fixed;
@@ -23,6 +24,35 @@ package body Model_Runner.Framework.Repository is
 
    --  Files larger than this are recorded and not read.
    Largest_Read : constant := 4 * 1024 * 1024;
+
+   --  A file's size and when it last changed, as seconds since the epoch.
+   function Stamp_Of (Full : String) return String is
+      use type Ada.Calendar.Time;
+      Seconds : constant Duration :=
+        Dirs.Modification_Time (Full) - Ada.Calendar.Time_Of (1970, 1, 1);
+   begin
+      return Ada.Strings.Fixed.Trim (Dirs.File_Size'Image (Dirs.Size (Full)), Ada.Strings.Both)
+        & ":" & Ada.Strings.Fixed.Trim (Long_Long_Integer'Image (Long_Long_Integer (Seconds)),
+                                        Ada.Strings.Both);
+   exception
+      when others =>
+         return "";
+   end Stamp_Of;
+
+   --  Whether a stamp says a file changed so lately that one of the same
+   --  second could still follow unseen.
+   function Recent (Stamp : String) return Boolean is
+      use type Ada.Calendar.Time;
+      Colon : constant Natural := Ada.Strings.Fixed.Index (Stamp, ":");
+      Now   : constant Long_Long_Integer :=
+        Long_Long_Integer (Ada.Calendar.Clock - Ada.Calendar.Time_Of (1970, 1, 1));
+   begin
+      return Colon = 0
+        or else Now - Long_Long_Integer'Value (Stamp (Colon + 1 .. Stamp'Last)) < 2;
+   exception
+      when others =>
+         return True;
+   end Recent;
 
    function Lower (Text : String) return String
    renames Ada.Characters.Handling.To_Lower;
@@ -69,13 +99,18 @@ package body Model_Runner.Framework.Repository is
                       Sure   => Certain,
                       Where  => To_Unbounded_String
                                   (To_String (Item.Path) & ":"
-                                   & Image (Item.Line))));
+                                   & Image (Item.Line)),
+                      Origin => Item.Path));
       end if;
    end Add_Symbol;
 
    procedure Add_Relation (Into : in out Graph; Item : Relation) is
+      Made : Relation := Item;
    begin
-      Into.Relations.Append (Item);
+      if Made.Origin = Null_Unbounded_String then
+         Made.Origin := Into.Reading;
+      end if;
+      Into.Relations.Append (Made);
    end Add_Relation;
 
    function File_Count (From : Graph) return Natural
@@ -385,14 +420,14 @@ package body Model_Runner.Framework.Repository is
         (Into,
          (Kind => Contains, From => To_Unbounded_String (Path),
           To => To_Unbounded_String (Unit), Source => Explicit, Sure => Certain,
-          Where => Null_Unbounded_String));
+          Where => Null_Unbounded_String, Origin => <>));
 
       if Is_Body then
          Add_Relation
            (Into,
             (Kind => Implements, From => To_Unbounded_String (Path),
              To => To_Unbounded_String (Unit), Source => Explicit,
-             Sure => Certain, Where => Null_Unbounded_String));
+             Sure => Certain, Where => Null_Unbounded_String, Origin => <>));
       end if;
 
       --  The context clause: what this unit withs.
@@ -412,7 +447,7 @@ package body Model_Runner.Framework.Repository is
                   (Kind => Depends_On, From => To_Unbounded_String (Unit),
                    To => Name, Source => Explicit, Sure => Certain,
                    Where => To_Unbounded_String
-                              (Path & ":" & Image (Tokens (Index).Line))));
+                              (Path & ":" & Image (Tokens (Index).Line)), Origin => <>));
                Index := Next;
                exit when Index > Count or else not Is_Mark (Tokens (Index), ',');
                Index := Index + 1;
@@ -447,7 +482,7 @@ package body Model_Runner.Framework.Repository is
                          From => To_Unbounded_String
                                    (Unit & "." & To_String (Tokens (At_Index + 1).Text)),
                          To => Made, Source => Explicit, Sure => Certain,
-                         Where => To_Unbounded_String (Path & ":" & Image (Here.Line))));
+                         Where => To_Unbounded_String (Path & ":" & Image (Here.Line)), Origin => <>));
                   end if;
                end;
             elsif Is_Word (Here, "type") and then At_Index + 1 <= Count
@@ -481,7 +516,7 @@ package body Model_Runner.Framework.Repository is
                                   From => To_Unbounded_String (Typed), To => Other,
                                   Source => Explicit, Sure => Certain,
                                   Where => To_Unbounded_String
-                                             (Path & ":" & Image (Tokens (Ahead).Line))));
+                                             (Path & ":" & Image (Tokens (Ahead).Line)), Origin => <>));
                            end if;
                         end;
                      elsif Seen_Is and then Is_Word (Tokens (Ahead), "record") then
@@ -499,7 +534,7 @@ package body Model_Runner.Framework.Repository is
                    From => To_Unbounded_String
                              (Unit & "." & To_String (Tokens (At_Index + 2).Text)),
                    To => Tokens (At_Index + 2).Text, Source => Explicit, Sure => Certain,
-                   Where => To_Unbounded_String (Path & ":" & Image (Here.Line))));
+                   Where => To_Unbounded_String (Path & ":" & Image (Here.Line)), Origin => <>));
             end if;
          end;
       end loop;
@@ -651,7 +686,7 @@ package body Model_Runner.Framework.Repository is
                             Source => Heuristic,
                             Sure   => Probable,
                             Where  => To_Unbounded_String
-                                        (Path & ":" & Image (Here.Line))));
+                                        (Path & ":" & Image (Here.Line)), Origin => <>));
 
                         --  A subprogram's name followed by its arguments or
                         --  the end of a statement is a call of it.
@@ -673,7 +708,7 @@ package body Model_Runner.Framework.Repository is
                                Source => Heuristic,
                                Sure   => Probable,
                                Where  => To_Unbounded_String
-                                           (Path & ":" & Image (Here.Line))));
+                                           (Path & ":" & Image (Here.Line)), Origin => <>));
                         end if;
                      end if;
                   end;
@@ -736,13 +771,15 @@ package body Model_Runner.Framework.Repository is
                      if Size <= Largest_Read then
                         Files.Read_Text (Full, Text, Status);
                      end if;
+                     Result.Reading := To_Unbounded_String (Relative);
                      Add_File
                        (Result,
                         (Path        => To_Unbounded_String (Relative),
                          Language    => To_Unbounded_String (Language_Of (Relative)),
                          Role        => Role_Of (Relative),
                          Fingerprint => To_Unbounded_String
-                                          (Fingerprint (To_String (Text)))));
+                                          (Fingerprint (To_String (Text))),
+                         Stamp       => To_Unbounded_String (Stamp_Of (Full))));
                      if Language_Of (Relative) = "Ada" then
                         Read (Ada_Read, Relative, To_String (Text), Result);
                         Paths.Append (Relative);
@@ -766,10 +803,269 @@ package body Model_Runner.Framework.Repository is
 
       --  References need every symbol, so they come after every file.
       for Index in 1 .. Natural (Paths.Length) loop
+         Result.Reading := To_Unbounded_String (Paths (Index));
          Find_References (Paths (Index), Texts (Index), Result);
       end loop;
+      Result.Reading := Null_Unbounded_String;
       return Result;
    end Scan;
+
+   -------------
+   -- Refresh --
+   -------------
+
+   function Refresh
+     (Project_Directory : String;
+      Kept              : Graph;
+      Read_Again        : out Natural) return Graph
+   is
+      Result   : Graph;
+      Ada_Read : Ada_Adapter;
+      Plain    : Generic_Adapter;
+
+      --  The files there are now, in the order Scan walks them, with their
+      --  stamps.
+      Now_Paths  : Name_Lists.Vector;
+      Now_Stamps : Name_Lists.Vector;
+
+      --  What was read again, and the text of every Ada file whose
+      --  references may have to be found again.
+      Changed : Name_Lists.Vector;
+
+      procedure Walk (Directory, Prefix : String) is
+         Search : Dirs.Search_Type;
+         Found  : Dirs.Directory_Entry_Type;
+         Names  : Name_Lists.Vector;
+      begin
+         Dirs.Start_Search (Search, Directory, "");
+         while Dirs.More_Entries (Search) loop
+            Dirs.Get_Next_Entry (Search, Found);
+            if not Skipped (Dirs.Simple_Name (Found)) then
+               Names.Append (Dirs.Simple_Name (Found));
+            end if;
+         end loop;
+         Dirs.End_Search (Search);
+         for Name of Sorted (Names) loop
+            declare
+               Full     : constant String := Hostkit.Fs.Join (Directory, Name);
+               Relative : constant String :=
+                 (if Prefix = "" then Name else Prefix & "/" & Name);
+            begin
+               if Dirs.Kind (Full) = Dirs.Directory then
+                  Walk (Full, Relative);
+               elsif Dirs.Kind (Full) = Dirs.Ordinary_File then
+                  Now_Paths.Append (Relative);
+                  Now_Stamps.Append (Stamp_Of (Full));
+               end if;
+            exception
+               when others =>
+                  null;
+            end;
+         end loop;
+      exception
+         when others =>
+            null;
+      end Walk;
+
+      function Kept_Index (Path : String) return Natural is
+      begin
+         for Index in 1 .. Natural (Kept.Files.Length) loop
+            if To_String (Kept.Files (Index).Path) = Path then
+               return Index;
+            end if;
+         end loop;
+         return 0;
+      end Kept_Index;
+
+      --  The text of a file, and whether it could be read.
+      function Text_Of (Path : String) return String is
+         Text   : Unbounded_String;
+         Status : E.Error_Info;
+         Full   : constant String := Hostkit.Fs.Join (Project_Directory, Path);
+         use type Dirs.File_Size;
+      begin
+         if Dirs.Size (Full) <= Largest_Read then
+            Files.Read_Text (Full, Text, Status);
+         end if;
+         return To_String (Text);
+      exception
+         when others =>
+            return "";
+      end Text_Of;
+
+      function Is_Reference (Kind : Relation_Kind) return Boolean
+      is (Kind in References | Calls);
+
+      --  The units a set of files hold, from a graph.
+      function Units_Of (From : Graph; Paths : Name_Lists.Vector) return Name_Lists.Vector is
+         Units : Name_Lists.Vector;
+      begin
+         for Link of From.Relations loop
+            if Link.Kind = Contains and then Paths.Contains (To_String (Link.From))
+              and then not Units.Contains (To_String (Link.To))
+            then
+               Units.Append (To_String (Link.To));
+            end if;
+         end loop;
+         return Units;
+      end Units_Of;
+
+      Gone : Name_Lists.Vector;
+   begin
+      Read_Again := 0;
+      Walk (Project_Directory, "");
+
+      --  What changed, and what went.
+      for Index in 1 .. Natural (Now_Paths.Length) loop
+         declare
+            Held : constant Natural := Kept_Index (Now_Paths (Index));
+         begin
+            if Held = 0 or else Length (Kept.Files (Held).Stamp) = 0
+              or else To_String (Kept.Files (Held).Stamp) /= Now_Stamps (Index)
+              or else Recent (Now_Stamps (Index))
+            then
+               Changed.Append (Now_Paths (Index));
+            end if;
+         end;
+      end loop;
+      for Item of Kept.Files loop
+         if not Now_Paths.Contains (To_String (Item.Path)) then
+            Gone.Append (To_String (Item.Path));
+         end if;
+      end loop;
+      if Changed.Is_Empty and then Gone.Is_Empty then
+         return Kept;
+      end if;
+
+      --  Each file in order: as it was, or read again.
+      for Index in 1 .. Natural (Now_Paths.Length) loop
+         declare
+            Path : constant String := Now_Paths (Index);
+         begin
+            Result.Reading := To_Unbounded_String (Path);
+            if Changed.Contains (Path) then
+               declare
+                  Text : constant String := Text_Of (Path);
+               begin
+                  Read_Again := Read_Again + 1;
+                  Add_File
+                    (Result,
+                     (Path        => To_Unbounded_String (Path),
+                      Language    => To_Unbounded_String (Language_Of (Path)),
+                      Role        => Role_Of (Path),
+                      Fingerprint => To_Unbounded_String (Fingerprint (Text)),
+                      Stamp       => To_Unbounded_String (Now_Stamps (Index))));
+                  if Language_Of (Path) = "Ada" then
+                     Read (Ada_Read, Path, Text, Result);
+                  else
+                     Read (Plain, Path, Text, Result);
+                  end if;
+               end;
+            else
+               Add_File (Result, Kept.Files (Kept_Index (Path)));
+               for Named of Kept.Symbols loop
+                  if To_String (Named.Path) = Path then
+                     Result.Symbols.Append (Named);
+                  end if;
+               end loop;
+               for Link of Kept.Relations loop
+                  if To_String (Link.Origin) = Path and then not Is_Reference (Link.Kind) then
+                     Result.Relations.Append (Link);
+                  end if;
+               end loop;
+            end if;
+         end;
+      end loop;
+
+      --  References: found again for a changed file and for every file
+      --  that can see a changed or removed unit; taken as they were for
+      --  the rest.
+      declare
+         Moved   : Name_Lists.Vector := Units_Of (Result, Changed);
+         Removed : constant Name_Lists.Vector := Units_Of (Kept, Gone);
+      begin
+         for Unit of Removed loop
+            if not Moved.Contains (Unit) then
+               Moved.Append (Unit);
+            end if;
+         end loop;
+         for Path of Now_Paths loop
+            if Language_Of (Path) = "Ada" then
+               declare
+                  Own    : constant Name_Lists.Vector :=
+                    Units_Of (Result, Name_Lists.To_Vector (Path, 1));
+                  Sees   : Boolean := Changed.Contains (Path);
+               begin
+                  for Link of Result.Relations loop
+                     if not Sees and then Own.Contains (To_String (Link.From))
+                       and then Link.Kind = Depends_On
+                       and then Moved.Contains (To_String (Link.To))
+                     then
+                        Sees := True;
+                     end if;
+                  end loop;
+                  Sees := Sees or else (for some Unit of Own => Moved.Contains (Unit));
+                  Result.Reading := To_Unbounded_String (Path);
+                  if Sees then
+                     if not Changed.Contains (Path) then
+                        Read_Again := Read_Again + 1;
+                     end if;
+                     Find_References (Path, Text_Of (Path), Result);
+                  else
+                     for Link of Kept.Relations loop
+                        if To_String (Link.Origin) = Path and then Is_Reference (Link.Kind) then
+                           Result.Relations.Append (Link);
+                        end if;
+                     end loop;
+                  end if;
+               end;
+            end if;
+         end loop;
+      end;
+      Result.Reading := Null_Unbounded_String;
+      return Result;
+   end Refresh;
+
+   ---------
+   -- Now --
+   ---------
+
+   function Now (Item : Stores.Store) return Graph is
+      Kept       : Graph;
+      Read       : E.Error_Info;
+      Read_Again : Natural;
+   begin
+      Load (Item, Kept, Read);
+      return Refresh (Ada.Directories.Containing_Directory (Stores.Root (Item)), Kept, Read_Again);
+   end Now;
+
+   -------------
+   -- Current --
+   -------------
+
+   procedure Current
+     (Item   : in out Stores.Store;
+      Found  : out Graph;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Kept       : Graph;
+      Read       : E.Error_Info;
+      Read_Again : Natural;
+      Change     : Stores.Transaction;
+   begin
+      Status := E.Success;
+      Load (Item, Kept, Read);
+      Found := Refresh (Ada.Directories.Containing_Directory (Stores.Root (Item)), Kept,
+                        Read_Again);
+      if Read_Again > 0 or else E.Is_Error (Read)
+        or else Natural (Found.Files.Length) /= Natural (Kept.Files.Length)
+      then
+         Keep (Item, Change, Found, Status);
+         if E.Is_Ok (Status) then
+            Stores.Commit (Item, Change, Status);
+         end if;
+      end if;
+   end Current;
 
    ---------------------------------------------------------------------------
    --  Keeping.
@@ -812,7 +1108,7 @@ package body Model_Runner.Framework.Repository is
               (Value, "file." & Six (Index),
                To_String (File.Path) & Tab & To_String (File.Language) & Tab
                & Lower (File_Role'Image (File.Role)) & Tab
-               & To_String (File.Fingerprint));
+               & To_String (File.Fingerprint) & Tab & To_String (File.Stamp));
          end;
       end loop;
       for Index in 1 .. Natural (Found.Symbols.Length) loop
@@ -835,7 +1131,7 @@ package body Model_Runner.Framework.Repository is
                & To_String (Link.From) & Tab & To_String (Link.To) & Tab
                & Lower (Derivation'Image (Link.Source)) & Tab
                & Lower (Confidence'Image (Link.Sure)) & Tab
-               & To_String (Link.Where));
+               & To_String (Link.Where) & Tab & To_String (Link.Origin));
          end;
       end loop;
       Records.Set (Value, "fingerprint", Graph_Fingerprint (Found));
@@ -866,14 +1162,16 @@ package body Model_Runner.Framework.Repository is
               Split_Tabs (Records.Get (Value, Field));
          begin
             if Ada.Strings.Fixed.Index (Field, "file.") = Field'First
-              and then Natural (Parts.Length) = 4
+              and then Natural (Parts.Length) in 4 .. 5
             then
                Found.Files.Append
                  (File_Entry'
                   (Path        => To_Unbounded_String (Parts (1)),
                    Language    => To_Unbounded_String (Parts (2)),
                    Role        => File_Role'Value (Parts (3)),
-                   Fingerprint => To_Unbounded_String (Parts (4))));
+                   Fingerprint => To_Unbounded_String (Parts (4)),
+                   Stamp       => To_Unbounded_String
+                                    (if Natural (Parts.Length) = 5 then Parts (5) else "")));
             elsif Ada.Strings.Fixed.Index (Field, "symbol.") = Field'First
               and then Natural (Parts.Length) = 4
             then
@@ -884,7 +1182,7 @@ package body Model_Runner.Framework.Repository is
                    Path => To_Unbounded_String (Parts (3)),
                    Line => Natural'Value (Parts (4))));
             elsif Ada.Strings.Fixed.Index (Field, "relation.") = Field'First
-              and then Natural (Parts.Length) = 6
+              and then Natural (Parts.Length) in 6 .. 7
             then
                Found.Relations.Append
                  (Relation'
@@ -893,7 +1191,9 @@ package body Model_Runner.Framework.Repository is
                    To     => To_Unbounded_String (Parts (3)),
                    Source => Derivation'Value (Parts (4)),
                    Sure   => Confidence'Value (Parts (5)),
-                   Where  => To_Unbounded_String (Parts (6))));
+                   Where  => To_Unbounded_String (Parts (6)),
+                   Origin => To_Unbounded_String
+                               (if Natural (Parts.Length) = 7 then Parts (7) else "")));
             end if;
          end;
       end loop;
