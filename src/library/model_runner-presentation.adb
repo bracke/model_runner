@@ -504,9 +504,30 @@ package body Model_Runner.Presentation is
       end if;
 
       if Item.Structured then
-         Put_Record
-           (Item, "error", E.Diagnostic_Code (Condition.Code),
-            [Loc.Named ("severity", Severity)], Detail);
+         --  Each of the condition's named values a field of its own -- a
+         --  missing input's name, a path, an offset -- so that a program
+         --  reads what went wrong without reading the text.
+         declare
+            use type Loc.Argument_List;
+
+            function Value_Of (One : E.Parameter) return String
+            is (case One.Kind is
+                   when E.Param_Integer | E.Param_Bytes | E.Param_Tokens | E.Param_Offset =>
+                      T.Image (One.Int_Value),
+                   when E.Param_Boolean => (if One.Bool_Value then "true" else "false"),
+                   when E.Param_Real => Long_Float'Image (One.Real_Value),
+                   when others => T.To_String (One.Text_Value));
+
+            function With_Parameters (From : Positive) return Loc.Argument_List
+            is (if From > Condition.Parameter_Total then Loc.Argument_List'(1 .. 0 => <>)
+                else Loc.Named (T.To_String (Condition.Parameters (From).Name),
+                                Value_Of (Condition.Parameters (From)))
+                     & With_Parameters (From + 1));
+         begin
+            Put_Record
+              (Item, "error", E.Diagnostic_Code (Condition.Code),
+               Loc.Named ("severity", Severity) & With_Parameters (1), Detail);
+         end;
          return;
       end if;
 

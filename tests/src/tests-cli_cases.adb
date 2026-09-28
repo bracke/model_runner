@@ -1588,9 +1588,13 @@ package body Tests.CLI_Cases is
               and then Shows ("is accepted"),
               "a cancelled task was not reopened: " & Last_Output);
 
+      --  What the condition names is a field of its own, not only words in
+      --  its text.
       Assert (Command ("work|no such thing", Json => True) /= 0
-              and then Shows ("""kind"": ""error""") and then Shows ("MR-FRAMEWORK"),
-              "work given text naming nothing did not say so, as JSON: " & Last_Output);
+              and then Shows ("""kind"": ""error""") and then Shows ("MR-FRAMEWORK")
+              and then Shows ("""name"": ""an accepted task matching no such thing"""),
+              "work given text naming nothing did not say so, with what it names, as JSON: "
+              & Last_Output);
 
       --  The console itself, told to write for a program.
       declare

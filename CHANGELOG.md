@@ -7,6 +7,10 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A structured error names what it is about.** With `--format json`, an
+  error record carries each of the condition's named values as a field of
+  its own -- the missing input's name, a path, an offset -- beside its code
+  and text, so a program need not read the text.
 - **init checks its result before it stands.** The consistency check runs
   inside `Configurations.Initialize`: all it finds is said
   (`Outcome.Findings`), and a state that did not come out whole -- a record
