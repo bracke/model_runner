@@ -3024,6 +3024,173 @@ package body Tests.Framework_Cases is
       Hostkit.Pty.Close (Pair);
    end Terminal_Restored_After_Cancel;
 
+   --  On a pseudo-terminal: the selector redraws when the window is
+   --  resized while nobody types, and a secret input is typed unseen.
+   procedure Terminal_Follows_Resize_And_Hides_Secrets
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Hostkit.Descriptors.Descriptor;
+      use type Hostkit.Spawn.Spawn_Outcome;
+      use type Ada.Streams.Stream_Element_Offset;
+
+      --  Run model_runner with these words on a fresh pseudo-terminal in a
+      --  directory; Act is given the pair once it has drawn something, and
+      --  what it wrote in all is returned. Empty where there is no device.
+      function Run_On_Terminal
+        (Words     : Hostkit.String_Vectors.Vector;
+         Directory : String;
+         Extra     : String;
+         Act       : not null access procedure (Pair : Hostkit.Pty.Pair; Seen : String))
+         return String
+      is
+         Pair    : Hostkit.Pty.Pair;
+         Options : Hostkit.Spawn.Options;
+         Child   : Hostkit.Spawn.Process_Handle;
+         Result  : Hostkit.Spawn.Status;
+         Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
+         Last    : Ada.Streams.Stream_Element_Offset;
+         Said    : Unbounded_String;
+
+         procedure Keep_Variable (Name, Value : String) is
+         begin
+            if Name /= "TERM" then
+               Options.Environment.Append (To_Unbounded_String (String'(Name & "=" & Value)));
+            end if;
+         end Keep_Variable;
+
+         --  What arrives within a few seconds.
+         procedure Gather is
+         begin
+            while Hostkit.Descriptors.Wait_Readable (Pair.From_Child, 3000) loop
+               exit when Hostkit.Descriptors."/="
+                           (Hostkit.Descriptors.Read (Pair.From_Child, Buffer, Last),
+                            Hostkit.Descriptors.Transfer_Ok)
+                 or else Last < Buffer'First;
+               for Byte of Buffer (Buffer'First .. Last) loop
+                  Append (Said, Character'Val (Byte));
+               end loop;
+               exit when Hostkit.Descriptors.Wait_Readable (Pair.From_Child, 300) = False;
+            end loop;
+         end Gather;
+      begin
+         if not Hostkit.Pty.Is_Supported or else not Hostkit.Pty.Open (Pair)
+           or else Pair.Device = Hostkit.Descriptors.Invalid
+         then
+            return "";
+         end if;
+         Ada.Environment_Variables.Iterate (Keep_Variable'Access);
+         Options.Environment.Append (To_Unbounded_String ("TERM=xterm"));
+         if Extra /= "" then
+            Options.Environment.Append (To_Unbounded_String (Extra));
+         end if;
+         Options.Replace_Environment := True;
+         Options.Working_Directory := To_Unbounded_String (Directory);
+         Assert (Hostkit.Pty.Set_Size (Pair, (Rows => 24, Columns => 80))
+                 and then Hostkit.Pty.Attach (Pair, Options),
+                 "the pseudo-terminal was not made ready");
+         Assert (Hostkit.Spawn.Start (Dirs.Full_Name ("../bin/model_runner"), Words, Options, Child)
+                 = Hostkit.Spawn.Spawn_Ok, "model_runner did not start");
+         Hostkit.Pty.Close_Device (Pair);
+         Gather;
+         Act (Pair, To_String (Said));
+         Gather;
+         loop
+            exit when Hostkit.Descriptors."/="
+                        (Hostkit.Descriptors.Read (Pair.From_Child, Buffer, Last),
+                         Hostkit.Descriptors.Transfer_Ok)
+              or else Last < Buffer'First;
+            for Byte of Buffer (Buffer'First .. Last) loop
+               Append (Said, Character'Val (Byte));
+            end loop;
+         end loop;
+         Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result), "not waited for");
+         Hostkit.Pty.Close (Pair);
+         return To_String (Said);
+      end Run_On_Terminal;
+
+      Store  : S.Store;
+      Redrew : Boolean := False;
+
+      procedure Resize_Then_Cancel (Pair : Hostkit.Pty.Pair; Seen : String) is
+         Buffer : Ada.Streams.Stream_Element_Array (1 .. 4096);
+         Last   : Ada.Streams.Stream_Element_Offset;
+         Sent   : Hostkit.Descriptors.Transfer_Outcome;
+      begin
+         Assert (Seen /= "", "the selector drew nothing");
+         Assert (Hostkit.Pty.Set_Size (Pair, (Rows => 30, Columns => 100)), "not resized");
+         Redrew := Hostkit.Descriptors.Wait_Readable (Pair.From_Child, 3000)
+           and then Hostkit.Descriptors."=" (Hostkit.Descriptors.Read (Pair.From_Child, Buffer, Last),
+                                            Hostkit.Descriptors.Transfer_Ok)
+           and then Last >= Buffer'First;
+         Sent := Hostkit.Descriptors.Write (Pair.To_Child, [1 => 3], Last);
+         Assert (Hostkit.Descriptors."=" (Sent, Hostkit.Descriptors.Transfer_Ok) and then Last = 1,
+                 "Ctrl-C was not sent");
+      end Resize_Then_Cancel;
+
+      procedure Type_Secret (Pair : Hostkit.Pty.Pair; Seen : String) is
+         Last : Ada.Streams.Stream_Element_Offset;
+         Word : constant String := "hunter2" & ASCII.CR;
+         Keys : Ada.Streams.Stream_Element_Array (1 .. Word'Length);
+         Sent : Hostkit.Descriptors.Transfer_Outcome;
+      begin
+         Assert (Ada.Strings.Fixed.Index (Seen, "Token") > 0, "the secret was not asked for: " & Seen);
+         for Index in Word'Range loop
+            Keys (Ada.Streams.Stream_Element_Offset (Index)) := Character'Pos (Word (Index));
+         end loop;
+         Sent := Hostkit.Descriptors.Write (Pair.To_Child, Keys, Last);
+         Assert (Hostkit.Descriptors."=" (Sent, Hostkit.Descriptors.Transfer_Ok)
+                 and then Last = Keys'Last, "the secret was not typed");
+      end Type_Secret;
+
+      Words : Hostkit.String_Vectors.Vector;
+   begin
+      if not Hostkit.Pty.Is_Supported then
+         Ada.Text_IO.Put_Line ("note: no pseudo-terminal here; not checked");
+         return;
+      end if;
+      Task_Project (Store, "terminal-resize");
+      S.Close (Store);
+      Words.Append (To_Unbounded_String ("task"));
+      Words.Append (To_Unbounded_String ("new"));
+      declare
+         Said : constant String :=
+           Run_On_Terminal (Words, Dirs.Full_Name (Scratch & "/terminal-resize"), "",
+                            Resize_Then_Cancel'Access);
+      begin
+         Assert (Said = "" or else Redrew, "a resize while nobody typed was not drawn");
+      end;
+
+      --  A template with a secret input, found beside a settings file.
+      declare
+         Home    : constant String := Dirs.Full_Name (Fresh ("secret-home"));
+         Project : constant String := Dirs.Full_Name (Fresh ("secret-project"));
+      begin
+         Dirs.Create_Path (Home & "/templates");
+         Put_File (Home & "/settings.conf", "");
+         Put_File (Home & "/templates/secret-demo.template",
+                   "template = secret-demo" & LF & "name = Secret demo" & LF & "version = 1" & LF
+                   & "input token" & LF
+                   & "  type = text" & LF & "  label = Token" & LF
+                   & "  description = the service's token" & LF
+                   & "  required = true" & LF & "  secret = true" & LF);
+         Words.Clear;
+         Words.Append (To_Unbounded_String ("init"));
+         Words.Append (To_Unbounded_String ("secret-demo"));
+         declare
+            Said : constant String :=
+              Run_On_Terminal (Words, Project, "MODEL_RUNNER_CONFIG=" & Home & "/settings.conf",
+                               Type_Secret'Access);
+         begin
+            Assert (Said = ""
+                    or else (Ada.Strings.Fixed.Index (Said, "hunter2") = 0
+                             and then Ada.Strings.Fixed.Index (Said, "*******") > 0
+                             and then Dirs.Exists (Project & "/.model_runner")),
+                    "a secret was shown as it was typed, or the project not made: " & Said);
+         end;
+      end;
+   end Terminal_Follows_Resize_And_Hides_Secrets;
+
    --  The derived indexes are made at init, known to be stale once the
    --  state or the repository moves on, and say what they were built from.
    procedure Indexes_Are_Derived
@@ -6548,6 +6715,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Terminal_Restored_After_Cancel'Access,
          "a chooser cancelled with Ctrl-C leaves the terminal as it found it");
+      Register_Routine
+        (T, Terminal_Follows_Resize_And_Hides_Secrets'Access,
+         "the selector redraws on a resize, and a secret is typed unseen");
       Register_Routine
         (T, Indexes_Are_Derived'Access,
          "the derived indexes are made at init and known to be stale when they are");

@@ -442,6 +442,23 @@ package body Model_Runner.CLI.Choosers is
       while not Finished (State) loop
          Draw;
 
+         --  Wait for a key, and meanwhile watch the window: a resize while
+         --  nobody types is drawn at once at the new size, not at the next
+         --  key.
+         declare
+            Was, Now : Term.Window_Size;
+            Measured : constant Boolean := Term.Size (Output, Was);
+         begin
+            while not Hostkit.Descriptors.Wait_Readable (Input, 200) loop
+               if Measured and then Term.Size (Output, Now)
+                 and then (Now.Rows /= Was.Rows or else Now.Columns /= Was.Columns)
+               then
+                  Draw;
+                  Was := Now;
+               end if;
+            end loop;
+         end;
+
          --  Read what is there, and act on every key it holds.
          declare
             Buffer : Ada.Streams.Stream_Element_Array (1 .. 32);
@@ -509,9 +526,62 @@ package body Model_Runner.CLI.Choosers is
       Choices : String;
       Default : String;
       Answer  : out Ada.Strings.Unbounded.Unbounded_String;
-      Given   : out Boolean)
+      Given   : out Boolean;
+      Secret  : Boolean := False)
    is
       Options : Choice_List;
+
+      --  A line typed with nothing of it shown: raw, a mark for each
+      --  character, Backspace taking one back, Enter ending it, Escape or
+      --  Ctrl-C giving up. The terminal's own mode is put back however it
+      --  ends.
+      function Hidden_Line (Gave_Up : out Boolean) return String is
+         Guard  : Raw_Guard;
+         Typed  : Unbounded_String;
+         Buffer : Ada.Streams.Stream_Element_Array (1 .. 1);
+         Last   : Ada.Streams.Stream_Element_Offset;
+      begin
+         Gave_Up := False;
+         if not Term.Save_Mode (Input, Guard.Saved) then
+            Gave_Up := True;
+            return "";
+         end if;
+         Guard.Held := True;
+         if not Term.Set_Raw (Input) then
+            Gave_Up := True;
+            return "";
+         end if;
+         loop
+            if Hostkit.Descriptors.Read (Input, Buffer, Last) /= Hostkit.Descriptors.Transfer_Ok
+              or else Last < Buffer'First
+            then
+               Gave_Up := True;
+               exit;
+            end if;
+            declare
+               Key : constant Character := Character'Val (Buffer (Buffer'First));
+            begin
+               if Key in ASCII.CR | ASCII.LF then
+                  exit;
+               elsif Key in ASCII.ESC | ASCII.ETX then
+                  Gave_Up := True;
+                  exit;
+               elsif Key in ASCII.DEL | ASCII.BS then
+                  if Length (Typed) > 0 then
+                     Delete (Typed, Length (Typed), Length (Typed));
+                     Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.BS & " " & ASCII.BS);
+                  end if;
+               elsif Key >= ' ' then
+                  Append (Typed, Key);
+                  Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, "*");
+               end if;
+               Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
+            end;
+         end loop;
+         Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CR & ASCII.LF);
+         Finalize (Guard);
+         return (if Gave_Up then "" else To_String (Typed));
+      end Hidden_Line;
    begin
       Answer := Null_Unbounded_String;
       Given := False;
@@ -533,7 +603,7 @@ package body Model_Runner.CLI.Choosers is
       Pres.Put_Note
         (Screen, "cli.choose.field",
          [Loc.Named ("name", Label), Loc.Named ("detail", Detail),
-          Loc.Named ("value", Default)]);
+          Loc.Named ("value", (if Secret then "" else Default))]);
 
       if Length (Options) > 0 then
          declare
@@ -542,6 +612,24 @@ package body Model_Runner.CLI.Choosers is
          begin
             if Picked > 0 then
                Answer := Options.Items (Picked).Label;
+               Given := True;
+            end if;
+         end;
+         return;
+      end if;
+
+      if Secret then
+         declare
+            Gave_Up : Boolean;
+            Typed   : constant String := Hidden_Line (Gave_Up);
+         begin
+            if Gave_Up then
+               return;
+            elsif Typed /= "" then
+               Answer := To_Unbounded_String (Typed);
+               Given := True;
+            elsif Default /= "" then
+               Answer := To_Unbounded_String (Default);
                Given := True;
             end if;
          end;

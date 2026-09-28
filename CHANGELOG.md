@@ -7,6 +7,12 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The selector follows a resize.** While it waits for a key it watches
+  the window, and redraws at the new size at once rather than at the next
+  key.
+- **Secrets are typed unseen.** An `init` input declared `secret = true`
+  is read with nothing of it shown -- a mark for each character, Backspace
+  and Escape or Ctrl-C as usual -- and its default is not shown either.
 - **Generated files are known.** A file has the role generated when
   `set repository.generated` places it (default: `generated`, and protocol
   buffer output) or its first lines say a tool made it and it is not to be

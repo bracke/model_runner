@@ -120,7 +120,7 @@ package body Model_Runner.CLI.Init is
             Choosers.Ask
               (Screen, To_String (Declared.Label),
                To_String (Declared.Description), To_String (Declared.Choices),
-               To_String (Declared.Default), Typed, Got);
+               To_String (Declared.Default), Typed, Got, Secret => Declared.Secret);
             if not Got then
                return;
             end if;

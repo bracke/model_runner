@@ -161,6 +161,9 @@ package Model_Runner.CLI.Choosers is
    --  @param Default What an empty answer takes; may be empty.
    --  @param Answer The value.
    --  @param Given Whether one was given, rather than the reader giving up.
+   --  @param Secret Whether what is typed is a secret: not shown as it is
+   --    typed, a mark standing for each character, and given up on with
+   --    Escape or Ctrl-C.
    procedure Ask
      (Screen  : in out Model_Runner.Presentation.Console;
       Label   : String;
@@ -168,7 +171,8 @@ package Model_Runner.CLI.Choosers is
       Choices : String;
       Default : String;
       Answer  : out Ada.Strings.Unbounded.Unbounded_String;
-      Given   : out Boolean);
+      Given   : out Boolean;
+      Secret  : Boolean := False);
 
 private
 
