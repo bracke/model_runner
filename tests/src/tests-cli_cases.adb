@@ -1526,6 +1526,102 @@ package body Tests.CLI_Cases is
 
    --  A mixture is reported as one, and a dense model is not.
    --
+   --  The project commands speak to a program as well as a person: --format
+   --  json writes one object a line, each message's key and values; task
+   --  list narrows by state and kind; task split, depend and reopen are
+   --  commands; and work given text that names no accepted task says so.
+   procedure Project_Commands_Speak_For_Programs
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Project : constant String := "obj/format-project";
+
+      function Command (Words : String; Json : Boolean := False) return Natural is
+         Source : Fixed_Arguments;
+         Status : Natural;
+         Start  : Natural := Words'First;
+      begin
+         for Index in Words'First .. Words'Last + 1 loop
+            if Index > Words'Last or else Words (Index) = '|' then
+               Add (Source, Words (Start .. Index - 1));
+               Start := Index + 1;
+            end if;
+         end loop;
+         Add (Source, "--directory");
+         Add (Source, Project);
+         if Json then
+            Add (Source, "--format");
+            Add (Source, "json");
+         end if;
+         Ran (Source, Status);
+         return Status;
+      end Command;
+
+      function Shows (Part : String) return Boolean
+      is (Ada.Strings.Fixed.Index (Last_Output, Part) > 0);
+   begin
+      if Ada.Directories.Exists (Project) then
+         Ada.Directories.Delete_Tree (Project);
+      end if;
+      Assert (Command ("init|ada-cli|--set|project_name=demo") = 0, "no project was made");
+      Assert (Command ("task|new|Lexer|--set|kind=analysis") = 0
+              and then Command ("task|new|Parser|--set|kind=implementation|--set|component=demo") = 0
+              and then Command ("task|accept|TASK-001") = 0,
+              "the tasks were not made");
+
+      Assert (Command ("task|list|--set|state=accepted", Json => True) = 0
+              and then Shows ("{""kind"": ""message"", ""key"": ""cli.task.item""")
+              and then Shows ("""name"": ""TASK-001""")
+              and then not Shows ("TASK-DEMO-001"),
+              "task list did not narrow by state, as JSON: " & Last_Output);
+      Assert (Command ("task|list|--set|kind=implementation") = 0
+              and then Shows ("TASK-DEMO-001") and then not Shows ("Lexer"),
+              "task list did not narrow by kind: " & Last_Output);
+
+      Assert (Command ("task|split|TASK-001|One; Two") = 0 and then Shows ("is blocked"),
+              "task split did not make the parts and block the parent: " & Last_Output);
+      Assert (Command ("task|depend|TASK-003|TASK-002") = 0 and then Shows ("waits for"),
+              "task depend did not make one wait for the other: " & Last_Output);
+      Assert (Command ("task|accept|TASK-DEMO-001") = 0
+              and then Command ("task|cancel|TASK-DEMO-001") = 0
+              and then Command ("task|reopen|TASK-DEMO-001") = 0
+              and then Shows ("is accepted"),
+              "a cancelled task was not reopened: " & Last_Output);
+
+      Assert (Command ("work|no such thing", Json => True) /= 0
+              and then Shows ("""kind"": ""error""") and then Shows ("MR-FRAMEWORK"),
+              "work given text naming nothing did not say so, as JSON: " & Last_Output);
+
+      --  The console itself, told to write for a program.
+      declare
+         Catalog : aliased Model_Runner.Localization.Catalog;
+         Screen  : Model_Runner.Presentation.Console;
+      begin
+         Model_Runner.Localization.Open
+           (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+         Model_Runner.Presentation.Open
+           (Screen, Catalog'Unchecked_Access, Opt.Color_Never,
+            (Output_Is_Terminal => False, Error_Is_Terminal => False,
+             Input_Is_Terminal  => False, Colour_Suppressed => True),
+            Opt.Normal);
+         Model_Runner.Presentation.Use_Structured (Screen, True);
+         Captured_Output.Open ("obj/structured-output.txt");
+         Model_Runner.Presentation.Put_Message
+           (Screen, "cli.task.moved",
+            [Model_Runner.Localization.Named ("name", "TASK-1"),
+             Model_Runner.Localization.Named ("value", "a ""quoted"" state")]);
+         declare
+            Caught : constant String := Captured_Output.Close;
+         begin
+            Assert (Ada.Strings.Fixed.Index
+                      (Caught,
+                       "{""kind"": ""message"", ""key"": ""cli.task.moved"", "
+                       & """name"": ""TASK-1"", ""value"": ""a \""quoted\"" state""") > 0,
+                    "a structured message was not one JSON object: " & Caught);
+         end;
+      end;
+   end Project_Commands_Speak_For_Programs;
+
    --  init starts a project from an installed template: the shipped
    --  templates are found, the inputs given are taken, and the project is
    --  made; a second init, an unknown template and an input no template
@@ -12145,6 +12241,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Task_Command_Manages_Work'Access,
          "task creates, moves, lists and shows the project's work");
+      Register_Routine
+        (T, Project_Commands_Speak_For_Programs'Access,
+         "the project commands speak JSON, narrow, split, depend and reopen");
       Register_Routine
         (T, Init_Starts_A_Project'Access,
          "init starts a project from a shipped template and refuses what"

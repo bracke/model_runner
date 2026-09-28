@@ -1,3 +1,4 @@
+with Interfaces;
 with Ada.Environment_Variables;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
@@ -3634,6 +3635,347 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Permissions_And_Proposals_Reach_The_Work;
 
+   --  A schema's records are carried forward by the steps registered for
+   --  it and refused where a step is missing; results kept only for a while
+   --  go when their time is up and the rest stay; the Ada adapter sees what
+   --  is made from what; an agent's proposed parts are candidate children;
+   --  and a task waits when no workspace slot is free.
+   procedure Schemas_Retention_Adapter_And_Slots
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Sc renames Model_Runner.Framework.Schemas;
+      package Rp renames Model_Runner.Framework.Repository;
+      use type Rp.Relation_Kind;
+      Store  : aliased S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Value  : R.Item;
+      Done   : Wk.Report;
+   begin
+      --  Migration.
+      declare
+         procedure Step (Old : in out R.Item; Result : out E.Error_Info) is
+            Next : R.Item := R.Create (R.Schema_Id (Old), 2, R.Entity_Id (Old), R.Revision (Old));
+         begin
+            for Index in 1 .. R.Field_Count (Old) loop
+               R.Set (Next, R.Field_Name (Old, Index), R.Get (Old, R.Field_Name (Old, Index)));
+            end loop;
+            R.Set (Next, "carried", "yes");
+            Old := Next;
+            Result := E.Success;
+         end Step;
+      begin
+         Sc.Register_Migration (Sc.Lease_Schema, 1, Step'Unrestricted_Access);
+         Value := R.Create (Sc.Lease_Schema, 1, "LEASE", 1);
+         Sc.Migrate (Value, 2, Status);
+         Assert (E.Is_Ok (Status) and then R.Schema_Version (Value) = 2
+                 and then R.Get (Value, "carried") = "yes",
+                 "a record was not carried forward by its step: " & Code_Of (Status));
+         Sc.Migrate (Value, 3, Status);
+         Assert (Status.Code = E.Framework_Format_Unsupported,
+                 "a record was carried where no step goes");
+         Sc.Migrate (Value, 1, Status);
+         Assert (Status.Code = E.Framework_Format_Unsupported,
+                 "a record was carried back");
+      end;
+
+      --  Retention.
+      Task_Project
+        (Store, "retention",
+         "set execution.allowed = test" & LF
+         & "profile checks = exists: test -d ." & LF
+         & "scalar verification.default = checks" & LF);
+      declare
+         Old_Log : Rs.Result :=
+           (Kind => Rs.Verification, Producer => To_Unbounded_String ("execution"),
+            Summary => To_Unbounded_String ("old"), Payload => To_Unbounded_String ("x"),
+            others => <>);
+         New_Log : Rs.Result :=
+           (Kind => Rs.Verification, Producer => To_Unbounded_String ("execution"),
+            Summary => To_Unbounded_String ("new"), Payload => To_Unbounded_String ("y"),
+            others => <>);
+         Kept    : Rs.Result :=
+           (Kind => Rs.Child_Result, Producer => To_Unbounded_String ("AG-1"),
+            Summary => To_Unbounded_String ("kept"), Payload => To_Unbounded_String ("z"),
+            others => <>);
+         Stored  : R.Item;
+         Removed : Natural;
+
+         --  Made long ago, as far as its record says.
+         procedure Age (Id : String) is
+         begin
+            S.Read (Store, Model_Runner.Framework.Results_Area, Id, Stored, Status);
+            R.Set (Stored, "created_at", "2020-01-01T00:00:00Z");
+            R.Set_Revision (Stored, R.Revision (Stored) + 1);
+            S.Put (Change, Model_Runner.Framework.Results_Area, Id, Stored);
+         end Age;
+      begin
+         Rs.Add (Store, Change, Old_Log, Status);
+         Rs.Add (Store, Change, New_Log, Status);
+         Rs.Add (Store, Change, Kept, Status);
+         S.Commit (Store, Change, Status);
+         Age (To_String (Old_Log.Id));
+         Age (To_String (Kept.Id));
+         S.Commit (Store, Change, Status);
+         Rs.Prune (Store, Change, Raw_Log_Days => 30, Context_Days => 0, Removed => Removed);
+         S.Commit (Store, Change, Status);
+         Assert (Removed = 1
+                 and then not S.Exists (Store, Model_Runner.Framework.Results_Area,
+                                        To_String (Old_Log.Id))
+                 and then S.Exists (Store, Model_Runner.Framework.Results_Area,
+                                    To_String (New_Log.Id))
+                 and then S.Exists (Store, Model_Runner.Framework.Results_Area,
+                                    To_String (Kept.Id)),
+                 "retention let the wrong results go:" & Removed'Image);
+      end;
+
+      --  The Ada adapter: instantiation, derivation, interfaces, overriding.
+      declare
+         Root  : constant String := Fresh_Root (Store);
+         Found : Rp.Graph;
+         Kinds : array (Rp.Relation_Kind) of Boolean := [others => False];
+      begin
+         Dirs.Create_Path (Root & "/src");
+         Put_File (Root & "/src/shapes.ads",
+                   "package Shapes is" & LF
+                   & "   type Drawable is interface;" & LF
+                   & "   type Shape is abstract tagged null record;" & LF
+                   & "   type Circle is new Shape and Drawable with null record;" & LF
+                   & "   overriding procedure Draw (Item : Circle);" & LF
+                   & "   package Lists is new Ada.Containers.Vectors (Positive, Integer);" & LF
+                   & "end Shapes;" & LF);
+         Found := Rp.Scan (Root);
+         for Index in 1 .. Rp.Relation_Count (Found) loop
+            Kinds (Rp.Relation_At (Found, Index).Kind) := True;
+         end loop;
+         Assert (Kinds (Rp.Instantiates) and then Kinds (Rp.Extends)
+                 and then Kinds (Rp.Implements_Interface) and then Kinds (Rp.Overrides),
+                 "the adapter missed what is made from what");
+      end;
+
+      --  Proposed parts, candidate children.
+      declare
+         Id : Unbounded_String;
+      begin
+         Tk.Create (Store, Change, Fields ("Big", "analysis"), "user", "", Id, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Wk.Execute (Store, To_String (Id),
+                     Scripted_Agent'(File => Null_Unbounded_String,
+                                     Answer => To_Unbounded_String
+                                       ("status: blocked" & LF & "summary: too big" & LF
+                                        & "parts: First half" & LF & "Second half"),
+                                     Broken => False),
+                     Cx.Profile (Store, ""), Done, Status);
+         Assert (To_String (Done.Final_State) = "blocked"
+                 and then Natural (Done.Proposed.Length) = 2
+                 and then Tk.State_Of (Store, Done.Proposed.First_Element) = "candidate"
+                 and then Tk.Children (Store, To_String (Id)).Contains (Done.Proposed.First_Element),
+                 "an agent's proposed parts did not become candidate children");
+      end;
+      S.Close (Store);
+
+      --  No free workspace slot, and the task waits.
+      Task_Project
+        (Store, "slots",
+         "scalar work.isolation = workspace" & LF
+         & "scalar work.max_workspaces = 0" & LF);
+      declare
+         Id : Unbounded_String;
+         Changes  : Cf.Value_Maps.Map;
+         Planned  : Cf.Change_Plan;
+         Revision : Natural;
+      begin
+         Changes.Include ("scalar.work.max_workspaces", "1");
+         Cf.Plan_Change (Store, Changes, Planned, Status);
+         Cf.Reconfigure (Store, Planned, Revision, Status);
+         for Round in 1 .. 2 loop
+            Tk.Create (Store, Change, Fields ("Slot" & Round'Image, "analysis"), "user", "",
+                       Id, Status);
+            S.Commit (Store, Change, Status);
+            Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+            S.Commit (Store, Change, Status);
+            Wk.Execute (Store, To_String (Id),
+                        Scripted_Agent'(File => Null_Unbounded_String,
+                                        Answer => To_Unbounded_String
+                                          ("status: done" & LF & "summary: x"),
+                                        Broken => False),
+                        Cx.Profile (Store, ""), Done, Status);
+         end loop;
+         Assert (To_String (Done.Final_State) = "blocked"
+                 and then To_String (Done.Reason) = "no workspace slot is free",
+                 "a task ran with no workspace slot free: " & To_String (Done.Final_State)
+                 & " " & To_String (Done.Reason));
+      end;
+      S.Close (Store);
+   end Schemas_Retention_Adapter_And_Slots;
+
+   --  Properties, not examples. The task lifecycle allows exactly the moves
+   --  the specification lists, the reopen and reconsideration ones only
+   --  when granted -- every pair of states, both ways. And over dependency
+   --  graphs grown at random from fixed seeds: a dependency is refused
+   --  exactly when it would close a cycle, no cycle is ever held, and a
+   --  task is ready exactly when everything it waits for is complete.
+   procedure State_Machine_And_Graph_Properties
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      type State_Name is access constant String;
+      States : constant array (1 .. 9) of State_Name :=
+        [new String'("candidate"), new String'("accepted"), new String'("running"),
+         new String'("blocked"), new String'("verification"), new String'("complete"),
+         new String'("failed"), new String'("cancelled"), new String'("rejected")];
+
+      --  The specification's table, as pairs; the last three need a grant.
+      Listed : constant array (1 .. 21) of State_Name :=
+        [new String'("candidate>accepted"), new String'("candidate>rejected"),
+         new String'("accepted>running"), new String'("accepted>blocked"),
+         new String'("accepted>cancelled"), new String'("blocked>accepted"),
+         new String'("blocked>cancelled"), new String'("blocked>failed"),
+         new String'("running>verification"), new String'("running>blocked"),
+         new String'("running>failed"), new String'("running>cancelled"),
+         new String'("verification>complete"), new String'("verification>running"),
+         new String'("verification>blocked"), new String'("verification>failed"),
+         new String'("verification>cancelled"), new String'("failed>accepted"),
+         new String'("failed>cancelled"),
+         new String'("complete>accepted"), new String'("cancelled>accepted")];
+      Granted_Only : constant array (1 .. 3) of State_Name :=
+        [new String'("complete>accepted"), new String'("cancelled>accepted"),
+         new String'("rejected>candidate")];
+
+      function In_Table (Pair : String) return Boolean
+      is ((for some One of Listed => One.all = Pair)
+          or else (for some One of Granted_Only => One.all = Pair));
+      function Needs_Grant (Pair : String) return Boolean
+      is (for some One of Granted_Only => One.all = Pair);
+
+      use type Interfaces.Unsigned_64;
+      Machine : constant Tr.Machine := Tk.Lifecycle;
+      Status  : E.Error_Info;
+      All_Granted : constant Tr.Permissions := [others => True];
+
+      --  A generator with a seed of its own, so a failure can be run again.
+      Seed : Interfaces.Unsigned_64;
+      function Next (Below : Positive) return Positive is
+      begin
+         Seed := Seed * 6364136223846793005 + 1442695040888963407;
+         return Natural (Interfaces.Shift_Right (Seed, 33) mod Interfaces.Unsigned_64 (Below)) + 1;
+      end Next;
+   begin
+      for From of States loop
+         for To of States loop
+            declare
+               Pair : constant String := From.all & ">" & To.all;
+            begin
+               Tr.Check (Machine, "T", From.all, To.all, Tr.Ordinary_Only, Status);
+               Assert (E.Is_Ok (Status) = (In_Table (Pair) and then not Needs_Grant (Pair)),
+                       Pair & " is " & (if E.Is_Ok (Status) then "allowed" else "refused")
+                       & " as an ordinary move");
+               Tr.Check (Machine, "T", From.all, To.all, All_Granted, Status);
+               Assert (E.Is_Ok (Status) = In_Table (Pair),
+                       Pair & " is " & (if E.Is_Ok (Status) then "allowed" else "refused")
+                       & " with every grant");
+            end;
+         end loop;
+      end loop;
+
+      for Round in 1 .. 3 loop
+         Seed := Interfaces.Unsigned_64 (Round) * 7919;
+         declare
+            Size   : constant := 10;
+            Store  : S.Store;
+            Change : S.Transaction;
+            Ids    : array (1 .. Size) of Unbounded_String;
+            Waits  : array (1 .. Size, 1 .. Size) of Boolean := [others => [others => False]];
+
+            --  Whether A reaches B through what waits for what, by the
+            --  test's own walk.
+            function Reaches (Start, Goal : Positive) return Boolean is
+               Seen  : array (1 .. Size) of Boolean := [others => False];
+               function Walk (From : Positive) return Boolean is
+               begin
+                  if From = Goal then
+                     return True;
+                  end if;
+                  Seen (From) := True;
+                  for Other in 1 .. Size loop
+                     if Waits (From, Other) and then not Seen (Other) and then Walk (Other) then
+                        return True;
+                     end if;
+                  end loop;
+                  return False;
+               end Walk;
+            begin
+               return Walk (Start);
+            end Reaches;
+         begin
+            Task_Project (Store, "properties-" & Ada.Strings.Fixed.Trim (Round'Image, Ada.Strings.Both));
+            for Index in Ids'Range loop
+               Tk.Create (Store, Change, Fields ("T" & Index'Image, "analysis"), "user", "",
+                          Ids (Index), Status);
+               S.Commit (Store, Change, Status);
+               Tk.Move (Store, Change, To_String (Ids (Index)), "accepted", "", Status => Status);
+               S.Commit (Store, Change, Status);
+            end loop;
+
+            for Try in 1 .. 30 loop
+               declare
+                  A : constant Positive := Next (Size);
+                  B : constant Positive := Next (Size);
+                  Closes : constant Boolean :=
+                    A = B or else Reaches (Start => B, Goal => A);
+               begin
+                  Tk.Add_Dependency (Store, Change, To_String (Ids (A)), To_String (Ids (B)), Status);
+                  Assert (E.Is_Error (Status) = Closes,
+                          "seed" & Round'Image & ": waiting" & A'Image & " on" & B'Image & " was "
+                          & (if E.Is_Error (Status) then "refused" else "taken")
+                          & " though it " & (if Closes then "closes" else "closes no") & " cycle");
+                  if E.Is_Ok (Status) then
+                     S.Commit (Store, Change, Status);
+                     Waits (A, B) := True;
+                  else
+                     Change := S.No_Changes;
+                  end if;
+               end;
+            end loop;
+            Assert (Tk.Cycles (Store).Is_Empty, "a cycle was held");
+
+            --  Some complete; readiness follows exactly.
+            for Index in 1 .. Size loop
+               if Next (3) = 1 then
+                  Tk.Move (Store, Change, To_String (Ids (Index)), "running", "", Status => Status);
+                  Tk.Move (Store, Change, To_String (Ids (Index)), "verification", "",
+                           Status => Status);
+                  Tk.Move (Store, Change, To_String (Ids (Index)), "complete", "",
+                           Gates_Passed => True, Status => Status);
+                  S.Commit (Store, Change, Status);
+               end if;
+            end loop;
+            for Index in 1 .. Size loop
+               if Tk.State_Of (Store, To_String (Ids (Index))) = "accepted" then
+                  declare
+                     Expected : Boolean := True;
+                  begin
+                     for Other in 1 .. Size loop
+                        if Waits (Index, Other)
+                          and then Tk.State_Of (Store, To_String (Ids (Other))) /= "complete"
+                        then
+                           Expected := False;
+                        end if;
+                     end loop;
+                     Assert (Tk.Ready (Store, To_String (Ids (Index))).Ready = Expected,
+                             "seed" & Round'Image & ": task" & Index'Image & " is "
+                             & (if Expected then "not " else "") & "ready against what it waits for");
+                  end;
+               end if;
+            end loop;
+            S.Close (Store);
+         end;
+      end loop;
+   end State_Machine_And_Graph_Properties;
+
    --  Where the project lists its components a task names one of them or
    --  none; a check keeps to its own deadline, tries and severity; the
    --  evidence says which tools and adapters it was taken with and with
@@ -4626,6 +4968,12 @@ package body Tests.Framework_Cases is
         (T, Recursion_Stays_Bounded'Access,
          "children stay within limits and permissions, failures and"
          & " cancellation are seen");
+      Register_Routine
+        (T, Schemas_Retention_Adapter_And_Slots'Access,
+         "schemas migrate, results retire, the adapter traces derivation, slots bound work");
+      Register_Routine
+        (T, State_Machine_And_Graph_Properties'Access,
+         "the lifecycle and dependency graphs keep their invariants, generated");
       Register_Routine
         (T, Components_Checks_And_Evidence'Access,
          "components are checked, checks keep their options, evidence says what it ran with");

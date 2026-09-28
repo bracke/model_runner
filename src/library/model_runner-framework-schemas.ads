@@ -79,6 +79,37 @@ package Model_Runner.Framework.Schemas is
    --  @return Its version, or zero when this build does not know it.
    function Current_Version (Schema_Id : String) return Natural;
 
+   --  One step of a schema's history: what carries a record written at one
+   --  version to the next -- renaming a field, giving a new one its value.
+   --  It receives the record at its old version and returns it at the next.
+   type Migration_Step is access procedure
+     (Value  : in out Records.Item;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  Say how a schema's records are carried from one version to the next.
+   --  The schema that changes registers its step here when it does, and a
+   --  record written before the change is read forward through it.
+   --
+   --  @param Schema_Id The schema.
+   --  @param From The version the step reads.
+   --  @param Step What it does.
+   procedure Register_Migration
+     (Schema_Id : String;
+      From      : Positive;
+      Step      : Migration_Step);
+
+   --  Carry a record forward, step by step, to a version of its schema.
+   --
+   --  @param Value The record, at its version on entry and at To_Version
+   --    after.
+   --  @param To_Version The version wanted.
+   --  @param Status Framework_Format_Unsupported when a step on the way is
+   --    missing, or the record is past To_Version.
+   procedure Migrate
+     (Value      : in out Records.Item;
+      To_Version : Positive;
+      Status     : out Model_Runner.Errors.Error_Info);
+
    --  Check a record against its schema.
    --
    --  @param Value The record.

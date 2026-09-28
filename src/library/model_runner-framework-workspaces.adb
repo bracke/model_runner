@@ -174,6 +174,44 @@ package body Model_Runner.Framework.Workspaces is
       Event   : Unbounded_String;
    begin
       Result := (others => <>);
+
+      --  No more at once than the project allows: a workspace is a copy of
+      --  the tree, and a slot is what bounds how many there are.
+      declare
+         Config : Records.Item;
+         Got    : E.Error_Info;
+         Active : Natural := 0;
+      begin
+         Configurations.Read (Item, Config, Got);
+         declare
+            Limit_Text : constant String := Records.Get (Config, "scalar.work.max_workspaces");
+            Limit      : constant Natural :=
+              (if Limit_Text'Length in 1 .. 6
+                 and then (for all C of Limit_Text => C in '0' .. '9')
+               then Natural'Value (Limit_Text) else 0);
+         begin
+            if Limit > 0 then
+               for Name of Stores.Names (Item, Workspaces_Area) loop
+                  declare
+                     Held : Workspace;
+                  begin
+                     Read (Item, Name, Held, Got);
+                     if E.Is_Ok (Got) and then To_String (Held.Status) = "active" then
+                        Active := Active + 1;
+                     end if;
+                  end;
+               end loop;
+               if Active >= Limit then
+                  Status := E.Make (E.Framework_Limit_Exceeded);
+                  E.Add_Text (Status, "name", "workspaces");
+                  E.Add_Text (Status, "detail", "all" & Natural'Image (Limit)
+                              & " workspace slots are taken");
+                  return;
+               end if;
+            end if;
+         end;
+      end;
+
       Stores.Allocate_Number (Item, Change, "WS", "", Number, Status);
       if E.Is_Error (Status) then
          return;

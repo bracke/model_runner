@@ -1923,7 +1923,8 @@ package body Checks is
       --  nothing uses at all.
       declare
          --  Raised from four hundred when the count reached it, and from
-         --  eight hundred when it reached that. That it reached the first
+         --  eight hundred when it reached that, and from twelve hundred when
+         --  the project state's commands took it past. That it reached the first
          --  was found the hard way: the collector stopped taking names and
          --  the check then reported that an operation declared in plain
          --  sight was declared nowhere. A bound that is silently full
@@ -1931,7 +1932,7 @@ package body Checks is
          --  of what a check is for, so overflowing it is now a failure that
          --  names itself, and the second time it was raised the failure is
          --  what said so.
-         Room  : constant := 1_200;
+         Room  : constant := 1_600;
          Width : constant := 64;
          Named : constant := 64;
 

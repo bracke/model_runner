@@ -1,3 +1,5 @@
+with Ada.Calendar.Formatting;
+with Ada.Calendar;
 with Ada.Characters.Handling;
 
 with Model_Runner.Framework.Records;
@@ -155,5 +157,56 @@ package body Model_Runner.Framework.Results is
                      E.Param_Path);
       end if;
    end Read;
+
+   -----------
+   -- Prune --
+   -----------
+
+   procedure Prune
+     (Item         : Stores.Store;
+      Change       : in out Stores.Transaction;
+      Raw_Log_Days : Natural;
+      Context_Days : Natural;
+      Removed      : out Natural)
+   is
+      --  The moment some days ago, written as a result's created_at is.
+      function Before (Days : Natural) return String is
+         use type Ada.Calendar.Time;
+         Text : String :=
+           Ada.Calendar.Formatting.Image (Ada.Calendar.Clock - Duration (Days) * 86_400.0);
+      begin
+         Text (Text'First + 10) := 'T';
+         return Text & "Z";
+      end Before;
+
+      Raw_Cut     : constant String := (if Raw_Log_Days = 0 then "" else Before (Raw_Log_Days));
+      Context_Cut : constant String := (if Context_Days = 0 then "" else Before (Context_Days));
+   begin
+      Removed := 0;
+      for Id of Stores.Names (Item, Results_Area) loop
+         declare
+            Stored : Records.Item;
+            Status : E.Error_Info;
+         begin
+            Stores.Read (Item, Results_Area, Id, Stored, Status);
+            if E.Is_Ok (Status) then
+               declare
+                  Kind    : constant String := Records.Get (Stored, "result_type");
+                  Made_At : constant String := Records.Get (Stored, "created_at");
+               begin
+                  if (Raw_Cut /= "" and then Kind = Kind_Word (Verification)
+                      and then Records.Get (Stored, "producer") = "execution"
+                      and then Made_At < Raw_Cut)
+                    or else (Context_Cut /= "" and then Kind = Kind_Word (Context_Report)
+                             and then Made_At < Context_Cut)
+                  then
+                     Stores.Remove (Change, Results_Area, Id);
+                     Removed := Removed + 1;
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+   end Prune;
 
 end Model_Runner.Framework.Results;

@@ -92,6 +92,16 @@ package body Model_Runner.Framework.Traceability is
                when Repository.References =>
                   Link (Result, "file:" & From, "symbol:" & To, "references",
                         Found.Source, Found.Sure, To_String (Found.Where));
+               when Repository.Calls =>
+                  Link (Result, "unit:" & From, "symbol:" & To, "calls",
+                        Found.Source, Found.Sure, To_String (Found.Where));
+               when Repository.Instantiates | Repository.Extends
+                  | Repository.Implements_Interface | Repository.Overrides =>
+                  --  What is made from what: a change to the one reaches the
+                  --  other, as a dependency does.
+                  Link (Result, "symbol:" & From, "unit:" & To,
+                        Lower (Repository.Relation_Kind'Image (Found.Kind)),
+                        Found.Source, Found.Sure, To_String (Found.Where));
             end case;
          end;
       end loop;

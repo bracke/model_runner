@@ -37,7 +37,23 @@ package Model_Runner.Framework.Repository is
       Implements,
       Depends_On,
       Declares,
-      References);
+      References,
+
+      --  A subprogram or package made from a generic: X is new G.
+      Instantiates,
+
+      --  A type derived from another: type T is new Parent.
+      Extends,
+
+      --  A type that takes on an interface: ... and I.
+      Implements_Interface,
+
+      --  An operation that replaces the one it inherits: overriding.
+      Overrides,
+
+      --  A use of a procedure or function followed by its call: a name
+      --  and then ( or ;. Found by name, so probable.
+      Calls);
 
    --  How a relation was found.
    type Derivation is

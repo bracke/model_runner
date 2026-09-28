@@ -146,6 +146,14 @@ package Model_Runner.Framework.Work is
    --  @return The limit.
    function Steps (Host : Child_Host) return Positive;
 
+   --  How many tool calls an agent on the task may make: the kind's scalar
+   --  task.max_tool_calls.KIND, else agents.max_tool_calls; zero for no
+   --  bound but its steps.
+   --
+   --  @param Host The host.
+   --  @return The budget.
+   function Tool_Budget (Host : Child_Host) return Natural;
+
    --  The verification profile the task is checked with.
    --
    --  @param Host The host.
@@ -365,8 +373,9 @@ private
       Calls   : Name_Lists.Vector;
       Opened  : Time_Vectors.Vector;
 
-      --  How many turns the root may take.
+      --  How many turns the root may take, and tool calls each agent.
       Max_Steps   : Natural := 24;
+      Max_Calls   : Natural := 0;
 
       --  What the root generated, and how long its conversation came to be.
       Root_Out    : Natural := 0;

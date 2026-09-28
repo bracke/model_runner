@@ -1,3 +1,4 @@
+with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
@@ -196,6 +197,9 @@ package body Model_Runner.CLI.Work is
       Done      : W.Report;
       Remaining : Model_Runner.Framework.Name_Lists.Vector;
 
+      --  The accepted tasks a textual selector matched.
+      Matching  : Model_Runner.Framework.Name_Lists.Vector;
+
       procedure Fail (Condition : E.Error_Info) is
       begin
          Pres.Report (Screen, Condition);
@@ -266,6 +270,53 @@ package body Model_Runner.CLI.Work is
          end;
       end if;
 
+      --  A selector that is no task's identifier picks among the accepted
+      --  tasks by their identifiers and titles: one match is the task, more
+      --  are offered on a terminal and named elsewhere, none is an error.
+      if Chosen /= Null_Unbounded_String
+        and then not S.Exists (Store, Model_Runner.Framework.Tasks_Area, To_String (Chosen))
+      then
+         declare
+            Wanted : constant String :=
+              Ada.Characters.Handling.To_Lower (To_String (Chosen));
+            Found  : Unbounded_String;
+         begin
+            for Id of Tk.List (Store, "accepted") loop
+               declare
+                  Defined : R.Item;
+                  Read    : E.Error_Info;
+               begin
+                  Tk.Definition (Store, Id, Defined, Read);
+                  if Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Id), Wanted) > 0
+                    or else Ada.Strings.Fixed.Index
+                              (Ada.Characters.Handling.To_Lower (R.Get (Defined, "title")),
+                               Wanted) > 0
+                  then
+                     Matching.Append (Id);
+                     Append (Found, (if Found = Null_Unbounded_String then "" else ", ") & Id);
+                  end if;
+               end;
+            end loop;
+            if Matching.Is_Empty then
+               Outcome := E.Make (E.Framework_Not_Found);
+               E.Add_Text (Outcome, "name", "an accepted task matching " & To_String (Chosen));
+               Fail (Outcome);
+               S.Close (Store);
+               return;
+            elsif Natural (Matching.Length) = 1 then
+               Chosen := To_Unbounded_String (Matching.First_Element);
+            elsif not Model_Runner.CLI.Choosers.Is_Available then
+               Outcome := E.Make (E.Framework_Input_Missing);
+               E.Add_Text (Outcome, "name", "one task: " & To_String (Found) & " all match");
+               Fail (Outcome);
+               S.Close (Store);
+               return;
+            else
+               Chosen := Null_Unbounded_String;
+            end if;
+         end;
+      end if;
+
       if Chosen = Null_Unbounded_String then
          if not Model_Runner.CLI.Choosers.Is_Available then
             Outcome := E.Make (E.Framework_Input_Missing);
@@ -282,7 +333,9 @@ package body Model_Runner.CLI.Work is
             Waiting : Model_Runner.Framework.Name_Lists.Vector;
          begin
             for Id of Tk.List (Store, "accepted") loop
-               if Tk.Ready (Store, Id).Ready then
+               if not Matching.Is_Empty and then not Matching.Contains (Id) then
+                  null;
+               elsif Tk.Ready (Store, Id).Ready then
                   Ready.Append (Id);
                else
                   Waiting.Append (Id);

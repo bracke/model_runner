@@ -82,4 +82,24 @@ package Model_Runner.Framework.Results is
       Value  : out Result;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Let results go that the project keeps only for a while. What is
+   --  required stays whatever its age -- verification evidence is not a
+   --  result, and an agent's answers, children's results, proposals and
+   --  reports are kept -- and what goes is what can go: the raw logs of
+   --  checks, whose diagnostics the evidence keeps, after Raw_Log_Days,
+   --  and the contexts kept for audit, which can be built again, after
+   --  Context_Days. Zero keeps them.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Raw_Log_Days How old a raw log may grow.
+   --  @param Context_Days How old a kept context may grow.
+   --  @param Removed How many went.
+   procedure Prune
+     (Item         : Stores.Store;
+      Change       : in out Stores.Transaction;
+      Raw_Log_Days : Natural;
+      Context_Days : Natural;
+      Removed      : out Natural);
+
 end Model_Runner.Framework.Results;

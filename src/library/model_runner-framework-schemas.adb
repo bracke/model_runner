@@ -1,3 +1,5 @@
+with Ada.Strings.Unbounded;
+with Ada.Containers.Vectors;
 with Model_Runner.Framework.Identifiers;
 
 package body Model_Runner.Framework.Schemas is
@@ -368,6 +370,81 @@ package body Model_Runner.Framework.Schemas is
       return (if Which = 0 then 0 else Schemas_Known (Which).Version);
    end Current_Version;
 
+   --  The registered steps, in the order registered.
+   type Step_Entry is record
+      Schema_Id : Ada.Strings.Unbounded.Unbounded_String;
+      From      : Positive := 1;
+      Step      : Migration_Step;
+   end record;
+
+   package Step_Vectors is new Ada.Containers.Vectors (Positive, Step_Entry);
+
+   Steps : Step_Vectors.Vector;
+
+   ------------------------
+   -- Register_Migration --
+   ------------------------
+
+   procedure Register_Migration
+     (Schema_Id : String;
+      From      : Positive;
+      Step      : Migration_Step) is
+   begin
+      Steps.Append (Step_Entry'(Ada.Strings.Unbounded.To_Unbounded_String (Schema_Id), From, Step));
+   end Register_Migration;
+
+   -------------
+   -- Migrate --
+   -------------
+
+   procedure Migrate
+     (Value      : in out Records.Item;
+      To_Version : Positive;
+      Status     : out Model_Runner.Errors.Error_Info)
+   is
+      function Refused (Detail : String) return E.Error_Info is
+         Made : E.Error_Info := E.Make (E.Framework_Format_Unsupported);
+      begin
+         E.Add_Text (Made, "path", Records.Schema_Id (Value) & " " & Records.Entity_Id (Value),
+                     E.Param_Path);
+         E.Add_Integer (Made, "version", Long_Long_Integer (Records.Schema_Version (Value)));
+         E.Add_Text (Made, "detail", Detail);
+         return Made;
+      end Refused;
+   begin
+      Status := E.Success;
+      if Records.Schema_Version (Value) > To_Version then
+         Status := Refused ("it is of a later version than wanted");
+         return;
+      end if;
+      while Records.Schema_Version (Value) < To_Version loop
+         declare
+            Now   : constant Positive := Records.Schema_Version (Value);
+            Found : Boolean := False;
+         begin
+            for One of Steps loop
+               if Ada.Strings.Unbounded.To_String (One.Schema_Id) = Records.Schema_Id (Value)
+                 and then One.From = Now
+               then
+                  One.Step (Value, Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+                  Found := True;
+                  exit;
+               end if;
+            end loop;
+            if not Found then
+               Status := Refused ("nothing carries it from version" & Positive'Image (Now));
+               return;
+            elsif Records.Schema_Version (Value) /= Now + 1 then
+               Status := Refused ("a step did not carry it one version on");
+               return;
+            end if;
+         end;
+      end loop;
+   end Migrate;
+
    --------------
    -- Validate --
    --------------
@@ -405,10 +482,9 @@ package body Model_Runner.Framework.Schemas is
             return;
          end if;
 
-         --  Every schema is at its first version, so there is nothing yet
-         --  to carry an earlier record forward from. The first schema
-         --  that changes adds its step here, before the fields are read
-         --  against the current rules.
+         --  A record of an earlier version has been carried forward by
+         --  Migrate before it is read here; one that was not is read
+         --  against the current rules as it stands.
 
          if not Identifiers.Is_Valid (Records.Entity_Id (Value)) then
             Refuse ("its entity " & Records.Entity_Id (Value)

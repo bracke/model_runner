@@ -12,3 +12,13 @@ task_kind test = component?, requirements?, notes?
 task_kind documentation = component?, notes?
 task_kind analysis = component?, notes?, question?
 scalar task.derived_kind = implementation
+
+# Where agents write: in the project itself, or each in a workspace of its
+# own taken in by integration -- which is what lets two work at once.
+input work_isolation
+  type = choice
+  label = Work isolation
+  description = project to write in the project itself; workspace for a workspace per task, taken in by task integrate
+  choices = project, workspace
+  default = project
+scalar work.isolation = ${work_isolation}

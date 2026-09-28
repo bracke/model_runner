@@ -176,7 +176,28 @@ alr build` -- and each check is an event: `Build_Completed`,
 `--version`, the adapters, the template version and every check's
 parameters, and no longer applies once the environment its checks were
 given has changed -- or, with `scalar verification.toolchain = strict`, once
-a tool answers with another version. The same commands run
+a tool answers with another version.
+
+`init`, `task`, `repo` and `work` take `--format json`, which writes one
+object a line -- each message's stable key and its values, errors with
+their code -- for a program to read. `/task list` narrows with
+`state=`, `kind=`, `component=`, `requirement=`, `origin=` and `parent=`;
+`/work` takes text as well as an identifier, running the one accepted task
+it names and offering, or listing, the ones when it names several;
+`/check full` runs the profiles `list verification.full` names; and
+`/state` says how many agents are active and how the last full test went.
+
+An agent that finds its task too large may name its parts under `parts:`;
+where it may propose tasks they become candidate children of it. A record
+of an older schema version is carried forward by the migration steps
+registered for it. Raw check logs and kept contexts go after `scalar
+retention.raw_log_days` and `retention.context_days`; evidence stays. An
+agent's tool calls can be bounded (`scalar agents.max_tool_calls`, or
+`task.max_tool_calls.KIND`) and the workspaces active at once
+(`work.max_workspaces`); the standard-development template asks where work
+is written, `project` or `workspace`. The Ada adapter also records
+instantiations, derivations, the interfaces a type takes on, overriding
+and calls. The same commands run
 outside a session too -- `model_runner init|task|repo|work`, with
 `--set NAME=VALUE` for the words -- for scripts.
 

@@ -1,3 +1,4 @@
+with Ada.Strings.Unbounded;
 with Ada.IO_Exceptions;
 with Ada.Text_IO;
 with Ada.Text_IO.Text_Streams;
@@ -161,11 +162,70 @@ package body Model_Runner.Presentation is
    -- Put_Message --
    ------------------
 
+   --------------------
+   -- Use_Structured --
+   --------------------
+
+   procedure Use_Structured (Item : in out Console; On : Boolean) is
+   begin
+      Item.Structured := On;
+   end Use_Structured;
+
+   --  A text as a JSON string.
+   function Quoted (Text : String) return String is
+      Result : Ada.Strings.Unbounded.Unbounded_String;
+      Hex    : constant String := "0123456789abcdef";
+   begin
+      Ada.Strings.Unbounded.Append (Result, '"');
+      for C of Text loop
+         case C is
+            when '"'      => Ada.Strings.Unbounded.Append (Result, "\""");
+            when '\'     => Ada.Strings.Unbounded.Append (Result, "\\");
+            when ASCII.LF => Ada.Strings.Unbounded.Append (Result, "\n");
+            when ASCII.CR => Ada.Strings.Unbounded.Append (Result, "\r");
+            when ASCII.HT => Ada.Strings.Unbounded.Append (Result, "\t");
+            when ASCII.NUL .. ASCII.BS | ASCII.VT | ASCII.FF | ASCII.SO .. ASCII.US =>
+               Ada.Strings.Unbounded.Append
+                 (Result, "\u00" & Hex (Character'Pos (C) / 16 + 1)
+                          & Hex (Character'Pos (C) mod 16 + 1));
+            when others   => Ada.Strings.Unbounded.Append (Result, C);
+         end case;
+      end loop;
+      Ada.Strings.Unbounded.Append (Result, '"');
+      return Ada.Strings.Unbounded.To_String (Result);
+   end Quoted;
+
+   --  One record for a program: what kind it is, its key, its values and
+   --  its text.
+   procedure Put_Record
+     (Item      : in out Console;
+      Kind      : String;
+      Key       : String;
+      Arguments : Loc.Argument_List;
+      Text      : String)
+   is
+      Line : Ada.Strings.Unbounded.Unbounded_String :=
+        Ada.Strings.Unbounded.To_Unbounded_String
+          ("{""kind"": " & Quoted (Kind) & ", ""key"": " & Quoted (Key));
+   begin
+      for One of Arguments loop
+         Ada.Strings.Unbounded.Append
+           (Line, ", " & Quoted (Model_Runner.Text.To_String (One.Name)) & ": "
+                  & Quoted (Model_Runner.Text.To_String (One.Value)));
+      end loop;
+      Ada.Strings.Unbounded.Append (Line, ", ""text"": " & Quoted (Text) & "}");
+      Put_Line (Item, Ada.Strings.Unbounded.To_String (Line));
+   end Put_Record;
+
    procedure Put_Message
      (Item      : in out Console;
       Key       : String;
       Arguments : Loc.Argument_List := Loc.Empty_Arguments) is
    begin
+      if Item.Structured then
+         Put_Record (Item, "message", Key, Arguments, Message (Item, Key, Arguments));
+         return;
+      end if;
       Put_Line (Item, Message (Item, Key, Arguments));
    end Put_Message;
 
@@ -282,6 +342,10 @@ package body Model_Runner.Presentation is
       Key       : String;
       Arguments : Loc.Argument_List := Loc.Empty_Arguments) is
    begin
+      if Item.Structured then
+         Put_Record (Item, "note", Key, Arguments, Message (Item, Key, Arguments));
+         return;
+      end if;
       if Item.Level = Opt.Quiet then
          return;
       end if;
@@ -429,6 +493,13 @@ package body Model_Runner.Presentation is
          else Loc.Describe (Item.Catalog.all, Condition));
    begin
       if E.Is_Ok (Condition) then
+         return;
+      end if;
+
+      if Item.Structured then
+         Put_Record
+           (Item, "error", E.Diagnostic_Code (Condition.Code),
+            [Loc.Named ("severity", Severity)], Detail);
          return;
       end if;
 

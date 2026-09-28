@@ -416,6 +416,88 @@ package body Model_Runner.Framework.Repository is
          end if;
       end loop;
 
+      --  What is made from what, anywhere in the unit: instantiations,
+      --  derivations and the interfaces they take on, and overriding.
+      for At_Index in Index .. Count loop
+         declare
+            Here : constant Token := Tokens (At_Index);
+         begin
+            if Here.Kind = Word
+              and then Lower (To_String (Here.Text)) in "package" | "procedure" | "function"
+              and then At_Index + 4 <= Count
+              and then Tokens (At_Index + 1).Kind = Word
+              and then Is_Word (Tokens (At_Index + 2), "is")
+              and then Is_Word (Tokens (At_Index + 3), "new")
+            then
+               declare
+                  Made : Unbounded_String;
+                  Past : Positive;
+               begin
+                  Name_At (Tokens, At_Index + 4, Made, Past);
+                  if Made /= Null_Unbounded_String then
+                     Add_Relation
+                       (Into,
+                        (Kind => Instantiates,
+                         From => To_Unbounded_String
+                                   (Unit & "." & To_String (Tokens (At_Index + 1).Text)),
+                         To => Made, Source => Explicit, Sure => Certain,
+                         Where => To_Unbounded_String (Path & ":" & Image (Here.Line))));
+                  end if;
+               end;
+            elsif Is_Word (Here, "type") and then At_Index + 1 <= Count
+              and then Tokens (At_Index + 1).Kind = Word
+            then
+               declare
+                  Typed : constant String :=
+                    Unit & "." & To_String (Tokens (At_Index + 1).Text);
+                  Ahead : Positive := At_Index + 2;
+                  Seen_Is : Boolean := False;
+               begin
+                  while Ahead <= Count and then not Is_Mark (Tokens (Ahead), ';') loop
+                     if Is_Word (Tokens (Ahead), "is") then
+                        Seen_Is := True;
+                     elsif Seen_Is
+                       and then (Is_Word (Tokens (Ahead), "new")
+                                 or else Is_Word (Tokens (Ahead), "and"))
+                     then
+                        declare
+                           Other : Unbounded_String;
+                           Past  : Positive;
+                        begin
+                           Name_At (Tokens, Ahead + 1, Other, Past);
+                           if Other /= Null_Unbounded_String
+                             and then Lower (To_String (Other)) not in "with" | "record"
+                           then
+                              Add_Relation
+                                (Into,
+                                 (Kind => (if Is_Word (Tokens (Ahead), "new") then Extends
+                                           else Implements_Interface),
+                                  From => To_Unbounded_String (Typed), To => Other,
+                                  Source => Explicit, Sure => Certain,
+                                  Where => To_Unbounded_String
+                                             (Path & ":" & Image (Tokens (Ahead).Line))));
+                           end if;
+                        end;
+                     elsif Seen_Is and then Is_Word (Tokens (Ahead), "record") then
+                        exit;
+                     end if;
+                     Ahead := Ahead + 1;
+                  end loop;
+               end;
+            elsif Is_Word (Here, "overriding") and then At_Index + 2 <= Count
+              and then Tokens (At_Index + 2).Kind = Word
+            then
+               Add_Relation
+                 (Into,
+                  (Kind => Overrides,
+                   From => To_Unbounded_String
+                             (Unit & "." & To_String (Tokens (At_Index + 2).Text)),
+                   To => Tokens (At_Index + 2).Text, Source => Explicit, Sure => Certain,
+                   Where => To_Unbounded_String (Path & ":" & Image (Here.Line))));
+            end if;
+         end;
+      end loop;
+
       --  The unit itself is a symbol, and in a spec so is everything it
       --  declares at its outer level.
       if not Is_Body or else not (for some Index in 1 .. Count =>
@@ -549,19 +631,46 @@ package body Model_Runner.Framework.Repository is
               Lower (if Dot = 0 then Full else Full (Dot + 1 .. Full'Last));
          begin
             if Seen.Contains (Owner) and then To_String (Item.Path) /= Path then
-               for Here of Tokens loop
-                  if Here.Kind = Word and then Lower (To_String (Here.Text)) = Last
-                  then
-                     Add_Relation
-                       (Into,
-                        (Kind  => References,
-                         From  => To_Unbounded_String (Path),
-                         To    => Item.Name,
-                         Source => Heuristic,
-                         Sure   => Probable,
-                         Where  => To_Unbounded_String
-                                     (Path & ":" & Image (Here.Line))));
-                  end if;
+               for At_Index in 1 .. Natural (Tokens.Length) loop
+                  declare
+                     Here : constant Token := Tokens (At_Index);
+                  begin
+                     if Here.Kind = Word and then Lower (To_String (Here.Text)) = Last
+                     then
+                        Add_Relation
+                          (Into,
+                           (Kind  => References,
+                            From  => To_Unbounded_String (Path),
+                            To    => Item.Name,
+                            Source => Heuristic,
+                            Sure   => Probable,
+                            Where  => To_Unbounded_String
+                                        (Path & ":" & Image (Here.Line))));
+
+                        --  A subprogram's name followed by its arguments or
+                        --  the end of a statement is a call of it.
+                        if To_String (Item.Kind) in "procedure" | "function"
+                          and then At_Index < Natural (Tokens.Length)
+                          and then (Is_Mark (Tokens (At_Index + 1), '(')
+                                    or else Is_Mark (Tokens (At_Index + 1), ';'))
+                          and then not (At_Index > 1
+                                        and then (Is_Word (Tokens (At_Index - 1), "procedure")
+                                                  or else Is_Word (Tokens (At_Index - 1),
+                                                                   "function")
+                                                  or else Is_Word (Tokens (At_Index - 1), "end")))
+                        then
+                           Add_Relation
+                             (Into,
+                              (Kind  => Calls,
+                               From  => To_Unbounded_String (Unit),
+                               To    => Item.Name,
+                               Source => Heuristic,
+                               Sure   => Probable,
+                               Where  => To_Unbounded_String
+                                           (Path & ":" & Image (Here.Line))));
+                        end if;
+                     end if;
+                  end;
                end loop;
             end if;
          end;

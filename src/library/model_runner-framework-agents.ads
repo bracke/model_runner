@@ -126,6 +126,12 @@ package Model_Runner.Framework.Agents is
       Result : out Agent;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  How many agents are going: made and not ended.
+   --
+   --  @param Item The store.
+   --  @return The count.
+   function Active_Count (Item : Stores.Store) return Natural;
+
    --  The children of an agent.
    --
    --  @param Item The store.

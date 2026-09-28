@@ -53,7 +53,8 @@ package body Model_Runner.Framework.Work is
        & " why. Two other statuses are for rare cases: issue, for a problem"
        & " found outside the task, and blocked, for a decision only a person"
        & " can make. Further work you found goes in proposed_tasks:, one a"
-       & " line." & ASCII.LF);
+       & " line. If the task is too large to do as one, say blocked and name"
+       & " the parts it should be split into under parts:, one a line." & ASCII.LF);
 
    --  The fields of a tab-separated line.
    function Fields_Of (Text : String) return Name_Lists.Vector is
@@ -443,6 +444,25 @@ package body Model_Runner.Framework.Work is
          end loop;
       end;
 
+      --  Results the project keeps only for a while, let go of.
+      declare
+         Removed : Natural;
+      begin
+         Results.Prune
+           (Item, Change,
+            Raw_Log_Days => Number_Of (Scalar (Item, "retention.raw_log_days"), 0),
+            Context_Days => Number_Of (Scalar (Item, "retention.context_days"), 0),
+            Removed      => Removed);
+         if Removed > 0 then
+            Stores.Commit (Item, Change, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+            Said.Append ("let go of" & Natural'Image (Removed)
+                         & " raw logs and kept contexts past their retention");
+         end if;
+      end;
+
       --  8: what is still wrong, for someone to settle.
       declare
          Wrong : constant Consistency.Finding_List := Consistency.Check (Item);
@@ -517,6 +537,12 @@ package body Model_Runner.Framework.Work is
       Agents.Read (Host.Item.all, Current (Host), Held, Status);
       return E.Is_Ok (Status) and then Permissions.Allows (Held.Allowed, What, Path);
    end May;
+
+   -----------------
+   -- Tool_Budget --
+   -----------------
+
+   function Tool_Budget (Host : Child_Host) return Natural is (Host.Max_Calls);
 
    -----------
    -- Steps --
@@ -1073,7 +1099,11 @@ package body Model_Runner.Framework.Work is
                Made, Held);
             if E.Is_Error (Held) then
                Change := Stores.No_Changes;
-               Conclude ("blocked", "its workspace cannot be made", "failed");
+               Conclude ("blocked",
+                         (if E."=" (Held.Code, E.Framework_Limit_Exceeded)
+                          then "no workspace slot is free"
+                          else "its workspace cannot be made"),
+                         "failed");
                return;
             end if;
             Result.Workspace_Id := Made.Id;
@@ -1110,6 +1140,10 @@ package body Model_Runner.Framework.Work is
             Host.Task_Id := To_Unbounded_String (Task_Id);
             Host.Apart := Isolated;
             Host.Model := Model;
+            Host.Max_Calls := Number_Of
+              ((if Tasks.Kind_Policy (Item, Kind, "max_tool_calls") /= ""
+                then Tasks.Kind_Policy (Item, Kind, "max_tool_calls")
+                else Scalar (Item, "agents.max_tool_calls")), 0);
             Host.Max_Steps := Number_Of
               ((if Tasks.Kind_Policy (Item, Kind, "max_steps") /= ""
                 then Tasks.Kind_Policy (Item, Kind, "max_steps")
@@ -1280,6 +1314,8 @@ package body Model_Runner.Framework.Work is
       declare
          Proposed  : constant Name_Lists.Vector :=
            Lines_Of (Invocations.Claim (Said, "proposed_tasks"));
+         Parts     : constant Name_Lists.Vector :=
+           Lines_Of (Invocations.Claim (Said, "parts"));
          Held_Root : Agents.Agent;
          Defined   : Records.Item;
          May_Propose : Boolean;
@@ -1313,6 +1349,38 @@ package body Model_Runner.Framework.Work is
                   end if;
                else
                   Append (Kept_Back, ASCII.LF & "proposed: " & Title);
+               end if;
+            end;
+         end loop;
+
+         --  The parts it would split its task into: proposal data, not a
+         --  split -- candidate children, which a person accepts or not, and
+         --  the task itself is left as the answer leaves it.
+         for Line of Parts loop
+            declare
+               Title  : constant String := Trim (Line);
+               Fields : Tasks.Field_Map;
+               Made   : Unbounded_String;
+            begin
+               if Title = "" or else Title = "-" then
+                  null;
+               elsif May_Propose then
+                  Fields.Include ("title", Title);
+                  Fields.Include ("kind", Records.Get (Defined, "kind"));
+                  Fields.Include ("parent", Task_Id);
+                  if Records.Get (Defined, "component") /= "" then
+                     Fields.Include ("component", Records.Get (Defined, "component"));
+                  end if;
+                  Tasks.Create
+                    (Item, Change, Fields, To_String (Result.Agent_Id),
+                     "agent decomposition of " & Task_Id, Made, Held);
+                  if E.Is_Ok (Held) then
+                     Result.Proposed.Append (To_String (Made));
+                  else
+                     Append (Kept_Back, ASCII.LF & "part: " & Title);
+                  end if;
+               else
+                  Append (Kept_Back, ASCII.LF & "part: " & Title);
                end if;
             end;
          end loop;

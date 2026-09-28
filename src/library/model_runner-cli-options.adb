@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 115) of Registry_Row :=
+   Registry : constant array (1 .. 116) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -231,6 +231,10 @@ package body Model_Runner.CLI.Options is
        [Command_Init | Command_Task | Command_Repo | Command_Work => True,
         others => False],
        Text ("directory")),
+      (Text ("--format"),
+       [Command_Init | Command_Task | Command_Repo | Command_Work => True,
+        others => False],
+       Text ("format")),
       (Text ("--quiet"), [others => True], Text ("quiet")),
       (Text ("--verbose"), [others => True], Text ("verbose")),
       (Text ("--locale"), [others => True], Text ("locale")),
@@ -919,7 +923,7 @@ package body Model_Runner.CLI.Options is
          Flag_Tools, Flag_Tools_File, Flag_Tool_Command,
          Flag_Max_Retries, Flag_Max_Total_Tokens, Flag_Max_Parallel,
          Flag_Context_Shift, Flag_Context_Keep,
-         Flag_Threads, Flag_Backend, Flag_Directory);
+         Flag_Threads, Flag_Backend, Flag_Directory, Flag_Format);
       Seen : array (Option_Flag) of Boolean := [others => False];
 
       procedure Fail (Code : E.Error_Code; Name : String; Detail : String := "")
@@ -1520,6 +1524,26 @@ package body Model_Runner.CLI.Options is
                      Result.Input_Count := Result.Input_Count + 1;
                      Result.Inputs (Result.Input_Count) :=
                        T.To_Bounded (Held.all);
+                     Free_Text (Held);
+
+                  elsif Name = "--format" then
+                     --  How the project commands say what they did: lines for
+                     --  a person, or one JSON object a line for a program.
+                     Mark (Flag_Format, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument, Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     if Held.all = "json" then
+                        Result.Structured := True;
+                     elsif Held.all /= "plain" then
+                        Fail (E.CLI_Invalid_Option_Value, Name, Held.all);
+                        Free_Text (Held);
+                        return;
+                     end if;
                      Free_Text (Held);
 
                   elsif Name = "--directory" then

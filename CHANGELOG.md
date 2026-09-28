@@ -7,6 +7,35 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The project commands for a program.** `--format json` on `init`,
+  `task`, `repo` and `work`: one JSON object a line, each message's key,
+  named values and text, errors with their code. `task list` filters by
+  state (ready derived), kind, component, requirement, origin and parent;
+  `work` resolves a textual selector against accepted tasks' identifiers
+  and titles, one match run, several offered on a terminal and listed
+  elsewhere; `/check full` runs `list verification.full`'s profiles rather
+  than falling back; `/state` adds agents active and the last full test.
+- **The smaller parts of the specification.**
+  - Schema migration hooks: `Schemas.Register_Migration` and `Migrate`;
+    a record of an earlier version is carried forward on read, and a
+    missing step is refused.
+  - Model-proposed decomposition: a work answer's `parts:` become
+    candidate child tasks where the agent may propose tasks.
+  - The Ada adapter records `Instantiates`, `Extends`,
+    `Implements_Interface`, `Overrides` and `Calls`, and the traceability
+    graph carries them.
+  - The standard-development template asks for `work_isolation`
+    (`project` or `workspace`).
+  - Retention: `Results.Prune` lets raw check logs and kept contexts go
+    after `scalar retention.raw_log_days` / `retention.context_days`, run
+    when a project is opened; evidence and answers stay.
+  - Resource bounds: a tool-call budget per agent (`agents.max_tool_calls`,
+    `task.max_tool_calls.KIND`) and workspace slots
+    (`work.max_workspaces`), a full one leaving the task blocked.
+  - Generated tests: the task transition matrix checked pair by pair,
+    and dependency graphs grown from fixed seeds checked for refused
+    cycles and exact readiness.
+
 - **Components are checked.** Where the configuration lists
   `set components`, a task created or revised with another component is
   refused (`Framework_Not_Found`, naming the ones there are).

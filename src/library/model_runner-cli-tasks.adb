@@ -112,31 +112,65 @@ package body Model_Runner.CLI.Tasks is
          return True;
       end Needs_Task;
 
+      --  The tasks, narrowed by what was given as NAME=VALUE: state (ready
+      --  among them, derived), kind, component, requirement, origin and
+      --  parent.
       procedure Show_List is
          Listed : constant Model_Runner.Framework.Name_Lists.Vector :=
            Tk.List (Store);
+         Shown  : Natural := 0;
+
+         function Wanted (Name : String) return String is
+         begin
+            for Index in 1 .. Item.Input_Count loop
+               declare
+                  Pair : constant String := T.To_String (Item.Inputs (Index));
+                  Cut  : constant Natural := Ada.Strings.Fixed.Index (Pair, "=");
+               begin
+                  if Cut > Pair'First and then Pair (Pair'First .. Cut - 1) = Name then
+                     return Pair (Cut + 1 .. Pair'Last);
+                  end if;
+               end;
+            end loop;
+            return "";
+         end Wanted;
       begin
-         if Listed.Is_Empty then
-            Pres.Put_Note (Screen, "cli.task.none");
-            return;
-         end if;
          for Id of Listed loop
             declare
                Defined : R.Item;
                Read    : E.Error_Info;
                State   : constant String := Tk.State_Of (Store, Id);
+               Shown_State : constant String :=
+                 (if State = "accepted" and then Tk.Ready (Store, Id).Ready then "ready"
+                  else State);
+
+               function Fits (Name, Held : String) return Boolean
+               is (Wanted (Name) = "" or else Wanted (Name) = Held);
             begin
                Tk.Definition (Store, Id, Defined, Read);
-               Pres.Put_Message
-                 (Screen, "cli.task.item",
-                  [Loc.Named ("name", Id),
-                   Loc.Named ("value",
-                              (if State = "accepted"
-                                 and then Tk.Ready (Store, Id).Ready
-                               then "ready" else State)),
-                   Loc.Named ("detail", R.Get (Defined, "title"))]);
+               if (Fits ("state", Shown_State)
+                   or else (Wanted ("state") = "accepted" and then State = "accepted"))
+                 and then Fits ("kind", R.Get (Defined, "kind"))
+                 and then Fits ("component", R.Get (Defined, "component"))
+                 and then Fits ("origin", R.Get (Defined, "origin"))
+                 and then Fits ("parent", R.Get (Defined, "parent"))
+                 and then (Wanted ("requirement") = ""
+                           or else Model_Runner.Framework.Lines_Of
+                                     (R.Get (Defined, "requirements")).Contains
+                                        (Wanted ("requirement")))
+               then
+                  Shown := Shown + 1;
+                  Pres.Put_Message
+                    (Screen, "cli.task.item",
+                     [Loc.Named ("name", Id),
+                      Loc.Named ("value", Shown_State),
+                      Loc.Named ("detail", R.Get (Defined, "title"))]);
+               end if;
             end;
          end loop;
+         if Shown = 0 then
+            Pres.Put_Note (Screen, "cli.task.none");
+         end if;
       end Show_List;
 
       procedure Create is

@@ -131,6 +131,16 @@ package body Model_Runner.Framework.Stores is
       if E.Is_Ok (Status) then
          Records.Parse (To_String (Text), Origin, Value, Status);
       end if;
+      --  Written at an earlier version of its schema, it is carried forward
+      --  first; a later one is left to Validate to refuse.
+      if E.Is_Ok (Status)
+        and then Schemas.Current_Version (Records.Schema_Id (Value)) > 0
+        and then Records.Schema_Version (Value)
+                   < Schemas.Current_Version (Records.Schema_Id (Value))
+      then
+         Schemas.Migrate
+           (Value, Schemas.Current_Version (Records.Schema_Id (Value)), Status);
+      end if;
       if E.Is_Ok (Status) then
          Schemas.Validate (Value, Origin, Status);
       end if;

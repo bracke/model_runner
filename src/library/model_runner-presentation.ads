@@ -90,6 +90,15 @@ package Model_Runner.Presentation is
       Capabilities : Terminal_Capabilities;
       Level        : Model_Runner.CLI.Options.Verbosity);
 
+   --  Have the console write for a program: each message, note and error
+   --  as one JSON object on standard output -- {"kind": ..., "key": ...,
+   --  and each of its named values, with the text as it would read} -- so
+   --  that what a command did can be read without reading its prose.
+   --
+   --  @param Item Console to change.
+   --  @param On Whether to.
+   procedure Use_Structured (Item : in out Console; On : Boolean);
+
    --  Report whether styling applies to standard error.
    --
    --  @param Item Console to inspect.
@@ -426,6 +435,7 @@ private
       Capabilities  : Terminal_Capabilities;
       Level         : Model_Runner.CLI.Options.Verbosity :=
         Model_Runner.CLI.Options.Normal;
+      Structured    : Boolean := False;
    end record;
 
    type Standard_Output_Sink is limited new Model_Runner.Output.Sink with record

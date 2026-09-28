@@ -572,6 +572,11 @@ package Model_Runner.CLI.Options is
       Stats_Set  : Boolean := False;
       Color      : Color_Mode := Color_Auto;
 
+      --  Whether init, task, repo and work write one JSON object a line --
+      --  each message's stable key and its values -- rather than text:
+      --  --format json.
+      Structured : Boolean := False;
+
       --  What to decode the weight matrices into at load, if anything.
       Repack     : Model_Runner.Llama.Repack_Mode :=
         Model_Runner.Llama.No_Repack;

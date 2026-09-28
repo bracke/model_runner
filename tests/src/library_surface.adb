@@ -19,12 +19,17 @@ package body Library_Surface is
 
       --  The project state's operations its commands do not reach yet:
       --  blocking a parent on children made some other way than by a
-      --  split, which blocks it as it makes them; and the schema version
-      --  and an area's portability, which a migration and a repository
-      --  policy ask. Until they arrive, the suite asks.
+      --  split, which blocks it as it makes them; and an area's
+      --  portability, which a repository policy asks. Until it arrives,
+      --  the suite asks.
       new String'("Block_On_Children"),
-      new String'("Current_Version"),
       new String'("Portability_Of"),
+
+      --  How a schema's records are carried to its next version. Every
+      --  schema is still at its first, so nothing registers a step yet;
+      --  the first that changes does, and the suite registers one to show
+      --  the way works.
+      new String'("Register_Migration"),
 
       new String'("Get_F16"),
       new String'("Tensor_Code"),

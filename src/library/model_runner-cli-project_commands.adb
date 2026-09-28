@@ -13,6 +13,7 @@ with Model_Runner.Clocks;
 with Model_Runner.Conversation;
 with Model_Runner.Entropy;
 with Model_Runner.Framework;
+with Model_Runner.Framework.Agents;
 with Model_Runner.Framework.Bootstrap;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Consistency;
@@ -240,7 +241,10 @@ package body Model_Runner.CLI.Project_Commands is
    type Work_Tools
      (Agent : not null access constant Session_Agent;
       Host  : Host_Access)
-   is new Model_Runner.Tools.Builtin.Instance with null record;
+   is new Model_Runner.Tools.Builtin.Instance with record
+      --  The calls this agent has made, against its tool budget.
+      Made : Natural := 0;
+   end record;
 
    overriding procedure Run
      (Self      : in out Work_Tools;
@@ -449,6 +453,8 @@ package body Model_Runner.CLI.Project_Commands is
       Found : Boolean;
       Path  : constant String :=
         Model_Runner.Tools.Builtin.Text_Argument (Arguments, "path", Found);
+      Budget : constant Natural :=
+        (if Self.Host = null then 0 else Self.Host.Tool_Budget);
 
       --  Whether the agent now working may read or write there: inside the
       --  project, and within its source or specification grants.
@@ -460,7 +466,11 @@ package body Model_Runner.CLI.Project_Commands is
                     or else Self.Host.May
                               ((if Reading then Pm.Read_Specs else Pm.Write_Specs), Path)));
    begin
-      if Named = "delegate" then
+      Self.Made := Self.Made + 1;
+      if Budget > 0 and then Self.Made > Budget then
+         Put ("error: the budget of" & Natural'Image (Budget)
+              & " tool calls is spent; give your answer now");
+      elsif Named = "delegate" then
          Put (Delegate (Self, Arguments));
       elsif Named = "run_checks" then
          if Self.Host = null then
@@ -773,6 +783,35 @@ package body Model_Runner.CLI.Project_Commands is
                         & (if R.Get (Held, "passed") = "true" then "PASS" else "FAIL"));
             end if;
          end;
+         Line_Of ("cli.project.agents_active",
+                  Image (Model_Runner.Framework.Agents.Active_Count (Store)));
+         declare
+            --  The last run of every profile the full verification is made
+            --  of, or of the default where it names none: all passed, or
+            --  not.
+            Full   : Names.Vector := Model_Runner.Framework.Lines_Of (R.Get (Config, "list.verification.full"));
+            Latest : Unbounded_String;
+            Result : Unbounded_String;
+         begin
+            if Full.Is_Empty then
+               Full.Append (R.Get (Config, "scalar.verification.default"));
+            end if;
+            for Name of S.Names (Store, Model_Runner.Framework.Verification_Area) loop
+               declare
+                  Held : R.Item;
+               begin
+                  S.Read (Store, Model_Runner.Framework.Verification_Area, Name, Held, Read);
+                  if E.Is_Ok (Read) and then Full.Contains (R.Get (Held, "profile")) then
+                     Latest := To_Unbounded_String (Name);
+                     Result := To_Unbounded_String
+                       (if R.Get (Held, "passed") = "true" then "PASS" else "FAIL");
+                  end if;
+               end;
+            end loop;
+            if Latest /= Null_Unbounded_String then
+               Line_Of ("cli.project.last_full", To_String (Latest) & " " & To_String (Result));
+            end if;
+         end;
       end State;
 
       procedure Show_Config (Store : in out S.Store) is
@@ -844,8 +883,6 @@ package body Model_Runner.CLI.Project_Commands is
          Config   : R.Item;
          Read     : E.Error_Info;
          Change   : S.Transaction;
-         Evidence : Unbounded_String;
-         Passed   : Boolean;
       begin
          --  The state itself, not the project's files: what does not hold
          --  together, found without a model.
@@ -869,45 +906,72 @@ package body Model_Runner.CLI.Project_Commands is
 
          Model_Runner.Framework.Configurations.Read (Store, Config, Read);
          declare
-            Profile : constant String :=
-              (if Argument (1) /= "" and then R.Has (Config, "profile." & Argument (1))
-               then Argument (1)
-               else R.Get (Config, "scalar.verification.default"));
+            --  The profiles to run: the one named; for full, those the
+            --  configuration's list verification.full names; otherwise the
+            --  default.
+            Profiles : Names.Vector;
+
+            procedure Run_One (Profile : String) is
+               Evidence : Unbounded_String;
+               Passed   : Boolean;
+            begin
+               Vf.Run_Profile (Store, Change, Profile, "", Evidence, Passed, Outcome);
+               if E.Is_Ok (Outcome) then
+                  S.Commit (Store, Change, Outcome);
+               end if;
+               if E.Is_Error (Outcome) then
+                  Pres.Report (Screen, Outcome);
+                  return;
+               end if;
+               declare
+                  Said : constant Vf.Diagnostic_List :=
+                    Vf.Diagnostics_Of (Store, To_String (Evidence));
+               begin
+                  for Index in 1 .. Vf.Length (Said) loop
+                     Pres.Put_Message
+                       (Screen, "cli.task.diagnostic",
+                        [Loc.Named ("path", To_String (Vf.Element (Said, Index).File) & ":"
+                                    & Image (Vf.Element (Said, Index).Line)),
+                         Loc.Named ("severity", To_String (Vf.Element (Said, Index).Severity)),
+                         Loc.Named ("detail", To_String (Vf.Element (Said, Index).Message))]);
+                  end loop;
+                  Pres.Put_Message
+                    (Screen, "cli.task.verified",
+                     [Loc.Named ("name", To_String (Evidence)),
+                      Loc.Named ("value", (if Passed then "passed" else "failed")),
+                      Loc.Named ("count", Image (Vf.Length
+                                   (Vf.Parse_Profile (R.Get (Config, "profile." & Profile))))),
+                      Loc.Named ("total", Image (Vf.Length (Said)))]);
+               end;
+            end Run_One;
          begin
-            if Profile = "" then
+            if Argument (1) = "full" and then not R.Has (Config, "profile.full") then
+               for Name of Model_Runner.Framework.Lines_Of (R.Get (Config, "list.verification.full")) loop
+                  if R.Has (Config, "profile." & Name) then
+                     Profiles.Append (Name);
+                  end if;
+               end loop;
+            elsif Argument (1) /= "" and then R.Has (Config, "profile." & Argument (1)) then
+               Profiles.Append (Argument (1));
+            elsif Argument (1) /= "" then
+               Outcome := E.Make (E.Framework_Not_Found);
+               E.Add_Text (Outcome, "name", "the profile " & Argument (1));
+               Pres.Report (Screen, Outcome);
+               return;
+            end if;
+            if Profiles.Is_Empty and then R.Get (Config, "scalar.verification.default") /= "" then
+               Profiles.Append (R.Get (Config, "scalar.verification.default"));
+            end if;
+            if Profiles.Is_Empty then
                Outcome := E.Make (E.Framework_Not_Found);
                E.Add_Text (Outcome, "name", "a verification profile");
                Pres.Report (Screen, Outcome);
                return;
             end if;
-            Vf.Run_Profile (Store, Change, Profile, "", Evidence, Passed, Outcome);
-            if E.Is_Ok (Outcome) then
-               S.Commit (Store, Change, Outcome);
-            end if;
-            if E.Is_Error (Outcome) then
-               Pres.Report (Screen, Outcome);
-               return;
-            end if;
-            declare
-               Said : constant Vf.Diagnostic_List :=
-                 Vf.Diagnostics_Of (Store, To_String (Evidence));
-            begin
-               for Index in 1 .. Vf.Length (Said) loop
-                  Pres.Put_Message
-                    (Screen, "cli.task.diagnostic",
-                     [Loc.Named ("path", To_String (Vf.Element (Said, Index).File) & ":"
-                                 & Image (Vf.Element (Said, Index).Line)),
-                      Loc.Named ("severity", To_String (Vf.Element (Said, Index).Severity)),
-                      Loc.Named ("detail", To_String (Vf.Element (Said, Index).Message))]);
-               end loop;
-               Pres.Put_Message
-                 (Screen, "cli.task.verified",
-                  [Loc.Named ("name", To_String (Evidence)),
-                   Loc.Named ("value", (if Passed then "passed" else "failed")),
-                   Loc.Named ("count", Image (Vf.Length
-                                (Vf.Parse_Profile (R.Get (Config, "profile." & Profile))))),
-                   Loc.Named ("total", Image (Vf.Length (Said)))]);
-            end;
+            for Profile of Profiles loop
+               Run_One (Profile);
+               exit when E.Is_Error (Outcome);
+            end loop;
          end;
       end Check;
 
@@ -1109,7 +1173,7 @@ package body Model_Runner.CLI.Project_Commands is
 
       elsif Word = "/work" then
          Command.Kind := Opt.Command_Work;
-         Command.Action_Argument := T.To_Bounded (Argument (1));
+         Command.Action_Argument := T.To_Bounded (Rest (2));
          Model_Runner.CLI.Work.Run_With (Command, Screen, Agent, Status);
 
       elsif Word in "/tree" | "/sym" | "/refs" | "/impact" | "/trace" then
