@@ -20,6 +20,7 @@ with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Localization;
 with Model_Runner.Text;
+with Model_Runner.Tools.Builtin;
 
 package body Model_Runner.CLI.Work is
 
@@ -116,6 +117,10 @@ package body Model_Runner.CLI.Work is
          Add ("--context-size");
          Add (Ada.Strings.Fixed.Trim (Natural'Image (Self.Context), Ada.Strings.Both));
       end if;
+
+      --  What it did, for the harness to account: its tokens and its calls.
+      Add ("--trace-file");
+      Add (Prompt_Path & ".trace");
       for Tool of Denied loop
          Add ("--deny-tool");
          Add (Tool.all);
@@ -146,6 +151,74 @@ package body Model_Runner.CLI.Work is
       if Ada.Directories.Exists (Output) then
          Ada.Directories.Delete_File (Output);
       end if;
+
+      --  Its trace, told to the harness in the harness's own terms.
+      declare
+         Trace : constant String := Whole (Prompt_Path & ".trace");
+
+         --  The number after "KEY": in the trace, or zero.
+         function Count_Of (Key : String) return String is
+            At_Key : constant Natural := Ada.Strings.Fixed.Index (Trace, '"' & Key & '"' & ':');
+            First  : constant Natural := At_Key + Key'Length + 3;
+            Stop   : Natural := First;
+         begin
+            if At_Key = 0 then
+               return "0";
+            end if;
+            while Stop <= Trace'Last and then Trace (Stop) in '0' .. '9' loop
+               Stop := Stop + 1;
+            end loop;
+            return (if Stop = First then "0" else Trace (First .. Stop - 1));
+         end Count_Of;
+
+         Usage : Unbounded_String :=
+           To_Unbounded_String ("prompt_tokens " & Count_Of ("prompt_tokens") & ASCII.LF
+                                & "output_tokens " & Count_Of ("generated_tokens") & ASCII.LF);
+         Mark  : constant String := "{" & '"' & "t_ms" & '"' & ":";
+         Call  : constant String := '"' & "event" & '"' & ":" & '"' & "call" & '"';
+         From  : Natural := Trace'First;
+      begin
+         if Trace /= "" then
+            --  Each event is one object, up to the next event's start.
+            loop
+               declare
+                  Start : constant Natural :=
+                    Ada.Strings.Fixed.Index (Trace (From .. Trace'Last), Mark);
+                  Next  : Natural;
+               begin
+                  exit when Start = 0;
+                  Next := Ada.Strings.Fixed.Index (Trace (Start + 1 .. Trace'Last), Mark);
+                  declare
+                     One  : constant String :=
+                       Trace (Start .. (if Next = 0 then Trace'Last else Next - 2));
+                     Have : Boolean;
+                  begin
+                     if Ada.Strings.Fixed.Index (One, Call) > 0 then
+                        Append (Usage, "call "
+                                & Model_Runner.Tools.Builtin.Text_Argument (One, "name", Have)
+                                & ASCII.HT
+                                & Model_Runner.Tools.Builtin.Text_Argument (One, "arguments", Have)
+                                & ASCII.LF);
+                     end if;
+                  end;
+                  exit when Next = 0;
+                  From := Next;
+               end;
+            end loop;
+            declare
+               File : Ada.Streams.Stream_IO.File_Type;
+            begin
+               Ada.Streams.Stream_IO.Create
+                 (File, Ada.Streams.Stream_IO.Out_File, W.Usage_Beside (Prompt_Path));
+               String'Write (Ada.Streams.Stream_IO.Stream (File), To_String (Usage));
+               Ada.Streams.Stream_IO.Close (File);
+            end;
+            Ada.Directories.Delete_File (Prompt_Path & ".trace");
+         end if;
+      exception
+         when others =>
+            null;
+      end;
       if not Happened.Started or else Happened.Timed_Out
         or else Happened.Exit_Status /= 0
       then
@@ -437,7 +510,8 @@ package body Model_Runner.CLI.Work is
                  (Store, To_String (Chosen),
                   Model_Agent'(Model   => To_Unbounded_String (Path),
                                Steps   => To_Unbounded_String (Setting ("steps", "")),
-                               Timeout => 1800,
+                               Timeout => Positive'Max
+                                            (60, W.Time_Allowed (Store, To_String (Chosen))),
                                Context => Model.Context_Limit),
                   Model, Done, Outcome);
             else

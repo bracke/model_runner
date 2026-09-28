@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Payloads kept apart are whole and collected.** A payload file is
+  written beside itself and renamed over, one a crash cut short is written
+  again when its result is stored again, and `Results.Collect_Payloads`,
+  run as a session opens after pruning, removes those nothing refers to.
+- **An agent run apart is accounted.** A process of its own reports through
+  its trace what it used and which tools it called; the harness charges the
+  tokens to the agent, records them and the calls on the invocation
+  (`Work.Usage_Beside`), and gives it the time the policy allows
+  (`Work.Time_Allowed`) instead of a fixed half hour.
 - **A confined agent process has only the tools that stay inside.** An
   agent the harness starts as a process of its own keeps the file tools,
   held where it works, and the tools that reach nothing; `retrieve`, which

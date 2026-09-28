@@ -553,6 +553,13 @@ package body Model_Runner.Framework.Work is
             Said.Append ("let go of" & Natural'Image (Removed)
                          & " raw logs and kept contexts past their retention");
          end if;
+
+         --  And the payloads kept apart that nothing refers to now.
+         declare
+            Collected : Natural;
+         begin
+            Results.Collect_Payloads (Item, Collected);
+         end;
       end;
 
       --  6: the repository's graph, brought up to date and kept, so what
@@ -919,6 +926,33 @@ package body Model_Runner.Framework.Work is
          end;
       end loop;
    end Run_Checks;
+
+   ------------------
+   -- Usage_Beside --
+   ------------------
+
+   function Usage_Beside (Prompt_Path : String) return String
+   is (Prompt_Path & ".usage");
+
+   ------------------
+   -- Time_Allowed --
+   ------------------
+
+   function Time_Allowed (Item : Stores.Store; Task_Id : String) return Natural is
+      Defined : Records.Item;
+      Read    : E.Error_Info;
+   begin
+      Tasks.Definition (Item, Task_Id, Defined, Read);
+      declare
+         Kind : constant String := Records.Get (Defined, "kind");
+      begin
+         return Number_Of
+           ((if Tasks.Kind_Policy (Item, Kind, "max_seconds") /= ""
+             then Tasks.Kind_Policy (Item, Kind, "max_seconds")
+             else Scalar (Item, "agents.max_seconds")),
+            Lease_Seconds (Item));
+      end;
+   end Time_Allowed;
 
    -----------
    -- Spend --
@@ -1434,11 +1468,7 @@ package body Model_Runner.Framework.Work is
             Host.Model := Model;
             declare
                use type Ada.Calendar.Time;
-               Seconds : constant Natural := Number_Of
-                 ((if Tasks.Kind_Policy (Item, Kind, "max_seconds") /= ""
-                   then Tasks.Kind_Policy (Item, Kind, "max_seconds")
-                   else Scalar (Item, "agents.max_seconds")),
-                  Lease_Seconds (Item));
+               Seconds : constant Natural := Time_Allowed (Item, Task_Id);
             begin
                Host.Bounded := Seconds > 0;
                Host.Deadline := Ada.Calendar.Clock + Duration (Seconds);
@@ -1459,6 +1489,38 @@ package body Model_Runner.Framework.Work is
                  (Prompt, To_String (Place), Host, Answer, Ran);
             else
                Runner.Run (Prompt, To_String (Place), Answer, Ran);
+
+               --  What an agent run apart used, as its runner reports it:
+               --  charged, and its calls recorded, as the harness's own are.
+               if Ada.Directories.Exists (Usage_Beside (Prompt)) then
+                  declare
+                     Text   : Unbounded_String;
+                     Read   : E.Error_Info;
+                     Spent  : Natural := 0;
+                     Seen   : Natural := 0;
+                  begin
+                     Files.Read_Text (Usage_Beside (Prompt), Text, Read);
+                     for Line of Lines_Of (To_String (Text)) loop
+                        if Ada.Strings.Fixed.Index (Line, "output_tokens ") = Line'First then
+                           Spent := Number_Of (Trim (Line (Line'First + 14 .. Line'Last)), 0);
+                        elsif Ada.Strings.Fixed.Index (Line, "prompt_tokens ") = Line'First then
+                           Seen := Number_Of (Trim (Line (Line'First + 14 .. Line'Last)), 0);
+                        elsif Ada.Strings.Fixed.Index (Line, "call ") = Line'First then
+                           declare
+                              Rest : constant String := Line (Line'First + 5 .. Line'Last);
+                              Tab  : constant Natural :=
+                                Ada.Strings.Fixed.Index (Rest, [1 => ASCII.HT]);
+                           begin
+                              Note_Call
+                                (Host, (if Tab = 0 then Rest else Rest (Rest'First .. Tab - 1)),
+                                 (if Tab = 0 then "" else Rest (Tab + 1 .. Rest'Last)), "");
+                           end;
+                        end if;
+                     end loop;
+                     Spend (Host, Spent, Seen);
+                     Files.Discard (Usage_Beside (Prompt));
+                  end;
+               end if;
             end if;
             Abandon (Host);
             By_Checks := Host.Written;

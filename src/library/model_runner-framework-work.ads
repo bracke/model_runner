@@ -50,6 +50,24 @@ package Model_Runner.Framework.Work is
    --  project and answers.
    type Agent_Runner is interface;
 
+   --  Where a runner that runs its agent apart -- as a process of its own,
+   --  whose calls the harness does not see -- says what the agent used, for
+   --  the harness to account as its own: a line each of prompt_tokens N,
+   --  output_tokens N, and call NAME, a tab and its arguments.
+   --
+   --  @param Prompt_Path The agent's prompt.
+   --  @return The file's path.
+   function Usage_Beside (Prompt_Path : String) return String;
+
+   --  How long an agent may work on a task: its kind's scalar
+   --  task.max_seconds.KIND, else agents.max_seconds, else the lease's
+   --  length.
+   --
+   --  @param Item The store.
+   --  @param Task_Id The task.
+   --  @return The seconds.
+   function Time_Allowed (Item : Stores.Store; Task_Id : String) return Natural;
+
    --  Run the agent.
    --
    --  @param Self The runner.

@@ -97,6 +97,19 @@ package body Tests.Framework_Cases is
       Answer      : out Unbounded_String;
       Status      : out E.Error_Info);
 
+   --  One run apart, as a process of its own is: it says what it used
+   --  where the harness reads it.
+   type Accounting_Agent is new Scripted_Agent with record
+      Usage : Unbounded_String;
+   end record;
+
+   overriding procedure Run
+     (Self        : Accounting_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
    --  Where the projects of this case are made.
    Scratch : constant String := "obj/framework-fixtures";
 
@@ -3563,6 +3576,50 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Task_Lifecycle_Is_The_Projects;
 
+   --  An agent run apart is accounted as the harness's own are: what it
+   --  used charged, its calls recorded; and its time is the policy's.
+   procedure Work_Apart_Is_Accounted
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Id     : Unbounded_String;
+      Done   : Model_Runner.Framework.Work.Report;
+      Call   : R.Item;
+      Held   : Model_Runner.Framework.Agents.Agent;
+   begin
+      Task_Project (Store, "work-apart",
+                    "scalar agents.max_seconds = 900" & LF
+                    & "scalar task.max_seconds.analysis = 120" & LF);
+      Tk.Create (Store, Change, Fields ("Look", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Assert (Model_Runner.Framework.Work.Time_Allowed (Store, To_String (Id)) = 120,
+              "a kind's own time was not the time it was allowed");
+      Model_Runner.Framework.Work.Execute
+        (Store, To_String (Id),
+         Accounting_Agent'(Scripted_Agent'(File   => Null_Unbounded_String,
+                                           Answer => To_Unbounded_String
+                                                       ("status: done" & LF & "summary: looked"),
+                                           Broken => False)
+                           with Usage => To_Unbounded_String
+                             ("prompt_tokens 300" & LF & "output_tokens 42" & LF
+                              & "call read_file" & ASCII.HT & "{""path"": ""README.md""}" & LF)),
+         Model_Runner.Framework.Context.Profile (Store, ""), Done, Status);
+      S.Read (Store, Model_Runner.Framework.Invocations_Area, To_String (Done.Invocation_Id),
+              Call, Status);
+      Model_Runner.Framework.Agents.Read (Store, To_String (Done.Agent_Id), Held, Status);
+      Assert (R.Get (Call, "output_tokens") = "42" and then R.Get (Call, "prompt_tokens") = "300"
+              and then Ada.Strings.Fixed.Index (R.Get (Call, "call.0001"), "read_file") = 1
+              and then Held.Used = 42,
+              "what an agent run apart used was not accounted: " & R.Get (Call, "output_tokens")
+              & " " & R.Get (Call, "call.0001"));
+      S.Close (Store);
+   end Work_Apart_Is_Accounted;
+
    ---------------------------------------------------------------------------
    --  Context and invocations.
    ---------------------------------------------------------------------------
@@ -4107,6 +4164,17 @@ package body Tests.Framework_Cases is
          Dirs.Create_Path (Project & "/src");
          Put_File (Project & "/" & To_String (Self.File), "procedure Hello is begin null; end;");
       end if;
+   end Run;
+
+   overriding procedure Run
+     (Self        : Accounting_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info) is
+   begin
+      Run (Scripted_Agent (Self), Prompt_Path, Project, Answer, Status);
+      Put_File (Model_Runner.Framework.Work.Usage_Beside (Prompt_Path), To_String (Self.Usage));
    end Run;
 
    --  One task runs from ready to complete, its context, call, changes and
@@ -4834,6 +4902,25 @@ package body Tests.Framework_Cases is
          Rs.Read (Store, To_String (Large.Id), Back, Status);
          Assert (Status.Code = E.Framework_Integrity_Failed,
                  "a damaged payload kept apart was returned");
+
+         --  Stored again, a damaged payload is written whole again; one
+         --  nothing refers to is collected, and one a result does is kept.
+         Change := S.No_Changes;
+         Rs.Add (Store, Change, Large, Status);
+         S.Commit (Store, Change, Status);
+         Rs.Read (Store, To_String (Large.Id), Back, Status);
+         Assert (E.Is_Ok (Status) and then Back.Payload = Large.Payload,
+                 "a damaged payload was not written again: " & Code_Of (Status));
+         Put_File (S.Root (Store) & "/results/payloads/ORPHAN.txt", "left behind");
+         declare
+            Collected : Natural;
+         begin
+            Rs.Collect_Payloads (Store, Collected);
+            Assert (Collected = 1
+                    and then not Dirs.Exists (S.Root (Store) & "/results/payloads/ORPHAN.txt")
+                    and then Dirs.Exists (Files_Apart.First_Element),
+                    "payloads were not collected as their results say");
+         end;
       end;
 
       --  Cancelling the root takes down what is still going beneath it.
@@ -7005,6 +7092,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Task_Lifecycle_Is_The_Projects'Access,
          "a project extends and restricts the task lifecycle, within the harness's own moves");
+      Register_Routine
+        (T, Work_Apart_Is_Accounted'Access,
+         "an agent run apart is accounted, and given the time the policy allows");
       Register_Routine
         (T, Derivation_Is_Idempotent'Access,
          "a requirement derives its task once, however often derivation"

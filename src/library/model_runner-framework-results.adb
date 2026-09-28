@@ -104,6 +104,28 @@ package body Model_Runner.Framework.Results is
             Held : Result;
          begin
             Read (Item, Id, Held, Status);
+            if E."=" (Status.Code, E.Framework_Integrity_Failed) then
+               --  Its payload kept apart was cut short or changed, and this
+               --  is the payload the record's fingerprint names: put it back
+               --  whole.
+               declare
+                  Stored : Records.Item;
+                  Got    : E.Error_Info;
+               begin
+                  Stores.Read (Item, Results_Area, Id, Stored, Got);
+                  if E.Is_Ok (Got) and then Records.Get (Stored, "payload_file") /= ""
+                    and then Records.Get (Stored, "payload_fingerprint")
+                               = Fingerprint (To_String (Value.Payload))
+                  then
+                     Files.Write_Whole
+                       (Payload_Path (Item, Records.Get (Stored, "payload_file")),
+                        To_String (Value.Payload), Status);
+                     if E.Is_Ok (Status) then
+                        Read (Item, Id, Held, Status);
+                     end if;
+                  end if;
+               end;
+            end if;
             if E.Is_Error (Status) then
                return;
             elsif Content (Held) /= Content (Value) then
@@ -139,13 +161,23 @@ package body Model_Runner.Framework.Results is
             declare
                Print : constant String := Fingerprint (To_String (Value.Payload));
                Path  : constant String := Payload_Path (Item, Print);
+               Held  : Unbounded_String;
+               Read  : E.Error_Info;
             begin
-               if not Ada.Directories.Exists (Path) then
+               --  Written whole or not at all, and written again where what
+               --  is there is not what its name says -- a write a crash cut
+               --  short.
+               if Ada.Directories.Exists (Path) then
+                  Files.Read_Text (Path, Held, Read);
+               end if;
+               if not Ada.Directories.Exists (Path) or else E.Is_Error (Read)
+                 or else Fingerprint (To_String (Held)) /= Print
+               then
                   if not Files.Make_Directory (Ada.Directories.Containing_Directory (Path)) then
                      Files.Write_Failed (Path, Status);
                      return;
                   end if;
-                  Files.Write_Text (Path, To_String (Value.Payload), Status);
+                  Files.Write_Whole (Path, To_String (Value.Payload), Status);
                   if E.Is_Error (Status) then
                      return;
                   end if;
@@ -277,5 +309,37 @@ package body Model_Runner.Framework.Results is
          end;
       end loop;
    end Prune;
+
+   ----------------------
+   -- Collect_Payloads --
+   ----------------------
+
+   procedure Collect_Payloads (Item : Stores.Store; Removed : out Natural) is
+      Directory : constant String :=
+        Stores.Root (Item) & "/" & Directory_Name (Results_Area) & "/payloads";
+      Wanted    : Name_Lists.Vector;
+   begin
+      Removed := 0;
+      if not Ada.Directories.Exists (Directory) then
+         return;
+      end if;
+      for Id of Stores.Names (Item, Results_Area) loop
+         declare
+            Stored : Records.Item;
+            Status : E.Error_Info;
+         begin
+            Stores.Read (Item, Results_Area, Id, Stored, Status);
+            if E.Is_Ok (Status) and then Records.Get (Stored, "payload_file") /= "" then
+               Wanted.Append (Records.Get (Stored, "payload_file") & ".txt");
+            end if;
+         end;
+      end loop;
+      for Name of Files.Files_In (Directory) loop
+         if not Wanted.Contains (Name) then
+            Files.Discard (Directory & "/" & Name);
+            Removed := Removed + 1;
+         end if;
+      end loop;
+   end Collect_Payloads;
 
 end Model_Runner.Framework.Results;

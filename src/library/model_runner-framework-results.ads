@@ -120,4 +120,12 @@ package Model_Runner.Framework.Results is
       Context_Days : Natural;
       Removed      : out Natural);
 
+   --  Remove the payloads kept apart that no result refers to any more:
+   --  those of results pruned, and any a write left that was never
+   --  committed. Run once what removed the results is committed.
+   --
+   --  @param Item The store.
+   --  @param Removed How many went.
+   procedure Collect_Payloads (Item : Stores.Store; Removed : out Natural);
+
 end Model_Runner.Framework.Results;
