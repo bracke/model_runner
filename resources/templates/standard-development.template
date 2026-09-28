@@ -11,14 +11,20 @@ task_kind bugfix = component?, requirements?, notes?, reproduction?
 task_kind test = component?, requirements?, notes?
 task_kind documentation = component?, notes?
 task_kind analysis = component?, notes?, question?
+
+# The fields of its own a kind lists, each with what it is: text, number,
+# identifier, path, list, or choice A|B|C.
+map task_field.reproduction = text
+map task_field.question = text
 scalar task.derived_kind = implementation
 
 # Where the project's files are: what a scan leaves out, and what is a test
-# or documentation. A name is a directory at any depth, a path is one place,
-# and *text is part of a file's name.
+# or documentation, and what a tool generates. A name is a directory at any
+# depth, a path is one place, and *text is part of a file's name.
 set repository.skip = obj bin lib alire node_modules target build _build
 set repository.tests = test tests testsuite *_test.
 set repository.documentation = doc docs
+set repository.generated = generated *.pb.go *_pb2.py *.pb.h *.pb.cc
 
 # What bootstrap reads, what it may make of it, and whether an item a
 # document gives its own identifier is accepted as the document says or

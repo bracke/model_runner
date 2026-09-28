@@ -26,8 +26,9 @@ with Model_Runner.Framework.Stores;
 --  again whenever it is asked for and missing or stale.
 package Model_Runner.Framework.Repository is
 
-   --  What a file is for.
-   type File_Role is (Source, Test, Documentation, Build, Other);
+   --  What a file is for. A generated one is made by a tool from something
+   --  else, and is changed by changing that and making it again.
+   type File_Role is (Source, Test, Documentation, Build, Generated, Other);
 
    --  What a node of the graph is.
    type Node_Kind is (File_Node, Unit_Node, Symbol_Node);
@@ -186,23 +187,28 @@ package Model_Runner.Framework.Repository is
    --  or a path within the project, as src/generated; one that starts
    --  with * is part of a file's name, as *_test. for parser_test.go. A
    --  hidden file or directory is always left out, the project state and
-   --  version control with it.
+   --  version control with it. Generated names what tools make; a file
+   --  whose first lines say it was generated and is not to be edited is
+   --  one too, wherever it is.
    type Roots is record
       Skip          : Name_Lists.Vector;
       Tests         : Name_Lists.Vector;
       Documentation : Name_Lists.Vector;
+      Generated     : Name_Lists.Vector;
    end record;
 
    --  The roots a configuration that names none has: build output and
    --  dependencies left out; test, tests and testsuite, and *_test.,
-   --  tests; doc and docs documentation.
+   --  tests; doc and docs documentation; generated, and the files protocol
+   --  buffer compilers write, generated.
    --
    --  @return The roots.
    function Default_Roots return Roots;
 
-   --  The project's roots: set repository.skip, repository.tests and
-   --  repository.documentation from the resolved configuration, each the
-   --  default where the configuration does not set it.
+   --  The project's roots: set repository.skip, repository.tests,
+   --  repository.documentation and repository.generated from the resolved
+   --  configuration, each the default where the configuration does not set
+   --  it.
    --
    --  @param Item The store.
    --  @return The roots.
@@ -214,6 +220,14 @@ package Model_Runner.Framework.Repository is
    --  @param Within The project's roots.
    --  @return Its role.
    function Role_Of (Path : String; Within : Roots := Default_Roots) return File_Role;
+
+   --  Whether a file's own first lines say a tool made it and it is not to
+   --  be edited: "generated" with "do not edit", or "@generated", or
+   --  "automatically generated", in its first five lines.
+   --
+   --  @param Text The file's text.
+   --  @return True when it says so.
+   function Says_Generated (Text : String) return Boolean;
 
    --  Walk a project and read every file into a graph.
    --

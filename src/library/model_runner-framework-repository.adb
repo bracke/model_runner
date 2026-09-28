@@ -218,7 +218,8 @@ package body Model_Runner.Framework.Repository is
    function Default_Roots return Roots
    is (Skip          => Split ("obj bin lib alire node_modules target build _build"),
        Tests         => Split ("test tests testsuite *_test."),
-       Documentation => Split ("doc docs"));
+       Documentation => Split ("doc docs"),
+       Generated     => Split ("generated *.pb.go *_pb2.py *.pb.h *.pb.cc"));
 
    --------------
    -- Roots_Of --
@@ -243,6 +244,7 @@ package body Model_Runner.Framework.Repository is
          Take ("skip", Result.Skip);
          Take ("tests", Result.Tests);
          Take ("documentation", Result.Documentation);
+         Take ("generated", Result.Generated);
       end if;
       return Result;
    end Roots_Of;
@@ -277,7 +279,9 @@ package body Model_Runner.Framework.Repository is
 
       Language : constant String := Language_Of (Path);
    begin
-      if Named_By (Within.Tests, Path) then
+      if Named_By (Within.Generated, Path) then
+         return Generated;
+      elsif Named_By (Within.Tests, Path) then
          return Test;
       elsif Language = "Markdown" or else Named_By (Within.Documentation, Path)
       then
@@ -291,6 +295,31 @@ package body Model_Runner.Framework.Repository is
       end if;
       return Other;
    end Role_Of;
+
+   --------------------
+   -- Says_Generated --
+   --------------------
+
+   function Says_Generated (Text : String) return Boolean is
+      Lines : Natural := 0;
+      Stop  : Natural := Text'First - 1;
+   begin
+      while Stop < Text'Last and then Lines < 5 loop
+         Stop := Stop + 1;
+         if Text (Stop) = ASCII.LF then
+            Lines := Lines + 1;
+         end if;
+      end loop;
+      declare
+         Head : constant String := Lower (Text (Text'First .. Stop));
+
+         function Has (Part : String) return Boolean
+         is (Ada.Strings.Fixed.Index (Head, Part) > 0);
+      begin
+         return Has ("@generated") or else Has ("automatically generated")
+           or else (Has ("generated") and then (Has ("do not edit") or else Has ("don't edit")));
+      end;
+   end Says_Generated;
 
    ---------------------------------------------------------------------------
    --  The generic adapter.
@@ -876,7 +905,8 @@ package body Model_Runner.Framework.Repository is
                        (Result,
                         (Path        => To_Unbounded_String (Relative),
                          Language    => To_Unbounded_String (Language_Of (Relative)),
-                         Role        => Role_Of (Relative, Within),
+                         Role        => (if Says_Generated (To_String (Text)) then Generated
+                                         else Role_Of (Relative, Within)),
                          Fingerprint => To_Unbounded_String
                                           (Fingerprint (To_String (Text))),
                          Stamp       => To_Unbounded_String (Stamp_Of (Full))));
@@ -1016,6 +1046,13 @@ package body Model_Runner.Framework.Repository is
          return Units;
       end Units_Of;
 
+      --  Whether the roots now place a kept file otherwise. One generated
+      --  by what it says, not where it is, stays so while it is unchanged.
+      function Role_Moved (Was : File_Role; Path : String) return Boolean
+      is (if Was = Generated
+          then not Named_By (Within.Generated, Path) and then not Says_Generated (Text_Of (Path))
+          else Was /= Role_Of (Path, Within));
+
       Gone : Name_Lists.Vector;
    begin
       Read_Again := 0;
@@ -1029,7 +1066,7 @@ package body Model_Runner.Framework.Repository is
             if Held = 0 or else Length (Kept.Files (Held).Stamp) = 0
               or else To_String (Kept.Files (Held).Stamp) /= Now_Stamps (Index)
               or else Recent (Now_Stamps (Index))
-              or else Kept.Files (Held).Role /= Role_Of (Now_Paths (Index), Within)
+              or else Role_Moved (Kept.Files (Held).Role, Now_Paths (Index))
             then
                Changed.Append (Now_Paths (Index));
             end if;
@@ -1059,7 +1096,8 @@ package body Model_Runner.Framework.Repository is
                     (Result,
                      (Path        => To_Unbounded_String (Path),
                       Language    => To_Unbounded_String (Language_Of (Path)),
-                      Role        => Role_Of (Path, Within),
+                      Role        => (if Says_Generated (Text) then Generated
+                                      else Role_Of (Path, Within)),
                       Fingerprint => To_Unbounded_String (Fingerprint (Text)),
                       Stamp       => To_Unbounded_String (Now_Stamps (Index))));
                   Languages.Adapter_For (Language_Of (Path)).Read (Path, Text, Result);

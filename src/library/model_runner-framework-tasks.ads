@@ -70,6 +70,25 @@ package Model_Runner.Framework.Tasks is
      (Item : Stores.Store;
       Kind : String) return Name_Lists.Vector;
 
+   --  Whether a task field is one every task may have, whatever its kind:
+   --  title, kind, component, requirements, depends_on, priority,
+   --  acceptance, parent, notes, permissions. Any other is a kind's own.
+   --
+   --  @param Name The field.
+   --  @return True for a core field.
+   function Is_Core_Field (Name : String) return Boolean;
+
+   --  Why a value does not read as a kind's own field says it must: the
+   --  field's schema, map task_field.NAME = TYPE, where TYPE is text,
+   --  number, identifier, path, list, or choice A|B|C. A field without a
+   --  schema has no stated meaning, and nothing is taken for it.
+   --
+   --  @param Item The store.
+   --  @param Name The field.
+   --  @param Value Its value.
+   --  @return The problem, or "" when it reads.
+   function Field_Problem (Item : Stores.Store; Name, Value : String) return String;
+
    --  Create a task: its definition, and its runtime state as a candidate
    --  -- or, where the configuration's set task.auto_accept names the
    --  task's class, accepted, with the policy recorded as who accepted it.

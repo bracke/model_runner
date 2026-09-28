@@ -1,5 +1,6 @@
 with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 
 with Model_Runner.Framework.Authority;
 with Model_Runner.Framework.Events;
@@ -30,6 +31,8 @@ package body Model_Runner.Framework.Tasks is
 
    function Is_Core (Name : String) return Boolean
    is (for some Field of Core => Field.all = Name);
+
+   function Is_Core_Field (Name : String) return Boolean renames Is_Core;
 
    --  Why a component cannot be named, where the configuration lists the
    --  project's components and it is not one of them; "" where it can.
@@ -221,6 +224,43 @@ package body Model_Runner.Framework.Tasks is
               then "agent" else First);
    end Class_Of;
 
+   -------------------
+   -- Field_Problem --
+   -------------------
+
+   function Field_Problem (Item : Stores.Store; Name, Value : String) return String is
+      Schema : constant String := Trim (Records.Get (Config (Item), "map.task_field." & Name));
+      Space  : constant Natural := Ada.Strings.Fixed.Index (Schema, " ");
+      Kind   : constant String := (if Space = 0 then Schema else Schema (Schema'First .. Space - 1));
+      Rest   : constant String := (if Space = 0 then "" else Trim (Schema (Space + 1 .. Schema'Last)));
+   begin
+      if Is_Core (Name) or else Value = "" then
+         return "";
+      elsif Schema = "" then
+         return "the field has no schema: map task_field." & Name & " says what it is";
+      elsif Kind = "text" or else Kind = "list" then
+         return "";
+      elsif Kind = "number" then
+         return (if Value'Length in 1 .. 9 and then (for all C of Value => C in '0' .. '9') then ""
+                 else "a number is its digits, not " & Value);
+      elsif Kind = "identifier" then
+         return (if Identifiers.Is_Valid (Ada.Characters.Handling.To_Upper (Value)) then ""
+                 else Value & " is not an identifier");
+      elsif Kind = "path" then
+         return (if Value (Value'First) not in '/' | '\' and then Ada.Strings.Fixed.Index (Value, "..") = 0
+                 then "" else Value & " is not a path inside the project");
+      elsif Kind = "choice" then
+         for Choice of Split (Ada.Strings.Fixed.Translate
+                                (Rest, Ada.Strings.Maps.To_Mapping ("|", ","))) loop
+            if Choice = Value then
+               return "";
+            end if;
+         end loop;
+         return Value & " is none of " & Rest;
+      end if;
+      return "the schema of " & Name & " names no type this knows: " & Kind;
+   end Field_Problem;
+
    ------------
    -- Create --
    ------------
@@ -289,6 +329,13 @@ package body Model_Runner.Framework.Tasks is
             elsif not Records.Is_Field_Name ("field." & Name) then
                Status := E.Make (E.Framework_Name_Invalid);
                E.Add_Text (Status, "value", Name);
+               return;
+            elsif Field_Problem (Item, Name, Trim (Configurations.Value_Maps.Element (Position))) /= ""
+            then
+               Status := E.Make (E.Framework_Schema_Violation);
+               E.Add_Text (Status, "name", Name);
+               E.Add_Text (Status, "detail",
+                           Field_Problem (Item, Name, Trim (Configurations.Value_Maps.Element (Position))));
                return;
             elsif Name = "permissions" then
                --  A restriction that does not read is refused here, where it
@@ -1249,6 +1296,11 @@ package body Model_Runner.Framework.Tasks is
                   Status := E.Make (E.Framework_Schema_Violation);
                   E.Add_Text (Status, "name", Name);
                   E.Add_Text (Status, "detail", "no field of a " & Kind & " task is called so");
+                  return;
+               elsif Field_Problem (Item, Name, Given) /= "" then
+                  Status := E.Make (E.Framework_Schema_Violation);
+                  E.Add_Text (Status, "name", Name);
+                  E.Add_Text (Status, "detail", Field_Problem (Item, Name, Given));
                   return;
                elsif Name = "title" and then Given = "" then
                   Status := E.Make (E.Framework_Schema_Violation);

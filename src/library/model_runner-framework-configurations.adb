@@ -11,6 +11,7 @@ with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Schemas;
+with Model_Runner.Framework.Tasks;
 
 package body Model_Runner.Framework.Configurations is
 
@@ -749,6 +750,30 @@ package body Model_Runner.Framework.Configurations is
             end if;
          end;
       end loop;
+      --  A kind's own field has a schema that says what it is.
+      for Index in 1 .. Records.Field_Count (Config) loop
+         declare
+            Name : constant String := Records.Field_Name (Config, Index);
+         begin
+            if Starts (Name, "task_kind.") then
+               for Field of Choices_Of (Records.Get (Config, Name)) loop
+                  declare
+                     Plain : constant String :=
+                       (if Field'Length > 0 and then Field (Field'Last) = '?'
+                        then Field (Field'First .. Field'Last - 1) else Field);
+                  begin
+                     if not Tasks.Is_Core_Field (Plain) and then not Has ("map.task_field." & Plain)
+                     then
+                        return Name & " lists " & Plain
+                          & ", a field of its own whose schema map task_field." & Plain
+                          & " does not say";
+                     end if;
+                  end;
+               end loop;
+            end if;
+         end;
+      end loop;
+
       --  A requirement move names states whose meaning is known: the core
       --  ones, or the project's, each said what it means.
       for Line of Lines_Of (Records.Get (Config, "set.requirement.transitions")) loop

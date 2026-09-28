@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Generated files are known.** A file has the role generated when
+  `set repository.generated` places it (default: `generated`, and protocol
+  buffer output) or its first lines say a tool made it and it is not to be
+  edited; refresh keeps such a file as it is while it is unchanged.
+- **A kind's own fields have schemas.** `map task_field.NAME = TYPE` (text,
+  number, identifier, path, list, or `choice A|B|C`) says what a field a
+  task kind lists is; a configuration listing a field with none is refused,
+  and a value its schema does not allow is refused on create and edit.
 - **The requirement lifecycle is the project's.** `map requirement.state.NAME
   = MEANING` adds a state with its meaning, `set requirement.transitions =
   FROM -> TO` the moves to and from it; the core states keep the harness's
