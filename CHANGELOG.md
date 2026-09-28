@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The task lifecycle is the project's too.** `map task.state.NAME =
+  MEANING` adds a task state, `set task.transitions = FROM -> TO` moves to
+  and from it, and `set task.forbidden = FROM -> TO` takes away a move a
+  person makes (rejecting, blocking or failing by hand, taking a failed
+  task up again, reopening, reconsidering); the harness's own moves and the
+  core states' meaning cannot be changed. `/task move ID STATE` makes any
+  move the lifecycle allows.
 - **Large results are kept apart.** A payload over 64 KiB is stored beside
   the results under its own fingerprint and read only when asked for
   (`Results.Read ... With_Payload`, `Results.Payload_Size`); `/result`

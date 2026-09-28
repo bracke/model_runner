@@ -157,7 +157,7 @@ en.help.init.quiet =   --quiet                 suppress progress, notes and warn
 en.help.init.verbose =   --verbose               report progress and detail on standard error
 en.help.init.locale =   --locale NAME           locale for program messages
 en.help.init.color =   --color=MODE            colour output: {value}
-en.help.task.usage = Usage: model_runner task [list|new TITLE|accept ID|reject ID|cancel ID|reopen ID|reconsider ID|audit ID|edit ID|depend ID ON|split ID TITLE; TITLE|show ID|context ID|verify ID|complete ID|integrate ID [anyway]|derive|step|plan] [options]
+en.help.task.usage = Usage: model_runner task [list|new TITLE|accept ID|reject ID|cancel ID|reopen ID|reconsider ID|move ID STATE|audit ID|edit ID|depend ID ON|split ID TITLE; TITLE|show ID|context ID|verify ID|complete ID|integrate ID [anyway]|derive|step|plan] [options]
 en.help.task.summary = Manage the project's persistent tasks. list shows each with its state, ready shown as one; new creates a candidate from --set fields, asking a terminal for what its kind requires; accept, reject and cancel move one; show prints the effective task; derive makes the tasks accepted requirements imply. Tasks that became ready are named after each change.
 en.help.task.options = Options:
 en.help.task.set =   --set NAME=VALUE        give the new task's field NAME its value; repeatable
@@ -318,7 +318,7 @@ en.cli.interactive.help.git = /git              how the project stands in Git, a
 en.cli.interactive.help.sandbox = /sandbox [R|off]  confine every agent this session starts, as a task's permissions field writes it
 en.cli.interactive.help.instruct = /instruct [S = V]  a standing instruction of yours: above every other source; withdraw ID ends it
 en.cli.interactive.help.reconfigure = /reconfigure NAME=VALUE ...  change settings: see what it reaches, then confirm
-en.cli.interactive.help.task = /task [ACTION]     list and manage tasks: new, accept, reject, edit, depend, split, reopen, reconsider, show, audit, derive, plan
+en.cli.interactive.help.task = /task [ACTION]     list and manage tasks: new, accept, reject, move, edit, depend, split, reopen, reconsider, show, audit, derive, plan
 en.cli.interactive.help.accept = /accept           accept the one candidate waiting
 en.cli.interactive.help.reject = /reject           reject the one candidate waiting
 en.cli.interactive.help.work = /work [TASK]      run a ready task on this model, verify and complete it
@@ -923,7 +923,7 @@ da.help.init.quiet =   --quiet                 undertryk status, noter og advars
 da.help.init.verbose =   --verbose               vis status og detaljer på standardfejl
 da.help.init.locale =   --locale NAVN           sprog for programmets beskeder
 da.help.init.color =   --color=TILSTAND        farvet output: {value}
-da.help.task.usage = Brug: model_runner task [list|new TITEL|accept ID|reject ID|cancel ID|reopen ID|reconsider ID|audit ID|edit ID|depend ID PÅ|split ID TITEL; TITEL|show ID|context ID|verify ID|complete ID|integrate ID [anyway]|derive|step|plan] [tilvalg]
+da.help.task.usage = Brug: model_runner task [list|new TITEL|accept ID|reject ID|cancel ID|reopen ID|reconsider ID|move ID TILSTAND|audit ID|edit ID|depend ID PÅ|split ID TITEL; TITEL|show ID|context ID|verify ID|complete ID|integrate ID [anyway]|derive|step|plan] [tilvalg]
 da.help.task.summary = Styr projektets vedvarende opgaver. list viser hver med dens tilstand, klar vist som en; new opretter en kandidat fra --set-felter og spørger en terminal om det dens slags kræver; accept, reject og cancel flytter en; show viser den effektive opgave; derive laver de opgaver accepterede krav medfører. Opgaver der blev klar nævnes efter hver ændring.
 da.help.task.options = Tilvalg:
 da.help.task.set =   --set NAVN=VÆRDI        giv den nye opgaves felt NAVN sin værdi; kan gentages
@@ -1242,7 +1242,7 @@ da.cli.interactive.help.git = /git              hvordan projektet står i Git, o
 da.cli.interactive.help.sandbox = /sandbox [R|off]  begræns hver agent denne session starter, som en opgaves permissions-felt skriver det
 da.cli.interactive.help.instruct = /instruct [S = V]  en stående instruks fra dig: over alle andre kilder; withdraw ID ophæver den
 da.cli.interactive.help.reconfigure = /reconfigure NAVN=VÆRDI ...  ændr indstillinger: se hvad det rækker til, og bekræft
-da.cli.interactive.help.task = /task [HANDLING]   vis og styr opgaver: new, accept, reject, edit, depend, split, reopen, reconsider, show, audit, derive, plan
+da.cli.interactive.help.task = /task [HANDLING]   vis og styr opgaver: new, accept, reject, move, edit, depend, split, reopen, reconsider, show, audit, derive, plan
 da.cli.interactive.help.accept = /accept           accepter den ene ventende kandidat
 da.cli.interactive.help.reject = /reject           afvis den ene ventende kandidat
 da.cli.interactive.help.work = /work [OPGAVE]    kør en klar opgave på denne model, verificér og fuldfør den
@@ -1770,7 +1770,7 @@ qps.help.init.quiet = ⟦  --quiet                 ßúppŕéßß pŕógŕéßß
 qps.help.init.verbose = ⟦  --verbose               ŕépóŕŧ pŕógŕéßß áñð ðéŧáíĺ óñ ßŧáñðáŕð éŕŕóŕ⟧
 qps.help.init.locale = ⟦  --locale NAME           ĺóçáĺé fóŕ pŕógŕám méßßágéß⟧
 qps.help.init.color = ⟦  --color=MODE            çóĺóúŕ óúŧpúŧ: {value}⟧
-qps.help.task.usage = ⟦Úßágé: móðéĺ_ŕúññéŕ ŧáßk [ĺíßŧ|ñéw TITLE|áççépŧ ID|ŕéjéçŧ ID|çáñçéĺ ID|ŕéópéñ ID|ŕéçóñßíðéŕ ID|áúðíŧ ID|éðíŧ ID|ðépéñð ID ON|ßþĺíŧ ID TITLE; TITLE|ßhów ID|ðéŕívé] [ópŧíóñß]⟧
+qps.help.task.usage = ⟦Úßágé: móðéĺ_ŕúññéŕ ŧáßk [ĺíßŧ|ñéw TITLE|áççépŧ ID|ŕéjéçŧ ID|çáñçéĺ ID|ŕéópéñ ID|ŕéçóñßíðéŕ ID|ɱóµé ID STATE|áúðíŧ ID|éðíŧ ID|ðépéñð ID ON|ßþĺíŧ ID TITLE; TITLE|ßhów ID|ðéŕívé] [ópŧíóñß]⟧
 qps.help.task.summary = ⟦Máñágé ŧhé pŕójéçŧ'ß péŕßíßŧéñŧ ŧáßkß. ĺíßŧ ßhówß éáçh wíŧh íŧß ßŧáŧé, ŕéáðý ßhówñ áß óñé; ñéw çŕéáŧéß á çáñðíðáŧé fŕóm --set fíéĺðß, áßkíñg á ŧéŕmíñáĺ fóŕ wháŧ íŧß kíñð ŕéqúíŕéß; áççépŧ, ŕéjéçŧ áñð çáñçéĺ móvé óñé; ßhów pŕíñŧß ŧhé éfféçŧívé ŧáßk; ðéŕívé mákéß ŧhé ŧáßkß áççépŧéð ŕéqúíŕéméñŧß ímpĺý. Ŧáßkß ŧháŧ béçámé ŕéáðý áŕé ñáméð áfŧéŕ éáçh çháñgé.⟧
 qps.help.task.options = ⟦Ópŧíóñß:⟧
 qps.help.task.set = ⟦  --set NAME=VALUE        gívé ŧhé ñéw ŧáßk'ß fíéĺð NAME íŧß váĺúé; ŕépéáŧábĺé⟧
@@ -1927,7 +1927,7 @@ qps.cli.interactive.help.git = ⟦/git              hów ŧhé þŕójéçŧ ß�
 qps.cli.interactive.help.sandbox = ⟦/sandbox [R|off]  çóñfíñé éµéŕý ágéñŧ ŧhíß ßéßßíóñ ßŧáŕŧß, áß á ŧáßk'ß þéŕɱíßßíóñß fíéĺð wŕíŧéß íŧ⟧
 qps.cli.interactive.help.instruct = ⟦/instruct [S = V]  á ßŧáñðíñg íñßŧŕúçŧíóñ óf ýóúŕß: áƀóµé éµéŕý óŧhéŕ ßóúŕçé; wíŧhðŕáw ÍÐ éñðß íŧ⟧
 qps.cli.interactive.help.reconfigure = ⟦/reconfigure NAME=VALUE ...  çháñgé ßéŧŧíñgß: ßéé wháŧ íŧ ŕéáçhéß, ŧhéñ çóñfíŕm⟧
-qps.cli.interactive.help.task = ⟦/task [ACTION]     ĺíßŧ áñð máñágé ŧáßkß: ñéw, áççépŧ, ŕéjéçŧ, éðíŧ, ðépéñð, ßþĺíŧ, ŕéópéñ, ŕéçóñßíðéŕ, ßhów, ðéŕívé, pĺáñ⟧
+qps.cli.interactive.help.task = ⟦/task [ACTION]     ĺíßŧ áñð máñágé ŧáßkß: ñéw, áççépŧ, ŕéjéçŧ, ɱóµé, éðíŧ, ðépéñð, ßþĺíŧ, ŕéópéñ, ŕéçóñßíðéŕ, ßhów, ðéŕívé, pĺáñ⟧
 qps.cli.interactive.help.accept = ⟦/accept           áççépŧ ŧhé óñé çáñðíðáŧé wáíŧíñg⟧
 qps.cli.interactive.help.reject = ⟦/reject           ŕéjéçŧ ŧhé óñé çáñðíðáŧé wáíŧíñg⟧
 qps.cli.interactive.help.work = ⟦/work [TASK]      ŕúñ á ŕéáðý ŧáßk óñ ŧhíß móðéĺ, véŕífý áñð çómpĺéŧé íŧ⟧

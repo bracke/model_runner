@@ -81,8 +81,72 @@ package body Model_Runner.Framework.Tasks is
    -- Lifecycle --
    ---------------
 
-   function Lifecycle return Transitions.Machine
-   is (Transitions.Task_Machine);
+   function Core_Task_States return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+   begin
+      for State of Name_Lists.Vector'
+        (["candidate", "accepted", "running", "blocked", "verification", "complete",
+          "failed", "cancelled", "rejected"])
+      loop
+         Result.Append (State);
+      end loop;
+      return Result;
+   end Core_Task_States;
+
+   function Forbiddable (From, To : String) return Boolean
+   is ((From = "candidate" and then To = "rejected")
+       or else (From = "accepted" and then To = "blocked")
+       or else (From = "blocked" and then To = "failed")
+       or else (From = "failed" and then To = "accepted")
+       or else (From in "complete" | "cancelled" and then To = "accepted")
+       or else (From = "rejected" and then To = "candidate"));
+
+   --  A FROM -> TO line's two sides, or two empty ones.
+   procedure Sides (Line : String; From, To : out Unbounded_String) is
+      Arrow : constant Natural := Ada.Strings.Fixed.Index (Line, "->");
+   begin
+      From := Null_Unbounded_String;
+      To := Null_Unbounded_String;
+      if Arrow > 0 then
+         From := To_Unbounded_String (Trim (Line (Line'First .. Arrow - 1)));
+         To := To_Unbounded_String (Trim (Line (Arrow + 2 .. Line'Last)));
+      end if;
+   end Sides;
+
+   function Lifecycle_Of (Item : Stores.Store) return Transitions.Machine is
+      Result   : Transitions.Machine := Transitions.Task_Machine;
+      Settings : constant Records.Item := Config (Item);
+      Known    : Name_Lists.Vector := Core_Task_States;
+      Prefix   : constant String := "map.task.state.";
+      From, To : Unbounded_String;
+   begin
+      for Index in 1 .. Records.Field_Count (Settings) loop
+         declare
+            Name : constant String := Records.Field_Name (Settings, Index);
+         begin
+            if Name'Length > Prefix'Length
+              and then Name (Name'First .. Name'First + Prefix'Length - 1) = Prefix
+              and then Records.Get (Settings, Name) /= ""
+            then
+               Known.Append (Name (Name'First + Prefix'Length .. Name'Last));
+               Transitions.Add_State (Result, Name (Name'First + Prefix'Length .. Name'Last));
+            end if;
+         end;
+      end loop;
+      for Line of Lines_Of (Records.Get (Settings, "set.task.transitions")) loop
+         Sides (Line, From, To);
+         if Known.Contains (To_String (From)) and then Known.Contains (To_String (To)) then
+            Transitions.Allow (Result, To_String (From), To_String (To));
+         end if;
+      end loop;
+      for Line of Lines_Of (Records.Get (Settings, "set.task.forbidden")) loop
+         Sides (Line, From, To);
+         if Forbiddable (To_String (From), To_String (To)) then
+            Transitions.Forbid (Result, To_String (From), To_String (To));
+         end if;
+      end loop;
+      return Result;
+   end Lifecycle_Of;
 
    -----------
    -- Kinds --
@@ -504,7 +568,7 @@ package body Model_Runner.Framework.Tasks is
       --  Checked here, before the machine: a move the machine allows may
       --  still not be one this task can make now.
       Transitions.Check
-        (Lifecycle, Id, Records.Get (Value, "state"), Next, Granted, Status);
+        (Lifecycle_Of (Item), Id, Records.Get (Value, "state"), Next, Granted, Status);
       if E.Is_Error (Status) then
          return;
       end if;
@@ -524,7 +588,7 @@ package body Model_Runner.Framework.Tasks is
       end if;
 
       Transitions.Apply
-        (Item, Change, Lifecycle, Tasks_Area, Id & State_Suffix, Next, Granted,
+        (Item, Change, Lifecycle_Of (Item), Tasks_Area, Id & State_Suffix, Next, Granted,
          Event_For (Next), Status, Actor);
       if E.Is_Error (Status) then
          return;

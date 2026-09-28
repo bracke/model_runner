@@ -815,6 +815,55 @@ package body Model_Runner.Framework.Configurations is
          end;
       end loop;
 
+      --  A task move names states whose meaning is known, a core state's
+      --  meaning is the harness's, and only a move a person makes may be
+      --  forbidden.
+      for Line of Lines_Of (Records.Get (Config, "set.task.transitions")) loop
+         declare
+            Arrow : constant Natural := Ada.Strings.Fixed.Index (Line, "->");
+         begin
+            if Arrow = 0 then
+               return "set.task.transitions is FROM -> TO a line, not " & Line;
+            end if;
+            for Side of Name_Lists.Vector'
+              ([Ada.Strings.Fixed.Trim (Line (Line'First .. Arrow - 1), Ada.Strings.Both),
+                Ada.Strings.Fixed.Trim (Line (Arrow + 2 .. Line'Last), Ada.Strings.Both)])
+            loop
+               if not Tasks.Core_Task_States.Contains (Side)
+                 and then not Has ("map.task.state." & Side)
+               then
+                  return "set.task.transitions names " & Side
+                    & ", a state whose meaning map task.state." & Side & " does not say";
+               end if;
+            end loop;
+         end;
+      end loop;
+      for Line of Lines_Of (Records.Get (Config, "set.task.forbidden")) loop
+         declare
+            Arrow : constant Natural := Ada.Strings.Fixed.Index (Line, "->");
+         begin
+            if Arrow = 0
+              or else not Tasks.Forbiddable
+                            (Ada.Strings.Fixed.Trim (Line (Line'First .. Arrow - 1), Ada.Strings.Both),
+                             Ada.Strings.Fixed.Trim (Line (Arrow + 2 .. Line'Last), Ada.Strings.Both))
+            then
+               return "set.task.forbidden takes away " & Line
+                 & ", which is no move a person makes; the harness's own moves stay";
+            end if;
+         end;
+      end loop;
+      for Index in 1 .. Records.Field_Count (Config) loop
+         declare
+            Name : constant String := Records.Field_Name (Config, Index);
+         begin
+            if Starts (Name, "map.task.state.")
+              and then Tasks.Core_Task_States.Contains (Name (Name'First + 15 .. Name'Last))
+            then
+               return Name & ": a core state's meaning is the harness's";
+            end if;
+         end;
+      end loop;
+
       --  A requirement move names states whose meaning is known: the core
       --  ones, or the project's, each said what it means.
       for Line of Lines_Of (Records.Get (Config, "set.requirement.transitions")) loop

@@ -3461,6 +3461,61 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Requirement_Lifecycle_Is_The_Projects;
 
+   --  A project adds task states with their meaning and moves to and from
+   --  them, and takes away moves a person makes; the harness's own moves
+   --  and the core states' meaning stay its.
+   procedure Task_Lifecycle_Is_The_Projects
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store   : S.Store;
+      Change  : S.Transaction;
+      Status  : E.Error_Info;
+      Id      : Unbounded_String;
+      Planned : Model_Runner.Framework.Configurations.Change_Plan;
+
+      function Refused (Name, Value : String) return Boolean is
+         One : Model_Runner.Framework.Configurations.Value_Maps.Map;
+         Got : E.Error_Info;
+      begin
+         One.Include (Name, Value);
+         Model_Runner.Framework.Configurations.Plan_Change (Store, One, Planned, Got);
+         return E.Is_Error (Got);
+      end Refused;
+   begin
+      Task_Project (Store, "task-lifecycle",
+                    "map task.state.parked = accepted, and set aside until the next release" & LF
+                    & "set task.transitions = accepted -> parked" & LF
+                    & "set task.transitions = parked -> accepted" & LF
+                    & "set task.forbidden = candidate -> rejected" & LF);
+      Assert (Tr.Is_State (Tk.Lifecycle_Of (Store), "parked")
+              and then Tk.Core_Task_States.Contains ("verification")
+              and then Tk.Forbiddable ("candidate", "rejected")
+              and then not Tk.Forbiddable ("accepted", "running"),
+              "the project's task lifecycle was not made");
+      Tk.Create (Store, Change, Fields ("Look", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "rejected", "", Status => Status);
+      Assert (Status.Code = E.Framework_Transition_Invalid, "a forbidden move was made");
+      Change := S.No_Changes;
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      Tk.Move (Store, Change, To_String (Id), "parked", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then Tk.State_Of (Store, To_String (Id)) = "parked",
+              "a move the project added was not made: " & Code_Of (Status));
+      Tk.Move (Store, Change, To_String (Id), "running", "", Status => Status);
+      Assert (Status.Code = E.Framework_Transition_Invalid,
+              "a move the project did not add was made from its own state");
+      Change := S.No_Changes;
+      Assert (Refused ("set.task.forbidden", "accepted -> running"),
+              "a move the harness makes was taken away");
+      Assert (Refused ("map.task.state.running", "whatever"),
+              "a core task state was given a meaning by the project");
+      Assert (Refused ("set.task.transitions", "accepted -> limbo"),
+              "a move to a task state nobody defined was taken");
+      S.Close (Store);
+   end Task_Lifecycle_Is_The_Projects;
+
    ---------------------------------------------------------------------------
    --  Context and invocations.
    ---------------------------------------------------------------------------
@@ -5381,7 +5436,7 @@ package body Tests.Framework_Cases is
       is (for some One of Granted_Only => One.all = Pair);
 
       use type Interfaces.Unsigned_64;
-      Machine : constant Tr.Machine := Tk.Lifecycle;
+      Machine : constant Tr.Machine := Tr.Task_Machine;
       Status  : E.Error_Info;
       All_Granted : constant Tr.Permissions := [others => True];
 
@@ -6900,6 +6955,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Requirement_Lifecycle_Is_The_Projects'Access,
          "a project adds requirement states with their meaning, and moves between them");
+      Register_Routine
+        (T, Task_Lifecycle_Is_The_Projects'Access,
+         "a project extends and restricts the task lifecycle, within the harness's own moves");
       Register_Routine
         (T, Derivation_Is_Idempotent'Access,
          "a requirement derives its task once, however often derivation"

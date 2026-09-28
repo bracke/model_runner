@@ -40,11 +40,6 @@ package Model_Runner.Framework.Tasks is
       Reasons : Name_Lists.Vector;
    end record;
 
-   --  The task lifecycle as this project has it.
-   --
-   --  @return The default task machine.
-   function Lifecycle return Transitions.Machine;
-
    --  The kinds of task a project defines.
    --
    --  @param Item The store.
@@ -69,6 +64,32 @@ package Model_Runner.Framework.Tasks is
    function Allowed_Fields
      (Item : Stores.Store;
       Kind : String) return Name_Lists.Vector;
+
+   --  The task states the harness itself gives meaning to: candidate,
+   --  accepted, running, blocked, verification, complete, failed,
+   --  cancelled and rejected.
+   --
+   --  @return Them.
+   function Core_Task_States return Name_Lists.Vector;
+
+   --  Whether a project may forbid a move of the default lifecycle: only
+   --  one a person makes -- rejecting a candidate, blocking or failing by
+   --  hand, taking a failed task up again, reopening, reconsidering. The
+   --  moves the harness makes as it works cannot be taken away from it.
+   --
+   --  @param From The state moved from.
+   --  @param To The state moved to.
+   --  @return True when the project may forbid it.
+   function Forbiddable (From, To : String) return Boolean;
+
+   --  The task lifecycle in a project: the default one, with the states
+   --  it adds -- map task.state.NAME = MEANING -- and the moves, a line
+   --  FROM -> TO each of set task.transitions, and without the moves set
+   --  task.forbidden takes away, of those Forbiddable allows.
+   --
+   --  @param Item The store.
+   --  @return The machine.
+   function Lifecycle_Of (Item : Stores.Store) return Transitions.Machine;
 
    --  Whether a task field is one every task may have, whatever its kind:
    --  title, kind, component, requirements, depends_on, priority,

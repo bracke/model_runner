@@ -731,6 +731,26 @@ package body Model_Runner.CLI.Tasks is
          Move_Granted ("accepted", Model_Runner.Framework.Transitions.Reopen);
       elsif Action = "reconsider" then
          Move_Granted ("candidate", Model_Runner.Framework.Transitions.Reconsideration);
+      elsif Action = "move" then
+         --  To any state the project's lifecycle allows: move TASK STATE.
+         if First_Word = "" or else After_First = "" then
+            Outcome := E.Make (E.Framework_Input_Missing);
+            E.Add_Text (Outcome, "name", "the task and the state");
+            Fail (Outcome);
+         else
+            Tk.Move (Store, Change, First_Word, After_First, "", Status => Outcome,
+                     Actor => Model_Runner.Framework.Transitions.User);
+            if E.Is_Ok (Outcome) then
+               Commit;
+            end if;
+            if E.Is_Error (Outcome) then
+               Fail (Outcome);
+            else
+               Pres.Put_Message
+                 (Screen, "cli.task.moved",
+                  [Loc.Named ("name", First_Word), Loc.Named ("value", After_First)]);
+            end if;
+         end if;
       elsif Action = "depend" then
          Depend;
       elsif Action = "edit" then
