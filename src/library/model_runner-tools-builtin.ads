@@ -194,6 +194,15 @@ package Model_Runner.Tools.Builtin is
    --  @param Result Buffer receiving the answer.
    --  @param Last Number of bytes written.
    --  @param Status Success or Tools_Too_Large.
+   --  A string argument of a call, decoded from its JSON.
+   --
+   --  @param Args The call's arguments, a JSON object.
+   --  @param Key The argument's name.
+   --  @param Found Whether it was there as a string.
+   --  @return Its content, or "" when not Found.
+   function Text_Argument (Args : String; Key : String; Found : out Boolean)
+     return String;
+
    overriding procedure Run
      (Self      : in out Instance;
       Named     : String;

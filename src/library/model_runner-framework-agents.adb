@@ -88,6 +88,7 @@ package body Model_Runner.Framework.Agents is
       Result.Allowed := Permissions.Value (Records.Get (Value, "permissions"));
       Result.Result := To_Unbounded_String (Records.Get (Value, "result"));
       Result.Summary := To_Unbounded_String (Records.Get (Value, "summary"));
+      Result.Retry_Of := To_Unbounded_String (Records.Get (Value, "retry_of"));
       return Result;
    end From_Record;
 
@@ -173,6 +174,9 @@ package body Model_Runner.Framework.Agents is
          Records.Set (Value, "budget", Image (Held.Budget));
          Records.Set (Value, "used", "0");
          Records.Set (Value, "permissions", Permissions.Image (Held.Allowed));
+         if Held.Retry_Of /= Null_Unbounded_String then
+            Records.Set (Value, "retry_of", To_String (Held.Retry_Of));
+         end if;
          Stores.Put (Change, Runtime_Area, Prefix & To_String (Id), Value);
          Events.Emit (Item, Change, Events.Agent_Spawned, To_String (Id),
                       (if Held.Parent = Null_Unbounded_String then "root"
@@ -254,10 +258,29 @@ package body Model_Runner.Framework.Agents is
       Asked  : Permissions.Permission_Set;
       Budget : Natural;
       Id     : out Ada.Strings.Unbounded.Unbounded_String;
-      Status : out Model_Runner.Errors.Error_Info)
+      Status : out Model_Runner.Errors.Error_Info;
+      Retry_Of : String := "")
    is
       Bounds : constant Limits := Limits_Of (Item);
       Value  : Records.Item;
+
+      --  Its children, less those run again for one that failed.
+      function First_Runs return Natural is
+         Count : Natural := 0;
+      begin
+         for Child of Children (Item, Parent) loop
+            declare
+               Held : Agent;
+               Read_Status : E.Error_Info;
+            begin
+               Read (Item, Child, Held, Read_Status);
+               if Held.Retry_Of = Null_Unbounded_String then
+                  Count := Count + 1;
+               end if;
+            end;
+         end loop;
+         return Count;
+      end First_Runs;
    begin
       Id := Null_Unbounded_String;
       Current (Item, Change, Parent, Value, Status);
@@ -288,8 +311,8 @@ package body Model_Runner.Framework.Agents is
             Over (Parent, "a child would be" & Natural'Image (Depth)
                   & " deep, past the limit", Status);
             return;
-         elsif Natural (Children (Item, Parent).Length)
-                 >= Natural'Min (Bounds.Max_Children, Grant.Max_Children)
+         elsif Retry_Of = ""
+           and then First_Runs >= Natural'Min (Bounds.Max_Children, Grant.Max_Children)
          then
             Over (Parent, "it has all the children it may have", Status);
             return;
@@ -326,6 +349,7 @@ package body Model_Runner.Framework.Agents is
                    Need    => Need,
                    Budget  => Budget,
                    Allowed => Allowed,
+                   Retry_Of => To_Unbounded_String (Retry_Of),
                    others  => <>),
                   Id, Status);
          end;
@@ -428,10 +452,34 @@ package body Model_Runner.Framework.Agents is
    function May_Complete
      (Item   : Stores.Store;
       Id     : String;
-      Reason : out Ada.Strings.Unbounded.Unbounded_String) return Boolean is
+      Reason : out Ada.Strings.Unbounded.Unbounded_String) return Boolean
+   is
+      Mine : constant Name_Lists.Vector := Children (Item, Id);
+
+      --  Whether a failed child was run again until one of its runs
+      --  completed.
+      function Made_Good (Failed : String) return Boolean is
+      begin
+         for Child of Mine loop
+            declare
+               Held   : Agent;
+               Status : E.Error_Info;
+            begin
+               Read (Item, Child, Held, Status);
+               if To_String (Held.Retry_Of) = Failed
+                 and then (To_String (Held.Status) = "completed"
+                           or else (To_String (Held.Status) = "failed"
+                                    and then Made_Good (Child)))
+               then
+                  return True;
+               end if;
+            end;
+         end loop;
+         return False;
+      end Made_Good;
    begin
       Reason := Null_Unbounded_String;
-      for Child of Children (Item, Id) loop
+      for Child of Mine loop
          declare
             Held   : Agent;
             Status : E.Error_Info;
@@ -442,8 +490,11 @@ package body Model_Runner.Framework.Agents is
                   Reason := To_Unbounded_String ("its required child " & Child
                                                  & " is still going");
                   return False;
-               elsif To_String (Held.Status) = "failed" then
-                  Reason := To_Unbounded_String ("its required child " & Child & " failed");
+               elsif To_String (Held.Status) = "failed" and then not Made_Good (Child) then
+                  Reason := To_Unbounded_String
+                    ("its required child " & Child & " failed"
+                     & (if Held.Summary = Null_Unbounded_String then ""
+                        else ": " & To_String (Held.Summary)));
                   return False;
                end if;
             end if;

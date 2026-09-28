@@ -16,8 +16,9 @@ with Model_Runner.Framework.Stores;
 --  constraints are roots=A|B, deny=C|D, profiles=P|Q, max_depth=N and
 --  max_children=N, separated by commas; an empty value grants the
 --  capability without limit. A project that says nothing gets the least
---  that work needs: reading and writing source and specifications, and
---  running builds and tests.
+--  that work needs: reading and writing source and specifications,
+--  running builds and tests, and making at most two children one level
+--  down.
 package Model_Runner.Framework.Permissions is
 
    --  What may be done.

@@ -7,6 +7,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Child agents do work.** An agent on `/work` may hand a part of its
+  task to a helper with the `delegate` tool (task, role, and whether it is
+  required, optional or advisory). The harness makes the child within its
+  parent's permissions and limits -- a project that says nothing now allows
+  two children one level down -- with half the parent's remaining token
+  budget and a context of its own: the task and what it is asked, never
+  the parent's conversation. The child runs on the same session with the
+  tools its own permissions give; its answer is held to a child result
+  contract, kept as a `child_result`, and its parent is told the result,
+  not the transcript. A required child that fails is run once more
+  (`scalar agents.child_retries`); if it still fails, or is left open when
+  its parent stops, the task is blocked (or failed, with `scalar
+  agents.on_child_failure = fail`). An optional or advisory child's
+  failure does not matter. Cancelling a task, or recovering one whose agent
+  stopped, cancels that agent's children. `work` lists each child with how
+  it ended.
+
 - **The project's commands are typed in the conversation.** In `run
   --interactive`, between turns: `/init`, `/bootstrap`, `/state`,
   `/config`, `/task`, `/accept`, `/reject`, `/work`, `/cancel`, `/check`,

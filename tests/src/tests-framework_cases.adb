@@ -2884,7 +2884,7 @@ package body Tests.Framework_Cases is
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T);
-      Store  : S.Store;
+      Store  : aliased S.Store;
       Status : E.Error_Info;
       Change : S.Transaction;
       Done   : Wk.Report;
@@ -3047,7 +3047,7 @@ package body Tests.Framework_Cases is
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T);
-      Store  : S.Store;
+      Store  : aliased S.Store;
       Status : E.Error_Info;
       Change : S.Transaction;
       Id     : Unbounded_String;
@@ -3289,7 +3289,8 @@ package body Tests.Framework_Cases is
       Project := Pm.Effective (Store, "", "");
       Assert (Pm.Allows (Project, Pm.Write_Source, "src/a.adb")
               and then not Pm.Allows (Project, Pm.Use_Network)
-              and then not Pm.Allows (Project, Pm.Create_Children),
+              and then Project (Pm.Create_Children).Max_Depth = 1
+              and then Project (Pm.Create_Children).Max_Children = 2,
               "a project that says nothing was not given the least work needs");
       S.Close (Store);
 
@@ -3459,7 +3460,8 @@ package body Tests.Framework_Cases is
       S.Close (Store);
 
       --  A project that grants no children refuses them.
-      Task_Project (Store, "recursion-none");
+      Task_Project (Store, "recursion-none",
+                    "map permission.project.read_source =" & LF);
       Change := S.No_Changes;
       Ag.Start_Root (Store, Change, "TASK-001", "worker", "", Root, Status);
       S.Commit (Store, Change, Status);
@@ -3475,7 +3477,7 @@ package body Tests.Framework_Cases is
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T);
-      Store  : S.Store;
+      Store  : aliased S.Store;
       Status : E.Error_Info;
       Change : S.Transaction;
       Id     : Unbounded_String;
@@ -3501,6 +3503,219 @@ package body Tests.Framework_Cases is
               & To_String (Done.Final_State) & " " & To_String (Done.Reason));
       S.Close (Store);
    end Writes_Stay_In_Bounds;
+
+   --  An agent that asks for children through the host, as a plan says.
+   type Parent_Plan is
+     (Helped, Fails_Twice, Fails_Then_Good, Optional_Fails, Left_Open, Denied);
+
+   type Scripted_Parent is new Wk.Parenting_Runner with record
+      Plan : Parent_Plan := Helped;
+   end record;
+
+   overriding procedure Run
+     (Self        : Scripted_Parent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding procedure Run_Parenting
+     (Self        : Scripted_Parent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   --  What the parent was last told of a child, and the last refusal.
+   Parent_Told   : Unbounded_String;
+   Parent_Status : E.Error_Info;
+
+   Parent_Done : constant String :=
+     "status: done" & LF & "summary: wrote hello" & LF & "changed_files: src/hello.adb";
+   Child_Done  : constant String :=
+     "status: done" & LF & "summary: looked" & LF & "findings: it is fine";
+   Child_Fails : constant String := "status: failed" & LF & "summary: could not look";
+
+   overriding procedure Run
+     (Self        : Scripted_Parent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path);
+   begin
+      Dirs.Create_Path (Project & "/src");
+      Put_File (Project & "/src/hello.adb", "procedure Hello is begin null; end;");
+      Answer := To_Unbounded_String (Parent_Done);
+      Status := E.Success;
+   end Run;
+
+   overriding procedure Run_Parenting
+     (Self        : Scripted_Parent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      Root    : constant String := Children.Current;
+      Id      : Unbounded_String;
+      Context : Unbounded_String;
+      Budget  : Natural;
+      Retry   : Boolean := False;
+
+      procedure Ask (Need, Said : String; Retry_Of : String := ""; Close : Boolean := True) is
+      begin
+         Children.Open_Child
+           ("reviewer", Need, "look at hello", Retry_Of, Id, Context, Budget, Parent_Status);
+         if E.Is_Ok (Parent_Status) then
+            Assert (Ada.Strings.Fixed.Index (To_String (Context), "look at hello") > 0
+                    and then Ada.Strings.Fixed.Index (To_String (Context), "status: done") > 0
+                    and then Budget > 0 and then Children.Current = To_String (Id),
+                    "a child was not given a context and budget of its own");
+            if Close then
+               Children.Close_Child (Said, 10, E.Success, Parent_Told, Retry);
+               Assert (Children.Current = Root, "a closed child was still the one working");
+            end if;
+         end if;
+      end Ask;
+   begin
+      Parent_Told := Null_Unbounded_String;
+      Parent_Status := E.Success;
+      Assert (Children.May (Pm.Write_Source, "src/hello.adb"),
+              "the root may not write where its task is");
+      case Self.Plan is
+         when Helped | Denied =>
+            Ask ("required", Child_Done);
+         when Fails_Twice =>
+            Ask ("required", Child_Fails);
+            Assert (Retry, "a required child that failed was not run again");
+            Ask ("required", Child_Fails, To_String (Id));
+            Assert (not Retry, "a child was run again past the limit");
+         when Fails_Then_Good =>
+            Ask ("required", Child_Fails);
+            Ask ("required", Child_Done, To_String (Id));
+         when Optional_Fails =>
+            Ask ("optional", Child_Fails);
+            Assert (not Retry, "an optional child was run again");
+         when Left_Open =>
+            Ask ("required", Child_Done, Close => False);
+      end case;
+      Children.Spend (5);
+      Run (Self, Prompt_Path, Project, Answer, Status);
+   end Run_Parenting;
+
+   --  A working agent's children are made by the harness within what the
+   --  agent was given, each with a context and budget of its own; their
+   --  results are kept and their parent told of them; a required child that
+   --  fails is run again once, and if it still fails -- or is left open --
+   --  the task cannot complete, while an optional one's failure does not
+   --  matter; a project that gives no children refuses them; and cancelling
+   --  a task cancels its agent's children.
+   procedure Children_Work_Within_Their_Parent
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Done   : Wk.Report;
+      Checks : constant String :=
+        "set execution.allowed = test" & LF
+        & "profile checks = exists: test -f src/hello.adb" & LF
+        & "scalar verification.default = checks" & LF;
+
+      function Contains (Text, Part : String) return Boolean
+      is (Ada.Strings.Fixed.Index (Text, Part) > 0);
+
+      procedure Work (Plan : Parent_Plan) is
+         Id : Unbounded_String;
+      begin
+         Tk.Create (Store, Change, Fields (Parent_Plan'Image (Plan), "analysis"), "user", "",
+                    Id, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Wk.Execute (Store, To_String (Id), Scripted_Parent'(Plan => Plan),
+                     Cx.Profile (Store, ""), Done, Status);
+         Assert (E.Is_Ok (Status), "work with children failed outright: " & Code_Of (Status));
+      end Work;
+   begin
+      Task_Project (Store, "children", Checks);
+
+      Work (Helped);
+      Assert (To_String (Done.Final_State) = "complete",
+              "a task whose child helped did not complete: " & To_String (Done.Reason));
+      Assert (Natural (Done.Children.Length) = 1
+              and then Contains (Done.Children.First_Element, "completed")
+              and then Contains (Done.Children.First_Element, "RES-"),
+              "the child's result was not kept");
+      Assert (Contains (To_String (Parent_Told), "done")
+              and then Contains (To_String (Parent_Told), "it is fine")
+              and then not Contains (To_String (Parent_Told), "look at hello"),
+              "the parent was not told the child's result, or was told more");
+
+      Work (Fails_Twice);
+      Assert (To_String (Done.Final_State) = "blocked"
+              and then Contains (To_String (Done.Reason), "failed")
+              and then Natural (Done.Children.Length) = 2,
+              "a required child that failed twice did not hold its parent: "
+              & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+
+      Work (Fails_Then_Good);
+      Assert (To_String (Done.Final_State) = "complete",
+              "a child made good on its second run still held its parent: "
+              & To_String (Done.Reason));
+
+      Work (Optional_Fails);
+      Assert (To_String (Done.Final_State) = "complete",
+              "an optional child's failure failed its parent: " & To_String (Done.Reason));
+
+      Work (Left_Open);
+      Assert (To_String (Done.Final_State) = "blocked"
+              and then Contains (Done.Children.First_Element, "failed")
+              and then Contains (Done.Children.First_Element, "stopped before"),
+              "a child left open went missing: " & To_String (Done.Reason));
+
+      --  Cancelling a task cancels what its agent made.
+      declare
+         Id    : Unbounded_String;
+         Root  : Unbounded_String;
+         Child : Unbounded_String;
+         Held  : Ag.Agent;
+      begin
+         Tk.Create (Store, Change, Fields ("Cancelled", "analysis"), "user", "", Id, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+         Ag.Start_Root (Store, Change, To_String (Id), "worker", "analysis", Root, Status);
+         S.Commit (Store, Change, Status);
+         Ag.Spawn_Child (Store, Change, To_String (Root), "reviewer", Ag.Required,
+                         Pm.Unrestricted, 100, Child, Status);
+         Ls.Acquire (Store, Change, "task." & To_String (Id), To_String (Root), 3600, Status);
+         Tk.Move (Store, Change, To_String (Id), "running", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Wk.Cancel (Store, To_String (Id), Status);
+         Ag.Read (Store, To_String (Child), Held, Status);
+         Assert (To_String (Held.Status) = "cancelled",
+                 "a cancelled task left its agent's child going: " & To_String (Held.Status));
+      end;
+      S.Close (Store);
+
+      --  A project that gives no children refuses them, and the work goes on.
+      Task_Project
+        (Store, "no-children",
+         Checks & "map permission.project.read_source =" & LF
+         & "map permission.project.write_source =" & LF
+         & "map permission.project.run_tests =" & LF);
+      Work (Denied);
+      Assert (Parent_Status.Code = E.Framework_Permission_Denied
+              and then To_String (Done.Final_State) = "complete"
+              and then Done.Children.Is_Empty,
+              "a child was made where the project gives none: " & Code_Of (Parent_Status));
+      S.Close (Store);
+   end Children_Work_Within_Their_Parent;
 
    ---------------------------------------------------------------------------
    --  Orchestration.
@@ -3697,6 +3912,9 @@ package body Tests.Framework_Cases is
         (T, Recursion_Stays_Bounded'Access,
          "children stay within limits and permissions, failures and"
          & " cancellation are seen");
+      Register_Routine
+        (T, Children_Work_Within_Their_Parent'Access,
+         "a working agent's children are made, run and answered for by the harness");
       Register_Routine
         (T, Writes_Stay_In_Bounds'Access,
          "an agent writing where it may not fails its task");

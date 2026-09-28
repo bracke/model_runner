@@ -31,8 +31,9 @@ with Model_Runner.Stops;
 --  conversation of its own: its context is built from the project state,
 --  never from the conversation on the screen, and the conversation on the
 --  screen is left as it was. The model works with the built-in file tools
---  only -- no shell, no network, no delegation -- inside the project or the
---  workspace the task is given.
+--  only -- no shell, no network -- inside the project or the workspace the
+--  task is given, and may hand a part of the work to a child agent the
+--  harness makes and answers for.
 package Model_Runner.CLI.Project_Commands is
 
    --  An agent that is the session's own model, already loaded.
@@ -42,11 +43,12 @@ package Model_Runner.CLI.Project_Commands is
       Stop_Set : not null access constant Model_Runner.Stops.Set;
       Screen   : not null access Model_Runner.Presentation.Console;
       Item     : not null access constant Model_Runner.CLI.Options.Command)
-   is new Model_Runner.Framework.Work.Agent_Runner with null record;
+   is new Model_Runner.Framework.Work.Parenting_Runner with null record;
 
-   --  Run the agent: a fresh conversation holding the task's context, the
-   --  agent loop with the file tools, and the session left reset so the
-   --  conversation on the screen is read again on its next turn.
+   --  Run the agent without children: a fresh conversation holding the
+   --  task's context, the agent loop with the file tools, and the session
+   --  left reset so the conversation on the screen is read again on its next
+   --  turn.
    --
    --  @param Self The agent.
    --  @param Prompt_Path Where the task's context is.
@@ -57,6 +59,26 @@ package Model_Runner.CLI.Project_Commands is
      (Self        : Session_Agent;
       Prompt_Path : String;
       Project     : String;
+      Answer      : out Ada.Strings.Unbounded.Unbounded_String;
+      Status      : out Model_Runner.Errors.Error_Info);
+
+   --  Run the agent with children: as Run, and where its permissions let
+   --  it, it may hand a part of the work to a helper with the delegate tool.
+   --  The harness makes the child through Children; it runs on the same
+   --  session in a conversation of its own, with the tools its own
+   --  permissions give, and its parent is told only its result.
+   --
+   --  @param Self The agent.
+   --  @param Prompt_Path Where the task's context is.
+   --  @param Project Where it works.
+   --  @param Children Where its children are made.
+   --  @param Answer Its final answer.
+   --  @param Status A failure of the loop.
+   overriding procedure Run_Parenting
+     (Self        : Session_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Model_Runner.Framework.Work.Child_Host'Class;
       Answer      : out Ada.Strings.Unbounded.Unbounded_String;
       Status      : out Model_Runner.Errors.Error_Info);
 

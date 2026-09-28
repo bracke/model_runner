@@ -2,6 +2,7 @@ with Ada.Strings.Unbounded;
 
 with Model_Runner.Errors;
 with Model_Runner.Framework.Context;
+with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Stores;
 
 --  One task, run from ready to done by one agent.
@@ -30,6 +31,17 @@ with Model_Runner.Framework.Stores;
 --  What the agent is, is the caller's: the command runs a model, a test runs
 --  a script. The harness gives it the context in a file and takes an answer
 --  back; it never gives it the right to change project state.
+--
+--  An agent that can have children of its own -- a Parenting_Runner -- is
+--  handed a Child_Host with its context. A child is asked for there and
+--  made by the harness, within what its parent was given; it gets a
+--  context built for it alone, its answer is held to the child result
+--  contract and kept, and its parent is told the result, never the
+--  conversation that led to it. A required child that fails is run once
+--  more (scalar agents.child_retries), and if it still fails its parent
+--  cannot complete: the task is blocked, or failed where scalar
+--  agents.on_child_failure = fail. A child left open when its parent stops
+--  is recorded failed, so no child's failure goes unseen.
 package Model_Runner.Framework.Work is
 
    --  Whatever does the work: given where its context is, it works in the
@@ -47,6 +59,93 @@ package Model_Runner.Framework.Work is
      (Self        : Agent_Runner;
       Prompt_Path : String;
       Project     : String;
+      Answer      : out Ada.Strings.Unbounded.Unbounded_String;
+      Status      : out Model_Runner.Errors.Error_Info) is abstract;
+
+   --  Where a working agent's children are made and answered for.
+   type Child_Host (<>) is tagged limited private;
+
+   --  Make a child of the agent now working -- the root, or the innermost
+   --  child still open -- and build the context it is given.
+   --
+   --  @param Host The host.
+   --  @param Role What the child is for, as the parent names it.
+   --  @param Need required, optional or advisory; anything else is required.
+   --  @param Brief What the child is asked, in the parent's words.
+   --  @param Retry_Of The child this one is run again for, or "".
+   --  @param Child_Id The child.
+   --  @param Context What it is told.
+   --  @param Budget The tokens it may generate.
+   --  @param Status Framework_Permission_Denied when the parent may not
+   --    create children, Framework_Limit_Exceeded past a limit.
+   procedure Open_Child
+     (Host     : in out Child_Host;
+      Role     : String;
+      Need     : String;
+      Brief    : String;
+      Retry_Of : String;
+      Child_Id : out Ada.Strings.Unbounded.Unbounded_String;
+      Context  : out Ada.Strings.Unbounded.Unbounded_String;
+      Budget   : out Natural;
+      Status   : out Model_Runner.Errors.Error_Info);
+
+   --  Take the innermost open child's answer: hold it to the child result
+   --  contract, keep it, charge what it used and record how it ended.
+   --
+   --  @param Host The host.
+   --  @param Answer What it answered.
+   --  @param Tokens The tokens it generated.
+   --  @param Ran A failure to run it at all.
+   --  @param Told What its parent is told: the result, not the transcript.
+   --  @param Retry Whether it is to be run again, with Retry_Of naming it.
+   procedure Close_Child
+     (Host   : in out Child_Host;
+      Answer : String;
+      Tokens : Natural;
+      Ran    : Model_Runner.Errors.Error_Info;
+      Told   : out Ada.Strings.Unbounded.Unbounded_String;
+      Retry  : out Boolean);
+
+   --  The agent now working: the root, or the innermost open child.
+   --
+   --  @param Host The host.
+   --  @return Its id.
+   function Current (Host : Child_Host) return String;
+
+   --  Whether the agent now working may do something.
+   --
+   --  @param Host The host.
+   --  @param What The capability.
+   --  @param Path Where, for a capability with roots; "" for anywhere.
+   --  @return True when it is granted there.
+   function May
+     (Host : Child_Host;
+      What : Permissions.Capability;
+      Path : String := "") return Boolean;
+
+   --  Count tokens the agent now working generated against its budget.
+   --
+   --  @param Host The host.
+   --  @param Tokens How many.
+   procedure Spend (Host : in out Child_Host; Tokens : Natural);
+
+   --  An agent that can have children: it is given the host they are made
+   --  through as it runs.
+   type Parenting_Runner is interface and Agent_Runner;
+
+   --  Run the agent, with children made through Children.
+   --
+   --  @param Self The runner.
+   --  @param Prompt_Path The file its context and instructions are in.
+   --  @param Project The project directory it works in.
+   --  @param Children Where its children are made.
+   --  @param Answer What it answered.
+   --  @param Status A failure to run it at all.
+   procedure Run_Parenting
+     (Self        : Parenting_Runner;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Child_Host'Class;
       Answer      : out Ada.Strings.Unbounded.Unbounded_String;
       Status      : out Model_Runner.Errors.Error_Info) is abstract;
 
@@ -72,6 +171,10 @@ package Model_Runner.Framework.Work is
 
       --  Requirements whose verification changed.
       Requirements  : Name_Lists.Vector;
+
+      --  The agent's children, one a line: each one's need, how it ended,
+      --  its result and summary.
+      Children      : Name_Lists.Vector;
    end record;
 
    --  Put back the tasks whose agents stopped without finishing: a running
@@ -98,7 +201,7 @@ package Model_Runner.Framework.Work is
    --    agent itself ends the task failed and is reported in Result, not
    --    here.
    procedure Execute
-     (Item    : in out Stores.Store;
+     (Item    : aliased in out Stores.Store;
       Task_Id : String;
       Runner  : Agent_Runner'Class;
       Model   : Context.Model_Profile;
@@ -121,9 +224,9 @@ package Model_Runner.Framework.Work is
       Result  : out Report;
       Status  : out Model_Runner.Errors.Error_Info);
 
-   --  Stop the work on a running task: its agent is recorded cancelled, its
-   --  lease let go, a workspace written for it abandoned, and the task
-   --  cancelled.
+   --  Stop the work on a running task: its agent and every child of it
+   --  still going are recorded cancelled, its lease let go, a workspace
+   --  written for it abandoned, and the task cancelled.
    --
    --  @param Item The store.
    --  @param Task_Id The task.
@@ -134,9 +237,23 @@ package Model_Runner.Framework.Work is
       Task_Id : String;
       Status  : out Model_Runner.Errors.Error_Info);
 
+   --  What a child is told after its context: how to answer.
+   --
+   --  @return The text.
+   function Child_Instructions return String;
+
    --  The instructions an agent is given after its context: how to answer.
    --
    --  @return The text.
    function Instructions return String;
+
+private
+
+   type Child_Host (Item : not null access Stores.Store) is tagged limited record
+      Task_Id : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  The root, then each child still open, innermost last.
+      Open    : Name_Lists.Vector;
+   end record;
 
 end Model_Runner.Framework.Work;

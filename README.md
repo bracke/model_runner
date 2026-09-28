@@ -103,7 +103,14 @@ directory: `model_runner run MODEL --interactive`, then
 
 `/work` gives the session's own model the task in a conversation of its
 own, built from the project state, with the file tools and nothing else;
-the conversation on the screen is left as it was. The same commands run
+the conversation on the screen is left as it was. It may hand a part of the
+work -- a review, an investigation -- to a helper with `delegate`: the
+harness makes that child agent within what its parent was given (by default
+at most two, one level down), gives it a context of its own, keeps its
+result and tells the parent only that. A required child that fails is run
+once more; if it still fails the task is blocked (`scalar
+agents.on_child_failure = fail` fails it instead), and cancelling a task
+cancels its agent's children. The same commands run
 outside a session too -- `model_runner init|task|repo|work`, with
 `--set NAME=VALUE` for the words -- for scripts.
 

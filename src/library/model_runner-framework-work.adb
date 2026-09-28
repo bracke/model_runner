@@ -1,3 +1,4 @@
+with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Strings.Fixed;
 
@@ -9,7 +10,6 @@ with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Invocations;
 with Model_Runner.Framework.Leases;
-with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Results;
@@ -39,7 +39,9 @@ package body Model_Runner.Framework.Work is
        & "Do the task now, with the tools: read_file reads a file, write_file"
        & " writes the whole new content of a file, list_directory lists a"
        & " directory. Paths are relative to the project. Make each change by"
-       & " calling write_file; describing a change does not make it."
+       & " calling write_file; describing a change does not make it. Where"
+       & " you have delegate, a part better done apart -- a review, an"
+       & " investigation -- can be handed to a helper, who reports back."
        & ASCII.LF & ASCII.LF
        & "When the files are written, finish with a short report in these lines:"
        & ASCII.LF & ASCII.LF
@@ -51,6 +53,15 @@ package body Model_Runner.Framework.Work is
        & " found outside the task, and blocked, for a decision only a person"
        & " can make. Further work you found goes in proposed_tasks:, one a"
        & " line." & ASCII.LF);
+
+   --  A scalar of the configuration.
+   function Scalar (Item : Stores.Store; Name : String) return String is
+      Config : Records.Item;
+      Status : E.Error_Info;
+   begin
+      Configurations.Read (Item, Config, Status);
+      return Records.Get (Config, "scalar." & Name);
+   end Scalar;
 
    --  A setting of the configuration's work.
    function Work_Setting (Item : Stores.Store; Name : String) return String is
@@ -148,6 +159,21 @@ package body Model_Runner.Framework.Work is
       return (if E.Is_Ok (Status) then Records.Get (Held, "generation") else "");
    end Generation_Of;
 
+   --  Every child of an agent still going is cancelled with it: a child
+   --  outlives nothing it was made for.
+   procedure Stop_Children
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Agent  : String)
+   is
+      Stopped : Name_Lists.Vector;
+      Status  : E.Error_Info;
+   begin
+      for Child of Agents.Children (Item, Agent) loop
+         Agents.Cancel (Item, Change, Child, Stopped, Status);
+      end loop;
+   end Stop_Children;
+
    -------------
    -- Recover --
    -------------
@@ -174,6 +200,7 @@ package body Model_Runner.Framework.Work is
                   return;
                end if;
                if Agent /= "" then
+                  Stop_Children (Item, Change, Agent);
                   Agent_State (Item, Change, Agent, "failed", "it stopped without finishing");
                end if;
                Leases.Release (Item, Change, Lease_Of (Id), Agent, Status);
@@ -197,12 +224,266 @@ package body Model_Runner.Framework.Work is
       return Result;
    end Snapshot;
 
+   --  What a child answers with.
+   Child_Claim : constant Invocations.Contract :=
+     Invocations.Contract_Of
+       ("child_result",
+        "status = done|failed" & ASCII.LF & "summary" & ASCII.LF
+        & "findings?" & ASCII.LF & "changed_files?");
+
+   ------------------------
+   -- Child_Instructions --
+   ------------------------
+
+   function Child_Instructions return String
+   is ("## What to do" & ASCII.LF
+       & "Do what you are asked, with the tools you have, and nothing more."
+       & " Paths are relative to the project. Only a write_file call changes a"
+       & " file, and only if you were asked to change one." & ASCII.LF & ASCII.LF
+       & "When you are done, report in these lines:" & ASCII.LF & ASCII.LF
+       & "status: done" & ASCII.LF
+       & "summary: one line on what you found or did" & ASCII.LF
+       & "findings: what you were asked for, in as many lines as it needs"
+       & ASCII.LF & ASCII.LF
+       & "If you could not do it, the status is failed and the summary says"
+       & " why. Add changed_files: for any file you wrote." & ASCII.LF);
+
+   -------------
+   -- Current --
+   -------------
+
+   function Current (Host : Child_Host) return String
+   is (if Host.Open.Is_Empty then "" else Host.Open.Last_Element);
+
+   ---------
+   -- May --
+   ---------
+
+   function May
+     (Host : Child_Host;
+      What : Permissions.Capability;
+      Path : String := "") return Boolean
+   is
+      Held   : Agents.Agent;
+      Status : E.Error_Info;
+   begin
+      Agents.Read (Host.Item.all, Current (Host), Held, Status);
+      return E.Is_Ok (Status) and then Permissions.Allows (Held.Allowed, What, Path);
+   end May;
+
+   -----------
+   -- Spend --
+   -----------
+
+   procedure Spend (Host : in out Child_Host; Tokens : Natural) is
+      Change : Stores.Transaction;
+      Status : E.Error_Info;
+   begin
+      --  What it used is recorded; going over is the loop's to stop, and the
+      --  record says so.
+      Agents.Charge (Host.Item.all, Change, Current (Host), Tokens, Status);
+      Stores.Commit (Host.Item.all, Change, Status);
+   end Spend;
+
+   ----------------
+   -- Open_Child --
+   ----------------
+
+   procedure Open_Child
+     (Host     : in out Child_Host;
+      Role     : String;
+      Need     : String;
+      Brief    : String;
+      Retry_Of : String;
+      Child_Id : out Ada.Strings.Unbounded.Unbounded_String;
+      Context  : out Ada.Strings.Unbounded.Unbounded_String;
+      Budget   : out Natural;
+      Status   : out Model_Runner.Errors.Error_Info)
+   is
+      Change  : Stores.Transaction;
+      Parent  : constant String := Current (Host);
+      Owner   : Agents.Agent;
+      Defined : Records.Item;
+      Read    : E.Error_Info;
+      Named   : constant String := (if Trim (Role) = "" then "helper" else Trim (Role));
+      Obliged : constant Agents.Obligation :=
+        (if Need = "optional" then Agents.Optional
+         elsif Need = "advisory" then Agents.Advisory
+         else Agents.Required);
+   begin
+      Child_Id := Null_Unbounded_String;
+      Context := Null_Unbounded_String;
+      Budget := 0;
+
+      --  Half of what its parent has left: a child that could spend all of
+      --  it would leave its parent nothing to finish with.
+      Agents.Read (Host.Item.all, Parent, Owner, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      Budget := (if Owner.Used >= Owner.Budget then 0 else (Owner.Budget - Owner.Used) / 2);
+      if Budget = 0 then
+         Status := E.Make (E.Framework_Limit_Exceeded);
+         E.Add_Text (Status, "name", Parent);
+         E.Add_Text (Status, "detail", "it has no tokens left to give a child");
+         return;
+      end if;
+
+      Agents.Spawn_Child
+        (Host.Item.all, Change, Parent, Named, Obliged, Permissions.Unrestricted, Budget,
+         Child_Id, Status, Retry_Of => Retry_Of);
+      if E.Is_Ok (Status) then
+         Stores.Commit (Host.Item.all, Change, Status);
+      end if;
+      if E.Is_Error (Status) then
+         Child_Id := Null_Unbounded_String;
+         Budget := 0;
+         return;
+      end if;
+      Host.Open.Append (To_String (Child_Id));
+
+      --  A context of its own: the task it helps with and what it is asked,
+      --  and nothing of the conversation it was asked from.
+      Tasks.Definition (Host.Item.all, To_String (Host.Task_Id), Defined, Read);
+      Context := To_Unbounded_String
+        ("## Rules" & ASCII.LF
+         & "You are helping an agent with one part of its task, as its " & Named
+         & ". You cannot see its conversation, and it will see only your report."
+         & ASCII.LF & ASCII.LF
+         & "## The task it works on, " & To_String (Host.Task_Id) & ASCII.LF
+         & "title: " & Records.Get (Defined, "title") & ASCII.LF
+         & (if Records.Get (Defined, "component") = "" then ""
+            else "component: " & Records.Get (Defined, "component") & ASCII.LF)
+         & ASCII.LF
+         & "## What you are asked" & ASCII.LF & Brief & ASCII.LF & ASCII.LF
+         & Child_Instructions);
+   end Open_Child;
+
+   -----------------
+   -- Close_Child --
+   -----------------
+
+   procedure Close_Child
+     (Host   : in out Child_Host;
+      Answer : String;
+      Tokens : Natural;
+      Ran    : Model_Runner.Errors.Error_Info;
+      Told   : out Ada.Strings.Unbounded.Unbounded_String;
+      Retry  : out Boolean)
+   is
+      Change  : Stores.Transaction;
+      Status  : E.Error_Info;
+      Charged : E.Error_Info;
+      Held    : E.Error_Info;
+      Said    : Invocations.Claims;
+      Child   : Agents.Agent;
+      Good    : Boolean := False;
+      Why     : Unbounded_String;
+      Kept    : Results.Result;
+
+      --  How many times the child it stands for has been run before it.
+      function Runs_Before (Id : String) return Natural is
+         Held_Agent : Agents.Agent;
+         Read       : E.Error_Info;
+      begin
+         Agents.Read (Host.Item.all, Id, Held_Agent, Read);
+         return (if E.Is_Error (Read) or else Held_Agent.Retry_Of = Null_Unbounded_String
+                 then 0 else 1 + Runs_Before (To_String (Held_Agent.Retry_Of)));
+      end Runs_Before;
+
+      Retries : constant Natural :=
+        (declare
+           Text : constant String := Scalar (Host.Item.all, "agents.child_retries");
+         begin
+           (if Text'Length in 1 .. 3 and then (for all C of Text => C in '0' .. '9')
+            then Natural'Value (Text) else 1));
+   begin
+      Told := Null_Unbounded_String;
+      Retry := False;
+      if Natural (Host.Open.Length) < 2 then
+         Told := To_Unbounded_String ("error: no child is open");
+         return;
+      end if;
+
+      declare
+         Id : constant String := Host.Open.Last_Element;
+      begin
+         Agents.Read (Host.Item.all, Id, Child, Status);
+         Agents.Charge (Host.Item.all, Change, Id, Tokens, Charged);
+
+         if E.Is_Error (Ran) then
+            Why := To_Unbounded_String ("it could not be run: " & E.Error_Code'Image (Ran.Code));
+         else
+            Invocations.Hold (Child_Claim, Answer, Said, Held);
+            if E.Is_Error (Held) then
+               Why := To_Unbounded_String ("its answer did not keep to the child result contract");
+            elsif E.Is_Error (Charged) then
+               Why := To_Unbounded_String ("it went over its budget");
+            else
+               Good := Invocations.Claim (Said, "status") = "done";
+               Why := To_Unbounded_String (Invocations.Claim (Said, "summary"));
+            end if;
+         end if;
+
+         --  Its result is kept, whichever way it went; the parent is told
+         --  of it, not of how it was reached.
+         Kept :=
+           (Kind       => Results.Child_Result,
+            Producer   => To_Unbounded_String (Id),
+            Summary    => Why,
+            Payload    => To_Unbounded_String
+              (if E.Is_Ok (Held) and then E.Is_Ok (Ran)
+               then Invocations.Claim (Said, "findings")
+                    & (if Invocations.Claim (Said, "changed_files") = "" then ""
+                       else ASCII.LF & "changed_files: "
+                            & Invocations.Claim (Said, "changed_files"))
+               else Answer),
+            Provenance => Child.Parent,
+            others     => <>);
+         Results.Add (Host.Item.all, Change, Kept, Status);
+         if E.Is_Ok (Status) then
+            Agents.Finish
+              (Host.Item.all, Change, Id, Good, To_String (Kept.Id), To_String (Why), Status);
+         end if;
+         if E.Is_Ok (Status) then
+            Stores.Commit (Host.Item.all, Change, Status);
+         end if;
+         Host.Open.Delete_Last;
+
+         Retry := not Good and then Agents."=" (Child.Need, Agents.Required)
+           and then Runs_Before (Id) < Retries;
+         Told := To_Unbounded_String
+           (Id & " (" & Ada.Characters.Handling.To_Lower (Agents.Obligation'Image (Child.Need))
+            & ") " & (if Good then "done" else "failed")
+            & (if Kept.Id = Null_Unbounded_String then "" else ", " & To_String (Kept.Id))
+            & ": " & To_String (Why)
+            & (if Good and then Invocations.Claim (Said, "findings") /= ""
+               then ASCII.LF & Invocations.Claim (Said, "findings") else "")
+            & (if Retry then ASCII.LF & "It is run once more." else ""));
+      end;
+   end Close_Child;
+
+   --  Children still open when their parent stopped: each is recorded
+   --  failed, so none of them goes missing.
+   procedure Abandon (Host : in out Child_Host) is
+      Change : Stores.Transaction;
+      Status : E.Error_Info;
+   begin
+      while Natural (Host.Open.Length) > 1 loop
+         Agents.Finish
+           (Host.Item.all, Change, Host.Open.Last_Element, False, "",
+            "its parent stopped before it answered", Status);
+         Host.Open.Delete_Last;
+      end loop;
+      Stores.Commit (Host.Item.all, Change, Status);
+   end Abandon;
+
    -------------
    -- Execute --
    -------------
 
    procedure Execute
-     (Item    : in out Stores.Store;
+     (Item    : aliased in out Stores.Store;
       Task_Id : String;
       Runner  : Agent_Runner'Class;
       Model   : Context.Model_Profile;
@@ -348,7 +629,22 @@ package body Model_Runner.Framework.Work is
             return;
          end if;
 
-         Runner.Run (Prompt, To_String (Place), Answer, Ran);
+         declare
+            Host : Child_Host (Item'Access);
+         begin
+            Host.Task_Id := To_Unbounded_String (Task_Id);
+            Host.Open.Append (To_String (Result.Agent_Id));
+            if Runner in Parenting_Runner'Class then
+               Parenting_Runner'Class (Runner).Run_Parenting
+                 (Prompt, To_String (Place), Host, Answer, Ran);
+            else
+               Runner.Run (Prompt, To_String (Place), Answer, Ran);
+            end if;
+            Abandon (Host);
+         end;
+         for Line of Lines_Of (Agents.Child_Results (Item, To_String (Result.Agent_Id))) loop
+            Result.Children.Append (Line);
+         end loop;
          Files.Discard (Prompt);
 
          --  What changed is what the files say, not what the answer says.
@@ -474,6 +770,19 @@ package body Model_Runner.Framework.Work is
          Conclude ("failed", To_String (Result.Summary), "completed");
          return;
       end if;
+
+      --  Done, it says -- but not while a child it needed is going or
+      --  failed.
+      declare
+         Why : Unbounded_String;
+      begin
+         if not Agents.May_Complete (Item, To_String (Result.Agent_Id), Why) then
+            Conclude ((if Scalar (Item, "agents.on_child_failure") = "fail" then "failed"
+                       else "blocked"),
+                      To_String (Why), "completed");
+            return;
+         end if;
+      end;
 
       --  Done, it says. The harness decides.
       Tasks.Move (Item, Change, Task_Id, "verification", "", Status => Status);
@@ -667,6 +976,7 @@ package body Model_Runner.Framework.Work is
          end if;
       end;
       if Agent /= "" then
+         Stop_Children (Item, Change, Agent);
          Agent_State (Item, Change, Agent, "cancelled", "the task was cancelled");
          Leases.Release (Item, Change, Lease_Of (Task_Id), Agent, Status);
          if Status.Code = E.Framework_Lease_Held then

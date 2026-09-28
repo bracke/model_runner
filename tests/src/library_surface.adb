@@ -20,15 +20,6 @@ package body Library_Surface is
       --  ask, which later phases bring. Until they arrive, the suite asks.
       new String'("Add_Dependency"),
 
-      --  Recursive agents. A work agent's own delegate tool is denied; what
-      --  replaces it is the harness making the child itself, within its
-      --  limits and permissions, and reading back its result rather than
-      --  its transcript. Until a command routes delegation through them,
-      --  the suite does.
-      new String'("Child_Results"),
-      new String'("May_Complete"),
-      new String'("Spawn_Child"),
-
       --  How large a traceability graph is. The trace command lists the
       --  edges touching one node; a caller walking the whole graph asks.
       new String'("Edge_Count"),
@@ -66,7 +57,6 @@ package body Library_Surface is
 
       --  Building a diagnostic.
       new String'("Add_Boolean"),
-      new String'("Find_Parameter"),
       new String'("Set_Cause"),
 
       --  Planning a session.

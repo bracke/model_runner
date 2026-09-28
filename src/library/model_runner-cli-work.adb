@@ -376,6 +376,9 @@ package body Model_Runner.CLI.Work is
          for Path of Done.Changed_Files loop
             Say ("cli.work.changed", Path, "");
          end loop;
+         for Child of Done.Children loop
+            Say ("cli.work.child", Child, "");
+         end loop;
          if Done.Claimed /= Null_Unbounded_String then
             Say ("cli.work.claimed", To_String (Done.Claimed), To_String (Done.Summary));
          end if;

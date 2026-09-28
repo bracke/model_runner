@@ -189,13 +189,16 @@ package body Model_Runner.Framework.Permissions is
       Result  : Permission_Set;
    begin
       --  Least privilege, and enough to work: a project that says nothing
-      --  lets its agents read and write source and specifications and run
-      --  builds and tests, and nothing more.
+      --  lets its agents read and write source and specifications, run
+      --  builds and tests, and hand a part of their work to at most two
+      --  children one level down, and nothing more.
       if not Present then
          Project := Nothing;
          for Item_Kind in Read_Source .. Run_Tests loop
             Project (Item_Kind).Granted := True;
          end loop;
+         Project (Create_Children) :=
+           (Granted => True, Max_Depth => 1, Max_Children => 2, others => <>);
       end if;
       Result := Intersect (Project, Runtime);
 

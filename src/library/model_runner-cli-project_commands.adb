@@ -14,6 +14,7 @@ with Model_Runner.Framework;
 with Model_Runner.Framework.Bootstrap;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Intent;
+with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Stores;
@@ -60,11 +61,11 @@ package body Model_Runner.CLI.Project_Commands is
       new String'("/tree"), new String'("/sym"), new String'("/refs"),
       new String'("/impact"), new String'("/trace")];
 
-   --  The tools the session's model may use working on a task.
-   Allowed_Tools : constant array (1 .. 6) of Word_Access :=
+   --  The tools the work's agents may call; each is offered only where the
+   --  agent's permissions give it.
+   Allowed_Tools : constant array (1 .. 4) of Word_Access :=
      [new String'("read_file"), new String'("write_file"),
-      new String'("list_directory"), new String'("retrieve"),
-      new String'("now"), new String'("memory_get")];
+      new String'("list_directory"), new String'("delegate")];
 
    function Image (Value : Natural) return String
    is (T.Image (Long_Long_Integer (Value)));
@@ -139,20 +140,86 @@ package body Model_Runner.CLI.Project_Commands is
       Pres.Put_Tool_Result (Self.Screen.all, Result);
    end On_Result;
 
-   ---------
-   -- Run --
-   ---------
+   package Wk renames Model_Runner.Framework.Work;
+   package Pm renames Model_Runner.Framework.Permissions;
+
+   type Host_Access is access all Wk.Child_Host'Class;
+
+   --  One tool as a model reads it.
+   function Tool (Name, Description, Parameters : String) return String
+   is ("{""type"": ""function"", ""function"": {""name"": """ & Name
+       & """, ""description"": """ & Description
+       & """, ""parameters"": " & Parameters & "}}");
+
+   function Strings (Names : String; Required : String) return String
+   is ("{""type"": ""object"", ""properties"": {" & Names & "}, ""required"": ["
+       & Required & "]}");
+
+   --  The tools an agent is offered: reading always, writing and handing
+   --  work to a helper where it may.
+   function Offered_Text (Host : Host_Access) return String
+   is ("["
+       & Tool ("read_file", "Read a text file and return its contents.",
+               Strings ("""path"": {""type"": ""string""}", """path"""))
+       & ", "
+       & Tool ("list_directory", "List the entries of a directory.",
+               Strings ("""path"": {""type"": ""string""}", """path"""))
+       & (if Host = null or else Host.May (Pm.Write_Source)
+          then ", "
+               & Tool ("write_file", "Write text to a file, replacing it.",
+                       Strings ("""path"": {""type"": ""string""}, "
+                                & """content"": {""type"": ""string""}",
+                                """path"", ""content"""))
+          else "")
+       & (if Host /= null and then Host.May (Pm.Create_Children)
+          then ", "
+               & Tool ("delegate",
+                       "Hand one part of the work -- a review, an investigation,"
+                       & " a piece to write -- to a helper that starts with no"
+                       & " memory of this conversation and reports back only its"
+                       & " result. Say everything it needs in task. role names"
+                       & " what it is for; need is required (the default),"
+                       & " optional or advisory.",
+                       Strings ("""task"": {""type"": ""string""}, "
+                                & """role"": {""type"": ""string""}, "
+                                & """need"": {""type"": ""string"", ""enum"": "
+                                & "[""required"", ""optional"", ""advisory""]}",
+                                """task"""))
+          else "")
+       & "]");
+
+   --  The file tools, fenced by the permissions of the agent now working,
+   --  and delegate, which makes a child through the harness and runs it.
+   type Work_Tools
+     (Agent : not null access constant Session_Agent;
+      Host  : Host_Access)
+   is new Model_Runner.Tools.Builtin.Instance with null record;
 
    overriding procedure Run
-     (Self        : Session_Agent;
-      Prompt_Path : String;
-      Project     : String;
-      Answer      : out Ada.Strings.Unbounded.Unbounded_String;
-      Status      : out Model_Runner.Errors.Error_Info)
+     (Self      : in out Work_Tools;
+      Named     : String;
+      Arguments : String;
+      Result    : out String;
+      Last      : out Natural;
+      Status    : out Model_Runner.Errors.Error_Info);
+
+   --  One agent's loop, on the session: the root working on its task, or a
+   --  child on what it was asked. A root that answers without calling a tool
+   --  has changed nothing, whatever its answer says; it is told so and goes
+   --  on, twice at most, before its answer is taken as it stands.
+   procedure Run_Loop
+     (Self   : Session_Agent;
+      Prompt : String;
+      Host   : Host_Access;
+      Budget : Natural;
+      Root   : Boolean;
+      Answer : out Unbounded_String;
+      Tokens : out Natural;
+      Status : out Model_Runner.Errors.Error_Info)
    is
       Messages : Conv.History;
       Offered  : Model_Runner.Tools.Definitions;
-      Runner   : Model_Runner.Tools.Builtin.Instance;
+      Runner   : Work_Tools (Self'Unchecked_Access, Host);
       Guard    : aliased Fence (Self.Screen);
       Watcher  : aliased Watch (Self.Screen);
       Sink     : aliased Pres.Standard_Output_Sink;
@@ -161,7 +228,6 @@ package body Model_Runner.CLI.Project_Commands is
       Request  : Model_Runner.Generation.Request;
       Outcome  : Model_Runner.Agent.Outcome;
       Calls    : Natural := 0;
-      Before   : constant String := Ada.Directories.Current_Directory;
 
       --  The template's own shape of call, and where that is the JSON
       --  envelope, the bare or fenced object too: models asked for a call
@@ -173,14 +239,14 @@ package body Model_Runner.CLI.Project_Commands is
          then Model_Runner.Tools.Open_JSON else Written);
    begin
       Answer := Null_Unbounded_String;
+      Tokens := 0;
 
       Conv.Open (Messages, Status => Status);
       if E.Is_Ok (Status) then
-         Conv.Append (Messages, Conv.User_Role, Whole (Prompt_Path), Status);
+         Conv.Append (Messages, Conv.User_Role, Prompt, Status);
       end if;
       if E.Is_Ok (Status) then
-         Model_Runner.Tools.Read
-           (Offered, Model_Runner.Tools.Builtin.All_Definitions_Text, Status);
+         Model_Runner.Tools.Read (Offered, Offered_Text (Host), Status);
       end if;
       if E.Is_Error (Status) then
          Conv.Close (Messages);
@@ -197,16 +263,7 @@ package body Model_Runner.CLI.Project_Commands is
       Request.Add_Beginning := False;
       Request.Retain_Text := True;
 
-      --  The work is done where the task's files are, and its own
-      --  conversation is on the session, which the screen's is read back
-      --  into afterwards.
-      L.Reset (Self.Session.all);
-      Ada.Directories.Set_Directory (Project);
-
-      --  A model that answers without calling a tool has changed nothing,
-      --  whatever its answer says; it is told so and goes on, twice at
-      --  most, before its answer is taken as it stands.
-      for Round in 1 .. 3 loop
+      for Round in 1 .. (if Root then 3 else 1) loop
          Model_Runner.Agent.Run
            (Source      => Self.Prepared.all,
             Session     => Self.Session.all,
@@ -218,13 +275,15 @@ package body Model_Runner.CLI.Project_Commands is
             Sink        => Sink'Unchecked_Access,
             Time        => Clock'Unchecked_Access,
             Seeds       => Seeds'Unchecked_Access,
-            Max_Steps   => 24,
+            Max_Steps   => (if Root then 24 else 16),
+            Max_Total_Tokens => Budget,
             Tool_Syntax => Syntax,
             Thinking    => Self.Item.Thinking,
             Approve     => Guard'Unchecked_Access,
             Watch       => Watcher'Unchecked_Access,
             Result      => Outcome);
          Calls := Calls + Outcome.Calls;
+         Tokens := Tokens + Outcome.Generated_Tokens;
          exit when Calls > 0 or else Round = 3
            or else Outcome.Reason /= Model_Runner.Agent.Answered;
          Conv.Append
@@ -234,8 +293,6 @@ package body Model_Runner.CLI.Project_Commands is
             & " again.", Status);
          exit when E.Is_Error (Status);
       end loop;
-      Ada.Directories.Set_Directory (Before);
-      L.Reset (Self.Session.all);
 
       if Conv.Length (Messages) > 0
         and then Conv.Sender_At (Messages, Conv.Length (Messages)) = Conv.Assistant_Role
@@ -250,12 +307,166 @@ package body Model_Runner.CLI.Project_Commands is
            (if E.Is_Error (Outcome.Error) then Outcome.Error
             else E.Make (E.Generation_Invalid_Request));
       end if;
+   end Run_Loop;
+
+   --  What a refusal says, for the model to read.
+   function Refusal (Status : E.Error_Info) return String is
+      Found : Boolean;
+      Given : E.Parameter;
+   begin
+      E.Find_Parameter (Status, "detail", Found, Given);
+      return (if Found then T.To_String (Given.Text_Value)
+              else E.Error_Code'Image (Status.Code));
+   end Refusal;
+
+   --  A child asked for, made by the harness, run on the session and
+   --  answered for; run again when the harness says so.
+   function Delegate (Self : Work_Tools; Arguments : String) return String is
+      Found    : Boolean;
+      Ignored  : Boolean;
+      Brief    : constant String :=
+        Model_Runner.Tools.Builtin.Text_Argument (Arguments, "task", Found);
+      Role     : constant String :=
+        Model_Runner.Tools.Builtin.Text_Argument (Arguments, "role", Ignored);
+      Need     : constant String :=
+        Model_Runner.Tools.Builtin.Text_Argument (Arguments, "need", Ignored);
+      Retry_Of : Unbounded_String;
+      Told     : Unbounded_String;
+   begin
+      if not Found or else Brief = "" then
+         return "error: delegate needs a task string";
+      elsif Self.Host = null then
+         return "error: no helper can be made here; do the work with the other tools";
+      end if;
+
+      loop
+         declare
+            Id      : Unbounded_String;
+            Context : Unbounded_String;
+            Budget  : Natural;
+            Status  : E.Error_Info;
+            Answer  : Unbounded_String;
+            Tokens  : Natural;
+            Ran     : E.Error_Info;
+            Now     : Unbounded_String;
+            Retry   : Boolean;
+         begin
+            Self.Host.Open_Child
+              (Role, Need, Brief, To_String (Retry_Of), Id, Context, Budget, Status);
+            if E.Is_Error (Status) then
+               return (if Told = Null_Unbounded_String then ""
+                       else To_String (Told) & ASCII.LF)
+                 & "error: no helper was made: " & Refusal (Status);
+            end if;
+            Run_Loop (Self.Agent.all, To_String (Context), Self.Host, Budget,
+                      Root => False, Answer => Answer, Tokens => Tokens, Status => Ran);
+            Self.Host.Close_Child (To_String (Answer), Tokens, Ran, Now, Retry);
+            Told := (if Told = Null_Unbounded_String then Now else Told & ASCII.LF & Now);
+            exit when not Retry;
+            Retry_Of := Id;
+         end;
+      end loop;
+      return To_String (Told);
+   end Delegate;
+
+   overriding procedure Run
+     (Self      : in out Work_Tools;
+      Named     : String;
+      Arguments : String;
+      Result    : out String;
+      Last      : out Natural;
+      Status    : out Model_Runner.Errors.Error_Info)
+   is
+      procedure Put (Text : String) is
+      begin
+         Last := 0;
+         Status := E.Success;
+         if Text'Length > Result'Length then
+            Status := E.Make (E.Tools_Too_Large);
+            return;
+         end if;
+         Result (Result'First .. Result'First + Text'Length - 1) := Text;
+         Last := Result'First + Text'Length - 1;
+      end Put;
+
+      Found : Boolean;
+   begin
+      if Named = "delegate" then
+         Put (Delegate (Self, Arguments));
+      elsif Named = "write_file" and then Self.Host /= null
+        and then not Self.Host.May
+                       (Pm.Write_Source,
+                        Model_Runner.Tools.Builtin.Text_Argument (Arguments, "path", Found))
+      then
+         Put ("error: you may not write "
+              & Model_Runner.Tools.Builtin.Text_Argument (Arguments, "path", Found));
+      else
+         Model_Runner.Tools.Builtin.Run
+           (Model_Runner.Tools.Builtin.Instance (Self), Named, Arguments, Result, Last,
+            Status);
+      end if;
+   end Run;
+
+   --  The root's run, with children through Host or without them.
+   procedure Work_On
+     (Self        : Session_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Host        : Host_Access;
+      Answer      : out Ada.Strings.Unbounded.Unbounded_String;
+      Status      : out Model_Runner.Errors.Error_Info)
+   is
+      Before : constant String := Ada.Directories.Current_Directory;
+      Prompt : constant String := Whole (Prompt_Path);
+      Tokens : Natural;
+   begin
+      --  The work is done where the task's files are, and its own
+      --  conversation -- and each child's -- is on the session, which the
+      --  screen's is read back into afterwards.
+      L.Reset (Self.Session.all);
+      Ada.Directories.Set_Directory (Project);
+      Run_Loop (Self, Prompt, Host, 0, True, Answer, Tokens, Status);
+      Ada.Directories.Set_Directory (Before);
+      L.Reset (Self.Session.all);
+      if Host /= null then
+         Host.Spend (Tokens);
+      end if;
    exception
       when others =>
          Ada.Directories.Set_Directory (Before);
          L.Reset (Self.Session.all);
+         Answer := Null_Unbounded_String;
          Status := E.Make (E.Internal_Unexpected_Exception);
+   end Work_On;
+
+   ---------
+   -- Run --
+   ---------
+
+   overriding procedure Run
+     (Self        : Session_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Ada.Strings.Unbounded.Unbounded_String;
+      Status      : out Model_Runner.Errors.Error_Info) is
+   begin
+      Work_On (Self, Prompt_Path, Project, null, Answer, Status);
    end Run;
+
+   -------------------
+   -- Run_Parenting --
+   -------------------
+
+   overriding procedure Run_Parenting
+     (Self        : Session_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Model_Runner.Framework.Work.Child_Host'Class;
+      Answer      : out Ada.Strings.Unbounded.Unbounded_String;
+      Status      : out Model_Runner.Errors.Error_Info) is
+   begin
+      Work_On (Self, Prompt_Path, Project, Children'Unchecked_Access, Answer, Status);
+   end Run_Parenting;
 
    ------------------------
    -- Is_Project_Command --

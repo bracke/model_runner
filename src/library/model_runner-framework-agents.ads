@@ -51,6 +51,9 @@ package Model_Runner.Framework.Agents is
       Allowed     : Permissions.Permission_Set := Permissions.Nothing;
       Result      : Ada.Strings.Unbounded.Unbounded_String;
       Summary     : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  The failed child this one was run again for, or empty.
+      Retry_Of    : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    --  The project's limits.
@@ -86,6 +89,9 @@ package Model_Runner.Framework.Agents is
    --  @param Need Whether the parent needs it.
    --  @param Asked The permissions asked for it.
    --  @param Budget The tokens it may use, out of the parent's.
+   --  @param Retry_Of The failed child this one is run again for, or "": a
+   --    run again is not one more child against the limit, and once it
+   --    completes the failure it stands for no longer holds its parent.
    --  @param Id The child.
    --  @param Status Framework_Permission_Denied when the parent may not make
    --    children, Framework_Limit_Exceeded when a limit of depth, children,
@@ -99,7 +105,8 @@ package Model_Runner.Framework.Agents is
       Asked  : Permissions.Permission_Set;
       Budget : Natural;
       Id     : out Ada.Strings.Unbounded.Unbounded_String;
-      Status : out Model_Runner.Errors.Error_Info);
+      Status : out Model_Runner.Errors.Error_Info;
+      Retry_Of : String := "");
 
    --  Read an agent.
    --
