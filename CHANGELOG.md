@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A person does not make the harness's moves.** A move by a person --
+  `/task move`, `/req move` and the like -- cannot start a task, take it to
+  verification or completion, or move a task at work other than by
+  cancelling it; `task move ID cancelled` cancels as `task cancel` does,
+  letting go of what it holds. Nor can a person make a requirement
+  implemented or verified: those follow its tasks and current evidence.
+  `task move` and `task integrate ID anyway` now parse on the command line
+  too.
 - **The task lifecycle is the project's too.** `map task.state.NAME =
   MEANING` adds a task state, `set task.transitions = FROM -> TO` moves to
   and from it, and `set task.forbidden = FROM -> TO` takes away a move a

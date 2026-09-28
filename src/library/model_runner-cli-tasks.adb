@@ -737,6 +737,17 @@ package body Model_Runner.CLI.Tasks is
             Outcome := E.Make (E.Framework_Input_Missing);
             E.Add_Text (Outcome, "name", "the task and the state");
             Fail (Outcome);
+         elsif After_First = "cancelled" then
+            --  Cancelled the way cancel does it: what it holds goes with it.
+            Model_Runner.Framework.Work.Cancel
+              (Store, First_Word, Outcome, Actor => Model_Runner.Framework.Transitions.User);
+            if E.Is_Error (Outcome) then
+               Fail (Outcome);
+            else
+               Pres.Put_Message
+                 (Screen, "cli.task.moved",
+                  [Loc.Named ("name", First_Word), Loc.Named ("value", After_First)]);
+            end if;
          else
             Tk.Move (Store, Change, First_Word, After_First, "", Status => Outcome,
                      Actor => Model_Runner.Framework.Transitions.User);

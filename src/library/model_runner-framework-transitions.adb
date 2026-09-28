@@ -219,4 +219,11 @@ package body Model_Runner.Framework.Transitions is
       return (if Name = "" then "user" else "user " & Name);
    end User;
 
+   ---------------
+   -- By_Person --
+   ---------------
+
+   function By_Person (Actor : String) return Boolean
+   is (Actor = "user" or else (Actor'Length > 5 and then Actor (Actor'First .. Actor'First + 4) = "user "));
+
 end Model_Runner.Framework.Transitions;

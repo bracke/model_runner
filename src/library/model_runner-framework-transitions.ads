@@ -122,6 +122,13 @@ package Model_Runner.Framework.Transitions is
    --  @return The actor.
    function User return String;
 
+   --  Whether an actor is a person, as User names one, rather than the
+   --  harness or a policy.
+   --
+   --  @param Actor The actor.
+   --  @return True for a person.
+   function By_Person (Actor : String) return Boolean;
+
 private
 
    type Move is record

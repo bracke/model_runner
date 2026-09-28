@@ -3427,6 +3427,15 @@ package body Tests.Framework_Cases is
       Assert (Status.Code = E.Framework_Transition_Invalid,
               "a move the project's lifecycle does not allow was made");
       Change := S.No_Changes;
+
+      --  Nor does a person say a requirement is implemented or verified.
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted", Tr.Ordinary_Only, Status);
+      S.Commit (Store, Change, Status);
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "implemented", Tr.Ordinary_Only,
+               Status, Actor => Tr.User);
+      Assert (Status.Code = E.Framework_Transition_Invalid,
+              "a person said a requirement was implemented");
+      Change := S.No_Changes;
       Assert (Refused ("set.requirement.transitions", "accepted -> limbo"),
               "a move to a state whose meaning nobody said was taken");
       Assert (Refused ("map.requirement.state.verified", "whatever"),
@@ -3506,6 +3515,15 @@ package body Tests.Framework_Cases is
       Tk.Move (Store, Change, To_String (Id), "running", "", Status => Status);
       Assert (Status.Code = E.Framework_Transition_Invalid,
               "a move the project did not add was made from its own state");
+      Change := S.No_Changes;
+
+      --  A person does not start work, nor take a task to verification.
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "running", "", Status => Status, Actor => Tr.User);
+      Assert (Status.Code = E.Framework_Transition_Invalid
+              and then Tr.By_Person (Tr.User) and then not Tr.By_Person ("policy x"),
+              "a person started a task without work");
       Change := S.No_Changes;
       Assert (Refused ("set.task.forbidden", "accepted -> running"),
               "a move the harness makes was taken away");

@@ -342,6 +342,20 @@ package body Model_Runner.Framework.Intent is
       Status  : out Model_Runner.Errors.Error_Info;
       Actor   : String := "") is
    begin
+      --  A person does not make a requirement implemented or verified:
+      --  those follow its tasks and their current evidence.
+      if Kind = Requirement and then Transitions.By_Person (Actor)
+        and then Next in "implemented" | "verified"
+      then
+         Status := E.Make (E.Framework_Transition_Invalid);
+         E.Add_Text (Status, "name", Id);
+         E.Add_Text (Status, "value", "");
+         E.Add_Text (Status, "expected", Next);
+         E.Add_Text (Status, "detail",
+                     "a requirement is implemented by its tasks and verified by their current"
+                     & " evidence, not by being said to be");
+         return;
+      end if;
       Transitions.Apply
         (Item, Change, Lifecycle_Of (Item, Kind), Area_Of (Kind), Id, Next, Granted,
          Event_For (Kind, Next), Status, Actor);

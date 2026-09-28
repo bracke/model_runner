@@ -2727,7 +2727,7 @@ package body Model_Runner.CLI.Options is
                                    | "cancel" | "show" | "context" | "verify"
                                    | "complete" | "integrate" | "derive" | "step"
                                    | "plan" | "reopen" | "reconsider" | "edit"
-                                   | "depend" | "split" | "audit"
+                                   | "depend" | "split" | "audit" | "move"
                   then
                      Fail (E.CLI_Unexpected_Operand, "", Argument);
                      return;
@@ -2755,10 +2755,11 @@ package body Model_Runner.CLI.Options is
                   Result.Action_Argument := T.To_Bounded (Argument);
 
                elsif Operands > 3 and then Result.Kind = Command_Task
-                 and then T.To_String (Result.Action) in "depend" | "split"
+                 and then T.To_String (Result.Action) in "depend" | "split" | "move" | "integrate"
                then
-                  --  What the task waits for, or its parts' titles: the rest
-                  --  of the words, as they were given.
+                  --  What the task waits for, its parts' titles, the state it
+                  --  moves to, or anyway: the rest of the words, as they were
+                  --  given.
                   Result.Action_Argument := T.To_Bounded
                     (T.To_String (Result.Action_Argument) & " " & Argument);
 

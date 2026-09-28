@@ -573,6 +573,26 @@ package body Model_Runner.Framework.Tasks is
          return;
       end if;
 
+      --  A person does not make the harness's moves: work starts a task,
+      --  and its checks take it to verification and completion; a task at
+      --  work is stopped by cancelling it, which lets go of what it holds.
+      if Transitions.By_Person (Actor)
+        and then (Next in "running" | "verification" | "complete"
+                  or else (Records.Get (Value, "state") in "running" | "verification"
+                           and then Next /= "cancelled"))
+      then
+         Status := E.Make (E.Framework_Transition_Invalid);
+         E.Add_Text (Status, "name", Id);
+         E.Add_Text (Status, "value", Records.Get (Value, "state"));
+         E.Add_Text (Status, "expected", Next);
+         E.Add_Text (Status, "detail",
+                     (if Next in "running" | "verification" | "complete"
+                      then "the harness makes this move: /work starts a task, and its checks"
+                           & " take it to verification and completion"
+                      else "a task at work is stopped by cancelling it"));
+         return;
+      end if;
+
       if Next = "running" then
          declare
             Now : constant Readiness := Ready_In (Item, Change, Id);

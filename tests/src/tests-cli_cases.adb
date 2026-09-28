@@ -1765,6 +1765,31 @@ package body Tests.CLI_Cases is
               "an accepted task was rejected");
       Assert (Task_Run ("cancel", "TASK-001", "") = 0,
               "an accepted task was not cancelled");
+
+      --  move TASK STATE, as a shell gives it: a person's move is made, the
+      --  harness's is not.
+      declare
+         function Move_To (State : String) return Natural is
+            Source : Fixed_Arguments;
+            Code   : Natural;
+         begin
+            Add (Source, "task");
+            Add (Source, "move");
+            Add (Source, "TASK-002");
+            Add (Source, State);
+            Add (Source, "--directory");
+            Add (Source, Project);
+            Ran (Source, Code);
+            return Code;
+         end Move_To;
+      begin
+         Assert (Task_Run ("new", "Another", "kind=analysis") = 0
+                 and then Task_Run ("accept", "TASK-002", "") = 0,
+                 "a second task was not made");
+         Assert (Move_To ("blocked") = 0, "a person's move was not made: " & Last_Output);
+         Assert (Move_To ("accepted") = 0 and then Move_To ("running") /= 0,
+                 "a person started a task without work: " & Last_Output);
+      end;
       Assert (Task_Run ("accept", "", "") = 2,
               "a move naming no task was taken");
       Assert (Task_Run ("show", "TASK-404", "") = 2,
