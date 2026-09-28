@@ -61,6 +61,11 @@ package Model_Runner.Framework.Configurations is
       --  Files the templates declare that were there already and were left
       --  as they were.
       Kept_Files       : Name_Lists.Vector;
+
+      --  What the check of the result found, SUBJECT: KIND: DETAIL a line:
+      --  what the configuration says that is not granted, and, when the
+      --  state did not come out whole, why the initialization was undone.
+      Findings         : Name_Lists.Vector;
    end record;
 
    --  The fingerprint of a configuration: of what it configures, and not of

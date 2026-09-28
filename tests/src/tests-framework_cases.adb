@@ -3188,6 +3188,24 @@ package body Tests.Framework_Cases is
                  "Ctrl-C was not sent");
       end Resize_Then_Cancel;
 
+      --  The kind's choice field offers its choices: a return takes the first;
+      --  the optional field is left empty.
+      procedure Choose_Then_Skip (Pair : Hostkit.Pty.Pair; Seen : String) is
+         Last : Ada.Streams.Stream_Element_Offset;
+         Sent : Hostkit.Descriptors.Transfer_Outcome;
+      begin
+         Assert (Ada.Strings.Fixed.Index (Seen, "pass") > 0
+                 and then Ada.Strings.Fixed.Index (Seen, "fail") > 0,
+                 "a choice field did not offer its choices: " & Seen);
+         Sent := Hostkit.Descriptors.Write (Pair.To_Child, [1 => 13], Last);
+         Assert (Hostkit.Descriptors."=" (Sent, Hostkit.Descriptors.Transfer_Ok) and then Last = 1,
+                 "a choice was not made");
+         delay 1.5;
+         Sent := Hostkit.Descriptors.Write (Pair.To_Child, [1 => 10], Last);
+         Assert (Hostkit.Descriptors."=" (Sent, Hostkit.Descriptors.Transfer_Ok) and then Last = 1,
+                 "an optional field was not passed over");
+      end Choose_Then_Skip;
+
       procedure Type_Secret (Pair : Hostkit.Pty.Pair; Seen : String) is
          Last : Ada.Streams.Stream_Element_Offset;
          Word : constant String := "hunter2" & ASCII.CR;
@@ -3219,6 +3237,35 @@ package body Tests.Framework_Cases is
                             Resize_Then_Cancel'Access);
       begin
          Assert (Said = "" or else Redrew, "a resize while nobody typed was not drawn");
+      end;
+
+      --  task new on a terminal: the form its kind's schema makes.
+      Task_Project (Store, "terminal-form",
+                    "task_kind review = verdict, notes?" & LF
+                    & "map task_field.verdict = choice pass|fail" & LF);
+      S.Close (Store);
+      Words.Clear;
+      Words.Append (To_Unbounded_String ("task"));
+      Words.Append (To_Unbounded_String ("new"));
+      Words.Append (To_Unbounded_String ("Judge it"));
+      Words.Append (To_Unbounded_String ("--set"));
+      Words.Append (To_Unbounded_String ("kind=review"));
+      declare
+         Said : constant String :=
+           Run_On_Terminal (Words, Dirs.Full_Name (Scratch & "/terminal-form"), "",
+                            Choose_Then_Skip'Access);
+         Form : S.Store;
+         Rep  : S.Recovery_Report;
+         Got  : E.Error_Info;
+         View : R.Item;
+      begin
+         if Said /= "" then
+            S.Open (Form, Scratch & "/terminal-form", Rep, Got);
+            Tk.Effective (Form, "TASK-001", View, Got);
+            Assert (R.Get (View, "definition.field.verdict") = "pass",
+                    "the form did not make the task its schema asks for: " & Said);
+            S.Close (Form);
+         end if;
       end;
 
       --  A template with a secret input, found beside a settings file.
@@ -3401,6 +3448,42 @@ package body Tests.Framework_Cases is
       end;
       S.Close (Store);
    end Agents_Stay_Out_Of_The_State;
+
+   --  An initialization's result is checked before it is left standing:
+   --  what the check finds is said, and only a state that did not come out
+   --  whole is undone.
+   procedure Init_Undone_When_Unsound
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Project  : constant String := Fresh ("unsound");
+      Registry : Tp.Registry;
+      Composed : Tp.Composition;
+      Given    : Cf.Value_Maps.Map;
+      Planned  : Cf.Plan;
+      Done     : Cf.Outcome;
+      Status   : E.Error_Info;
+      Store    : S.Store;
+   begin
+      Tp.Add (Registry, Parsed
+        ("template = unsound" & LF & "name = U" & LF & "version = 1" & LF
+         & "task_kind analysis = notes?" & LF
+         & "map permission.kind.analysis.use_network =" & LF
+         & "file NOTES.txt = made by init" & LF));
+      Tp.Compose (Registry, "unsound", Composed, Status);
+      Cf.Prepare (Composed, Project, Given, Planned, Status);
+      Cf.Initialize (Store, Project, Planned, Done, Status);
+      --  What the configuration says and is not granted is said, and the
+      --  project stands: its state came out whole.
+      Assert (E.Is_Ok (Status)
+              and then not Done.Findings.Is_Empty
+              and then Ada.Strings.Fixed.Index (Done.Findings.First_Element, "permission_widening") > 0
+              and then S.Is_Initialized (Project)
+              and then Dirs.Exists (Project & "/NOTES.txt"),
+              "what the check of a sound initialization found was not said, or it was undone: "
+              & Code_Of (Status));
+      S.Close (Store);
+   end Init_Undone_When_Unsound;
 
    --  Bootstrap reads what its policy names, makes only the kinds it lets
    --  it, and proposes rather than accepts an import when it says so.
@@ -7204,6 +7287,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Agents_Stay_Out_Of_The_State'Access,
          "agents never reach the project's state, and harness programs get only what is passed");
+      Register_Routine
+        (T, Init_Undone_When_Unsound'Access,
+         "an initialization's result is checked, and said, before it stands");
       Register_Routine
         (T, Bootstrap_Follows_Its_Policy'Access,
          "bootstrap reads, makes and accepts what its policy says");

@@ -292,6 +292,9 @@ package body Model_Runner.Framework.Tasks is
               then "agent" else First);
    end Class_Of;
 
+   function Field_Schema (Item : Stores.Store; Name : String) return String
+   is (if Is_Core (Name) then "" else Trim (Records.Get (Config (Item), "map.task_field." & Name)));
+
    -------------------
    -- Field_Problem --
    -------------------

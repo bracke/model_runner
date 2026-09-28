@@ -3,6 +3,7 @@ with Ada.Directories;
 
 with Hostkit.Fs;
 
+with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Facts;
 with Model_Runner.Framework.Files;
@@ -642,6 +643,51 @@ package body Model_Runner.Framework.Configurations is
          Indexes.Build (Item, Change, Graph, Kept);
          if E.Is_Ok (Kept) then
             Stores.Commit (Item, Change, Kept);
+         end if;
+      end;
+
+      --  The result checked as any project's state is, before it is left
+      --  standing. All it finds is said; a state that did not come out whole
+      --  -- a record off its schema, an identifier twice, a change left
+      --  half made, an index that disagrees -- undoes the initialization:
+      --  the state, and the files and directories it made.
+      declare
+         use type Consistency.Finding_Kind;
+         Found  : constant Consistency.Finding_List := Consistency.Check (Item);
+         Broken : Boolean := False;
+      begin
+         for Index in 1 .. Consistency.Length (Found) loop
+            Done.Findings.Append
+              (To_String (Consistency.Element (Found, Index).Subject) & ": "
+               & Consistency.Kind_Word (Consistency.Element (Found, Index).Kind) & ": "
+               & To_String (Consistency.Element (Found, Index).Detail));
+            Broken := Broken
+              or else Consistency.Element (Found, Index).Kind
+                        in Consistency.Schema_Mismatch | Consistency.Duplicate_Identifier
+                         | Consistency.Incomplete_Transaction | Consistency.Index_Mismatch;
+         end loop;
+         if Broken then
+            Stores.Close (Item);
+            Files.Remove_Tree (Stores.State_Root (Project_Directory));
+            for Name of Done.Written_Files loop
+               Files.Discard (Hostkit.Fs.Join (Project_Directory, Name));
+            end loop;
+            for Index in reverse 1 .. Natural (Done.Made_Directories.Length) loop
+               begin
+                  Ada.Directories.Delete_Directory
+                    (Hostkit.Fs.Join (Project_Directory, Done.Made_Directories (Index)));
+               exception
+                  when others =>
+                     null;
+               end;
+            end loop;
+            Status := E.Make (E.Framework_Schema_Violation);
+            E.Add_Text (Status, "name", "the project as initialized");
+            E.Add_Text (Status, "detail", Done.Findings.First_Element
+                        & (if Consistency.Length (Found) > 1
+                           then " (and" & Natural'Image (Consistency.Length (Found) - 1) & " more)"
+                           else "")
+                        & "; nothing was kept");
          end if;
       end;
    end Initialize;

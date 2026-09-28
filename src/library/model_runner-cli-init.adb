@@ -4,7 +4,6 @@ with Model_Runner.Errors;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Configurations;
-with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
@@ -319,6 +318,11 @@ package body Model_Runner.CLI.Init is
 
       Cf.Initialize (Store, Directory, Planned, Done, Outcome);
       if E.Is_Error (Outcome) then
+         --  What the check of the result found, when that undid it.
+         for Line of Done.Findings loop
+            Pres.Put_Note (Screen, "cli.task.field",
+                           [Loc.Named ("name", "found"), Loc.Named ("value", Line)]);
+         end loop;
          Fail (Outcome);
          return;
       end if;
@@ -328,6 +332,11 @@ package body Model_Runner.CLI.Init is
       end loop;
       for Made of Done.Written_Files loop
          Pres.Put_Note (Screen, "cli.init.made", [Loc.Named ("path", Made)]);
+      end loop;
+      --  What the check of the result found and left standing.
+      for Line of Done.Findings loop
+         Pres.Put_Note (Screen, "cli.task.field",
+                        [Loc.Named ("name", "found"), Loc.Named ("value", Line)]);
       end loop;
       for Kept of Done.Kept_Files loop
          Pres.Put_Note (Screen, "cli.init.kept", [Loc.Named ("path", Kept)]);
@@ -351,26 +360,6 @@ package body Model_Runner.CLI.Init is
             ("detail",
              R.Get (Planned.Configuration, "configuration_fingerprint"))]);
 
-      --  The result checked as any project's state is: what was made holds
-      --  together, or is said not to.
-      declare
-         package Cs renames Model_Runner.Framework.Consistency;
-         Found : constant Cs.Finding_List := Cs.Check (Store);
-      begin
-         if Cs.Length (Found) > 0 then
-            for Index in 1 .. Cs.Length (Found) loop
-               Pres.Put_Message
-                 (Screen, "cli.task.item",
-                  [Loc.Named ("name", To_String (Cs.Element (Found, Index).Subject)),
-                   Loc.Named ("value", Cs.Kind_Word (Cs.Element (Found, Index).Kind)),
-                   Loc.Named ("detail", To_String (Cs.Element (Found, Index).Detail))]);
-            end loop;
-            Pres.Put_Message
-              (Screen, "cli.project.consistency",
-               [Loc.Named ("count", T.Image (Long_Long_Integer (Cs.Length (Found))))]);
-            Status := E.Exit_Input_Output;
-         end if;
-      end;
       S.Close (Store);
    end Run;
 

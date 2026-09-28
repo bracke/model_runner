@@ -110,6 +110,14 @@ package Model_Runner.Framework.Tasks is
    --  @return The problem, or "" when it reads.
    function Field_Problem (Item : Stores.Store; Name, Value : String) return String;
 
+   --  What a kind's own field's schema says it is, as map task_field.NAME
+   --  writes it: text, number, identifier, path, list or choice A|B|C.
+   --
+   --  @param Item The store.
+   --  @param Name The field.
+   --  @return The schema; empty for a core field or one with none.
+   function Field_Schema (Item : Stores.Store; Name : String) return String;
+
    --  Create a task: its definition, and its runtime state as a candidate
    --  -- or, where the configuration's set task.auto_accept names the
    --  task's class, accepted, with the policy recorded as who accepted it.

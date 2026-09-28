@@ -1,4 +1,5 @@
 with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 with Ada.Strings.Unbounded;
 
 with Model_Runner.CLI.Choosers;
@@ -176,6 +177,18 @@ package body Model_Runner.CLI.Tasks is
       procedure Create is
          Fields : Tk.Field_Map;
          Id     : Unbounded_String;
+         Offered_Optional : Boolean := False;
+
+         --  A condition's named value, or "".
+         function Parameter_Of (Condition : E.Error_Info; Name : String) return String is
+         begin
+            for Index in 1 .. Condition.Parameter_Total loop
+               if T.To_String (Condition.Parameters (Index).Name) = Name then
+                  return T.To_String (Condition.Parameters (Index).Text_Value);
+               end if;
+            end loop;
+            return "";
+         end Parameter_Of;
       begin
          for Index in 1 .. Item.Input_Count loop
             declare
@@ -194,14 +207,30 @@ package body Model_Runner.CLI.Tasks is
             Fields.Include ("title", Argument);
          end if;
 
-         --  On a terminal, what the kind requires and was not given is
-         --  asked for, the kind first.
+         --  On a terminal, the form the kind's schema makes: the kind first,
+         --  then what it requires, then what it allows -- a choice field
+         --  offered its choices, and a value its schema refuses asked for
+         --  again.
          loop
             Tk.Create (Store, Change, Fields, "user", "", Id, Outcome);
             exit when E.Is_Ok (Outcome)
               or else not Interactive
               or else Outcome.Code not in E.Framework_Input_Missing
-                                        | E.Framework_Task_Kind_Unknown;
+                                        | E.Framework_Task_Kind_Unknown
+                                        | E.Framework_Schema_Violation;
+
+            --  A value refused: shown why, and asked for again.
+            if Outcome.Code = E.Framework_Schema_Violation then
+               Pres.Report (Screen, Outcome);
+               declare
+                  Named : constant String := Parameter_Of (Outcome, "name");
+               begin
+                  exit when Named = "" or else not Fields.Contains (Named);
+                  Fields.Exclude (Named);
+                  Change := S.No_Changes;
+                  Outcome := E.Make (E.Framework_Input_Missing);
+               end;
+            end if;
 
             if Outcome.Code = E.Framework_Task_Kind_Unknown then
                declare
@@ -230,13 +259,29 @@ package body Model_Runner.CLI.Tasks is
                                then Fields ("kind") else ""));
                   Typed  : Unbounded_String;
                   Got    : Boolean;
+                  Kind   : constant String :=
+                    (if Fields.Contains ("kind") then Fields ("kind") else "");
+
+                  --  The choices a choice field offers, as Ask takes them.
+                  function Choices (Field : String) return String is
+                     Schema : constant String := Tk.Field_Schema (Store, Field);
+                  begin
+                     if Schema'Length > 7 and then Schema (Schema'First .. Schema'First + 6) = "choice "
+                     then
+                        return Ada.Strings.Fixed.Translate
+                          (Schema (Schema'First + 7 .. Schema'Last),
+                           Ada.Strings.Maps.To_Mapping ("|", ","));
+                     end if;
+                     return "";
+                  end Choices;
                begin
                   Wanted.Prepend ("title");
                   for Field of Wanted loop
                      if not Fields.Contains (Field)
                        or else Ada.Strings.Fixed.Trim (Fields (Field), Ada.Strings.Both) = ""
                      then
-                        Choosers.Ask (Screen, Field, "", "", "", Typed, Got);
+                        Choosers.Ask (Screen, Field, Tk.Field_Schema (Store, Field),
+                                      Choices (Field), "", Typed, Got);
                         if not Got then
                            Pres.Put_Note (Screen, "cli.task.cancelled");
                            Status := E.Exit_Cancelled;
@@ -246,6 +291,23 @@ package body Model_Runner.CLI.Tasks is
                         Fields.Include (Field, To_String (Typed));
                      end if;
                   end loop;
+
+                  --  What the kind allows and does not require, once: an
+                  --  empty answer leaves it out.
+                  if not Offered_Optional and then Kind /= "" then
+                     Offered_Optional := True;
+                     for Field of Tk.Allowed_Fields (Store, Kind) loop
+                        if not Wanted.Contains (Field) and then not Fields.Contains (Field) then
+                           Choosers.Ask (Screen, Field & "?", Tk.Field_Schema (Store, Field),
+                                         Choices (Field), "", Typed, Got);
+                           if Got and then Ada.Strings.Fixed.Trim (To_String (Typed),
+                                                                   Ada.Strings.Both) /= ""
+                           then
+                              Fields.Include (Field, To_String (Typed));
+                           end if;
+                        end if;
+                     end loop;
+                  end if;
                end;
             end if;
          end loop;

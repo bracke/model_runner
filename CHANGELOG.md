@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **init checks its result before it stands.** The consistency check runs
+  inside `Configurations.Initialize`: all it finds is said
+  (`Outcome.Findings`), and a state that did not come out whole -- a record
+  off its schema, an identifier twice, a half-made change, an index that
+  disagrees -- undoes the initialization, state and files alike.
+- **task new asks as its kind's schema says.** On a terminal the form asks
+  for what the kind requires and then offers what it allows, a choice field
+  offering its choices (`Tasks.Field_Schema`), and a value its schema
+  refuses is asked for again instead of ending the form.
 - **Imported items keep their identifiers.** An item a document gives its
   own identifier, as REQ-PARSE-003, is kept under it where nothing has it
   yet (`Intent.Propose ... Given`), and a made identifier is never one
