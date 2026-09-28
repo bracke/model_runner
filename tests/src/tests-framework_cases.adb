@@ -9,6 +9,7 @@ with AUnit.Assertions;
 
 with Model_Runner.CLI.Intents;
 with Model_Runner.CLI.Options;
+with Model_Runner.CLI.Project_Commands;
 with Model_Runner.CLI.Work;
 with Model_Runner.Errors;
 with Model_Runner.Framework;
@@ -4771,7 +4772,7 @@ package body Tests.Framework_Cases is
    --  An agent that asks for children through the host, as a plan says.
    type Parent_Plan is
      (Helped, Fails_Twice, Fails_Then_Good, Optional_Fails, Left_Open, Denied,
-      Checks_First, Interrupted);
+      Checks_First, Interrupted, Out_Of_Time);
 
    type Scripted_Parent is new Wk.Parenting_Runner with record
       Plan : Parent_Plan := Helped;
@@ -4888,6 +4889,15 @@ package body Tests.Framework_Cases is
                        and then Ada.Strings.Fixed.Index (To_String (Report), "exists") > 0,
                        "the checks' report does not say what failed: " & To_String (Report));
             end;
+         when Out_Of_Time =>
+            --  Bounded by the project's time, and stopped by it.
+            Assert (Children.Time_Left > 0.0 and then Children.Time_Left <= 5.0,
+                    "the work was not bounded by the project's time:"
+                    & Duration'Image (Children.Time_Left));
+            Answer := Null_Unbounded_String;
+            Status := E.Make (E.Framework_Limit_Exceeded);
+            E.Add_Text (Status, "name", "time");
+            return;
          when Interrupted =>
             --  Stopped while its child works: both are cancelled.
             Ask ("required", Child_Done, Close => False);
@@ -4901,6 +4911,143 @@ package body Tests.Framework_Cases is
       Children.Spend (5, Prompt_Tokens => 100);
       Run (Self, Prompt_Path, Project, Answer, Status);
    end Run_Parenting;
+
+   --  /work as typed in a session: by its identifier, and by words of its
+   --  title, runs the task on the agent the session hands it.
+   procedure Session_Work_Line_Runs_The_Task
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store   : S.Store;
+      Status  : E.Error_Info;
+      Change  : S.Transaction;
+      First   : Unbounded_String;
+      Second  : Unbounded_String;
+      Catalog : aliased Model_Runner.Localization.Catalog;
+      Screen  : Model_Runner.Presentation.Console;
+      Before  : constant String := Dirs.Current_Directory;
+      Report  : S.Recovery_Report;
+      Agent   : constant Scripted_Agent :=
+        (File => To_Unbounded_String ("src/hello.adb"),
+         Answer => To_Unbounded_String ("status: done" & LF & "summary: x"),
+         Broken => False);
+   begin
+      Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+      Model_Runner.Presentation.Open
+        (Screen, Catalog'Unchecked_Access, Model_Runner.CLI.Options.Color_Never,
+         (Output_Is_Terminal => False, Error_Is_Terminal => False,
+          Input_Is_Terminal  => False, Colour_Suppressed => True),
+         Model_Runner.CLI.Options.Quiet);
+      Task_Project
+        (Store, "session-work",
+         "set execution.allowed = test" & LF
+         & "profile checks = exists: test -f src/hello.adb" & LF
+         & "scalar verification.default = checks" & LF);
+      Tk.Create (Store, Change, Fields ("Greet the world", "analysis"), "user", "", First, Status);
+      Tk.Create (Store, Change, Fields ("Count the stars", "analysis"), "user", "", Second, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (First), "accepted", "", Status => Status);
+      Tk.Move (Store, Change, To_String (Second), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      declare
+         Root : constant String := Fresh_Root (Store);
+      begin
+         S.Close (Store);
+         Dirs.Set_Directory (Root);
+         Model_Runner.CLI.Project_Commands.Run
+           ("/work " & To_String (First), Screen, Agent);
+         Model_Runner.CLI.Project_Commands.Run ("/work count the stars", Screen, Agent);
+         Dirs.Set_Directory (Before);
+         S.Open (Store, Root, Report, Status);
+      exception
+         when others =>
+            Dirs.Set_Directory (Before);
+            raise;
+      end;
+      Assert (Tk.State_Of (Store, To_String (First)) = "complete",
+              "/work by identifier did not run the task: " & Tk.State_Of (Store, To_String (First)));
+      Assert (Tk.State_Of (Store, To_String (Second)) = "complete",
+              "/work by title did not run the task: " & Tk.State_Of (Store, To_String (Second)));
+      S.Close (Store);
+   end Session_Work_Line_Runs_The_Task;
+
+   --  The context says what the task's files declare and which tests bear
+   --  on it; after an attempt whose verification failed, what that attempt
+   --  left. And work is bounded in time: past it, the task is set aside,
+   --  not failed.
+   procedure Context_Carries_Symbols_Tests_And_Results
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Id     : Unbounded_String;
+      Built  : Cx.Built;
+      Done   : Wk.Report;
+
+      function Holds (Part : String) return Boolean
+      is (Ada.Strings.Fixed.Index (Cx.Rendered (Built), Part) > 0);
+   begin
+      Task_Project
+        (Store, "context-more",
+         "set execution.allowed = test" & LF
+         & "scalar agents.max_seconds = 5" & LF);
+      declare
+         Changes  : Cf.Value_Maps.Map;
+         Planned  : Cf.Change_Plan;
+         Revision : Natural;
+      begin
+         Changes.Include ("profile.tests", "exists: test -f no-such-file");
+         Cf.Plan_Change (Store, Changes, Planned, Status);
+         Cf.Reconfigure (Store, Planned, Revision, Status);
+      end;
+      Dirs.Create_Path (Fresh_Root (Store) & "/src");
+      Dirs.Create_Path (Fresh_Root (Store) & "/tests");
+      Put_File (Fresh_Root (Store) & "/src/parser.ads",
+                "package Parser is" & LF & "   procedure Next_Token;" & LF & "end Parser;" & LF);
+      Put_File (Fresh_Root (Store) & "/tests/parser_tests.adb",
+                "procedure Parser_Tests is begin null; end Parser_Tests;" & LF);
+      Tk.Create (Store, Change, Fields ("Parse", "implementation", "component", "parser"),
+                 "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+
+      Cx.Build (Store, To_String (Id), Cx.Profile (Store, ""), Built, Status);
+      Assert (E.Is_Ok (Status) and then Holds ("What its files declare")
+              and then Holds ("Parser.Next_Token")
+              and then Holds ("The tests that bear on it")
+              and then Holds ("tests/parser_tests.adb"),
+              "the context does not say what the files declare or which tests bear on them");
+      Assert (not Holds ("What the last attempt left"), "a first attempt was told of a last");
+
+      --  An attempt whose verification fails; the next is told why.
+      Wk.Execute (Store, To_String (Id),
+                  Scripted_Agent'(File => To_Unbounded_String ("src/parser.adb"),
+                                  Answer => To_Unbounded_String
+                                    ("status: done" & LF & "summary: tried"),
+                                  Broken => False),
+                  Cx.Profile (Store, ""), Done, Status);
+      Assert (To_String (Done.Final_State) = "failed", "the failing attempt did not fail");
+      Cx.Build (Store, To_String (Id), Cx.Profile (Store, ""), Built, Status);
+      Assert (Holds ("What the last attempt left") and then Holds ("did not pass")
+              and then Holds ("tried"),
+              "a retry was not told what the last attempt left");
+
+      --  Out of time: set aside.
+      Tk.Create (Store, Change, Fields ("Slow", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Execute (Store, To_String (Id), Scripted_Parent'(Plan => Out_Of_Time),
+                  Cx.Profile (Store, ""), Done, Status);
+      Assert (To_String (Done.Final_State) = "blocked"
+              and then To_String (Done.Reason) = "its work ran out of time",
+              "work out of time was not set aside: " & To_String (Done.Final_State) & " "
+              & To_String (Done.Reason));
+      S.Close (Store);
+   end Context_Carries_Symbols_Tests_And_Results;
 
    --  A working agent's children are made by the harness within what the
    --  agent was given, each with a context and budget of its own; their
@@ -5260,6 +5407,12 @@ package body Tests.Framework_Cases is
         (T, Recursion_Stays_Bounded'Access,
          "children stay within limits and permissions, failures and"
          & " cancellation are seen");
+      Register_Routine
+        (T, Session_Work_Line_Runs_The_Task'Access,
+         "/work typed in a session runs the task by identifier or by title");
+      Register_Routine
+        (T, Context_Carries_Symbols_Tests_And_Results'Access,
+         "the context carries symbols, tests and the last attempt, and work is bounded in time");
       Register_Routine
         (T, Claims_And_Gates'Access,
          "an agent's claims are proposals, and the gates a project names are kept");

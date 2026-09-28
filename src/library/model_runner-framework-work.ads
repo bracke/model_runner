@@ -154,6 +154,15 @@ package Model_Runner.Framework.Work is
    --  @return The budget.
    function Tool_Budget (Host : Child_Host) return Natural;
 
+   --  How long the agents on the task may still work, root and children
+   --  together: from the kind's scalar task.max_seconds.KIND, else
+   --  agents.max_seconds, else the task's lease, which work must not
+   --  outlive. Never less than a second while any is left to give.
+   --
+   --  @param Host The host.
+   --  @return The time left, or 0.0 for no bound.
+   function Time_Left (Host : Child_Host) return Duration;
+
    --  The verification profile the task is checked with.
    --
    --  @param Host The host.
@@ -381,6 +390,10 @@ private
       --  How many turns the root may take, and tool calls each agent.
       Max_Steps   : Natural := 24;
       Max_Calls   : Natural := 0;
+
+      --  When the work must be over, where it is bounded.
+      Bounded     : Boolean := False;
+      Deadline    : Ada.Calendar.Time := Ada.Calendar.Clock;
 
       --  What the root generated, and how long its conversation came to be.
       Root_Out    : Natural := 0;

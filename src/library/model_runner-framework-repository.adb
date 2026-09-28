@@ -84,6 +84,12 @@ package body Model_Runner.Framework.Repository is
    function File_At (From : Graph; Index : Positive) return File_Entry
    is (From.Files (Index));
 
+   function Symbol_Count (From : Graph) return Natural
+   is (Natural (From.Symbols.Length));
+
+   function Symbol_At (From : Graph; Index : Positive) return Symbol
+   is (From.Symbols (Index));
+
    function Relation_Count (From : Graph) return Natural
    is (Natural (From.Relations.Length));
 

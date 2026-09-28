@@ -12,6 +12,7 @@ with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Schemas;
 with Model_Runner.Framework.Tasks;
+with Model_Runner.Framework.Verification;
 
 package body Model_Runner.Framework.Context is
 
@@ -421,14 +422,104 @@ package body Model_Runner.Framework.Context is
                   then
                      Files.Read_Text (Hostkit.Fs.Join (Project, Path), Text, Read);
                      if E.Is_Ok (Read) then
-                        Offer ("file:" & Path, "source",
+                        Offer ("file:" & Path,
+                               (if File.Role = Repository.Source then "source" else "test"),
                                (if File.Role = Repository.Source then Normal else Low),
                                To_String (Text));
                      end if;
                   end if;
                end;
             end loop;
+
+            --  The symbols its files declare: what there is to use or to
+            --  change, where the files themselves may not all fit.
+            declare
+               Listed : Unbounded_String;
+            begin
+               for Index in 1 .. Repository.Symbol_Count (Graph) loop
+                  declare
+                     One : constant Repository.Symbol := Repository.Symbol_At (Graph, Index);
+                  begin
+                     if Ada.Strings.Fixed.Index (Lower (To_String (One.Path)), Wanted) > 0 then
+                        Append (Listed, To_String (One.Kind) & " " & To_String (One.Name)
+                                & "  " & To_String (One.Path) & ":" & Image (One.Line) & ASCII.LF);
+                     end if;
+                  end;
+               end loop;
+               Offer (Task_Id & "#symbols", "symbols", Normal, To_String (Listed));
+            end;
          end if;
+
+         --  The tests that bear on it: the component's test files, and the
+         --  tests its requirements name.
+         declare
+            Listed : Unbounded_String;
+         begin
+            if Wanted /= "" then
+               for Index in 1 .. Repository.File_Count (Graph) loop
+                  declare
+                     use type Repository.File_Role;
+                     File : constant Repository.File_Entry := Repository.File_At (Graph, Index);
+                  begin
+                     if File.Role = Repository.Test
+                       and then Ada.Strings.Fixed.Index (Lower (To_String (File.Path)), Wanted) > 0
+                     then
+                        Append (Listed, To_String (File.Path) & ASCII.LF);
+                     end if;
+                  end;
+               end loop;
+            end if;
+            for Requirement of Lines_Of (Records.Get (View, "definition.requirements")) loop
+               for Test of Intent.Links (Item, Intent.Requirement, Requirement, Intent.Test) loop
+                  Append (Listed, Test & " (tests " & Requirement & ")" & ASCII.LF);
+               end loop;
+            end loop;
+            Offer (Task_Id & "#tests", "tests", Normal, To_String (Listed));
+         end;
+      end;
+
+      --  What earlier attempts left: the last answer, and what the last
+      --  verification found wrong -- a retry is told why it is one.
+      declare
+         State    : Records.Item;
+         Read     : E.Error_Info;
+         Listed   : Unbounded_String;
+      begin
+         Stores.Read (Item, Tasks_Area, Task_Id & ".state", State, Read);
+         if Records.Get (State, "last_result") /= "" then
+            declare
+               Held : Results.Result;
+            begin
+               Results.Read (Item, Records.Get (State, "last_result"), Held, Read);
+               if E.Is_Ok (Read) then
+                  Append (Listed, "The last answer (" & Records.Get (State, "last_result") & "):"
+                          & ASCII.LF & To_String (Held.Payload) & ASCII.LF);
+               end if;
+            end;
+         end if;
+         if Records.Get (State, "current_verification") /= "" then
+            declare
+               Evidence : constant String := Records.Get (State, "current_verification");
+               Said     : constant Verification.Diagnostic_List :=
+                 Verification.Diagnostics_Of (Item, Evidence);
+               Value    : Records.Item;
+            begin
+               Stores.Read (Item, Verification_Area, Evidence, Value, Read);
+               if E.Is_Ok (Read) and then Records.Get (Value, "passed") /= "true" then
+                  Append (Listed, Evidence & " did not pass:" & ASCII.LF);
+                  for Index in 1 .. Verification.Length (Said) loop
+                     declare
+                        One : constant Verification.Diagnostic := Verification.Element (Said, Index);
+                     begin
+                        Append (Listed, To_String (One.File) & ":" & Image (One.Line) & ": "
+                                & To_String (One.Severity) & ": " & To_String (One.Message)
+                                & ASCII.LF);
+                     end;
+                  end loop;
+               end if;
+            end;
+         end if;
+         Offer (Task_Id & "#results", "results", High, To_String (Listed));
       end;
 
       Settle (Candidates, Task_Id, Result, Status);
@@ -517,6 +608,14 @@ package body Model_Runner.Framework.Context is
             return "The project's configuration";
          elsif Kind = "authority" then
             return "What governs the work";
+         elsif Kind = "symbols" then
+            return "What its files declare";
+         elsif Kind = "tests" then
+            return "The tests that bear on it";
+         elsif Kind = "test" then
+            return "The test " & Id (Id'First + 5 .. Id'Last);
+         elsif Kind = "results" then
+            return "What the last attempt left";
          elsif Kind = "helped" then
             return "The task it works on, " & Id (Id'First .. Ada.Strings.Fixed.Index (Id, "#") - 1);
          elsif Kind = "brief" then

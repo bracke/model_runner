@@ -252,6 +252,19 @@ package Model_Runner.Framework.Repository is
      (From : Graph;
       Unit : String) return Name_Lists.Vector;
 
+   --  How many symbols a graph holds.
+   --
+   --  @param From The graph.
+   --  @return The count.
+   function Symbol_Count (From : Graph) return Natural;
+
+   --  One of them, in the order found.
+   --
+   --  @param From The graph.
+   --  @param Index 1 .. Symbol_Count.
+   --  @return It.
+   function Symbol_At (From : Graph; Index : Positive) return Symbol;
+
    --  How many relations a graph holds.
    --
    --  @param From The graph.

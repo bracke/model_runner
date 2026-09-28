@@ -223,7 +223,16 @@ accepts it. A project names the gates a task must pass (`set task.gates`,
 or `task.gates.KIND`): beside verification, children, no blocking issue and
 integration, `implementation_present`, `traceability_sufficient`,
 `documentation_current`, and any gate of its own that `scalar gate.NAME`
-ties to a profile. The same commands run
+ties to a profile.
+
+What `/work` puts in front of the model follows the specification's list:
+besides the rules, the task, its requirements, decisions, authorities,
+configuration, specifications and files, it now says what the task's files
+declare, which tests bear on it, and what the last attempt left -- the
+previous answer and what its verification found wrong -- so a retry knows
+why it is one. And work is bounded in time: `scalar agents.max_seconds`, or
+`task.max_seconds.KIND`, else the task's lease, for the agent and its
+children together; past it the task is set aside, blocked, not failed. The same commands run
 outside a session too -- `model_runner init|task|repo|work`, with
 `--set NAME=VALUE` for the words -- for scripts.
 

@@ -18,6 +18,7 @@ with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Verification;
 with Model_Runner.Framework.Workspaces;
+with Model_Runner.Text;
 
 package body Model_Runner.Framework.Work is
 
@@ -101,6 +102,18 @@ package body Model_Runner.Framework.Work is
       end loop;
       return Result;
    end Replaced;
+
+   --  Whether a run was stopped by its time running out.
+   function Out_Of_Time (Ran : E.Error_Info) return Boolean is
+      Found : Boolean;
+      Given : E.Parameter;
+   begin
+      if not E."=" (Ran.Code, E.Framework_Limit_Exceeded) then
+         return False;
+      end if;
+      E.Find_Parameter (Ran, "name", Found, Given);
+      return Found and then Model_Runner.Text.To_String (Given.Text_Value) = "time";
+   end Out_Of_Time;
 
    --  Whether a run was stopped by whoever started it.
    function Interrupted (Ran : E.Error_Info) return Boolean
@@ -571,6 +584,19 @@ package body Model_Runner.Framework.Work is
       return E.Is_Ok (Status) and then Permissions.Allows (Held.Allowed, What, Path);
    end May;
 
+   ---------------
+   -- Time_Left --
+   ---------------
+
+   function Time_Left (Host : Child_Host) return Duration is
+      use type Ada.Calendar.Time;
+   begin
+      if not Host.Bounded then
+         return 0.0;
+      end if;
+      return Duration'Max (1.0, Host.Deadline - Ada.Calendar.Clock);
+   end Time_Left;
+
    -----------------
    -- Tool_Budget --
    -----------------
@@ -965,7 +991,7 @@ package body Model_Runner.Framework.Work is
          Host.Calls.Delete_Last;
          Host.Opened.Delete_Last;
 
-         Retry := not Good and then not Interrupted (Ran)
+         Retry := not Good and then not Interrupted (Ran) and then not Out_Of_Time (Ran)
            and then Agents."=" (Child.Need, Agents.Required)
            and then Runs_Before (Id) < Retries;
          Told := To_Unbounded_String
@@ -1188,6 +1214,17 @@ package body Model_Runner.Framework.Work is
             Host.Task_Id := To_Unbounded_String (Task_Id);
             Host.Apart := Isolated;
             Host.Model := Model;
+            declare
+               use type Ada.Calendar.Time;
+               Seconds : constant Natural := Number_Of
+                 ((if Tasks.Kind_Policy (Item, Kind, "max_seconds") /= ""
+                   then Tasks.Kind_Policy (Item, Kind, "max_seconds")
+                   else Scalar (Item, "agents.max_seconds")),
+                  Lease_Seconds (Item));
+            begin
+               Host.Bounded := Seconds > 0;
+               Host.Deadline := Ada.Calendar.Clock + Duration (Seconds);
+            end;
             Host.Max_Calls := Number_Of
               ((if Tasks.Kind_Policy (Item, Kind, "max_tool_calls") /= ""
                 then Tasks.Kind_Policy (Item, Kind, "max_tool_calls")
@@ -1290,6 +1327,12 @@ package body Model_Runner.Framework.Work is
       if Interrupted (Ran) then
          Stop_Children (Item, Change, To_String (Result.Agent_Id));
          Conclude ("blocked", "its work was cancelled", "cancelled");
+         return;
+      elsif Out_Of_Time (Ran) then
+         --  Out of time is not wrong work: the task is set aside, not
+         --  failed, with what its agents made stopped.
+         Stop_Children (Item, Change, To_String (Result.Agent_Id));
+         Conclude ("blocked", "its work ran out of time", "failed");
          return;
       elsif E.Is_Error (Ran) then
          Conclude ("failed", "the agent could not be run: " & E.Error_Code'Image (Ran.Code),

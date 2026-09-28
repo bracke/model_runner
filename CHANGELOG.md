@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`/work` in the session runs the task it is given again.** Since the
+  text selector, the session handed `/work` the words after its first
+  argument rather than from it, so `/work TASK-X` opened the chooser
+  instead of running the task. A test now types the line.
+- **A fuller context.** `Context.Build` offers the symbols the task's
+  component files declare (`Repository.Symbol_Count`/`Symbol_At`), the tests
+  that bear on it (the component's test files and its requirements' test
+  links), and what the last attempt left: the previous answer and the
+  failures and diagnostics of its verification.
+- **Work bounded in time.** The agent loop's wall-clock limit is set for
+  `/work` and every child it makes, from `scalar task.max_seconds.KIND`, else
+  `agents.max_seconds`, else the task's lease. Running out leaves the task
+  blocked with "its work ran out of time" and its children stopped, not
+  retried.
+
 - **Agents say more.** The work contract takes `decisions:` and
   `specifications:` (proposed entries of those registers, where the agent
   may propose), `waits_for:` (a dependency said and kept, not asserted),

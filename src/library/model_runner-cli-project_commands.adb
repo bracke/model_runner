@@ -333,6 +333,7 @@ package body Model_Runner.CLI.Project_Commands is
             Max_Steps   => (if Root and then Host /= null then Host.Steps
                             elsif Root then 24 else 16),
             Max_Total_Tokens => Budget,
+            Max_Seconds => (if Host = null then 0.0 else Host.Time_Left),
             Cancel      => Self.Cancel,
             Tool_Syntax => Syntax,
             Thinking    => Self.Item.Thinking,
@@ -362,6 +363,10 @@ package body Model_Runner.CLI.Project_Commands is
 
       if Outcome.Reason = Model_Runner.Agent.Cancelled then
          Status := E.Make (E.Generation_Cancelled);
+      elsif Outcome.Reason = Model_Runner.Agent.Timed_Out then
+         Status := E.Make (E.Framework_Limit_Exceeded);
+         E.Add_Text (Status, "name", "time");
+         E.Add_Text (Status, "detail", "the work ran out of the time it was given");
       elsif Outcome.Reason /= Model_Runner.Agent.Answered then
          Status :=
            (if E.Is_Error (Outcome.Error) then Outcome.Error
@@ -1185,7 +1190,7 @@ package body Model_Runner.CLI.Project_Commands is
 
       elsif Word = "/work" then
          Command.Kind := Opt.Command_Work;
-         Command.Action_Argument := T.To_Bounded (Rest (2));
+         Command.Action_Argument := T.To_Bounded (Rest (1));
          Model_Runner.CLI.Work.Run_With (Command, Screen, Agent, Status);
 
       elsif Word in "/tree" | "/sym" | "/refs" | "/impact" | "/trace" then
