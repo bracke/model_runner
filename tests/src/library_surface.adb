@@ -19,6 +19,10 @@ package body Library_Surface is
       --  area's portability are what a migration and a repository policy
       --  ask, which later phases bring. Until they arrive, the suite asks.
       new String'("Add_Dependency"),
+
+      --  A graph's relations one at a time, which the impact analysis of
+      --  a later phase walks; the repo command answers by kind instead.
+      new String'("Relation_At"),
       new String'("Block_On_Children"),
       new String'("Current_Version"),
       new String'("Portability_Of"),

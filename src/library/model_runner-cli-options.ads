@@ -66,6 +66,7 @@ package Model_Runner.CLI.Options is
       Command_Models,
       Command_Init,
       Command_Task,
+      Command_Repo,
       Command_Help,
       Command_Version);
 
@@ -263,9 +264,10 @@ package Model_Runner.CLI.Options is
       Input_Count       : Natural := 0;
       Project_Directory : Model_Runner.Text.Bounded;
 
-      --  task: what to do, and the task or title it is done with.
-      Task_Action   : Model_Runner.Text.Bounded;
-      Task_Argument : Model_Runner.Text.Bounded;
+      --  task and repo: what to do, and what it is done with -- a task, a
+      --  new task's title, a symbol, a unit.
+      Action          : Model_Runner.Text.Bounded;
+      Action_Argument : Model_Runner.Text.Bounded;
 
       Prompt_Kind : Prompt_Source := Prompt_Unset;
 

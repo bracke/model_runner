@@ -1779,6 +1779,73 @@ package body Tests.CLI_Cases is
               "whether a terminal can be asked is not answered");
    end Selector_Behaves;
 
+   --  repo answers about the repository's structure without a model: what
+   --  a symbol is and where it is used, and what a unit depends on.
+   procedure Repo_Command_Answers
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Project : constant String := "obj/repo-project";
+
+      function Repo (Action, Argument : String) return Natural is
+         Source : Fixed_Arguments;
+         Status : Natural;
+      begin
+         Add (Source, "repo");
+         Add (Source, Action);
+         if Argument /= "" then
+            Add (Source, Argument);
+         end if;
+         Add (Source, "--directory");
+         Add (Source, Project);
+         Ran (Source, Status);
+         return Status;
+      end Repo;
+
+      procedure Write (Path, Text : String) is
+         File : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Path);
+         Ada.Text_IO.Put (File, Text);
+         Ada.Text_IO.Close (File);
+      end Write;
+   begin
+      if Ada.Directories.Exists (Project) then
+         Ada.Directories.Delete_Tree (Project);
+      end if;
+      Ada.Directories.Create_Path (Project & "/src");
+      Write (Project & "/src/greet.ads",
+             "package Greet is" & ASCII.LF
+             & "   procedure Hello;" & ASCII.LF & "end Greet;" & ASCII.LF);
+      Write (Project & "/src/main.adb",
+             "with Greet;" & ASCII.LF & "procedure Main is" & ASCII.LF
+             & "begin" & ASCII.LF & "   Greet.Hello;" & ASCII.LF
+             & "end Main;" & ASCII.LF);
+
+      Assert (Repo ("scan", "") = 0
+              and then Ada.Strings.Fixed.Index (Last_Output, "2 files") > 0,
+              "the scan did not say what it found: " & Last_Output);
+      Assert (Repo ("tree", "") = 0
+              and then Ada.Strings.Fixed.Index (Last_Output, "src/greet.ads") > 0,
+              "the tree did not list the files");
+      Assert (Repo ("sym", "hello") = 0
+              and then Ada.Strings.Fixed.Index
+                         (Last_Output, "Greet.Hello  procedure  src/greet.ads:2")
+                       > 0,
+              "a symbol was not found where it is declared: " & Last_Output);
+      Assert (Repo ("refs", "Hello") = 0
+              and then Ada.Strings.Fixed.Index (Last_Output, "src/main.adb:4") > 0,
+              "a use of a symbol was not found");
+      Assert (Repo ("deps", "Main") = 0
+              and then Ada.Strings.Fixed.Index (Last_Output, "Greet") > 0,
+              "a dependency was not found");
+      Assert (Repo ("users", "Greet") = 0
+              and then Ada.Strings.Fixed.Index (Last_Output, "Main") > 0,
+              "a dependent was not found");
+      Assert (Repo ("sym", "nothing_here") = 2, "a missing symbol was found");
+      Assert (Repo ("refs", "") = 2, "refs without a name was taken");
+   end Repo_Command_Answers;
+
    --  An inspection that named a feed-forward width and nothing else
    --  described a block a mixture-of-experts model does not have: the file
    --  states that width, the engine computes with an expert's, and the
@@ -12045,6 +12112,10 @@ package body Tests.CLI_Cases is
         (T, Beginning_Marker_Follows_The_Vocabulary'Access,
          "a vocabulary that declares it wants no beginning marker is not "
          & "given one");
+      Register_Routine
+        (T, Repo_Command_Answers'Access,
+         "repo answers what a symbol is, where it is used, what depends on"
+         & " what");
       Register_Routine
         (T, Selector_Behaves'Access,
          "the shared selector moves, filters, explains and fits its window");

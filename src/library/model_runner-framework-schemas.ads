@@ -45,6 +45,9 @@ package Model_Runner.Framework.Schemas is
    --  The derived cache of which tasks are ready.
    Readiness_Schema : constant String := "index.readiness";
 
+   --  The derived graph of the repository's files, units and symbols.
+   Repository_Schema : constant String := "index.repository";
+
    --  One event.
    Event_Schema : constant String := "event.record";
 

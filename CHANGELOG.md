@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The repository, read without a model (Phase G).** A scan walks the
+  project -- leaving out version control, the project state, build output
+  and hidden files -- and gives each file a language and a role. Language
+  adapters read what they can into a graph: a generic one records the
+  file, and the Ada one reads compilation units, with clauses, the
+  declarations of each spec and where their names are used. Every
+  relation says how it was found and how sure that is: a with clause is
+  explicit and certain, a name match a probable heuristic. The graph is
+  kept in the indexes when it changes. `model_runner repo
+  scan|tree|sym|refs|deps|users` asks it.
+
 - **One terminal interface for every command that asks (Phase F).** A
   selector with arrow and page keys, a / filter that narrows as it is
   typed, Tab for details, Enter to choose and Escape to give up; a choice

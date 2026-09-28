@@ -196,6 +196,15 @@ package body Model_Runner.Framework.Schemas is
           Rule ("current_failure", Text_Field, False),
           Rule ("accepted_by", Text_Field, False)]),
 
+      (Id      => new String'(Repository_Schema),
+       Version => 1,
+       Policy  => Reject_Unknown,
+       Rules   => new Rule_List'
+         [Rule ("fingerprint", Text_Field, True),
+          Rule ("file.*", Text_Field, False),
+          Rule ("symbol.*", Text_Field, False),
+          Rule ("relation.*", Text_Field, False)]),
+
       (Id      => new String'(Readiness_Schema),
        Version => 1,
        Policy  => Reject_Unknown,

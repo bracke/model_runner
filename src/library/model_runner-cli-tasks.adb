@@ -50,9 +50,9 @@ package body Model_Runner.CLI.Tasks is
         (if T.Is_Empty (Item.Project_Directory) then "."
          else T.To_String (Item.Project_Directory));
       Action    : constant String :=
-        (if T.Is_Empty (Item.Task_Action) then "list"
-         else T.To_String (Item.Task_Action));
-      Argument  : constant String := T.To_String (Item.Task_Argument);
+        (if T.Is_Empty (Item.Action) then "list"
+         else T.To_String (Item.Action));
+      Argument  : constant String := T.To_String (Item.Action_Argument);
 
       Interactive : constant Boolean := Choosers.Is_Available;
 

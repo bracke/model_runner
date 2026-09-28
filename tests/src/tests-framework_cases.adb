@@ -17,6 +17,7 @@ with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Leases;
 with Model_Runner.Framework.Records;
+with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Schemas;
 with Model_Runner.Framework.Stores;
@@ -37,6 +38,7 @@ package body Tests.Framework_Cases is
    use type Model_Runner.Framework.Stores.Recovery_Report;
    use type Model_Runner.Framework.Results.Result_Kind;
    use type Model_Runner.Framework.Events.Event_Kind;
+   use type Model_Runner.Framework.Name_Lists.Vector;
 
    package E renames Model_Runner.Errors;
    package F renames Model_Runner.Framework;
@@ -2237,6 +2239,186 @@ package body Tests.Framework_Cases is
    end Derivation_Is_Idempotent;
 
    ---------------------------------------------------------------------------
+   --  The repository.
+   ---------------------------------------------------------------------------
+
+   package Rp renames Model_Runner.Framework.Repository;
+
+   --  A scan finds the files and what the Ada in them declares, withs and
+   --  uses, says how it knows each relation, and finds the same the second
+   --  time; the graph kept in the state reads back whole.
+   procedure Repository_Is_Scanned
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Rp.File_Role;
+      use type Rp.Relation_Kind;
+      use type Rp.Derivation;
+      use type Rp.Confidence;
+
+      Project : constant String := Fresh ("repository");
+      Found   : Rp.Graph;
+      Again   : Rp.Graph;
+      Kept    : Rp.Graph;
+      Store   : S.Store;
+      Status  : E.Error_Info;
+      Change  : S.Transaction;
+      Here    : Boolean;
+      Named   : Rp.Symbol;
+   begin
+      Dirs.Create_Path (Project & "/src");
+      Dirs.Create_Path (Project & "/tests");
+      Dirs.Create_Path (Project & "/obj");
+      Dirs.Create_Path (Project & "/.git");
+      Put_File (Project & "/src/parser.ads",
+                "--  Next is only a comment here." & LF
+                & "package Parser is" & LF
+                & "   type Token is record" & LF
+                & "      Kind : Natural := 0;" & LF
+                & "   end record;" & LF
+                & "   procedure Next (Item : out Token);" & LF
+                & "   Limit : constant := 3;" & LF
+                & "   Broken : exception;" & LF
+                & "end Parser;" & LF);
+      Put_File (Project & "/src/parser.adb",
+                "package body Parser is" & LF
+                & "   procedure Next (Item : out Token) is" & LF
+                & "   begin" & LF
+                & "      Item.Kind := Limit;" & LF
+                & "   end Next;" & LF
+                & "end Parser;" & LF);
+      Put_File (Project & "/src/main.adb",
+                "with Parser;" & LF
+                & "procedure Main is" & LF
+                & "   Item : Parser.Token;" & LF
+                & "   Said : constant String := ""Next"";" & LF
+                & "begin" & LF
+                & "   Parser.Next (Item);" & LF
+                & "end Main;" & LF);
+      Put_File (Project & "/tests/parser_tests.adb",
+                "with Parser;" & LF & "procedure Parser_Tests is" & LF
+                & "begin" & LF & "   null;" & LF & "end Parser_Tests;" & LF);
+      Put_File (Project & "/README.md", "# A parser" & LF);
+      Put_File (Project & "/alire.toml", "name = ""parser""" & LF);
+      Put_File (Project & "/obj/parser.o", "not source");
+      Put_File (Project & "/.git/HEAD", "ref");
+
+      Found := Rp.Scan (Project);
+      Assert (Rp.File_Count (Found) = 6,
+              "the scan did not leave out build output and hidden files:"
+              & Natural'Image (Rp.File_Count (Found)));
+      for Index in 1 .. Rp.File_Count (Found) loop
+         declare
+            File : constant Rp.File_Entry := Rp.File_At (Found, Index);
+            Path : constant String := To_String (File.Path);
+         begin
+            if Path = "tests/parser_tests.adb" then
+               Assert (File.Role = Rp.Test, "a test file is not one");
+            elsif Path = "README.md" then
+               Assert (File.Role = Rp.Documentation, "documentation is not");
+            elsif Path = "src/parser.ads" then
+               Assert (File.Role = Rp.Source
+                       and then To_String (File.Language) = "Ada",
+                       "a spec is not Ada source");
+            end if;
+         end;
+      end loop;
+
+      Assert (Rp.Find_Symbols (Found, "next").First_Element = "Parser.Next"
+              and then Natural (Rp.Find_Symbols (Found, "Parser").Length) = 1,
+              "a symbol was not found by its name");
+      Named := Rp.Symbol_Of (Found, "Parser.Limit", Here);
+      Assert (Here and then To_String (Named.Kind) = "constant"
+              and then Named.Line = 7,
+              "a constant was not declared where it is");
+      Named := Rp.Symbol_Of (Found, "Parser.Broken", Here);
+      Assert (Here and then To_String (Named.Kind) = "exception",
+              "an exception was not found");
+      Named := Rp.Symbol_Of (Found, "Parser.Kind", Here);
+      Assert (not Here, "a record component was taken for a declaration");
+
+      Assert (Rp.Dependencies_Of (Found, "Main").First_Element = "Parser",
+              "a with clause was not a dependency");
+      Assert (Natural (Rp.Dependents_Of (Found, "Parser").Length) = 2,
+              "the units depending on a unit were not found");
+      Assert (Rp.References_To (Found, "Parser.Next").Contains
+                ("src/main.adb:6")
+              and then not Rp.References_To (Found, "Parser.Next").Contains
+                             ("src/main.adb:4"),
+              "a reference was missed, or a string taken for one");
+
+      declare
+         Explicit_With : Boolean := False;
+      begin
+         for Index in 1 .. Rp.Relation_Count (Found) loop
+            declare
+               Link : constant Rp.Relation := Rp.Relation_At (Found, Index);
+            begin
+               if Link.Kind = Rp.Depends_On then
+                  Explicit_With := Link.Source = Rp.Explicit
+                    and then Link.Sure = Rp.Certain;
+               elsif Link.Kind = Rp.References then
+                  Assert (Link.Source = Rp.Heuristic,
+                          "a name match claims more than a heuristic");
+               end if;
+            end;
+         end loop;
+         Assert (Explicit_With, "a with clause is not explicit and certain");
+      end;
+
+      Again := Rp.Scan (Project);
+      Assert (Rp.Graph_Fingerprint (Again) = Rp.Graph_Fingerprint (Found)
+              and then Rp.Relation_Count (Again) = Rp.Relation_Count (Found),
+              "two scans of one tree differ");
+
+      S.Create (Store, Project, "Repository", Status);
+      Rp.Keep (Store, Change, Found, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "the graph was not kept: " & Code_Of (Status));
+      Rp.Load (Store, Kept, Status);
+      Assert (E.Is_Ok (Status)
+              and then Rp.Graph_Fingerprint (Kept) = Rp.Graph_Fingerprint (Found)
+              and then Rp.Relation_Count (Kept) = Rp.Relation_Count (Found)
+              and then Rp.References_To (Kept, "Parser.Next")
+                       = Rp.References_To (Found, "Parser.Next"),
+              "the kept graph did not read back whole");
+
+      Put_File (Project & "/src/extra.ads", "package Extra is" & LF
+                & "end Extra;" & LF);
+      Assert (Rp.Graph_Fingerprint (Rp.Scan (Project))
+              /= Rp.Graph_Fingerprint (Found),
+              "a new file did not change the graph's fingerprint");
+      Assert (Rp.Language_Of ("x.rs") = "Rust"
+              and then Rp.Role_Of ("Makefile") = Rp.Build
+              and then Rp.Role_Of ("notes.txt") = Rp.Other
+              and then Rp.Role_Of ("build.gpr") = Rp.Build,
+              "languages or roles are not what the names say");
+      S.Close (Store);
+
+      --  What another language's adapter would write, by hand.
+      declare
+         Built : Rp.Graph;
+      begin
+         Rp.Add_File (Built, (Path => To_Unbounded_String ("lib.c"),
+                              Language => To_Unbounded_String ("C"),
+                              Role => Rp.Source,
+                              Fingerprint => To_Unbounded_String ("0")));
+         Rp.Add_Symbol (Built, (Name => To_Unbounded_String ("lib.open"),
+                                Kind => To_Unbounded_String ("function"),
+                                Path => To_Unbounded_String ("lib.c"),
+                                Line => 3));
+         Rp.Add_Relation
+           (Built, (Kind => Rp.Depends_On, From => To_Unbounded_String ("app"),
+                    To => To_Unbounded_String ("lib"), Source => Rp.Build_Metadata,
+                    Sure => Rp.Probable, Where => Null_Unbounded_String));
+         Assert (Rp.Find_Symbols (Built, "open").First_Element = "lib.open"
+                 and then Rp.Dependents_Of (Built, "lib").First_Element = "app"
+                 and then Rp.Relation_Count (Built) = 2,
+                 "a graph built by an adapter is not queried as one");
+      end;
+   end Repository_Is_Scanned;
+
+   ---------------------------------------------------------------------------
    -- Register_Tests --
    ---------------------------------------------------------------------------
 
@@ -2339,6 +2521,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Parents_Wait_For_Children'Access,
          "a parent waits for its children and goes back to work after them");
+      Register_Routine
+        (T, Repository_Is_Scanned'Access,
+         "a scan finds files, units, symbols and references, and says how");
       Register_Routine
         (T, Derivation_Is_Idempotent'Access,
          "a requirement derives its task once, however often derivation"
