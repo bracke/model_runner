@@ -157,7 +157,7 @@ en.help.init.quiet =   --quiet                 suppress progress, notes and warn
 en.help.init.verbose =   --verbose               report progress and detail on standard error
 en.help.init.locale =   --locale NAME           locale for program messages
 en.help.init.color =   --color=MODE            colour output: {value}
-en.help.task.usage = Usage: model_runner task [list|new TITLE|accept ID|reject ID|cancel ID|reopen ID|reconsider ID|audit ID|edit ID|depend ID ON|split ID TITLE; TITLE|show ID|context ID|verify ID|complete ID|integrate ID|derive|step|plan] [options]
+en.help.task.usage = Usage: model_runner task [list|new TITLE|accept ID|reject ID|cancel ID|reopen ID|reconsider ID|audit ID|edit ID|depend ID ON|split ID TITLE; TITLE|show ID|context ID|verify ID|complete ID|integrate ID [anyway]|derive|step|plan] [options]
 en.help.task.summary = Manage the project's persistent tasks. list shows each with its state, ready shown as one; new creates a candidate from --set fields, asking a terminal for what its kind requires; accept, reject and cancel move one; show prints the effective task; derive makes the tasks accepted requirements imply. Tasks that became ready are named after each change.
 en.help.task.options = Options:
 en.help.task.set =   --set NAME=VALUE        give the new task's field NAME its value; repeatable
@@ -315,6 +315,7 @@ en.cli.interactive.help.bootstrap = /bootstrap [FILE]  read documents for requir
 en.cli.interactive.help.state = /state            where the project stands
 en.cli.interactive.help.config = /config           the project's resolved configuration
 en.cli.interactive.help.git = /git              how the project stands in Git, and which tasks changed what
+en.cli.interactive.help.sandbox = /sandbox [R|off]  confine every agent this session starts, as a task's permissions field writes it
 en.cli.interactive.help.reconfigure = /reconfigure NAME=VALUE ...  change settings: see what it reaches, then confirm
 en.cli.interactive.help.task = /task [ACTION]     list and manage tasks: new, accept, reject, edit, depend, split, reopen, reconsider, show, audit, derive, plan
 en.cli.interactive.help.accept = /accept           accept the one candidate waiting
@@ -441,6 +442,8 @@ en.cli.project.recovered = on opening: {detail}
 en.cli.project.git.branch = on {name}
 en.cli.project.git.clean = nothing has changed since the last commit
 en.cli.project.git.none = the project is not in a Git repository git can read
+en.cli.project.sandbox.none = agents are confined only by the project's permissions
+en.cli.project.sandbox.set = agents are confined to {value}
 en.cli.project.consistency = what does not hold together in the project's state: {count}
 en.cli.repo.summary = {count} files and {total} relations; graph {value}
 en.cli.repo.file = {path}  {value}  {detail}
@@ -915,7 +918,7 @@ da.help.init.quiet =   --quiet                 undertryk status, noter og advars
 da.help.init.verbose =   --verbose               vis status og detaljer på standardfejl
 da.help.init.locale =   --locale NAVN           sprog for programmets beskeder
 da.help.init.color =   --color=TILSTAND        farvet output: {value}
-da.help.task.usage = Brug: model_runner task [list|new TITEL|accept ID|reject ID|cancel ID|reopen ID|reconsider ID|audit ID|edit ID|depend ID PÅ|split ID TITEL; TITEL|show ID|context ID|verify ID|complete ID|integrate ID|derive|step|plan] [tilvalg]
+da.help.task.usage = Brug: model_runner task [list|new TITEL|accept ID|reject ID|cancel ID|reopen ID|reconsider ID|audit ID|edit ID|depend ID PÅ|split ID TITEL; TITEL|show ID|context ID|verify ID|complete ID|integrate ID [anyway]|derive|step|plan] [tilvalg]
 da.help.task.summary = Styr projektets vedvarende opgaver. list viser hver med dens tilstand, klar vist som en; new opretter en kandidat fra --set-felter og spørger en terminal om det dens slags kræver; accept, reject og cancel flytter en; show viser den effektive opgave; derive laver de opgaver accepterede krav medfører. Opgaver der blev klar nævnes efter hver ændring.
 da.help.task.options = Tilvalg:
 da.help.task.set =   --set NAVN=VÆRDI        giv den nye opgaves felt NAVN sin værdi; kan gentages
@@ -1231,6 +1234,7 @@ da.cli.interactive.help.bootstrap = /bootstrap [FIL]   læs dokumenter for krav 
 da.cli.interactive.help.state = /state            hvor projektet står
 da.cli.interactive.help.config = /config           projektets afklarede konfiguration
 da.cli.interactive.help.git = /git              hvordan projektet står i Git, og hvilke opgaver ændrede hvad
+da.cli.interactive.help.sandbox = /sandbox [R|off]  begræns hver agent denne session starter, som en opgaves permissions-felt skriver det
 da.cli.interactive.help.reconfigure = /reconfigure NAVN=VÆRDI ...  ændr indstillinger: se hvad det rækker til, og bekræft
 da.cli.interactive.help.task = /task [HANDLING]   vis og styr opgaver: new, accept, reject, edit, depend, split, reopen, reconsider, show, audit, derive, plan
 da.cli.interactive.help.accept = /accept           accepter den ene ventende kandidat
@@ -1344,6 +1348,8 @@ da.cli.project.recovered = ved åbning: {detail}
 da.cli.project.git.branch = på {name}
 da.cli.project.git.clean = intet er ændret siden sidste commit
 da.cli.project.git.none = projektet er ikke i et Git-repository som git kan læse
+da.cli.project.sandbox.none = agenter begrænses kun af projektets tilladelser
+da.cli.project.sandbox.set = agenter er begrænset til {value}
 da.cli.project.consistency = hvad der ikke hænger sammen i projektets tilstand: {count}
 da.cli.repo.summary = {count} filer og {total} relationer; graf {value}
 da.cli.repo.file = {path}  {value}  {detail}
@@ -1908,6 +1914,7 @@ qps.cli.interactive.help.bootstrap = ⟦/bootstrap [FILE]  ŕéáð ðóçúmé�
 qps.cli.interactive.help.state = ⟦/state            whéŕé ŧhé pŕójéçŧ ßŧáñðß⟧
 qps.cli.interactive.help.config = ⟦/config           ŧhé pŕójéçŧ'ß ŕéßóĺvéð çóñfígúŕáŧíóñ⟧
 qps.cli.interactive.help.git = ⟦/git              hów ŧhé þŕójéçŧ ßŧáñðß íñ Gíŧ, áñð whíçh ŧáßkß çháñgéð wháŧ⟧
+qps.cli.interactive.help.sandbox = ⟦/sandbox [R|off]  çóñfíñé éµéŕý ágéñŧ ŧhíß ßéßßíóñ ßŧáŕŧß, áß á ŧáßk'ß þéŕɱíßßíóñß fíéĺð wŕíŧéß íŧ⟧
 qps.cli.interactive.help.reconfigure = ⟦/reconfigure NAME=VALUE ...  çháñgé ßéŧŧíñgß: ßéé wháŧ íŧ ŕéáçhéß, ŧhéñ çóñfíŕm⟧
 qps.cli.interactive.help.task = ⟦/task [ACTION]     ĺíßŧ áñð máñágé ŧáßkß: ñéw, áççépŧ, ŕéjéçŧ, éðíŧ, ðépéñð, ßþĺíŧ, ŕéópéñ, ŕéçóñßíðéŕ, ßhów, ðéŕívé, pĺáñ⟧
 qps.cli.interactive.help.accept = ⟦/accept           áççépŧ ŧhé óñé çáñðíðáŧé wáíŧíñg⟧
@@ -2034,6 +2041,8 @@ qps.cli.project.recovered = ⟦óñ óþéñíñg: {detail}⟧
 qps.cli.project.git.branch = ⟦óñ {name}⟧
 qps.cli.project.git.clean = ⟦ñóŧhíñg háß çháñgéð ßíñçé ŧhé ĺáßŧ çómmíŧ⟧
 qps.cli.project.git.none = ⟦ŧhé þŕójéçŧ íß ñóŧ íñ á Gíŧ ŕéþóßíŧóŕý gíŧ çáñ ŕéáð⟧
+qps.cli.project.sandbox.none = ⟦ágéñŧß áŕé çóñfíñéð óñĺý ƀý ŧhé þŕóĵéçŧ'ß þéŕɱíßßíóñß⟧
+qps.cli.project.sandbox.set = ⟦ágéñŧß áŕé çóñfíñéð ŧó {value}⟧
 qps.cli.project.consistency = ⟦wháŧ ðóéß ñóŧ hóĺð ŧógéŧhéŕ íñ ŧhé pŕójéçŧ'ß ßŧáŧé: {count}⟧
 qps.cli.repo.summary = ⟦{count} fíĺéß áñð {total} ŕéĺáŧíóñß; gŕáph {value}⟧
 qps.cli.repo.file = ⟦{path}  {value}  {detail}⟧

@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Derived indexes.** `Framework.Indexes` builds requirements, decisions,
+  tasks, components, symbols, tests, traceability, dependency and search
+  indexes, each saying what it was built from; `init` builds them and a
+  session's opening rebuilds stale ones.
+- **The runtime sandbox level.** `Permissions.Sandbox`, from
+  `MODEL_RUNNER_SANDBOX` or `/sandbox` in a session, is intersected into
+  every agent's effective permissions.
+- **Semantic conflicts at integration.** `Workspaces.Semantic_Conflicts`
+  finds workspace changes the project's own changes reach through the
+  code; integration refuses them until `task integrate ID anyway`.
+- **Terminal restoration is tested.** A chooser cancelled with Ctrl-C on a
+  pseudo-terminal leaves the terminal's mode as it found it.
 - **C, C++, Rust and Python adapters.** `Repository.Languages` reads each
   file's unit, its includes, uses or imports, its outer-level functions,
   types, macros, traits, classes and methods, what extends or implements

@@ -13,10 +13,6 @@ package body Library_Surface is
    --  The codec's other half.
    Held : constant Text_List :=
      [
-      --  How large a traceability graph is. The trace command lists the
-      --  edges touching one node; a caller walking the whole graph asks.
-      new String'("Edge_Count"),
-
       --  The project state's operation its commands do not reach yet:
       --  blocking a parent on children made some other way than by a
       --  split, which blocks it as it makes them. Until something does,

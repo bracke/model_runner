@@ -67,7 +67,8 @@ package body Model_Runner.CLI.Project_Commands is
       new String'("/check"), new String'("/req"), new String'("/result"),
       new String'("/tree"), new String'("/sym"), new String'("/refs"),
       new String'("/impact"), new String'("/trace"), new String'("/reconfigure"),
-      new String'("/decision"), new String'("/spec"), new String'("/git")];
+      new String'("/decision"), new String'("/spec"), new String'("/git"),
+      new String'("/sandbox")];
 
    --  The tools the work's agents may call; each is offered only where the
    --  agent's permissions give it.
@@ -669,6 +670,7 @@ package body Model_Runner.CLI.Project_Commands is
       Pres.Put_Note (Screen, "cli.interactive.help.state");
       Pres.Put_Note (Screen, "cli.interactive.help.config");
       Pres.Put_Note (Screen, "cli.interactive.help.git");
+      Pres.Put_Note (Screen, "cli.interactive.help.sandbox");
       Pres.Put_Note (Screen, "cli.interactive.help.reconfigure");
       Pres.Put_Note (Screen, "cli.interactive.help.task");
       Pres.Put_Note (Screen, "cli.interactive.help.accept");
@@ -1297,6 +1299,38 @@ package body Model_Runner.CLI.Project_Commands is
          With_Store (Bootstrap'Access);
       elsif Word = "/git" then
          With_Store (Git_Status'Access);
+      elsif Word = "/sandbox" then
+         --  The run's own confinement, below every other level: it needs
+         --  no project, and lasts until changed or the session ends.
+         if Natural (All_Words.Length) > 1 then
+            declare
+               --  All of it, constraints such as roots=src/ included.
+               Said : Unbounded_String;
+            begin
+               for Index in 2 .. Natural (All_Words.Length) loop
+                  Append (Said, (if Index = 2 then "" else " ") & All_Words (Index));
+               end loop;
+               Model_Runner.Framework.Permissions.Set_Sandbox
+                 ((if To_String (Said) = "off" then "" else To_String (Said)), Outcome);
+            end;
+            if E.Is_Error (Outcome) then
+               Pres.Report (Screen, Outcome);
+               return;
+            end if;
+         end if;
+         declare
+            use type Model_Runner.Framework.Permissions.Permission_Set;
+            Now : constant Model_Runner.Framework.Permissions.Permission_Set :=
+              Model_Runner.Framework.Permissions.Sandbox;
+         begin
+            if Now = Model_Runner.Framework.Permissions.Unrestricted then
+               Pres.Put_Note (Screen, "cli.project.sandbox.none");
+            else
+               Pres.Put_Message
+                 (Screen, "cli.project.sandbox.set",
+                  [Loc.Named ("value", Model_Runner.Framework.Permissions.Image (Now))]);
+            end if;
+         end;
       elsif Word = "/reconfigure" then
          With_Store (Reconfigure'Access);
       end if;

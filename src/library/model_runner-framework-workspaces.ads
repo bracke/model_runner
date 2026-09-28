@@ -14,7 +14,11 @@ with Model_Runner.Framework.Stores;
 --
 --  Taking the work in is the harness's: it needs its own permission --
 --  having written is not having the right to integrate -- and it is refused,
---  naming the files, when there is a conflict. Integration copies the
+--  naming the files, when there is a conflict. A semantic conflict -- no
+--  file on both sides, but a unit changed on both, or a unit the agent
+--  changed depending on one the project changed or depended on by it -- is
+--  escalated the same way, for a person to take in anyway or not; text
+--  alone would have merged it. Integration copies the
 --  changed files into the project and removes the ones the agent removed;
 --  what is verified afterwards is the project as it now is, not the
 --  workspace.
@@ -90,6 +94,17 @@ package Model_Runner.Framework.Workspaces is
    --  @return Their paths, sorted.
    function Conflicts (Item : Stores.Store; Id : String) return Name_Lists.Vector;
 
+   --  The workspace's changes that the project's own changes since the
+   --  baseline reach through the code, with no file in both: a unit
+   --  changed on both sides, a unit changed here depending on one changed
+   --  there, or one changed there depending on one changed here. Found by
+   --  the repository graphs, so as sure as they are.
+   --
+   --  @param Item The store.
+   --  @param Id The workspace.
+   --  @return Each as the workspace's file, the project's and why.
+   function Semantic_Conflicts (Item : Stores.Store; Id : String) return Name_Lists.Vector;
+
    --  Take a workspace's changes into the project.
    --
    --  @param Item The store.
@@ -98,15 +113,19 @@ package Model_Runner.Framework.Workspaces is
    --  @param Permitted Whether whoever asks has the right to integrate.
    --  @param Taken The files integrated.
    --  @param Status Framework_Integration_Refused without the right,
-   --    Framework_Integration_Conflict naming the files in conflict,
+   --    Framework_Integration_Conflict naming the files in conflict, or
+   --    the semantic conflicts when they are not accepted,
    --    Framework_Transition_Invalid when it is not active.
+   --  @param Semantic_Accepted Whether a person has seen the semantic
+   --    conflicts and takes the work in anyway.
    procedure Integrate
      (Item      : Stores.Store;
       Change    : in out Stores.Transaction;
       Id        : String;
       Permitted : Boolean;
       Taken     : out Name_Lists.Vector;
-      Status    : out Model_Runner.Errors.Error_Info);
+      Status    : out Model_Runner.Errors.Error_Info;
+      Semantic_Accepted : Boolean := False);
 
    --  Give a workspace up: its files removed and its record marked
    --  abandoned.

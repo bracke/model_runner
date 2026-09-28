@@ -608,7 +608,9 @@ package body Model_Runner.CLI.Tasks is
          if not Needs_Task then
             return;
          end if;
-         Model_Runner.Framework.Work.Take_In (Store, Argument, Done, Outcome);
+         --  integrate TASK anyway: taken in whatever the code joins it to.
+         Model_Runner.Framework.Work.Take_In
+           (Store, First_Word, Done, Outcome, Semantic_Accepted => After_First = "anyway");
          if E.Is_Error (Outcome) then
             Fail (Outcome);
             return;
@@ -620,7 +622,7 @@ package body Model_Runner.CLI.Tasks is
                           (Natural (Done.Changed_Files.Length))))]);
          Pres.Put_Message
            (Screen, "cli.task.moved",
-            [Loc.Named ("name", Argument),
+            [Loc.Named ("name", First_Word),
              Loc.Named ("value", To_String (Done.Final_State))]);
          if To_String (Done.Final_State) /= "complete" then
             Status := E.Exit_Input_Output;

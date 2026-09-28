@@ -25,6 +25,7 @@ with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Facts;
 with Model_Runner.Framework.Identifiers;
+with Model_Runner.Framework.Indexes;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Invocations;
@@ -46,6 +47,11 @@ with Model_Runner.Framework.Work;
 with Model_Runner.Framework.Workspaces;
 with Model_Runner.Localization;
 with Hostkit.Fs;
+with Hostkit.Pty;
+with Hostkit.Spawn;
+with Hostkit.Terminal_Control;
+with Hostkit.Terminal_Control.Differences;
+with Hostkit.Descriptors;
 with Hostkit.Host;
 with Hostkit.Process;
 with Model_Runner.Platform;
@@ -2855,6 +2861,126 @@ package body Tests.Framework_Cases is
       end;
    end Other_Languages_Are_Read;
 
+   --  A chooser cancelled with Ctrl-C leaves the terminal as it found it:
+   --  task new, on a pseudo-terminal, offers the kinds in raw mode, and
+   --  the mode read back after the cancellation is the mode before.
+   procedure Terminal_Restored_After_Cancel
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Hostkit.Descriptors.Descriptor;
+      use type Hostkit.Spawn.Spawn_Outcome;
+      use type Ada.Streams.Stream_Element_Offset;
+      Store   : S.Store;
+      Pair    : Hostkit.Pty.Pair;
+      Options : Hostkit.Spawn.Options;
+      Child   : Hostkit.Spawn.Process_Handle;
+      Result  : Hostkit.Spawn.Status;
+      Before  : Hostkit.Terminal_Control.Mode;
+      During  : Hostkit.Terminal_Control.Mode;
+      After   : Hostkit.Terminal_Control.Mode;
+      Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
+      Last    : Ada.Streams.Stream_Element_Offset;
+      Was     : Interfaces.Unsigned_8;
+      Became  : Interfaces.Unsigned_8;
+      Words   : Hostkit.String_Vectors.Vector;
+
+      procedure Keep_Variable (Name, Value : String) is
+      begin
+         if Name /= "TERM" then
+            Options.Environment.Append (To_Unbounded_String (String'(Name & "=" & Value)));
+         end if;
+      end Keep_Variable;
+   begin
+      if not Hostkit.Pty.Is_Supported or else not Hostkit.Pty.Open (Pair)
+        or else Pair.Device = Hostkit.Descriptors.Invalid
+      then
+         Ada.Text_IO.Put_Line ("note: no pseudo-terminal device here; not checked");
+         return;
+      end if;
+      Task_Project (Store, "terminal");
+      S.Close (Store);
+
+      Ada.Environment_Variables.Iterate (Keep_Variable'Access);
+      Options.Environment.Append (To_Unbounded_String ("TERM=xterm"));
+      Options.Replace_Environment := True;
+      Options.Working_Directory :=
+        To_Unbounded_String (Dirs.Full_Name (Scratch & "/terminal"));
+      Assert (Hostkit.Pty.Set_Size (Pair, (Rows => 24, Columns => 80)),
+              "the pseudo-terminal was not sized");
+      Assert (Hostkit.Pty.Attach (Pair, Options), "the pseudo-terminal was not attached");
+      Assert (Hostkit.Terminal_Control.Save_Mode (Pair.To_Child, Before),
+              "the terminal's mode was not read");
+      Words.Append (To_Unbounded_String ("task"));
+      Words.Append (To_Unbounded_String ("new"));
+      Assert (Hostkit.Spawn.Start (Dirs.Full_Name ("../bin/model_runner"), Words, Options, Child)
+              = Hostkit.Spawn.Spawn_Ok, "model_runner did not start");
+      Hostkit.Pty.Close_Device (Pair);
+
+      --  The kinds are drawn once raw mode is set; then Ctrl-C.
+      Assert (Hostkit.Descriptors."=" (Hostkit.Descriptors.Read (Pair.From_Child, Buffer, Last),
+                                      Hostkit.Descriptors.Transfer_Ok)
+              and then Last >= Buffer'First,
+              "task new drew nothing on a terminal");
+      Assert (Hostkit.Terminal_Control.Save_Mode (Pair.To_Child, During)
+              and then Hostkit.Terminal_Control.Differences.First_Difference
+                         (Before, During, Was, Became) /= 0,
+              "the chooser did not put the terminal in raw mode, so nothing is checked");
+      Assert (Hostkit.Descriptors."=" (Hostkit.Descriptors.Write
+                                         (Pair.To_Child, [1 => 3], Last),
+                                       Hostkit.Descriptors.Transfer_Ok),
+              "Ctrl-C was not sent");
+      loop
+         exit when Hostkit.Descriptors."/=" (Hostkit.Descriptors.Read (Pair.From_Child, Buffer, Last),
+                                             Hostkit.Descriptors.Transfer_Ok)
+           or else Last < Buffer'First;
+      end loop;
+      Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result),
+              "task new was not waited for");
+      Assert (Hostkit.Terminal_Control.Save_Mode (Pair.To_Child, After),
+              "the terminal's mode was not read afterwards");
+      Assert (Hostkit.Terminal_Control.Differences.First_Difference (Before, After, Was, Became) = 0,
+              "the terminal was left as the chooser set it after Ctrl-C");
+      Hostkit.Pty.Close (Pair);
+   end Terminal_Restored_After_Cancel;
+
+   --  The derived indexes are made at init, known to be stale once the
+   --  state or the repository moves on, and say what they were built from.
+   procedure Indexes_Are_Derived
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Ix renames Model_Runner.Framework.Indexes;
+      Store  : S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      Id     : Unbounded_String;
+      Given  : Tk.Field_Map;
+   begin
+      Task_Project (Store, "indexes");
+      Assert (Ix.Current (Store, Rp.Now (Store)),
+              "init did not build the indexes");
+      Given.Include ("title", "Look");
+      Given.Include ("kind", "analysis");
+      Tk.Create (Store, Change, Given, "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Assert (not Ix.Current (Store, Rp.Now (Store)),
+              "an index built before a task was made was taken as current");
+      Dirs.Create_Path (Fresh_Root (Store) & "/src");
+      Put_File (Fresh_Root (Store) & "/src/io.ads", "package IO is" & LF
+                & "   procedure Read;" & LF & "end IO;" & LF);
+      Ix.Build (Store, Change, Rp.Now (Store), Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then Ix.Current (Store, Rp.Now (Store)),
+              "indexes just built were not current: " & Code_Of (Status));
+      Assert (Ada.Strings.Fixed.Index (Ix.Entries (Store, Ix.Tasks_Index).First_Element,
+                                       To_String (Id)) = 1
+              and then Ix.Entries (Store, Ix.Search_Index).Contains ("read" & ASCII.HT & "IO.Read")
+              and then Ix.Entries (Store, Ix.Dependency_Index).Is_Empty,
+              "an index does not say what the state and the repository hold");
+      S.Close (Store);
+   end Indexes_Are_Derived;
+
    ---------------------------------------------------------------------------
    --  Context and invocations.
    ---------------------------------------------------------------------------
@@ -2908,6 +3034,8 @@ package body Tests.Framework_Cases is
               "the default profile is not the default");
       Assert (Cx.Estimate ("abcdefgh") = 2, "a text's cost is not estimated");
 
+      --  Without a kept graph: init keeps one, so it is taken away.
+      Dirs.Delete_File (S.Root (Store) & "/indexes/repository.rec");
       Cx.Build (Store, To_String (Id), Profile, One, Status);
       Assert (E.Is_Ok (Status), "a context was not built: " & Code_Of (Status));
       Assert (Cx.Cost (One) <= 800 and then Cx.Excluded_Count (One) >= 2,
@@ -3582,6 +3710,34 @@ package body Tests.Framework_Cases is
                  and then not Dirs.Exists (To_String (Made.Path)),
                  "an abandoned workspace was not removed");
       end;
+
+      --  No file on both sides, but the code joins them: the workspace
+      --  changes Parser, the project changes Lexer, which Parser withs.
+      Put_File (Fresh_Root (Store) & "/src/lexer.ads", "package Lexer is" & LF & "end Lexer;" & LF);
+      Put_File (Fresh_Root (Store) & "/src/parser.ads",
+                "with Lexer;" & LF & "package Parser is" & LF & "end Parser;" & LF);
+      Ws.Create (Store, Change, To_String (Other), "AG-TEST", "2", False, Made, Status);
+      S.Commit (Store, Change, Status);
+      Put_File (To_String (Made.Path) & "/src/parser.ads",
+                "with Lexer;" & LF & "package Parser is" & LF & "   procedure Next;" & LF
+                & "end Parser;" & LF);
+      Put_File (Fresh_Root (Store) & "/src/lexer.ads",
+                "package Lexer is" & LF & "   Limit : constant := 1;" & LF & "end Lexer;" & LF);
+      Assert (Ws.Conflicts (Store, To_String (Made.Id)).Is_Empty
+              and then Natural (Ws.Semantic_Conflicts (Store, To_String (Made.Id)).Length) = 1
+              and then Ada.Strings.Fixed.Index
+                         (Ws.Semantic_Conflicts (Store, To_String (Made.Id)).First_Element,
+                          "Parser depends on Lexer") > 0,
+              "a change the project's own change reaches through the code was not seen");
+      Ws.Integrate (Store, Change, To_String (Made.Id), True, Taken, Status);
+      Assert (Status.Code = E.Framework_Integration_Conflict,
+              "work the code joins to the project's change was taken in unasked");
+      Change := S.No_Changes;
+      Ws.Integrate (Store, Change, To_String (Made.Id), True, Taken, Status,
+                    Semantic_Accepted => True);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then Taken.Contains ("src/parser.ads"),
+              "work taken in anyway was not taken in: " & Code_Of (Status));
       S.Close (Store);
    end Workspaces_Isolate_And_Integrate;
 
@@ -3785,6 +3941,37 @@ package body Tests.Framework_Cases is
               or else Cn.Element (Findings, Index).Kind = Cn.Permission_Widening;
          end loop;
          Assert (Widening, "configuration that tries to widen was not found");
+      end;
+
+      --  The run's own sandbox is the lowest level: set, it narrows every
+      --  agent; one that does not read changes nothing; off, it is gone.
+      --  What is found is asserted once the sandbox is off again, so that a
+      --  failure here does not confine the cases after it.
+      declare
+         Status  : E.Error_Info;
+         Screen  : Model_Runner.Presentation.Console;
+         Agent   : Scripted_Agent;
+         Narrows, Kept, Freed, Whole : Boolean;
+      begin
+         Pm.Set_Sandbox ("run_tests: profiles=quick", Status);
+         Narrows := E.Is_Ok (Status)
+           and then not Pm.Allows (Pm.Effective (Store, "", ""), Pm.Write_Source, "src/x.adb")
+           and then Pm.Allows_Profile (Pm.Effective (Store, "", ""), Pm.Run_Tests, "quick")
+           and then not Pm.Allows_Profile (Pm.Effective (Store, "", ""), Pm.Run_Tests, "full");
+         Pm.Set_Sandbox ("fly", Status);
+         Kept := E.Is_Error (Status) and then not Pm.Sandbox (Pm.Write_Source).Granted
+           and then Pm.Sandbox (Pm.Run_Tests).Granted;
+         Model_Runner.CLI.Project_Commands.Run ("/sandbox off", Screen, Agent);
+         Freed := Pm.Allows (Pm.Effective (Store, "", ""), Pm.Write_Source, "src/x.adb")
+           and then Ada.Environment_Variables.Value (Pm.Sandbox_Variable, "") = "";
+         Model_Runner.CLI.Project_Commands.Run ("/sandbox write_source: roots=src/", Screen, Agent);
+         Whole := Pm.Allows (Pm.Sandbox, Pm.Write_Source, "src/x.adb")
+           and then not Pm.Allows (Pm.Sandbox, Pm.Write_Source, "docs/x.md");
+         Pm.Set_Sandbox ("", Status);
+         Assert (Narrows, "a sandbox did not narrow what agents may do");
+         Assert (Kept, "a sandbox that does not read changed the one there");
+         Assert (Freed, "/sandbox off did not free the run");
+         Assert (Whole, "/sandbox did not take its constraints whole");
       end;
       S.Close (Store);
    end Permissions_Only_Narrow;
@@ -6008,6 +6195,12 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Other_Languages_Are_Read'Access,
          "C, Rust and Python files are read for their units, symbols and uses");
+      Register_Routine
+        (T, Terminal_Restored_After_Cancel'Access,
+         "a chooser cancelled with Ctrl-C leaves the terminal as it found it");
+      Register_Routine
+        (T, Indexes_Are_Derived'Access,
+         "the derived indexes are made at init and known to be stale when they are");
       Register_Routine
         (T, Derivation_Is_Idempotent'Access,
          "a requirement derives its task once, however often derivation"

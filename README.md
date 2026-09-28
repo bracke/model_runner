@@ -256,7 +256,16 @@ depends on it and tests it. A task that is proposed starts as a candidate
 unless `set task.auto_accept` names its class -- its kind, or where it came
 from: `user`, `requirement_derivation`, `agent`, `verification_engine` --
 and every acceptance, rejection and other move records who made it: the
-person at the terminal, the policy, or the agent. The repository graph reads Ada, C and C++, Rust and Python: each file's
+person at the terminal, the policy, or the agent. `init` builds the derived indexes -- requirements, decisions, tasks,
+components, symbols, tests, traceability, dependencies and a search index
+of names -- and opening a session builds them again when what they were
+built from has moved on. `/sandbox RESTRICTION` confines every agent the
+session starts, below every other permission level, written as a task's
+`permissions` field is (`MODEL_RUNNER_SANDBOX` does the same from the
+shell; `/sandbox off` frees it). Integration refuses a semantic conflict as
+it refuses a textual one: no file changed on both sides, but a unit changed
+on both, or one side's changed unit depending on the other's;
+`task integrate ID anyway` takes the work in once someone has looked. The repository graph reads Ada, C and C++, Rust and Python: each file's
 unit, what it brings in (`with`, `#include "..."`, `use`, `import`), what it
 declares at its outer level, what it extends or implements, and where the
 names it can see are used and called -- each relation saying whether it is

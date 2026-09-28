@@ -86,6 +86,28 @@ package Model_Runner.Framework.Permissions is
       Level   : String;
       Present : out Boolean) return Permission_Set;
 
+   --  The environment variable a sandbox is set by.
+   Sandbox_Variable : constant String := "MODEL_RUNNER_SANDBOX";
+
+   --  What the run itself is confined to: the sandbox level, below every
+   --  other. MODEL_RUNNER_SANDBOX, written as a task's permissions field
+   --  writes a restriction, confines every agent the process starts --
+   --  from the shell that starts it, or from /sandbox in a session. Unset
+   --  or empty, it confines nothing; one that does not read confines to
+   --  nothing.
+   --
+   --  @return The sandbox level.
+   function Sandbox return Permission_Set;
+
+   --  Confine the run, or free it: what Sandbox reads afterwards.
+   --
+   --  @param Text The restriction; empty to free the run.
+   --  @param Status Framework_Schema_Violation when it does not read, and
+   --    then nothing changes.
+   procedure Set_Sandbox
+     (Text   : String;
+      Status : out Model_Runner.Errors.Error_Info);
+
    --  What two levels both allow.
    --
    --  @param Left One level.
@@ -98,7 +120,8 @@ package Model_Runner.Framework.Permissions is
    --  @param Item The store.
    --  @param Kind The task's kind; empty for none.
    --  @param Role The agent's role; empty for none.
-   --  @param Runtime What the run itself restricts to.
+   --  @param Runtime What the caller restricts to, beside the Sandbox,
+   --    which always applies.
    --  @param Task_Level The task's own restriction, as its permissions field
    --    writes it; empty for none. One that does not read restricts to
    --    nothing.

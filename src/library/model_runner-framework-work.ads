@@ -334,12 +334,15 @@ package Model_Runner.Framework.Work is
    --  @param Result What it did.
    --  @param Status Framework_Not_Found when the task has no workspace
    --    waiting, Framework_Integration_Conflict naming the files in
-   --    conflict.
+   --    conflict, or what the code joins when that is not accepted.
+   --  @param Semantic_Accepted Whether the person takes it in whatever the
+   --    code joins it to.
    procedure Take_In
      (Item    : in out Stores.Store;
       Task_Id : String;
       Result  : out Report;
-      Status  : out Model_Runner.Errors.Error_Info);
+      Status  : out Model_Runner.Errors.Error_Info;
+      Semantic_Accepted : Boolean := False);
 
    --  Stop the work on a running task: its agent and every child of it
    --  still going are recorded cancelled, its lease let go, a workspace

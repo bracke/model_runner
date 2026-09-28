@@ -1,3 +1,4 @@
+with Ada.Environment_Variables;
 with Ada.Characters.Handling;
 with Ada.Strings.Unbounded;
 with Ada.Strings.Fixed;
@@ -242,6 +243,45 @@ package body Model_Runner.Framework.Permissions is
       return Result;
    end Intersect;
 
+   -------------
+   -- Sandbox --
+   -------------
+
+   function Sandbox return Permission_Set is
+      Text   : constant String :=
+        (if Ada.Environment_Variables.Exists (Sandbox_Variable)
+         then Ada.Environment_Variables.Value (Sandbox_Variable) else "");
+      Result : Permission_Set;
+      Status : E.Error_Info;
+   begin
+      if Trim (Text) = "" then
+         return Unrestricted;
+      end if;
+      Restriction (Text, Result, Status);
+      return (if E.Is_Ok (Status) then Result else Nothing);
+   end Sandbox;
+
+   -----------------
+   -- Set_Sandbox --
+   -----------------
+
+   procedure Set_Sandbox
+     (Text   : String;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Ignored : Permission_Set;
+   begin
+      Status := E.Success;
+      if Trim (Text) = "" then
+         Ada.Environment_Variables.Clear (Sandbox_Variable);
+         return;
+      end if;
+      Restriction (Text, Ignored, Status);
+      if E.Is_Ok (Status) then
+         Ada.Environment_Variables.Set (Sandbox_Variable, Text);
+      end if;
+   end Set_Sandbox;
+
    ---------------
    -- Effective --
    ---------------
@@ -270,7 +310,7 @@ package body Model_Runner.Framework.Permissions is
            (Granted => True, Max_Depth => 1, Max_Children => 2, others => <>);
          Project (Propose_Tasks).Granted := True;
       end if;
-      Result := Intersect (Project, Runtime);
+      Result := Intersect (Intersect (Project, Runtime), Sandbox);
 
       if Kind /= "" then
          declare

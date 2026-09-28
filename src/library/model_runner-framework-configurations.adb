@@ -6,7 +6,9 @@ with Hostkit.Fs;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Facts;
 with Model_Runner.Framework.Files;
+with Model_Runner.Framework.Indexes;
 with Model_Runner.Framework.Permissions;
+with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Schemas;
 
 package body Model_Runner.Framework.Configurations is
@@ -584,6 +586,21 @@ package body Model_Runner.Framework.Configurations is
             end if;
          end;
       end loop;
+
+      --  The initial indexes, derived from the project as it now is -- its
+      --  own files included -- so that the first session reads them rather
+      --  than making them. Derived, so failing to keep them fails nothing.
+      declare
+         Graph  : Repository.Graph;
+         Kept   : E.Error_Info;
+         Change : Stores.Transaction;
+      begin
+         Repository.Current (Item, Graph, Kept);
+         Indexes.Build (Item, Change, Graph, Kept);
+         if E.Is_Ok (Kept) then
+            Stores.Commit (Item, Change, Kept);
+         end if;
+      end;
    end Initialize;
 
    --  The settings a reconfiguration may change, by the start of their name.

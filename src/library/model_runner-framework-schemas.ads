@@ -32,6 +32,10 @@ package Model_Runner.Framework.Schemas is
    --  The derived index of every entity in the state.
    Index_Schema : constant String := "index.entities";
 
+   --  One of the derived indexes that are looked up: what it was built
+   --  from, and its entries.
+   Derived_Index_Schema : constant String := "index.derived";
+
    --  A project's resolved configuration, current or of one revision.
    Configuration_Schema : constant String := "project.configuration";
 

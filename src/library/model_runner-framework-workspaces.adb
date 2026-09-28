@@ -434,6 +434,102 @@ package body Model_Runner.Framework.Workspaces is
       return Result;
    end Conflicts;
 
+   ------------------------
+   -- Semantic_Conflicts --
+   ------------------------
+
+   function Semantic_Conflicts (Item : Stores.Store; Id : String) return Name_Lists.Vector is
+      use type Repository.Relation_Kind;
+      Held      : Workspace;
+      Status    : E.Error_Info;
+      Result    : Name_Lists.Vector;
+      Baseline  : constant Maps.Map := Baseline_Of (Item, Id);
+      Roots     : constant Repository.Roots := Repository.Roots_Of (Item);
+      Here      : constant Name_Lists.Vector := Changes (Item, Id);
+      There     : Name_Lists.Vector;
+   begin
+      Read (Item, Id, Held, Status);
+      if E.Is_Error (Status) then
+         return Result;
+      end if;
+
+      --  What the project changed since the baseline, apart from what the
+      --  workspace changed too, which is a conflict of text.
+      declare
+         Now : constant Maps.Map := Snapshot (Project_Of (Item), Roots);
+      begin
+         for Position in Now.Iterate loop
+            declare
+               Path : constant String := Maps.Key (Position);
+            begin
+               if (not Baseline.Contains (Path) or else Baseline (Path) /= Maps.Element (Position))
+                 and then not Here.Contains (Path)
+               then
+                  There.Append (Path);
+               end if;
+            end;
+         end loop;
+         for Position in Baseline.Iterate loop
+            if not Now.Contains (Maps.Key (Position)) and then not Here.Contains (Maps.Key (Position))
+            then
+               There.Append (Maps.Key (Position));
+            end if;
+         end loop;
+      end;
+      if There.Is_Empty or else Here.Is_Empty then
+         return Result;
+      end if;
+
+      declare
+         Ours   : constant Repository.Graph := Repository.Scan (To_String (Held.Path), Roots);
+         Theirs : constant Repository.Graph := Repository.Now (Item);
+
+         function Units_Of (From : Repository.Graph; Path : String) return Name_Lists.Vector is
+            Units : Name_Lists.Vector;
+         begin
+            for Index in 1 .. Repository.Relation_Count (From) loop
+               declare
+                  Link : constant Repository.Relation := Repository.Relation_At (From, Index);
+               begin
+                  if Link.Kind = Repository.Contains and then To_String (Link.From) = Path then
+                     Units.Append (To_String (Link.To));
+                  end if;
+               end;
+            end loop;
+            return Units;
+         end Units_Of;
+
+         function Depends (From : Repository.Graph; Unit, On : String) return Boolean
+         is (Repository.Dependencies_Of (From, Unit).Contains (On));
+      begin
+         for Mine of Here loop
+            for Other of Sorted (There) loop
+               declare
+                  Why : Unbounded_String;
+               begin
+                  for Unit of Units_Of (Ours, Mine) loop
+                     for Changed of Units_Of (Theirs, Other) loop
+                        if Why = Null_Unbounded_String then
+                           if Unit = Changed then
+                              Why := To_Unbounded_String ("both change " & Unit);
+                           elsif Depends (Ours, Unit, Changed) then
+                              Why := To_Unbounded_String (Unit & " depends on " & Changed);
+                           elsif Depends (Theirs, Changed, Unit) then
+                              Why := To_Unbounded_String (Changed & " depends on " & Unit);
+                           end if;
+                        end if;
+                     end loop;
+                  end loop;
+                  if Why /= Null_Unbounded_String then
+                     Result.Append (Mine & " and " & Other & ": " & To_String (Why));
+                  end if;
+               end;
+            end loop;
+         end loop;
+      end;
+      return Result;
+   end Semantic_Conflicts;
+
    --  Remove a workspace's files, and a worktree's registration.
    procedure Remove_Tree (Item : Stores.Store; Held : Workspace) is
       Worked : Boolean;
@@ -491,7 +587,8 @@ package body Model_Runner.Framework.Workspaces is
       Id        : String;
       Permitted : Boolean;
       Taken     : out Name_Lists.Vector;
-      Status    : out Model_Runner.Errors.Error_Info)
+      Status    : out Model_Runner.Errors.Error_Info;
+      Semantic_Accepted : Boolean := False)
    is
       Held    : Workspace;
       Project : constant String := Project_Of (Item);
@@ -530,6 +627,24 @@ package body Model_Runner.Framework.Workspaces is
             return;
          end if;
       end;
+
+      --  What only the code joins is for a person to judge.
+      if not Semantic_Accepted then
+         declare
+            Joined : constant Name_Lists.Vector := Semantic_Conflicts (Item, Id);
+            Listed : Unbounded_String;
+         begin
+            if not Joined.Is_Empty then
+               for Line of Joined loop
+                  Append (Listed, (if Listed = Null_Unbounded_String then "" else "; ") & Line);
+               end loop;
+               Status := E.Make (E.Framework_Integration_Conflict);
+               E.Add_Text (Status, "name", Id);
+               E.Add_Text (Status, "detail", "what the code joins -- " & To_String (Listed));
+               return;
+            end if;
+         end;
+      end if;
 
       for Path of Changes (Item, Id) loop
          declare

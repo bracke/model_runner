@@ -10,6 +10,7 @@ with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Git;
+with Model_Runner.Framework.Indexes;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Invocations;
 with Model_Runner.Framework.Leases;
@@ -554,12 +555,20 @@ package body Model_Runner.Framework.Work is
       end;
 
       --  6: the repository's graph, brought up to date and kept, so what
-      --  reads it next reads only what changed since.
+      --  reads it next reads only what changed since; and the indexes
+      --  built again where they are missing or stale.
       declare
-         Graph : Repository.Graph;
-         Kept  : E.Error_Info;
+         Graph  : Repository.Graph;
+         Kept   : E.Error_Info;
+         Change : Stores.Transaction;
       begin
          Repository.Current (Item, Graph, Kept);
+         if not Indexes.Current (Item, Graph) then
+            Indexes.Build (Item, Change, Graph, Kept);
+            if E.Is_Ok (Kept) then
+               Stores.Commit (Item, Change, Kept);
+            end if;
+         end if;
       end;
 
       --  8: what is still wrong, for someone to settle.
@@ -1921,7 +1930,8 @@ package body Model_Runner.Framework.Work is
      (Item    : in out Stores.Store;
       Task_Id : String;
       Result  : out Report;
-      Status  : out Model_Runner.Errors.Error_Info)
+      Status  : out Model_Runner.Errors.Error_Info;
+      Semantic_Accepted : Boolean := False)
    is
       Change : Stores.Transaction;
       Id     : constant String := Workspaces.Active_For (Item, Task_Id);
@@ -1937,7 +1947,7 @@ package body Model_Runner.Framework.Work is
       end if;
       Result.Workspace_Id := To_Unbounded_String (Id);
 
-      Workspaces.Integrate (Item, Change, Id, True, Taken, Status);
+      Workspaces.Integrate (Item, Change, Id, True, Taken, Status, Semantic_Accepted);
       if E.Is_Ok (Status) then
          Stores.Commit (Item, Change, Status);
       end if;
