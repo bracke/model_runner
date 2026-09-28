@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`model_runner work` runs one task from ready to done (Phase J).** An
+  agent record takes a lease on the task and starts a new execution
+  generation; the task's context is built and its manifest kept; the model
+  call is recorded before it is made; the agent -- `--set model=PATH`, run
+  as this program's own agent with no shell, network or delegation, or a
+  configured `work.agent` command under the execution policy -- is given
+  its context in a file; its answer is held to the work contract; the
+  files, not the answer, say what changed; then the task's verification
+  runs and it completes through its gates, or ends blocked or failed with
+  why, and requirements are reevaluated. Every step is committed as it is
+  taken; a later run puts back a task whose agent stopped. Without a task
+  named, a terminal chooses among the ready ones, blocked ones shown with
+  why. Milestone 3's conditions are each a test.
+
 - **Deciding without a model whether work is done (Phase I).** Every
   external program runs through one execution layer: only programs the
   configuration's `execution.allowed` names, directly unless

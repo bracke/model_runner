@@ -55,6 +55,9 @@ package Model_Runner.Framework.Schemas is
    --  What a verification run found, kept as it was.
    Evidence_Schema : constant String := "verification.evidence";
 
+   --  An agent: who worked on which task, and how it ended.
+   Agent_Schema : constant String := "runtime.agent";
+
    --  One event.
    Event_Schema : constant String := "event.record";
 

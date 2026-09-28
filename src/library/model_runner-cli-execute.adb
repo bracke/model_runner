@@ -54,6 +54,7 @@ with Model_Runner.CLI.Interactive;
 with Model_Runner.CLI.Checkpoint;
 with Model_Runner.CLI.Init;
 with Model_Runner.CLI.Repo;
+with Model_Runner.CLI.Work;
 with Model_Runner.CLI.Tasks;
 
 package body Model_Runner.CLI.Execute is
@@ -1928,7 +1929,8 @@ package body Model_Runner.CLI.Execute is
       --  compiled, dispatched, taken options -- and had no help.
       case Opt.Command_Of (Topic) is
          when Opt.Command_Run | Opt.Command_Embed | Opt.Command_Inspect
-            | Opt.Command_Init | Opt.Command_Task | Opt.Command_Repo =>
+            | Opt.Command_Init | Opt.Command_Task | Opt.Command_Repo
+            | Opt.Command_Work =>
             declare
                Kind : constant Opt.Command_Kind := Opt.Command_Of (Topic);
                Word : constant String := Opt.Command_Word (Kind);
@@ -5652,6 +5654,9 @@ package body Model_Runner.CLI.Execute is
 
          when Opt.Command_Repo =>
             Model_Runner.CLI.Repo.Run (Item, Screen, Status);
+
+         when Opt.Command_Work =>
+            Model_Runner.CLI.Work.Run (Item, Screen, Status);
 
          when Opt.Command_Run =>
             if T.Is_Empty (Item.Model_Path) then

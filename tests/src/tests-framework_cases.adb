@@ -28,6 +28,7 @@ with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Templates;
 with Model_Runner.Framework.Transitions;
 with Model_Runner.Framework.Verification;
+with Model_Runner.Framework.Work;
 with Model_Runner.Text;
 
 package body Tests.Framework_Cases is
@@ -49,6 +50,21 @@ package body Tests.Framework_Cases is
    package R renames Model_Runner.Framework.Records;
    package S renames Model_Runner.Framework.Stores;
    package Dirs renames Ada.Directories;
+
+   --  An agent that does what it is told to do here: writes a file, and
+   --  answers.
+   type Scripted_Agent is new Model_Runner.Framework.Work.Agent_Runner with record
+      File   : Unbounded_String;
+      Answer : Unbounded_String;
+      Broken : Boolean := False;
+   end record;
+
+   overriding procedure Run
+     (Self        : Scripted_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
 
    --  Where the projects of this case are made.
    Scratch : constant String := "obj/framework-fixtures";
@@ -2814,6 +2830,140 @@ package body Tests.Framework_Cases is
    end Completion_Needs_Current_Evidence;
 
    ---------------------------------------------------------------------------
+   --  Work.
+   ---------------------------------------------------------------------------
+
+   package Wk renames Model_Runner.Framework.Work;
+
+   overriding procedure Run
+     (Self        : Scripted_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+   begin
+      Answer := Self.Answer;
+      Status := E.Success;
+      if Self.Broken then
+         Status := E.Make (E.Generation_Invalid_Request);
+         return;
+      end if;
+      Assert (Dirs.Exists (Prompt_Path), "the agent was not given its context");
+      if Self.File /= Null_Unbounded_String then
+         Dirs.Create_Path (Project & "/src");
+         Put_File (Project & "/" & To_String (Self.File), "procedure Hello is begin null; end;");
+      end if;
+   end Run;
+
+   --  One task runs from ready to complete, its context, call, changes and
+   --  evidence recorded; an answer outside the contract, a blocked one and
+   --  a broken agent each end it as they should; a task whose agent
+   --  stopped is put back; a running task can be cancelled.
+   procedure Work_Runs_A_Task_Through
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Done   : Wk.Report;
+      Ids    : array (1 .. 5) of Unbounded_String;
+      Back   : Model_Runner.Framework.Name_Lists.Vector;
+      Model  : Cx.Model_Profile;
+      Good   : constant String :=
+        "status: done" & LF & "summary: wrote hello" & LF & "changed_files: src/hello.adb";
+   begin
+      Task_Project
+        (Store, "work",
+         "set execution.allowed = test" & LF
+         & "profile checks = exists: test -f src/hello.adb" & LF
+         & "scalar verification.default = checks" & LF);
+      Model := Cx.Profile (Store, "");
+      for Index in Ids'Range loop
+         Tk.Create (Store, Change, Fields ("Work" & Integer'Image (Index), "analysis"),
+                    "user", "", Ids (Index), Status);
+      end loop;
+      S.Commit (Store, Change, Status);
+      Wk.Execute (Store, To_String (Ids (1)),
+                  Scripted_Agent'(File => Null_Unbounded_String,
+                                  Answer => To_Unbounded_String (Good), Broken => False),
+                  Model, Done, Status);
+      Assert (Status.Code = E.Framework_Task_Not_Ready, "a candidate was worked on");
+      for Index in Ids'Range loop
+         Tk.Move (Store, Change, To_String (Ids (Index)), "accepted", "", Status => Status);
+      end loop;
+      S.Commit (Store, Change, Status);
+
+      Wk.Execute (Store, To_String (Ids (1)),
+                  Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                                  Answer => To_Unbounded_String (Good), Broken => False),
+                  Model, Done, Status);
+      Assert (E.Is_Ok (Status) and then To_String (Done.Final_State) = "complete",
+              "a task done and verified did not complete: " & Code_Of (Status) & " "
+              & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+      Assert (Done.Changed_Files.Contains ("src/hello.adb")
+              and then Length (Done.Evidence_Id) > 0 and then Length (Done.Manifest_Id) > 0
+              and then Iv.State_Of (Store, To_String (Done.Invocation_Id)) = "completed",
+              "what the work did was not all recorded");
+      Assert (Tk.Ready (Store, To_String (Ids (1))).Reasons.First_Element = "it is complete",
+              "the task's lease was not let go");
+
+      --  Done, it says; but the check fails once the file is gone.
+      Dirs.Delete_File (Fresh_Root (Store) & "/src/hello.adb");
+      Wk.Execute (Store, To_String (Ids (2)),
+                  Scripted_Agent'(File => Null_Unbounded_String,
+                                  Answer => To_Unbounded_String (Good), Broken => False),
+                  Model, Done, Status);
+      Assert (To_String (Done.Final_State) = "failed" and then Done.Changed_Files.Is_Empty,
+              "an agent's claim was taken over the failing check, or a change"
+              & " it did not make was put on it: " & To_String (Done.Final_State));
+
+      Wk.Execute (Store, To_String (Ids (3)),
+                  Scripted_Agent'(File => Null_Unbounded_String,
+                                  Answer => To_Unbounded_String ("I did it!"), Broken => False),
+                  Model, Done, Status);
+      Assert (To_String (Done.Final_State) = "failed",
+              "an answer outside the contract was taken");
+
+      Wk.Execute (Store, To_String (Ids (4)),
+                  Scripted_Agent'(File => Null_Unbounded_String,
+                                  Answer => To_Unbounded_String
+                                    ("status: blocked" & LF & "summary: needs a decision"),
+                                  Broken => False),
+                  Model, Done, Status);
+      Assert (To_String (Done.Final_State) = "blocked"
+              and then To_String (Done.Reason) = "needs a decision",
+              "a blocked answer did not block the task");
+
+      Wk.Execute (Store, To_String (Ids (5)),
+                  Scripted_Agent'(File => Null_Unbounded_String,
+                                  Answer => Null_Unbounded_String, Broken => True),
+                  Model, Done, Status);
+      Assert (To_String (Done.Final_State) = "failed",
+              "a broken agent did not fail its task");
+
+      --  A running task whose agent's lease ran out goes back.
+      Tk.Move (Store, Change, To_String (Ids (5)), "accepted", "", Status => Status);
+      Tk.Move (Store, Change, To_String (Ids (5)), "running", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Recover (Store, Back, Status);
+      Assert (E.Is_Ok (Status) and then Back.Contains (To_String (Ids (5)))
+              and then Tk.State_Of (Store, To_String (Ids (5))) = "blocked",
+              "a running task with no agent was left running: " & Code_Of (Status));
+
+      Tk.Move (Store, Change, To_String (Ids (5)), "accepted", "", Status => Status);
+      Tk.Move (Store, Change, To_String (Ids (5)), "running", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Cancel (Store, To_String (Ids (5)), Status);
+      Assert (E.Is_Ok (Status) and then Tk.State_Of (Store, To_String (Ids (5))) = "cancelled",
+              "a running task was not cancelled");
+      Assert (Ada.Strings.Fixed.Index (Wk.Instructions, "status:") > 0,
+              "the agent is not told how to answer");
+      S.Close (Store);
+   end Work_Runs_A_Task_Through;
+
+   ---------------------------------------------------------------------------
    -- Register_Tests --
    ---------------------------------------------------------------------------
 
@@ -2916,6 +3066,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Parents_Wait_For_Children'Access,
          "a parent waits for its children and goes back to work after them");
+      Register_Routine
+        (T, Work_Runs_A_Task_Through'Access,
+         "one task runs from ready through verification to where it ends");
       Register_Routine
         (T, Execution_Follows_Policy'Access,
          "only what the policy allows is run, directly, and its output kept");

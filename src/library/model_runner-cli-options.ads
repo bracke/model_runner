@@ -67,6 +67,7 @@ package Model_Runner.CLI.Options is
       Command_Init,
       Command_Task,
       Command_Repo,
+      Command_Work,
       Command_Help,
       Command_Version);
 

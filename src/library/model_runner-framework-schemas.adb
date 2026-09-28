@@ -249,6 +249,14 @@ package body Model_Runner.Framework.Schemas is
           Rule ("requirement.*", Number_Field, False),
           Rule ("meaning.*", Text_Field, False)]),
 
+      (Id      => new String'(Agent_Schema),
+       Version => 1,
+       Policy  => Preserve_Unknown,
+       Rules   => new Rule_List'
+         [Rule ("state", Choice_Field, True, "running completed failed cancelled "),
+          Rule ("task", Identifier_Field, True),
+          Rule ("started_at", Text_Field, True)]),
+
       (Id      => new String'(Readiness_Schema),
        Version => 1,
        Policy  => Reject_Unknown,

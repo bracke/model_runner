@@ -224,10 +224,12 @@ package body Model_Runner.CLI.Options is
       (Text ("--metadata"), [Command_Inspect => True, others => False], Text ("metadata")),
       (Text ("--tensors"), [Command_Inspect => True, others => False], Text ("tensors")),
       (Text ("--validate"), [Command_Inspect => True, others => False], Text ("validate")),
-      (Text ("--set"), [Command_Init | Command_Task => True, others => False],
+      (Text ("--set"),
+       [Command_Init | Command_Task | Command_Work => True, others => False],
        Text ("set")),
       (Text ("--directory"),
-       [Command_Init | Command_Task | Command_Repo => True, others => False],
+       [Command_Init | Command_Task | Command_Repo | Command_Work => True,
+        others => False],
        Text ("directory")),
       (Text ("--quiet"), [others => True], Text ("quiet")),
       (Text ("--verbose"), [others => True], Text ("verbose")),
@@ -277,6 +279,7 @@ package body Model_Runner.CLI.Options is
          when Command_Init    => "init",
          when Command_Task    => "task",
          when Command_Repo    => "repo",
+         when Command_Work    => "work",
          when Command_Help    => "help",
          when Command_Version => "version");
 
@@ -2679,6 +2682,8 @@ package body Model_Runner.CLI.Options is
                      Result.Kind := Command_Task;
                   elsif Argument = "repo" then
                      Result.Kind := Command_Repo;
+                  elsif Argument = "work" then
+                     Result.Kind := Command_Work;
                   elsif Argument = "help" then
                      Result.Kind := Command_Help;
                   elsif Argument = "version" then
@@ -2702,6 +2707,10 @@ package body Model_Runner.CLI.Options is
                      return;
                   end if;
                   Result.Action := T.To_Bounded (Argument);
+
+               elsif Operands = 2 and then Result.Kind = Command_Work then
+                  --  work TASK: the task to run.
+                  Result.Action_Argument := T.To_Bounded (Argument);
 
                elsif Operands = 2 and then Result.Kind = Command_Repo then
                   --  repo ACTION: what to ask of the repository.

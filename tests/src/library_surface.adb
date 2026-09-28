@@ -24,9 +24,6 @@ package body Library_Surface is
       --  a later phase walks; the repo command answers by kind instead.
       new String'("Relation_At"),
 
-      --  The contract a work agent answers by, which /work holds its
-      --  answers to when it arrives.
-      new String'("Work_Claim"),
       new String'("Block_On_Children"),
       new String'("Current_Version"),
       new String'("Portability_Of"),

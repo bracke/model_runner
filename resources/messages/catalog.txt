@@ -21,6 +21,7 @@ en.cli.general.command.models =   models [remove NAME]  list the models on hand,
 en.cli.general.command.init =   init [TEMPLATE]  start a project's state from an installed template
 en.cli.general.command.task =   task [ACTION]    list and manage the project's tasks
 en.cli.general.command.repo =   repo [ACTION]    the repository's files, symbols and dependencies
+en.cli.general.command.work =   work [TASK]      run a ready task from context to completion
 en.cli.general.command.help =   help [COMMAND]  show help for a command
 en.cli.general.command.version =   version         show version information
 en.cli.general.more = Run 'model_runner help COMMAND' for the options of a command.
@@ -172,6 +173,15 @@ en.help.repo.quiet =   --quiet                 suppress progress, notes and warn
 en.help.repo.verbose =   --verbose               report progress and detail on standard error
 en.help.repo.locale =   --locale NAME           locale for program messages
 en.help.repo.color =   --color=MODE            colour output: {value}
+en.help.work.usage = Usage: model_runner work [TASK] [options]
+en.help.work.summary = Run one ready task: an agent holds it in a new generation, its context is built and kept, the model call recorded, and what the agent answers is held to the work contract. The files show what changed; the task's verification runs, and it completes through its gates or ends blocked or failed with why. The agent is --set model=PATH, run as this program's agent with no shell, network or delegation, or the configuration's scalar work.agent command, with ${prompt} for its context's file. Without a task named, a terminal chooses one.
+en.help.work.options = Options:
+en.help.work.set =   --set NAME=VALUE        model=PATH, steps=N or profile=ID; repeatable
+en.help.work.directory =   --directory DIR         the project in DIR rather than the current directory
+en.help.work.quiet =   --quiet                 suppress progress, notes and warnings
+en.help.work.verbose =   --verbose               report progress and detail on standard error
+en.help.work.locale =   --locale NAME           locale for program messages
+en.help.work.color =   --color=MODE            colour output: {value}
 en.help.inspect.options = Options:
 en.help.inspect.metadata =   --metadata              list metadata keys, types and values
 en.help.inspect.tensors =   --tensors               list tensor names, shapes and formats
@@ -373,6 +383,16 @@ en.cli.repo.file = {path}  {value}  {detail}
 en.cli.repo.symbol = {name}  {value}  {path}
 en.cli.repo.reference = {path}  {name}
 en.cli.repo.unit = {name}
+en.cli.work.choose = Select work:
+en.cli.work.nothing = no work was started
+en.cli.work.recovered = {name} was running with no agent; it is blocked now
+en.cli.work.agent = {name} works on {value}
+en.cli.work.context = context {name}, call {value}
+en.cli.work.changed = changed {name}
+en.cli.work.claimed = the agent says {name}: {value}
+en.cli.work.evidence = verified by {name}
+en.cli.work.requirement = {name} changed its verification
+en.cli.work.ended = the task is {name} {value}
 en.cli.agent.stopped = agent stopped: {state} after {count} steps and {total} tool calls
 en.cli.interactive.tool_needs_text = /tool needs the tool's answer as text
 en.cli.interactive.path_needed = that command needs a file path
@@ -737,6 +757,7 @@ da.cli.general.command.models =   models [remove NAME]  vis modellerne ved hånd
 da.cli.general.command.init =   init [SKABELON]  start et projekts tilstand fra en installeret skabelon
 da.cli.general.command.task =   task [HANDLING]  vis og styr projektets opgaver
 da.cli.general.command.repo =   repo [HANDLING]  depotets filer, symboler og afhængigheder
+da.cli.general.command.work =   work [OPGAVE]    kør en klar opgave fra kontekst til fuldførelse
 da.cli.general.command.help = help [KOMMANDO] vis hjælp til en kommando
 da.cli.general.command.version = version         vis versionsoplysninger
 da.cli.general.more = Kør 'model_runner help KOMMANDO' for at se en kommandos tilvalg.
@@ -835,6 +856,15 @@ da.help.repo.quiet =   --quiet                 undertryk status, noter og advars
 da.help.repo.verbose =   --verbose               vis status og detaljer på standardfejl
 da.help.repo.locale =   --locale NAVN           sprog for programmets beskeder
 da.help.repo.color =   --color=TILSTAND        farvet output: {value}
+da.help.work.usage = Brug: model_runner work [OPGAVE] [tilvalg]
+da.help.work.summary = Kør en klar opgave: en agent holder den i en ny generation, dens kontekst bygges og gemmes, modelkaldet registreres, og agentens svar holdes op mod arbejdskontrakten. Filerne viser hvad der ændredes; opgavens verifikation kører, og den fuldføres gennem sine porte eller ender blokeret eller fejlet med hvorfor. Agenten er --set model=STI, kørt som dette programs agent uden skal, netværk eller uddelegering, eller konfigurationens scalar work.agent-kommando med ${prompt} for kontekstens fil. Uden en navngivet opgave vælger en terminal en.
+da.help.work.options = Tilvalg:
+da.help.work.set =   --set NAVN=VÆRDI        model=STI, steps=N eller profile=ID; kan gentages
+da.help.work.directory =   --directory MAPPE       projektet i MAPPE i stedet for den aktuelle mappe
+da.help.work.quiet =   --quiet                 undertryk status, noter og advarsler
+da.help.work.verbose =   --verbose               vis status og detaljer på standardfejl
+da.help.work.locale =   --locale NAVN           sprog for programmets beskeder
+da.help.work.color =   --color=TILSTAND        farvet output: {value}
 da.help.inspect.options = Tilvalg:
 da.help.inspect.metadata = --metadata              vis metadatanogler, typer og vaerdier
 da.help.inspect.tensors = --tensors               vis tensorernes navne, former og formater
@@ -1181,6 +1211,16 @@ da.cli.repo.file = {path}  {value}  {detail}
 da.cli.repo.symbol = {name}  {value}  {path}
 da.cli.repo.reference = {path}  {name}
 da.cli.repo.unit = {name}
+da.cli.work.choose = Vælg arbejde:
+da.cli.work.nothing = intet arbejde blev startet
+da.cli.work.recovered = {name} kørte uden agent; den er blokeret nu
+da.cli.work.agent = {name} arbejder på {value}
+da.cli.work.context = kontekst {name}, kald {value}
+da.cli.work.changed = ændrede {name}
+da.cli.work.claimed = agenten siger {name}: {value}
+da.cli.work.evidence = verificeret af {name}
+da.cli.work.requirement = {name} ændrede sin verifikation
+da.cli.work.ended = opgaven er {name} {value}
 da.cli.agent.stopped = agenten stoppede: {state} efter {count} trin og {total} værktøjskald
 da.cli.interactive.tool_needs_text = /tool skal have værktøjets svar som tekst
 da.cli.interactive.path_needed = den kommando skal have en filsti
@@ -1430,6 +1470,7 @@ qps.cli.general.command.models = ⟦  móðéĺß [ŕémóvé NAME]  ĺíßŧ ŧ
 qps.cli.general.command.init = ⟦  íñíŧ [TEMPLATE]  ßŧáŕŧ á pŕójéçŧ'ß ßŧáŧé fŕóm áñ íñßŧáĺĺéð ŧémpĺáŧé⟧
 qps.cli.general.command.task = ⟦  ŧáßk [ACTION]    ĺíßŧ áñð máñágé ŧhé pŕójéçŧ'ß ŧáßkß⟧
 qps.cli.general.command.repo = ⟦  ŕépó [ACTION]    ŧhé ŕépóßíŧóŕý'ß fíĺéß, ßýmbóĺß áñð ðépéñðéñçíéß⟧
+qps.cli.general.command.work = ⟦  wóŕk [TASK]      ŕúñ á ŕéáðý ŧáßk fŕóm çóñŧéxŧ ŧó çómpĺéŧíóñ⟧
 qps.cli.general.command.help = ⟦  héĺp [ÇÓMMÁÑÐ]  ßhów héĺp fóŕ á çómmáñð⟧
 qps.cli.general.command.version = ⟦  véŕßíóñ         ßhów véŕßíóñ íñfóŕmáŧíóñ⟧
 qps.cli.general.more = ⟦Ŕúñ 'model_runner héĺp ÇÓMMÁÑÐ' fóŕ ŧhé ópŧíóñß óf á çómmáñð.⟧
@@ -1579,6 +1620,15 @@ qps.help.repo.quiet = ⟦  --quiet                 ßúppŕéßß pŕógŕéßß
 qps.help.repo.verbose = ⟦  --verbose               ŕépóŕŧ pŕógŕéßß áñð ðéŧáíĺ óñ ßŧáñðáŕð éŕŕóŕ⟧
 qps.help.repo.locale = ⟦  --locale NAME           ĺóçáĺé fóŕ pŕógŕám méßßágéß⟧
 qps.help.repo.color = ⟦  --color=MODE            çóĺóúŕ óúŧpúŧ: {value}⟧
+qps.help.work.usage = ⟦Úßágé: móðéĺ_ŕúññéŕ wóŕk [TASK] [ópŧíóñß]⟧
+qps.help.work.summary = ⟦Ŕúñ óñé ŕéáðý ŧáßk: áñ ágéñŧ hóĺðß íŧ íñ á ñéw géñéŕáŧíóñ, íŧß çóñŧéxŧ íß búíĺŧ áñð képŧ, ŧhé móðéĺ çáĺĺ ŕéçóŕðéð, áñð wháŧ ŧhé ágéñŧ áñßwéŕß íß héĺð ŧó ŧhé wóŕk çóñŧŕáçŧ. Ŧhé fíĺéß ßhów wháŧ çháñgéð; ŧhé ŧáßk'ß véŕífíçáŧíóñ ŕúñß, áñð íŧ çómpĺéŧéß ŧhŕóúgh íŧß gáŧéß óŕ éñðß bĺóçkéð óŕ fáíĺéð wíŧh whý. Ŧhé ágéñŧ íß --set móðéĺ=PATH, ŕúñ áß ŧhíß pŕógŕám'ß ágéñŧ wíŧh ñó ßhéĺĺ, ñéŧwóŕk óŕ ðéĺégáŧíóñ, óŕ ŧhé çóñfígúŕáŧíóñ'ß ßçáĺáŕ wóŕk.ágéñŧ çómmáñð, wíŧh ${prompt} fóŕ íŧß çóñŧéxŧ'ß fíĺé. Wíŧhóúŧ á ŧáßk ñáméð, á ŧéŕmíñáĺ çhóóßéß óñé.⟧
+qps.help.work.options = ⟦Ópŧíóñß:⟧
+qps.help.work.set = ⟦  --set NAME=VALUE        móðéĺ=PATH, ßŧépß=Ñ óŕ pŕófíĺé=ID; ŕépéáŧábĺé⟧
+qps.help.work.directory = ⟦  --directory DIR         ŧhé pŕójéçŧ íñ DIR ŕáŧhéŕ ŧháñ ŧhé çúŕŕéñŧ ðíŕéçŧóŕý⟧
+qps.help.work.quiet = ⟦  --quiet                 ßúppŕéßß pŕógŕéßß, ñóŧéß áñð wáŕñíñgß⟧
+qps.help.work.verbose = ⟦  --verbose               ŕépóŕŧ pŕógŕéßß áñð ðéŧáíĺ óñ ßŧáñðáŕð éŕŕóŕ⟧
+qps.help.work.locale = ⟦  --locale NAME           ĺóçáĺé fóŕ pŕógŕám méßßágéß⟧
+qps.help.work.color = ⟦  --color=MODE            çóĺóúŕ óúŧpúŧ: {value}⟧
 qps.help.inspect.options = ⟦Ópŧíóñß:⟧
 qps.help.inspect.metadata = ⟦  --metadata              ĺíßŧ méŧáðáŧá kéýß, ŧýpéß áñð váĺúéß⟧
 qps.help.inspect.tensors = ⟦  --tensors               ĺíßŧ ŧéñßóŕ ñáméß, ßhápéß áñð fóŕmáŧß⟧
@@ -1776,6 +1826,16 @@ qps.cli.repo.file = ⟦{path}  {value}  {detail}⟧
 qps.cli.repo.symbol = ⟦{name}  {value}  {path}⟧
 qps.cli.repo.reference = ⟦{path}  {name}⟧
 qps.cli.repo.unit = ⟦{name}⟧
+qps.cli.work.choose = ⟦Séĺéçŧ wóŕk:⟧
+qps.cli.work.nothing = ⟦ñó wóŕk wáß ßŧáŕŧéð⟧
+qps.cli.work.recovered = ⟦{name} wáß ŕúññíñg wíŧh ñó ágéñŧ; íŧ íß bĺóçkéð ñów⟧
+qps.cli.work.agent = ⟦{name} wóŕkß óñ {value}⟧
+qps.cli.work.context = ⟦çóñŧéxŧ {name}, çáĺĺ {value}⟧
+qps.cli.work.changed = ⟦çháñgéð {name}⟧
+qps.cli.work.claimed = ⟦ŧhé ágéñŧ ßáýß {name}: {value}⟧
+qps.cli.work.evidence = ⟦véŕífíéð bý {name}⟧
+qps.cli.work.requirement = ⟦{name} çháñgéð íŧß véŕífíçáŧíóñ⟧
+qps.cli.work.ended = ⟦ŧhé ŧáßk íß {name} {value}⟧
 qps.cli.agent.stopped = ⟦ágéñŧ ßŧóppéð: {state} áfŧéŕ {count} ßŧépß áñð {total} ŧóóĺ çáĺĺß⟧
 qps.cli.interactive.tool_needs_text = ⟦/tool ñééðß ŧhé ŧóóĺ'ß áñßwéŕ áß ŧéxŧ⟧
 qps.cli.interactive.path_needed = ⟦ŧháŧ çómmáñð ñééðß á fíĺé páŧh⟧
