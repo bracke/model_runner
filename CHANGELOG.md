@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The requirement lifecycle is the project's.** `map requirement.state.NAME
+  = MEANING` adds a state with its meaning, `set requirement.transitions =
+  FROM -> TO` the moves to and from it; the core states keep the harness's
+  meaning and the configuration is refused where a move names a state
+  nobody defined. `/req move ID STATE` makes any move the lifecycle allows.
+- **A parent may go on another way.** With `scalar agents.on_child_failure =
+  continue`, an agent whose required child failed may still finish when its
+  answer says how under `instead:`; what it went past and how are kept as a
+  diagnostic result, so the failure never disappears.
 - **Human instructions govern.** `/instruct SUBJECT = VALUE [overriding
   SOURCE]` gives a standing instruction, kept with who gave it and when;
   it enters authority resolution at the top level, above decisions,

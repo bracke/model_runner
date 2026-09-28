@@ -100,6 +100,7 @@ package body Model_Runner.Framework.Invocations is
           & "decisions?" & ASCII.LF
           & "specifications?" & ASCII.LF
           & "waits_for?" & ASCII.LF
+          & "instead?" & ASCII.LF
           & "verify? = yes|no"));
 
    function Name_Of (Item : Contract) return String

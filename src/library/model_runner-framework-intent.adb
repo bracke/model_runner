@@ -1,6 +1,7 @@
 with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 
+with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Schemas;
@@ -118,6 +119,74 @@ package body Model_Runner.Framework.Intent is
       end case;
       return Result;
    end Machine_Of;
+
+   -----------------------------
+   -- Core_Requirement_States --
+   -----------------------------
+
+   function Core_Requirement_States return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+   begin
+      for State of Name_Lists.Vector'
+        (["candidate", "accepted", "implemented", "verified", "blocked", "obsolete", "rejected"])
+      loop
+         Result.Append (State);
+      end loop;
+      return Result;
+   end Core_Requirement_States;
+
+   ------------------
+   -- Lifecycle_Of --
+   ------------------
+
+   function Lifecycle_Of
+     (Item : Stores.Store;
+      Kind : Intent_Kind) return Transitions.Machine
+   is
+      Result : Transitions.Machine := Machine_Of (Kind);
+      Config : Records.Item;
+      Read   : E.Error_Info;
+      Prefix : constant String := "map.requirement.state.";
+      Known  : Name_Lists.Vector := Core_Requirement_States;
+   begin
+      if Kind /= Requirement then
+         return Result;
+      end if;
+      Configurations.Read (Item, Config, Read);
+      if E.Is_Error (Read) then
+         return Result;
+      end if;
+      for Index in 1 .. Records.Field_Count (Config) loop
+         declare
+            Name : constant String := Records.Field_Name (Config, Index);
+         begin
+            if Name'Length > Prefix'Length
+              and then Name (Name'First .. Name'First + Prefix'Length - 1) = Prefix
+              and then Records.Get (Config, Name) /= ""
+            then
+               Known.Append (Name (Name'First + Prefix'Length .. Name'Last));
+               Transitions.Add_State (Result, Name (Name'First + Prefix'Length .. Name'Last));
+            end if;
+         end;
+      end loop;
+      for Line of Lines_Of (Records.Get (Config, "set.requirement.transitions")) loop
+         declare
+            Arrow : constant Natural := Ada.Strings.Fixed.Index (Line, "->");
+            From  : constant String :=
+              (if Arrow = 0 then "" else Ada.Strings.Fixed.Trim (Line (Line'First .. Arrow - 1),
+                                                                  Ada.Strings.Both));
+            To    : constant String :=
+              (if Arrow = 0 then "" else Ada.Strings.Fixed.Trim (Line (Arrow + 2 .. Line'Last),
+                                                                  Ada.Strings.Both));
+         begin
+            --  Only between states whose meaning is known.
+            if Known.Contains (From) and then Known.Contains (To) then
+               Transitions.Allow (Result, From, To);
+            end if;
+         end;
+      end loop;
+      return Result;
+   end Lifecycle_Of;
 
    --  The event a move is recorded by.
    function Event_For
@@ -274,7 +343,7 @@ package body Model_Runner.Framework.Intent is
       Actor   : String := "") is
    begin
       Transitions.Apply
-        (Item, Change, Machine_Of (Kind), Area_Of (Kind), Id, Next, Granted,
+        (Item, Change, Lifecycle_Of (Item, Kind), Area_Of (Kind), Id, Next, Granted,
          Event_For (Kind, Next), Status, Actor);
    end Move;
 

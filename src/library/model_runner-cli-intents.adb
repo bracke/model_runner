@@ -224,6 +224,24 @@ package body Model_Runner.CLI.Intents is
             end;
          end if;
 
+      elsif Action = "move" then
+         --  To any state the project's lifecycle allows: its own among them.
+         Needs (3, "the " & Word_Of (Kind) & " and the state");
+         if E.Is_Ok (Status) then
+            Nt.Move (Store, Change, Kind, Word (2), Word (3), Tr.Ordinary_Only, Status,
+                     Actor => Tr.User);
+            if E.Is_Ok (Status) then
+               S.Commit (Store, Change, Status);
+            end if;
+            if E.Is_Error (Status) then
+               Pres.Report (Screen, Status);
+               return;
+            end if;
+            Pres.Put_Message
+              (Screen, "cli.task.moved", [Loc.Named ("name", Word (2)), Loc.Named ("value", Word (3))]);
+            Move_Along (Store, Screen);
+         end if;
+
       elsif Action = "revise" then
          Needs (2, "the " & Word_Of (Kind));
          if E.Is_Ok (Status) then

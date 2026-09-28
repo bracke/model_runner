@@ -91,11 +91,32 @@ package Model_Runner.Framework.Intent is
    --  @return SPEC, REQ or DEC.
    function Namespace (Kind : Intent_Kind) return String;
 
-   --  The lifecycle of a kind.
+   --  The default lifecycle of a kind.
    --
    --  @param Kind The kind.
    --  @return Its machine.
    function Machine_Of (Kind : Intent_Kind) return Transitions.Machine;
+
+   --  The requirement states the harness itself gives meaning to, which a
+   --  project cannot take away: candidate, accepted, implemented, verified,
+   --  blocked, obsolete and rejected.
+   --
+   --  @return Them.
+   function Core_Requirement_States return Name_Lists.Vector;
+
+   --  A kind's lifecycle in a project: the default one, and for
+   --  requirements what the project's policy adds -- a state of its own
+   --  with what it means, map requirement.state.NAME = MEANING, and moves
+   --  to and from it, a line FROM -> TO each of set
+   --  requirement.transitions. Nothing it adds changes what the core states
+   --  mean; a state without a stated meaning is not added.
+   --
+   --  @param Item The store.
+   --  @param Kind The kind.
+   --  @return Its machine.
+   function Lifecycle_Of
+     (Item : Stores.Store;
+      Kind : Intent_Kind) return Transitions.Machine;
 
    --  The state a kind starts in.
    --

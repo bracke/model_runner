@@ -455,7 +455,8 @@ package body Model_Runner.Framework.Agents is
    function May_Complete
      (Item   : Stores.Store;
       Id     : String;
-      Reason : out Ada.Strings.Unbounded.Unbounded_String) return Boolean
+      Reason : out Ada.Strings.Unbounded.Unbounded_String;
+      Past_Failures : Boolean := False) return Boolean
    is
       Mine : constant Name_Lists.Vector := Children (Item, Id);
 
@@ -493,7 +494,9 @@ package body Model_Runner.Framework.Agents is
                   Reason := To_Unbounded_String ("its required child " & Child
                                                  & " is still going");
                   return False;
-               elsif To_String (Held.Status) = "failed" and then not Made_Good (Child) then
+               elsif To_String (Held.Status) = "failed" and then not Made_Good (Child)
+                 and then not Past_Failures
+               then
                   Reason := To_Unbounded_String
                     ("its required child " & Child & " failed"
                      & (if Held.Summary = Null_Unbounded_String then ""

@@ -176,16 +176,20 @@ package Model_Runner.Framework.Agents is
       Status    : out Model_Runner.Errors.Error_Info);
 
    --  Whether an agent may claim it is done: none of its required children
-   --  still going or failed.
+   --  still going or failed -- or, where the policy lets a parent go on
+   --  another way and it said how, none still going.
    --
    --  @param Item The store.
    --  @param Id The agent.
    --  @param Reason Why not, when not.
+   --  @param Past_Failures Whether a failed required child is not in the
+   --    way.
    --  @return True when it may.
    function May_Complete
      (Item   : Stores.Store;
       Id     : String;
-      Reason : out Ada.Strings.Unbounded.Unbounded_String) return Boolean;
+      Reason : out Ada.Strings.Unbounded.Unbounded_String;
+      Past_Failures : Boolean := False) return Boolean;
 
    --  Cancel an agent and, unless detached, every child of it still going.
    --

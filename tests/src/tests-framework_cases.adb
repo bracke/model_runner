@@ -3152,6 +3152,63 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Bootstrap_Follows_Its_Policy;
 
+   --  A project adds requirement states of its own, each with what it
+   --  means, and the moves to and from them; the core states' meaning
+   --  stays the harness's, and a move to a state nobody defined is refused.
+   procedure Requirement_Lifecycle_Is_The_Projects
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store   : S.Store;
+      Change  : S.Transaction;
+      Status  : E.Error_Info;
+      Req     : Unbounded_String;
+      Screen  : Model_Runner.Presentation.Console;
+      Planned : Model_Runner.Framework.Configurations.Change_Plan;
+
+      function Refused (Name, Value : String) return Boolean is
+         One : Model_Runner.Framework.Configurations.Value_Maps.Map;
+         Got : E.Error_Info;
+      begin
+         One.Include (Name, Value);
+         Model_Runner.Framework.Configurations.Plan_Change (Store, One, Planned, Got);
+         return E.Is_Error (Got);
+      end Refused;
+   begin
+      Task_Project (Store, "requirement-lifecycle",
+                    "map requirement.state.in_review = agreed, and waiting for sign-off" & LF
+                    & "set requirement.transitions = accepted -> in_review" & LF
+                    & "set requirement.transitions = in_review -> accepted" & LF);
+      Assert (Nt.Core_Requirement_States.Contains ("verified")
+              and then Tr.Is_State (Nt.Lifecycle_Of (Store, Nt.Requirement), "in_review")
+              and then not Tr.Is_State (Nt.Machine_Of (Nt.Requirement), "in_review"),
+              "the project's own state was not in its lifecycle");
+      Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.",
+                  "", "user", "", "project", Req, Status);
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted", Tr.Ordinary_Only, Status);
+      S.Commit (Store, Change, Status);
+      Model_Runner.CLI.Intents.Run
+        (Store, Nt.Requirement,
+         Model_Runner.Framework.Name_Lists.To_Vector ("move", 1)
+         & To_String (Req) & "in_review", Screen);
+      declare
+         Held : Nt.Entity;
+      begin
+         Nt.Read (Store, Nt.Requirement, To_String (Req), Held, Status);
+         Assert (To_String (Held.State) = "in_review",
+                 "a move the project's lifecycle allows was not made: " & To_String (Held.State));
+      end;
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "verified", Tr.Ordinary_Only, Status);
+      Assert (Status.Code = E.Framework_Transition_Invalid,
+              "a move the project's lifecycle does not allow was made");
+      Change := S.No_Changes;
+      Assert (Refused ("set.requirement.transitions", "accepted -> limbo"),
+              "a move to a state whose meaning nobody said was taken");
+      Assert (Refused ("map.requirement.state.verified", "whatever"),
+              "a core state was given a meaning by the project");
+      S.Close (Store);
+   end Requirement_Lifecycle_Is_The_Projects;
+
    ---------------------------------------------------------------------------
    --  Context and invocations.
    ---------------------------------------------------------------------------
@@ -4268,6 +4325,8 @@ package body Tests.Framework_Cases is
       Assert (not Ag.May_Complete (Store, To_String (First), Reason)
               and then Ada.Strings.Fixed.Index (To_String (Reason), "failed") > 0,
               "a required child's failure did not reach its parent");
+      Assert (Ag.May_Complete (Store, To_String (First), Reason, Past_Failures => True),
+              "a parent the policy lets go on another way was held by a failed child");
       Ag.Finish (Store, Change, To_String (Grand), True, "", "", Status);
       Assert (Status.Code = E.Framework_Transition_Invalid,
               "an agent that ended was ended again");
@@ -6443,6 +6502,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Bootstrap_Follows_Its_Policy'Access,
          "bootstrap reads, makes and accepts what its policy says");
+      Register_Routine
+        (T, Requirement_Lifecycle_Is_The_Projects'Access,
+         "a project adds requirement states with their meaning, and moves between them");
       Register_Routine
         (T, Derivation_Is_Idempotent'Access,
          "a requirement derives its task once, however often derivation"

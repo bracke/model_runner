@@ -7,6 +7,7 @@ with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Facts;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Indexes;
+with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Schemas;
@@ -748,6 +749,41 @@ package body Model_Runner.Framework.Configurations is
             end if;
          end;
       end loop;
+      --  A requirement move names states whose meaning is known: the core
+      --  ones, or the project's, each said what it means.
+      for Line of Lines_Of (Records.Get (Config, "set.requirement.transitions")) loop
+         declare
+            Arrow : constant Natural := Ada.Strings.Fixed.Index (Line, "->");
+         begin
+            if Arrow = 0 then
+               return "set.requirement.transitions is FROM -> TO a line, not " & Line;
+            end if;
+            for Side of Name_Lists.Vector'
+              ([Ada.Strings.Fixed.Trim (Line (Line'First .. Arrow - 1), Ada.Strings.Both),
+                Ada.Strings.Fixed.Trim (Line (Arrow + 2 .. Line'Last), Ada.Strings.Both)])
+            loop
+               if not Intent.Core_Requirement_States.Contains (Side)
+                 and then not Has ("map.requirement.state." & Side)
+               then
+                  return "set.requirement.transitions names " & Side
+                    & ", a state whose meaning map requirement.state." & Side & " does not say";
+               end if;
+            end loop;
+         end;
+      end loop;
+      for Index in 1 .. Records.Field_Count (Config) loop
+         declare
+            Name : constant String := Records.Field_Name (Config, Index);
+         begin
+            if Starts (Name, "map.requirement.state.")
+              and then Intent.Core_Requirement_States.Contains
+                         (Name (Name'First + 22 .. Name'Last))
+            then
+               return Name & ": a core state's meaning is the harness's";
+            end if;
+         end;
+      end loop;
+
       if not Among ("scalar.repository.state_policy", "portable, local, all") then
          return "scalar.repository.state_policy is portable, local or all";
       elsif not Among ("scalar.work.isolation", "project, workspace") then

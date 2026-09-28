@@ -63,7 +63,8 @@ package body Model_Runner.Framework.Work is
        & " or specification you would propose goes under decisions: or"
        & " specifications:, a task this one should wait for under waits_for:,"
        & " and verify: yes asks for your work to be checked whatever the"
-       & " status." & ASCII.LF);
+       & " status. If a helper you needed failed and you did its part another"
+       & " way, say how under instead:." & ASCII.LF);
 
    --  The fields of a tab-separated line.
    function Fields_Of (Text : String) return Name_Lists.Vector is
@@ -1801,14 +1802,46 @@ package body Model_Runner.Framework.Work is
 
       --  Done, it says -- but not while a child it needed is going or
       --  failed.
+      --  Where the policy lets a parent go on another way, it may -- once
+      --  it has said how, which is kept beside the failure it went past.
       declare
-         Why : Unbounded_String;
+         Why     : Unbounded_String;
+         Still   : Unbounded_String;
+         Instead : constant String := Trim (Invocations.Claim (Said, "instead"));
+         Going_On : constant Boolean :=
+           Scalar (Item, "agents.on_child_failure") = "continue" and then Instead not in "" | "-";
       begin
          if not Agents.May_Complete (Item, To_String (Result.Agent_Id), Why) then
-            Conclude ((if Scalar (Item, "agents.on_child_failure") = "fail" then "failed"
-                       else "blocked"),
-                      To_String (Why), "completed");
-            return;
+            if not Going_On
+              or else not Agents.May_Complete
+                            (Item, To_String (Result.Agent_Id), Still, Past_Failures => True)
+            then
+               if Going_On then
+                  Why := Still;
+               end if;
+               Conclude ((if Scalar (Item, "agents.on_child_failure") = "fail" then "failed"
+                          else "blocked"),
+                         To_String (Why), "completed");
+               return;
+            end if;
+            declare
+               Kept : Results.Result :=
+                 (Kind       => Results.Diagnostic,
+                  Producer   => Result.Agent_Id,
+                  Summary    => To_Unbounded_String
+                                  ("went on past a failed required child: " & To_String (Why)),
+                  Payload    => To_Unbounded_String (Instead),
+                  Provenance => Result.Invocation_Id,
+                  others     => <>);
+            begin
+               Results.Add (Item, Change, Kept, Status);
+               if E.Is_Ok (Status) then
+                  Stores.Commit (Item, Change, Status);
+               end if;
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end;
          end if;
       end;
 
