@@ -153,8 +153,89 @@ package body Model_Runner.Framework.Verification is
    -- Normalize --
    ---------------
 
-   function Normalize (Tool : String; Output : String) return Diagnostic_List is
+   function Normalize
+     (Tool    : String;
+      Output  : String;
+      Raw_Log : String := "") return Diagnostic_List
+   is
       Result : Diagnostic_List;
+      Line_Number : Natural := 0;
+
+      --  A trailing [CODE], or error[CODE] at the front: the tool's name for
+      --  what it says.
+      function Code_In (Said : String) return String is
+         Close : constant Natural := Ada.Strings.Fixed.Index (Said, "]", Ada.Strings.Backward);
+         Open  : constant Natural :=
+           (if Close = 0 then 0 else Ada.Strings.Fixed.Index (Said (Said'First .. Close), "[",
+                                                             Ada.Strings.Backward));
+      begin
+         --  A code is a word: a bracketed list of a command's arguments is
+         --  not one.
+         if Open > 0 and then Close > Open + 1 and then Close - Open <= 25
+           and then (for all C of Said (Open + 1 .. Close - 1) =>
+                       C not in ' ' | '"' | ',')
+         then
+            return Said (Open + 1 .. Close - 1);
+         end if;
+         return "";
+      end Code_In;
+
+      --  The first name in double quotes, as GNAT quotes what it means.
+      function Symbol_In (Said : String) return String is
+         First : constant Natural := Ada.Strings.Fixed.Index (Said, """");
+         Last  : constant Natural :=
+           (if First = 0 then 0 else Ada.Strings.Fixed.Index (Said (First + 1 .. Said'Last), """"));
+      begin
+         if First > 0 and then Last > First + 1 then
+            return Said (First + 1 .. Last - 1);
+         end if;
+         return "";
+      end Symbol_In;
+
+      --  The places it points at: at FILE:LINE, and at line N of the same
+      --  file.
+      function Related_In (Said : String; File : String) return String is
+         Found : Unbounded_String;
+         Index : Natural := Said'First;
+      begin
+         loop
+            declare
+               At_Mark : constant Natural :=
+                 Ada.Strings.Fixed.Index (Said (Index .. Said'Last), " at ");
+            begin
+               exit when At_Mark = 0;
+               declare
+                  Rest  : constant String := Said (At_Mark + 4 .. Said'Last);
+                  Space : constant Natural := Ada.Strings.Fixed.Index (Rest & " ", " ");
+                  Place : constant String := Rest (Rest'First .. Space - 1);
+               begin
+                  if Starts (Rest, "line ") then
+                     declare
+                        After : constant String := Rest (Rest'First + 5 .. Rest'Last);
+                        Stop  : Natural := After'First;
+                     begin
+                        while Stop <= After'Last and then After (Stop) in '0' .. '9' loop
+                           Stop := Stop + 1;
+                        end loop;
+                        if Stop > After'First then
+                           Append (Found, (if Found = Null_Unbounded_String then "" else ";")
+                                   & File & ":" & After (After'First .. Stop - 1));
+                        end if;
+                     end;
+                  elsif Ada.Strings.Fixed.Index (Place, ":") > Place'First
+                    and then Place (Ada.Strings.Fixed.Index (Place, ":") + 1 .. Place'Last)'Length > 0
+                    and then Place (Ada.Strings.Fixed.Index (Place, ":") + 1) in '0' .. '9'
+                  then
+                     Append (Found, (if Found = Null_Unbounded_String then "" else ";")
+                             & Trim (Place));
+                  end if;
+                  Index := At_Mark + 4;
+               end;
+            end;
+            exit when Index > Said'Last;
+         end loop;
+         return To_String (Found);
+      end Related_In;
 
       --  A number at the front of a text, and what follows its colon.
       procedure Number
@@ -198,10 +279,17 @@ package body Model_Runner.Framework.Verification is
                         File     => To_Unbounded_String (File),
                         Line     => Line,
                         Column   => Column,
-                        Message  => To_Unbounded_String (Body_Text)));
+                        Message  => To_Unbounded_String (Body_Text),
+                        Code     => To_Unbounded_String (Code_In (Message)),
+                        Symbol   => To_Unbounded_String (Symbol_In (Message)),
+                        Related  => To_Unbounded_String (Related_In (Message, File)),
+                        Raw      => To_Unbounded_String
+                          (if Raw_Log = "" then ""
+                           else Raw_Log & ":" & Trim (Natural'Image (Line_Number)))));
       end Found;
    begin
       for Raw of Lines_Of (Output) loop
+         Line_Number := Line_Number + 1;
          declare
             Line  : constant String := Trim (Raw);
             Colon : constant Natural := Ada.Strings.Fixed.Index (Line, ":");
@@ -500,7 +588,7 @@ package body Model_Runner.Framework.Verification is
                declare
                   Said : constant Diagnostic_List :=
                     Normalize ((if Program.Is_Empty then "" else Program.First_Element),
-                               To_String (Ran.Output));
+                               To_String (Ran.Output), To_String (Ran.Raw_Log));
                begin
                   for Place in 1 .. Length (Said) loop
                      declare
@@ -511,7 +599,9 @@ package body Model_Runner.Framework.Verification is
                           (Value, "diagnostic." & Pad (Diagnostics, 5),
                            To_String (One.Tool) & Tab & To_String (One.Severity) & Tab
                            & To_String (One.File) & Tab & Image (One.Line) & Tab
-                           & Image (One.Column) & Tab & To_String (One.Message));
+                           & Image (One.Column) & Tab & To_String (One.Message)
+                           & Tab & To_String (One.Code) & Tab & To_String (One.Symbol)
+                           & Tab & To_String (One.Related) & Tab & To_String (One.Raw));
                      end;
                   end loop;
                end;
@@ -561,14 +651,23 @@ package body Model_Runner.Framework.Verification is
                         Start := Place + 1;
                      end if;
                   end loop;
-                  if Natural (Parts.Length) = 6 then
+                  --  Six fields as evidence first kept them, ten since.
+                  if Natural (Parts.Length) in 6 | 10 then
                      Result.Items.Append
                        (Diagnostic'(Tool     => To_Unbounded_String (Parts (1)),
                                     Severity => To_Unbounded_String (Parts (2)),
                                     File     => To_Unbounded_String (Parts (3)),
                                     Line     => Natural'Value (Parts (4)),
                                     Column   => Natural'Value (Parts (5)),
-                                    Message  => To_Unbounded_String (Parts (6))));
+                                    Message  => To_Unbounded_String (Parts (6)),
+                                    Code     => To_Unbounded_String
+                                      (if Natural (Parts.Length) = 10 then Parts (7) else ""),
+                                    Symbol   => To_Unbounded_String
+                                      (if Natural (Parts.Length) = 10 then Parts (8) else ""),
+                                    Related  => To_Unbounded_String
+                                      (if Natural (Parts.Length) = 10 then Parts (9) else ""),
+                                    Raw      => To_Unbounded_String
+                                      (if Natural (Parts.Length) = 10 then Parts (10) else "")));
                   end if;
                end;
             end if;

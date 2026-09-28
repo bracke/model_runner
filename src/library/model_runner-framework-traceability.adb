@@ -263,6 +263,13 @@ package body Model_Runner.Framework.Traceability is
    -- Impact_Of --
    ---------------
 
+   --  The node a change starts from: a file by its path, or a symbol or a
+   --  unit named as its node.
+   function Seed_Of (Changed : String) return String
+   is (if (Changed'Length > 7 and then Changed (Changed'First .. Changed'First + 6) = "symbol:")
+          or else (Changed'Length > 5 and then Changed (Changed'First .. Changed'First + 4) = "unit:")
+       then Changed else "file:" & Changed);
+
    function Impact_Of (From : Graph; Changed : Name_Lists.Vector) return Impact is
       Result : Impact;
 
@@ -316,8 +323,8 @@ package body Model_Runner.Framework.Traceability is
       Queue : Name_Lists.Vector;
    begin
       for Path of Changed loop
-         if Reach ("file:" & Path, Repository.Certain) then
-            Queue.Append ("file:" & Path);
+         if Reach (Seed_Of (Path), Repository.Certain) then
+            Queue.Append (Seed_Of (Path));
          end if;
       end loop;
 
@@ -400,8 +407,8 @@ package body Model_Runner.Framework.Traceability is
          begin
             for Next of From.Edges loop
                Reaches_Anything := Reaches_Anything
-                 or else ((To_String (Next.From) = "file:" & Path
-                           or else To_String (Next.To) = "file:" & Path)
+                 or else ((To_String (Next.From) = Seed_Of (Path)
+                           or else To_String (Next.To) = Seed_Of (Path))
                           and then To_String (Next.Kind) /= "is_test");
             end loop;
             if not Reaches_Anything then

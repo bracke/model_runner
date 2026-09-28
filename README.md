@@ -245,7 +245,14 @@ the project's state goes into Git is `scalar repository.state_policy`:
 out what belongs to one machine or can be built again; `local` leaves out all
 of it; `all` commits all of it -- kept as the state's own `.gitignore`. And
 `/git` asks Git how the project stands: the branch, and each changed path
-with the tasks whose work changed it. The same commands run
+with the tasks whose work changed it.
+
+A tool's output becomes diagnostics that say, where the tool does, the
+file, line and column, the severity, the tool's own code (`-gnatwu`,
+`E0308`), the name it is about, the other places it points at, and where
+in the kept raw output it was said. `/impact` takes a symbol as well as a
+file -- `/impact Parser.Next`, or just `Next` -- and says what refers to it,
+depends on it and tests it. The same commands run
 outside a session too -- `model_runner init|task|repo|work`, with
 `--set NAME=VALUE` for the words -- for scripts.
 

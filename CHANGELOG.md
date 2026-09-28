@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Fuller diagnostics.** `Verification.Diagnostic` adds the tool's code (a
+  trailing `[CODE]`, a word and not a command's argument list), the quoted
+  symbol, related places (`at FILE:LINE`, `at line N`) and a raw-output
+  reference (`RES-...:LINE`); evidence keeps them, older evidence still
+  reads, and `/check` shows the code.
+- **`/impact` of a symbol.** A name that is no file is looked up as a
+  symbol, full or last name, and the impact walk starts from its node:
+  what refers to it, what depends on its unit, the tests, tasks and
+  requirements that reach it.
+
 - **A task answers for itself.** When work starts, why the task could start
   is recorded (`admission`: its state, its dependencies' states, that no
   agent held it or its component, its kind, definition revision and

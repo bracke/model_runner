@@ -916,7 +916,10 @@ package body Model_Runner.CLI.Project_Commands is
                         [Loc.Named ("path", To_String (Vf.Element (Said, Index).File) & ":"
                                     & Image (Vf.Element (Said, Index).Line)),
                          Loc.Named ("severity", To_String (Vf.Element (Said, Index).Severity)),
-                         Loc.Named ("detail", To_String (Vf.Element (Said, Index).Message))]);
+                         Loc.Named ("detail", To_String (Vf.Element (Said, Index).Message)
+                                    & (if Length (Vf.Element (Said, Index).Code) = 0 then ""
+                                       else " [" & To_String (Vf.Element (Said, Index).Code)
+                                            & "]"))]);
                   end loop;
                   Pres.Put_Message
                     (Screen, "cli.task.verified",

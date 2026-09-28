@@ -2751,6 +2751,32 @@ package body Tests.Framework_Cases is
                  "an error was not read as one");
       end;
 
+      --  What else a diagnostic can say: its code, the name it is about,
+      --  the places it points at, and where in the raw output it was said.
+      declare
+         More : constant Vf.Diagnostic_List :=
+           Vf.Normalize
+             ("gprbuild",
+              "a.adb:3:10: warning: variable ""Count"" is not referenced [-gnatwu]" & LF
+              & "b.adb:5:1: error: non-visible declaration at c.ads:87" & LF
+              & "d.adb:9:4: error: missing ""end"" for ""if"" at line 12" & LF
+              & "error: Command [""gprbuild"", ""-s""] exited with code 4" & LF,
+              Raw_Log => "RES-1");
+      begin
+         Assert (Vf.Length (More) = 4
+                 and then To_String (Vf.Element (More, 4).Code) = ""
+                 and then To_String (Vf.Element (More, 1).Code) = "-gnatwu"
+                 and then To_String (Vf.Element (More, 1).Symbol) = "Count"
+                 and then To_String (Vf.Element (More, 1).Raw) = "RES-1:1"
+                 and then To_String (Vf.Element (More, 2).Related) = "c.ads:87"
+                 and then To_String (Vf.Element (More, 3).Related) = "d.adb:12"
+                 and then To_String (Vf.Element (More, 3).Raw) = "RES-1:3",
+                 "a diagnostic's code, symbol, related place or raw reference was not read: ["
+                 & To_String (Vf.Element (More, 1).Code) & "] ["
+                 & To_String (Vf.Element (More, 2).Related) & "] ["
+                 & To_String (Vf.Element (More, 3).Related) & "]");
+      end;
+
       Assert (Vf.Length (Checks) = 3
               and then To_String (Vf.Element (Checks, 2).Directory) = "tests"
               and then To_String (Vf.Element (Checks, 2).Label) = "unit"
@@ -3305,6 +3331,14 @@ package body Tests.Framework_Cases is
       Chosen := Tc.Select_Tests (Store, Reach);
       Assert (Chosen.Tests.Contains ("tests/parser_tests.adb"),
               "the affected test was not chosen");
+
+      --  From a symbol rather than a file: what refers to it is reached.
+      Changed.Clear;
+      Changed.Append ("symbol:Parser.Next");
+      Reach := Tc.Impact_Of (Graph, Changed);
+      Assert (Reached ("symbol:Parser.Next", Sure) and then Sure = Rp.Certain
+              and then Has ("file:src/main.adb"),
+              "a changed symbol did not reach what refers to it");
 
       Changed.Clear;
       Changed.Append ("NOTES.txt");

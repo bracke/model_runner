@@ -112,7 +112,7 @@ package body Model_Runner.CLI.Repo is
       then
          Outcome := E.Make (E.Framework_Input_Missing);
          E.Add_Text (Outcome, "name", (if Action in "deps" | "users" then "unit"
-                                       elsif Action = "impact" then "file"
+                                       elsif Action = "impact" then "file or symbol"
                                        elsif Action = "trace" then "node"
                                        else "symbol"));
          Fail (Outcome);
@@ -220,7 +220,24 @@ package body Model_Runner.CLI.Repo is
                      Reach   : Tr.Impact;
                      Chosen  : Tr.Selection;
                   begin
-                     Changed.Append (Argument);
+                     --  A file by its path; anything else is a symbol, by its
+                     --  full or its last name.
+                     declare
+                        Is_File : Boolean := False;
+                     begin
+                        for Index in 1 .. Rp.File_Count (Found) loop
+                           Is_File := Is_File
+                             or else To_String (Rp.File_At (Found, Index).Path) = Argument;
+                        end loop;
+                        if not Is_File then
+                           for Name of Rp.Find_Symbols (Found, Argument) loop
+                              Changed.Append ("symbol:" & Name);
+                           end loop;
+                        end if;
+                        if Changed.Is_Empty then
+                           Changed.Append (Argument);
+                        end if;
+                     end;
                      Reach := Tr.Impact_Of (Graph, Changed);
                      for Index in 1 .. Tr.Length (Reach) loop
                         declare

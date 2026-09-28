@@ -522,7 +522,9 @@ package body Model_Runner.CLI.Tasks is
                      [Loc.Named ("path", To_String (One.File) & ":"
                                  & T.Image (Long_Long_Integer (One.Line))),
                       Loc.Named ("severity", To_String (One.Severity)),
-                      Loc.Named ("detail", To_String (One.Message))]);
+                      Loc.Named ("detail", To_String (One.Message)
+                                 & (if Length (One.Code) = 0 then ""
+                                    else " [" & To_String (One.Code) & "]"))]);
                end;
             end loop;
             Pres.Put_Message

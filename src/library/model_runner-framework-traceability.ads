@@ -91,10 +91,11 @@ package Model_Runner.Framework.Traceability is
    --  @return Their positions, in order.
    function Touching (From : Graph; Node : String) return Name_Lists.Vector;
 
-   --  What changing some files reaches.
+   --  What changing some files, or symbols, reaches.
    --
    --  @param From The graph.
-   --  @param Changed The files, as paths within the project.
+   --  @param Changed The files, as paths within the project; a symbol or a
+   --    unit is given as its node, symbol:Unit.Name or unit:Unit.
    --  @return The impact.
    function Impact_Of (From : Graph; Changed : Name_Lists.Vector) return Impact;
 

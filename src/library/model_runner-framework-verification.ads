@@ -52,6 +52,19 @@ package Model_Runner.Framework.Verification is
       Line     : Natural := 0;
       Column   : Natural := 0;
       Message  : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  The tool's own name for it, where it gives one: -gnatwu, E0308.
+      Code     : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  The name it is about, where it quotes one.
+      Symbol   : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  The other places it points at, as FILE:LINE, separated by ;.
+      Related  : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  Where it was said: the raw log's result and its line there, as
+      --  RES-...:LINE.
+      Raw      : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    --  One gate, and whether it passed.
@@ -105,12 +118,19 @@ package Model_Runner.Framework.Verification is
 
    --  What tools said, from their output: lines of FILE:LINE:COLUMN:
    --  [SEVERITY:] MESSAGE, as GNAT and GCC write them, and lines starting
-   --  error: or warning:. A style message is a warning.
+   --  error: or warning:. A style message is a warning. A trailing [CODE]
+   --  or error[CODE] is its code, the first quoted name its symbol, and
+   --  "at FILE:LINE" or "at line N" in it a related place.
    --
    --  @param Tool What wrote the output.
    --  @param Output The output.
+   --  @param Raw_Log The result the whole output is kept as, for each
+   --    diagnostic's reference back to where it was said.
    --  @return The diagnostics, in order.
-   function Normalize (Tool : String; Output : String) return Diagnostic_List;
+   function Normalize
+     (Tool    : String;
+      Output  : String;
+      Raw_Log : String := "") return Diagnostic_List;
 
    --  The verification profile a task is checked by: the configuration's
    --  scalar task.profile.KIND, else scalar verification.default.
