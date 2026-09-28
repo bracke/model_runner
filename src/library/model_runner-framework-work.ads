@@ -236,6 +236,11 @@ package Model_Runner.Framework.Work is
 
       --  The candidate tasks made from the work it proposed.
       Proposed      : Name_Lists.Vector;
+
+      --  How widely it was verified -- certain_tests, component_tests or
+      --  full_suite -- and why.
+      Scope         : Ada.Strings.Unbounded.Unbounded_String;
+      Scope_Reason  : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    --  Put back the tasks whose agents stopped without finishing: a running

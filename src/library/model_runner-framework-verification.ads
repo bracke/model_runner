@@ -122,6 +122,11 @@ package Model_Runner.Framework.Verification is
    --  @param Status Framework_Not_Found when there is no such profile,
    --    Framework_Execution_Refused when the policy refuses one of its
    --    commands.
+   --  @param Given Values its commands and directories may use, as
+   --    NAME=VALUE: {NAME} in a check stands for VALUE. Each is kept on the
+   --    evidence.
+   --  @param Stands_For The task's own profile, when this narrower one is
+   --    run in its place; its evidence then counts for that profile.
    procedure Run_Profile
      (Item     : Stores.Store;
       Change   : in out Stores.Transaction;
@@ -129,7 +134,41 @@ package Model_Runner.Framework.Verification is
       Task_Id  : String;
       Evidence : out Ada.Strings.Unbounded.Unbounded_String;
       Passed   : out Boolean;
-      Status   : out Model_Runner.Errors.Error_Info);
+      Status   : out Model_Runner.Errors.Error_Info;
+      Given    : Name_Lists.Vector := Name_Lists.Empty_Vector;
+      Stands_For : String := "");
+
+   --  How widely a task's work is verified, and with what.
+   type Choice is record
+      --  The profile to run, and the task's own it answers for when that is
+      --  another.
+      Profile    : Ada.Strings.Unbounded.Unbounded_String;
+      Stands_For : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  How widely: certain_tests, component_tests or full_suite, and why.
+      Scope      : Ada.Strings.Unbounded.Unbounded_String;
+      Reason     : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  What the checks may use: tests, scope, component, as NAME=VALUE.
+      Given      : Name_Lists.Vector;
+   end record;
+
+   --  Choose how to verify a task's work from what it changed: what the
+   --  change reaches in the traceability graph, the tests that selects and
+   --  how sure it is, and the project's policy. A narrower scope runs the
+   --  profile the configuration names for it -- scalar
+   --  verification.scope.KIND.WIDTH, else verification.scope.WIDTH, with
+   --  WIDTH certain or component -- and otherwise, as for the full suite,
+   --  the task's own profile. What cannot be traced is verified in full.
+   --
+   --  @param Item The store.
+   --  @param Task_Id The task.
+   --  @param Changed The files its work changed.
+   --  @return The choice; an empty profile when none applies.
+   function Choose
+     (Item    : Stores.Store;
+      Task_Id : String;
+      Changed : Name_Lists.Vector) return Choice;
 
    --  The diagnostics a piece of evidence recorded.
    --

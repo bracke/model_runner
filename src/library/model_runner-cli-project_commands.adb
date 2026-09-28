@@ -15,6 +15,7 @@ with Model_Runner.Entropy;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Bootstrap;
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Records;
@@ -845,6 +846,26 @@ package body Model_Runner.CLI.Project_Commands is
          Evidence : Unbounded_String;
          Passed   : Boolean;
       begin
+         --  The state itself, not the project's files: what does not hold
+         --  together, found without a model.
+         if Argument (1) = "consistency" then
+            declare
+               package Cs renames Model_Runner.Framework.Consistency;
+               Found : constant Cs.Finding_List := Cs.Check (Store);
+            begin
+               for Index in 1 .. Cs.Length (Found) loop
+                  Pres.Put_Message
+                    (Screen, "cli.task.item",
+                     [Loc.Named ("name", To_String (Cs.Element (Found, Index).Subject)),
+                      Loc.Named ("value", Cs.Kind_Word (Cs.Element (Found, Index).Kind)),
+                      Loc.Named ("detail", To_String (Cs.Element (Found, Index).Detail))]);
+               end loop;
+               Pres.Put_Message
+                 (Screen, "cli.project.consistency", [Loc.Named ("count", Image (Cs.Length (Found)))]);
+            end;
+            return;
+         end if;
+
          Model_Runner.Framework.Configurations.Read (Store, Config, Read);
          declare
             Profile : constant String :=

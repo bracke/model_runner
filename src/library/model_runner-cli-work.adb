@@ -391,6 +391,9 @@ package body Model_Runner.CLI.Work is
          if Done.Claimed /= Null_Unbounded_String then
             Say ("cli.work.claimed", To_String (Done.Claimed), To_String (Done.Summary));
          end if;
+         if Done.Scope /= Null_Unbounded_String then
+            Say ("cli.work.scope", To_String (Done.Scope), To_String (Done.Scope_Reason));
+         end if;
          if Done.Evidence_Id /= Null_Unbounded_String then
             Say ("cli.work.evidence", To_String (Done.Evidence_Id), "");
          end if;

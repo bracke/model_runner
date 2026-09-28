@@ -140,7 +140,19 @@ as `scalar recovery.running` says -- and agents, invocations and workspaces
 no one is running are recorded abandoned. Every call is on record: a child
 has an invocation and a context manifest of its own, each tool call is
 noted on the invocation that made it, with what it used, and `/work`
-budgets for the loaded model's own context size. The same commands run
+budgets for the loaded model's own context size.
+
+Work is verified as widely as what it changed reaches. The traceability graph
+says which tests the change reaches and how sure that is; where the policy
+allows testing less than everything and names a profile for it --
+`scalar verification.scope.certain` or `.component`, or per task kind
+`verification.scope.KIND.certain` -- that profile runs in the task's
+profile's place, its checks given `{tests}`, `{scope}` and `{component}`;
+anything uncertain is verified in full. The evidence says what was chosen
+and why. `/check consistency` lists what does not hold together in the
+project's state -- the spec's list, including a task whose component the
+project does not have and one held ready while what it depends on is open --
+and opening a project says how much there is. The same commands run
 outside a session too -- `model_runner init|task|repo|work`, with
 `--set NAME=VALUE` for the words -- for scripts.
 

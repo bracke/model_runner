@@ -1,3 +1,4 @@
+with Ada.Directories;
 with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
@@ -182,7 +183,6 @@ package body Model_Runner.Framework.Consistency is
          end loop;
       end;
 
-
       --  Tasks: every task named is one there is, no dependency or parent
       --  comes back to itself, and every task is of a kind the project
       --  defines, with only the fields that kind allows.
@@ -259,6 +259,92 @@ package body Model_Runner.Framework.Consistency is
             Found (Cyclic_Dependency, Id,
                    "its dependencies or its parents come back to it");
          end loop;
+      end;
+
+      --  A task's component is one the project has: the configuration's
+      --  set.components names it, or a file of the repository is named
+      --  after it, as the traceability graph ties them.
+      declare
+         Settings : Records.Item;
+         Read     : E.Error_Info;
+         Files    : constant Repository.Graph :=
+           Repository.Scan (Ada.Directories.Containing_Directory (Stores.Root (Item)));
+         Listed   : Name_Lists.Vector;
+
+         function Known (Component : String) return Boolean is
+            Name : constant String := Ada.Characters.Handling.To_Lower (Component);
+         begin
+            if Listed.Contains (Component) then
+               return True;
+            end if;
+            for Index in 1 .. Repository.File_Count (Files) loop
+               if Ada.Strings.Fixed.Index
+                    (Ada.Characters.Handling.To_Lower
+                       (Ada.Strings.Unbounded.To_String (Repository.File_At (Files, Index).Path)),
+                     Name) > 0
+               then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Known;
+      begin
+         Configurations.Read (Item, Settings, Read);
+         Listed := Lines_Of (Records.Get (Settings, "set.components"));
+         for Id of Tasks.List (Item) loop
+            declare
+               Defined   : Records.Item;
+               Status    : E.Error_Info;
+            begin
+               Tasks.Definition (Item, Id, Defined, Status);
+               if E.Is_Ok (Status) then
+                  declare
+                     Component : constant String := Records.Get (Defined, "component");
+                  begin
+                     if Component /= ""
+                       and then Tasks.State_Of (Item, Id) not in "complete" | "cancelled" | "rejected"
+                       and then not Known (Component)
+                     then
+                        Found (Missing_Component, Id,
+                               "its component " & Component
+                               & " is neither listed nor found in the repository");
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
+      end;
+
+      --  What the readiness index says is ready, with a dependency that is
+      --  not complete.
+      declare
+         Cache  : Records.Item;
+         Status : E.Error_Info;
+      begin
+         if Stores.Exists (Item, Indexes_Area, "readiness") then
+            Stores.Read (Item, Indexes_Area, "readiness", Cache, Status);
+            if E.Is_Ok (Status) then
+               for Id of Tasks.List (Item) loop
+                  if Records.Get (Cache, "task." & Id) = "ready" then
+                     declare
+                        Defined : Records.Item;
+                        Read    : E.Error_Info;
+                     begin
+                        Tasks.Definition (Item, Id, Defined, Read);
+                        for Other of Lines_Of (Records.Get (Defined, "depends_on")) loop
+                           if Stores.Exists (Item, Tasks_Area, Other)
+                             and then Tasks.State_Of (Item, Other) /= "complete"
+                           then
+                              Found (Ready_With_Open_Dependency, Id,
+                                     "it is held ready while " & Other & " is "
+                                     & Tasks.State_Of (Item, Other));
+                           end if;
+                        end loop;
+                     end;
+                  end if;
+               end loop;
+            end if;
+         end if;
       end;
 
       --  Traceability to symbols the repository does not have, as far as

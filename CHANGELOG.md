@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Verification follows the change.** After a task's work, the changed
+  files are traced to what they reach and tests are selected by confidence
+  and `scalar verification.escalation`; a narrower scope runs the profile the
+  configuration names for it (`scalar verification.scope[.KIND].certain` or
+  `.component`), standing in for the task's own and given `{tests}`,
+  `{scope}` and `{component}`; anything else runs whole. The evidence and
+  `work`'s report say which scope and why. Taking a workspace in is verified
+  the same way.
+- **Consistency on demand.** `/check consistency` runs the consistency check
+  and lists each finding; opening a project says how many there are. Two
+  checks are new: a live task whose component is neither in
+  `set.components` nor named by a repository file, and a task the readiness
+  index holds ready while a dependency is not complete.
+
 - **`/reconfigure`.** Settings change by an explicit revision: the change is
   worked out from the current configuration and checked whole -- only
   settings fields, profiles that read, permissions that name a capability

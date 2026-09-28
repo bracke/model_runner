@@ -10,6 +10,7 @@ with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Schemas;
 with Model_Runner.Framework.Tasks;
+with Model_Runner.Framework.Traceability;
 with Model_Runner.Framework.Transitions;
 with Model_Runner.Framework.Workspaces;
 with Model_Runner.Platform;
@@ -235,10 +236,33 @@ package body Model_Runner.Framework.Verification is
       Task_Id  : String;
       Evidence : out Ada.Strings.Unbounded.Unbounded_String;
       Passed   : out Boolean;
-      Status   : out Model_Runner.Errors.Error_Info)
+      Status   : out Model_Runner.Errors.Error_Info;
+      Given    : Name_Lists.Vector := Name_Lists.Empty_Vector;
+      Stands_For : String := "")
    is
       Settings : constant Records.Item := Config (Item);
       Text     : constant String := Records.Get (Settings, "profile." & Profile);
+
+      --  A check's text with each {NAME} given replaced by its value -- not
+      --  ${NAME}, which a template fills in when the project is made.
+      function Filled (Template : String) return String is
+         Result : Unbounded_String := To_Unbounded_String (Template);
+      begin
+         for Pair of Given loop
+            declare
+               Equal : constant Natural := Ada.Strings.Fixed.Index (Pair, "=");
+               Mark  : constant String := "{" & Pair (Pair'First .. Equal - 1) & "}";
+               Value : constant String := Pair (Equal + 1 .. Pair'Last);
+               At_Index : Natural := Index (Result, Mark);
+            begin
+               while At_Index > 0 loop
+                  Replace_Slice (Result, At_Index, At_Index + Mark'Length - 1, Value);
+                  At_Index := Index (Result, Mark, At_Index + Value'Length);
+               end loop;
+            end;
+         end loop;
+         return To_String (Result);
+      end Filled;
       Checks   : constant Check_List := Parse_Profile (Text);
       Rules    : constant Execution.Policy := Execution.Policy_Of (Item);
       Number   : Natural;
@@ -265,6 +289,19 @@ package body Model_Runner.Framework.Verification is
       begin
          Records.Set (Value, "task", Task_Id);
          Records.Set (Value, "profile", Profile);
+         if Stands_For /= "" and then Stands_For /= Profile then
+            Records.Set (Value, "stands_for", Stands_For);
+         end if;
+         for Pair of Given loop
+            declare
+               Equal : constant Natural := Ada.Strings.Fixed.Index (Pair, "=");
+            begin
+               if Equal > Pair'First and then Pair (Equal + 1 .. Pair'Last) /= "" then
+                  Records.Set (Value, "given." & Pair (Pair'First .. Equal - 1),
+                               Pair (Equal + 1 .. Pair'Last));
+               end if;
+            end;
+         end loop;
          Records.Set (Value, "started_at", Timestamp);
          Records.Set (Value, "configuration_revision", Image (Records.Revision (Settings)));
          Records.Set
@@ -309,8 +346,8 @@ package body Model_Runner.Framework.Verification is
                  Execution.Words_Of (To_String (Next.Command));
             begin
                Execution.Run
-                 (Item, Change, Rules, To_String (Next.Command),
-                  To_String (Next.Directory), Ran, Status);
+                 (Item, Change, Rules, Filled (To_String (Next.Command)),
+                  Filled (To_String (Next.Directory)), Ran, Status);
                if E.Is_Error (Status) then
                   return;
                end if;
@@ -481,7 +518,8 @@ package body Model_Runner.Framework.Verification is
          begin
             Stores.Read (Item, Verification_Area, Name, Value, Status);
             if E.Is_Ok (Status) and then Records.Get (Value, "task") = Task_Id
-              and then Records.Get (Value, "profile") = Profile
+              and then (Records.Get (Value, "profile") = Profile
+                        or else Records.Get (Value, "stands_for") = Profile)
             then
                Result := To_Unbounded_String (Name);
             end if;
@@ -489,6 +527,83 @@ package body Model_Runner.Framework.Verification is
       end loop;
       return To_String (Result);
    end Latest;
+
+   ------------
+   -- Choose --
+   ------------
+
+   function Choose
+     (Item    : Stores.Store;
+      Task_Id : String;
+      Changed : Name_Lists.Vector) return Choice
+   is
+      use type Traceability.Scope;
+      Result    : Choice;
+      Settings  : constant Records.Item := Config (Item);
+      Own       : constant String := Profile_Of (Item, Task_Id);
+      Defined   : Records.Item;
+      Read      : E.Error_Info;
+      Selected  : Traceability.Selection;
+      Tests     : Unbounded_String;
+   begin
+      Tasks.Definition (Item, Task_Id, Defined, Read);
+      if Changed.Is_Empty then
+         Selected :=
+           (Width  => Traceability.Full_Suite,
+            Reason => To_Unbounded_String ("nothing it changed can be traced"),
+            others => <>);
+      else
+         declare
+            Project : constant String :=
+              Ada.Directories.Containing_Directory (Stores.Root (Item));
+            Graph   : constant Traceability.Graph :=
+              Traceability.Build (Item, Repository.Scan (Project));
+         begin
+            Selected := Traceability.Select_Tests
+              (Item, Traceability.Impact_Of (Graph, Changed));
+         end;
+      end if;
+
+      declare
+         Width : constant String :=
+           (case Selected.Width is
+              when Traceability.Certain_Tests   => "certain",
+              when Traceability.Component_Tests => "component",
+              when Traceability.Full_Suite      => "full");
+         Kind  : constant String := Records.Get (Defined, "kind");
+         Named : constant String :=
+           (if Width = "full" then ""
+            elsif Records.Get (Settings, "scalar.verification.scope." & Kind & "." & Width) /= ""
+            then Records.Get (Settings, "scalar.verification.scope." & Kind & "." & Width)
+            else Records.Get (Settings, "scalar.verification.scope." & Width));
+      begin
+         Result.Scope := To_Unbounded_String
+           (case Selected.Width is
+              when Traceability.Certain_Tests   => "certain_tests",
+              when Traceability.Component_Tests => "component_tests",
+              when Traceability.Full_Suite      => "full_suite");
+         Result.Reason := Selected.Reason;
+         if Named /= "" and then Records.Get (Settings, "profile." & Named) /= "" then
+            Result.Profile := To_Unbounded_String (Named);
+            Result.Stands_For := To_Unbounded_String (Own);
+         else
+            Result.Profile := To_Unbounded_String (Own);
+            if Width /= "full" then
+               Append (Result.Reason, "; no narrower profile is configured, so "
+                       & (if Own = "" then "none" else Own) & " runs whole");
+            end if;
+         end if;
+      end;
+
+      for Test of Selected.Tests loop
+         Append (Tests, (if Tests = Null_Unbounded_String then "" else " ") & Test);
+      end loop;
+      Result.Given.Append ("tests=" & To_String (Tests));
+      Result.Given.Append ("scope=" & To_String (Result.Scope));
+      Result.Given.Append ("component=" & Records.Get (Defined, "component"));
+      Result.Given.Append ("reason=" & To_String (Result.Reason));
+      return Result;
+   end Choose;
 
    -----------
    -- Gates --

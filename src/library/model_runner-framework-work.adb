@@ -6,6 +6,7 @@ with Hostkit.Fs;
 
 with Model_Runner.Framework.Agents;
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Invocations;
@@ -426,6 +427,20 @@ package body Model_Runner.Framework.Work is
          for Id of Moved loop
             Said.Append (Id & " changed its verification");
          end loop;
+      end;
+
+      --  8: what is still wrong, for someone to settle.
+      declare
+         Wrong : constant Consistency.Finding_List := Consistency.Check (Item);
+      begin
+         if Consistency.Length (Wrong) > 0 then
+            Said.Append
+              ("what does not hold together in the state:"
+               & Natural'Image (Consistency.Length (Wrong)) & ", first "
+               & To_String (Consistency.Element (Wrong, 1).Subject) & ": "
+               & To_String (Consistency.Element (Wrong, 1).Detail)
+               & "; /check consistency lists it all");
+         end if;
       end;
    end Recover_On_Opening;
 
@@ -1371,16 +1386,23 @@ package body Model_Runner.Framework.Work is
          end;
       end if;
 
+      --  Verified as widely as what it changed reaches, by the project's
+      --  policy: a model has no say in it.
       declare
-         Profile : constant String := Verification.Profile_Of (Item, Task_Id);
+         Chosen  : constant Verification.Choice :=
+           Verification.Choose (Item, Task_Id, Result.Changed_Files);
+         Profile : constant String := To_String (Chosen.Profile);
          Passed  : Boolean := False;
       begin
+         Result.Scope := Chosen.Scope;
+         Result.Scope_Reason := Chosen.Reason;
          if Profile = "" then
             Conclude ("blocked", "no verification profile applies to it", "completed");
             return;
          end if;
          Verification.Run_Profile
-           (Item, Change, Profile, Task_Id, Result.Evidence_Id, Passed, Status);
+           (Item, Change, Profile, Task_Id, Result.Evidence_Id, Passed, Status,
+            Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For));
          if E.Is_Error (Status) then
             Held := Status;
             Status := E.Success;
@@ -1466,10 +1488,17 @@ package body Model_Runner.Framework.Work is
       end if;
       Result.Changed_Files := Taken;
 
-      --  The project as it is now is what is verified.
-      Verification.Run_Profile
-        (Item, Change, Verification.Profile_Of (Item, Task_Id), Task_Id,
-         Result.Evidence_Id, Passed, Held);
+      --  The project as it is now is what is verified, as widely as what was
+      --  taken in reaches.
+      declare
+         Chosen : constant Verification.Choice := Verification.Choose (Item, Task_Id, Taken);
+      begin
+         Result.Scope := Chosen.Scope;
+         Result.Scope_Reason := Chosen.Reason;
+         Verification.Run_Profile
+           (Item, Change, To_String (Chosen.Profile), Task_Id, Result.Evidence_Id, Passed, Held,
+            Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For));
+      end;
       if E.Is_Ok (Held) then
          Stores.Commit (Item, Change, Status);
       else

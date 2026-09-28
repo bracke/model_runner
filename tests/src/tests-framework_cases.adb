@@ -3633,6 +3633,116 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Permissions_And_Proposals_Reach_The_Work;
 
+   --  How widely work is verified follows what it changed and the
+   --  project's policy: with nothing narrower configured the whole profile
+   --  runs and says why; where the policy tests narrowly and names a
+   --  profile for that, it runs in the task's profile's place -- given the
+   --  scope it runs for -- and completes the task.
+   procedure Verification_Follows_What_Changed
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Status : E.Error_Info;
+      Done   : Wk.Report;
+      Value  : R.Item;
+
+      procedure Work (Name : String) is
+         Change : S.Transaction;
+         Id     : Unbounded_String;
+      begin
+         Tk.Create (Store, Change, Fields (Name, "analysis"), "user", "", Id, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Wk.Execute (Store, To_String (Id),
+                     Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                                     Answer => To_Unbounded_String
+                                       ("status: done" & LF & "summary: x"),
+                                     Broken => False),
+                     Cx.Profile (Store, ""), Done, Status);
+      end Work;
+   begin
+      Task_Project
+        (Store, "scoped",
+         "set execution.allowed = test" & LF
+         & "profile checks = exists: test -f src/hello.adb" & LF
+         & "scalar verification.default = checks" & LF);
+      Work ("Whole");
+      Assert (To_String (Done.Final_State) = "complete"
+              and then To_String (Done.Scope) = "full_suite"
+              and then Length (Done.Scope_Reason) > 0,
+              "work was not verified whole, with why: " & To_String (Done.Scope) & " "
+              & To_String (Done.Reason));
+      S.Close (Store);
+
+      Task_Project
+        (Store, "scoped-narrow",
+         "set execution.allowed = test" & LF
+         & "profile checks = exists: test -f src/hello.adb" & LF
+         & "profile quick = scoped: test {scope} = certain_tests" & LF
+         & "scalar verification.default = checks" & LF
+         & "scalar verification.escalation = narrow" & LF
+         & "scalar verification.scope.certain = quick" & LF);
+      Work ("Narrow");
+      Assert (To_String (Done.Final_State) = "complete"
+              and then To_String (Done.Scope) = "certain_tests",
+              "narrow verification did not stand for the task's profile: "
+              & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+      S.Read (Store, Model_Runner.Framework.Verification_Area, To_String (Done.Evidence_Id),
+              Value, Status);
+      Assert (R.Get (Value, "profile") = "quick" and then R.Get (Value, "stands_for") = "checks"
+              and then R.Get (Value, "given.scope") = "certain_tests",
+              "the evidence does not say what it was run for");
+      S.Close (Store);
+   end Verification_Follows_What_Changed;
+
+   --  The consistency check sees a task tied to a component the project
+   --  does not have, and one held ready while what it depends on is open.
+   procedure Consistency_Sees_Components_And_Readiness
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Cs renames Model_Runner.Framework.Consistency;
+      use type Cs.Finding_Kind;
+      Store  : S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      First  : Unbounded_String;
+      Second : Unbounded_String;
+      Cache  : R.Item :=
+        R.Create (Model_Runner.Framework.Schemas.Readiness_Schema, 1, "READINESS", 1);
+
+      function Has (Kind : Cs.Finding_Kind; Subject : String) return Boolean is
+         Found : constant Cs.Finding_List := Cs.Check (Store);
+      begin
+         return (for some Index in 1 .. Cs.Length (Found) =>
+                   Cs.Element (Found, Index).Kind = Kind
+                   and then To_String (Cs.Element (Found, Index).Subject) = Subject);
+      end Has;
+   begin
+      Task_Project (Store, "consistency-more");
+      Tk.Create (Store, Change, Fields ("First", "implementation", "component", "nowhere"),
+                 "user", "", First, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Create (Store, Change, Fields ("Second", "analysis", "depends_on", To_String (First)),
+                 "user", "", Second, Status);
+      S.Commit (Store, Change, Status);
+      Assert (Has (Cs.Missing_Component, To_String (First)),
+              "a component the project does not have went unseen");
+
+      if S.Exists (Store, Model_Runner.Framework.Indexes_Area, "readiness") then
+         S.Read (Store, Model_Runner.Framework.Indexes_Area, "readiness", Cache, Status);
+         R.Set_Revision (Cache, R.Revision (Cache) + 1);
+      end if;
+      R.Set (Cache, "task." & To_String (Second), "ready");
+      S.Put (Change, Model_Runner.Framework.Indexes_Area, "readiness", Cache);
+      S.Commit (Store, Change, Status);
+      Assert (Has (Cs.Ready_With_Open_Dependency, To_String (Second)),
+              "a task held ready with an open dependency went unseen");
+      S.Close (Store);
+   end Consistency_Sees_Components_And_Readiness;
+
    --  A change to the configuration is worked out first -- what it
    --  changes and reaches -- and refused where it touches what is not a
    --  setting or does not read; made, it is a new revision in the history,
@@ -4287,6 +4397,12 @@ package body Tests.Framework_Cases is
         (T, Recursion_Stays_Bounded'Access,
          "children stay within limits and permissions, failures and"
          & " cancellation are seen");
+      Register_Routine
+        (T, Verification_Follows_What_Changed'Access,
+         "how widely work is verified follows what it changed and the policy");
+      Register_Routine
+        (T, Consistency_Sees_Components_And_Readiness'Access,
+         "the consistency check sees missing components and false readiness");
       Register_Routine
         (T, Configuration_Changes_Explicitly'Access,
          "the configuration changes by an explicit, validated, recorded revision");
