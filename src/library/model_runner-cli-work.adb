@@ -17,7 +17,6 @@ with Model_Runner.Framework.Orchestration;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
-with Model_Runner.Framework.Work;
 with Model_Runner.Localization;
 with Model_Runner.Text;
 
@@ -178,13 +177,11 @@ package body Model_Runner.CLI.Work is
       end if;
    end Run;
 
-   ---------
-   -- Run --
-   ---------
-
-   procedure Run
+   --  The command, with the agent given or chosen from the configuration.
+   procedure Drive
      (Item   : Model_Runner.CLI.Options.Command;
       Screen : in out Model_Runner.Presentation.Console;
+      Given_Runner : access constant W.Agent_Runner'Class;
       Status : out Natural)
    is
       Directory : constant String :=
@@ -347,7 +344,10 @@ package body Model_Runner.CLI.Work is
             Command : constant String := R.Get (Config, "scalar.work.agent");
             Path    : constant String := Setting ("model", "");
          begin
-            if Command /= "" then
+            if Given_Runner /= null then
+               W.Execute
+                 (Store, To_String (Chosen), Given_Runner.all, Model, Done, Outcome);
+            elsif Command /= "" then
                W.Execute
                  (Store, To_String (Chosen),
                   Command_Agent'(Store => Store'Access, Command => To_Unbounded_String (Command)),
@@ -396,6 +396,31 @@ package body Model_Runner.CLI.Work is
          Status := E.Exit_Input_Output;
       end if;
       S.Close (Store);
+   end Drive;
+
+   ---------
+   -- Run --
+   ---------
+
+   procedure Run
+     (Item   : Model_Runner.CLI.Options.Command;
+      Screen : in out Model_Runner.Presentation.Console;
+      Status : out Natural) is
+   begin
+      Drive (Item, Screen, null, Status);
    end Run;
+
+   --------------
+   -- Run_With --
+   --------------
+
+   procedure Run_With
+     (Item   : Model_Runner.CLI.Options.Command;
+      Screen : in out Model_Runner.Presentation.Console;
+      Runner : Model_Runner.Framework.Work.Agent_Runner'Class;
+      Status : out Natural) is
+   begin
+      Drive (Item, Screen, Runner'Unchecked_Access, Status);
+   end Run_With;
 
 end Model_Runner.CLI.Work;

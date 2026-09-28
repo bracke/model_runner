@@ -21,6 +21,11 @@ with Model_Runner.Tools;
 --    /exit   /reset   /help   /settings   /stats   /context   /system [TEXT]
 --    /tools  /tool TEXT
 --
+--  and the project's own -- /init, /task, /work, /state and the rest --
+--  which CLI.Project_Commands carries out between turns: the session is
+--  where a project is developed, and /work runs the session's own model on
+--  a task in a conversation apart from the one on the screen.
+--
 --  /system with no text removes the system message, which is otherwise the
 --  one thing a session cannot undo: --system sets one before the first turn
 --  and /system TEXT replaces it, and without this there is no way back to a

@@ -20,6 +20,25 @@ package body Model_Runner.Framework.Invocations is
    function Image (Value : Natural) return String
    is (Trim (Natural'Image (Value)));
 
+   --  A value as a model may have written it in JSON: without the quotes
+   --  and the comma around it, or the brackets of an empty list.
+   function Unquoted (Text : String) return String is
+      First : Natural := Text'First;
+      Last  : Natural := Text'Last;
+   begin
+      while Last >= First and then Text (Last) in ',' | ' ' loop
+         Last := Last - 1;
+      end loop;
+      if Last > First and then Text (First) = '"' and then Text (Last) = '"' then
+         First := First + 1;
+         Last := Last - 1;
+      end if;
+      if Text (First .. Last) = "[]" then
+         return "";
+      end if;
+      return Text (First .. Last);
+   end Unquoted;
+
    --  The lifecycle of an invocation: started, then ended once.
    function Machine return Transitions.Machine is
       Result : Transitions.Machine;
@@ -107,11 +126,11 @@ package body Model_Runner.Framework.Invocations is
          declare
             Colon : constant Natural := Ada.Strings.Fixed.Index (Line, ":");
             Name  : constant String :=
-              (if Colon = 0 then "" else Lower (Trim (Line (Line'First .. Colon - 1))));
+              (if Colon = 0 then "" else Unquoted (Lower (Trim (Line (Line'First .. Colon - 1)))));
          begin
             if Name /= "" and then Rules.Fields.Contains (Name) then
                Current := To_Unbounded_String (Name);
-               Result.Values.Include (Name, Trim (Line (Colon + 1 .. Line'Last)));
+               Result.Values.Include (Name, Unquoted (Trim (Line (Colon + 1 .. Line'Last))));
             elsif Current /= Null_Unbounded_String then
                declare
                   Held : constant String := Result.Values (To_String (Current));

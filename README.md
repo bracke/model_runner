@@ -88,14 +88,24 @@ invocations and their context manifests), and what is derived from them
 transaction that an interrupted session finishes or undoes on the next
 open; nothing is kept in a conversation.
 
+The commands are typed in the conversation, between turns, in the project
+directory: `model_runner run MODEL --interactive`, then
+
 ```
-model_runner init ada-cli --set project_name=hello   start from a template
-model_runner task new "Read input" --set kind=implementation --set component=io
-model_runner task accept TASK-IO-001
-model_runner work TASK-IO-001 --set model=MODEL      context, call, verify, complete
-model_runner task plan                                what can start, what waits
-model_runner repo impact src/io.adb                   what a change reaches
+/init ada-cli project_name=hello        start from a template
+/task new "Read input" kind=implementation component=io
+/accept                                  the one candidate waiting
+/work TASK-IO-001                        this model does the task: context,
+                                         call, verify, complete
+/state                                   where the project stands
+/task plan   /check   /req   /impact src/io.adb   /trace TASK-IO-001
 ```
+
+`/work` gives the session's own model the task in a conversation of its
+own, built from the project state, with the file tools and nothing else;
+the conversation on the screen is left as it was. The same commands run
+outside a session too -- `model_runner init|task|repo|work`, with
+`--set NAME=VALUE` for the words -- for scripts.
 
 Kinds of project, task kinds, verification profiles, execution policy,
 permissions and automation rules are all the project's configuration,

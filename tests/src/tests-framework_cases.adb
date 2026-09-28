@@ -5,6 +5,8 @@ with Ada.Strings.Unbounded;
 
 with AUnit.Assertions;
 
+with Model_Runner.CLI.Options;
+with Model_Runner.CLI.Work;
 with Model_Runner.Errors;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Authority;
@@ -34,6 +36,9 @@ with Model_Runner.Framework.Transitions;
 with Model_Runner.Framework.Verification;
 with Model_Runner.Framework.Work;
 with Model_Runner.Framework.Workspaces;
+with Model_Runner.Localization;
+with Model_Runner.Platform;
+with Model_Runner.Presentation;
 with Model_Runner.Text;
 
 package body Tests.Framework_Cases is
@@ -2978,6 +2983,61 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Work_Runs_A_Task_Through;
 
+   --  The command a session's /work runs takes the agent it is handed --
+   --  the session's own model there, a scripted one here -- and carries the
+   --  task through as the command line's work does.
+   procedure Work_Runs_With_A_Given_Agent
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store   : S.Store;
+      Status  : E.Error_Info;
+      Change  : S.Transaction;
+      Id      : Unbounded_String;
+      Root    : Unbounded_String;
+      Catalog : aliased Model_Runner.Localization.Catalog;
+      Screen  : Model_Runner.Presentation.Console;
+      Options : Model_Runner.CLI.Options.Command;
+      Exit_Status : Natural;
+      Report  : S.Recovery_Report;
+   begin
+      Task_Project
+        (Store, "work-given",
+         "set execution.allowed = test" & LF
+         & "profile checks = exists: test -f src/hello.adb" & LF
+         & "scalar verification.default = checks" & LF);
+      Tk.Create (Store, Change, Fields ("Given", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Root := To_Unbounded_String (Fresh_Root (Store));
+      S.Close (Store);
+
+      Model_Runner.Localization.Open
+        (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+      Model_Runner.Presentation.Open
+        (Screen, Catalog'Unchecked_Access, Model_Runner.CLI.Options.Color_Never,
+         (Output_Is_Terminal => False, Error_Is_Terminal => False,
+          Input_Is_Terminal  => False, Colour_Suppressed => True),
+         Model_Runner.CLI.Options.Quiet);
+      Options.Project_Directory := Model_Runner.Text.To_Bounded (To_String (Root));
+      Options.Action_Argument := Model_Runner.Text.To_Bounded (To_String (Id));
+      Model_Runner.CLI.Work.Run_With
+        (Options, Screen,
+         Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                         Answer => To_Unbounded_String
+                           ("status: done" & LF & "summary: wrote hello" & LF
+                            & "changed_files: src/hello.adb"),
+                         Broken => False),
+         Exit_Status);
+
+      S.Open (Store, To_String (Root), Report, Status);
+      Assert (Exit_Status = 0 and then Tk.State_Of (Store, To_String (Id)) = "complete",
+              "the given agent's work did not complete the task:"
+              & Natural'Image (Exit_Status) & " " & Tk.State_Of (Store, To_String (Id)));
+      S.Close (Store);
+   end Work_Runs_With_A_Given_Agent;
+
    package Ws renames Model_Runner.Framework.Workspaces;
 
    --  Work written in a workspace stays out of the project until it is
@@ -3650,6 +3710,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Work_Runs_A_Task_Through'Access,
          "one task runs from ready through verification to where it ends");
+      Register_Routine
+        (T, Work_Runs_With_A_Given_Agent'Access,
+         "the work command runs a task on the agent it is handed");
       Register_Routine
         (T, Execution_Follows_Policy'Access,
          "only what the policy allows is run, directly, and its output kept");

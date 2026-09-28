@@ -266,8 +266,6 @@ package body Model_Runner.Framework.Verification is
          Records.Set (Value, "task", Task_Id);
          Records.Set (Value, "profile", Profile);
          Records.Set (Value, "started_at", Timestamp);
-         Records.Set (Value, "repository_revision", Repository_Now (Item));
-         Records.Set (Value, "workspace_revision", Repository_Now (Item));
          Records.Set (Value, "configuration_revision", Image (Records.Revision (Settings)));
          Records.Set
            (Value, "configuration_fingerprint",
@@ -351,6 +349,11 @@ package body Model_Runner.Framework.Verification is
             end;
          end loop;
 
+         --  The files as the checks left them: a build writes sources of
+         --  its own -- Alire's config/ is one -- and evidence taken before
+         --  it would be out of date the moment it was recorded.
+         Records.Set (Value, "repository_revision", Repository_Now (Item));
+         Records.Set (Value, "workspace_revision", Repository_Now (Item));
          Records.Set (Value, "passed", (if Passed then "true" else "false"));
          Records.Set (Value, "ended_at", Timestamp);
          Stores.Put (Change, Verification_Area, To_String (Evidence), Value);

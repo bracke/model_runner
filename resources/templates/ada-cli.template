@@ -18,3 +18,4 @@ input project_name
 scalar project.kind = executable
 file alire.toml = name = "${project_name}"\ndescription = ""\nversion = "0.1.0-dev"\n\nexecutables = ["${project_name}"]\n
 file src/${project_name}.adb = procedure ${project_name} is\nbegin\n   null;\nend ${project_name};\n
+file ${project_name}.gpr = project ${project_name} is\n   for Source_Dirs use ("src/");\n   for Object_Dir use "obj/";\n   for Exec_Dir use "bin";\n   for Main use ("${project_name}.adb");\n   for Create_Missing_Dirs use "True";\nend ${project_name};\n

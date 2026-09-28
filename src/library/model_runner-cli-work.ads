@@ -1,4 +1,5 @@
 with Model_Runner.CLI.Options;
+with Model_Runner.Framework.Work;
 with Model_Runner.Presentation;
 
 --  The work command: run one ready task, from context to completion.
@@ -22,6 +23,19 @@ package Model_Runner.CLI.Work is
    procedure Run
      (Item   : Model_Runner.CLI.Options.Command;
       Screen : in out Model_Runner.Presentation.Console;
+      Status : out Natural);
+
+   --  Run the work command with an agent the caller supplies: the
+   --  interactive session's own model, already loaded.
+   --
+   --  @param Item The parsed command.
+   --  @param Screen Where to write.
+   --  @param Runner The agent.
+   --  @param Status The exit status.
+   procedure Run_With
+     (Item   : Model_Runner.CLI.Options.Command;
+      Screen : in out Model_Runner.Presentation.Console;
+      Runner : Model_Runner.Framework.Work.Agent_Runner'Class;
       Status : out Natural);
 
 end Model_Runner.CLI.Work;

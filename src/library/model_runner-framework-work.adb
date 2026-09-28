@@ -35,14 +35,22 @@ package body Model_Runner.Framework.Work is
    ------------------
 
    function Instructions return String
-   is ("## Instructions" & ASCII.LF
-       & "Do the task above in the project's files, and nothing else." & ASCII.LF
-       & "When you have finished, answer with these lines:" & ASCII.LF
-       & "status: done, blocked, failed or issue" & ASCII.LF
-       & "summary: what you did, or why you could not" & ASCII.LF
-       & "changed_files: the files you changed, separated by commas" & ASCII.LF
-       & "issues: anything you found that is outside the task" & ASCII.LF
-       & "proposed_tasks: further work the project needs, one a line" & ASCII.LF);
+   is ("## What to do" & ASCII.LF
+       & "Do the task now, with the tools: read_file reads a file, write_file"
+       & " writes the whole new content of a file, list_directory lists a"
+       & " directory. Paths are relative to the project. Make each change by"
+       & " calling write_file; describing a change does not make it."
+       & ASCII.LF & ASCII.LF
+       & "When the files are written, finish with a short report in these lines:"
+       & ASCII.LF & ASCII.LF
+       & "status: done" & ASCII.LF
+       & "summary: one line on what you did" & ASCII.LF
+       & "changed_files: the files you wrote" & ASCII.LF & ASCII.LF
+       & "If you could not do it, the status is failed and the summary says"
+       & " why. Two other statuses are for rare cases: issue, for a problem"
+       & " found outside the task, and blocked, for a decision only a person"
+       & " can make. Further work you found goes in proposed_tasks:, one a"
+       & " line." & ASCII.LF);
 
    --  A setting of the configuration's work.
    function Work_Setting (Item : Stores.Store; Name : String) return String is
@@ -544,7 +552,24 @@ package body Model_Runner.Framework.Work is
          Verification.Complete_Task (Item, Change, Task_Id, Held);
          if E.Is_Error (Held) then
             Change := Stores.No_Changes;
-            Conclude ("blocked", "its gates did not pass", "completed");
+            declare
+               Failing : Unbounded_String;
+               Judged  : constant Verification.Gate_List := Verification.Gates (Item, Task_Id);
+            begin
+               for Index in 1 .. Verification.Length (Judged) loop
+                  declare
+                     Next : constant Verification.Gate := Verification.Element (Judged, Index);
+                  begin
+                     if not Next.Passed then
+                        Append (Failing, (if Failing = Null_Unbounded_String then "" else "; ")
+                                         & To_String (Next.Name) & ": "
+                                         & To_String (Next.Reason));
+                     end if;
+                  end;
+               end loop;
+               Conclude ("blocked", "its gates did not pass: " & To_String (Failing),
+                         "completed");
+            end;
             return;
          end if;
          Verification.Reevaluate_Requirements (Item, Change, Result.Requirements, Status);

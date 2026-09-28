@@ -22,15 +22,22 @@ package body Model_Runner.Framework.Context is
    --  What every context starts with: how the harness expects to be
    --  answered, whatever the project.
    Harness_Rules : constant String :=
-     "You are working on one task of a project whose state the harness"
-     & " keeps. Work only within the task's scope. Do not change project"
-     & " state yourself: report what you did and what you found in the"
-     & " structured form you are asked for, and the harness decides what"
-     & " follows. If you find more work than the task holds, report it as an"
-     & " issue rather than doing it.";
+     "You are doing one task in a project. Change the project's files as"
+     & " the task needs, and nothing outside the task. The harness keeps"
+     & " the project's records -- tasks, requirements, verification -- and"
+     & " decides from your answer and its own checks what happens next, so"
+     & " say plainly what you did. If you find more work than the task"
+     & " holds, report it as an issue rather than doing it.";
 
    function Lower (Text : String) return String
    renames Ada.Characters.Handling.To_Lower;
+
+   type Name_Text is access constant String;
+
+   --  The task's fields that say what it is.
+   Wanted_Fields : constant array (1 .. 6) of Name_Text :=
+     [new String'("title"), new String'("kind"), new String'("component"),
+      new String'("requirements"), new String'("depends_on"), new String'("notes")];
 
    function Image (Value : Natural) return String
    is (Ada.Strings.Fixed.Trim (Natural'Image (Value), Ada.Strings.Both));
@@ -192,8 +199,30 @@ package body Model_Runner.Framework.Context is
              & (if Records.Get (Config, "scalar.context.rules") = "" then ""
                 else ASCII.LF & Records.Get (Config, "scalar.context.rules")));
 
-      --  The task as it is to be done.
-      Offer (Task_Id & "#effective", "task", Mandatory, Fields_Of (View, "definition."));
+      --  The task as it is to be done: what it is, not its bookkeeping.
+      declare
+         Text : Unbounded_String;
+      begin
+         for Name of Wanted_Fields loop
+            if Records.Get (View, "definition." & Name.all) /= "" then
+               Append (Text, Name.all & ": " & Records.Get (View, "definition." & Name.all)
+                       & ASCII.LF);
+            end if;
+         end loop;
+         for Index in 1 .. Records.Field_Count (View) loop
+            declare
+               Field : constant String := Records.Field_Name (View, Index);
+            begin
+               if Field'Length > 17 and then Field (Field'First .. Field'First + 16)
+                                              = "definition.field."
+               then
+                  Append (Text, Field (Field'First + 17 .. Field'Last) & ": "
+                          & Records.Get (View, Field) & ASCII.LF);
+               end if;
+            end;
+         end loop;
+         Offer (Task_Id & "#effective", "task", Mandatory, To_String (Text));
+      end;
 
       --  The requirements it serves, at their revisions.
       for Index in 1 .. Records.Field_Count (View) loop
@@ -235,17 +264,25 @@ package body Model_Runner.Framework.Context is
          end;
       end loop;
 
-      --  Where the task stands.
+      --  Where the task stands: which attempt this is.
       Offer (Task_Id & "#runtime", "runtime", High,
-             "state: " & Records.Get (View, "runtime.state") & ASCII.LF
-             & "generation: " & Records.Get (View, "runtime.generation")
-             & (if Records.Get (View, "blocked_by") = "" then ""
-                else ASCII.LF & "not ready because: " & Records.Get (View, "blocked_by")));
+             "attempt: " & Records.Get (View, "runtime.generation"));
 
       --  How the project is configured, as far as work on it goes.
-      Offer ("CONFIG@" & Image (Result.Config_Revision), "configuration", High,
-             Fields_Of (Config, "scalar.") & Fields_Of (Config, "adapter.")
-             & Fields_Of (Config, "profile."));
+      declare
+         Kind : constant String := Records.Get (View, "definition.kind");
+         Profile_Name : constant String :=
+           (if Records.Get (Config, "scalar.task.profile." & Kind) /= ""
+            then Records.Get (Config, "scalar.task.profile." & Kind)
+            else Records.Get (Config, "scalar.verification.default"));
+      begin
+         Offer ("CONFIG@" & Image (Result.Config_Revision), "configuration", High,
+                Fields_Of (Config, "fact.") & Fields_Of (Config, "scalar.build.")
+                & Fields_Of (Config, "adapter.")
+                & (if Records.Get (Config, "profile." & Profile_Name) = "" then ""
+                   else "verification: " & Records.Get (Config, "profile." & Profile_Name)
+                        & ASCII.LF));
+      end;
 
       --  The accepted specifications for the project and the component.
       for Id of Intent.List (Item, Intent.Specification, "accepted") loop
@@ -387,9 +424,30 @@ package body Model_Runner.Framework.Context is
 
    function Rendered (From : Built) return String is
       Text : Unbounded_String;
+
+      --  A heading a reader, or a model, takes for what it is rather than
+      --  for an identifier to call.
+      function Heading (Next : Item) return String is
+         Kind : constant String := To_String (Next.Kind);
+         Id   : constant String := To_String (Next.Id);
+      begin
+         if Kind = "rules" then
+            return "Rules";
+         elsif Kind = "task" then
+            return "The task, " & Id (Id'First .. Ada.Strings.Fixed.Index (Id, "#") - 1);
+         elsif Kind = "runtime" then
+            return "Where the task stands";
+         elsif Kind = "configuration" then
+            return "The project's configuration";
+         elsif Kind = "source" then
+            return "The file " & Id (Id'First + 5 .. Id'Last);
+         else
+            return "The " & Kind & " " & Id;
+         end if;
+      end Heading;
    begin
       for Next of From.Included loop
-         Append (Text, "## " & To_String (Next.Id) & ASCII.LF
+         Append (Text, "## " & Heading (Next) & ASCII.LF
                  & To_String (Next.Text) & ASCII.LF & ASCII.LF);
       end loop;
       return To_String (Text);

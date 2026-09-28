@@ -14,6 +14,7 @@ with Ada.Strings.Unbounded;
 with Ada.Text_IO.Text_Streams;
 with Captured_Output;
 with Model_Runner.CLI.Choosers;
+with Model_Runner.CLI.Project_Commands;
 with Model_Runner.Framework;
 with Project_Tools.Files;
 with Project_Tools.Processes;
@@ -1845,6 +1846,25 @@ package body Tests.CLI_Cases is
       Assert (Repo ("sym", "nothing_here") = 2, "a missing symbol was found");
       Assert (Repo ("refs", "") = 2, "refs without a name was taken");
    end Repo_Command_Answers;
+
+   --  The project's commands are the conversation's: each is recognised
+   --  there, and nothing that only looks like one is.
+   procedure Project_Commands_Are_Recognised
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package P renames Model_Runner.CLI.Project_Commands;
+   begin
+      Assert (P.Is_Project_Command ("/task") and then P.Is_Project_Command ("/work")
+              and then P.Is_Project_Command ("/state")
+              and then P.Is_Project_Command ("/impact")
+              and then P.Is_Project_Command ("/accept"),
+              "a project command is not recognised in the conversation");
+      Assert (not P.Is_Project_Command ("/tasks")
+              and then not P.Is_Project_Command ("task")
+              and then not P.Is_Project_Command ("/reset"),
+              "something that is not a project command was taken for one");
+   end Project_Commands_Are_Recognised;
 
    --  An inspection that named a feed-forward width and nothing else
    --  described a block a mixture-of-experts model does not have: the file
@@ -12112,6 +12132,9 @@ package body Tests.CLI_Cases is
         (T, Beginning_Marker_Follows_The_Vocabulary'Access,
          "a vocabulary that declares it wants no beginning marker is not "
          & "given one");
+      Register_Routine
+        (T, Project_Commands_Are_Recognised'Access,
+         "the project's commands are recognised in the conversation");
       Register_Routine
         (T, Repo_Command_Answers'Access,
          "repo answers what a symbol is, where it is used, what depends on"

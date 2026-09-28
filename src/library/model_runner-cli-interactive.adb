@@ -1,7 +1,9 @@
+with Ada.Strings.Fixed;
 with Ada.Text_IO;
 with Ada.Unchecked_Deallocation;
 
 with Model_Runner.CLI.Checkpoint;
+with Model_Runner.CLI.Project_Commands;
 with Model_Runner.Clocks;
 with Model_Runner.Conversation;
 with Model_Runner.Entropy;
@@ -232,7 +234,14 @@ package body Model_Runner.CLI.Interactive is
         L.Vocabulary (Prepared);
 
       Messages : Conv.History;
-      Stop_Set : Model_Runner.Stops.Set;
+      Stop_Set : aliased Model_Runner.Stops.Set;
+
+      --  The session's own model, as the agent /work runs on a task.
+      Asked_For : aliased constant Opt.Command := Item;
+      Worker    : Model_Runner.CLI.Project_Commands.Session_Agent
+        (Prepared'Unchecked_Access, Session'Unchecked_Access,
+         Stop_Set'Unchecked_Access, Screen'Unchecked_Access,
+         Asked_For'Unchecked_Access);
       Sink     : aliased Pres.Standard_Output_Sink;
       Clock    : aliased Model_Runner.Clocks.System_Clock;
       Seeds    : aliased Model_Runner.Entropy.Host_Source;
@@ -361,9 +370,18 @@ package body Model_Runner.CLI.Interactive is
       --  Handle one slash command. Returns True when the input was a command.
       function Handle_Command (Line : String) return Boolean is
          Asked : constant Parsed_Command := Parse (Line);
+         Space : constant Natural := Ada.Strings.Fixed.Index (Line, " ");
+         First : constant String :=
+           (if Space = 0 then Line else Line (Line'First .. Space - 1));
       begin
          if Asked.Kind = Not_A_Command then
             return False;
+         end if;
+
+         --  The project's own commands, between turns.
+         if Model_Runner.CLI.Project_Commands.Is_Project_Command (First) then
+            Model_Runner.CLI.Project_Commands.Run (Line, Screen, Worker);
+            return True;
          end if;
 
          if Asked.Kind = Leave then
@@ -393,6 +411,7 @@ package body Model_Runner.CLI.Interactive is
                   end;
                end if;
             end loop;
+            Model_Runner.CLI.Project_Commands.Help (Screen);
 
          elsif Asked.Kind = Settings then
             Show_Settings;

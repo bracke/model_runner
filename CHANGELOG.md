@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The project's commands are typed in the conversation.** In `run
+  --interactive`, between turns: `/init`, `/bootstrap`, `/state`,
+  `/config`, `/task`, `/accept`, `/reject`, `/work`, `/cancel`, `/check`,
+  `/req`, `/result`, `/tree`, `/sym`, `/refs`, `/impact` and `/trace`, on
+  the project in the session's directory. `/work` runs the session's own
+  model on the task -- its context built from the project state, in a
+  conversation apart from the one on the screen, with the file tools only
+  -- and then verifies and completes it through its gates. The agent is
+  told to change files with `write_file` and answer in plain lines, and
+  an answer written as JSON is read too, and so is a call written without
+  its `<tool_call>` envelope. A model that answers without calling a tool
+  is told nothing changed and goes on, twice at most. Checked end to end
+  with Steelman-14B: the task is written, built, verified and complete.
+
 - **Routine progression without a model (Phase N).** Automation rules --
   `list automation.rules` of `EVENT: ACTION`, with defaults that derive
   tasks from accepted and revised requirements, reevaluate requirements
@@ -769,6 +783,15 @@ Keep a Changelog and the project uses semantic versioning.
   IQ3_S and IQ2_XXS.
 
 ### Fixed
+
+- **A fresh Ada project builds.** `ada-cli` and `ada-library` wrote an
+  `alire.toml` naming a project file they did not write; each now writes
+  its `.gpr`. A fresh project's tests check is optional until it has a
+  tests crate.
+- **Verification's evidence is current when it is recorded.** The files'
+  fingerprint is taken after the checks run, so the sources a build writes
+  -- Alire's `config/` -- no longer leave every task blocked at its gates.
+  A task blocked at its gates now says which.
 
 - **A session keeps the arithmetic it opened in.** Whether the processor's
   products quantize their activations was one process-wide setting, read by
