@@ -7,6 +7,12 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **C, C++, Rust and Python adapters.** `Repository.Languages` reads each
+  file's unit, its includes, uses or imports, its outer-level functions,
+  types, macros, traits, classes and methods, what extends or implements
+  what, and afterwards where the names it can see are used and called.
+  Adapters gained `Read_References`, run once every file is read, and
+  scan and refresh dispatch on the file's language.
 - **Baselines.** A template's `baseline project.SUBJECT = TEXT` and
   `baseline language.SUBJECT = TEXT` fill the project- and language-baseline
   levels of authority; a governing baseline is in the Effective Task. The

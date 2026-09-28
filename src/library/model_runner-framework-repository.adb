@@ -9,6 +9,7 @@ with Hostkit.Fs;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Records;
+with Model_Runner.Framework.Repository.Languages;
 with Model_Runner.Framework.Schemas;
 
 package body Model_Runner.Framework.Repository is
@@ -184,7 +185,9 @@ package body Model_Runner.Framework.Repository is
          return "GPR";
       elsif Ends (".c") or else Ends (".h") then
          return "C";
-      elsif Ends (".cpp") or else Ends (".hpp") or else Ends (".cc") then
+      elsif Ends (".cpp") or else Ends (".hpp") or else Ends (".cc") or else Ends (".hh")
+        or else Ends (".cxx") or else Ends (".hxx")
+      then
          return "C++";
       elsif Ends (".rs") then
          return "Rust";
@@ -797,9 +800,22 @@ package body Model_Runner.Framework.Repository is
       end loop;
    end Find_References;
 
+   overriding procedure Read_References
+     (Self : Ada_Adapter;
+      Path : String;
+      Text : String;
+      Into : in out Graph) is
+   begin
+      Find_References (Path, Text, Into);
+   end Read_References;
+
    ---------------------------------------------------------------------------
    --  Scanning.
    ---------------------------------------------------------------------------
+
+   --  Whether a file's adapter finds references once every file is read.
+   function Reads_References (Path : String) return Boolean
+   is (Language_Of (Path) in "Ada" | "C" | "C++" | "Rust" | "Python");
 
    --  Whether a scan leaves a file or directory out: a hidden one, or one
    --  the roots skip.
@@ -816,8 +832,6 @@ package body Model_Runner.Framework.Repository is
       Within            : Roots := Default_Roots) return Graph
    is
       Result   : Graph;
-      Ada_Read : Ada_Adapter;
-      Plain    : Generic_Adapter;
       Texts    : Name_Lists.Vector;
       Paths    : Name_Lists.Vector;
 
@@ -866,13 +880,16 @@ package body Model_Runner.Framework.Repository is
                          Fingerprint => To_Unbounded_String
                                           (Fingerprint (To_String (Text))),
                          Stamp       => To_Unbounded_String (Stamp_Of (Full))));
-                     if Language_Of (Relative) = "Ada" then
-                        Read (Ada_Read, Relative, To_String (Text), Result);
-                        Paths.Append (Relative);
-                        Texts.Append (To_String (Text));
-                     else
-                        Read (Plain, Relative, To_String (Text), Result);
-                     end if;
+                     declare
+                        Reader : constant Adapter'Class :=
+                          Languages.Adapter_For (Language_Of (Relative));
+                     begin
+                        Reader.Read (Relative, To_String (Text), Result);
+                        if Reads_References (Relative) then
+                           Paths.Append (Relative);
+                           Texts.Append (To_String (Text));
+                        end if;
+                     end;
                   end;
                end if;
             exception
@@ -890,7 +907,8 @@ package body Model_Runner.Framework.Repository is
       --  References need every symbol, so they come after every file.
       for Index in 1 .. Natural (Paths.Length) loop
          Result.Reading := To_Unbounded_String (Paths (Index));
-         Find_References (Paths (Index), Texts (Index), Result);
+         Languages.Adapter_For (Language_Of (Paths (Index))).Read_References
+           (Paths (Index), Texts (Index), Result);
       end loop;
       Result.Reading := Null_Unbounded_String;
       return Result;
@@ -907,8 +925,6 @@ package body Model_Runner.Framework.Repository is
       Within            : Roots := Default_Roots) return Graph
    is
       Result   : Graph;
-      Ada_Read : Ada_Adapter;
-      Plain    : Generic_Adapter;
 
       --  The files there are now, in the order Scan walks them, with their
       --  stamps.
@@ -1046,11 +1062,7 @@ package body Model_Runner.Framework.Repository is
                       Role        => Role_Of (Path, Within),
                       Fingerprint => To_Unbounded_String (Fingerprint (Text)),
                       Stamp       => To_Unbounded_String (Now_Stamps (Index))));
-                  if Language_Of (Path) = "Ada" then
-                     Read (Ada_Read, Path, Text, Result);
-                  else
-                     Read (Plain, Path, Text, Result);
-                  end if;
+                  Languages.Adapter_For (Language_Of (Path)).Read (Path, Text, Result);
                end;
             else
                Add_File (Result, Kept.Files (Kept_Index (Path)));
@@ -1081,7 +1093,7 @@ package body Model_Runner.Framework.Repository is
             end if;
          end loop;
          for Path of Now_Paths loop
-            if Language_Of (Path) = "Ada" then
+            if Reads_References (Path) then
                declare
                   Own    : constant Name_Lists.Vector :=
                     Units_Of (Result, Name_Lists.To_Vector (Path, 1));
@@ -1101,7 +1113,8 @@ package body Model_Runner.Framework.Repository is
                      if not Changed.Contains (Path) then
                         Read_Again := Read_Again + 1;
                      end if;
-                     Find_References (Path, Text_Of (Path), Result);
+                     Languages.Adapter_For (Language_Of (Path)).Read_References
+                       (Path, Text_Of (Path), Result);
                   else
                      for Link of Kept.Relations loop
                         if To_String (Link.Origin) = Path and then Is_Reference (Link.Kind) then

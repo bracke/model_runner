@@ -33,6 +33,7 @@ with Model_Runner.Framework.Orchestration;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
+with Model_Runner.Framework.Repository.Languages;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Schemas;
 with Model_Runner.Framework.Stores;
@@ -2700,6 +2701,159 @@ package body Tests.Framework_Cases is
          pragma Unreferenced (Gone);
       end;
    end Repository_Is_Scanned;
+
+   --  C, Rust and Python are read by their own adapters: units, what each
+   --  brings in, what each declares, and where those names are used.
+   procedure Other_Languages_Are_Read
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Project : constant String := Fresh ("languages");
+      Found   : Rp.Graph;
+      Named   : Rp.Symbol;
+      Here    : Boolean;
+
+      function Has_Relation
+        (Kind : Rp.Relation_Kind; From, To : String) return Boolean is
+      begin
+         for Index in 1 .. Rp.Relation_Count (Found) loop
+            declare
+               use type Rp.Relation_Kind;
+               Link : constant Rp.Relation := Rp.Relation_At (Found, Index);
+            begin
+               if Link.Kind = Kind and then To_String (Link.From) = From
+                 and then To_String (Link.To) = To
+               then
+                  return True;
+               end if;
+            end;
+         end loop;
+         return False;
+      end Has_Relation;
+   begin
+      Dirs.Create_Path (Project & "/c");
+      Dirs.Create_Path (Project & "/src/io");
+      Dirs.Create_Path (Project & "/py/shop");
+      Put_File (Project & "/c/buffer.h",
+                "#include <stdio.h>" & LF
+                & "#define BUFFER_SIZE 64" & LF
+                & "typedef struct { int n; } buffer_t;" & LF
+                & "/* int hidden(void); */" & LF
+                & "int buffer_fill(buffer_t *b, const char *text);" & LF);
+      Put_File (Project & "/c/main.c",
+                "#include ""buffer.h""" & LF
+                & "static const char *said = ""buffer_fill(x)"";" & LF
+                & "int main(void) {" & LF
+                & "   buffer_t b;" & LF
+                & "   if (buffer_fill(&b, said)) { return 1; }" & LF
+                & "   return 0;" & LF
+                & "}" & LF);
+      Put_File (Project & "/src/lib.rs",
+                "pub mod io;" & LF & "use crate::io::reader::Reader;" & LF
+                & "pub fn run() -> usize { let r = Reader::new(); r.count() }" & LF);
+      Put_File (Project & "/src/io/reader.rs",
+                "pub trait Count { fn count(&self) -> usize; }" & LF
+                & "pub struct Reader { n: usize }" & LF
+                & "impl Reader { pub fn new() -> Self { Reader { n: 0 } } }" & LF
+                & "impl Count for Reader { fn count(&self) -> usize { self.n } }" & LF
+                & "// fn gone() {}" & LF);
+      Put_File (Project & "/py/shop/__init__.py", "");
+      Put_File (Project & "/py/shop/cart.py",
+                "from .prices import total, TAX" & LF
+                & "import json" & LF
+                & "LIMIT = 10" & LF
+                & "class Cart(Base):" & LF
+                & "    """"""def hidden(): a docstring""""""" & LF
+                & "    def add(self, item):" & LF
+                & "        def inner():" & LF
+                & "            pass" & LF
+                & "        return total([item])  # total() in a comment" & LF);
+      Put_File (Project & "/py/shop/prices.py",
+                "TAX = 0.25" & LF & "def total(items):" & LF & "    return sum(items)" & LF);
+
+      Found := Rp.Scan (Project);
+
+      --  C.
+      Named := Rp.Symbol_Of (Found, "buffer.buffer_fill", Here);
+      Assert (Here and then To_String (Named.Kind) = "function" and then Named.Line = 5,
+              "a C prototype was not a symbol where it is");
+      Named := Rp.Symbol_Of (Found, "buffer.buffer_t", Here);
+      Assert (Here and then To_String (Named.Kind) = "type", "a typedef was not a type");
+      Named := Rp.Symbol_Of (Found, "buffer.BUFFER_SIZE", Here);
+      Assert (Here and then To_String (Named.Kind) = "macro", "a macro was not found");
+      Named := Rp.Symbol_Of (Found, "buffer.hidden", Here);
+      Assert (not Here, "a commented declaration was taken for one");
+      Assert (Has_Relation (Rp.Depends_On, "main", "buffer")
+              and then not Has_Relation (Rp.Depends_On, "main", "stdio"),
+              "an include was not a dependency, or a system header was");
+      Assert (Rp.References_To (Found, "buffer.buffer_fill").Contains ("c/main.c:5")
+              and then not Rp.References_To (Found, "buffer.buffer_fill").Contains ("c/main.c:2")
+              and then Has_Relation (Rp.Calls, "main", "buffer.buffer_fill"),
+              "a C call was missed, or a string taken for one");
+
+      --  Read_References is what finds them, once every file is read.
+      declare
+         Extra  : Rp.Graph := Found;
+         Before : constant Natural := Rp.Relation_Count (Found);
+      begin
+         Model_Runner.Framework.Repository.Languages.Adapter_For ("C").Read_References
+           ("c/main.c", "int y(void) { return buffer_fill(0, 0); }", Extra);
+         Assert (Rp.Relation_Count (Extra) = Before + 2,
+                 "a file's references were not found once asked for");
+      end;
+
+      --  Rust.
+      Named := Rp.Symbol_Of (Found, "crate::io::reader.Reader", Here);
+      Assert (Here and then To_String (Named.Kind) = "type",
+              "a Rust struct was not a symbol of its module");
+      Named := Rp.Symbol_Of (Found, "crate::io::reader.Reader.new", Here);
+      Assert (Here and then To_String (Named.Kind) = "method",
+              "a function in an impl was not its type's");
+      Named := Rp.Symbol_Of (Found, "crate::io::reader.gone", Here);
+      Assert (not Here, "a commented Rust function was taken for one");
+      Assert (Has_Relation (Rp.Implements_Interface, "crate::io::reader.Reader", "Count")
+              and then Has_Relation (Rp.Overrides, "crate::io::reader.Reader.count", "count"),
+              "impl Trait for Type did not take the trait on");
+      Assert (Has_Relation (Rp.Depends_On, "crate", "crate::io::reader"),
+              "a use of a type was not a dependency on its module");
+      Assert (not Rp.References_To (Found, "crate::io::reader.Reader").Is_Empty,
+              "a Rust type's use was missed");
+
+      --  Python.
+      Named := Rp.Symbol_Of (Found, "py.shop.cart.Cart.add", Here);
+      Assert (Here and then To_String (Named.Kind) = "method" and then Named.Line = 6,
+              "a method was not its class's");
+      Named := Rp.Symbol_Of (Found, "py.shop.cart.Cart.add.inner", Here);
+      Assert (not Here, "a function inside a function was declared");
+      Named := Rp.Symbol_Of (Found, "py.shop.cart.hidden", Here);
+      Assert (not Here, "a docstring was read as code");
+      Named := Rp.Symbol_Of (Found, "py.shop.cart.LIMIT", Here);
+      Assert (Here and then To_String (Named.Kind) = "constant", "a constant was not found");
+      Assert (Has_Relation (Rp.Depends_On, "py.shop.cart", "py.shop.prices")
+              and then Has_Relation (Rp.Depends_On, "py.shop.cart", "json")
+              and then Has_Relation (Rp.Extends, "py.shop.cart.Cart", "Base"),
+              "an import, relative or not, or a base was missed");
+      Assert (Rp.References_To (Found, "py.shop.prices.total").Contains ("py/shop/cart.py:9")
+              and then Has_Relation (Rp.Calls, "py.shop.cart", "py.shop.prices.total")
+              and then Natural (Rp.References_To (Found, "py.shop.prices.total").Length) = 2,
+              "a Python call was missed, or a comment read as one");
+
+      --  A change in one language's file is brought in as a scan would.
+      delay 2.1;
+      declare
+         Read  : Natural;
+         Again : Rp.Graph;
+      begin
+         Put_File (Project & "/py/shop/prices.py",
+                   "TAX = 0.25" & LF & "def total(items):" & LF & "    return sum(items)" & LF
+                   & "def discount(items):" & LF & "    return 0" & LF);
+         Again := Rp.Refresh (Project, Found, Read);
+         Assert (Rp.Graph_Fingerprint (Again) = Rp.Graph_Fingerprint (Rp.Scan (Project))
+                 and then Rp.Relation_Count (Again) = Rp.Relation_Count (Rp.Scan (Project))
+                 and then Rp.Symbol_Count (Again) = Rp.Symbol_Count (Rp.Scan (Project)),
+                 "a refresh of a Python change differs from a scan");
+      end;
+   end Other_Languages_Are_Read;
 
    ---------------------------------------------------------------------------
    --  Context and invocations.
@@ -5851,6 +6005,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Repository_Is_Scanned'Access,
          "a scan finds files, units, symbols and references, and says how");
+      Register_Routine
+        (T, Other_Languages_Are_Read'Access,
+         "C, Rust and Python files are read for their units, symbols and uses");
       Register_Routine
         (T, Derivation_Is_Idempotent'Access,
          "a requirement derives its task once, however often derivation"

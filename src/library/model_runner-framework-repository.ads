@@ -13,7 +13,8 @@ with Model_Runner.Framework.Stores;
 --  handed to the adapter for its language. Every language has at least
 --  the generic one, which records the file and nothing in it; Ada has an
 --  adapter that reads compilation units, what each withs, what each spec
---  declares and where those names are used.
+--  declares and where those names are used, and C and C++, Rust and Python
+--  have theirs in Repository.Languages.
 --
 --  What is found is a graph: files, units and symbols, and the relations
 --  between them -- a unit is in a file, a body implements a spec, a unit
@@ -131,6 +132,19 @@ package Model_Runner.Framework.Repository is
       Text : String;
       Into : in out Graph) is abstract;
 
+   --  Once every file is read, so that every symbol is known: find where a
+   --  file uses the names it can see.
+   --
+   --  @param Self The adapter.
+   --  @param Path The file's path within the project.
+   --  @param Text Its text.
+   --  @param Into The graph, to add the references to.
+   procedure Read_References
+     (Self : Adapter;
+      Path : String;
+      Text : String;
+      Into : in out Graph) is null;
+
    --  The adapter for a language no other reads: the file is recorded and
    --  nothing in it.
    type Generic_Adapter is new Adapter with null record;
@@ -149,6 +163,12 @@ package Model_Runner.Framework.Repository is
    overriding function Language (Self : Ada_Adapter) return String;
 
    overriding procedure Read
+     (Self : Ada_Adapter;
+      Path : String;
+      Text : String;
+      Into : in out Graph);
+
+   overriding procedure Read_References
      (Self : Ada_Adapter;
       Path : String;
       Text : String;

@@ -256,7 +256,14 @@ depends on it and tests it. A task that is proposed starts as a candidate
 unless `set task.auto_accept` names its class -- its kind, or where it came
 from: `user`, `requirement_derivation`, `agent`, `verification_engine` --
 and every acceptance, rejection and other move records who made it: the
-person at the terminal, the policy, or the agent. Templates state baselines -- `baseline project.SUBJECT = ...` and
+person at the terminal, the policy, or the agent. The repository graph reads Ada, C and C++, Rust and Python: each file's
+unit, what it brings in (`with`, `#include "..."`, `use`, `import`), what it
+declares at its outer level, what it extends or implements, and where the
+names it can see are used and called -- each relation saying whether it is
+explicit, a naming convention or a heuristic. None of the adapters compiles:
+macros, conditional compilation and re-exports are not seen through, and a
+Rust `use` of a lower-case name, which may be a module or a function, is
+marked uncertain. Templates state baselines -- `baseline project.SUBJECT = ...` and
 `baseline language.SUBJECT = ...` -- the two lowest standings of authority,
 which govern what nothing higher speaks to and reach the task's context.
 Where the files are is configuration too: `set repository.skip`,
