@@ -3313,6 +3313,20 @@ package body Tests.Framework_Cases is
                     and then not Dirs.Exists (".model_runner/evil")
                     and then not Dirs.Exists (Root & "/.model_runner/evil"),
                     "a confined agent process wrote the state: " & Said (1 .. Last));
+
+            --  Nor does it read a whole folder, while a tool that reaches
+            --  nothing still works.
+            Env.Set (Pm.Agent_Root_Variable, Root);
+            Model_Runner.Tools.Builtin.Run
+              (Runner, "retrieve", "{""folder"": ""."", ""query"": ""state""}", Said, Last, Status);
+            Assert (Ada.Strings.Fixed.Index (Said (1 .. Last), "does not use retrieve") > 0,
+                    "a confined agent process read a whole folder: " & Said (1 .. Last));
+            Model_Runner.Tools.Builtin.Run
+              (Runner, "calculator", "{""a"": 2, ""b"": 2, ""op"": ""+""}", Said, Last, Status);
+            Env.Clear (Pm.Agent_Root_Variable);
+            Assert (Ada.Strings.Fixed.Index (Said (1 .. Last), "4") > 0,
+                    "a confined agent process lost a tool that reaches nothing: "
+                    & Said (1 .. Last));
          end;
 
          --  The harness's own program: only PATH, HOME and what is given.
@@ -3512,6 +3526,21 @@ package body Tests.Framework_Cases is
       S.Commit (Store, Change, Status);
       Assert (E.Is_Ok (Status) and then Tk.State_Of (Store, To_String (Id)) = "parked",
               "a move the project added was not made: " & Code_Of (Status));
+      declare
+         Seen    : constant Ev.Event_List := Ev.Since (Store, 0);
+         Revised : Tk.Field_Map;
+      begin
+         Assert (Ev.Element (Seen, Ev.Length (Seen)).Kind = Ev.Task_Moved,
+                 "a move into a project's state was recorded as something else");
+         Revised.Include ("notes", "waits for the release");
+         Tk.Revise (Store, Change, To_String (Id), Revised, Status);
+         Assert (E.Is_Ok (Status), "a task in a project's state was not revised: "
+                 & Code_Of (Status));
+         S.Commit (Store, Change, Status);
+         Tk.Revise (Store, Change, "TASK-404", Revised, Status);
+         Assert (Status.Code = E.Framework_Not_Found, "a task nobody made was revised");
+         Change := S.No_Changes;
+      end;
       Tk.Move (Store, Change, To_String (Id), "running", "", Status => Status);
       Assert (Status.Code = E.Framework_Transition_Invalid,
               "a move the project did not add was made from its own state");

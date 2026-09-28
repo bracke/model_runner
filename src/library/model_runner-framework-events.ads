@@ -69,7 +69,12 @@ package Model_Runner.Framework.Events is
       Decision_Revised,
       Decision_Rejected,
       Decision_Superseded,
-      Decision_Reconsidered);
+      Decision_Reconsidered,
+
+      --  A move into or out of a state a project defined, whose meaning its
+      --  configuration says: the detail says from where to where.
+      Task_Moved,
+      Requirement_Moved);
 
    --  One event, as read back.
    type Event is record

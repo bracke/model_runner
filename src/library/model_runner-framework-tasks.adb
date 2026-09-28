@@ -130,6 +130,10 @@ package body Model_Runner.Framework.Tasks is
             then
                Known.Append (Name (Name'First + Prefix'Length .. Name'Last));
                Transitions.Add_State (Result, Name (Name'First + Prefix'Length .. Name'Last));
+
+               --  A task can always be cancelled, whatever state it waits in.
+               Transitions.Allow
+                 (Result, Name (Name'First + Prefix'Length .. Name'Last), "cancelled");
             end if;
          end;
       end loop;
@@ -534,7 +538,8 @@ package body Model_Runner.Framework.Tasks is
        elsif Next = "complete" then Events.Task_Completed
        elsif Next = "failed" then Events.Task_Failed
        elsif Next = "cancelled" then Events.Task_Cancelled
-       else Events.Task_Candidate_Created);
+       elsif Next = "candidate" then Events.Task_Candidate_Created
+       else Events.Task_Moved);
 
    ----------
    -- Move --
@@ -1340,11 +1345,17 @@ package body Model_Runner.Framework.Tasks is
       Event  : Unbounded_String;
    begin
       Status := E.Success;
-      if Now not in "candidate" | "accepted" | "blocked" | "failed" then
+      --  Not while it is being worked or once it has ended; a state the
+      --  project defined is one it waits in, and it may be revised there.
+      if Now = "" then
+         Status := E.Make (E.Framework_Not_Found);
+         E.Add_Text (Status, "name", Id);
+         return;
+      elsif Now in "running" | "verification" | "complete" | "cancelled" | "rejected" then
          Status := E.Make (E.Framework_Transition_Invalid);
          E.Add_Text (Status, "name", Id);
          E.Add_Text (Status, "value", Now);
-         E.Add_Text (Status, "expected", "candidate, accepted, blocked or failed");
+         E.Add_Text (Status, "expected", "a state it is not worked in");
          E.Add_Text (Status, "detail", "a task is revised only while it is not being worked");
          return;
       end if;

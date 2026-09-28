@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A confined agent process has only the tools that stay inside.** An
+  agent the harness starts as a process of its own keeps the file tools,
+  held where it works, and the tools that reach nothing; `retrieve`, which
+  reads a whole folder, and anything that runs a program or goes to the
+  network are refused, whatever it was told to deny.
+- **A project's own states are states.** A move into or out of one is
+  recorded as `Task_Moved` or `Requirement_Moved` rather than as some core
+  event; a task waiting in one can be revised and can always be cancelled;
+  editing a task nobody made says it is not there.
 - **A person does not make the harness's moves.** A move by a person --
   `/task move`, `/req move` and the like -- cannot start a task, take it to
   verification or completion, or move a task at work other than by

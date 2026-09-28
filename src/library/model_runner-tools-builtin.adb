@@ -1049,6 +1049,15 @@ package body Model_Runner.Tools.Builtin is
    begin
       if not Env.Exists (Pm.Agent_Root_Variable) then
          return "";
+      elsif Named not in "read_file" | "write_file" | "list_directory" then
+         --  Held where it works, it has the file tools and those that reach
+         --  nothing: a tool that reads a whole folder, runs a program or
+         --  goes to the network would take it past what they check.
+         return (if Named in "calculator" | "string_length" | "reverse_text" | "lookup"
+                           | "base64_encode" | "base64_decode" | "now"
+                           | "memory_put" | "memory_get"
+                 then ""
+                 else "an agent the harness started does not use " & Named);
       end if;
       return Pm.Path_Refusal
         (Env.Value (Pm.Agent_Root_Variable), Path,
@@ -1897,9 +1906,7 @@ package body Model_Runner.Tools.Builtin is
             return Memory_Put (Self, Arguments);
          elsif Named = "memory_get" then
             return Memory_Get (Self, Arguments);
-         elsif Named in "read_file" | "write_file" | "list_directory"
-           and then Confinement (Named, Arguments) /= ""
-         then
+         elsif Confinement (Named, Arguments) /= "" then
             return "error: " & Confinement (Named, Arguments);
          elsif Named = "read_file" then
             return Read_File (Arguments);

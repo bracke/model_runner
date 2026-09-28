@@ -213,7 +213,8 @@ package body Model_Runner.Framework.Intent is
                     elsif Next = "blocked" then Requirement_Blocked
                     elsif Next = "obsolete" then Requirement_Obsoleted
                     elsif Next = "rejected" then Requirement_Rejected
-                    else Requirement_Reconsidered);
+                    elsif Next = "candidate" then Requirement_Reconsidered
+                    else Requirement_Moved);
       end case;
    end Event_For;
 

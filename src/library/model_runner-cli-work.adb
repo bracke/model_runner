@@ -36,10 +36,10 @@ package body Model_Runner.CLI.Work is
 
    --  The tools an agent working on a task is not given: no shell, no
    --  network, no delegation, nobody to ask.
-   Denied : constant array (1 .. 7) of access constant String :=
+   Denied : constant array (1 .. 8) of access constant String :=
      [new String'("shell"), new String'("run_python"), new String'("http_get"),
       new String'("web_search"), new String'("sql"), new String'("delegate"),
-      new String'("ask_user")];
+      new String'("ask_user"), new String'("retrieve")];
 
    --  A whole file, or nothing when it cannot be read.
    function Whole (Path : String) return String is
