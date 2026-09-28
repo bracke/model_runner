@@ -7,6 +7,10 @@ version = 1
 category = existing
 includes = standard-development
 
+# Writing into a repository that is already there is confirmed first: at a
+# terminal it is asked, and otherwise given as --set confirm=yes.
+scalar init.confirm = yes
+
 input project_name
   type = text
   label = Project name

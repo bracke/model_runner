@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **init confirms where policy says so, and checks what it made.** A
+  template's `scalar init.confirm = yes` has a terminal asked before
+  anything is written, and anything else refused unless given
+  `--set confirm=yes`; the generic template (an existing repository) says
+  so. Every init ends with the consistency check of the new state, and
+  fails if it finds anything.
+- **Reconfiguration is validated whole and committed as one.** `schema.`
+  and `baseline.` fields can be changed; the new configuration is checked
+  whole (the profiles and task kinds settings name, the policies' words);
+  the impact names the derived state a change invalidates (repository
+  graph and indexes, authority, components, tasks); and the new revision
+  and the requirements it takes verification from are committed in one
+  transaction (`Configurations.Stage_Change`, and
+  `Reevaluate_Requirements`/`Is_Current` held to the staged configuration).
 - **Explicit test links choose tests.** Impact follows a reached
   requirement's `tested_by` links to the tests it names, which are chosen
   whether or not any dependency reaches them.

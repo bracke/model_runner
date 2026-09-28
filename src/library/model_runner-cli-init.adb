@@ -4,6 +4,7 @@ with Model_Runner.Errors;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
@@ -47,6 +48,7 @@ package body Model_Runner.CLI.Init is
         To_Unbounded_String (T.To_String (Item.Template_Name));
       Composed : Tp.Composition;
       Given    : Cf.Value_Maps.Map;
+      Confirmed : Boolean := False;
       Planned  : Cf.Plan;
       Done     : Cf.Outcome;
       Store    : S.Store;
@@ -227,6 +229,11 @@ package body Model_Runner.CLI.Init is
          end;
       end loop;
 
+      --  confirm=yes is the answer to the policy's question, given ahead;
+      --  no template asks for it as an input.
+      Confirmed := Given.Contains ("confirm") and then Given ("confirm") in "yes" | "true";
+      Given.Exclude ("confirm");
+
       --  What is known is not asked for: given, found in the project or
       --  defaulted. A terminal is asked for the rest, one at a time.
       loop
@@ -276,6 +283,40 @@ package body Model_Runner.CLI.Init is
       Show_Facts (Planned.Template_Facts, Declared => True);
       Show_Facts (Planned.Discovered_Facts, Declared => False);
 
+      --  Confirmed where the policy wants it: asked at a terminal, and
+      --  otherwise given as confirm=yes or missing, never assumed.
+      if R.Get (Planned.Configuration, "scalar.init.confirm") in "yes" | "true" | "required"
+        and then not Confirmed
+      then
+         if not Interactive then
+            Outcome := E.Make (E.Framework_Input_Missing);
+            E.Add_Text (Outcome, "name", "confirm");
+            Fail (Outcome);
+            return;
+         end if;
+         declare
+            Answers : Choosers.Choice_List;
+         begin
+            Choosers.Append
+              (Answers, (Label      => To_Unbounded_String
+                                         (Pres.Message_Value (Screen, "cli.init.confirm.yes")),
+                         Tag        => Null_Unbounded_String,
+                         Details    => Null_Unbounded_String,
+                         Selectable => True));
+            Choosers.Append
+              (Answers, (Label      => To_Unbounded_String
+                                         (Pres.Message_Value (Screen, "cli.init.confirm.no")),
+                         Tag        => Null_Unbounded_String,
+                         Details    => Null_Unbounded_String,
+                         Selectable => True));
+            if Choosers.Choose (Screen, "cli.init.confirm", Answers) /= 1 then
+               Pres.Put_Note (Screen, "cli.init.cancelled");
+               Status := E.Exit_Cancelled;
+               return;
+            end if;
+         end;
+      end if;
+
       Cf.Initialize (Store, Directory, Planned, Done, Outcome);
       if E.Is_Error (Outcome) then
          Fail (Outcome);
@@ -309,6 +350,27 @@ package body Model_Runner.CLI.Init is
           Loc.Named
             ("detail",
              R.Get (Planned.Configuration, "configuration_fingerprint"))]);
+
+      --  The result checked as any project's state is: what was made holds
+      --  together, or is said not to.
+      declare
+         package Cs renames Model_Runner.Framework.Consistency;
+         Found : constant Cs.Finding_List := Cs.Check (Store);
+      begin
+         if Cs.Length (Found) > 0 then
+            for Index in 1 .. Cs.Length (Found) loop
+               Pres.Put_Message
+                 (Screen, "cli.task.item",
+                  [Loc.Named ("name", To_String (Cs.Element (Found, Index).Subject)),
+                   Loc.Named ("value", Cs.Kind_Word (Cs.Element (Found, Index).Kind)),
+                   Loc.Named ("detail", To_String (Cs.Element (Found, Index).Detail))]);
+            end loop;
+            Pres.Put_Message
+              (Screen, "cli.project.consistency",
+               [Loc.Named ("count", T.Image (Long_Long_Integer (Cs.Length (Found))))]);
+            Status := E.Exit_Input_Output;
+         end if;
+      end;
       S.Close (Store);
    end Run;
 

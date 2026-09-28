@@ -1678,6 +1678,16 @@ package body Tests.CLI_Cases is
               "an input of the wrong kind was taken");
       Assert (not Ada.Directories.Exists (Project & "/.model_runner"),
               "a refused init left state behind");
+
+      --  A template whose policy wants confirmation is not initialized
+      --  without it where nobody can be asked, and is with it.
+      Assert (Init ("generic", "") = 2
+              and then not Ada.Directories.Exists (Project & "/.model_runner"),
+              "a project whose policy wants confirmation was made unconfirmed");
+      Assert (Init ("generic", "confirm=yes") = 0
+              and then Ada.Directories.Exists (Project & "/.model_runner/indexes/tasks.rec"),
+              "a confirmed project was not made, or without its indexes: " & Last_Output);
+      Ada.Directories.Delete_Tree (Project);
    end Init_Starts_A_Project;
 
    --  task manages the project's work from the command line: new creates
@@ -1726,6 +1736,8 @@ package body Tests.CLI_Cases is
          Add (Source, "generic");
          Add (Source, "--directory");
          Add (Source, Project);
+         Add (Source, "--set");
+         Add (Source, "confirm=yes");
          Ran (Source, Status);
          Assert (Status = 0, "a project for tasks was not made");
       end;

@@ -135,10 +135,12 @@ package Model_Runner.Framework.Configurations is
 
    --  Work out a change to the configuration: start from the current one,
    --  apply the changes named -- NAME to a new value, or to "" to remove it --
-   --  and check the whole of what results. Only the settings are changed
-   --  this way: scalar., set., list., map., profile., fact., adapter. and
-   --  task_kind. fields; where the configuration came from and what it wrote
-   --  are the harness's. No template is read: a template's new defaults
+   --  and check the whole of what results: each value as its field reads,
+   --  and every setting that names another -- a profile, a task kind -- as
+   --  naming one that is there. Only the settings are changed this way:
+   --  scalar., set., list., map., profile., fact., adapter., task_kind.,
+   --  schema. and baseline. fields; where the configuration came from and
+   --  what it wrote are the harness's. No template is read: a template's new defaults
    --  reach a project only when someone names them.
    --
    --  @param Item The store.
@@ -151,6 +153,22 @@ package Model_Runner.Framework.Configurations is
      (Item    : Stores.Store;
       Changes : Value_Maps.Map;
       Result  : out Change_Plan;
+      Status  : out Model_Runner.Errors.Error_Info);
+
+   --  Stage a planned change in a transaction, to be committed with what
+   --  follows from it -- the requirements it takes verification from -- as
+   --  one: the new revision, its copy in the history, and
+   --  Configuration_Changed.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Planned The plan.
+   --  @param Status Framework_Revision_Conflict when the configuration
+   --    changed after the plan was made.
+   procedure Stage_Change
+     (Item    : Stores.Store;
+      Change  : in out Stores.Transaction;
+      Planned : Change_Plan;
       Status  : out Model_Runner.Errors.Error_Info);
 
    --  Make a planned change: a new revision of the configuration, kept in its

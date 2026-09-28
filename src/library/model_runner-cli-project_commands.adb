@@ -1054,20 +1054,30 @@ package body Model_Runner.CLI.Project_Commands is
                return;
          end;
 
-         Cf.Reconfigure (Store, Planned, Revision, Read);
-         if E.Is_Error (Read) then
-            Pres.Report (Screen, Read);
-            return;
-         end if;
          declare
             Change  : S.Transaction;
             Moved   : Names.Vector;
             Became  : Names.Vector;
          begin
-            Vf.Reevaluate_Requirements (Store, Change, Moved, Read);
+            --  The new revision and the requirements it takes verification
+            --  from, committed as one.
+            Cf.Stage_Change (Store, Change, Planned, Read);
+            if E.Is_Ok (Read) then
+               Vf.Reevaluate_Requirements
+                 (Store, Change, Moved, Read,
+                  Configuration => R.Get (Planned.After, "configuration_fingerprint"));
+            end if;
             if E.Is_Ok (Read) then
                S.Commit (Store, Change, Read);
             end if;
+            if E.Is_Error (Read) then
+               Pres.Report (Screen, Read);
+               return;
+            end if;
+            Revision := R.Revision (Planned.After);
+
+            --  Readiness is derived, and worked out from the state as it
+            --  now is.
             if E.Is_Ok (Read) then
                Tk.Recompute_Readiness (Store, Change, Became, Read);
             end if;

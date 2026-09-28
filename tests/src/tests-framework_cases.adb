@@ -5373,6 +5373,34 @@ package body Tests.Framework_Cases is
       Assert (Refused ("template_id", "other"), "where the configuration came from was changed");
       Assert (Refused ("profile.checks", "no colon here"), "a profile that does not read was taken");
       Assert (Refused ("map.permission.project.fly", ""), "a permission no capability names was taken");
+      Assert (Refused ("scalar.verification.default", "nosuch"),
+              "a setting naming a profile that is not there was taken");
+      Assert (Refused ("baseline.tests", "x")
+              and then not Refused ("baseline.project.tests", "a change comes with its test")
+              and then not Refused ("schema.release", "semver"),
+              "baselines and schemas were not changed as settings");
+      declare
+         One : Cf.Value_Maps.Map;
+         Got : Cf.Change_Plan;
+      begin
+         One.Include ("set.repository.skip", "obj, vendor");
+         Cf.Plan_Change (Store, One, Got, Status);
+         Assert ((for some Line of Got.Impact =>
+                    Ada.Strings.Fixed.Index (Line, "repository graph") > 0),
+                 "the derived state a change of roots invalidates was not named");
+
+         --  Staged, and held against the configuration it would make: the
+         --  evidence of the one in force is not current against it.
+         Change := S.No_Changes;
+         Cf.Stage_Change (Store, Change, Got, Status);
+         Assert (E.Is_Ok (Status)
+                 and then Vf.Is_Current (Store, To_String (Evidence), Reasons)
+                 and then not Vf.Is_Current
+                                (Store, To_String (Evidence), Reasons,
+                                 Configuration => R.Get (Got.After, "configuration_fingerprint")),
+                 "evidence was not held to the configuration being staged");
+         Change := S.No_Changes;
+      end;
 
       Changes.Include ("scalar.work.isolation", "workspace");
       Changes.Include ("set.execution.allowed", "test, alr");
@@ -5727,8 +5755,6 @@ package body Tests.Framework_Cases is
          Changes.Clear;
          Changes.Include ("scalar.repository.state_policy", "sometimes");
          Cf.Plan_Change (Store, Changes, Planned, Status);
-         Cf.Reconfigure (Store, Planned, Revision, Status);
-         Model_Runner.Framework.Git.Keep_Policy (Store, Written, Status);
          Assert (Status.Code = E.Framework_Schema_Violation, "a policy that is none was taken");
       end;
 

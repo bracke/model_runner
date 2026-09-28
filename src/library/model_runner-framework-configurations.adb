@@ -604,10 +604,11 @@ package body Model_Runner.Framework.Configurations is
    end Initialize;
 
    --  The settings a reconfiguration may change, by the start of their name.
-   Changeable : constant array (1 .. 8) of access constant String :=
+   Changeable : constant array (1 .. 10) of access constant String :=
      [new String'("scalar."), new String'("set."), new String'("list."),
       new String'("map."), new String'("profile."), new String'("fact."),
-      new String'("adapter."), new String'("task_kind.")];
+      new String'("adapter."), new String'("task_kind."), new String'("schema."),
+      new String'("baseline.")];
 
    function Starts (Text, Prefix : String) return Boolean
    is (Text'Length > Prefix'Length
@@ -655,6 +656,15 @@ package body Model_Runner.Framework.Configurations is
          return "work: how agents run tasks from now on";
       elsif Starts (Name, "list.automation.") then
          return "automation: what happens on its own after an event";
+      elsif Starts (Name, "set.repository.") then
+         return "the repository graph and the indexes: files placed, left out or given"
+           & " a role by the new roots are read again, and the indexes built again";
+      elsif Starts (Name, "set.components") then
+         return "components: the indexes built again, and what tasks may name";
+      elsif Starts (Name, "baseline.") or else Starts (Name, "schema.") then
+         return "authority: what governs " & Name & " in every task's effective view";
+      elsif Starts (Name, "scalar.task.") or else Starts (Name, "set.task.") then
+         return "tasks: how they are derived, accepted and judged ready from now on";
       else
          return "settings: " & Name;
       end if;
@@ -663,7 +673,12 @@ package body Model_Runner.Framework.Configurations is
    --  Whether a value reads as its field needs.
    function Problem (Name, Value : String) return String is
    begin
-      if Starts (Name, "profile.") then
+      if Starts (Name, "baseline.")
+        and then not Starts (Name, "baseline.project.")
+        and then not Starts (Name, "baseline.language.")
+      then
+         return "a baseline is baseline.project.SUBJECT or baseline.language.SUBJECT";
+      elsif Starts (Name, "profile.") then
          declare
             Start : Natural := Value'First;
          begin
@@ -697,6 +712,49 @@ package body Model_Runner.Framework.Configurations is
       end if;
       return "";
    end Problem;
+
+   --  What is wrong with a whole configuration: a setting naming a profile
+   --  or a task kind that is not there, or a policy that is none of its
+   --  words. The first found, or nothing. How each changed value reads is
+   --  checked as it is given.
+   function Whole_Problem (Config : Records.Item) return String is
+      function Has (Field : String) return Boolean is (Records.Get (Config, Field) /= "");
+
+      function Among (Field : String; Words : String) return Boolean
+      is (Records.Get (Config, Field) = ""
+          or else Choices_Of (Words).Contains (Records.Get (Config, Field)));
+   begin
+      for Index in 1 .. Records.Field_Count (Config) loop
+         declare
+            Name  : constant String := Records.Field_Name (Config, Index);
+            Value : constant String := Records.Get (Config, Name);
+         begin
+            if Name = "scalar.verification.default" and then not Has ("profile." & Value) then
+               return Name & " names the profile " & Value & ", which is not there";
+            elsif Starts (Name, "scalar.task.profile.") then
+               if not Has ("task_kind." & Name (Name'First + 20 .. Name'Last)) then
+                  return Name & " is for a task kind that is not there";
+               elsif not Has ("profile." & Value) then
+                  return Name & " names the profile " & Value & ", which is not there";
+               end if;
+            elsif Name = "list.verification.full" then
+               for Profile of Lines_Of (Value) loop
+                  if not Has ("profile." & Profile) then
+                     return Name & " names the profile " & Profile & ", which is not there";
+                  end if;
+               end loop;
+            elsif Name = "scalar.task.derived_kind" and then not Has ("task_kind." & Value) then
+               return Name & " names the task kind " & Value & ", which is not there";
+            end if;
+         end;
+      end loop;
+      if not Among ("scalar.repository.state_policy", "portable, local, all") then
+         return "scalar.repository.state_policy is portable, local or all";
+      elsif not Among ("scalar.work.isolation", "project, workspace") then
+         return "scalar.work.isolation is project or workspace";
+      end if;
+      return "";
+   end Whole_Problem;
 
    -----------------
    -- Plan_Change --
@@ -762,6 +820,12 @@ package body Model_Runner.Framework.Configurations is
          end;
       end loop;
 
+      --  The whole of it, as it would be.
+      if not Result.Changed.Is_Empty and then Whole_Problem (Result.After) /= "" then
+         Status := Refused ("the configuration", Whole_Problem (Result.After));
+         return;
+      end if;
+
       --  Evidence is taken against a configuration: any change leaves what
       --  was verified before to be verified again.
       if not Result.Changed.Is_Empty then
@@ -775,17 +839,16 @@ package body Model_Runner.Framework.Configurations is
         (Result.After, "configuration_fingerprint", Configuration_Fingerprint (Result.After));
    end Plan_Change;
 
-   -----------------
-   -- Reconfigure --
-   -----------------
+   ------------------
+   -- Stage_Change --
+   ------------------
 
-   procedure Reconfigure
-     (Item     : in out Stores.Store;
-      Planned  : Change_Plan;
-      Revision : out Natural;
-      Status   : out Model_Runner.Errors.Error_Info)
+   procedure Stage_Change
+     (Item    : Stores.Store;
+      Change  : in out Stores.Transaction;
+      Planned : Change_Plan;
+      Status  : out Model_Runner.Errors.Error_Info)
    is
-      Change : Stores.Transaction;
       Now    : Records.Item;
       Event  : Unbounded_String;
       Number : constant String := Natural'Image (Records.Revision (Planned.After));
@@ -794,9 +857,8 @@ package body Model_Runner.Framework.Configurations is
         & Number (Number'First + 1 .. Number'Last);
       Kept   : Records.Item := Copy (Planned.After, History_Entity);
    begin
-      Revision := Records.Revision (Planned.Before);
+      Status := E.Success;
       if Planned.Changed.Is_Empty then
-         Status := E.Success;
          return;
       end if;
 
@@ -825,11 +887,27 @@ package body Model_Runner.Framework.Configurations is
            (Item, Change, Events.Configuration_Changed, "PROJECT", To_String (Said),
             Event, Status);
       end;
-      if E.Is_Ok (Status) then
+   end Stage_Change;
+
+   -----------------
+   -- Reconfigure --
+   -----------------
+
+   procedure Reconfigure
+     (Item     : in out Stores.Store;
+      Planned  : Change_Plan;
+      Revision : out Natural;
+      Status   : out Model_Runner.Errors.Error_Info)
+   is
+      Change : Stores.Transaction;
+   begin
+      Revision := Records.Revision (Planned.Before);
+      Stage_Change (Item, Change, Planned, Status);
+      if E.Is_Ok (Status) and then not Planned.Changed.Is_Empty then
          Stores.Commit (Item, Change, Status);
-      end if;
-      if E.Is_Ok (Status) then
-         Revision := Records.Revision (Planned.After);
+         if E.Is_Ok (Status) then
+            Revision := Records.Revision (Planned.After);
+         end if;
       end if;
    end Reconfigure;
 

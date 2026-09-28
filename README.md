@@ -264,7 +264,12 @@ shell): its tree and permissions go with it, and its file tools refuse the
 rest. Git and that agent process run through the execution layer like a
 project's checks -- no standard input, only PATH, HOME and what is passed,
 a deadline -- and each run is a line in `.model_runner/runtime/harness.log`.
-`init` builds the derived indexes -- requirements, decisions, tasks,
+A template can ask for confirmation before `init` writes anything
+(`scalar init.confirm = yes`; the generic template does): a terminal is
+asked, and a script passes `--set confirm=yes`. `/reconfigure` checks the
+whole new configuration, says which derived state it invalidates, and
+commits the new revision together with the requirements it takes
+verification from. `init` builds the derived indexes -- requirements, decisions, tasks,
 components, symbols, tests, traceability, dependencies and a search index
 of names -- and opening a session builds them again when what they were
 built from has moved on. `/sandbox RESTRICTION` confines every agent the

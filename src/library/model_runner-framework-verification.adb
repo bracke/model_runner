@@ -680,9 +680,10 @@ package body Model_Runner.Framework.Verification is
    ----------------
 
    function Is_Current
-     (Item     : Stores.Store;
-      Evidence : String;
-      Reasons  : out Name_Lists.Vector) return Boolean
+     (Item          : Stores.Store;
+      Evidence      : String;
+      Reasons       : out Name_Lists.Vector;
+      Configuration : String := "") return Boolean
    is
       Value    : Records.Item;
       Status   : E.Error_Info;
@@ -699,7 +700,8 @@ package body Model_Runner.Framework.Verification is
          Reasons.Append ("the files have changed since " & Evidence);
       end if;
       if Records.Get (Value, "configuration_fingerprint")
-           /= Records.Get (Settings, "configuration_fingerprint")
+           /= (if Configuration /= "" then Configuration
+               else Records.Get (Settings, "configuration_fingerprint"))
       then
          Reasons.Append ("the configuration has changed since " & Evidence);
       end if;
@@ -1081,7 +1083,8 @@ package body Model_Runner.Framework.Verification is
      (Item    : Stores.Store;
       Change  : in out Stores.Transaction;
       Changed : out Name_Lists.Vector;
-      Status  : out Model_Runner.Errors.Error_Info)
+      Status  : out Model_Runner.Errors.Error_Info;
+      Configuration : String := "")
    is
       Everything : constant Name_Lists.Vector := Tasks.List (Item);
 
@@ -1117,7 +1120,7 @@ package body Model_Runner.Framework.Verification is
                      end if;
                      Stores.Read (Item, Verification_Area, Evidence, Value, Read);
                      if Records.Get (Value, "passed") /= "true"
-                       or else not Is_Current (Item, Evidence, Reasons)
+                       or else not Is_Current (Item, Evidence, Reasons, Configuration)
                      then
                         return "";
                      end if;
