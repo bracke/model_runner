@@ -59,6 +59,11 @@ $ model_runner run tiny-model.gguf --raw --prompt "ab" --seed 42 --temperature 0
 model_runner run MODEL       generate text from a model file
 model_runner embed MODEL     reduce a text to one vector
 model_runner inspect MODEL   report what a model file contains
+model_runner models          list the models on hand, or remove one
+model_runner init [TEMPLATE] start a project's state from a template
+model_runner task [ACTION]   list and manage the project's tasks
+model_runner repo [ACTION]   the repository's files, symbols and dependencies
+model_runner work [TASK]     run a ready task from context to completion
 model_runner help [COMMAND]  show help for a command
 model_runner version         show version information
 ```
@@ -69,6 +74,34 @@ resolved.
 Run `model_runner help run` for the full option list. Options are validated
 with the same typed path as environment variables, repeated options are a usage
 error, and `--` ends option processing.
+
+### Spec-driven development
+
+`init`, `task`, `repo` and `work` keep a project's development state in
+`.model_runner/` beside its code, as specified in
+`docs/spec_driven_development_framework_v3_revised.md`: what the project is
+meant to be (specifications, requirements and decisions, each revised
+rather than rewritten), the work toward it (tasks moved only by their
+lifecycle's legal transitions), what happened (events, evidence, model
+invocations and their context manifests), and what is derived from them
+(indexes, traceability, readiness). Every change is a journaled
+transaction that an interrupted session finishes or undoes on the next
+open; nothing is kept in a conversation.
+
+```
+model_runner init ada-cli --set project_name=hello   start from a template
+model_runner task new "Read input" --set kind=implementation --set component=io
+model_runner task accept TASK-IO-001
+model_runner work TASK-IO-001 --set model=MODEL      context, call, verify, complete
+model_runner task plan                                what can start, what waits
+model_runner repo impact src/io.adb                   what a change reaches
+```
+
+Kinds of project, task kinds, verification profiles, execution policy,
+permissions and automation rules are all the project's configuration,
+resolved from templates at `init` and never looked up again. A model is
+asked only for the work itself: selection, readiness, verification,
+completion, traceability and scheduling are the harness's.
 
 ### Saving a context
 

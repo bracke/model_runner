@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Routine progression without a model (Phase N).** Automation rules --
+  `list automation.rules` of `EVENT: ACTION`, with defaults that derive
+  tasks from accepted and revised requirements, reevaluate requirements
+  when tasks complete or source changes, and work out readiness after
+  anything -- act on each event once. Source changes are events: from
+  `repo` when the graph changes and from `work` when an agent changes
+  files. Dispatch plans the ready tasks by priority within the free agent
+  slots, one writer to a component unless work is isolated, and lists
+  what needs judgment: candidates, blocked tasks, conflicts of authority.
+  `task step`, `task plan`, and `work --set all=yes` to run the plan in
+  turn. The README says how the framework's commands fit together.
+
 - **Agents that make agents, kept inside what they were given (Phase M).**
   Permissions are capabilities with scope -- roots, denied paths, profiles,
   depth and children limits -- set as `map permission.LEVEL.CAPABILITY`,

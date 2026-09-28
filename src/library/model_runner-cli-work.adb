@@ -13,6 +13,7 @@ with Model_Runner.Framework;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Context;
 with Model_Runner.Framework.Execution;
+with Model_Runner.Framework.Orchestration;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
@@ -196,6 +197,7 @@ package body Model_Runner.CLI.Work is
       Given     : Model_Runner.Framework.Configurations.Value_Maps.Map;
       Config    : R.Item;
       Done      : W.Report;
+      Remaining : Model_Runner.Framework.Name_Lists.Vector;
 
       procedure Fail (Condition : E.Error_Info) is
       begin
@@ -244,6 +246,27 @@ package body Model_Runner.CLI.Work is
             Pres.Put_Note (Screen, "cli.work.recovered", [Loc.Named ("name", Id)]);
          end loop;
       end;
+
+      --  Everything the plan can start, one after another: the state is
+      --  one writer's, so the plan's batch runs in turn.
+      if Chosen = Null_Unbounded_String and then Setting ("all", "") = "yes" then
+         declare
+            Planned : constant Model_Runner.Framework.Orchestration.Dispatch_Plan :=
+              Model_Runner.Framework.Orchestration.Plan (Store);
+         begin
+            if Planned.Start.Is_Empty then
+               Pres.Put_Note (Screen, "cli.work.nothing");
+               S.Close (Store);
+               return;
+            end if;
+            for Id of Planned.Start loop
+               Chosen := To_Unbounded_String (Id);
+               exit;
+            end loop;
+            Remaining := Planned.Start;
+            Remaining.Delete_First;
+         end;
+      end if;
 
       if Chosen = Null_Unbounded_String then
          if not Model_Runner.CLI.Choosers.Is_Available then
@@ -317,51 +340,57 @@ package body Model_Runner.CLI.Work is
          end;
       end if;
 
-      declare
-         Model   : constant Model_Runner.Framework.Context.Model_Profile :=
-           Model_Runner.Framework.Context.Profile (Store, Setting ("profile", ""));
-         Command : constant String := R.Get (Config, "scalar.work.agent");
-         Path    : constant String := Setting ("model", "");
-      begin
-         if Command /= "" then
-            W.Execute
-              (Store, To_String (Chosen),
-               Command_Agent'(Store => Store'Access, Command => To_Unbounded_String (Command)),
-               Model, Done, Outcome);
-         elsif Path /= "" then
-            W.Execute
-              (Store, To_String (Chosen),
-               Model_Agent'(Model   => To_Unbounded_String (Path),
-                            Steps   => To_Unbounded_String (Setting ("steps", "")),
-                            Timeout => 1800),
-               Model, Done, Outcome);
-         else
-            Outcome := E.Make (E.Framework_Input_Missing);
-            E.Add_Text (Outcome, "name", "model");
+      loop
+         declare
+            Model   : constant Model_Runner.Framework.Context.Model_Profile :=
+              Model_Runner.Framework.Context.Profile (Store, Setting ("profile", ""));
+            Command : constant String := R.Get (Config, "scalar.work.agent");
+            Path    : constant String := Setting ("model", "");
+         begin
+            if Command /= "" then
+               W.Execute
+                 (Store, To_String (Chosen),
+                  Command_Agent'(Store => Store'Access, Command => To_Unbounded_String (Command)),
+                  Model, Done, Outcome);
+            elsif Path /= "" then
+               W.Execute
+                 (Store, To_String (Chosen),
+                  Model_Agent'(Model   => To_Unbounded_String (Path),
+                               Steps   => To_Unbounded_String (Setting ("steps", "")),
+                               Timeout => 1800),
+                  Model, Done, Outcome);
+            else
+               Outcome := E.Make (E.Framework_Input_Missing);
+               E.Add_Text (Outcome, "name", "model");
+            end if;
+         end;
+
+         if E.Is_Error (Outcome) then
+            Fail (Outcome);
+            S.Close (Store);
+            return;
          end if;
-      end;
 
-      if E.Is_Error (Outcome) then
-         Fail (Outcome);
-         S.Close (Store);
-         return;
-      end if;
+         Say ("cli.work.agent", To_String (Done.Agent_Id), To_String (Done.Task_Id));
+         Say ("cli.work.context", To_String (Done.Manifest_Id), To_String (Done.Invocation_Id));
+         for Path of Done.Changed_Files loop
+            Say ("cli.work.changed", Path, "");
+         end loop;
+         if Done.Claimed /= Null_Unbounded_String then
+            Say ("cli.work.claimed", To_String (Done.Claimed), To_String (Done.Summary));
+         end if;
+         if Done.Evidence_Id /= Null_Unbounded_String then
+            Say ("cli.work.evidence", To_String (Done.Evidence_Id), "");
+         end if;
+         for Requirement of Done.Requirements loop
+            Say ("cli.work.requirement", Requirement, "");
+         end loop;
+         Say ("cli.work.ended", To_String (Done.Final_State), To_String (Done.Reason));
 
-      Say ("cli.work.agent", To_String (Done.Agent_Id), To_String (Done.Task_Id));
-      Say ("cli.work.context", To_String (Done.Manifest_Id), To_String (Done.Invocation_Id));
-      for Path of Done.Changed_Files loop
-         Say ("cli.work.changed", Path, "");
+         exit when Remaining.Is_Empty;
+         Chosen := To_Unbounded_String (Remaining.First_Element);
+         Remaining.Delete_First;
       end loop;
-      if Done.Claimed /= Null_Unbounded_String then
-         Say ("cli.work.claimed", To_String (Done.Claimed), To_String (Done.Summary));
-      end if;
-      if Done.Evidence_Id /= Null_Unbounded_String then
-         Say ("cli.work.evidence", To_String (Done.Evidence_Id), "");
-      end if;
-      for Requirement of Done.Requirements loop
-         Say ("cli.work.requirement", Requirement, "");
-      end loop;
-      Say ("cli.work.ended", To_String (Done.Final_State), To_String (Done.Reason));
 
       if To_String (Done.Final_State) /= "complete" then
          Status := E.Exit_Input_Output;

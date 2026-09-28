@@ -7,6 +7,7 @@ with Model_Runner.Framework;
 with Model_Runner.Framework.Context;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Intent;
+with Model_Runner.Framework.Orchestration;
 with Model_Runner.Framework.Verification;
 with Model_Runner.Framework.Work;
 with Model_Runner.Framework.Records;
@@ -454,6 +455,43 @@ package body Model_Runner.CLI.Tasks is
          end if;
       end Integrate;
 
+      --  One step of the orchestrator: every event acted on by the rules.
+      procedure Step is
+         Done : Model_Runner.Framework.Orchestration.Step_Report;
+      begin
+         Model_Runner.Framework.Orchestration.Step (Store, Done, Outcome);
+         if E.Is_Error (Outcome) then
+            Fail (Outcome);
+            return;
+         end if;
+         Pres.Put_Message
+           (Screen, "cli.task.step",
+            [Loc.Named ("count", T.Image (Long_Long_Integer (Done.Events_Seen))),
+             Loc.Named ("total", T.Image (Long_Long_Integer (Done.Actions_Taken)))]);
+         for Id of Done.Derived loop
+            Pres.Put_Message (Screen, "cli.task.derived", [Loc.Named ("name", Id)]);
+         end loop;
+         for Id of Done.Became_Ready loop
+            Pres.Put_Note (Screen, "cli.task.ready", [Loc.Named ("name", Id)]);
+         end loop;
+      end Step;
+
+      --  What can start now, what waits, and what needs judgment.
+      procedure Show_Plan is
+         Planned : constant Model_Runner.Framework.Orchestration.Dispatch_Plan :=
+           Model_Runner.Framework.Orchestration.Plan (Store);
+      begin
+         for Id of Planned.Start loop
+            Pres.Put_Message (Screen, "cli.task.start", [Loc.Named ("name", Id)]);
+         end loop;
+         for Line of Planned.Held loop
+            Pres.Put_Message (Screen, "cli.task.held", [Loc.Named ("detail", Line)]);
+         end loop;
+         for Line of Model_Runner.Framework.Orchestration.Needs_Judgment (Store) loop
+            Pres.Put_Message (Screen, "cli.task.judgment", [Loc.Named ("detail", Line)]);
+         end loop;
+      end Show_Plan;
+
       procedure Derive is
          Made : Model_Runner.Framework.Name_Lists.Vector;
       begin
@@ -510,6 +548,10 @@ package body Model_Runner.CLI.Tasks is
          Complete;
       elsif Action = "integrate" then
          Integrate;
+      elsif Action = "step" then
+         Step;
+      elsif Action = "plan" then
+         Show_Plan;
       else
          Derive;
       end if;

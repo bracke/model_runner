@@ -20,6 +20,7 @@ with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Invocations;
 with Model_Runner.Framework.Leases;
+with Model_Runner.Framework.Orchestration;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
@@ -3442,6 +3443,87 @@ package body Tests.Framework_Cases is
    end Writes_Stay_In_Bounds;
 
    ---------------------------------------------------------------------------
+   --  Orchestration.
+   ---------------------------------------------------------------------------
+
+   package Or_ch renames Model_Runner.Framework.Orchestration;
+
+   --  Events are acted on once, by the rules, without a model; dispatch
+   --  starts the most important ready tasks that fit, one writer to a
+   --  component; and what needs judgment is listed.
+   procedure Orchestration_Is_Routine
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Req    : Unbounded_String;
+      Ids    : array (1 .. 4) of Unbounded_String;
+      Done   : Or_ch.Step_Report;
+      Plan   : Or_ch.Dispatch_Plan;
+      Given  : Tk.Field_Map;
+   begin
+      Task_Project (Store, "orchestration", "scalar agents.max_active = 2" & LF);
+      Assert (Natural (Or_ch.Rules (Store).Length) = 5,
+              "a project that says nothing did not get the rules it needs");
+
+      Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.", "",
+                  "user", "", "io", Req, Status);
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted",
+               Tr.Ordinary_Only, Status);
+      S.Commit (Store, Change, Status);
+
+      Or_ch.Step (Store, Done, Status);
+      Assert (E.Is_Ok (Status) and then Done.Events_Seen > 0
+              and then Natural (Done.Derived.Length) = 1,
+              "an accepted requirement's event did not derive its task: "
+              & Code_Of (Status));
+      --  The second step reads what the first one did, and derives
+      --  nothing again; a third has nothing left to read.
+      Or_ch.Step (Store, Done, Status);
+      Assert (Done.Derived.Is_Empty, "a step run twice derived twice");
+      Or_ch.Step (Store, Done, Status);
+      Assert (Done.Events_Seen = 0, "a step read events that were read already");
+
+      --  Four ready tasks; two slots; two of them write one component.
+      for Index in Ids'Range loop
+         Given := Fields ("Work" & Integer'Image (Index), "implementation", "component",
+                          (if Index <= 2 then "parser" else "io" & Integer'Image (Index)));
+         Given.Include ("priority", (if Index = 2 then "9" else "1"));
+         Tk.Create (Store, Change, Given, "user", "", Ids (Index), Status);
+      end loop;
+      S.Commit (Store, Change, Status);
+      for Index in Ids'Range loop
+         Tk.Move (Store, Change, To_String (Ids (Index)), "accepted", "", Status => Status);
+      end loop;
+      S.Commit (Store, Change, Status);
+
+      Or_ch.Step (Store, Done, Status);
+      Assert (Natural (Done.Became_Ready.Length) = 4,
+              "readiness was not worked out by the step");
+      Plan := Or_ch.Plan (Store);
+      Assert (Plan.Slots = 2 and then Natural (Plan.Start.Length) = 2
+              and then Plan.Start.First_Element = To_String (Ids (2)),
+              "dispatch did not start the most important tasks that fit");
+      Assert (not Plan.Start.Contains (To_String (Ids (1))),
+              "two tasks writing one component were started together");
+      Assert (not Plan.Held.Is_Empty, "the tasks held back were not said");
+
+      declare
+         Waiting : constant Model_Runner.Framework.Name_Lists.Vector :=
+           Or_ch.Needs_Judgment (Store);
+         Found   : Boolean := False;
+      begin
+         for Line of Waiting loop
+            Found := Found or else Ada.Strings.Fixed.Index (Line, "candidate") > 0;
+         end loop;
+         Assert (Found, "the derived candidate was not listed for judgment");
+      end;
+      S.Close (Store);
+   end Orchestration_Is_Routine;
+
+   ---------------------------------------------------------------------------
    -- Register_Tests --
    ---------------------------------------------------------------------------
 
@@ -3544,6 +3626,10 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Parents_Wait_For_Children'Access,
          "a parent waits for its children and goes back to work after them");
+      Register_Routine
+        (T, Orchestration_Is_Routine'Access,
+         "routine progression is rule-driven, once, and dispatched by"
+         & " resources");
       Register_Routine
         (T, Permissions_Only_Narrow'Access,
          "permissions are scoped and every level only narrows");

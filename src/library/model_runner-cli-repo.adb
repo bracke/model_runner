@@ -4,6 +4,7 @@ with Ada.Strings.Unbounded;
 
 with Model_Runner.Errors;
 with Model_Runner.Framework;
+with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Traceability;
@@ -76,6 +77,18 @@ package body Model_Runner.CLI.Repo is
               or else Rp.Graph_Fingerprint (Kept) /= Rp.Graph_Fingerprint (Found)
             then
                Rp.Keep (Store, Change, Found, Outcome);
+
+               --  A graph that was kept before and differs now is source
+               --  that changed, which the orchestrator acts on.
+               if E.Is_Ok (Outcome) and then Rp.File_Count (Kept) > 0 then
+                  declare
+                     Event : Unbounded_String;
+                  begin
+                     Model_Runner.Framework.Events.Emit
+                       (Store, Change, Model_Runner.Framework.Events.Source_Changed,
+                        "PROJECT", Rp.Graph_Fingerprint (Found), Event, Outcome);
+                  end;
+               end if;
                if E.Is_Ok (Outcome) then
                   S.Commit (Store, Change, Outcome);
                end if;

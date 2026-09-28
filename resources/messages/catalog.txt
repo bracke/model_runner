@@ -156,7 +156,7 @@ en.help.init.quiet =   --quiet                 suppress progress, notes and warn
 en.help.init.verbose =   --verbose               report progress and detail on standard error
 en.help.init.locale =   --locale NAME           locale for program messages
 en.help.init.color =   --color=MODE            colour output: {value}
-en.help.task.usage = Usage: model_runner task [list|new TITLE|accept ID|reject ID|cancel ID|show ID|context ID|verify ID|complete ID|integrate ID|derive] [options]
+en.help.task.usage = Usage: model_runner task [list|new TITLE|accept ID|reject ID|cancel ID|show ID|context ID|verify ID|complete ID|integrate ID|derive|step|plan] [options]
 en.help.task.summary = Manage the project's persistent tasks. list shows each with its state, ready shown as one; new creates a candidate from --set fields, asking a terminal for what its kind requires; accept, reject and cancel move one; show prints the effective task; derive makes the tasks accepted requirements imply. Tasks that became ready are named after each change.
 en.help.task.options = Options:
 en.help.task.set =   --set NAME=VALUE        give the new task's field NAME its value; repeatable
@@ -176,7 +176,7 @@ en.help.repo.color =   --color=MODE            colour output: {value}
 en.help.work.usage = Usage: model_runner work [TASK] [options]
 en.help.work.summary = Run one ready task: an agent holds it in a new generation, its context is built and kept, the model call recorded, and what the agent answers is held to the work contract. The files show what changed; the task's verification runs, and it completes through its gates or ends blocked or failed with why. The agent is --set model=PATH, run as this program's agent with no shell, network or delegation, or the configuration's scalar work.agent command, with ${prompt} for its context's file. Without a task named, a terminal chooses one.
 en.help.work.options = Options:
-en.help.work.set =   --set NAME=VALUE        model=PATH, steps=N or profile=ID; repeatable
+en.help.work.set =   --set NAME=VALUE        model=PATH, steps=N or profile=ID or all=yes; repeatable
 en.help.work.directory =   --directory DIR         the project in DIR rather than the current directory
 en.help.work.quiet =   --quiet                 suppress progress, notes and warnings
 en.help.work.verbose =   --verbose               report progress and detail on standard error
@@ -379,6 +379,10 @@ en.cli.task.diagnostic = {path}  {severity}  {detail}
 en.cli.task.gate = {name}: {detail}
 en.cli.task.requirement = {name} is {value}
 en.cli.task.integrated = {name} took in {count} files
+en.cli.task.step = {count} events acted on, {total} actions taken
+en.cli.task.start = start {name}
+en.cli.task.held = waits: {detail}
+en.cli.task.judgment = needs judgment: {detail}
 en.cli.repo.summary = {count} files and {total} relations; graph {value}
 en.cli.repo.file = {path}  {value}  {detail}
 en.cli.repo.symbol = {name}  {value}  {path}
@@ -848,7 +852,7 @@ da.help.init.quiet =   --quiet                 undertryk status, noter og advars
 da.help.init.verbose =   --verbose               vis status og detaljer på standardfejl
 da.help.init.locale =   --locale NAVN           sprog for programmets beskeder
 da.help.init.color =   --color=TILSTAND        farvet output: {value}
-da.help.task.usage = Brug: model_runner task [list|new TITEL|accept ID|reject ID|cancel ID|show ID|context ID|verify ID|complete ID|integrate ID|derive] [tilvalg]
+da.help.task.usage = Brug: model_runner task [list|new TITEL|accept ID|reject ID|cancel ID|show ID|context ID|verify ID|complete ID|integrate ID|derive|step|plan] [tilvalg]
 da.help.task.summary = Styr projektets vedvarende opgaver. list viser hver med dens tilstand, klar vist som en; new opretter en kandidat fra --set-felter og spørger en terminal om det dens slags kræver; accept, reject og cancel flytter en; show viser den effektive opgave; derive laver de opgaver accepterede krav medfører. Opgaver der blev klar nævnes efter hver ændring.
 da.help.task.options = Tilvalg:
 da.help.task.set =   --set NAVN=VÆRDI        giv den nye opgaves felt NAVN sin værdi; kan gentages
@@ -868,7 +872,7 @@ da.help.repo.color =   --color=TILSTAND        farvet output: {value}
 da.help.work.usage = Brug: model_runner work [OPGAVE] [tilvalg]
 da.help.work.summary = Kør en klar opgave: en agent holder den i en ny generation, dens kontekst bygges og gemmes, modelkaldet registreres, og agentens svar holdes op mod arbejdskontrakten. Filerne viser hvad der ændredes; opgavens verifikation kører, og den fuldføres gennem sine porte eller ender blokeret eller fejlet med hvorfor. Agenten er --set model=STI, kørt som dette programs agent uden skal, netværk eller uddelegering, eller konfigurationens scalar work.agent-kommando med ${prompt} for kontekstens fil. Uden en navngivet opgave vælger en terminal en.
 da.help.work.options = Tilvalg:
-da.help.work.set =   --set NAVN=VÆRDI        model=STI, steps=N eller profile=ID; kan gentages
+da.help.work.set =   --set NAVN=VÆRDI        model=STI, steps=N eller profile=ID or all=yes; kan gentages
 da.help.work.directory =   --directory MAPPE       projektet i MAPPE i stedet for den aktuelle mappe
 da.help.work.quiet =   --quiet                 undertryk status, noter og advarsler
 da.help.work.verbose =   --verbose               vis status og detaljer på standardfejl
@@ -1216,6 +1220,10 @@ da.cli.task.diagnostic = {path}  {severity}  {detail}
 da.cli.task.gate = {name}: {detail}
 da.cli.task.requirement = {name} er {value}
 da.cli.task.integrated = {name} tog {count} filer ind
+da.cli.task.step = {count} hændelser behandlet, {total} handlinger udført
+da.cli.task.start = start {name}
+da.cli.task.held = venter: {detail}
+da.cli.task.judgment = kræver vurdering: {detail}
 da.cli.repo.summary = {count} filer og {total} relationer; graf {value}
 da.cli.repo.file = {path}  {value}  {detail}
 da.cli.repo.symbol = {name}  {value}  {path}
@@ -1840,6 +1848,10 @@ qps.cli.task.diagnostic = ⟦{path}  {severity}  {detail}⟧
 qps.cli.task.gate = ⟦{name}: {detail}⟧
 qps.cli.task.requirement = ⟦{name} íß {value}⟧
 qps.cli.task.integrated = ⟦{name} ŧóók íñ {count} fíĺéß⟧
+qps.cli.task.step = ⟦{count} évéñŧß áçŧéð óñ, {total} áçŧíóñß ŧákéñ⟧
+qps.cli.task.start = ⟦ßŧáŕŧ {name}⟧
+qps.cli.task.held = ⟦wáíŧß: {detail}⟧
+qps.cli.task.judgment = ⟦ñééðß júðgméñŧ: {detail}⟧
 qps.cli.repo.summary = ⟦{count} fíĺéß áñð {total} ŕéĺáŧíóñß; gŕáph {value}⟧
 qps.cli.repo.file = ⟦{path}  {value}  {detail}⟧
 qps.cli.repo.symbol = ⟦{name}  {value}  {path}⟧

@@ -5,6 +5,7 @@ with Hostkit.Fs;
 
 with Model_Runner.Framework.Agents;
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Invocations;
 with Model_Runner.Framework.Leases;
@@ -389,6 +390,14 @@ package body Model_Runner.Framework.Work is
                                 & Path);
          end loop;
          Annotate (Item, Change, Task_Id, "changed_files", To_String (Files_Text));
+         if not Result.Changed_Files.Is_Empty and then not Isolated then
+            declare
+               Event : Unbounded_String;
+            begin
+               Events.Emit (Item, Change, Events.Source_Changed, Task_Id,
+                            To_String (Files_Text), Event, Status);
+            end;
+         end if;
       end;
       if E.Is_Error (Status) then
          return;
@@ -487,6 +496,12 @@ package body Model_Runner.Framework.Work is
                          & E.Error_Code'Image (Held.Code), "completed");
                return;
             end if;
+            declare
+               Event : Unbounded_String;
+            begin
+               Events.Emit (Item, Change, Events.Source_Changed, Task_Id,
+                            "taken in from " & To_String (Result.Workspace_Id), Event, Status);
+            end;
             Stores.Commit (Item, Change, Status);
             if E.Is_Error (Status) then
                return;
