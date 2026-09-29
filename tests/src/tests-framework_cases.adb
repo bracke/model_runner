@@ -6735,6 +6735,109 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Verification_Follows_What_Changed;
 
+   --  Work taken in by the harness on its own is reported as work taken in
+   --  by hand is, and its workspace goes once that is kept; a Git
+   --  workspace starts from the project as it is, not as it was committed.
+   procedure Workspaces_Start_And_End_Whole
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Id     : Unbounded_String;
+      Done   : Wk.Report;
+      Made   : Ws.Workspace;
+      Taken  : Model_Runner.Framework.Name_Lists.Vector;
+   begin
+      Task_Project
+        (Store, "auto-integrate",
+         "set execution.allowed = test" & LF
+         & "profile checks = exists: test -f src/hello.adb" & LF
+         & "scalar verification.default = checks" & LF
+         & "scalar work.isolation = workspace" & LF
+         & "scalar work.integrate = automatic" & LF
+         & "map permission.project.read_source =" & LF
+         & "map permission.project.write_source =" & LF
+         & "map permission.project.run_tests =" & LF
+         & "map permission.project.request_integration =" & LF);
+      Tk.Create (Store, Change, Fields ("Apart", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Execute (Store, To_String (Id),
+                  Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                                  Answer => To_Unbounded_String
+                                    ("status: done" & LF & "summary: x"),
+                                  Broken => False),
+                  Cx.Profile (Store, ""), Done, Status);
+      declare
+         Runtime_Value : R.Item;
+         Held          : Ws.Workspace;
+      begin
+         S.Read (Store, Model_Runner.Framework.Tasks_Area, To_String (Id) & ".state",
+                 Runtime_Value, Status);
+         Ws.Read (Store, To_String (Done.Workspace_Id), Held, Status);
+         Assert (To_String (Done.Final_State) = "complete"
+                 and then R.Get (Runtime_Value, "integration_report") /= ""
+                 and then To_String (Held.Status) = "integrated"
+                 and then not Dirs.Exists (To_String (Held.Path)),
+                 "work taken in on its own left no report, or its workspace: "
+                 & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+      end;
+      S.Close (Store);
+
+      Task_Project (Store, "git-workspace", "");
+      declare
+         Root      : constant String := Dirs.Full_Name (Fresh_Root (Store));
+         Exit_Code : Integer;
+
+         function Git (A, B, C, D, F : String := "") return Boolean is
+            Args : Hostkit.String_Vectors.Vector;
+         begin
+            for Word of Model_Runner.Framework.Name_Lists.Vector'
+              (["-C", Root, "-c", "user.name=t", "-c", "user.email=t@t", A, B, C, D, F])
+            loop
+               if Word /= "" then
+                  Args.Append (To_Unbounded_String (Word));
+               end if;
+            end loop;
+            return Hostkit.Process.Locate ("git") /= ""
+              and then Hostkit.Process.Run (Hostkit.Process.Locate ("git"), Args, Exit_Code)
+              and then Exit_Code = 0;
+         end Git;
+      begin
+         Dirs.Create_Path (Root & "/src");
+         Put_File (Root & "/src/a.adb", "one");
+         if Git ("init", "-q") and then Git ("add", "src") and then Git ("commit", "-q", "-m", "one")
+         then
+            Put_File (Root & "/src/a.adb", "two");
+            Put_File (Root & "/src/new.adb", "new");
+            Tk.Create (Store, Change, Fields ("Git", "analysis"), "user", "", Id, Status);
+            S.Commit (Store, Change, Status);
+            Ws.Create (Store, Change, To_String (Id), "AG-TEST", "1", True, Made, Status);
+            S.Commit (Store, Change, Status);
+            Assert (E.Is_Ok (Status) and then Ws."=" (Made.Kind, Ws.Git_Worktree)
+                    and then Read_Whole (To_String (Made.Path) & "/src/a.adb") = "two"
+                    and then Dirs.Exists (To_String (Made.Path) & "/src/new.adb")
+                    and then Ws.Changes (Store, To_String (Made.Id)).Is_Empty,
+                    "a Git workspace did not start from the project as it is: " & Code_Of (Status));
+            Put_File (To_String (Made.Path) & "/src/a.adb", "three");
+            Ws.Integrate (Store, Change, To_String (Made.Id), True, Taken, Status);
+            Assert (E.Is_Ok (Status) and then Natural (Taken.Length) = 1
+                    and then Dirs.Exists (To_String (Made.Path)),
+                    "only the workspace's own change was not taken in, or its tree went"
+                    & " before the integration was kept: " & Code_Of (Status));
+            S.Commit (Store, Change, Status);
+            Ws.Release (Store, To_String (Made.Id));
+            Assert (Read_Whole (Root & "/src/a.adb") = "three"
+                    and then not Dirs.Exists (To_String (Made.Path)),
+                    "a kept integration left its tree, or did not take the change in");
+         end if;
+      end;
+      S.Close (Store);
+   end Workspaces_Start_And_End_Whole;
+
    --  A task is ready only while what it serves is agreed; it names only
    --  tasks and requirements, not records beside them; and a requirement
    --  is implemented once every task serving it is complete.
@@ -7456,7 +7559,10 @@ package body Tests.Framework_Cases is
          Args.Append (To_Unbounded_String ("init"));
          Args.Append (To_Unbounded_String ("-q"));
          Args.Append (To_Unbounded_String (Root));
-         if Hostkit.Process.Run ("git", Args, Exit_Code) and then Exit_Code = 0 then
+         if Hostkit.Process.Locate ("git") /= ""
+           and then Hostkit.Process.Run (Hostkit.Process.Locate ("git"), Args, Exit_Code)
+           and then Exit_Code = 0
+         then
             Put_File (Root & "/new.txt", "x");
             declare
                Said : constant Model_Runner.Framework.Git.Status_Report :=
@@ -8082,6 +8188,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Verification_Follows_What_Changed'Access,
          "how widely work is verified follows what it changed and the policy");
+      Register_Routine
+        (T, Workspaces_Start_And_End_Whole'Access,
+         "workspaces start from the project as it is and end once their work is kept");
       Register_Routine
         (T, Readiness_Follows_What_Is_Served'Access,
          "a task is ready only while what it serves is agreed, and names only what is there");

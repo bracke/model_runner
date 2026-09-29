@@ -234,6 +234,43 @@ package body Model_Runner.Framework.Work is
       Stores.Put (Change, Tasks_Area, Task_Id & ".state", Held);
    end Annotate;
 
+   --  What was taken in, kept as a result -- the files, and the project's
+   --  revision they made, which integration made the state it is in --
+   --  named on the task, and said as a change to the source.
+   procedure Report_Integration
+     (Item    : Stores.Store;
+      Change  : in out Stores.Transaction;
+      Id      : String;
+      Task_Id : String;
+      Taken   : Name_Lists.Vector;
+      Status  : out Model_Runner.Errors.Error_Info)
+   is
+      Listed : Unbounded_String;
+      Event  : Unbounded_String;
+   begin
+      for Path of Taken loop
+         Append (Listed, Path & ASCII.LF);
+      end loop;
+      declare
+         Report_Of : Results.Result :=
+           (Kind       => Results.Integration_Report,
+            Producer   => To_Unbounded_String ("integration"),
+            Summary    => To_Unbounded_String
+                            (Id & " taken in for " & Task_Id & ", the project now at "
+                             & Repository.Graph_Fingerprint (Repository.Now (Item))),
+            Payload    => Listed,
+            Provenance => To_Unbounded_String (Id),
+            others     => <>);
+      begin
+         Results.Add (Item, Change, Report_Of, Status);
+         if E.Is_Ok (Status) then
+            Annotate (Item, Change, Task_Id, "integration_report", To_String (Report_Of.Id));
+            Events.Emit (Item, Change, Events.Source_Changed, Task_Id,
+                         "taken in from " & Id, Event, Status);
+         end if;
+      end;
+   end Report_Integration;
+
    --  Set an agent record's state, in the transaction.
    procedure Agent_State
      (Item   : Stores.Store;
@@ -2120,16 +2157,15 @@ package body Model_Runner.Framework.Work is
                          & Why_Of (Held), "completed");
                return;
             end if;
-            declare
-               Event : Unbounded_String;
-            begin
-               Events.Emit (Item, Change, Events.Source_Changed, Task_Id,
-                            "taken in from " & To_String (Result.Workspace_Id), Event, Status);
-            end;
-            Stores.Commit (Item, Change, Status);
+            Report_Integration
+              (Item, Change, To_String (Result.Workspace_Id), Task_Id, Taken, Status);
+            if E.Is_Ok (Status) then
+               Stores.Commit (Item, Change, Status);
+            end if;
             if E.Is_Error (Status) then
                return;
             end if;
+            Workspaces.Release (Item, To_String (Result.Workspace_Id));
          end;
       end if;
 
@@ -2236,42 +2272,14 @@ package body Model_Runner.Framework.Work is
 
       Workspaces.Integrate (Item, Change, Id, True, Taken, Status, Semantic_Accepted);
 
-      --  What was taken in, kept as a result: the files, and the project's
-      --  revision they made -- which integration made the state it is in.
       if E.Is_Ok (Status) then
-         declare
-            Listed : Unbounded_String;
-            Event  : Unbounded_String;
-         begin
-            for Path of Taken loop
-               Append (Listed, Path & ASCII.LF);
-            end loop;
-            Stores.Commit (Item, Change, Status);
-            if E.Is_Ok (Status) then
-               declare
-                  Report_Of : Results.Result :=
-                    (Kind       => Results.Integration_Report,
-                     Producer   => To_Unbounded_String ("integration"),
-                     Summary    => To_Unbounded_String
-                                     (Id & " taken in for " & Task_Id & ", the project now at "
-                                      & Repository.Graph_Fingerprint (Repository.Now (Item))),
-                     Payload    => Listed,
-                     Provenance => To_Unbounded_String (Id),
-                     others     => <>);
-               begin
-                  Results.Add (Item, Change, Report_Of, Status);
-                  if E.Is_Ok (Status) then
-                     Annotate (Item, Change, Task_Id, "integration_report",
-                               To_String (Report_Of.Id));
-                     Events.Emit (Item, Change, Events.Source_Changed, Task_Id,
-                                  "taken in from " & Id, Event, Status);
-                  end if;
-               end;
-            end if;
-         end;
+         Report_Integration (Item, Change, Id, Task_Id, Taken, Status);
       end if;
       if E.Is_Ok (Status) then
          Stores.Commit (Item, Change, Status);
+      end if;
+      if E.Is_Ok (Status) then
+         Workspaces.Release (Item, Id);
       end if;
       if E.Is_Error (Status) then
          return;

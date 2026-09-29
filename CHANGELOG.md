@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A Git workspace starts from the project as it is:** modified and new
+  files are copied over the checkout, so the work and its conflicts are
+  judged against what is there, not the last commit.
+- **Integration is all or nothing:** a file that cannot be written puts
+  back those already taken in, and a workspace's tree goes only once the
+  integration is kept (`Workspaces.Release`).
+- **Work the harness takes in on its own is reported** as work taken in by
+  hand is: an integration report, named on the task.
+
 - **A cancelled check judges nothing:** the profile stops, no evidence is
   kept, and the task is blocked "its verification was cancelled".
 - **`/req`, `/decision` and `/spec` values run on to the next NAME=,** so

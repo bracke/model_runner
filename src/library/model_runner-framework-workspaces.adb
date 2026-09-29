@@ -247,6 +247,50 @@ package body Model_Runner.Framework.Workspaces is
                      if Worked then
                         Result.Kind := Git_Worktree;
                         Result.Base := To_Unbounded_String (Head);
+
+                        --  The project as it is, not as it was committed:
+                        --  what is modified or new is copied over, and what
+                        --  is gone is gone there too, so the work starts
+                        --  from -- and is compared with -- what is here.
+                        declare
+                           Here  : constant Maps.Map := Snapshot (Project, Repository.Roots_Of (Item));
+                           There : constant Maps.Map := Snapshot (Tree, Repository.Roots_Of (Item));
+                        begin
+                           for Position in Here.Iterate loop
+                              if not There.Contains (Maps.Key (Position))
+                                or else There (Maps.Key (Position)) /= Maps.Element (Position)
+                              then
+                                 declare
+                                    Target : constant String :=
+                                      Hostkit.Fs.Join (Tree, Maps.Key (Position));
+                                 begin
+                                    if Files.Make_Directory (Dirs.Containing_Directory (Target)) then
+                                       Dirs.Copy_File
+                                         (Hostkit.Fs.Join (Project, Maps.Key (Position)), Target);
+                                    end if;
+                                 end;
+                              end if;
+                           end loop;
+                           for Position in There.Iterate loop
+                              if not Here.Contains (Maps.Key (Position)) then
+                                 Files.Discard (Hostkit.Fs.Join (Tree, Maps.Key (Position)));
+                              end if;
+                           end loop;
+                        exception
+                           when others =>
+                              --  Copied instead, whole, as without Git.
+                              declare
+                                 Gone : constant String :=
+                                   Git (Project, Words ("worktree", "remove", "--force", Tree),
+                                        Scratch, Worked);
+                                 pragma Unreferenced (Gone);
+                              begin
+                                 if Dirs.Exists (Tree) then
+                                    Files.Remove_Tree (Tree);
+                                 end if;
+                                 Worked := False;
+                              end;
+                        end;
                      end if;
                   end;
                end if;
@@ -641,35 +685,96 @@ package body Model_Runner.Framework.Workspaces is
          end;
       end if;
 
-      for Path of Changes (Item, Id) loop
-         declare
-            From   : constant String := Hostkit.Fs.Join (To_String (Held.Path), Path);
-            Target : constant String := Hostkit.Fs.Join (Project, Path);
+      --  All or nothing: what each file was is kept, and put back should
+      --  any of them fail to be written.
+      declare
+         Wanted : constant Name_Lists.Vector := Changes (Item, Id);
+         Before : Maps.Map;
+         Absent : Name_Lists.Vector;
+
+         procedure Put_Back is
+            Ignored : E.Error_Info;
          begin
-            if Dirs.Exists (From) then
-               if not Files.Make_Directory (Dirs.Containing_Directory (Target)) then
+            for Path of Taken loop
+               declare
+                  Target : constant String := Hostkit.Fs.Join (Project, Path);
+               begin
+                  if Absent.Contains (Path) then
+                     Files.Discard (Target);
+                  elsif Before.Contains (Path) then
+                     Files.Write_Text (Target, Before (Path), Ignored);
+                  end if;
+               end;
+            end loop;
+            Taken.Clear;
+         end Put_Back;
+      begin
+         for Path of Wanted loop
+            declare
+               Target : constant String := Hostkit.Fs.Join (Project, Path);
+               Text   : Unbounded_String;
+               Read   : E.Error_Info;
+            begin
+               if Dirs.Exists (Target) then
+                  Files.Read_Text (Target, Text, Read);
+                  if E.Is_Error (Read) then
+                     Status := Read;
+                     return;
+                  end if;
+                  Before.Include (Path, To_String (Text));
+               else
+                  Absent.Append (Path);
+               end if;
+            end;
+         end loop;
+
+         for Path of Wanted loop
+            declare
+               From   : constant String := Hostkit.Fs.Join (To_String (Held.Path), Path);
+               Target : constant String := Hostkit.Fs.Join (Project, Path);
+            begin
+               Taken.Append (Path);
+               if Dirs.Exists (From) then
+                  if not Files.Make_Directory (Dirs.Containing_Directory (Target)) then
+                     Files.Write_Failed (Target, Status);
+                     Put_Back;
+                     return;
+                  end if;
+                  Dirs.Copy_File (From, Target);
+               elsif not Files.Delete_If_Present (Target) then
                   Files.Write_Failed (Target, Status);
+                  Put_Back;
                   return;
                end if;
-               Dirs.Copy_File (From, Target);
-            elsif not Files.Delete_If_Present (Target) then
-               Files.Write_Failed (Target, Status);
-               return;
-            end if;
-            Taken.Append (Path);
-         exception
-            when others =>
-               Files.Write_Failed (Target, Status);
-               return;
-         end;
-      end loop;
+            exception
+               when others =>
+                  Files.Write_Failed (Target, Status);
+                  Put_Back;
+                  return;
+            end;
+         end loop;
+      end;
 
       Set_Status (Item, Change, Id, "integrated",
                   Image (Natural (Taken.Length)) & " files taken in");
       Events.Emit (Item, Change, Events.Workspace_Integrated, Id,
                    To_String (Held.Task_Id), Event, Status);
-      Remove_Tree (Item, Held);
+      --  Its tree stays until the integration is kept: Release removes it.
    end Integrate;
+
+   -------------
+   -- Release --
+   -------------
+
+   procedure Release (Item : Stores.Store; Id : String) is
+      Held   : Workspace;
+      Status : E.Error_Info;
+   begin
+      Read (Item, Id, Held, Status);
+      if E.Is_Ok (Status) and then To_String (Held.Status) = "integrated" then
+         Remove_Tree (Item, Held);
+      end if;
+   end Release;
 
    -------------
    -- Abandon --

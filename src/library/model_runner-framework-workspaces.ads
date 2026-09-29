@@ -105,6 +105,13 @@ package Model_Runner.Framework.Workspaces is
    --  @return Each as the workspace's file, the project's and why.
    function Semantic_Conflicts (Item : Stores.Store; Id : String) return Name_Lists.Vector;
 
+   --  Remove an integrated workspace's tree, once its integration is
+   --  kept: until then the work is still there to take in again.
+   --
+   --  @param Item The store.
+   --  @param Id The workspace.
+   procedure Release (Item : Stores.Store; Id : String);
+
    --  Take a workspace's changes into the project.
    --
    --  @param Item The store.
