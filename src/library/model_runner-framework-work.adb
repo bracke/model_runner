@@ -70,6 +70,27 @@ package body Model_Runner.Framework.Work is
        & " status. If a helper you needed failed and you did its part another"
        & " way, say how under instead:." & ASCII.LF);
 
+   --  The same, for an agent that is a command: it works on the files
+   --  itself, in the directory it is started in, and answers on its
+   --  standard output; it has no tools to call.
+   function Command_Instructions return String
+   is ("## What to do" & ASCII.LF
+       & "Do the task now, working on the files yourself: you are started in"
+       & " the project's directory, and paths are relative to it. Change the"
+       & " files the task needs changed; describing a change does not make it."
+       & ASCII.LF & ASCII.LF
+       & "When the files are written, print a short report on standard output,"
+       & " in these lines:" & ASCII.LF & ASCII.LF
+       & "status: done" & ASCII.LF
+       & "summary: one line on what you did" & ASCII.LF
+       & "changed_files: the files you wrote, one a line" & ASCII.LF & ASCII.LF
+       & "If you could not do it, the status is failed and the summary says"
+       & " why; issue is for a problem found outside the task, and blocked for"
+       & " a decision only a person can make. Further work you found goes in"
+       & " proposed_tasks:, one a line, as TITLE; kind=K; component=C. If the"
+       & " task is too large to do as one, say blocked and name its parts under"
+       & " parts:, one a line." & ASCII.LF);
+
    --  The fields of a tab-separated line.
    function Fields_Of (Text : String) return Name_Lists.Vector is
       Result : Name_Lists.Vector;
@@ -1552,12 +1573,13 @@ package body Model_Runner.Framework.Work is
 
    --  The work itself; Execute holds it to ending the task it started.
    procedure Execute_Work
-     (Item    : aliased in out Stores.Store;
-      Task_Id : String;
-      Runner  : Agent_Runner'Class;
-      Model   : Context.Model_Profile;
-      Result  : out Report;
-      Status  : out Model_Runner.Errors.Error_Info)
+     (Item     : aliased in out Stores.Store;
+      Task_Id  : String;
+      Runner   : Agent_Runner'Class;
+      Model    : Context.Model_Profile;
+      Result   : out Report;
+      Status   : out Model_Runner.Errors.Error_Info;
+      Starting : access procedure (Agent_Id, Manifest_Id, Invocation_Id : String) := null)
    is
       Change  : Stores.Transaction;
       Project : constant String :=
@@ -1780,7 +1802,10 @@ package body Model_Runner.Framework.Work is
       end if;
 
       --  What it is told, and the call, recorded before it is made.
-      Context.Build (Item, Task_Id, Model, Built, Held, Instructions => Instructions);
+      Context.Build
+        (Item, Task_Id, Model, Built, Held,
+         Instructions => (if Ada.Strings.Fixed.Index (Runner_Named, "the command ") = 1
+                          then Command_Instructions else Instructions));
       if E.Is_Error (Held) then
          Conclude ("blocked", "its context cannot be built: "
                    & Why_Of (Held), "failed");
@@ -1939,6 +1964,10 @@ package body Model_Runner.Framework.Work is
                declare
                   State : constant Stores.State_Snapshot := Stores.Snapshot_State (Item);
                begin
+                  if Starting /= null then
+                     Starting (To_String (Result.Agent_Id), To_String (Result.Manifest_Id),
+                               To_String (Result.Invocation_Id));
+                  end if;
                   Runner.Run (Prompt, To_String (Place), Answer, Ran);
                   Stores.Restore_State (Item, State, Tampered);
                end;
@@ -2728,14 +2757,15 @@ package body Model_Runner.Framework.Work is
    -------------
 
    procedure Execute
-     (Item    : aliased in out Stores.Store;
-      Task_Id : String;
-      Runner  : Agent_Runner'Class;
-      Model   : Context.Model_Profile;
-      Result  : out Report;
-      Status  : out Model_Runner.Errors.Error_Info) is
+     (Item     : aliased in out Stores.Store;
+      Task_Id  : String;
+      Runner   : Agent_Runner'Class;
+      Model    : Context.Model_Profile;
+      Result   : out Report;
+      Status   : out Model_Runner.Errors.Error_Info;
+      Starting : access procedure (Agent_Id, Manifest_Id, Invocation_Id : String) := null) is
    begin
-      Execute_Work (Item, Task_Id, Runner, Model, Result, Status);
+      Execute_Work (Item, Task_Id, Runner, Model, Result, Status, Starting);
       Execution.Watch_Lease (null);
 
       --  Whatever way the work ended, a task it started is not left running

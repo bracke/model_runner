@@ -2533,8 +2533,12 @@ package body Tests.Framework_Cases is
       Tk.Create (Store, Change,
                  Fields ("Parse the input", "implementation", "component",
                          "parser"), "user", "", Id, Status);
-      Assert (E.Is_Ok (Status) and then To_String (Id) = "TASK-PARSER-001",
-              "a task was not created: " & Code_Of (Status));
+      --  Keyed by its component where the project has several.
+      Assert (E.Is_Ok (Status)
+              and then To_String (Id)
+                       = (if Natural (Tk.Components (Store).Length) > 1 then "TASK-PARSER-001"
+                          else "TASK-001"),
+              "a task was not created: " & Code_Of (Status) & " " & To_String (Id));
       Tk.Create (Store, Change,
                  Fields ("Look at the input", "analysis", "estimate", "2h"),
                  "user", "", Other, Status);
@@ -8389,8 +8393,12 @@ package body Tests.Framework_Cases is
          Set_Error (Said);
          Model_Runner.Presentation.Put_Note
            (Screen, "cli.next.retry", [Model_Runner.Localization.Named ("name", "TASK-7")]);
+         Model_Runner.Presentation.Put_Aside (Screen, "cli.interactive.help.projects");
          Set_Error (Standard_Error);
          Close (Said);
+         Assert (Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"),
+                                          ASCII.LF & "project commands:") > 0,
+                 "a line put aside was written with the program's name before it");
          Assert (Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"), "/task accept TASK-7") > 0,
                  "a next step in a session was not its slash command: "
                  & Read_Whole ("obj/session-next.txt"));

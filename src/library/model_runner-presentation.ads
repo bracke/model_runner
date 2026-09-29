@@ -193,6 +193,19 @@ package Model_Runner.Presentation is
       Value : String;
       Where : Destination);
 
+   --  Write a message on standard error as a line of its own, with no
+   --  program name before it: what a session says about itself -- its help
+   --  -- where standard output is the model's alone.
+   --
+   --  @param Item Console to write through.
+   --  @param Key Catalog key.
+   --  @param Arguments Named arguments.
+   procedure Put_Aside
+     (Item      : in out Console;
+      Key       : String;
+      Arguments : Model_Runner.Localization.Argument_List :=
+        Model_Runner.Localization.Empty_Arguments);
+
    --  Have the console speak for a session: what a next step names -- a
    --  task, req or work command -- is said as its slash command.
    --

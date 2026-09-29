@@ -3,6 +3,7 @@ with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
+with Ada.Text_IO;
 
 with Hostkit;
 with Hostkit.Fs;
@@ -466,6 +467,15 @@ package body Model_Runner.CLI.Work is
            (Screen, Key, [Loc.Named ("name", Name), Loc.Named ("value", Value)]);
       end Say;
 
+      --  The agent, its context and its call, said as it starts: a long
+      --  run is watched knowing what is running.
+      procedure Announce (Agent_Id, Manifest_Id, Invocation_Id : String) is
+      begin
+         Say ("cli.work.agent", Agent_Id, To_String (Chosen));
+         Say ("cli.work.context", Manifest_Id, Invocation_Id);
+         Ada.Text_IO.Flush;
+      end Announce;
+
       --  What there is to do instead, where nothing was named or ready:
       --  the tasks ready now, else the candidates waiting, else how to
       --  make one.
@@ -730,14 +740,15 @@ package body Model_Runner.CLI.Work is
             end if;
             if Given_Runner /= null and then Command = "" then
                W.Execute
-                 (Store, To_String (Chosen), Given_Runner.all, Model, Done, Outcome);
+                 (Store, To_String (Chosen), Given_Runner.all, Model, Done, Outcome,
+                  Starting => Announce'Access);
             elsif Command /= "" then
                W.Execute
                  (Store, To_String (Chosen),
                   Command_Agent'(Store   => Store'Access,
                                  Command => To_Unbounded_String (Command),
                                  Timeout => Agent_Seconds),
-                  Model, Done, Outcome);
+                  Model, Done, Outcome, Starting => Announce'Access);
             elsif Path /= "" then
                W.Execute
                  (Store, To_String (Chosen),
@@ -746,7 +757,7 @@ package body Model_Runner.CLI.Work is
                                Timeout => Positive'Max
                                             (60, W.Time_Allowed (Store, To_String (Chosen))),
                                Context => Model.Context_Limit),
-                  Model, Done, Outcome);
+                  Model, Done, Outcome, Starting => Announce'Access);
             else
                Outcome := E.Make (E.Framework_Input_Missing);
                E.Add_Text (Outcome, "name", "model");
@@ -763,8 +774,6 @@ package body Model_Runner.CLI.Work is
             return;
          end if;
 
-         Say ("cli.work.agent", To_String (Done.Agent_Id), To_String (Done.Task_Id));
-         Say ("cli.work.context", To_String (Done.Manifest_Id), To_String (Done.Invocation_Id));
          for Path of Done.Changed_Files loop
             Say ("cli.work.changed", Path, "");
          end loop;

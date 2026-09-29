@@ -645,31 +645,31 @@ package body Model_Runner.CLI.Project_Commands is
    procedure Help (Screen : in out Model_Runner.Presentation.Console) is
    begin
       --  One key each, spelled out, so the catalog's readers can be found.
-      Pres.Put_Message (Screen, "cli.interactive.help.init");
-      Pres.Put_Message (Screen, "cli.interactive.help.bootstrap");
-      Pres.Put_Message (Screen, "cli.interactive.help.state");
-      Pres.Put_Message (Screen, "cli.interactive.help.config");
-      Pres.Put_Message (Screen, "cli.interactive.help.git");
-      Pres.Put_Message (Screen, "cli.interactive.help.sandbox");
-      Pres.Put_Message (Screen, "cli.interactive.help.instruct");
-      Pres.Put_Message (Screen, "cli.interactive.help.reconfigure");
-      Pres.Put_Message (Screen, "cli.interactive.help.task");
-      Pres.Put_Message (Screen, "cli.interactive.help.accept");
-      Pres.Put_Message (Screen, "cli.interactive.help.reject");
-      Pres.Put_Message (Screen, "cli.interactive.help.work");
-      Pres.Put_Message (Screen, "cli.interactive.help.cancel");
-      Pres.Put_Message (Screen, "cli.interactive.help.check");
-      Pres.Put_Message (Screen, "cli.interactive.help.req");
-      Pres.Put_Message (Screen, "cli.interactive.help.decision");
-      Pres.Put_Message (Screen, "cli.interactive.help.spec");
-      Pres.Put_Message (Screen, "cli.interactive.help.result");
-      Pres.Put_Message (Screen, "cli.interactive.help.tree");
-      Pres.Put_Message (Screen, "cli.interactive.help.sym");
-      Pres.Put_Message (Screen, "cli.interactive.help.refs");
-      Pres.Put_Message (Screen, "cli.interactive.help.deps");
-      Pres.Put_Message (Screen, "cli.interactive.help.users");
-      Pres.Put_Message (Screen, "cli.interactive.help.impact");
-      Pres.Put_Message (Screen, "cli.interactive.help.trace");
+      Pres.Put_Aside (Screen, "cli.interactive.help.init");
+      Pres.Put_Aside (Screen, "cli.interactive.help.bootstrap");
+      Pres.Put_Aside (Screen, "cli.interactive.help.state");
+      Pres.Put_Aside (Screen, "cli.interactive.help.config");
+      Pres.Put_Aside (Screen, "cli.interactive.help.git");
+      Pres.Put_Aside (Screen, "cli.interactive.help.sandbox");
+      Pres.Put_Aside (Screen, "cli.interactive.help.instruct");
+      Pres.Put_Aside (Screen, "cli.interactive.help.reconfigure");
+      Pres.Put_Aside (Screen, "cli.interactive.help.task");
+      Pres.Put_Aside (Screen, "cli.interactive.help.accept");
+      Pres.Put_Aside (Screen, "cli.interactive.help.reject");
+      Pres.Put_Aside (Screen, "cli.interactive.help.work");
+      Pres.Put_Aside (Screen, "cli.interactive.help.cancel");
+      Pres.Put_Aside (Screen, "cli.interactive.help.check");
+      Pres.Put_Aside (Screen, "cli.interactive.help.req");
+      Pres.Put_Aside (Screen, "cli.interactive.help.decision");
+      Pres.Put_Aside (Screen, "cli.interactive.help.spec");
+      Pres.Put_Aside (Screen, "cli.interactive.help.result");
+      Pres.Put_Aside (Screen, "cli.interactive.help.tree");
+      Pres.Put_Aside (Screen, "cli.interactive.help.sym");
+      Pres.Put_Aside (Screen, "cli.interactive.help.refs");
+      Pres.Put_Aside (Screen, "cli.interactive.help.deps");
+      Pres.Put_Aside (Screen, "cli.interactive.help.users");
+      Pres.Put_Aside (Screen, "cli.interactive.help.impact");
+      Pres.Put_Aside (Screen, "cli.interactive.help.trace");
    end Help;
 
    --  The words of a line, with a quoted stretch kept whole.

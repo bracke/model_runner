@@ -1782,6 +1782,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **`work` says which agent, context and call it started as it starts
+  them**, not only once the agent has finished.
+- **Task identifiers are keyed by component only where a project has more
+  than one:** a project that is one component numbers every task TASK-NNN,
+  as it numbers those without a component. Tasks made before keep theirs.
+- **`/help` fits a screen:** the session's own commands and one line naming
+  the project's; `/help project` says what each of those does. Help is on
+  standard error without the program's name before each line.
+- **A command agent is told it works on the files itself** and answers on
+  standard output, not about tools it does not have.
+
 - **A killed or timed-out `work` no longer leaves the project locked:** the
   lock is not handed to the agent, the lock names the process holding it,
   SIGTERM and SIGHUP end a run as Ctrl-C does, a command agent is bounded by

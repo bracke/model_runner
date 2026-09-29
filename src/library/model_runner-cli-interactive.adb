@@ -197,13 +197,13 @@ package body Model_Runner.CLI.Interactive is
          end if;
 
          --  Matched against the words the enumeration carries rather than
-         --  a chain beside it. Only one command takes what follows it.
+         --  a chain beside it. Those that take what follows them are named.
          for Kind in Command_Kind loop
             if Command_Word (Kind) /= "" and then Word = Command_Word (Kind)
             then
                if Kind in Set_System | Tool_Result
                             | Save_Conversation | Load_Conversation
-                            | Show_Picture | Show_Video
+                            | Show_Picture | Show_Video | Help
                then
                   return (Kind, First, Last);
                else
@@ -397,23 +397,31 @@ package body Model_Runner.CLI.Interactive is
             Have_Stats := False;
             Pres.Put_Note (Screen, "cli.interactive.reset_done");
 
+         elsif Asked.Kind = Help
+           and then Asked.First in Line'Range
+           and then Line (Asked.First .. Asked.Last) = "project"
+         then
+            --  The project's commands, each with what it does.
+            Model_Runner.CLI.Project_Commands.Help (Screen);
+
          elsif Asked.Kind = Help then
             --  One line per command the enumeration carries, so a command
             --  added without a line fails the checklist rather than going
-            --  unmentioned in the only place that lists them.
+            --  unmentioned in the only place that lists them; the project's
+            --  commands named on one more, so that it all fits a screen.
             for Kind in Command_Kind loop
                if Command_Word (Kind) /= "" then
                   declare
                      Word : constant String := Command_Word (Kind);
                   begin
-                     Pres.Put_Note
+                     Pres.Put_Aside
                        (Screen,
                         "cli.interactive.help."
                         & Word (Word'First + 1 .. Word'Last));
                   end;
                end if;
             end loop;
-            Model_Runner.CLI.Project_Commands.Help (Screen);
+            Pres.Put_Aside (Screen, "cli.interactive.help.projects");
 
          elsif Asked.Kind = Settings then
             Show_Settings;

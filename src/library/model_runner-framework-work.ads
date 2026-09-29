@@ -369,17 +369,20 @@ package Model_Runner.Framework.Work is
    --  @param Runner The agent.
    --  @param Model The profile the context is budgeted for.
    --  @param Result What it did.
+   --  @param Starting Told the agent, its context and its call just before
+   --    the agent starts: what a person watching a long run wants to know.
    --  @param Status Framework_Task_Not_Ready when the task is not ready,
    --    Framework_Lease_Held when another agent holds it; a failure of the
    --    agent itself ends the task failed and is reported in Result, not
    --    here.
    procedure Execute
-     (Item    : aliased in out Stores.Store;
-      Task_Id : String;
-      Runner  : Agent_Runner'Class;
-      Model   : Context.Model_Profile;
-      Result  : out Report;
-      Status  : out Model_Runner.Errors.Error_Info);
+     (Item     : aliased in out Stores.Store;
+      Task_Id  : String;
+      Runner   : Agent_Runner'Class;
+      Model    : Context.Model_Profile;
+      Result   : out Report;
+      Status   : out Model_Runner.Errors.Error_Info;
+      Starting : access procedure (Agent_Id, Manifest_Id, Invocation_Id : String) := null);
 
    --  Take a task's workspace into the project, then verify the project as
    --  it now is and complete the task through its gates. Whoever asks is

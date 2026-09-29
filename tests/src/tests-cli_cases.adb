@@ -1609,13 +1609,13 @@ package body Tests.CLI_Cases is
       Assert (Command ("task|list|--set|state=accepted", Json => True) = 0
               and then Shows ("{""kind"": ""message"", ""key"": ""cli.task.item""")
               and then Shows ("""name"": ""TASK-001""")
-              and then not Shows ("TASK-DEMO-001"),
+              and then not Shows ("TASK-002"),
               "task list did not narrow by state, as JSON: " & Last_Output);
       Assert (Command ("task|list|--set|kind=implementation") = 0
-              and then Shows ("TASK-DEMO-001") and then not Shows ("Lexer"),
+              and then Shows ("TASK-002") and then not Shows ("Lexer"),
               "task list did not narrow by kind: " & Last_Output);
       Assert (Command ("task|list|kind=implementation") = 0
-              and then Shows ("TASK-DEMO-001") and then not Shows ("Lexer"),
+              and then Shows ("TASK-002") and then not Shows ("Lexer"),
               "task list did not narrow by a filter given without --set: " & Last_Output);
 
       --  Least privilege by kind, and work that changes code done only
@@ -1625,17 +1625,17 @@ package body Tests.CLI_Cases is
       Assert (Command ("task|show|TASK-001") = 0
               and then Shows ("permissions: read_source; read_specs; run_build; run_tests;"
                               & " propose_tasks")
-              and then Command ("task|show|TASK-DEMO-001") = 0
+              and then Command ("task|show|TASK-002") = 0
               and then Shows ("implementation_present"),
               "a kind was not narrowed, or its gates not what the template says: " & Last_Output);
 
       Assert (Command ("task|split|TASK-001|One; Two") = 0 and then Shows ("is blocked"),
               "task split did not make the parts and block the parent: " & Last_Output);
-      Assert (Command ("task|depend|TASK-003|TASK-002") = 0 and then Shows ("waits for"),
+      Assert (Command ("task|depend|TASK-004|TASK-003") = 0 and then Shows ("waits for"),
               "task depend did not make one wait for the other: " & Last_Output);
-      Assert (Command ("task|accept|TASK-DEMO-001") = 0
-              and then Command ("task|cancel|TASK-DEMO-001") = 0
-              and then Command ("task|reopen|TASK-DEMO-001") = 0
+      Assert (Command ("task|accept|TASK-002") = 0
+              and then Command ("task|cancel|TASK-002") = 0
+              and then Command ("task|reopen|TASK-002") = 0
               and then Shows ("is accepted"),
               "a cancelled task was not reopened: " & Last_Output);
 
@@ -2128,7 +2128,10 @@ package body Tests.CLI_Cases is
       --  An answer's list written as a list is read as one.
       Write (Root & "/g/src/listed.txt", "before" & LF);
       Write (Root & "/listed.sh",
-             "#!/bin/sh" & LF & "echo after > src/listed.txt" & LF
+             "#!/bin/sh" & LF
+             --  Told as a command is: to work on the files itself.
+             & "grep -q 'working on the files yourself' ""$1"" || exit 3" & LF
+             & "echo after > src/listed.txt" & LF
              & "printf 'status: done\nsummary: wrote it\nchanged_files:\n  - src/listed.txt\n'" & LF,
              Executable => True);
       Run ("reconfigure|work.agent=" & Root & "/listed.sh $PROMPT|execution.allowed+=listed.sh"
@@ -8977,6 +8980,15 @@ package body Tests.CLI_Cases is
                                      & "/exit" & ASCII.LF),
                           "nothing is asking yes or no"),
               "a lone answer after a command was sent to the model");
+      --  /help fits a screen, naming the project's commands; /help project
+      --  says what each does.
+      Assert (Project_Tools.Text.Contains
+                (Conversed ("/help" & ASCII.LF & "/exit" & ASCII.LF), "/help project says")
+              and then Project_Tools.Text.Contains
+                         (Conversed ("/help project" & ASCII.LF & "/exit" & ASCII.LF),
+                          "where a symbol is declared"),
+              "/help did not name the project's commands, or /help project say them");
+
       Assert (Took_A_Turn ("/settings" & ASCII.LF & "n" & ASCII.LF & ASCII.LF
                            & "n" & ASCII.LF & ASCII.LF & "/stats" & ASCII.LF & "/exit" & ASCII.LF),
               "a lone answer sent again was not sent");

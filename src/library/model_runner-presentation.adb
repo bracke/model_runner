@@ -399,6 +399,22 @@ package body Model_Runner.Presentation is
             [Loc.Named ("detail", Said)]));
    end Put_Note;
 
+   ---------------
+   -- Put_Aside --
+   ---------------
+
+   procedure Put_Aside
+     (Item      : in out Console;
+      Key       : String;
+      Arguments : Loc.Argument_List := Loc.Empty_Arguments) is
+   begin
+      if Item.Structured then
+         Put_Record (Item, "note", Key, Arguments, Message (Item, Key, Arguments));
+         return;
+      end if;
+      Error_Line (Item, Message (Item, Key, Arguments));
+   end Put_Aside;
+
    -----------------
    -- Use_Session --
    -----------------

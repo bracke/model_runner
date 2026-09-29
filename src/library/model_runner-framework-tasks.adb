@@ -598,10 +598,13 @@ package body Model_Runner.Framework.Tasks is
                Char := '_';
             end if;
          end loop;
+         --  Keyed by its component where there are several to tell apart;
+         --  in a project that is one component, every task is TASK-NNN.
          Stores.Allocate_Identifier
            (Item, Change, "TASK",
-            (if Component /= "" and then Identifiers.Is_Valid (Key) then Key
-             else ""),
+            (if Component /= "" and then Identifiers.Is_Valid (Key)
+               and then Natural (Components (Item).Length) > 1
+             then Key else ""),
             Id, Status);
          if E.Is_Error (Status) then
             return;
