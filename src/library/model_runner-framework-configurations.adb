@@ -1070,6 +1070,11 @@ package body Model_Runner.Framework.Configurations is
             Name  : constant String := Records.Field_Name (Config, Index);
             Value : constant String := Records.Get (Config, Name);
          begin
+            if Starts (Name, "scalar.profile_capability.")
+              and then Value not in "run_build" | "run_tests" | "run_static_analysis"
+            then
+               return Name & " is one of run_build, run_tests, run_static_analysis, not " & Value;
+            end if;
             if (Starts (Name, "scalar.agents.max_") or else Starts (Name, "scalar.execution.max_")
                 or else Starts (Name, "scalar.retention.")
                 or else Name in "scalar.agents.token_budget" | "scalar.execution.output_limit"

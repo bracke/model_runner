@@ -143,7 +143,8 @@ package Model_Runner.Framework.Execution is
    --  @param Directory Where it runs.
    --  @param Output The file its standard output is written to.
    --  @param Timeout Seconds it may take.
-   --  @param Result What became of it; Output there is left empty.
+   --  @param Result What became of it; Output there is the end of what it
+   --    said on its error stream, which the harness log keeps too.
    --  @param Passed More variables to pass, separated by commas.
    --  @param Added NAME=VALUE assignments to give it.
    procedure Run_Harness

@@ -895,12 +895,20 @@ package body Model_Runner.Framework.Work is
       Held   : Agents.Agent;
       Status : E.Error_Info;
       Named  : constant String := Ada.Characters.Handling.To_Lower (Profile);
+
+      --  What running it takes: what the configuration says of it, scalar
+      --  profile_capability.NAME -- else, by its name, tests or analysis,
+      --  and anything else a build, which may run whatever it names.
+      Said   : constant String := Scalar (Host.Item.all, "profile_capability." & Profile);
       Needed : constant Permissions.Capability :=
-        (if Ada.Strings.Fixed.Index (Named, "build") > 0 then Permissions.Run_Build
+        (if Said = "run_tests" then Permissions.Run_Tests
+         elsif Said = "run_static_analysis" then Permissions.Run_Static_Analysis
+         elsif Said = "run_build" then Permissions.Run_Build
          elsif Ada.Strings.Fixed.Index (Named, "analysis") > 0
            or else Ada.Strings.Fixed.Index (Named, "lint") > 0
          then Permissions.Run_Static_Analysis
-         else Permissions.Run_Tests);
+         elsif Ada.Strings.Fixed.Index (Named, "test") > 0 then Permissions.Run_Tests
+         else Permissions.Run_Build);
    begin
       if Host.Apart or else Profile = "" then
          return False;

@@ -7,6 +7,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **What the harness's own programs say on their error stream is kept:**
+  the agent subprocess and workspace Git write it to the harness log, and
+  an agent that fails says why in its words.
+- **A check's permission is declared, not guessed:** `scalar
+  profile_capability.NAME = run_build|run_tests|run_static_analysis`; the
+  templates declare theirs, and an undeclared profile not named for tests
+  or analysis is a build.
+- **The consistency check holds a complete task to all its gates:** what it
+  changed, its integration, its documentation, and a project gate's
+  evidence.
+- **An agent run as a command or a process of its own that runs out of
+  time sets its task aside,** as the session's agent does; a cancelled one
+  is cancelled.
+- **One failing automation action holds back neither the others nor the
+  events:** each is kept on its own and the first failure is said.
+
 - **`/bootstrap FILE` refuses a file it cannot read,** or one outside the
   project or in its state, instead of reporting nothing made.
 - **Why a task was blocked, failed or cancelled stays on record** in the

@@ -16,6 +16,9 @@ with Captured_Output;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Project_Commands;
 with Model_Runner.Framework;
+with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Stores;
+with Model_Runner.Framework.Tasks;
 with Project_Tools.Files;
 with Project_Tools.Processes;
 with Project_Tools.Text;
@@ -1769,6 +1772,67 @@ package body Tests.CLI_Cases is
    --  a candidate from --set fields, accept and cancel move it, list and
    --  show say where it stands, derive makes what accepted requirements
    --  imply, and what is not a task or a legal move is refused.
+   --  An agent the configuration names, run as a command, that runs out
+   --  of time sets its task aside, as the session's agent does -- not
+   --  failed; and what it said on its error stream is kept.
+   procedure Agent_Command_Out_Of_Time
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package S renames Model_Runner.Framework.Stores;
+      package Cf renames Model_Runner.Framework.Configurations;
+      Project : constant String := "obj/agent-timeout";
+
+      function Command (Words : String) return Natural is
+         Source : Fixed_Arguments;
+         Status : Natural;
+         Start  : Natural := Words'First;
+      begin
+         for Index in Words'First .. Words'Last + 1 loop
+            if Index > Words'Last or else Words (Index) = '|' then
+               Add (Source, Words (Start .. Index - 1));
+               Start := Index + 1;
+            end if;
+         end loop;
+         Add (Source, "--directory");
+         Add (Source, Project);
+         Ran (Source, Status);
+         return Status;
+      end Command;
+
+      Store   : S.Store;
+      Report  : S.Recovery_Report;
+      Status  : E.Error_Info;
+      Changes : Cf.Value_Maps.Map;
+      Planned : Cf.Change_Plan;
+      Revision : Natural;
+   begin
+      if Ada.Directories.Exists (Project) then
+         Ada.Directories.Delete_Tree (Project);
+      end if;
+      Assert (Command ("init|ada-cli|--set|project_name=demo") = 0, "no project was made");
+      S.Open (Store, Project, Report, Status);
+      Changes.Include ("scalar.work.agent", "sleep 30");
+      Changes.Include ("set.execution.allowed", "alr" & ASCII.LF & "sleep");
+      Changes.Include ("scalar.execution.timeout", "1");
+      Cf.Plan_Change (Store, Changes, Planned, Status);
+      Cf.Reconfigure (Store, Planned, Revision, Status);
+      S.Close (Store);
+      Assert (E.Is_Ok (Status), "the agent command was not configured: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Command ("task|new|Slow|--set|kind=analysis") = 0
+              and then Command ("task|accept|TASK-001") = 0,
+              "the task was not made");
+      Assert (Command ("work|TASK-001") /= 0, "work that ran out of time succeeded");
+      S.Open (Store, Project, Report, Status);
+      declare
+         Now : constant String := Model_Runner.Framework.Tasks.State_Of (Store, "TASK-001");
+      begin
+         S.Close (Store);
+         Assert (Now = "blocked", "an agent command out of time left its task " & Now);
+      end;
+   end Agent_Command_Out_Of_Time;
+
    procedure Task_Command_Manages_Work
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -12360,6 +12424,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Selector_Behaves'Access,
          "the shared selector moves, filters, explains and fits its window");
+      Register_Routine
+        (T, Agent_Command_Out_Of_Time'Access,
+         "an agent command out of time sets its task aside");
       Register_Routine
         (T, Task_Command_Manages_Work'Access,
          "task creates, moves, lists and shows the project's work");

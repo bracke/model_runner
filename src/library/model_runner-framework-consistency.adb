@@ -421,7 +421,9 @@ package body Model_Runner.Framework.Consistency is
             Read     : E.Error_Info;
             Defined  : Records.Item;
             Got      : E.Error_Info;
+            Config   : Records.Item;
          begin
+            Configurations.Read (Item, Config, Got);
             Tasks.Definition (Item, Id, Defined, Got);
             declare
                Gates : constant Name_Lists.Vector :=
@@ -446,6 +448,54 @@ package body Model_Runner.Framework.Consistency is
                      end if;
                   end loop;
                end if;
+
+               --  Its other gates, as far as what they judge does not age:
+               --  what it changed and where that went, judged as at
+               --  completion; a project's own gate by whether its evidence
+               --  passed, not whether it is still current.
+               declare
+                  Judged : constant Verification.Gate_List := Verification.Gates (Item, Id);
+               begin
+                  for Index in 1 .. Verification.Length (Judged) loop
+                     declare
+                        One  : constant Verification.Gate := Verification.Element (Judged, Index);
+                        Name : constant String := To_String (One.Name);
+                     begin
+                        if not One.Passed
+                          and then Name in "implementation_present" | "traceability_sufficient"
+                                         | "integration" | "documentation_current"
+                        then
+                           Found (Completed_Without_Gate, Id,
+                                  "it is complete and its gate " & Name & " does not hold: "
+                                  & To_String (One.Reason));
+                        end if;
+                     end;
+                  end loop;
+               end;
+               for Gate of Gates loop
+                  declare
+                     Profile : constant String :=
+                       Records.Get (Config, "scalar.gate." & Gate);
+                     Proof   : constant String :=
+                       (if Profile = "" then "" else Verification.Latest (Item, Id, Profile));
+                     Kept    : Records.Item;
+                     Got     : E.Error_Info;
+                  begin
+                     if Profile /= "" then
+                        if Proof = "" then
+                           Found (Completed_Without_Gate, Id,
+                                  "it is complete and its gate " & Gate & " was never checked");
+                        else
+                           Stores.Read (Item, Verification_Area, Proof, Kept, Got);
+                           if Records.Get (Kept, "passed") /= "true" then
+                              Found (Completed_Without_Gate, Id,
+                                     "it is complete and its gate " & Gate & " did not pass ("
+                                     & Proof & ")");
+                           end if;
+                        end if;
+                     end if;
+                  end;
+               end loop;
             end;
          end;
       end loop;

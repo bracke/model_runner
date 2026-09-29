@@ -4353,6 +4353,27 @@ package body Tests.Framework_Cases is
       end;
       S.Close (Store);
 
+      --  A program the harness runs itself keeps what it said on its
+      --  error stream.
+      declare
+         Said : Ex.Outcome;
+         Out_Path : constant String := Dirs.Full_Name (Scratch) & "/harness-out.txt";
+      begin
+         Ex.Run_Harness
+           (Project   => "",
+            Program   => "sh",
+            Arguments => Model_Runner.Framework.Lines_Of
+                           ("-c" & LF & "echo it would not start >&2; exit 3"),
+            Directory => Dirs.Full_Name (Scratch),
+            Output    => Out_Path,
+            Timeout   => 10,
+            Result    => Said);
+         Assert (Said.Exit_Status = 3
+                 and then Ada.Strings.Fixed.Index (To_String (Said.Output), "would not start") > 0,
+                 "what a harness program said on its error stream was lost: "
+                 & To_String (Said.Output));
+      end;
+
       --  A profile whose check is cancelled judges nothing: no evidence,
       --  and the cancellation said, not a failure.
       Task_Project (Store, "cancelled-check",
@@ -5998,6 +6019,37 @@ package body Tests.Framework_Cases is
          end loop;
          Assert (Present, "a parent's children's changes were not its implementation");
       end;
+
+      --  Complete without having changed anything its gate asks for: the
+      --  consistency check sees it.
+      declare
+         Hollow   : Unbounded_String;
+         Found_It : Boolean := False;
+      begin
+         Tk.Create (Store, Change, Fields ("Hollow", "analysis"), "user", "", Hollow, Status);
+         S.Commit (Store, Change, Status);
+         for Next of Model_Runner.Framework.Name_Lists.Vector'
+           (["accepted", "running", "verification"])
+         loop
+            Tk.Move (Store, Change, To_String (Hollow), Next, "", Status => Status);
+            S.Commit (Store, Change, Status);
+         end loop;
+         Tk.Move (Store, Change, To_String (Hollow), "complete", "", Gates_Passed => True,
+                  Status => Status);
+         S.Commit (Store, Change, Status);
+         declare
+            Findings : constant Cn.Finding_List := Cn.Check (Store);
+         begin
+            for Index in 1 .. Cn.Length (Findings) loop
+               Found_It := Found_It
+                 or else (To_String (Cn.Element (Findings, Index).Subject) = To_String (Hollow)
+                          and then Ada.Strings.Fixed.Index
+                                     (To_String (Cn.Element (Findings, Index).Detail),
+                                      "implementation_present") > 0);
+            end loop;
+         end;
+         Assert (Found_It, "a complete task whose gate does not hold was not found");
+      end;
       S.Close (Store);
    end Claims_And_Gates;
 
@@ -7553,6 +7605,12 @@ package body Tests.Framework_Cases is
             E.Add_Text (Status, "name", "time");
             return;
          when Grandchild_Fails =>
+            --  Where the project may test but not build, a check is judged
+            --  by what the configuration says it takes, and by its name
+            --  only where it says nothing -- a compile is a build.
+            Assert (Children.May_Check ("quick") and then not Children.May_Check ("compile"),
+                    "what a check takes was guessed from its name over what is declared");
+
             --  A child whose own required child fails is not done, whatever
             --  it says: it is run again, as any failed required child is.
             Ask ("required", Child_Done, Close => False);
@@ -8104,7 +8162,8 @@ package body Tests.Framework_Cases is
          & "map permission.project.create_children = max_depth=2, max_children=8" & LF
          & "scalar agents.max_depth = 2" & LF
          & "scalar agents.max_children = 8" & LF
-         & "scalar agents.max_active = 8" & LF);
+         & "scalar agents.max_active = 8" & LF
+         & "scalar profile_capability.quick = run_tests" & LF);
       Work (Grandchild_Fails);
       Assert (To_String (Done.Final_State) = "complete",
               "a child run again past its failed child did not let the task complete: "
@@ -8155,6 +8214,33 @@ package body Tests.Framework_Cases is
       Assert (Done.Derived.Is_Empty, "a step run twice derived twice");
       Or_ch.Step (Store, Done, Status);
       Assert (Done.Events_Seen = 0, "a step read events that were read already");
+
+      --  One action failing holds back neither the others nor the events.
+      S.Close (Store);
+      Task_Project (Store, "orchestration-failing",
+                    "list automation.rules = *: verify" & LF
+                    & "list automation.rules = Requirement_Accepted: derive_tasks" & LF
+                    & "profile broken = go: nosuchprogram" & LF
+                    & "scalar verification.default = broken" & LF);
+      Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.", "",
+                  "user", "", "io", Req, Status);
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted",
+               Tr.Ordinary_Only, Status);
+      S.Commit (Store, Change, Status);
+      Or_ch.Step (Store, Done, Status);
+      Assert (E.Is_Error (Status) and then Natural (Done.Derived.Length) = 1,
+              "a failing action held back the others, or was not said: " & Code_Of (Status));
+      Or_ch.Step (Store, Done, Status);
+      Assert (Done.Derived.Is_Empty, "events a failing step read were read again");
+      S.Close (Store);
+      Task_Project (Store, "orchestration-again", "scalar agents.max_active = 2" & LF);
+      Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.", "",
+                  "user", "", "io", Req, Status);
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted",
+               Tr.Ordinary_Only, Status);
+      S.Commit (Store, Change, Status);
+      Or_ch.Step (Store, Done, Status);
+      Or_ch.Step (Store, Done, Status);
 
       --  Four ready tasks; two slots; two of them write one component.
       for Index in Ids'Range loop

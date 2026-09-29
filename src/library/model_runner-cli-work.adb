@@ -220,10 +220,17 @@ package body Model_Runner.CLI.Work is
          when others =>
             null;
       end;
-      if not Happened.Started or else Happened.Timed_Out
-        or else Happened.Exit_Status /= 0
-      then
+      --  Out of time is the work's bound, as the session's agent has it --
+      --  the task set aside, not failed; anything else says why, in its
+      --  own words from its error stream.
+      if Happened.Timed_Out then
+         Status := E.Make (E.Framework_Limit_Exceeded);
+         E.Add_Text (Status, "name", "time");
+      elsif not Happened.Started or else Happened.Exit_Status /= 0 then
          Status := E.Make (E.Generation_Invalid_Request);
+         if Length (Happened.Output) > 0 then
+            E.Add_Text (Status, "detail", To_String (Happened.Output));
+         end if;
       end if;
    end Run;
 
@@ -283,7 +290,12 @@ package body Model_Runner.CLI.Work is
          S.Commit (Self.Store.all, Change, Status);
       end if;
       Answer := Ran.Output;
-      if E.Is_Ok (Status) and then (not Ran.Started or else Ran.Exit_Status /= 0) then
+      if E.Is_Ok (Status) and then Ran.Cancelled then
+         Status := E.Make (E.Generation_Cancelled);
+      elsif E.Is_Ok (Status) and then Ran.Timed_Out then
+         Status := E.Make (E.Framework_Limit_Exceeded);
+         E.Add_Text (Status, "name", "time");
+      elsif E.Is_Ok (Status) and then (not Ran.Started or else Ran.Exit_Status /= 0) then
          Status := E.Make (E.Framework_Execution_Refused);
          E.Add_Text (Status, "name", Command);
          E.Add_Text (Status, "detail", "it ended with" & Integer'Image (Ran.Exit_Status));

@@ -10,6 +10,7 @@ fact build_system = Alire
 adapter build = alire
 scalar build.command = alr build
 profile build = build: alr build
+scalar profile_capability.build = run_build
 
 # What any task is verified by, unless its kind names its own.
 scalar verification.default = build

@@ -62,6 +62,9 @@ package body Model_Runner.Framework.Orchestration is
       Change   : Stores.Transaction;
       Wanted   : Name_Lists.Vector;
 
+      --  The first action that failed, said once the rest are taken.
+      Failed   : E.Error_Info := E.Success;
+
       --  The actions the rules give an event, in rule order, once each.
       procedure Actions_For (Kind : String) is
       begin
@@ -103,6 +106,14 @@ package body Model_Runner.Framework.Orchestration is
          end;
       end loop;
 
+      --  The events are acted on whatever becomes of the actions: kept
+      --  consumed first, so that one action failing does not hold back
+      --  every event after it.
+      Stores.Commit (Item, Change, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
       for Action of Wanted loop
          Result.Actions_Taken := Result.Actions_Taken + 1;
          if Action = "derive_tasks" then
@@ -124,15 +135,19 @@ package body Model_Runner.Framework.Orchestration is
                end if;
             end;
          end if;
+         --  Each action kept on its own; one that fails is dropped and
+         --  said, and the others are still taken.
+         if E.Is_Ok (Status) then
+            Stores.Commit (Item, Change, Status);
+         end if;
          if E.Is_Error (Status) then
-            return;
+            Change := Stores.No_Changes;
+            if E.Is_Ok (Failed) then
+               Failed := Status;
+            end if;
+            Status := E.Success;
          end if;
       end loop;
-
-      Stores.Commit (Item, Change, Status);
-      if E.Is_Error (Status) then
-         return;
-      end if;
 
       --  Readiness last, over what the actions left.
       if Wanted.Contains ("recompute_readiness") then
@@ -140,6 +155,9 @@ package body Model_Runner.Framework.Orchestration is
          if E.Is_Ok (Status) then
             Stores.Commit (Item, Change, Status);
          end if;
+      end if;
+      if E.Is_Ok (Status) and then E.Is_Error (Failed) then
+         Status := Failed;
       end if;
    end Step;
 

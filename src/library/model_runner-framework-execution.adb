@@ -432,6 +432,17 @@ package body Model_Runner.Framework.Execution is
       Command  : Unbounded_String := To_Unbounded_String (Program);
       Began    : constant Ada.Calendar.Time := Ada.Calendar.Clock;
       Happened : Hostkit.Process.Process_Outcome;
+
+      --  Each line of what it said on its error stream, after its own,
+      --  indented.
+      function Indented (Text : String) return String is
+         Done : Unbounded_String;
+      begin
+         for One of Lines_Of (Text) loop
+            Append (Done, "    " & One & ASCII.LF);
+         end loop;
+         return To_String (Done);
+      end Indented;
    begin
       --  Only what is passed: env starts from nothing.
       Words.Append (To_Unbounded_String ("-i"));
@@ -454,7 +465,7 @@ package body Model_Runner.Framework.Execution is
            Working_Directory => Directory,
            Stdin_Path        => Hostkit.Fs.Null_Device,
            Stdout_Path       => Output,
-           Stderr_Path       => Hostkit.Fs.Null_Device,
+           Stderr_Path       => Output & ".stderr",
            Timeout_Ms        => Timeout * 1000);
       Result := (Command     => Command,
                  Directory   => To_Unbounded_String (Directory),
@@ -463,6 +474,22 @@ package body Model_Runner.Framework.Execution is
                  Exit_Status => Happened.Exit_Status,
                  Seconds     => Natural (Ada.Calendar.Clock - Began),
                  others      => <>);
+
+      --  What it said on its error stream, kept -- the end of it, which is
+      --  where a program says why it stopped -- rather than thrown away.
+      declare
+         Said : Unbounded_String;
+         Read : E.Error_Info;
+      begin
+         if Ada.Directories.Exists (Output & ".stderr") then
+            Files.Read_Text (Output & ".stderr", Said, Read);
+            Files.Discard (Output & ".stderr");
+            if E.Is_Ok (Read) and then Length (Said) > 0 then
+               Result.Output := To_Unbounded_String
+                 (Slice (Said, Integer'Max (1, Length (Said) - 3999), Length (Said)));
+            end if;
+         end if;
+      end;
 
       --  Said where the project keeps its runtime, when it has one.
       if Project /= ""
@@ -477,7 +504,8 @@ package body Model_Runner.Framework.Execution is
               & (if not Happened.Started then "not started"
                  elsif Happened.Timed_Out then "timed out"
                  else "exit" & Integer'Image (Happened.Exit_Status))
-              & ASCII.HT & Trim (Natural'Image (Result.Seconds)) & "s" & ASCII.LF;
+              & ASCII.HT & Trim (Natural'Image (Result.Seconds)) & "s" & ASCII.LF
+              & Indented (To_String (Result.Output));
          begin
             if Ada.Directories.Exists (Harness_Log (Project)) then
                Open (File, Append_File, Harness_Log (Project));
