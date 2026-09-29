@@ -1086,7 +1086,7 @@ package body Model_Runner.Framework.Work is
            (Host.Item.all, To_String (Host.Task_Id), Host.Model,
             "You are helping an agent with one part of its task, as its " & Named
             & ". You cannot see its conversation, and it will see only your report.",
-            Brief, Made, Read);
+            Brief, Made, Read, Instructions => Child_Instructions);
          if E.Is_Ok (Read) then
             Framework.Context.Keep (Host.Item.all, Change, Made, Read);
          end if;
@@ -1106,8 +1106,7 @@ package body Model_Runner.Framework.Work is
             Stores.Commit (Host.Item.all, Change, Read);
          end if;
          Host.Calls.Append (To_String (Called));
-         Context := To_Unbounded_String
-           (Framework.Context.Rendered (Made) & Child_Instructions);
+         Context := To_Unbounded_String (Framework.Context.Rendered (Made));
          if E.Is_Error (Read) then
             Status := Read;
          end if;
@@ -1288,6 +1287,13 @@ package body Model_Runner.Framework.Work is
       Said    : Invocations.Claims;
       Held    : E.Error_Info;
 
+      --  The state files an agent run as a process of its own changed, put
+      --  back as they were: the project's state is the harness's to change.
+      Tampered : Name_Lists.Vector;
+
+      --  The result its answer was kept as, which its end names.
+      Last_Result : Unbounded_String;
+
       --  What the call used, as the agent reports it.
       Used    : Invocations.Usage;
 
@@ -1312,7 +1318,20 @@ package body Model_Runner.Framework.Work is
          end if;
          Result.Final_State := To_Unbounded_String (Tasks.State_Of (Item, Task_Id));
          Result.Reason := To_Unbounded_String (Reason);
-         Agent_State (Item, Change, To_String (Result.Agent_Id), Agent_End, Reason);
+         --  Its end, as any agent's: with the result it gave and an event
+         --  saying so -- cancelled is only a state.
+         declare
+            Ended : E.Error_Info := E.Make (E.Framework_Transition_Invalid);
+         begin
+            if Agent_End in "completed" | "failed" then
+               Agents.Finish
+                 (Item, Change, To_String (Result.Agent_Id), Agent_End = "completed",
+                  To_String (Last_Result), Reason, Ended);
+            end if;
+            if E.Is_Error (Ended) then
+               Agent_State (Item, Change, To_String (Result.Agent_Id), Agent_End, Reason);
+            end if;
+         end;
          Leases.Release
            (Item, Change, Lease_Of (Task_Id), To_String (Result.Agent_Id), Status);
          if E.Is_Ok (Status) and then not Isolated and then Component_Of (Item, Task_Id) /= ""
@@ -1371,6 +1390,23 @@ package body Model_Runner.Framework.Work is
       if E.Is_Ok (Status) then
          Tasks.Move (Item, Change, Task_Id, "running", "", Status => Status);
       end if;
+
+      --  The agent works in the generation the move to running began, not
+      --  the one before it.
+      if E.Is_Ok (Status) then
+         declare
+            Task_State, Agent : Records.Item;
+            Staged, Held      : Boolean;
+         begin
+            Stores.Pending (Change, Tasks_Area, Task_Id & ".state", Task_State, Staged);
+            Stores.Pending (Change, Runtime_Area, "agent." & To_String (Result.Agent_Id),
+                            Agent, Held);
+            if Staged and then Held then
+               Records.Set (Agent, "generation", Records.Get (Task_State, "generation"));
+               Stores.Put (Change, Runtime_Area, "agent." & To_String (Result.Agent_Id), Agent);
+            end if;
+         end;
+      end if;
       if E.Is_Ok (Status) then
          Annotate (Item, Change, Task_Id, "admission", Admission (Item, Task_Id, Isolated));
          Annotate (Item, Change, Task_Id, "active_agent", To_String (Result.Agent_Id));
@@ -1381,7 +1417,7 @@ package body Model_Runner.Framework.Work is
       end if;
 
       --  What it is told, and the call, recorded before it is made.
-      Context.Build (Item, Task_Id, Model, Built, Held);
+      Context.Build (Item, Task_Id, Model, Built, Held, Instructions => Instructions);
       if E.Is_Error (Held) then
          Conclude ("blocked", "its context cannot be built: "
                    & E.Error_Code'Image (Held.Code), "failed");
@@ -1457,7 +1493,7 @@ package body Model_Runner.Framework.Work is
       begin
          if Files.Make_Directory (Scratch) then
             Files.Write_Text
-              (Prompt, Context.Rendered (Built) & Instructions, Status);
+              (Prompt, Context.Rendered (Built), Status);
 
             --  What the agent may do, for a runner that starts it as a
             --  process of its own to hold it to.
@@ -1508,7 +1544,12 @@ package body Model_Runner.Framework.Work is
                Parenting_Runner'Class (Runner).Run_Parenting
                  (Prompt, To_String (Place), Host, Answer, Ran);
             else
-               Runner.Run (Prompt, To_String (Place), Answer, Ran);
+               declare
+                  State : constant Stores.State_Snapshot := Stores.Snapshot_State (Item);
+               begin
+                  Runner.Run (Prompt, To_String (Place), Answer, Ran);
+                  Stores.Restore_State (Item, State, Tampered);
+               end;
 
                --  What an agent run apart used, as its runner reports it:
                --  charged, and its calls recorded, as the harness's own are.
@@ -1595,6 +1636,7 @@ package body Model_Runner.Framework.Work is
          Files_Text : Unbounded_String;
       begin
          Results.Add (Item, Change, Kept, Status);
+         Last_Result := Kept.Id;
          Invocations.Finish
            (Item, Change, To_String (Result.Invocation_Id),
             (if E.Is_Ok (Ran) then Invocations.Completed
@@ -1638,6 +1680,20 @@ package body Model_Runner.Framework.Work is
       elsif E.Is_Error (Ran) then
          Conclude ("failed", "the agent could not be run: " & E.Error_Code'Image (Ran.Code),
                    "failed");
+         return;
+      end if;
+
+      --  Its state is not the agent's to write, whatever it may.
+      if not Tampered.Is_Empty then
+         declare
+            Named : Unbounded_String;
+         begin
+            for Path of Tampered loop
+               Append (Named, (if Named = Null_Unbounded_String then "" else ", ") & Path);
+            end loop;
+            Conclude ("failed", "it changed the project's state, which was put back: "
+                      & To_String (Named), "failed");
+         end;
          return;
       end if;
 

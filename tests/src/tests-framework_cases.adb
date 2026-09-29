@@ -3755,6 +3755,30 @@ package body Tests.Framework_Cases is
          end;
       end;
       S.Close (Store);
+
+      --  An import whose identifier the project already gives something
+      --  else is made under another, not accepted, and raised.
+      Task_Project (Store, "bootstrap-clash",
+                    "set bootstrap.sources = notes/*.txt" & LF
+                    & "set bootstrap.propose = imports" & LF
+                    & "scalar bootstrap.import = accepted" & LF);
+      declare
+         Req : Unbounded_String;
+      begin
+         Nt.Propose (Store, Change, Nt.Requirement, "IO", "Other", "It SHALL be other.", "",
+                     "user", "", "io", Req, Status, Given => "REQ-IO-001");
+         S.Commit (Store, Change, Status);
+         Assert (To_String (Req) = "REQ-IO-001", "the identifier given was not taken");
+      end;
+      Found := Bs.Scan ("notes/io.txt", "- REQ-IO-001: Input is read once." & LF);
+      Bs.Apply (Store, Change, Found, Report, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then Report.Issues = 1
+              and then Natural (Nt.List (Store, Nt.Requirement).Length) = 2
+              and then Nt.List (Store, Nt.Requirement, "accepted").Is_Empty,
+              "an import whose identifier was taken was accepted, or not raised: "
+              & Code_Of (Status) & Report.Issues'Image);
+      S.Close (Store);
    end Bootstrap_Follows_Its_Policy;
 
    --  A project adds requirement states of its own, each with what it
@@ -3820,6 +3844,15 @@ package body Tests.Framework_Cases is
               "a move to a state whose meaning nobody said was taken");
       Assert (Refused ("map.requirement.state.verified", "whatever"),
               "a core state was given a meaning by the project");
+
+      --  A setting read as one of some words, or as a count, is one.
+      Assert (Refused ("scalar.bootstrap.import", "maybe")
+              and then Refused ("scalar.execution.network", "sometimes")
+              and then Refused ("scalar.execution.timeout", "long")
+              and then Refused ("scalar.agents.max_steps", "-1")
+              and then not Refused ("scalar.execution.network", "denied")
+              and then not Refused ("scalar.execution.timeout", "30"),
+              "a setting's value was not held to what the harness reads it as");
 
       --  A kind's own field has a schema, and its values are held to it.
       Assert (Refused ("task_kind.review", "verdict?"),
@@ -4067,6 +4100,23 @@ package body Tests.Framework_Cases is
       Assert (Cx.Manifest_Id (Two) = Cx.Manifest_Id (One)
               and then Cx.Rendered (Two) = Cx.Rendered (One),
               "one context built twice is two");
+
+      --  What the agent is told after it counts: in the cost, the
+      --  manifest and the text, and in what does not fit.
+      declare
+         Told : Cx.Built;
+      begin
+         Cx.Build (Store, To_String (Id), Profile, Told, Status,
+                   Instructions => "Answer in three lines.");
+         Assert (E.Is_Ok (Status)
+                 and then Cx.Manifest_Id (Told) /= Cx.Manifest_Id (One)
+                 and then Ada.Strings.Fixed.Index (Cx.Rendered (Told), "Answer in three lines.") > 0,
+                 "the instructions were not part of the context");
+         Cx.Build (Store, To_String (Id), Profile, Told, Status,
+                   Instructions => [1 .. 4000 => 'x']);
+         Assert (Status.Code = E.Framework_Context_Overflow,
+                 "instructions past the model's room were not counted");
+      end;
 
       --  A child's context: its rules, the task and what it is asked, and
       --  nothing of the task's own context.
@@ -4601,6 +4651,34 @@ package body Tests.Framework_Cases is
               "what the work did was not all recorded");
       Assert (Tk.Ready (Store, To_String (Ids (1))).Reasons.First_Element = "it is complete",
               "the task's lease was not let go");
+
+      --  Its agent worked in the generation its move to running began, and
+      --  ended as any agent does: with its result, and an event saying so.
+      declare
+         Agent : R.Item;
+         State : R.Item;
+         Events : constant Model_Runner.Framework.Events.Event_List :=
+           Model_Runner.Framework.Events.Since (Store, 0);
+         Said   : Boolean := False;
+      begin
+         S.Read (Store, Model_Runner.Framework.Runtime_Area, "agent." & To_String (Done.Agent_Id),
+                 Agent, Status);
+         S.Read (Store, Model_Runner.Framework.Tasks_Area, To_String (Ids (1)) & ".state",
+                 State, Status);
+         for Index in 1 .. Model_Runner.Framework.Events.Length (Events) loop
+            Said := Said
+              or else (Model_Runner.Framework.Events.Element (Events, Index).Kind
+                         = Model_Runner.Framework.Events.Agent_Completed
+                       and then To_String (Model_Runner.Framework.Events.Element
+                                             (Events, Index).Subject) = To_String (Done.Agent_Id));
+         end loop;
+         Assert (R.Get (Agent, "generation") = R.Get (State, "generation")
+                 and then R.Get (Agent, "state") = "completed"
+                 and then R.Get (Agent, "result") /= "" and then Said,
+                 "the root agent's generation or end was not recorded: ["
+                 & R.Get (Agent, "generation") & "] [" & R.Get (State, "generation") & "] "
+                 & R.Get (Agent, "state") & " [" & R.Get (Agent, "result") & "]");
+      end;
 
       --  Done, it says; but the check fails once the file is gone.
       Dirs.Delete_File (Fresh_Root (Store) & "/src/hello.adb");
@@ -6529,6 +6607,61 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Verification_Follows_What_Changed;
 
+   --  The project's state is the harness's: an agent run as a process of
+   --  its own that writes it, and checks that do, find it put back and
+   --  their work failed.
+   procedure State_Is_The_Harness_Own
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Done   : Wk.Report;
+      Id     : Unbounded_String;
+      Evidence : Unbounded_String;
+      Passed : Boolean;
+      Value  : R.Item;
+   begin
+      Task_Project
+        (Store, "state-protected",
+         "set execution.allowed = touch" & LF
+         & "profile checks = meddle: touch .model_runner/evil.rec" & LF
+         & "scalar verification.default = checks" & LF);
+      Tk.Create (Store, Change, Fields ("Meddle", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Execute (Store, To_String (Id),
+                  Scripted_Agent'(File => To_Unbounded_String (".model_runner/tasks/evil.rec"),
+                                  Answer => To_Unbounded_String
+                                    ("status: done" & LF & "summary: x"),
+                                  Broken => False),
+                  Cx.Profile (Store, ""), Done, Status);
+      Assert (To_String (Done.Final_State) = "failed"
+              and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "tasks/evil.rec") > 0
+              and then not Dirs.Exists (Fresh_Root (Store) & "/.model_runner/tasks/evil.rec"),
+              "an agent's write to the project's state was kept, or its work taken: "
+              & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+
+      Vf.Run_Profile (Store, Change, "checks", To_String (Id), Evidence, Passed, Status);
+      S.Commit (Store, Change, Status);
+      S.Read (Store, Model_Runner.Framework.Verification_Area, To_String (Evidence), Value, Status);
+      Assert (not Passed and then R.Get (Value, "state_changed") = "evil.rec"
+              and then not Dirs.Exists (Fresh_Root (Store) & "/.model_runner/evil.rec"),
+              "a check's write to the project's state was kept, or passed");
+
+      --  Left alone, nothing is put back.
+      declare
+         Taken   : constant S.State_Snapshot := S.Snapshot_State (Store);
+         Changed : Model_Runner.Framework.Name_Lists.Vector;
+      begin
+         S.Restore_State (Store, Taken, Changed);
+         Assert (Changed.Is_Empty, "a state left alone was put back");
+      end;
+      S.Close (Store);
+   end State_Is_The_Harness_Own;
+
    --  The consistency check sees a task tied to a component the project
    --  does not have, and one held ready while what it depends on is open.
    procedure Consistency_Sees_Components_And_Readiness
@@ -7631,6 +7764,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Verification_Follows_What_Changed'Access,
          "how widely work is verified follows what it changed and the policy");
+      Register_Routine
+        (T, State_Is_The_Harness_Own'Access,
+         "the project's state is put back after an agent or a check writes it");
       Register_Routine
         (T, Consistency_Sees_Components_And_Readiness'Access,
          "the consistency check sees missing components and false readiness");

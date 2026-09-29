@@ -1215,4 +1215,97 @@ package body Model_Runner.Framework.Stores is
       Close (Item);
    end Finalize;
 
+   --------------------
+   -- Snapshot_State --
+   --------------------
+
+   --  Every state file below a directory, relative to the root, with what
+   --  it holds; the scratch, the lock and a workspace's tree are left out.
+   procedure Gather
+     (Root, Under : String;
+      Into        : in out Text_Maps.Map)
+   is
+      Search : Ada.Directories.Search_Type;
+      Found  : Ada.Directories.Directory_Entry_Type;
+      Here   : constant String := (if Under = "" then Root else Hostkit.Fs.Join (Root, Under));
+   begin
+      Ada.Directories.Start_Search (Search, Here, "");
+      while Ada.Directories.More_Entries (Search) loop
+         Ada.Directories.Get_Next_Entry (Search, Found);
+         declare
+            use type Ada.Directories.File_Kind;
+            Name     : constant String := Ada.Directories.Simple_Name (Found);
+            Relative : constant String := (if Under = "" then Name else Under & "/" & Name);
+         begin
+            if Name in "." | ".." then
+               null;
+            elsif Ada.Directories.Kind (Found) = Ada.Directories.Directory then
+               if Relative not in "runtime/exec" | "runtime/slots"
+                 and then not (Under = "workspaces")
+               then
+                  Gather (Root, Relative, Into);
+               end if;
+            elsif Ada.Directories.Kind (Found) = Ada.Directories.Ordinary_File
+              and then Relative /= "runtime/lock"
+            then
+               declare
+                  Text : Unbounded_String;
+                  Read : E.Error_Info;
+               begin
+                  Files.Read_Text (Ada.Directories.Full_Name (Found), Text, Read);
+                  if E.Is_Ok (Read) then
+                     Into.Include (Relative, To_String (Text));
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+      Ada.Directories.End_Search (Search);
+   end Gather;
+
+   function Snapshot_State (Item : Store) return State_Snapshot is
+      Result : State_Snapshot;
+   begin
+      if Ada.Directories.Exists (Root (Item)) then
+         Gather (Root (Item), "", Result.Files);
+      end if;
+      return Result;
+   end Snapshot_State;
+
+   -------------------
+   -- Restore_State --
+   -------------------
+
+   procedure Restore_State
+     (Item    : Store;
+      From    : State_Snapshot;
+      Changed : out Name_Lists.Vector)
+   is
+      Now    : constant State_Snapshot := Snapshot_State (Item);
+      Status : E.Error_Info;
+   begin
+      Changed.Clear;
+      for Position in From.Files.Iterate loop
+         declare
+            Name : constant String := Text_Maps.Key (Position);
+            Path : constant String := Hostkit.Fs.Join (Root (Item), Name);
+         begin
+            if not Now.Files.Contains (Name)
+              or else Now.Files (Name) /= Text_Maps.Element (Position)
+            then
+               Changed.Append (Name);
+               if Files.Make_Directory (Ada.Directories.Containing_Directory (Path)) then
+                  Files.Write_Text (Path, Text_Maps.Element (Position), Status);
+               end if;
+            end if;
+         end;
+      end loop;
+      for Position in Now.Files.Iterate loop
+         if not From.Files.Contains (Text_Maps.Key (Position)) then
+            Changed.Append (Text_Maps.Key (Position));
+            Files.Discard (Hostkit.Fs.Join (Root (Item), Text_Maps.Key (Position)));
+         end if;
+      end loop;
+   end Restore_State;
+
 end Model_Runner.Framework.Stores;

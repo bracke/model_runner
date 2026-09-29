@@ -573,6 +573,9 @@ package body Model_Runner.Framework.Configurations is
       end;
    end Prepare;
 
+   --  What makes a configuration one the project cannot keep, or "".
+   function Whole_Problem (Config : Records.Item) return String;
+
    ----------------
    -- Initialize --
    ----------------
@@ -610,6 +613,15 @@ package body Model_Runner.Framework.Configurations is
          Status := E.Make (E.Framework_Already_Initialized);
          E.Add_Text
            (Status, "path", Stores.State_Root (Project_Directory), E.Param_Path);
+         return;
+      end if;
+
+      --  A project starts with settings it can keep, as a change to them
+      --  must leave it.
+      if Whole_Problem (Planned.Configuration) /= "" then
+         Status := E.Make (E.Framework_Schema_Violation);
+         E.Add_Text (Status, "name", "the configuration");
+         E.Add_Text (Status, "detail", Whole_Problem (Planned.Configuration));
          return;
       end if;
 
@@ -1012,6 +1024,54 @@ package body Model_Runner.Framework.Configurations is
       elsif not Among ("scalar.work.isolation", "project, workspace") then
          return "scalar.work.isolation is project or workspace";
       end if;
+
+      --  What the harness reads as one of some words is one of them: any
+      --  other is read as none, and would change what it does unsaid.
+      declare
+         function Off (Field, Words : String) return Boolean is (not Among (Field, Words));
+         function Said (Field, Words : String) return String
+         is (Field & " is one of " & Words & ", not " & Records.Get (Config, Field));
+      begin
+         if Off ("scalar.bootstrap.import", "candidate, accepted") then
+            return Said ("scalar.bootstrap.import", "candidate, accepted");
+         elsif Off ("scalar.execution.network", "allowed, denied") then
+            return Said ("scalar.execution.network", "allowed, denied");
+         elsif Off ("scalar.execution.shell", "allowed, denied") then
+            return Said ("scalar.execution.shell", "allowed, denied");
+         elsif Off ("scalar.task.auto_accept", "true, false") then
+            return Said ("scalar.task.auto_accept", "true, false");
+         elsif Off ("scalar.task.coordination", "parent_waits, parent_runs") then
+            return Said ("scalar.task.coordination", "parent_waits, parent_runs");
+         elsif Off ("scalar.verification.escalation", "conservative, narrow") then
+            return Said ("scalar.verification.escalation", "conservative, narrow");
+         elsif Off ("scalar.verification.toolchain", "recorded, strict") then
+            return Said ("scalar.verification.toolchain", "recorded, strict");
+         elsif Off ("scalar.agents.on_child_failure", "block, fail, continue") then
+            return Said ("scalar.agents.on_child_failure", "block, fail, continue");
+         elsif Off ("scalar.recovery.running", "blocked, failed, accepted") then
+            return Said ("scalar.recovery.running", "blocked, failed, accepted");
+         end if;
+      end;
+
+      --  And what it reads as a count is one: a word there is read as the
+      --  default, which is not what was set.
+      for Index in 1 .. Records.Field_Count (Config) loop
+         declare
+            Name  : constant String := Records.Field_Name (Config, Index);
+            Value : constant String := Records.Get (Config, Name);
+         begin
+            if (Starts (Name, "scalar.agents.max_") or else Starts (Name, "scalar.execution.max_")
+                or else Starts (Name, "scalar.retention.")
+                or else Name in "scalar.agents.token_budget" | "scalar.execution.output_limit"
+                              | "scalar.execution.process_slots" | "scalar.execution.timeout"
+                              | "scalar.work.lease" | "scalar.work.max_workspaces")
+              and then (Value'Length not in 1 .. 9
+                        or else (for some C of Value => C not in '0' .. '9'))
+            then
+               return Name & " is a whole number, not " & Value;
+            end if;
+         end;
+      end loop;
       return "";
    end Whole_Problem;
 

@@ -421,21 +421,56 @@ package body Model_Runner.Framework.Bootstrap is
                         end if;
                      end;
                   else
-                     --  Under the identifier the document gives it.
-                     Intent.Propose
-                       (Item, Change, Intent.Requirement, Field (Next.Key),
-                        Field (Next.Title), Field (Next.Text), "",
-                        Field (Next.Source), Provenance, "project", Id, Status,
-                        Given => Provenance (Ada.Strings.Fixed.Index (Provenance, "#") + 1
-                                             .. Provenance'Last));
-                     if E.Is_Ok (Status) and then Accept_Imports then
-                        Intent.Move
-                          (Item, Change, Intent.Requirement, To_String (Id),
-                           "accepted", Transitions.Ordinary_Only, Status);
-                     end if;
-                     if E.Is_Ok (Status) then
-                        Result.Created := Result.Created + 1;
-                     end if;
+                     --  Under the identifier the document gives it -- unless
+                     --  something else holds it: then made under another,
+                     --  and left for a person to accept, for the document
+                     --  and the project disagree.
+                     declare
+                        Given : constant String :=
+                          Provenance (Ada.Strings.Fixed.Index (Provenance, "#") + 1
+                                      .. Provenance'Last);
+                        Held   : Records.Item;
+                        Staged : Boolean;
+                        Moved  : Boolean;
+                     begin
+                        Moved := False;
+                        if Stores.Is_Name (Given) then
+                           Stores.Pending (Change, Requirements_Area, Given, Held, Staged);
+                           Moved := Staged or else Stores.Exists (Item, Requirements_Area, Given);
+                        end if;
+                        Intent.Propose
+                          (Item, Change, Intent.Requirement, Field (Next.Key),
+                           Field (Next.Title), Field (Next.Text), "",
+                           Field (Next.Source), Provenance, "project", Id, Status,
+                           Given => Given);
+                        Moved := Moved and then E.Is_Ok (Status);
+                        if E.Is_Ok (Status) and then Accept_Imports and then not Moved then
+                           Intent.Move
+                             (Item, Change, Intent.Requirement, To_String (Id),
+                              "accepted", Transitions.Ordinary_Only, Status);
+                        end if;
+                        if E.Is_Ok (Status) then
+                           Result.Created := Result.Created + 1;
+                        end if;
+                        if Moved then
+                           declare
+                              Said : Results.Result :=
+                                (Kind       => Results.Diagnostic,
+                                 Producer   => To_Unbounded_String ("bootstrap"),
+                                 Summary    => To_Unbounded_String
+                                                 (Field (Next.Source) & " gives " & Given
+                                                  & ", which the project already has; it was"
+                                                  & " made as " & To_String (Id)
+                                                  & ", a candidate"),
+                                 Payload    => Next.Text,
+                                 Provenance => Next.Provenance,
+                                 others     => <>);
+                           begin
+                              Results.Add (Item, Change, Said, Status);
+                              Result.Issues := Result.Issues + 1;
+                           end;
+                        end if;
+                     end;
                   end if;
 
                when Requirement_Candidate =>

@@ -424,6 +424,7 @@ package body Model_Runner.Framework.Verification is
       Rules    : Execution.Policy := Execution.Policy_Of (Item);
       Number   : Natural;
       Diagnostics : Natural := 0;
+      State    : Stores.State_Snapshot;
    begin
       Evidence := Null_Unbounded_String;
       Passed := False;
@@ -536,6 +537,7 @@ package body Model_Runner.Framework.Verification is
          end;
 
          Passed := True;
+         State := Stores.Snapshot_State (Item);
          for Index in 1 .. Length (Checks) loop
             declare
                Next    : constant Check := Element (Checks, Index);
@@ -623,6 +625,23 @@ package body Model_Runner.Framework.Verification is
                end;
             end;
          end loop;
+
+         --  The project's state is not the checks' to change: what they
+         --  changed is put back, and they did not pass.
+         declare
+            Changed : Name_Lists.Vector;
+            Named   : Unbounded_String;
+         begin
+            Stores.Restore_State (Item, State, Changed);
+            if not Changed.Is_Empty then
+               Passed := False;
+               for Path of Changed loop
+                  Append (Named, (if Named = Null_Unbounded_String then "" else [1 => ASCII.LF])
+                                 & Path);
+               end loop;
+               Records.Set (Value, "state_changed", To_String (Named));
+            end if;
+         end;
 
          --  The files as the checks left them: a build writes sources of
          --  its own -- Alire's config/ is one -- and evidence taken before

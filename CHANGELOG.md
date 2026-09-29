@@ -7,6 +7,22 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The project's state is the harness's.** An agent run as a process of
+  its own, or a verification check, that writes under `.model_runner`
+  finds it put back: the work fails naming what it touched, and the
+  evidence does not pass (`state_changed`).
+- **Settings are held to what they are read as** at `init` and
+  `reconfigure`: `bootstrap.import`, `execution.network`,
+  `verification.escalation` and the other word settings take only their
+  words, and counts (`execution.timeout`, `agents.max_*`, …) only digits.
+- **An imported requirement whose identifier the project already uses** is
+  made under another, left a candidate, and raised as an issue.
+- **A task's root agent works in the generation its run began,** and ends
+  as any agent does: with its result and an `agent_completed` or
+  `agent_failed` event.
+- **The work instructions are part of the context:** counted in its budget
+  and cost, fingerprinted in the manifest, rendered last.
+
 - **Evidence for some tests stays current while nothing it covers
   changes.** Scoped evidence records the files it was taken on; a later
   change that reaches none of its tests leaves it current, one that cannot

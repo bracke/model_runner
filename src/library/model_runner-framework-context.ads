@@ -79,12 +79,15 @@ package Model_Runner.Framework.Context is
    --  @param Result The context.
    --  @param Status Framework_Not_Found when there is no such task, and
    --    Framework_Context_Overflow when what is mandatory does not fit.
+   --  @param Instructions What the agent is told to do and answer, after
+   --    the context: counted in its cost, fingerprinted and rendered last.
    procedure Build
      (Item    : Stores.Store;
       Task_Id : String;
       Model   : Model_Profile;
       Result  : out Built;
-      Status  : out Model_Runner.Errors.Error_Info);
+      Status  : out Model_Runner.Errors.Error_Info;
+      Instructions : String := "");
 
    --  Build the context of a child agent: its rules, the task it helps with
    --  and what it is asked, all mandatory, fitted and fingerprinted as a
@@ -97,6 +100,7 @@ package Model_Runner.Framework.Context is
    --  @param Brief What it is asked, in its parent's words.
    --  @param Result The context and its manifest.
    --  @param Status Framework_Context_Overflow when it does not fit.
+   --  @param Instructions As for Build.
    procedure Build_Brief
      (Item    : Stores.Store;
       Task_Id : String;
@@ -104,7 +108,8 @@ package Model_Runner.Framework.Context is
       Rules   : String;
       Brief   : String;
       Result  : out Built;
-      Status  : out Model_Runner.Errors.Error_Info);
+      Status  : out Model_Runner.Errors.Error_Info;
+      Instructions : String := "");
 
    --  The context's identifier: CTX- and its fingerprint.
    --
@@ -195,6 +200,9 @@ private
       Budget     : Natural := 0;
       Cost       : Natural := 0;
       Print      : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  What the agent is told after the context, counted in its cost.
+      Instructions : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
 end Model_Runner.Framework.Context;

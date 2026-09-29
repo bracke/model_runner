@@ -206,6 +206,10 @@ package body Model_Runner.Framework.Context is
             Append (Text, "+" & To_String (Next.Id) & " "
                     & Fingerprint (To_String (Next.Text)) & ASCII.LF);
          end loop;
+         if Result.Instructions /= Null_Unbounded_String then
+            Append (Text, "+instructions " & Fingerprint (To_String (Result.Instructions))
+                    & ASCII.LF);
+         end if;
          for Index in 1 .. Natural (Result.Excluded.Length) loop
             Append (Text, "-" & To_String (Result.Excluded (Index).Id) & " "
                     & Result.Reasons (Index) & ASCII.LF);
@@ -223,7 +227,8 @@ package body Model_Runner.Framework.Context is
       Task_Id : String;
       Model   : Model_Profile;
       Result  : out Built;
-      Status  : out Model_Runner.Errors.Error_Info)
+      Status  : out Model_Runner.Errors.Error_Info;
+      Instructions : String := "")
    is
       View       : Records.Item;
       Config     : Records.Item;
@@ -263,6 +268,8 @@ package body Model_Runner.Framework.Context is
       end Fields_Of;
    begin
       Result := (Model => Model, others => <>);
+      Result.Instructions := To_Unbounded_String (Instructions);
+      Result.Cost := (if Instructions = "" then 0 else Estimate (Instructions));
       Result.Task_Id := To_Unbounded_String (Task_Id);
 
       Tasks.Effective (Item, Task_Id, View, Status);
@@ -549,7 +556,8 @@ package body Model_Runner.Framework.Context is
       Rules   : String;
       Brief   : String;
       Result  : out Built;
-      Status  : out Model_Runner.Errors.Error_Info)
+      Status  : out Model_Runner.Errors.Error_Info;
+      Instructions : String := "")
    is
       Defined    : Records.Item;
       Config     : Records.Item;
@@ -565,6 +573,8 @@ package body Model_Runner.Framework.Context is
       end Offer;
    begin
       Result := (Model => Model, others => <>);
+      Result.Instructions := To_Unbounded_String (Instructions);
+      Result.Cost := (if Instructions = "" then 0 else Estimate (Instructions));
       Result.Task_Id := To_Unbounded_String (Task_Id);
       Tasks.Definition (Item, Task_Id, Defined, Status);
       if E.Is_Error (Status) then
@@ -644,7 +654,7 @@ package body Model_Runner.Framework.Context is
          Append (Text, "## " & Heading (Next) & ASCII.LF
                  & To_String (Next.Text) & ASCII.LF & ASCII.LF);
       end loop;
-      return To_String (Text);
+      return To_String (Text & From.Instructions);
    end Rendered;
 
    function Budget (From : Built) return Natural

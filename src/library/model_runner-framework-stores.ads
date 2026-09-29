@@ -1,3 +1,4 @@
+private with Ada.Containers.Indefinite_Ordered_Maps;
 private with Ada.Containers.Vectors;
 private with Ada.Finalization;
 private with Hostkit.Locks;
@@ -359,9 +360,40 @@ package Model_Runner.Framework.Stores is
       Name      : out Ada.Strings.Unbounded.Unbounded_String;
       Found     : out Boolean);
 
+   --  The project's state as its files were at a moment: every file under
+   --  the state root but the scratch a run is given, the process slots,
+   --  the lock, and the workspaces' trees, with what it held.
+   type State_Snapshot is private;
+
+   --  Take the state as it is.
+   --
+   --  @param Item The store.
+   --  @return The snapshot.
+   function Snapshot_State (Item : Store) return State_Snapshot;
+
+   --  Put back what something outside the harness changed in the state:
+   --  a file it wrote is written back as it was, one it removed is made
+   --  again, and one it added is removed.
+   --
+   --  @param Item The store.
+   --  @param From The state as it was before.
+   --  @param Changed The files, relative to the state root, that had
+   --    changed; none when it was left alone.
+   procedure Restore_State
+     (Item    : Store;
+      From    : State_Snapshot;
+      Changed : out Name_Lists.Vector);
+
 private
 
    use Ada.Strings.Unbounded;
+
+   package Text_Maps is new Ada.Containers.Indefinite_Ordered_Maps
+     (Key_Type => String, Element_Type => String);
+
+   type State_Snapshot is record
+      Files : Text_Maps.Map;
+   end record;
 
    type Operation_Kind is (Put_Operation, Remove_Operation);
 
