@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A cancelled check judges nothing:** the profile stops, no evidence is
+  kept, and the task is blocked "its verification was cancelled".
+- **`/req`, `/decision` and `/spec` values run on to the next NAME=,** so
+  `text=the parser shall stop` is kept whole.
+- **A parent whose work its children did has their changes** for
+  `implementation_present` and `traceability_sufficient`.
+- **A child whose own required child failed is not done,** whatever it
+  says; it is run again as any failed required child.
+- **`/reconfigure` asks only on a terminal;** elsewhere it takes
+  `confirm=yes` and otherwise refuses with the input missing.
+
 - **A rejected child counts as done:** its parent goes back to work and
   passes its `children` gate.
 - **A task is ready only while its requirements are accepted, implemented

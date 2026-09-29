@@ -4329,6 +4329,25 @@ package body Tests.Framework_Cases is
                  "a cancelled run did not stop its command");
       end;
       S.Close (Store);
+
+      --  A profile whose check is cancelled judges nothing: no evidence,
+      --  and the cancellation said, not a failure.
+      Task_Project (Store, "cancelled-check",
+                    "set execution.allowed = sleep" & LF & "profile slow = wait: sleep 20" & LF);
+      declare
+         Token    : aliased Model_Runner.Cancellation.Token;
+         Evidence : Unbounded_String;
+         Passed   : Boolean;
+      begin
+         Token.Request;
+         Ex.Watch (Token'Unchecked_Access);
+         Vf.Run_Profile (Store, Change, "slow", "", Evidence, Passed, Status);
+         Ex.Watch (null);
+         Change := S.No_Changes;
+         Assert (Status.Code = E.Generation_Cancelled and then Length (Evidence) = 0,
+                 "a cancelled check was judged: " & Code_Of (Status));
+      end;
+      S.Close (Store);
    end Execution_Follows_Policy;
 
    --  Diagnostics are read out of tools' output, and a profile's checks out
@@ -5905,6 +5924,42 @@ package body Tests.Framework_Cases is
       Work (Documenting_Agent'(null record), "Documented");
       Assert (To_String (Done.Final_State) = "complete",
               "work that passed every named gate did not complete: " & To_String (Done.Reason));
+
+      --  A parent whose work its children did has what they changed.
+      declare
+         Parent, Child : Unbounded_String;
+         Runtime_Value : R.Item;
+         Judged        : Vf.Gate_List;
+         Present       : Boolean := False;
+      begin
+         Tk.Create (Store, Change, Fields ("Whole", "analysis"), "user", "", Parent, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Create (Store, Change, Fields ("Part", "analysis", "parent", To_String (Parent)),
+                    "user", "", Child, Status);
+         S.Commit (Store, Change, Status);
+         for Next of Model_Runner.Framework.Name_Lists.Vector'
+           (["accepted", "running", "verification"])
+         loop
+            Tk.Move (Store, Change, To_String (Child), Next, "", Status => Status);
+            S.Commit (Store, Change, Status);
+         end loop;
+         S.Read (Store, Model_Runner.Framework.Tasks_Area, To_String (Child) & ".state",
+                 Runtime_Value, Status);
+         R.Set_Revision (Runtime_Value, R.Revision (Runtime_Value) + 1);
+         R.Set (Runtime_Value, "changed_files", "src/part.adb");
+         S.Put (Change, Model_Runner.Framework.Tasks_Area, To_String (Child) & ".state",
+                Runtime_Value);
+         Tk.Move (Store, Change, To_String (Child), "complete", "", Gates_Passed => True,
+                  Status => Status);
+         S.Commit (Store, Change, Status);
+         Judged := Vf.Gates (Store, To_String (Parent));
+         for Index in 1 .. Vf.Length (Judged) loop
+            if To_String (Vf.Element (Judged, Index).Name) = "implementation_present" then
+               Present := Vf.Element (Judged, Index).Passed;
+            end if;
+         end loop;
+         Assert (Present, "a parent's children's changes were not its implementation");
+      end;
       S.Close (Store);
    end Claims_And_Gates;
 
@@ -7121,7 +7176,7 @@ package body Tests.Framework_Cases is
    --  An agent that asks for children through the host, as a plan says.
    type Parent_Plan is
      (Helped, Fails_Twice, Fails_Then_Good, Optional_Fails, Left_Open, Denied,
-      Checks_First, Interrupted, Out_Of_Time);
+      Checks_First, Interrupted, Out_Of_Time, Grandchild_Fails);
 
    type Scripted_Parent is new Wk.Parenting_Runner with record
       Plan : Parent_Plan := Helped;
@@ -7247,6 +7302,29 @@ package body Tests.Framework_Cases is
             Status := E.Make (E.Framework_Limit_Exceeded);
             E.Add_Text (Status, "name", "time");
             return;
+         when Grandchild_Fails =>
+            --  A child whose own required child fails is not done, whatever
+            --  it says: it is run again, as any failed required child is.
+            Ask ("required", Child_Done, Close => False);
+            declare
+               Child   : constant String := To_String (Id);
+               Grand   : Unbounded_String;
+               Told    : Unbounded_String;
+            begin
+               for Attempt in 1 .. 2 loop
+                  Children.Open_Child
+                    ("reviewer", "required", "look deeper",
+                     (if Attempt = 1 then "" else To_String (Grand)),
+                     Grand, Context, Budget, Parent_Status);
+                  Assert (E.Is_Ok (Parent_Status),
+                          "a child could not ask for one of its own: " & Code_Of (Parent_Status));
+                  Children.Close_Child (Child_Fails, 5, E.Success, Told, Retry);
+               end loop;
+               Children.Close_Child (Child_Done, 10, E.Success, Parent_Told, Retry);
+               Assert (Retry, "a child whose required child failed was taken as done: "
+                       & To_String (Parent_Told));
+               Ask ("required", Child_Done, Child);
+            end;
          when Interrupted =>
             --  Stopped while its child works: both are cancelled.
             Ask ("required", Child_Done, Close => False);
@@ -7464,6 +7542,11 @@ package body Tests.Framework_Cases is
             Model_Runner.CLI.Project_Commands.Run ("/accept REQ-404", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/req show REQ-001", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/req move REQ-001 accepted", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run
+              ("/req revise REQ-001 text=the stars are counted twice", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/reconfigure scalar.work.lease=120", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run
+              ("/reconfigure scalar.work.lease=90 confirm=yes", Screen, Agent);
             Set_Output (Standard_Output);
             Set_Error (Standard_Error);
             Close (Said);
@@ -7474,7 +7557,8 @@ package body Tests.Framework_Cases is
                        and then Ada.Strings.Fixed.Index (Text, "nonsense") > 0
                        and then Ada.Strings.Fixed.Index (Text, "Stars counted") > 0
                        and then Ada.Strings.Fixed.Index (Text, "moved from") > 0
-                       and then Ada.Strings.Fixed.Index (Text, "a proposal REQ-404") > 0,
+                       and then Ada.Strings.Fixed.Index (Text, "a proposal REQ-404") > 0
+                       and then Ada.Strings.Fixed.Index (Text, "a value for confirm") > 0,
                        "/task ID, an unknown /task action or /req show said nothing: " & Text);
             end;
          exception
@@ -7496,6 +7580,17 @@ package body Tests.Framework_Cases is
          Nt.Read (Store, Nt.Requirement, "REQ-002", Held, Status);
          Assert (To_String (Held.State) = "accepted",
                  "/accept ID did not decide the one it names: " & To_String (Held.State));
+         Nt.Read (Store, Nt.Requirement, "REQ-001", Held, Status);
+         Assert (To_String (Held.Text) = "the stars are counted twice",
+                 "a revised text was cut to its first word: " & To_String (Held.Text));
+      end;
+      declare
+         Config : R.Item;
+      begin
+         Model_Runner.Framework.Configurations.Read (Store, Config, Status);
+         Assert (R.Get (Config, "scalar.work.lease") = "90",
+                 "/reconfigure was not refused unconfirmed off a terminal, or not taken"
+                 & " confirmed: " & R.Get (Config, "scalar.work.lease"));
       end;
       Assert (Tk.State_Of (Store, To_String (First)) = "complete",
               "/work by identifier did not run the task: " & Tk.State_Of (Store, To_String (First)));
@@ -7742,6 +7837,23 @@ package body Tests.Framework_Cases is
               and then To_String (Done.Final_State) = "complete"
               and then Done.Children.Is_Empty,
               "a child was made where the project gives none: " & Code_Of (Parent_Status));
+      S.Close (Store);
+
+      --  Two deep: a child whose own required child failed.
+      Task_Project
+        (Store, "grandchildren",
+         Checks
+         & "map permission.project.read_source =" & LF
+         & "map permission.project.write_source =" & LF
+         & "map permission.project.run_tests =" & LF
+         & "map permission.project.create_children = max_depth=2, max_children=8" & LF
+         & "scalar agents.max_depth = 2" & LF
+         & "scalar agents.max_children = 8" & LF
+         & "scalar agents.max_active = 8" & LF);
+      Work (Grandchild_Fails);
+      Assert (To_String (Done.Final_State) = "complete",
+              "a child run again past its failed child did not let the task complete: "
+              & To_String (Done.Reason));
       S.Close (Store);
    end Children_Work_Within_Their_Parent;
 

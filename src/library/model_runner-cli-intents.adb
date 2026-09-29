@@ -155,6 +155,11 @@ package body Model_Runner.CLI.Intents is
                           C in 'a' .. 'z' | 'A' .. 'Z' | '_')
             then
                Settings.Append (Part);
+            elsif not Settings.Is_Empty then
+               --  A value runs on to the next NAME=: text=the parser
+               --  shall stop is one text, not a word and three more.
+               Settings.Replace_Element
+                 (Settings.Last_Index, Settings.Last_Element & " " & Part);
             else
                Plain.Append (Part);
             end if;

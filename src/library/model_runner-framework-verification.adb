@@ -563,6 +563,20 @@ package body Model_Runner.Framework.Verification is
                   if E.Is_Error (Status) then
                      return;
                   end if;
+
+                  --  Stopped by whoever started it: not a failure of what
+                  --  it checks, so nothing is judged and no evidence kept.
+                  if Ran.Cancelled then
+                     declare
+                        Changed : Name_Lists.Vector;
+                     begin
+                        Stores.Restore_State (Item, State, Changed);
+                     end;
+                     Evidence := Null_Unbounded_String;
+                     Status := E.Make (E.Generation_Cancelled);
+                     E.Add_Text (Status, "detail", To_String (Next.Label) & " was cancelled");
+                     return;
+                  end if;
                   Good := Ran.Started and then not Ran.Timed_Out and then Ran.Exit_Status = 0;
                   exit when Good or else Tries > Next.Retries;
                end loop;
@@ -1027,13 +1041,30 @@ package body Model_Runner.Framework.Verification is
                   Passed => Passed,
                   Reason => To_Unbounded_String (if Passed then "" else Reason)));
       end Judge;
-      --  The files the task's work changed, as the harness saw them.
+      --  The files the task's work changed, as the harness saw them -- and
+      --  its completed children's: work split among them is its work.
       function Changed_Files return Name_Lists.Vector is
-         State  : Records.Item;
-         Status : E.Error_Info;
+         Result : Name_Lists.Vector;
+
+         procedure Gather (Id : String) is
+            State  : Records.Item;
+            Status : E.Error_Info;
+         begin
+            Stores.Read (Item, Tasks_Area, Id & ".state", State, Status);
+            for Path of Lines_Of (Records.Get (State, "changed_files")) loop
+               if not Result.Contains (Path) then
+                  Result.Append (Path);
+               end if;
+            end loop;
+         end Gather;
       begin
-         Stores.Read (Item, Tasks_Area, Task_Id & ".state", State, Status);
-         return Lines_Of (Records.Get (State, "changed_files"));
+         Gather (Task_Id);
+         for Child of Tasks.Children (Item, Task_Id) loop
+            if Tasks.State_Of (Item, Child) = "complete" then
+               Gather (Child);
+            end if;
+         end loop;
+         return Result;
       end Changed_Files;
 
       Changed : constant Name_Lists.Vector := Changed_Files;

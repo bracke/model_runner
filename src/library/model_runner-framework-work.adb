@@ -1204,6 +1204,17 @@ package body Model_Runner.Framework.Work is
             else
                Good := Invocations.Claim (Said, "status") = "done";
                Why := To_Unbounded_String (Invocations.Claim (Said, "summary"));
+
+               --  Done, it says -- but a required child of its own that
+               --  failed holds it as it holds the root.
+               declare
+                  Held_Back : Unbounded_String;
+               begin
+                  if Good and then not Agents.May_Complete (Host.Item.all, Id, Held_Back) then
+                     Good := False;
+                     Why := Held_Back;
+                  end if;
+               end;
             end if;
          end if;
 
@@ -2144,8 +2155,9 @@ package body Model_Runner.Framework.Work is
             Status := E.Success;
             Result.Evidence_Id := Null_Unbounded_String;
             Change := Stores.No_Changes;
-            Conclude ("blocked", "its verification could not run: "
-                      & Why_Of (Held), "completed");
+            Conclude ("blocked", (if Interrupted (Held) then "its verification was cancelled"
+                                  else "its verification could not run: " & Why_Of (Held)),
+                      "completed");
             return;
          end if;
          Annotate (Item, Change, Task_Id, "current_verification",
@@ -2293,7 +2305,8 @@ package body Model_Runner.Framework.Work is
               (Item, Change, To_String (Chosen.Profile), Task_Id, Result.Evidence_Id, Passed, Held,
                Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For));
             if E.Is_Error (Held) then
-               Leave ("blocked", "its verification could not run: " & Why_Of (Held));
+               Leave ("blocked", (if Interrupted (Held) then "its verification was cancelled"
+                                    else "its verification could not run: " & Why_Of (Held)));
             else
                Annotate (Item, Change, Task_Id, "current_verification",
                          To_String (Result.Evidence_Id));

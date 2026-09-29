@@ -5,6 +5,7 @@ with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 
 with Model_Runner.Agent;
+with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Init;
 with Model_Runner.CLI.Intents;
 with Model_Runner.CLI.Repo;
@@ -1022,7 +1023,9 @@ package body Model_Runner.CLI.Project_Commands is
                   Part  : constant String := All_Words (Index);
                   Equal : constant Natural := Ada.Strings.Fixed.Index (Part, "=");
                begin
-                  if Is_Setting (Part)
+                  if Part = "confirm=yes" then
+                     null;
+                  elsif Is_Setting (Part)
                     and then Ada.Strings.Fixed.Index (Part (Part'First .. Equal - 1), ".") > 0
                   then
                      if Name /= Null_Unbounded_String then
@@ -1055,21 +1058,35 @@ package body Model_Runner.CLI.Project_Commands is
             Pres.Put_Message (Screen, "cli.project.reconfigure.reaches", [Loc.Named ("name", Line)]);
          end loop;
 
-         Pres.Put_Message (Screen, "cli.project.reconfigure.confirm", []);
-         declare
-            Answer : constant String :=
-              Ada.Characters.Handling.To_Lower
-                (Ada.Strings.Fixed.Trim (Ada.Text_IO.Get_Line, Ada.Strings.Both));
-         begin
-            if Answer not in "y" | "yes" | "j" | "ja" then
-               Pres.Put_Note (Screen, "cli.project.reconfigure.kept");
-               return;
-            end if;
-         exception
-            when Ada.Text_IO.End_Error =>
-               Pres.Put_Note (Screen, "cli.project.reconfigure.kept");
-               return;
-         end;
+         --  Confirmed by confirm=yes among the words, or asked -- but only
+         --  on a terminal: a script's next line is not an answer.
+         if All_Words.Contains ("confirm=yes") then
+            null;
+         elsif not Model_Runner.CLI.Choosers.Is_Available (Screen) then
+            declare
+               Missing : E.Error_Info := E.Make (E.Framework_Input_Missing);
+            begin
+               E.Add_Text (Missing, "name", "confirm");
+               Pres.Report (Screen, Missing);
+            end;
+            return;
+         else
+            Pres.Put_Message (Screen, "cli.project.reconfigure.confirm", []);
+            declare
+               Answer : constant String :=
+                 Ada.Characters.Handling.To_Lower
+                   (Ada.Strings.Fixed.Trim (Ada.Text_IO.Get_Line, Ada.Strings.Both));
+            begin
+               if Answer not in "y" | "yes" | "j" | "ja" then
+                  Pres.Put_Note (Screen, "cli.project.reconfigure.kept");
+                  return;
+               end if;
+            exception
+               when Ada.Text_IO.End_Error =>
+                  Pres.Put_Note (Screen, "cli.project.reconfigure.kept");
+                  return;
+            end;
+         end if;
 
          declare
             Change  : S.Transaction;
