@@ -370,8 +370,11 @@ package body Model_Runner.CLI.Choosers is
 
    --  The terminal's own mode, put back however the selector ends.
    type Raw_Guard is new Ada.Finalization.Limited_Controlled with record
-      Saved : Term.Mode;
-      Held  : Boolean := False;
+      Saved     : Term.Mode;
+      Held      : Boolean := False;
+
+      --  Drawing on the alternate screen, to be left however it ends.
+      Alternate : Boolean := False;
    end record;
 
    overriding procedure Finalize (Guard : in out Raw_Guard);
@@ -381,6 +384,10 @@ package body Model_Runner.CLI.Choosers is
    begin
       if Guard.Held then
          Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
+         if Guard.Alternate then
+            Ignored := Term.Control (Output, Term.Leave_Alternate_Screen);
+            Guard.Alternate := False;
+         end if;
          Ignored := Term.Control (Output, Term.Show_Cursor);
          Ignored := Term.Restore_Mode (Input, Guard.Saved);
          Guard.Held := False;
@@ -443,13 +450,15 @@ package body Model_Runner.CLI.Choosers is
          begin
             for Line of Lines loop
                Control (Term.Erase_Line);
-               Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, Line & ASCII.CR & ASCII.LF);
+               Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, Line & ASCII.CR);
+               Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Error);
             end loop;
 
             --  A shorter frame than the last leaves lines to wipe.
             for Extra in Natural (Lines.Length) + 1 .. Drawn loop
                Control (Term.Erase_Line);
-               Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CR & ASCII.LF);
+               Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CR);
+               Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Error);
             end loop;
             if Drawn > Natural (Lines.Length) then
                Control (Term.Move_Up, Drawn - Natural (Lines.Length));
@@ -477,6 +486,12 @@ package body Model_Runner.CLI.Choosers is
       if not Term.Set_Raw (Input) then
          return 0;
       end if;
+      --  Drawn on a screen of its own where the terminal has one: the one
+      --  there was is given back as it was, with nothing it scrolled left
+      --  behind. Drawn from where the cursor is, so that a terminal with no
+      --  second screen draws in place as before.
+      Control (Term.Enter_Alternate_Screen);
+      Guard.Alternate := True;
       Control (Term.Hide_Cursor);
 
       while not Finished (State) loop
@@ -542,7 +557,8 @@ package body Model_Runner.CLI.Choosers is
          Control (Term.Move_Up, Drawn);
          for Line in 1 .. Drawn loop
             Control (Term.Erase_Line);
-            Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CR & ASCII.LF);
+            Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CR);
+            Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Error);
          end loop;
          Control (Term.Move_Up, Drawn);
       end if;
@@ -551,11 +567,13 @@ package body Model_Runner.CLI.Choosers is
    end Choose;
 
    --  A line typed at the terminal, or nothing at the end of input.
-   function Line return String is
+   function Line (Ended : out Boolean) return String is
    begin
+      Ended := False;
       return Ada.Text_IO.Get_Line;
    exception
       when Ada.Text_IO.End_Error =>
+         Ended := True;
          return "";
    end Line;
 
@@ -571,7 +589,8 @@ package body Model_Runner.CLI.Choosers is
       Default : String;
       Answer  : out Ada.Strings.Unbounded.Unbounded_String;
       Given   : out Boolean;
-      Secret  : Boolean := False)
+      Secret  : Boolean := False;
+      Required : Boolean := False)
    is
       Options : Choice_List;
 
@@ -622,7 +641,8 @@ package body Model_Runner.CLI.Choosers is
                Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
             end;
          end loop;
-         Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CR & ASCII.LF);
+         Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CR);
+         Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Error);
          Finalize (Guard);
          return (if Gave_Up then "" else To_String (Typed));
       end Hidden_Line;
@@ -644,10 +664,20 @@ package body Model_Runner.CLI.Choosers is
              others => <>));
       end loop;
 
-      Pres.Put_Note
-        (Screen, "cli.choose.field",
-         [Loc.Named ("name", Label), Loc.Named ("detail", Detail),
-          Loc.Named ("value", (if Secret then "" else Default))]);
+      --  The question, with what it is for and what Enter takes where
+      --  there are such: no empty brackets.
+      declare
+         Shown : constant String := (if Secret then "" else Default);
+      begin
+         Pres.Put_Note
+           (Screen,
+            (if Detail /= "" and then Shown /= "" then "cli.choose.field"
+             elsif Detail /= "" then "cli.choose.field.no_default"
+             elsif Shown /= "" then "cli.choose.field.no_detail"
+             else "cli.choose.field.bare"),
+            [Loc.Named ("name", Label), Loc.Named ("detail", Detail),
+             Loc.Named ("value", Shown)]);
+      end;
 
       if Length (Options) > 0 then
          declare
@@ -662,36 +692,30 @@ package body Model_Runner.CLI.Choosers is
          return;
       end if;
 
-      if Secret then
+      loop
          declare
             Gave_Up : Boolean;
-            Typed   : constant String := Hidden_Line (Gave_Up);
+            Typed   : constant String :=
+              (if Secret then Hidden_Line (Gave_Up)
+               else Ada.Strings.Fixed.Trim (Line (Gave_Up), Ada.Strings.Both));
          begin
             if Gave_Up then
                return;
             elsif Typed /= "" then
                Answer := To_Unbounded_String (Typed);
                Given := True;
+               return;
             elsif Default /= "" then
                Answer := To_Unbounded_String (Default);
                Given := True;
+               return;
+            elsif not Required then
+               return;
             end if;
+            --  Nothing typed where something must be: asked again.
+            Pres.Put_Note (Screen, "cli.choose.needed", [Loc.Named ("name", Label)]);
          end;
-         return;
-      end if;
-
-      declare
-         Typed : constant String :=
-           Ada.Strings.Fixed.Trim (Line, Ada.Strings.Both);
-      begin
-         if Typed /= "" then
-            Answer := To_Unbounded_String (Typed);
-            Given := True;
-         elsif Default /= "" then
-            Answer := To_Unbounded_String (Default);
-            Given := True;
-         end if;
-      end;
+      end loop;
    end Ask;
 
 end Model_Runner.CLI.Choosers;

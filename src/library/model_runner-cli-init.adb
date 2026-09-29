@@ -154,7 +154,7 @@ package body Model_Runner.CLI.Init is
                To_String (Declared.Choices),
                (if Ada.Strings.Fixed.Index (To_String (Declared.Default), "${") > 0 then ""
                 else To_String (Declared.Default)),
-               Typed, Got, Secret => Declared.Secret);
+               Typed, Got, Secret => Declared.Secret, Required => Declared.Required);
             if not Got then
                return;
             end if;

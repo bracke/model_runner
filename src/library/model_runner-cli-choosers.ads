@@ -172,6 +172,9 @@ package Model_Runner.CLI.Choosers is
    --  @param Secret Whether what is typed is a secret: not shown as it is
    --    typed, a mark standing for each character, and given up on with
    --    Escape or Ctrl-C.
+   --  @param Required Whether an empty answer with no default is asked
+   --    again, said so, rather than taken as giving up: only the end of
+   --    input -- Ctrl-D -- or Escape gives up then.
    procedure Ask
      (Screen  : in out Model_Runner.Presentation.Console;
       Label   : String;
@@ -180,7 +183,8 @@ package Model_Runner.CLI.Choosers is
       Default : String;
       Answer  : out Ada.Strings.Unbounded.Unbounded_String;
       Given   : out Boolean;
-      Secret  : Boolean := False);
+      Secret  : Boolean := False;
+      Required : Boolean := False);
 
 private
 

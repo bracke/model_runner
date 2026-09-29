@@ -1,3 +1,4 @@
+with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 with Ada.Text_IO;
 with Ada.Unchecked_Deallocation;
@@ -736,6 +737,9 @@ package body Model_Runner.CLI.Interactive is
       end Take_Turn;
 
       --  Submit whatever has accumulated, if anything.
+      --  Whether the last line was a command, not words for the model.
+      After_Command : Boolean := False;
+
       procedure Submit is
       begin
          if Pending (Typing) = "" then
@@ -744,8 +748,19 @@ package body Model_Runner.CLI.Interactive is
 
          declare
             Prompt : constant String := Pending (Typing);
+            Word   : constant String := Ada.Characters.Handling.To_Lower (T.Trim (Prompt));
          begin
             Taken (Typing);
+
+            --  A lone yes or no just after a command answers nothing: the
+            --  command asked no question, and the model was not being
+            --  talked to. Said so, and sent only if it is sent again.
+            if After_Command and then Word in "y" | "n" | "yes" | "no" | "j" | "ja" | "nej" then
+               After_Command := False;
+               Pres.Put_Note (Screen, "cli.interactive.no_question", [Loc.Named ("value", T.Trim (Prompt))]);
+               return;
+            end if;
+            After_Command := False;
             if Model_Runner.UTF8.Is_Valid (Prompt) then
                Take_Turn (Prompt);
             else
@@ -867,6 +882,7 @@ package body Model_Runner.CLI.Interactive is
                         --  so the answer here is always True and is not
                         --  consulted.
                         Handled := Handle_Command (T.Trim (Line));
+                        After_Command := True;
 
                      when Submits =>
                         --  A blank line submits; an empty submission is

@@ -1,4 +1,5 @@
 with Ada.Characters.Handling;
+with Ada.Containers.Vectors;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 
@@ -6,7 +7,9 @@ with Model_Runner.Errors;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Repository;
+with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
+with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Traceability;
 with Model_Runner.Framework.Work;
 with Model_Runner.Localization;
@@ -23,6 +26,7 @@ package body Model_Runner.CLI.Repo is
    package Rp renames Model_Runner.Framework.Repository;
    package S renames Model_Runner.Framework.Stores;
    package T renames Model_Runner.Text;
+   package Tk renames Model_Runner.Framework.Tasks;
    package Tr renames Model_Runner.Framework.Traceability;
 
    function Image (Value : Natural) return String
@@ -346,14 +350,56 @@ package body Model_Runner.CLI.Repo is
                           ["requirement", "task", "test", "specification", "decision",
                            "component", "file", "unit", "symbol", "other"];
                         Counts : Unbounded_String;
+
+                        --  What it reaches, and the open tasks serving a
+                        --  requirement it reaches: their work is what the
+                        --  change touches too.
+                        package Reached_Vectors is new Ada.Containers.Vectors
+                          (Positive, Tr.Reached, Tr."=");
+                        All_Reached : Reached_Vectors.Vector;
+                        Ids         : Model_Runner.Framework.Name_Lists.Vector;
                      begin
+                        for Index in 1 .. Tr.Length (Reach) loop
+                           All_Reached.Append (Tr.Element (Reach, Index));
+                           Ids.Append (To_String (Tr.Element (Reach, Index).Id));
+                        end loop;
+                        for Index in 1 .. Tr.Length (Reach) loop
+                           declare
+                              One : constant Tr.Reached := Tr.Element (Reach, Index);
+                           begin
+                              if To_String (One.Kind) = "requirement" then
+                                 for Id of Tk.List (Store) loop
+                                    if not Ids.Contains (Id)
+                                      and then Tk.State_Of (Store, Id) not in "complete" | "cancelled" | "rejected"
+                                    then
+                                       declare
+                                          Defined : Model_Runner.Framework.Records.Item;
+                                          Read    : E.Error_Info;
+                                       begin
+                                          Tk.Definition (Store, Id, Defined, Read);
+                                          if E.Is_Ok (Read)
+                                            and then Model_Runner.Framework.Lines_Of
+                                                       (Model_Runner.Framework.Records.Get
+                                                          (Defined, "requirements")).Contains
+                                                          (To_String (One.Id))
+                                          then
+                                             Ids.Append (Id);
+                                             All_Reached.Append
+                                               (Tr.Reached'(Kind => To_Unbounded_String ("task"),
+                                                 Id   => To_Unbounded_String (Id),
+                                                 Sure => One.Sure));
+                                          end if;
+                                       end;
+                                    end if;
+                                 end loop;
+                              end if;
+                           end;
+                        end loop;
                         for Kind of Order loop
                            declare
                               Of_Kind : Natural := 0;
                            begin
-                              for Index in 1 .. Tr.Length (Reach) loop
-                                 declare
-                                    One : constant Tr.Reached := Tr.Element (Reach, Index);
+                              for One of All_Reached loop
                                  begin
                                     if To_String (One.Kind) = Kind then
                                        Of_Kind := Of_Kind + 1;
@@ -384,7 +430,7 @@ package body Model_Runner.CLI.Repo is
                         Pres.Put_Message
                           (Screen, "cli.repo.impact_summary",
                            [Loc.Named ("name", Argument),
-                            Loc.Named ("count", Image (Tr.Length (Reach))),
+                            Loc.Named ("count", Image (Natural (All_Reached.Length))),
                             Loc.Named ("detail", To_String (Counts))]);
                      end;
                      Chosen := Tr.Select_Tests (Store, Reach);

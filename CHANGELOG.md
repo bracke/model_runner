@@ -1797,7 +1797,8 @@ Keep a Changelog and the project uses semantic versioning.
   pass names its first diagnostics; conditions are said in words with their
   code, not as the code alone; a move not allowed names the moves there
   are; a thing not found is named, not its path in the state.
-- **Ctrl-C during `work`** stops the agent and everything it started,
+- **Ctrl-C during `work`** stops the agent and everything it started --
+  its process group, or its job on Windows --
   sets the task aside with why, and ends with status 7.
 - **Quieter and clearer output:** routine processing at opening is not
   reported, only what it made; messages keep their line breaks rather than
@@ -1812,7 +1813,17 @@ Keep a Changelog and the project uses semantic versioning.
   edge once, and `impact` leads with requirements, tasks and tests, cuts a
   long run of symbols short and ends with a count by kind.
 - **Choosers:** a digit picks that item, typing starts a filter, and Escape
-  clears a filter before it closes the list.
+  clears a filter before it closes the list. A list is drawn on the
+  terminal's alternate screen, so that closing it leaves the screen as it
+  was, with no blank lines where it scrolled; and no stray line break is
+  left after it. A required input answered with an empty line is asked
+  again rather than ending the whole form; a question with no default shows
+  no empty brackets, and an optional one says Enter skips it.
+- **A lone yes or no typed just after a command** in the session is not
+  sent to the model -- the command asked nothing -- and is said so; sent
+  again, it goes.
+- **`impact` of a requirement** starts from the requirement itself and
+  lists the open tasks serving any requirement it reaches.
 - **Proposals are not lost or doubled:** one the agent may not make, or
   that cannot be made, is said with why; one with the title of a task not
   yet ended is not made again. `task new` and `req new` say when the title

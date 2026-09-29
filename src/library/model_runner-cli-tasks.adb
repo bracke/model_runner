@@ -341,7 +341,7 @@ package body Model_Runner.CLI.Tasks is
                        or else Ada.Strings.Fixed.Trim (Fields (Field), Ada.Strings.Both) = ""
                      then
                         Choosers.Ask (Screen, Field, Tk.Field_Schema (Store, Field),
-                                      Choices (Field), "", Typed, Got);
+                                      Choices (Field), "", Typed, Got, Required => True);
                         if not Got then
                            Pres.Put_Note (Screen, "cli.task.cancelled");
                            Status := E.Exit_Cancelled;
@@ -358,7 +358,9 @@ package body Model_Runner.CLI.Tasks is
                      Offered_Optional := True;
                      for Field of Tk.Allowed_Fields (Store, Kind) loop
                         if not Wanted.Contains (Field) and then not Fields.Contains (Field) then
-                           Choosers.Ask (Screen, Field & "?", Tk.Field_Schema (Store, Field),
+                           Choosers.Ask (Screen,
+                                         Field & " " & Pres.Message_Value (Screen, "cli.choose.optional"),
+                                         Tk.Field_Schema (Store, Field),
                                          Choices (Field), "", Typed, Got);
                            if Got and then Ada.Strings.Fixed.Trim (To_String (Typed),
                                                                    Ada.Strings.Both) /= ""

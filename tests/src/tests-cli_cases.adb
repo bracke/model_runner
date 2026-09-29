@@ -2036,6 +2036,10 @@ package body Tests.CLI_Cases is
       Run ("req|show|REQ-SHELL-001");
       Assert (Shows ("criteria: a space survives") and then Shows ("title: Quoting"),
               "a requirement's criteria and title were not read: " & To_String (Said));
+      Run ("repo|impact|REQ-SHELL-001");
+      Assert (Shows ("requirement  REQ-SHELL-001") and then Shows ("task  TASK-"),
+              "impact of a requirement did not reach it and the task serving it: "
+              & To_String (Said));
       Write (Root & "/g/docs/spec.md",
              "# Shell" & LF & LF & "## REQ-SHELL-001 Quoting" & LF
              & "Arguments SHALL be quoted." & LF & "Acceptance: a space survives" & LF & LF
@@ -8892,6 +8896,19 @@ package body Tests.CLI_Cases is
       Assert (not Took_A_Turn ("/settings" & ASCII.LF & "/stats" & ASCII.LF
                                & "/exit" & ASCII.LF),
               "a command was taken for a prompt");
+
+      --  A lone no just after a command answers nothing, and is not sent;
+      --  sent again, it is.
+      Assert (not Took_A_Turn ("/settings" & ASCII.LF & "n" & ASCII.LF & ASCII.LF
+                               & "/stats" & ASCII.LF & "/exit" & ASCII.LF)
+              and then Project_Tools.Text.Contains
+                         (Conversed ("/settings" & ASCII.LF & "n" & ASCII.LF & ASCII.LF
+                                     & "/exit" & ASCII.LF),
+                          "nothing is asking yes or no"),
+              "a lone answer after a command was sent to the model");
+      Assert (Took_A_Turn ("/settings" & ASCII.LF & "n" & ASCII.LF & ASCII.LF
+                           & "n" & ASCII.LF & ASCII.LF & "/stats" & ASCII.LF & "/exit" & ASCII.LF),
+              "a lone answer sent again was not sent");
 
       --  And /settings prints the figures it claims to. Ten fields in the
       --  column the rest of the program uses, and nothing had read them.

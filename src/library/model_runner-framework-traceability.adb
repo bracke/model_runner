@@ -4,6 +4,7 @@ with Ada.Strings.Maps;
 
 with Model_Runner.Errors;
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Tasks;
@@ -294,10 +295,20 @@ package body Model_Runner.Framework.Traceability is
 
    --  The node a change starts from: a file by its path, or a symbol or a
    --  unit named as its node.
-   function Seed_Of (Changed : String) return String
-   is (if (Changed'Length > 7 and then Changed (Changed'First .. Changed'First + 6) = "symbol:")
-          or else (Changed'Length > 5 and then Changed (Changed'First .. Changed'First + 4) = "unit:")
-       then Changed else "file:" & Changed);
+   --  A changed thing as a node: a symbol, unit or component as it is
+   --  named, an entity of the project's state by its identifier, anything
+   --  else a file.
+   function Seed_Of (Changed : String) return String is
+      function Starts (Prefix : String) return Boolean
+      is (Changed'Length > Prefix'Length
+          and then Changed (Changed'First .. Changed'First + Prefix'Length - 1) = Prefix);
+   begin
+      return (if Starts ("symbol:") or else Starts ("unit:") or else Starts ("component:")
+                or else ((Starts ("REQ-") or else Starts ("TASK-") or else Starts ("SPEC-")
+                          or else Starts ("DEC-"))
+                         and then Identifiers.Is_Valid (Changed))
+              then Changed else "file:" & Changed);
+   end Seed_Of;
 
    function Impact_Of (From : Graph; Changed : Name_Lists.Vector) return Impact is
       Result : Impact;
