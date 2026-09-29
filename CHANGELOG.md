@@ -7,6 +7,24 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The spec's requirements, each checked:** `docs/spec-conformance.tsv`
+  lists every SHALL and MUST of the specification -- every item of every
+  list, 690 in all -- with whether it is met, the code that meets it and
+  the test that shows it.
+- **A part an agent proposes holds its parent only once accepted:** until
+  then it is proposal data, not work the parent waits on.
+- **Work done for a requirement's old words implements nothing of the
+  new:** completion records what each requirement meant, and a revision
+  that changes it is not taken as implemented by work done before.
+- **Bootstrap run again leaves a person's revision alone:** what the
+  document said at import is kept, and only a change in the document
+  counts -- revised where the policy takes the document's word, raised as
+  an issue for a person otherwise.
+- **Two template files that are one once the inputs are in** are a
+  conflict, not one written over the other.
+- **The selector waits for the rest of a key sent in pieces,** as SSH and
+  tmux may send it, and reads home and end as tmux sends them.
+
 - **Commits are durable:** each staged record, the journal, the commit
   mark and every area written are put on the device (`Hostkit.Durability`)
   before what depends on them; a staged record cut short is refused on

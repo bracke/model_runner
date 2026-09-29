@@ -334,31 +334,84 @@ package body Model_Runner.Framework.Bootstrap is
             Provenance : constant String := Field (Next.Provenance);
             Id         : Unbounded_String;
 
+            function Area_Of (Kind : Intent.Intent_Kind) return Area
+            is (case Kind is
+                  when Intent.Requirement   => Requirements_Area,
+                  when Intent.Specification => Specs_Area,
+                  when Intent.Decision      => Decisions_Area);
+
+            --  What the document said when it was imported, kept on what it
+            --  made: what is compared with the next run, so a person's own
+            --  revision is not taken for the document's.
+            procedure Mark_Imported (Kind : Intent.Intent_Kind; Named : String) is
+               Value  : Records.Item;
+               Staged : Boolean;
+            begin
+               Stores.Pending (Change, Area_Of (Kind), Named, Value, Staged);
+               if Staged then
+                  Records.Set (Value, "imported_text", To_String (Next.Text));
+                  Stores.Put (Change, Area_Of (Kind), Named, Value);
+               end if;
+            end Mark_Imported;
+
+            --  Found again. The document unchanged since it was imported --
+            --  whatever a person has made of it since -- is nothing new. The
+            --  document changed: its next revision, where what it made is
+            --  still a candidate or the policy takes the document's word;
+            --  otherwise an issue for a person, who decides what is agreed.
+            procedure Again (Kind : Intent.Intent_Kind; Known : String; Settled : Boolean) is
+               Held   : Intent.Entity;
+               Effect : Intent.Impact;
+               Kept   : Records.Item;
+               Read   : E.Error_Info;
+            begin
+               Intent.Read (Item, Kind, Known, Held, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+               Stores.Read (Item, Area_Of (Kind), Known, Kept, Read);
+               declare
+                  Imported : constant String :=
+                    (if Records.Get (Kept, "imported_text") /= ""
+                     then Records.Get (Kept, "imported_text") else To_String (Held.Text));
+               begin
+                  if To_String (Next.Text) = Imported
+                    or else To_String (Held.State) in "obsolete" | "superseded"
+                  then
+                     Result.Existing := Result.Existing + 1;
+                  elsif To_String (Held.State) /= Intent.First_State (Kind) and then not Settled then
+                     declare
+                        Said : Results.Result :=
+                          (Kind       => Results.Diagnostic,
+                           Producer   => To_Unbounded_String ("bootstrap"),
+                           Summary    => To_Unbounded_String
+                                           (Field (Next.Source) & " now says what " & Known
+                                            & " does not; revise " & Known
+                                            & " to take it, which a person decides"),
+                           Payload    => Next.Text,
+                           Provenance => Next.Provenance,
+                           others     => <>);
+                     begin
+                        Results.Add (Item, Change, Said, Status);
+                        Result.Issues := Result.Issues + 1;
+                     end;
+                  else
+                     Intent.Revise
+                       (Item, Change, Kind, Known, Field (Next.Title), Field (Next.Text),
+                        To_String (Held.Criteria), Effect, Status);
+                     if E.Is_Ok (Status) then
+                        Mark_Imported (Kind, Known);
+                        Result.Created := Result.Created + 1;
+                     end if;
+                  end if;
+               end;
+            end Again;
+
             procedure Propose (Kind : Intent.Intent_Kind) is
                Known : constant String := Intent.Find_By_Provenance (Item, Kind, Provenance);
             begin
-               --  Found again: as it was, or what the document now says, as
-               --  its next revision -- unless it has been replaced.
                if Known /= "" then
-                  declare
-                     Held   : Intent.Entity;
-                     Effect : Intent.Impact;
-                  begin
-                     Intent.Read (Item, Kind, Known, Held, Status);
-                     if E.Is_Ok (Status) and then Held.Text /= Next.Text
-                       and then To_String (Held.State) not in "obsolete" | "superseded"
-                     then
-                        Intent.Revise
-                          (Item, Change, Kind, Known, Field (Next.Title), Field (Next.Text),
-                           To_String (Held.Criteria), Effect, Status);
-                        if E.Is_Ok (Status) then
-                           Result.Created := Result.Created + 1;
-                        end if;
-                     else
-                        Status := E.Success;
-                        Result.Existing := Result.Existing + 1;
-                     end if;
-                  end;
+                  Again (Kind, Known, Settled => False);
                   return;
                end if;
                Intent.Propose
@@ -366,6 +419,7 @@ package body Model_Runner.Framework.Bootstrap is
                   Field (Next.Text), "", Field (Next.Source), Provenance,
                   "project", Id, Status);
                if E.Is_Ok (Status) then
+                  Mark_Imported (Kind, To_String (Id));
                   Result.Created := Result.Created + 1;
                end if;
             end Propose;
@@ -421,28 +475,12 @@ package body Model_Runner.Framework.Bootstrap is
                   if Intent.Find_By_Provenance
                        (Item, Intent.Requirement, Provenance) /= ""
                   then
-                     --  The same item again: as it was, or what its line
-                     --  now says, as its next revision.
-                     declare
-                        Held    : Intent.Entity;
-                        Known   : constant String :=
-                          Intent.Find_By_Provenance (Item, Intent.Requirement, Provenance);
-                        Effect  : Intent.Impact;
-                     begin
-                        Intent.Read (Item, Intent.Requirement, Known, Held, Status);
-                        if E.Is_Ok (Status) and then Held.Text /= Next.Text
-                          and then To_String (Held.State) not in "obsolete" | "superseded"
-                        then
-                           Intent.Revise
-                             (Item, Change, Intent.Requirement, Known, Field (Next.Title),
-                              Field (Next.Text), To_String (Held.Criteria), Effect, Status);
-                           if E.Is_Ok (Status) then
-                              Result.Created := Result.Created + 1;
-                           end if;
-                        else
-                           Result.Existing := Result.Existing + 1;
-                        end if;
-                     end;
+                     --  The same item again: where the policy takes the
+                     --  document's word, what its line now says is the next
+                     --  revision; otherwise a person decides.
+                     Again (Intent.Requirement,
+                            Intent.Find_By_Provenance (Item, Intent.Requirement, Provenance),
+                            Settled => Accept_Imports);
                   else
                      --  Under the identifier the document gives it -- unless
                      --  something else holds it: then made under another,
@@ -467,6 +505,9 @@ package body Model_Runner.Framework.Bootstrap is
                            Field (Next.Source), Provenance, "project", Id, Status,
                            Given => Given);
                         Moved := Moved and then E.Is_Ok (Status);
+                        if E.Is_Ok (Status) then
+                           Mark_Imported (Intent.Requirement, To_String (Id));
+                        end if;
                         if E.Is_Ok (Status) and then Accept_Imports and then not Moved then
                            Intent.Move
                              (Item, Change, Intent.Requirement, To_String (Id),

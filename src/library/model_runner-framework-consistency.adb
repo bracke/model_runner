@@ -454,7 +454,7 @@ package body Model_Runner.Framework.Consistency is
                end if;
                if Gates.Contains ("children") then
                   for Child of Tasks.Children (Item, Id) loop
-                     if Tasks.State_Of (Item, Child) not in "complete" | "cancelled" | "rejected" then
+                     if Tasks.Holds_Parent (Item, Child, Tasks.State_Of (Item, Child)) then
                         Found (Completed_Without_Gate, Id,
                                "it is complete and its child " & Child & " is "
                                & Tasks.State_Of (Item, Child));

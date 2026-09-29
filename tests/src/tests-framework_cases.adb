@@ -1125,6 +1125,27 @@ package body Tests.Framework_Cases is
       Assert (Status.Code = E.Framework_Template_Invalid,
               "a baseline of neither the project nor its language was declared");
 
+      --  Two files that are one once the inputs are in, with different
+      --  text, are a conflict.
+      declare
+         Holding : Tp.Registry;
+         Made    : Tp.Composition;
+         Planned : Cf.Plan;
+         Given   : Cf.Value_Maps.Map;
+      begin
+         Tp.Add (Holding, Parsed ("template = clashing" & LF & "name = C" & LF
+                                  & "description = D" & LF & "version = 1" & LF
+                                  & "input x" & LF & "  type = text" & LF & "  required = true" & LF
+                                  & "file src/${x}.adb = one" & LF
+                                  & "file src/main.adb = two" & LF));
+         Tp.Compose (Holding, "clashing", Made, Status);
+         Given.Include ("x", "main");
+         Cf.Prepare (Made, Fresh ("file-clash"), Given, Planned, Status);
+         Assert (Status.Code = E.Framework_Template_Conflict,
+                 "two files the same once the inputs were in were written over each other: "
+                 & Code_Of (Status));
+      end;
+
       --  The agent command's prompt marker is no input, and passes through.
       declare
          Holding : Tp.Registry;
@@ -3462,6 +3483,30 @@ package body Tests.Framework_Cases is
                  "an optional field was not passed over");
       end Choose_Then_Skip;
 
+      --  A cursor key sent in two pieces, as SSH or tmux may send it: the
+      --  second choice, not the selector given up on.
+      procedure Split_Key_Then_Choose (Pair : Hostkit.Pty.Pair; Seen : String) is
+         pragma Unreferenced (Seen);
+
+         procedure Send (Bytes : Ada.Streams.Stream_Element_Array) is
+            Last : Ada.Streams.Stream_Element_Offset;
+            Sent : constant Hostkit.Descriptors.Transfer_Outcome :=
+              Hostkit.Descriptors.Write (Pair.To_Child, Bytes, Last);
+            Whole : constant Boolean := Last = Bytes'Last;
+         begin
+            Assert (Hostkit.Descriptors."=" (Sent, Hostkit.Descriptors.Transfer_Ok) and then Whole,
+                    "a key was not sent");
+         end Send;
+      begin
+         Send ([1 => 27]);
+         delay 0.01;
+         Send ([1 => Character'Pos ('['), 2 => Character'Pos ('B')]);
+         delay 0.3;
+         Send ([1 => 13]);
+         delay 1.5;
+         Send ([1 => 10]);
+      end Split_Key_Then_Choose;
+
       procedure Type_Secret (Pair : Hostkit.Pty.Pair; Seen : String) is
          Last : Ada.Streams.Stream_Element_Offset;
          Word : constant String := "hunter2" & ASCII.CR;
@@ -3520,6 +3565,29 @@ package body Tests.Framework_Cases is
             Tk.Effective (Form, "TASK-001", View, Got);
             Assert (R.Get (View, "definition.field.verdict") = "pass",
                     "the form did not make the task its schema asks for: " & Said);
+            S.Close (Form);
+         end if;
+      end;
+
+      --  The same form, the choice made with a cursor key sent in pieces.
+      Task_Project (Store, "terminal-split",
+                    "task_kind review = verdict, notes?" & LF
+                    & "map task_field.verdict = choice pass|fail" & LF);
+      S.Close (Store);
+      declare
+         Said : constant String :=
+           Run_On_Terminal (Words, Dirs.Full_Name (Scratch & "/terminal-split"), "",
+                            Split_Key_Then_Choose'Access);
+         Form : S.Store;
+         Rep  : S.Recovery_Report;
+         Got  : E.Error_Info;
+         View : R.Item;
+      begin
+         if Said /= "" then
+            S.Open (Form, Scratch & "/terminal-split", Rep, Got);
+            Tk.Effective (Form, "TASK-001", View, Got);
+            Assert (R.Get (View, "definition.field.verdict") = "fail",
+                    "a cursor key sent in pieces was not read as one: " & Said);
             S.Close (Form);
          end if;
       end;
@@ -3877,6 +3945,34 @@ package body Tests.Framework_Cases is
                  or else Ada.Strings.Fixed.Index (R.Get (Defined, "requirements"), Imported) > 0;
             end loop;
             Assert (Followed, "an accepted import was not followed by its task");
+         end;
+
+         --  A person revises it; bootstrap run again over the same document
+         --  leaves the person's words, and over a changed one raises it for
+         --  a person rather than rewriting what was agreed.
+         declare
+            Effect : Nt.Impact;
+            Held   : Nt.Entity;
+         begin
+            Nt.Revise (Store, Change, Nt.Requirement, Imported, "Read", "Input is read twice.", "",
+                       Effect, Status);
+            S.Commit (Store, Change, Status);
+            Bs.Apply (Store, Change,
+                      Bs.Scan ("notes/io.txt", Read_Whole (Fresh_Root (Store) & "/notes/io.txt")),
+                      Report, Status);
+            S.Commit (Store, Change, Status);
+            Nt.Read (Store, Nt.Requirement, Imported, Held, Status);
+            Assert (To_String (Held.Text) = "Input is read twice.",
+                    "bootstrap run again put the document's words over a person's: "
+                    & To_String (Held.Text));
+            Bs.Apply (Store, Change,
+                      Bs.Scan ("notes/io.txt", "- REQ-IO-001: Input is read in chunks." & LF),
+                      Report, Status);
+            S.Commit (Store, Change, Status);
+            Nt.Read (Store, Nt.Requirement, Imported, Held, Status);
+            Assert (To_String (Held.Text) = "Input is read twice." and then Report.Issues >= 1,
+                    "a changed document rewrote an agreed requirement unasked: "
+                    & To_String (Held.Text));
          end;
       end;
       S.Close (Store);
@@ -7369,6 +7465,41 @@ package body Tests.Framework_Cases is
          Assert (To_String (Held2.State) = "implemented" and then Moved.Contains (To_String (Req2)),
                  "an accepted requirement whose tasks were all complete stayed accepted: "
                  & To_String (Held2.State));
+
+         --  Revised to say something else, what was done for the old words
+         --  implements nothing of the new.
+         declare
+            Effect : Nt.Impact;
+         begin
+            Nt.Revise (Store, Change, Nt.Requirement, To_String (Req2), "Write",
+                       "It SHALL write twice.", "", Effect, Status);
+            S.Commit (Store, Change, Status);
+            Vf.Reevaluate_Requirements (Store, Change, Moved, Status);
+            S.Commit (Store, Change, Status);
+            Nt.Read (Store, Nt.Requirement, To_String (Req2), Held2, Status);
+            Assert (To_String (Held2.State) = "accepted",
+                    "work done for a requirement's old words implemented its new ones: "
+                    & To_String (Held2.State));
+         end;
+      end;
+
+      --  A part an agent proposed holds its parent only once accepted.
+      declare
+         Whole, Part : Unbounded_String;
+      begin
+         Tk.Create (Store, Change, Fields ("Whole thing", "analysis"), "user", "", Whole, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Whole), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Tk.Create (Store, Change, Fields ("A part", "analysis", "parent", To_String (Whole)),
+                    "agent AG-000001", To_String (Whole), Part, Status);
+         S.Commit (Store, Change, Status);
+         Assert (Tk.Ready (Store, To_String (Whole)).Ready,
+                 "a part an agent proposed held its parent before it was accepted");
+         Tk.Move (Store, Change, To_String (Part), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Assert (not Tk.Ready (Store, To_String (Whole)).Ready,
+                 "an accepted part did not hold its parent");
       end;
 
       --  What supersedes keeps what it was.

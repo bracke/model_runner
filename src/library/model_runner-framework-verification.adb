@@ -1147,7 +1147,7 @@ package body Model_Runner.Framework.Verification is
                Open : Unbounded_String;
             begin
                for Child of Tasks.Children (Item, Task_Id) loop
-                  if Tasks.State_Of (Item, Child) not in "complete" | "cancelled" | "rejected" then
+                  if Tasks.Holds_Parent (Item, Child, Tasks.State_Of (Item, Child)) then
                      Append (Open, (if Open = Null_Unbounded_String then "" else ", ") & Child);
                   end if;
                end loop;
@@ -1451,6 +1451,20 @@ package body Model_Runner.Framework.Verification is
       --  implemented -- come back from blocked, say, after they did.
       for Requirement of Intent.List (Item, Intent.Requirement, "accepted") loop
          declare
+            --  Done while the requirement meant something else: a task that
+            --  completed before a revision changed what it says.
+            function Done_For_Other_Words (Id : String) return Boolean is
+               Runtime_Value : Records.Item;
+               Got           : E.Error_Info;
+               Held          : Intent.Entity;
+            begin
+               Stores.Read (Item, Tasks_Area, Id & ".state", Runtime_Value, Got);
+               Intent.Read (Item, Intent.Requirement, Requirement, Held, Got);
+               return Records.Get (Runtime_Value, "served." & Requirement) /= ""
+                 and then Records.Get (Runtime_Value, "served." & Requirement)
+                            /= To_String (Held.Meaning);
+            end Done_For_Other_Words;
+
             Serving : Natural := 0;
             Open    : Boolean := False;
          begin
@@ -1466,7 +1480,7 @@ package body Model_Runner.Framework.Verification is
                     and then State not in "cancelled" | "rejected"
                   then
                      Serving := Serving + 1;
-                     Open := Open or else State /= "complete";
+                     Open := Open or else State /= "complete" or else Done_For_Other_Words (Id);
                   end if;
                end;
             end loop;

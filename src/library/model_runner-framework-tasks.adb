@@ -726,6 +726,25 @@ package body Model_Runner.Framework.Tasks is
          Records.Set (Value, "blocking_reasons", Reason);
       elsif Next = "failed" then
          Records.Set (Value, "current_failure", Reason);
+      elsif Next = "complete" then
+         --  What each requirement it served meant when it was done: work
+         --  done for other words implements nothing of the new ones.
+         declare
+            Defined : Records.Item;
+            Read    : E.Error_Info;
+         begin
+            Definition (Item, Id, Defined, Read);
+            for Requirement of Split (Records.Get (Defined, "requirements")) loop
+               declare
+                  Held : Intent.Entity;
+               begin
+                  Intent.Read (Item, Intent.Requirement, Requirement, Held, Read);
+                  if E.Is_Ok (Read) then
+                     Records.Set (Value, "served." & Requirement, To_String (Held.Meaning));
+                  end if;
+               end;
+            end loop;
+         end;
       elsif Next = "accepted" then
          Records.Remove (Value, "blocking_reasons");
          Records.Remove (Value, "current_failure");
@@ -746,7 +765,7 @@ package body Model_Runner.Framework.Tasks is
          begin
             Definition (Item, Id, Defined, Read);
             for Child of Children (Item, Id) loop
-               if State_Of (Item, Child) not in "complete" | "cancelled" | "rejected" then
+               if Holds_Parent (Item, Child, State_Of (Item, Child)) then
                   Open.Append (Child);
                end if;
             end loop;
@@ -821,9 +840,7 @@ package body Model_Runner.Framework.Tasks is
       end loop;
 
       for Child of Children (Item, Id) loop
-         if State_In (Item, Change, Child)
-              not in "complete" | "cancelled" | "rejected"
-         then
+         if Holds_Parent (Item, Child, State_In (Item, Change, Child)) then
             Result.Reasons.Append
               ("its child " & Child & " is " & State_In (Item, Change, Child));
          end if;
@@ -924,7 +941,7 @@ package body Model_Runner.Framework.Tasks is
                          (Records.Get (Value, "blocking_reasons"),
                           Children_Reason) = 1
               and then (for all Child of Children (Item, Id) =>
-                          State_Of (Item, Child) in "complete" | "cancelled" | "rejected")
+                          not Holds_Parent (Item, Child, State_Of (Item, Child)))
             then
                Move (Item, Change, Id, "accepted", "its children are done",
                      Status => Status);
@@ -991,6 +1008,28 @@ package body Model_Runner.Framework.Tasks is
       Move (Item, Change, Parent, "blocked",
             Children_Reason & Joined (Waiting, ", "), Status => Status);
    end Block_On_Children;
+
+   ------------------
+   -- Holds_Parent --
+   ------------------
+
+   function Holds_Parent (Item : Stores.Store; Child : String; State : String) return Boolean is
+      Defined : Records.Item;
+      Read    : E.Error_Info;
+   begin
+      if State in "complete" | "cancelled" | "rejected" then
+         return False;
+      elsif State = "candidate" then
+         Definition (Item, Child, Defined, Read);
+         declare
+            By : constant String := Records.Get (Defined, "created_by");
+         begin
+            return not (E.Is_Ok (Read) and then By'Length > 6
+                        and then By (By'First .. By'First + 5) = "agent ");
+         end;
+      end if;
+      return True;
+   end Holds_Parent;
 
    ----------
    -- List --

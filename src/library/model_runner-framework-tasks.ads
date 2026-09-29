@@ -239,6 +239,17 @@ package Model_Runner.Framework.Tasks is
      (Item  : Stores.Store;
       State : String := "") return Name_Lists.Vector;
 
+   --  Whether a child holds its parent: it is still to be done -- not
+   --  complete, cancelled or rejected -- and it is work someone took on. A
+   --  part an agent proposed is proposal data until it is accepted, and
+   --  holds nothing before then.
+   --
+   --  @param Item The store.
+   --  @param Child The child.
+   --  @param State Its state, as the caller sees it.
+   --  @return True when it holds its parent.
+   function Holds_Parent (Item : Stores.Store; Child : String; State : String) return Boolean;
+
    --  The children of a task.
    --
    --  @param Item The store.

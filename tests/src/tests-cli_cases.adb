@@ -1992,6 +1992,9 @@ package body Tests.CLI_Cases is
               "an up arrow was not read as one");
       Assert (C.Decode (ASCII.ESC & "[6~", Used).Kind = C.Page_Down
               and then Used = 4, "page down was not read as one");
+      Assert (C.Decode (ASCII.ESC & "[1~", Used).Kind = C.Home and then Used = 4
+              and then C.Decode (ASCII.ESC & "[4~", Used).Kind = C.End_Key,
+              "home and end as tmux sends them were not read");
       Assert (C.Decode ([1 => ASCII.ESC], Used).Kind = C.Escape
               and then Used = 1,
               "a lone escape was not read as Escape");

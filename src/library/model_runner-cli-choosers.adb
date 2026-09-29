@@ -33,6 +33,17 @@ package body Model_Runner.CLI.Choosers is
    function Length (From : Choice_List) return Natural
    is (Natural (From.Items.Length));
 
+   --  Whether bytes are the start of a key's sequence and not all of it:
+   --  an escape alone, or escape and [ or O, or escape, [ and a digit
+   --  still waiting for its ~ -- what a terminal behind SSH or tmux, or a
+   --  read that ended mid-key, hands over in two pieces.
+   function Incomplete (Bytes : String) return Boolean
+   is (Bytes'Length > 0 and then Bytes (Bytes'First) = ASCII.ESC
+       and then (Bytes'Length = 1
+                 or else (Bytes'Length = 2 and then Bytes (Bytes'First + 1) in '[' | 'O')
+                 or else (Bytes'Length = 3 and then Bytes (Bytes'First + 1) = '['
+                          and then Bytes (Bytes'First + 2) in '0' .. '9')));
+
    ------------
    -- Decode --
    ------------
@@ -63,13 +74,18 @@ package body Model_Runner.CLI.Choosers is
                   when 'B' => return (Down, ' ');
                   when 'H' => return (Home, ' ');
                   when 'F' => return (End_Key, ' ');
-                  when '5' | '6' =>
+                  when '1' | '4' | '5' | '6' | '7' | '8' =>
+                     --  The keys that end in ~: page up and down, and the
+                     --  home and end tmux and the Linux console send.
                      if Bytes'Length >= 4 and then Bytes (Bytes'First + 3) = '~'
                      then
                         Used := 4;
                         return
-                          ((if Bytes (Bytes'First + 2) = '5' then Page_Up
-                            else Page_Down), ' ');
+                          ((case Bytes (Bytes'First + 2) is
+                              when '5'       => Page_Up,
+                              when '6'       => Page_Down,
+                              when '1' | '7' => Home,
+                              when others    => End_Key), ' ');
                      end if;
                      return (Nothing, ' ');
                   when others => return (Nothing, ' ');
@@ -484,6 +500,10 @@ package body Model_Runner.CLI.Choosers is
          end;
 
          while Held > 0 and then not Finished (State) loop
+            --  A key's sequence part way: the rest is waited for, briefly,
+            --  before an escape is taken for Escape.
+            exit when Incomplete (Pending (1 .. Held))
+              and then Hostkit.Descriptors.Wait_Readable (Input, 50);
             declare
                Used    : Natural;
                Pressed : constant Key := Decode (Pending (1 .. Held), Used);

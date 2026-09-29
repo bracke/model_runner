@@ -526,6 +526,17 @@ package body Model_Runner.Framework.Configurations is
                         elsif not Templates.Is_Project_Path (Path) then
                            Invalid (Path & " is not a path inside the project");
                            return;
+
+                        --  Two files that are one once the inputs are in:
+                        --  the same text is one file, different text is a
+                        --  conflict nothing in the templates resolves.
+                        elsif Result.Files.Contains (Path) and then Result.Files (Path) /= Value then
+                           Status := E.Make (E.Framework_Template_Conflict);
+                           E.Add_Text (Status, "name", "file " & Path);
+                           E.Add_Text (Status, "detail",
+                                       Key & " is " & Path & " with these inputs, which another"
+                                       & " file of the templates already is");
+                           return;
                         end if;
                         Result.Files.Include (Path, Value);
                         Records.Set (Config, "file." & Path, Value);
