@@ -7,6 +7,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Least privilege by kind, and code work must change something.** The
+  standard template narrows analysis to reading and checking, documentation
+  to writing documents, and tests to writing tests, and gives implementation
+  and bugfix tasks the implementation_present gate.
+- **An agent's proposals say where they came from:** created by `agent
+  AG-...`, from the task it was working on.
+- **References say how sure they are.** `/refs` shows each reference's
+  derivation and confidence, and a name another unit's name qualifies, as
+  `Other.Parse`, is no longer taken for this unit's.
 - **A document does not outweigh the template.** Bootstrap raises an issue,
   and leaves the fact, where a document disagrees with a template's or the
   project's own authoritative one; a fact it does record keeps the

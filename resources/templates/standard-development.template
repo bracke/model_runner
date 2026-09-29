@@ -12,6 +12,38 @@ task_kind test = component?, requirements?, notes?
 task_kind documentation = component?, notes?
 task_kind analysis = component?, notes?, question?
 
+# What completes a task of each kind: work that changes code is complete only
+# when it changed something.
+set task.gates.implementation = verification
+set task.gates.implementation = children
+set task.gates.implementation = no_blocking_issue
+set task.gates.implementation = integration
+set task.gates.implementation = implementation_present
+set task.gates.bugfix = verification
+set task.gates.bugfix = children
+set task.gates.bugfix = no_blocking_issue
+set task.gates.bugfix = integration
+set task.gates.bugfix = implementation_present
+
+# What an agent may do, by kind, within the project's least: analysis reads
+# and checks, documentation writes documents, tests write tests.
+map permission.kind.analysis.read_source =
+map permission.kind.analysis.read_specs =
+map permission.kind.analysis.run_build =
+map permission.kind.analysis.run_tests =
+map permission.kind.analysis.propose_tasks =
+map permission.kind.documentation.read_source =
+map permission.kind.documentation.read_specs =
+map permission.kind.documentation.write_source = roots=docs/|doc/|README
+map permission.kind.documentation.write_specs = roots=docs/|doc/
+map permission.kind.documentation.propose_tasks =
+map permission.kind.test.read_source =
+map permission.kind.test.read_specs =
+map permission.kind.test.write_source = roots=tests/|test/
+map permission.kind.test.run_build =
+map permission.kind.test.run_tests =
+map permission.kind.test.propose_tasks =
+
 # The fields of its own a kind lists, each with what it is: text, number,
 # identifier, path, list, or choice A|B|C.
 map task_field.reproduction = text

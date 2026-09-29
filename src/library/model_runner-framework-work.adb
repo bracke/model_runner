@@ -1757,8 +1757,10 @@ package body Model_Runner.Framework.Work is
                      Fields.Include ("depends_on", Said_Of ("depends_on", ""));
                   end if;
                   Fields.Include ("notes", "proposed working on " & Task_Id);
+                  --  Made by an agent, from the task it was working on.
                   Tasks.Create
-                    (Item, Change, Fields, To_String (Result.Agent_Id), "agent", Made, Held);
+                    (Item, Change, Fields, "agent " & To_String (Result.Agent_Id), Task_Id,
+                     Made, Held);
                   if E.Is_Ok (Held) then
                      Result.Proposed.Append (To_String (Made));
                   else
@@ -1789,8 +1791,8 @@ package body Model_Runner.Framework.Work is
                      Fields.Include ("component", Records.Get (Defined, "component"));
                   end if;
                   Tasks.Create
-                    (Item, Change, Fields, To_String (Result.Agent_Id),
-                     "agent decomposition of " & Task_Id, Made, Held);
+                    (Item, Change, Fields, "agent " & To_String (Result.Agent_Id), Task_Id,
+                     Made, Held);
                   if E.Is_Ok (Held) then
                      Result.Proposed.Append (To_String (Made));
                   else

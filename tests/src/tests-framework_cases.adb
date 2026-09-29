@@ -2710,6 +2710,7 @@ package body Tests.Framework_Cases is
                 & "   Said : constant String := ""Next"";" & LF
                 & "begin" & LF
                 & "   Parser.Next (Item);" & LF
+                & "   Other.Next (Item);" & LF
                 & "end Main;" & LF);
       Put_File (Project & "/tests/parser_tests.adb",
                 "with Parser;" & LF & "procedure Parser_Tests is" & LF
@@ -2760,8 +2761,10 @@ package body Tests.Framework_Cases is
       Assert (Rp.References_To (Found, "Parser.Next").Contains
                 ("src/main.adb:6")
               and then not Rp.References_To (Found, "Parser.Next").Contains
-                             ("src/main.adb:4"),
-              "a reference was missed, or a string taken for one");
+                             ("src/main.adb:4")
+              and then not Rp.References_To (Found, "Parser.Next").Contains
+                             ("src/main.adb:7"),
+              "a reference was missed, a string taken for one, or another unit's name");
 
       declare
          Explicit_With : Boolean := False;
@@ -5427,6 +5430,15 @@ package body Tests.Framework_Cases is
               and then Natural (Done.Proposed.Length) = 2
               and then Tk.State_Of (Store, Done.Proposed.First_Element) = "candidate",
               "proposed work did not become candidate tasks");
+      declare
+         Defined : R.Item;
+      begin
+         Tk.Definition (Store, Done.Proposed.First_Element, Defined, Status);
+         Assert (R.Get (Defined, "created_by") = "agent " & To_String (Done.Agent_Id)
+                 and then R.Get (Defined, "origin") = To_String (Done.Task_Id),
+                 "a proposed task does not say which agent made it, from which task: "
+                 & R.Get (Defined, "created_by") & " / " & R.Get (Defined, "origin"));
+      end;
       S.Close (Store);
 
       --  Where it may not propose, it is an issue and nothing more.

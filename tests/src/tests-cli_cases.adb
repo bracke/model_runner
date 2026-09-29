@@ -1578,6 +1578,15 @@ package body Tests.CLI_Cases is
               and then Shows ("TASK-DEMO-001") and then not Shows ("Lexer"),
               "task list did not narrow by kind: " & Last_Output);
 
+      --  Least privilege by kind, and work that changes code done only
+      --  when it changed something.
+      Assert (Command ("task|show|TASK-001") = 0
+              and then Shows ("permissions: read_source; read_specs; run_build; run_tests;"
+                              & " propose_tasks")
+              and then Command ("task|show|TASK-DEMO-001") = 0
+              and then Shows ("implementation_present"),
+              "a kind was not narrowed, or its gates not what the template says: " & Last_Output);
+
       Assert (Command ("task|split|TASK-001|One; Two") = 0 and then Shows ("is blocked"),
               "task split did not make the parts and block the parent: " & Last_Output);
       Assert (Command ("task|depend|TASK-003|TASK-002") = 0 and then Shows ("waits for"),

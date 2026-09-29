@@ -194,11 +194,24 @@ package body Model_Runner.CLI.Repo is
                Not_Found;
                return;
             end if;
+            --  Each with how it was found and how sure that is: a name that
+            --  matches is a guess, and says so.
             for Name of Names loop
-               for Place of Rp.References_To (Found, Name) loop
-                  Pres.Put_Message
-                    (Screen, "cli.repo.reference",
-                     [Loc.Named ("name", Name), Loc.Named ("path", Place)]);
+               for Index in 1 .. Rp.Relation_Count (Found) loop
+                  declare
+                     use type Rp.Relation_Kind;
+                     One : constant Rp.Relation := Rp.Relation_At (Found, Index);
+                  begin
+                     if One.Kind = Rp.References and then To_String (One.To) = Name then
+                        Pres.Put_Message
+                          (Screen, "cli.repo.reference",
+                           [Loc.Named ("name", Name), Loc.Named ("path", To_String (One.Where)),
+                            Loc.Named ("detail",
+                                       Ada.Characters.Handling.To_Lower
+                                         (Rp.Derivation'Image (One.Source) & ", "
+                                          & Rp.Confidence'Image (One.Sure)))]);
+                     end if;
+                  end;
                end loop;
             end loop;
          end;

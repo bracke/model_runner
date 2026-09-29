@@ -755,6 +755,13 @@ package body Model_Runner.Framework.Repository is
       end loop;
    end Read;
 
+   --  The last part of a dotted name.
+   function Last_Part (Name : String) return String is
+      Dot : constant Natural := Ada.Strings.Fixed.Index (Name, ".", Ada.Strings.Backward);
+   begin
+      return (if Dot = 0 then Name else Name (Dot + 1 .. Name'Last));
+   end Last_Part;
+
    --  The references a file makes to the symbols of the units it withs
    --  and its own: every word that is such a symbol's last name.
    procedure Find_References
@@ -793,7 +800,14 @@ package body Model_Runner.Framework.Repository is
                   declare
                      Here : constant Token := Tokens (At_Index);
                   begin
+                     --  A name another unit's name qualifies, as Other.Parse,
+                     --  is not this unit's: a qualifier must be its owner's.
                      if Here.Kind = Word and then Lower (To_String (Here.Text)) = Last
+                       and then not
+                         (At_Index > 2 and then Is_Mark (Tokens (At_Index - 1), '.')
+                          and then Tokens (At_Index - 2).Kind = Word
+                          and then Lower (To_String (Tokens (At_Index - 2).Text))
+                                     /= Lower (Last_Part (Owner)))
                      then
                         Add_Relation
                           (Into,
