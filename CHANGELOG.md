@@ -7,6 +7,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **One writer in the project tree at a time:** work that is not isolated
+  holds the project (`project.write`) as well as its component; a task
+  waits while another agent writes there, and dispatch starts one.
+- **A task is held for as long as its work is allowed,** and held again
+  before it is verified, so live work is not taken back by another
+  process's recovery; a process that dies still lets go at once.
+- **A task ended elsewhere stops the work running for it:** its lease is
+  watched, a harness program is stopped and a session agent stops at its
+  next call, and nothing of the run is added to the task.
+- **What the harness commits is logged,** so putting back what an agent
+  wrote in the state spares changes other processes committed meanwhile.
+
 - **A helper that cannot be started is not left the one working:** it is
   recorded cancelled, and its parent goes on charged, held and recorded as
   itself.

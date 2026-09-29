@@ -867,6 +867,22 @@ package body Model_Runner.Framework.Tasks is
          end if;
       end;
 
+      --  Working in the project itself, it waits for any other agent that
+      --  is: one writer in a tree at a time.
+      declare
+         Kind     : constant String := Records.Get (Defined, "kind");
+         Isolated : constant Boolean :=
+           (if Kind_Policy (Item, Kind, "isolation") /= ""
+            then Kind_Policy (Item, Kind, "isolation")
+            else Records.Get (Config (Item), "scalar.work.isolation")) = "workspace";
+         Writer   : constant String :=
+           (if Isolated then "" else Leases.Holder (Item, Project_Lease));
+      begin
+         if Writer /= "" then
+            Result.Reasons.Append ("the project is being written by " & Writer);
+         end if;
+      end;
+
       Result.Ready := Result.Reasons.Is_Empty;
       return Result;
    end Ready_In;

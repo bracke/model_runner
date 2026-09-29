@@ -10,6 +10,7 @@ with Hostkit.Process;
 
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Files;
+with Model_Runner.Framework.Leases;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Templates;
@@ -80,10 +81,52 @@ package body Model_Runner.Framework.Execution is
       Watched := Token;
    end Watch;
 
-   --  Whether the run has been cancelled, asked while a command waits.
+   --  The work watched, and when its lease was last asked after.
+   Watched_Store : access constant Stores.Store := null;
+   Watched_Lease : Unbounded_String;
+   Watched_Owner : Unbounded_String;
+   Last_Asked    : Ada.Calendar.Time := Ada.Calendar.Clock;
+   Withdrawn     : Boolean := False;
+
+   -----------------
+   -- Watch_Lease --
+   -----------------
+
+   procedure Watch_Lease
+     (Item     : access constant Stores.Store;
+      Resource : String := "";
+      Owner    : String := "") is
+   begin
+      Watched_Store := Item;
+      Watched_Lease := To_Unbounded_String (Resource);
+      Watched_Owner := To_Unbounded_String (Owner);
+      Withdrawn := False;
+      Last_Asked := Ada.Calendar.Clock;
+   end Watch_Lease;
+
+   --------------------
+   -- Work_Withdrawn --
+   --------------------
+
+   function Work_Withdrawn return Boolean is
+   begin
+      if Watched_Store = null or else Withdrawn then
+         return Withdrawn;
+      end if;
+      if Ada.Calendar.Clock - Last_Asked >= 1.0 then
+         Last_Asked := Ada.Calendar.Clock;
+         Withdrawn := Leases.Holder (Watched_Store.all, To_String (Watched_Lease))
+                        /= To_String (Watched_Owner);
+      end if;
+      return Withdrawn;
+   end Work_Withdrawn;
+
+   --  Whether the run has been cancelled, asked while a command waits: by
+   --  whoever runs it, or by the work being ended elsewhere.
    function Stop_Asked return Boolean
-   is (Model_Runner.Cancellation."/=" (Watched, null)
-       and then Model_Runner.Cancellation.Is_Cancelled (Watched));
+   is ((Model_Runner.Cancellation."/=" (Watched, null)
+        and then Model_Runner.Cancellation.Is_Cancelled (Watched))
+       or else Work_Withdrawn);
 
    --  Whether this host can take the network away from one program: asked
    --  once, by trying.
@@ -466,7 +509,8 @@ package body Model_Runner.Framework.Execution is
            Stdin_Path        => Hostkit.Fs.Null_Device,
            Stdout_Path       => Output,
            Stderr_Path       => Output & ".stderr",
-           Timeout_Ms        => Timeout * 1000);
+           Timeout_Ms        => Timeout * 1000,
+           Cancelled         => Stop_Asked'Access);
       Result := (Command     => Command,
                  Directory   => To_Unbounded_String (Directory),
                  Started     => Happened.Started,

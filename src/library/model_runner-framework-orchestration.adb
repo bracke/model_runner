@@ -279,6 +279,12 @@ package body Model_Runner.Framework.Orchestration is
          begin
             if Natural (Result.Start.Length) >= Result.Slots then
                Result.Held.Append (To_String (Next.Id) & ": no agent slot is free");
+
+            --  In the project itself, one writer at a time: two in one tree
+            --  would have each other's changes taken for their own.
+            elsif not Isolated and then (Running > 0 or else not Result.Start.Is_Empty) then
+               Result.Held.Append
+                 (To_String (Next.Id) & ": another task is writing in the project");
             elsif not Isolated and then Component /= "" and then Taken.Contains (Component)
             then
                Result.Held.Append

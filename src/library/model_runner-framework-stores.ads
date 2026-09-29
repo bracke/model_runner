@@ -393,6 +393,10 @@ private
 
    type State_Snapshot is record
       Files : Text_Maps.Map;
+
+      --  How long the log of what commits wrote was when it was taken:
+      --  what is written after is the harness's, whichever process made it.
+      Logged : Natural := 0;
    end record;
 
    type Operation_Kind is (Put_Operation, Remove_Operation);

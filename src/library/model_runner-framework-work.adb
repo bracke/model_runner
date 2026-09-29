@@ -8,6 +8,7 @@ with Model_Runner.Framework.Agents;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Events;
+with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Indexes;
@@ -367,6 +368,9 @@ package body Model_Runner.Framework.Work is
                if E.Is_Ok (Status) and then Component_Of (Item, Id) /= "" then
                   Leases.Release
                     (Item, Change, Tasks.Component_Lease (Component_Of (Item, Id)), Agent, Status);
+               end if;
+               if E.Is_Ok (Status) and then Leases.Holder (Item, Tasks.Project_Lease) = Agent then
+                  Leases.Release (Item, Change, Tasks.Project_Lease, Agent, Status);
                end if;
 
                --  Blocked, unless the project says otherwise.
@@ -1462,11 +1466,40 @@ package body Model_Runner.Framework.Work is
               (Item, Change, Tasks.Component_Lease (Component_Of (Item, Task_Id)),
                To_String (Result.Agent_Id), Status);
          end if;
+         if E.Is_Ok (Status) and then not Isolated then
+            Leases.Release
+              (Item, Change, Tasks.Project_Lease, To_String (Result.Agent_Id), Status);
+         end if;
          if E.Is_Ok (Status) then
             Stores.Commit (Item, Change, Status);
          end if;
          Result.Final_State := To_Unbounded_String (Tasks.State_Of (Item, Task_Id));
       end Conclude;
+
+      --  Hold the task -- and, writing in the project itself, its component
+      --  and the project -- for so long; taken again by the same agent, a
+      --  hold is renewed. Long enough for the work it is allowed, so a live
+      --  task is not taken back from it; a process that dies lets go at once.
+      procedure Hold (Seconds : Positive) is
+      begin
+         Leases.Acquire
+           (Item, Change, Lease_Of (Task_Id), To_String (Result.Agent_Id), Seconds, Status);
+
+         --  Writing in the project itself, it holds its component too, so
+         --  no other agent writes the same component meanwhile.
+         if E.Is_Ok (Status) and then not Isolated and then Component_Of (Item, Task_Id) /= ""
+         then
+            Leases.Acquire
+              (Item, Change, Tasks.Component_Lease (Component_Of (Item, Task_Id)),
+               To_String (Result.Agent_Id), Seconds, Status);
+         end if;
+
+         --  And the project, so that no other agent writes in it meanwhile.
+         if E.Is_Ok (Status) and then not Isolated then
+            Leases.Acquire
+              (Item, Change, Tasks.Project_Lease, To_String (Result.Agent_Id), Seconds, Status);
+         end if;
+      end Hold;
    begin
       Result := (Task_Id => To_Unbounded_String (Task_Id), others => <>);
 
@@ -1498,17 +1531,7 @@ package body Model_Runner.Framework.Work is
       if E.Is_Error (Status) then
          return;
       end if;
-      Leases.Acquire
-        (Item, Change, Lease_Of (Task_Id), To_String (Result.Agent_Id),
-         Lease_Seconds (Item), Status);
-
-      --  Writing in the project itself, it holds its component too, so no
-      --  other agent writes the same component meanwhile.
-      if E.Is_Ok (Status) and then not Isolated and then Component_Of (Item, Task_Id) /= "" then
-         Leases.Acquire
-           (Item, Change, Tasks.Component_Lease (Component_Of (Item, Task_Id)),
-            To_String (Result.Agent_Id), Lease_Seconds (Item), Status);
-      end if;
+      Hold (Lease_Seconds (Item) + Time_Allowed (Item, Task_Id));
       if E.Is_Ok (Status) then
          Tasks.Move (Item, Change, Task_Id, "running", "", Status => Status);
       end if;
@@ -1674,6 +1697,11 @@ package body Model_Runner.Framework.Work is
             Host.Open.Append (To_String (Result.Agent_Id));
             Host.Calls.Append (To_String (Result.Invocation_Id));
             Host.Opened.Append (Ada.Calendar.Clock);
+
+            --  Ended elsewhere meanwhile -- cancelled from another process
+            --  -- what runs for it is stopped.
+            Execution.Watch_Lease
+              (Item'Unchecked_Access, Lease_Of (Task_Id), To_String (Result.Agent_Id));
             if Runner in Parenting_Runner'Class then
                Parenting_Runner'Class (Runner).Run_Parenting
                  (Prompt, To_String (Place), Host, Answer, Ran);
@@ -1717,6 +1745,7 @@ package body Model_Runner.Framework.Work is
                   end;
                end if;
             end if;
+            Execution.Watch_Lease (null);
             Abandon (Host);
             By_Checks := Host.Written;
             Over_Budget := Host.Root_Over;
@@ -1796,6 +1825,16 @@ package body Model_Runner.Framework.Work is
          end if;
       end;
       if E.Is_Error (Status) then
+         return;
+      end if;
+
+      --  Ended elsewhere while it ran: what that did stands, and nothing of
+      --  this run is added to a task that is no longer its.
+      if Tasks.State_Of (Item, Task_Id) /= "running"
+        or else Leases.Holder (Item, Lease_Of (Task_Id)) /= To_String (Result.Agent_Id)
+      then
+         Result.Final_State := To_Unbounded_String (Tasks.State_Of (Item, Task_Id));
+         Result.Reason := To_Unbounded_String ("it was ended elsewhere while it ran");
          return;
       end if;
 
@@ -2150,8 +2189,12 @@ package body Model_Runner.Framework.Work is
          end if;
       end;
 
-      --  Done, it says. The harness decides.
-      Tasks.Move (Item, Change, Task_Id, "verification", "", Status => Status);
+      --  Done, it says. The harness decides -- held again for as long as
+      --  that may take.
+      Hold (Lease_Seconds (Item));
+      if E.Is_Ok (Status) then
+         Tasks.Move (Item, Change, Task_Id, "verification", "", Status => Status);
+      end if;
       if E.Is_Ok (Status) then
          Stores.Commit (Item, Change, Status);
       end if;
@@ -2464,6 +2507,9 @@ package body Model_Runner.Framework.Work is
          if E.Is_Ok (Status) and then Component_Of (Item, Task_Id) /= "" then
             Leases.Release
               (Item, Change, Tasks.Component_Lease (Component_Of (Item, Task_Id)), Agent, Status);
+         end if;
+         if E.Is_Ok (Status) and then Leases.Holder (Item, Tasks.Project_Lease) = Agent then
+            Leases.Release (Item, Change, Tasks.Project_Lease, Agent, Status);
          end if;
          if Status.Code = E.Framework_Lease_Held then
             Status := E.Success;

@@ -84,6 +84,25 @@ package Model_Runner.Framework.Execution is
    --  @param Token The token; null for none.
    procedure Watch (Token : Model_Runner.Cancellation.Token_Reference);
 
+   --  The work whose ending elsewhere stops what runs for it: while it is
+   --  watched, a command or harness program running is stopped -- as a
+   --  cancellation stops it -- once the lease no longer names its owner;
+   --  another process cancelled the task, say. Asked at most once a second.
+   --
+   --  @param Item The store the lease is in; null to watch nothing.
+   --  @param Resource The lease.
+   --  @param Owner The agent that holds it.
+   procedure Watch_Lease
+     (Item     : access constant Stores.Store;
+      Resource : String := "";
+      Owner    : String := "");
+
+   --  Whether the work watched has been ended elsewhere: its lease no
+   --  longer names its owner.
+   --
+   --  @return True when it has.
+   function Work_Withdrawn return Boolean;
+
    --  The project's policy, from its configuration.
    --
    --  @param Item The store.

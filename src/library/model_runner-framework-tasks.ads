@@ -311,6 +311,11 @@ package Model_Runner.Framework.Tasks is
    function Component_Lease (Component : String) return String
    is ("component." & Component);
 
+   --  The lease an agent writing in the project itself, not a workspace of
+   --  its own, holds on the whole of it: two writing in one tree would
+   --  have each other's changes taken for their own.
+   Project_Lease : constant String := "project.write";
+
    --  A kind's own policy, where it has one: the configuration's scalar
    --  task.NAME.KIND -- isolation, token_budget, max_steps, coordination --
    --  which a caller falls back from to the project's.

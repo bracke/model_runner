@@ -20,6 +20,7 @@ with Model_Runner.Framework.Authority;
 with Model_Runner.Framework.Bootstrap;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Consistency;
+with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Permissions;
@@ -142,6 +143,9 @@ package body Model_Runner.CLI.Project_Commands is
       --  The arguments of the calls asked for and not yet answered, oldest
       --  first: a reply may ask for several before any is answered.
       Asked : Names.Vector;
+
+      --  The run's own stop, asked for when its work is ended elsewhere.
+      Stop  : Model_Runner.Cancellation.Token_Reference := null;
    end record;
 
    overriding procedure On_Call
@@ -152,7 +156,13 @@ package body Model_Runner.CLI.Project_Commands is
 
    overriding procedure On_Call
      (Self : in out Watch; Named : String; Arguments : String) is
+      use type Model_Runner.Cancellation.Token_Reference;
    begin
+      --  Its task ended elsewhere -- cancelled from another process -- the
+      --  work stops rather than write on for a task that is not its.
+      if Self.Stop /= null and then Model_Runner.Framework.Execution.Work_Withdrawn then
+         Self.Stop.Request;
+      end if;
       Self.Asked.Append (Arguments);
       Pres.Put_Tool_Call (Self.Screen.all, Named, Arguments);
    end On_Call;
@@ -283,6 +293,7 @@ package body Model_Runner.CLI.Project_Commands is
       Answer := Null_Unbounded_String;
       Tokens := 0;
       Prompt_Tokens := 0;
+      Watcher.Stop := Self.Cancel;
 
       Conv.Open (Messages, Status => Status);
       if E.Is_Ok (Status) then
@@ -350,6 +361,13 @@ package body Model_Runner.CLI.Project_Commands is
       Model_Runner.Tools.Close (Offered);
 
       if Outcome.Reason = Model_Runner.Agent.Cancelled then
+         --  Stopped for work ended elsewhere, not by the person: the
+         --  session's own stop is not left asked for.
+         if Model_Runner.Framework.Execution.Work_Withdrawn
+           and then Model_Runner.Cancellation."/=" (Self.Cancel, null)
+         then
+            Self.Cancel.Reset;
+         end if;
          Status := E.Make (E.Generation_Cancelled);
       elsif Outcome.Reason = Model_Runner.Agent.Timed_Out then
          Status := E.Make (E.Framework_Limit_Exceeded);

@@ -7106,6 +7106,20 @@ package body Tests.Framework_Cases is
       S.Commit (Store, Change, Status);
       Assert (Tk.Ready (Store, To_String (First)).Ready, "a task serving an accepted requirement waits");
 
+      --  Another agent writing in the project holds it up: one writer in a
+      --  tree at a time.
+      Model_Runner.Framework.Leases.Acquire
+        (Store, Change, Tk.Project_Lease, "AG-ELSEWHERE", 60, Status);
+      S.Commit (Store, Change, Status);
+      Assert (not Tk.Ready (Store, To_String (First)).Ready
+              and then Ada.Strings.Fixed.Index
+                         (Tk.Ready (Store, To_String (First)).Reasons.First_Element,
+                          "the project is being written by AG-ELSEWHERE") > 0,
+              "a task was ready while another agent wrote in the project");
+      Model_Runner.Framework.Leases.Release
+        (Store, Change, Tk.Project_Lease, "AG-ELSEWHERE", Status);
+      S.Commit (Store, Change, Status);
+
       --  The profile that will run is what the effective task says, the
       --  default among them; a title is not revised away; and why a task
       --  was blocked stays in the move's event.
@@ -7373,6 +7387,32 @@ package body Tests.Framework_Cases is
          S.Restore_State (Store, Taken, Changed);
          Assert (Changed.Is_Empty, "a state left alone was put back");
       end;
+
+      --  What the harness commits meanwhile -- by this process or another --
+      --  is not put back; only what was written behind its back.
+      declare
+         Taken   : constant S.State_Snapshot := S.Snapshot_State (Store);
+         Changed : Model_Runner.Framework.Name_Lists.Vector;
+         Other   : Unbounded_String;
+      begin
+         Tk.Create (Store, Change, Fields ("Meanwhile", "analysis"), "user", "", Other, Status);
+         S.Commit (Store, Change, Status);
+         Put_File (Fresh_Root (Store) & "/.model_runner/sneaked.rec", "x");
+         S.Restore_State (Store, Taken, Changed);
+         Assert (Tk.State_Of (Store, To_String (Other)) = "candidate"
+                 and then Changed.Contains ("sneaked.rec")
+                 and then not Dirs.Exists (Fresh_Root (Store) & "/.model_runner/sneaked.rec"),
+                 "a commit made meanwhile was put back, or a write behind the harness kept");
+      end;
+
+      --  Work whose lease no longer names its agent is withdrawn.
+      Model_Runner.Framework.Execution.Watch_Lease (Store'Unchecked_Access, "task.NOBODY", "AG-X");
+      delay 1.1;
+      Assert (Model_Runner.Framework.Execution.Work_Withdrawn,
+              "work whose lease went was not seen withdrawn");
+      Model_Runner.Framework.Execution.Watch_Lease (null);
+      Assert (not Model_Runner.Framework.Execution.Work_Withdrawn,
+              "unwatched work was taken for withdrawn");
       S.Close (Store);
    end State_Is_The_Harness_Own;
 
@@ -8518,9 +8558,10 @@ package body Tests.Framework_Cases is
       Assert (Natural (Done.Became_Ready.Length) = 4,
               "readiness was not worked out by the step");
       Plan := Or_ch.Plan (Store);
-      Assert (Plan.Slots = 2 and then Natural (Plan.Start.Length) = 2
+      --  Two slots, but one tree: in the project itself, one writer.
+      Assert (Plan.Slots = 2 and then Natural (Plan.Start.Length) = 1
               and then Plan.Start.First_Element = To_String (Ids (2)),
-              "dispatch did not start the most important tasks that fit");
+              "dispatch did not start the most important task alone in the project");
       Assert (not Plan.Start.Contains (To_String (Ids (1))),
               "two tasks writing one component were started together");
       Assert (not Plan.Held.Is_Empty, "the tasks held back were not said");

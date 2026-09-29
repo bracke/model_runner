@@ -1,5 +1,6 @@
 with Ada.Characters.Handling;
 with Ada.Directories;
+with Ada.Streams.Stream_IO;
 
 with Hostkit.Fs;
 
@@ -41,6 +42,11 @@ package body Model_Runner.Framework.Stores is
 
    function Area_Directory (Root : String; Where : Area) return String
    is (Join (Root, Directory_Name (Where)));
+
+   --  The log of the records commits wrote, each by its path under the
+   --  state root, a line each.
+   function Written_Log (Root_Path : String) return String
+   is (Hostkit.Fs.Join (Hostkit.Fs.Join (Root_Path, "runtime"), "written.log"));
 
    function Record_Path
      (Root : String; Where : Area; Name : String) return String
@@ -806,6 +812,49 @@ package body Model_Runner.Framework.Stores is
       --  Apply every change. Each one is a rename or a removal, and one
       --  already done is recognised and passed over, so a journal that was
       --  interrupted while this ran is finished by running it again.
+      --
+      --  What it writes is said first, in the log a snapshot of the state is
+      --  compared with: a change the harness made is not taken for one made
+      --  behind its back.
+      declare
+         use Ada.Streams.Stream_IO;
+         Log  : File_Type;
+         Said : Unbounded_String;
+      begin
+         for Op in 1 .. Count loop
+            declare
+               Line  : constant String := Records.Get (Manifest, "op." & Six (Op));
+               Where : Area;
+               Known : Boolean;
+            begin
+               Area_Of (Word (Line, 2), Where, Known);
+               if Known and then Is_Name (Word (Line, 3)) then
+                  declare
+                     Target : constant String := Record_Path (Root (Item), Where, Word (Line, 3));
+                  begin
+                     Append (Said, Target (Target'First + Root (Item)'Length + 1 .. Target'Last)
+                                   & ASCII.LF);
+                  end;
+               end if;
+            end;
+         end loop;
+         Append (Said, Index_Path (Root (Item)) (Index_Path (Root (Item))'First
+                                                 + Root (Item)'Length + 1
+                                                 .. Index_Path (Root (Item))'Last) & ASCII.LF);
+         if Ada.Directories.Exists (Written_Log (Root (Item))) then
+            Open (Log, Append_File, Written_Log (Root (Item)));
+         else
+            Create (Log, Out_File, Written_Log (Root (Item)));
+         end if;
+         String'Write (Stream (Log), To_String (Said));
+         Close (Log);
+      exception
+         when others =>
+            if Is_Open (Log) then
+               Close (Log);
+            end if;
+      end;
+
       for Op in 1 .. Count loop
          declare
             Line   : constant String := Records.Get (Manifest, "op." & Six (Op));
@@ -1255,7 +1304,7 @@ package body Model_Runner.Framework.Stores is
                   Gather (Root, Relative, Into);
                end if;
             elsif Ada.Directories.Kind (Found) = Ada.Directories.Ordinary_File
-              and then Relative /= "runtime/lock"
+              and then Relative not in "runtime/lock" | "runtime/written.log" | "runtime/harness.log"
             then
                declare
                   Text : Unbounded_String;
@@ -1277,6 +1326,9 @@ package body Model_Runner.Framework.Stores is
    begin
       if Ada.Directories.Exists (Root (Item)) then
          Gather (Root (Item), "", Result.Files);
+         if Ada.Directories.Exists (Written_Log (Root (Item))) then
+            Result.Logged := Natural (Ada.Directories.Size (Written_Log (Root (Item))));
+         end if;
       end if;
       return Result;
    end Snapshot_State;
@@ -1292,14 +1344,32 @@ package body Model_Runner.Framework.Stores is
    is
       Now    : constant State_Snapshot := Snapshot_State (Item);
       Status : E.Error_Info;
+
+      --  What commits wrote since: the harness's own changes, by this
+      --  process or another -- a cancel, another task's work -- and not put
+      --  back.
+      Committed : Name_Lists.Vector;
    begin
       Changed.Clear;
+      declare
+         Log  : Unbounded_String;
+         Read : E.Error_Info;
+      begin
+         if Ada.Directories.Exists (Written_Log (Root (Item))) then
+            Files.Read_Text (Written_Log (Root (Item)), Log, Read);
+            if E.Is_Ok (Read) and then Length (Log) > From.Logged then
+               Committed := Lines_Of (Slice (Log, From.Logged + 1, Length (Log)));
+            end if;
+         end if;
+      end;
       for Position in From.Files.Iterate loop
          declare
             Name : constant String := Text_Maps.Key (Position);
             Path : constant String := Hostkit.Fs.Join (Root (Item), Name);
          begin
-            if not Now.Files.Contains (Name)
+            if Committed.Contains (Name) then
+               null;
+            elsif not Now.Files.Contains (Name)
               or else Now.Files (Name) /= Text_Maps.Element (Position)
             then
                Changed.Append (Name);
@@ -1310,7 +1380,9 @@ package body Model_Runner.Framework.Stores is
          end;
       end loop;
       for Position in Now.Files.Iterate loop
-         if not From.Files.Contains (Text_Maps.Key (Position)) then
+         if not From.Files.Contains (Text_Maps.Key (Position))
+           and then not Committed.Contains (Text_Maps.Key (Position))
+         then
             Changed.Append (Text_Maps.Key (Position));
             Files.Discard (Hostkit.Fs.Join (Root (Item), Text_Maps.Key (Position)));
          end if;
