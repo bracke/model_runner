@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **An event is consumed only with what it calls for done:** an action
+  that fails, or a stop in between, leaves its events to be acted on
+  again, while the others' are consumed.
+- **A marked change is finished before another is staged over it,** so a
+  later commit in the same session never wipes the journal that completes
+  it.
+
 - **A task made to wait for its own parent, or for what waits for it, is
   refused at creation** as a dependency cycle.
 - **`task depend` is a revision:** not on a task being worked or ended,

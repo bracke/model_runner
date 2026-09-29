@@ -580,6 +580,33 @@ package body Tests.Framework_Cases is
               and then To_String (Name) = "fact.language",
               "the index does not know what the finished change wrote");
 
+      --  Marked and not finished, then another change in the same session:
+      --  the first is finished before the second is staged over it.
+      declare
+         Other  : S.Transaction;
+         Second : S.Transaction;
+         More   : R.Item := R.Create ("project.fact", 1, "FACT-BUILD", 1);
+         Again  : R.Item := R.Create ("project.fact", 1, "FACT-TARGET", 1);
+      begin
+         R.Set (More, "key", "build");
+         R.Set (More, "value", "alire");
+         R.Set (More, "source", "explicit");
+         R.Set (More, "confidence", "authoritative");
+         S.Put (Other, F.Project_Area, "fact.build", More);
+         S.Stage (Store, Other, Status);
+         S.Mark (Store, Status);
+         R.Set (Again, "key", "target");
+         R.Set (Again, "value", "native");
+         R.Set (Again, "source", "explicit");
+         R.Set (Again, "confidence", "authoritative");
+         S.Put (Second, F.Project_Area, "fact.target", Again);
+         S.Commit (Store, Second, Status);
+         Assert (E.Is_Ok (Status)
+                 and then S.Exists (Store, F.Project_Area, "fact.build")
+                 and then S.Exists (Store, F.Project_Area, "fact.target"),
+                 "a marked change was wiped by the next commit: " & Code_Of (Status));
+      end;
+
       --  Finishing again finds nothing to do.
       S.Finish (Store, Status);
       Assert (E.Is_Ok (Status), "finishing twice failed");
@@ -8306,8 +8333,11 @@ package body Tests.Framework_Cases is
       Or_ch.Step (Store, Done, Status);
       Assert (E.Is_Error (Status) and then Natural (Done.Derived.Length) = 1,
               "a failing action held back the others, or was not said: " & Code_Of (Status));
+      --  The events whose action failed wait to be acted on again; what
+      --  was done is not done twice.
       Or_ch.Step (Store, Done, Status);
-      Assert (Done.Derived.Is_Empty, "events a failing step read were read again");
+      Assert (Done.Events_Seen > 0 and then Done.Derived.Is_Empty,
+              "events a failed action called for were dropped, or acted on twice");
       S.Close (Store);
       Task_Project (Store, "orchestration-again", "scalar agents.max_active = 2" & LF);
       Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.", "",

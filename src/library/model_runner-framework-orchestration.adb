@@ -66,7 +66,8 @@ package body Model_Runner.Framework.Orchestration is
       Failed   : E.Error_Info := E.Success;
 
       --  The actions the rules give an event, in rule order, once each.
-      procedure Actions_For (Kind : String) is
+      function Actions_For (Kind : String) return Name_Lists.Vector is
+         Found : Name_Lists.Vector;
       begin
          for Line of In_Force loop
             declare
@@ -77,44 +78,55 @@ package body Model_Runner.Framework.Orchestration is
                  (if Colon = 0 then "" else Trim (Line (Colon + 1 .. Line'Last)));
             begin
                if (Event = "*" or else Event = Kind) and then Action /= ""
-                 and then not Wanted.Contains (Action)
+                 and then not Found.Contains (Action)
                then
-                  Wanted.Append (Action);
+                  Found.Append (Action);
                end if;
             end;
          end loop;
+         return Found;
       end Actions_For;
+
+      --  The events not yet acted on, and the kinds they are.
+      Fresh_Ids   : Name_Lists.Vector;
+      Fresh_Kinds : Name_Lists.Vector;
+
+      --  The actions that failed: their events stay to be acted on again.
+      Broken      : Name_Lists.Vector;
    begin
       Result := (others => <>);
       Status := E.Success;
 
-      --  Consume every event not yet acted on; the actions they call for
-      --  are gathered and taken once, together.
+      --  Which events are new, asked without consuming them: an event is
+      --  consumed only with what it calls for done, so that a failure or a
+      --  stop in between leaves it to be acted on again.
       for Index in 1 .. Events.Length (Listed) loop
          declare
             Happened : constant Events.Event := Events.Element (Listed, Index);
             Fresh    : Boolean;
+            Scratch  : Stores.Transaction;
          begin
-            Events.Consume (Item, Change, Consumer, To_String (Happened.Id), Fresh, Status);
+            Events.Consume (Item, Scratch, Consumer, To_String (Happened.Id), Fresh, Status);
             if E.Is_Error (Status) then
                return;
             end if;
             if Fresh then
                Result.Events_Seen := Result.Events_Seen + 1;
-               Actions_For (To_String (Happened.Kind_Word));
+               Fresh_Ids.Append (To_String (Happened.Id));
+               Fresh_Kinds.Append (To_String (Happened.Kind_Word));
+               for Action of Actions_For (To_String (Happened.Kind_Word)) loop
+                  if not Wanted.Contains (Action) then
+                     Wanted.Append (Action);
+                  end if;
+               end loop;
             end if;
          end;
       end loop;
 
-      --  The events are acted on whatever becomes of the actions: kept
-      --  consumed first, so that one action failing does not hold back
-      --  every event after it.
-      Stores.Commit (Item, Change, Status);
-      if E.Is_Error (Status) then
-         return;
-      end if;
-
       for Action of Wanted loop
+         if Action = "recompute_readiness" then
+            goto Next_Action;
+         end if;
          Result.Actions_Taken := Result.Actions_Taken + 1;
          if Action = "derive_tasks" then
             Tasks.Derive (Item, Change, Result.Derived, Status);
@@ -135,6 +147,7 @@ package body Model_Runner.Framework.Orchestration is
                end if;
             end;
          end if;
+
          --  Each action kept on its own; one that fails is dropped and
          --  said, and the others are still taken.
          if E.Is_Ok (Status) then
@@ -142,20 +155,49 @@ package body Model_Runner.Framework.Orchestration is
          end if;
          if E.Is_Error (Status) then
             Change := Stores.No_Changes;
+            Broken.Append (Action);
             if E.Is_Ok (Failed) then
                Failed := Status;
             end if;
             Status := E.Success;
          end if;
+         <<Next_Action>>
       end loop;
 
       --  Readiness last, over what the actions left.
       if Wanted.Contains ("recompute_readiness") then
+         Result.Actions_Taken := Result.Actions_Taken + 1;
          Tasks.Recompute_Readiness (Item, Change, Result.Became_Ready, Status);
          if E.Is_Ok (Status) then
             Stores.Commit (Item, Change, Status);
          end if;
+         if E.Is_Error (Status) then
+            Change := Stores.No_Changes;
+            Broken.Append ("recompute_readiness");
+            if E.Is_Ok (Failed) then
+               Failed := Status;
+            end if;
+            Status := E.Success;
+         end if;
       end if;
+
+      --  Each event whose actions were all taken is consumed; one whose
+      --  action failed waits for the next step. Everything else it calls
+      --  for is taken again then, which each action is safe to be.
+      for Index in 1 .. Natural (Fresh_Ids.Length) loop
+         if (for all Action of Actions_For (Fresh_Kinds (Index)) => not Broken.Contains (Action))
+         then
+            declare
+               Fresh : Boolean;
+            begin
+               Events.Consume (Item, Change, Consumer, Fresh_Ids (Index), Fresh, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end;
+         end if;
+      end loop;
+      Stores.Commit (Item, Change, Status);
       if E.Is_Ok (Status) and then E.Is_Error (Failed) then
          Status := Failed;
       end if;

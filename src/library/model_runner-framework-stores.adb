@@ -646,6 +646,15 @@ package body Model_Runner.Framework.Stores is
          return;
       end if;
 
+      --  A journal marked and not finished is a change made: finished
+      --  before anything else is staged over it, or nothing is staged.
+      if Ada.Directories.Exists (Join (Journal, Manifest_File)) then
+         Finish (Item, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+      end if;
+
       --  A journal staged and never marked is not a change anybody made.
       if not Make_Directory (Journal) or else not Clear_Journal (Root (Item))
       then
