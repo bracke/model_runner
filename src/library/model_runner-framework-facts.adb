@@ -53,6 +53,9 @@ package body Model_Runner.Framework.Facts is
          Records.Set (Stored, "value", To_String (Value.Value));
          Records.Set (Stored, "source", Word (Value.Source'Image));
          Records.Set (Stored, "confidence", Word (Value.Confidence'Image));
+         if Value.Origin /= Null_Unbounded_String then
+            Records.Set (Stored, "origin", To_String (Value.Origin));
+         end if;
          Stores.Put (Change, Project_Area, Prefix & Key, Stored);
       end;
       Status := E.Success;
@@ -84,6 +87,7 @@ package body Model_Runner.Framework.Facts is
 
       Value.Key := To_Unbounded_String (Records.Get (Stored, "key"));
       Value.Value := To_Unbounded_String (Records.Get (Stored, "value"));
+      Value.Origin := To_Unbounded_String (Records.Get (Stored, "origin"));
 
       --  The schema allows only these words, so each is one of them.
       for Source in Derivation_Source loop

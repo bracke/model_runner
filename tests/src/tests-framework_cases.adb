@@ -212,7 +212,8 @@ package body Tests.Framework_Cases is
          (Key        => To_Unbounded_String (Key),
           Value      => To_Unbounded_String (Value),
           Source     => Model_Runner.Framework.Facts.Build_Metadata,
-          Confidence => Model_Runner.Framework.Facts.Certain),
+          Confidence => Model_Runner.Framework.Facts.Certain,
+          Origin     => <>),
          Status);
       Assert (E.Is_Ok (Status), "a fact was refused: " & Code_Of (Status));
       S.Commit (Store, Change, Status);
@@ -2192,6 +2193,34 @@ package body Tests.Framework_Cases is
          Assert (Report.Existing = 1 and then Report.Created = 0,
                  "a discovered fact was recorded twice");
       end;
+
+      --  A document does not outweigh what the template says: an issue,
+      --  and the fact as it was. What it does record says where from.
+      declare
+         Held : Model_Runner.Framework.Facts.Fact;
+      begin
+         Change := S.No_Changes;
+         Model_Runner.Framework.Facts.Record_Fact
+           (Store, Change,
+            (Key        => To_Unbounded_String ("build_system"),
+             Value      => To_Unbounded_String ("Alire"),
+             Source     => Model_Runner.Framework.Facts.Template,
+             Confidence => Model_Runner.Framework.Facts.Authoritative,
+             Origin     => <>),
+            Status);
+         S.Commit (Store, Change, Status);
+         Bs.Apply (Store, Change,
+                   Bs.Scan ("docs/build.md",
+                            "Fact: build_system = Make" & LF & "Fact: vcs = git" & LF),
+                   Report, Status);
+         S.Commit (Store, Change, Status);
+         Model_Runner.Framework.Facts.Find (Store, "build_system", Held, Status);
+         Assert (To_String (Held.Value) = "Alire" and then Report.Issues = 1,
+                 "a document outweighed the template's fact, or unsaid");
+         Model_Runner.Framework.Facts.Find (Store, "vcs", Held, Status);
+         Assert (To_String (Held.Value) = "git" and then To_String (Held.Origin) = "docs/build.md",
+                 "a document's fact does not say where it came from");
+      end;
       S.Close (Store);
    end Bootstrap_Is_Repeatable;
 
@@ -3555,6 +3584,73 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Init_Undone_When_Unsound;
 
+   --  Where the project verifies requirements themselves, a requirement is
+   --  verified only with its own evidence, taken by that profile.
+   procedure Requirements_Verified_By_Policy
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store    : S.Store;
+      Change   : S.Transaction;
+      Status   : E.Error_Info;
+      Req      : Unbounded_String;
+      Id       : Unbounded_String;
+      Given    : Tk.Field_Map;
+      Evidence : Unbounded_String;
+      Passed   : Boolean;
+      Changed  : Model_Runner.Framework.Name_Lists.Vector;
+      Held     : Nt.Entity;
+   begin
+      Task_Project
+        (Store, "requirement-policy",
+         "set execution.allowed = echo" & LF
+         & "profile passing = say: echo all good" & LF
+         & "profile acceptance = accept: echo checking {requirement} with {tests}" & LF
+         & "scalar verification.default = passing" & LF
+         & "scalar verification.requirements = acceptance" & LF);
+      Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.", "",
+                  "user", "", "io", Req, Status);
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted", Tr.Ordinary_Only, Status);
+      S.Commit (Store, Change, Status);
+      Given := Fields ("Look", "analysis");
+      Given.Include ("requirements", To_String (Req));
+      Tk.Create (Store, Change, Given, "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      Tk.Move (Store, Change, To_String (Id), "running", "", Status => Status);
+      Tk.Move (Store, Change, To_String (Id), "verification", "", Status => Status);
+      Model_Runner.Framework.Verification.Run_Profile
+        (Store, Change, "passing", To_String (Id), Evidence, Passed, Status);
+      S.Commit (Store, Change, Status);
+      Model_Runner.Framework.Verification.Complete_Task (Store, Change, To_String (Id), Status);
+      S.Commit (Store, Change, Status);
+      declare
+         Runtime_Value : R.Item;
+      begin
+         S.Read (Store, Model_Runner.Framework.Tasks_Area, To_String (Id) & ".state",
+                 Runtime_Value, Status);
+         R.Set_Revision (Runtime_Value, R.Revision (Runtime_Value) + 1);
+         R.Set (Runtime_Value, "changed_files", "src/io.adb");
+         S.Put (Change, Model_Runner.Framework.Tasks_Area, To_String (Id) & ".state", Runtime_Value);
+      end;
+      S.Commit (Store, Change, Status);
+
+      Model_Runner.Framework.Verification.Reevaluate_Requirements (Store, Change, Changed, Status);
+      S.Commit (Store, Change, Status);
+      Nt.Read (Store, Nt.Requirement, To_String (Req), Held, Status);
+      Assert (To_String (Held.State) = "implemented",
+              "a requirement was verified without its own evidence");
+
+      Model_Runner.Framework.Verification.Verify_Requirement (Store, Change, To_String (Req), Evidence, Passed, Status);
+      S.Commit (Store, Change, Status);
+      Model_Runner.Framework.Verification.Reevaluate_Requirements (Store, Change, Changed, Status);
+      S.Commit (Store, Change, Status);
+      Nt.Read (Store, Nt.Requirement, To_String (Req), Held, Status);
+      Assert (Passed and then To_String (Held.State) = "verified",
+              "a requirement with its own evidence was not verified: " & To_String (Held.State));
+      S.Close (Store);
+   end Requirements_Verified_By_Policy;
+
    --  Bootstrap reads what its policy names, makes only the kinds it lets
    --  it, and proposes rather than accepts an import when it says so.
    procedure Bootstrap_Follows_Its_Policy
@@ -4319,6 +4415,25 @@ package body Tests.Framework_Cases is
       Assert (To_String (Held.State) = "implemented",
               "completing a task verified its requirement by itself");
 
+      --  Nothing implements it yet: its task changed no files, and no
+      --  implementation is linked.
+      Vf.Reevaluate_Requirements (Store, Change, Changed, Status);
+      S.Commit (Store, Change, Status);
+      Nt.Read (Store, Nt.Requirement, To_String (Req), Held, Status);
+      Assert (To_String (Held.State) = "implemented",
+              "a requirement nothing implements was verified");
+
+      --  Its task changed files: it is implemented, and verified.
+      declare
+         Runtime_Value : R.Item;
+      begin
+         S.Read (Store, Model_Runner.Framework.Tasks_Area, To_String (Id) & ".state",
+                 Runtime_Value, Status);
+         R.Set_Revision (Runtime_Value, R.Revision (Runtime_Value) + 1);
+         R.Set (Runtime_Value, "changed_files", "src/io.adb");
+         S.Put (Change, Model_Runner.Framework.Tasks_Area, To_String (Id) & ".state", Runtime_Value);
+         S.Commit (Store, Change, Status);
+      end;
       Vf.Reevaluate_Requirements (Store, Change, Changed, Status);
       S.Commit (Store, Change, Status);
       Nt.Read (Store, Nt.Requirement, To_String (Req), Held, Status);
@@ -6104,6 +6219,15 @@ package body Tests.Framework_Cases is
       Tk.Definition (Store, To_String (A), Defined, Status);
       Assert (R.Get (Defined, "title") = "First, better" and then R.Revision (Defined) = 2,
               "a task was not revised as its next revision");
+      declare
+         Before : R.Item;
+      begin
+         S.Read (Store, Model_Runner.Framework.Tasks_Area, To_String (A) & ".rev-000001", Before,
+                 Status);
+         Assert (E.Is_Ok (Status) and then R.Get (Before, "title") = "First"
+                 and then not Tk.List (Store).Contains (To_String (A) & ".rev-000001"),
+                 "a task's earlier revision was written over, or taken for a task");
+      end;
       Revise_Fields.Clear;
       Revise_Fields.Include ("kind", "implementation");
       Tk.Revise (Store, Change, To_String (A), Revise_Fields, Status);
@@ -7426,6 +7550,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Agents_Stay_Out_Of_The_State'Access,
          "agents never reach the project's state, and harness programs get only what is passed");
+      Register_Routine
+        (T, Requirements_Verified_By_Policy'Access,
+         "a requirement is verified by its own evidence where the project says so");
       Register_Routine
         (T, Init_Undone_When_Unsound'Access,
          "an initialization's result is checked, and said, before it stands");

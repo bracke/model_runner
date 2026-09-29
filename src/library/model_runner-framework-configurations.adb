@@ -590,7 +590,8 @@ package body Model_Runner.Framework.Configurations is
                (Key        => To_Unbounded_String (Key),
                 Value      => To_Unbounded_String (Value),
                 Source     => Source,
-                Confidence => Level),
+                Confidence => Level,
+                Origin     => <>),
                Status);
          end if;
       end Add_Fact;

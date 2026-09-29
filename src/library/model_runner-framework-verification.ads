@@ -264,10 +264,33 @@ package Model_Runner.Framework.Verification is
       Task_Id : String;
       Status  : out Model_Runner.Errors.Error_Info);
 
+   --  Verify a requirement itself by the project's profile for
+   --  requirements, scalar verification.requirements: {requirement} in a
+   --  check stands for its identifier and {tests} for the tests it names.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Requirement The requirement.
+   --  @param Evidence The evidence taken.
+   --  @param Passed Whether it passed.
+   --  @param Status Framework_Not_Found when the project names no such
+   --    profile or there is no such requirement.
+   procedure Verify_Requirement
+     (Item        : Stores.Store;
+      Change      : in out Stores.Transaction;
+      Requirement : String;
+      Evidence    : out Ada.Strings.Unbounded.Unbounded_String;
+      Passed      : out Boolean;
+      Status      : out Model_Runner.Errors.Error_Info);
+
    --  Work out again which requirements are verified: an implemented one
-   --  whose serving tasks are complete with current passing evidence
-   --  becomes verified, naming that evidence; a verified one whose
-   --  evidence stopped applying goes back to implemented.
+   --  whose serving tasks are complete with current passing evidence,
+   --  that something implements -- a linked implementation, or files a
+   --  serving task changed -- and, where the project names a profile for
+   --  requirements (scalar verification.requirements), that has current
+   --  passing evidence of it taken for the requirement itself, becomes
+   --  verified, naming that evidence; a verified one whose evidence
+   --  stopped applying goes back to implemented.
    --
    --  @param Item The store.
    --  @param Change The transaction.

@@ -332,6 +332,27 @@ package body Model_Runner.Framework.Tasks is
       return "the schema of " & Name & " names no type this knows: " & Kind;
    end Field_Problem;
 
+   --  Keep a definition as it stands before it is revised, under a name of
+   --  its own -- TASK.rev-NNNNNN, an entity TASK-REV-NNNNNN -- so that no
+   --  revision of what a task was is written over.
+   procedure Keep_Revision
+     (Change : in out Stores.Transaction;
+      Id     : String;
+      Value  : Records.Item)
+   is
+      Number : constant String := Trim (Natural'Image (Records.Revision (Value)));
+      Padded : constant String := [1 .. Integer'Max (0, 6 - Number'Length) => '0'] & Number;
+      Kept   : Records.Item :=
+        Records.Create (Schemas.Task_Definition_Schema, 1, Id & "-REV-" & Padded, 1);
+   begin
+      for Index in 1 .. Records.Field_Count (Value) loop
+         Records.Set (Kept, Records.Field_Name (Value, Index),
+                      Records.Get (Value, Records.Field_Name (Value, Index)));
+      end loop;
+      Records.Set (Kept, "revision_of", Id);
+      Stores.Put (Change, Tasks_Area, Id & ".rev-" & Padded, Kept);
+   end Keep_Revision;
+
    ------------
    -- Create --
    ------------
@@ -1185,6 +1206,7 @@ package body Model_Runner.Framework.Tasks is
                               if E.Is_Error (Status) then
                                  return;
                               end if;
+                              Keep_Revision (Change, To_String (Earlier), Value);
                               Records.Set_Revision (Value, Records.Revision (Value) + 1);
                            end if;
                            Records.Set (Value, "derivation_key", Key);
@@ -1432,6 +1454,7 @@ package body Model_Runner.Framework.Tasks is
          if E.Is_Error (Status) then
             return;
          end if;
+         Keep_Revision (Change, Id, Value);
          Records.Set_Revision (Value, Records.Revision (Value) + 1);
       end if;
 

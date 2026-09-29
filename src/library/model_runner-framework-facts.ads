@@ -35,6 +35,9 @@ package Model_Runner.Framework.Facts is
       Value      : Ada.Strings.Unbounded.Unbounded_String;
       Source     : Derivation_Source := Explicit;
       Confidence : Confidence_Level := Authoritative;
+
+      --  Where it was found, where that is one place: a document's path.
+      Origin     : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    --  Whether a string can be a fact's key: lower-case letters, digits and

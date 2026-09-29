@@ -7,6 +7,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A document does not outweigh the template.** Bootstrap raises an issue,
+  and leaves the fact, where a document disagrees with a template's or the
+  project's own authoritative one; a fact it does record keeps the
+  document it came from (`Facts.Fact.Origin`).
+- **A task's earlier revisions are kept.** Revising a task, or giving a
+  derived one a requirement's new meaning, keeps the definition it replaces
+  as TASK.rev-NNNNNN.
+- **Requirements are verified by more than their tasks.** Something must
+  implement one -- a linked implementation, or files a serving task
+  changed -- and where `scalar verification.requirements` names a profile,
+  the requirement needs current passing evidence of it taken for itself
+  (`/req verify ID`, `Verification.Verify_Requirement`; `{requirement}`
+  and `{tests}` in its checks).
 - **Nothing is left stuck in verification.** Work taken in by hand is
   concluded as work the harness ran is: failed when its checks fail,
   blocked when they cannot run or its gates do not hold, the reason said;

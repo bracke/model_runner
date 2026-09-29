@@ -354,13 +354,38 @@ package body Model_Runner.Framework.Bootstrap is
                      Facts.Find (Item, Field (Next.Key), Held, Status);
                      if E.Is_Ok (Status) and then Held.Value = Next.Text then
                         Result.Existing := Result.Existing + 1;
+                     elsif E.Is_Ok (Status)
+                       and then (Held.Confidence in Facts.Authoritative | Facts.Certain
+                                 or else Held.Source in Facts.Explicit | Facts.Template)
+                     then
+                        --  A document does not outweigh what the template or
+                        --  the project's own files say: the disagreement is
+                        --  an issue for someone to settle, and the fact
+                        --  stays.
+                        declare
+                           Said : Results.Result :=
+                             (Kind       => Results.Diagnostic,
+                              Producer   => To_Unbounded_String ("bootstrap"),
+                              Summary    => To_Unbounded_String
+                                              (Field (Next.Source) & " says " & Field (Next.Key)
+                                               & " = " & Field (Next.Text) & ", which the project"
+                                               & " has as " & To_String (Held.Value)),
+                              Payload    => Next.Text,
+                              Provenance => Next.Provenance,
+                              others     => <>);
+                        begin
+                           Status := E.Success;
+                           Results.Add (Item, Change, Said, Status);
+                           Result.Issues := Result.Issues + 1;
+                        end;
                      else
                         Facts.Record_Fact
                           (Item, Change,
                            (Key        => Next.Key,
                             Value      => Next.Text,
                             Source     => Facts.Heuristic,
-                            Confidence => Facts.Probable),
+                            Confidence => Facts.Probable,
+                            Origin     => Next.Source),
                            Status);
                         if E.Is_Ok (Status) then
                            Result.Created := Result.Created + 1;

@@ -469,7 +469,19 @@ package body Model_Runner.Framework.Verification is
                            (To_String (Rules.Environment))));
          Records.Set (Value, "network", (if Rules.Network then "allowed" else "not allowed"));
 
-         if Task_Id /= "" then
+         --  Evidence taken for a requirement itself names its revision.
+         if Task_Id /= "" and then Stores.Exists (Item, Requirements_Area, Task_Id) then
+            declare
+               Held : Intent.Entity;
+               Read : E.Error_Info;
+            begin
+               Intent.Read (Item, Intent.Requirement, Task_Id, Held, Read);
+               if E.Is_Ok (Read) then
+                  Records.Set (Value, "requirement." & Task_Id, Image (Held.Revision));
+                  Records.Set (Value, "meaning." & Task_Id, To_String (Held.Meaning));
+               end if;
+            end;
+         elsif Task_Id /= "" then
             declare
                View : Records.Item;
                Read : E.Error_Info;
@@ -1087,6 +1099,38 @@ package body Model_Runner.Framework.Verification is
       Status := E.Success;
    end Complete_Task;
 
+   ------------------------
+   -- Verify_Requirement --
+   ------------------------
+
+   procedure Verify_Requirement
+     (Item        : Stores.Store;
+      Change      : in out Stores.Transaction;
+      Requirement : String;
+      Evidence    : out Ada.Strings.Unbounded.Unbounded_String;
+      Passed      : out Boolean;
+      Status      : out Model_Runner.Errors.Error_Info)
+   is
+      Profile : constant String := Records.Get (Config (Item), "scalar.verification.requirements");
+      Given   : Name_Lists.Vector;
+      Tests   : Unbounded_String;
+   begin
+      Evidence := Null_Unbounded_String;
+      Passed := False;
+      if Profile = "" or else not Stores.Exists (Item, Requirements_Area, Requirement) then
+         Status := E.Make (E.Framework_Not_Found);
+         E.Add_Text (Status, "name",
+                     (if Profile = "" then "a profile for requirements" else Requirement));
+         return;
+      end if;
+      for Test of Intent.Links (Item, Intent.Requirement, Requirement, Intent.Test) loop
+         Append (Tests, (if Tests = Null_Unbounded_String then "" else " ") & Test);
+      end loop;
+      Given.Append ("requirement=" & Requirement);
+      Given.Append ("tests=" & To_String (Tests));
+      Run_Profile (Item, Change, Profile, Requirement, Evidence, Passed, Status, Given => Given);
+   end Verify_Requirement;
+
    -----------------------------
    -- Reevaluate_Requirements --
    -----------------------------
@@ -1102,9 +1146,14 @@ package body Model_Runner.Framework.Verification is
 
       --  The evidence that shows a requirement verified now, or nothing
       --  when something is missing.
+      Policy_Profile : constant String :=
+        Records.Get (Config (Item), "scalar.verification.requirements");
+
       function Supporting (Requirement : String) return String is
          Found : Unbounded_String;
          Any   : Boolean := False;
+         Built : Boolean :=
+           not Intent.Links (Item, Intent.Requirement, Requirement, Intent.Implementation).Is_Empty;
       begin
          for Id of Everything loop
             declare
@@ -1121,6 +1170,18 @@ package body Model_Runner.Framework.Verification is
                   if State /= "complete" then
                      return "";
                   end if;
+
+                  --  Something implements it: a linked implementation, or
+                  --  files a task serving it changed.
+                  declare
+                     Runtime_Value : Records.Item;
+                     Got           : E.Error_Info;
+                  begin
+                     Stores.Read (Item, Tasks_Area, Id & ".state", Runtime_Value, Got);
+                     Built := Built
+                       or else (E.Is_Ok (Got)
+                                and then Records.Get (Runtime_Value, "changed_files") /= "");
+                  end;
                   declare
                      Evidence : constant String :=
                        Latest (Item, Id, Profile_Of (Item, Id));
@@ -1142,7 +1203,32 @@ package body Model_Runner.Framework.Verification is
                end if;
             end;
          end loop;
-         return (if Any then To_String (Found) else "");
+         if not Any or else not Built then
+            return "";
+         end if;
+
+         --  Where the project verifies requirements themselves, by its
+         --  profile: that evidence, current and passing, as well.
+         if Policy_Profile /= "" then
+            declare
+               Own     : constant String := Latest (Item, Requirement, Policy_Profile);
+               Value   : Records.Item;
+               Read    : E.Error_Info;
+               Reasons : Name_Lists.Vector;
+            begin
+               if Own = "" then
+                  return "";
+               end if;
+               Stores.Read (Item, Verification_Area, Own, Value, Read);
+               if Records.Get (Value, "passed") /= "true"
+                 or else not Is_Current (Item, Own, Reasons, Configuration)
+               then
+                  return "";
+               end if;
+               Append (Found, ", " & Own);
+            end;
+         end if;
+         return To_String (Found);
       end Supporting;
 
       Event : Unbounded_String;

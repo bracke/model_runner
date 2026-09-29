@@ -81,7 +81,8 @@ package body Model_Runner.Framework.Schemas is
                 "explicit template semantic_analysis build_metadata "
                 & "naming_convention heuristic "),
           Rule ("confidence", Choice_Field, True,
-                "authoritative certain probable uncertain ")]),
+                "authoritative certain probable uncertain "),
+          Rule ("origin", Text_Field, False)]),
 
       (Id      => new String'(Result_Schema),
        Version => 1,

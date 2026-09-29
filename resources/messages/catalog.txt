@@ -324,7 +324,7 @@ en.cli.interactive.help.reject = /reject           reject the one candidate wait
 en.cli.interactive.help.work = /work [TASK]      run a ready task on this model, verify and complete it
 en.cli.interactive.help.cancel = /cancel TASK      cancel a task
 en.cli.interactive.help.check = /check [PROFILE | consistency]  verify the project now, or check its state holds together
-en.cli.interactive.help.req = /req [ID | ACTION]  requirements: list, show, new TITLE "text=...", accept, reject, move ID STATE, revise, link, obsolete
+en.cli.interactive.help.req = /req [ID | ACTION]  requirements: list, show, new TITLE "text=...", accept, reject, move ID STATE, verify ID, revise, link, obsolete
 en.cli.interactive.help.decision = /decision [ID | ACTION]  decisions: the same, and govern ID SETTING RULING, supersede OLD NEW
 en.cli.interactive.help.spec = /spec [ID | ACTION]  specifications: the same as decisions
 en.cli.interactive.help.result = /result ID        show a stored result
@@ -1248,7 +1248,7 @@ da.cli.interactive.help.reject = /reject           afvis den ene ventende kandid
 da.cli.interactive.help.work = /work [OPGAVE]    kør en klar opgave på denne model, verificér og fuldfør den
 da.cli.interactive.help.cancel = /cancel OPGAVE    annullér en opgave
 da.cli.interactive.help.check = /check [PROFIL | consistency]  verificér projektet nu, eller tjek at dets tilstand hænger sammen
-da.cli.interactive.help.req = /req [ID | HANDLING]  krav: list, vis, new TITEL, accept, reject, move ID TILSTAND, revise, link, obsolete
+da.cli.interactive.help.req = /req [ID | HANDLING]  krav: list, vis, new TITEL, accept, reject, move ID TILSTAND, verify ID, revise, link, obsolete
 da.cli.interactive.help.decision = /decision [ID | HANDLING]  beslutninger: det samme, og govern ID INDSTILLING AFGØRELSE, supersede GAMMEL NY
 da.cli.interactive.help.spec = /spec [ID | HANDLING]  specifikationer: det samme som beslutninger
 da.cli.interactive.help.result = /result ID        vis et gemt resultat
@@ -1933,7 +1933,7 @@ qps.cli.interactive.help.reject = ⟦/reject           ŕéjéçŧ ŧhé óñé 
 qps.cli.interactive.help.work = ⟦/work [TASK]      ŕúñ á ŕéáðý ŧáßk óñ ŧhíß móðéĺ, véŕífý áñð çómpĺéŧé íŧ⟧
 qps.cli.interactive.help.cancel = ⟦/cancel TASK      çáñçéĺ á ŧáßk⟧
 qps.cli.interactive.help.check = ⟦/check [PROFILE | consistency]  véŕífý ŧhé pŕójéçŧ ñów, óŕ çhéçk íŧß ßŧáŧé hóĺðß ŧógéŧhéŕ⟧
-qps.cli.interactive.help.req = ⟦/req [ID | ACTION]  ŕéqúíŕéméñŧß: ĺíßŧ, ßhów, ñéw TITLE, áççépŧ, ŕéjéçŧ, ɱóµé ID STATE, ŕévíßé, ĺíñk, óbßóĺéŧé⟧
+qps.cli.interactive.help.req = ⟦/req [ID | ACTION]  ŕéqúíŕéméñŧß: ĺíßŧ, ßhów, ñéw TITLE, áççépŧ, ŕéjéçŧ, ɱóµé ID STATE, µéŕífý ID, ŕévíßé, ĺíñk, óbßóĺéŧé⟧
 qps.cli.interactive.help.decision = ⟦/decision [ID | ACTION]  ðéçíßíóñß: ŧhé ßámé, áñð góvéŕñ ID SETTING RULING, ßúþéŕßéðé OLD NEW⟧
 qps.cli.interactive.help.spec = ⟦/spec [ID | ACTION]  ßþéçífíçáŧíóñß: ŧhé ßámé áß ðéçíßíóñß⟧
 qps.cli.interactive.help.result = ⟦/result ID        ßhów á ßŧóŕéð ŕéßúĺŧ⟧

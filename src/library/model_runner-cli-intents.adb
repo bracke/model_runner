@@ -5,6 +5,7 @@ with Ada.Strings.Unbounded;
 with Model_Runner.Errors;
 with Model_Runner.Framework.Orchestration;
 with Model_Runner.Framework.Transitions;
+with Model_Runner.Framework.Verification;
 with Model_Runner.Localization;
 
 package body Model_Runner.CLI.Intents is
@@ -221,6 +222,42 @@ package body Model_Runner.CLI.Intents is
                Pres.Put_Message
                  (Screen, "cli.task.moved", [Loc.Named ("name", Word (2)), Loc.Named ("value", Next)]);
                Move_Along (Store, Screen);
+            end;
+         end if;
+
+      elsif Action = "verify" and then Nt."=" (Kind, Nt.Requirement) then
+         --  The requirement itself, by the project's profile for them; then
+         --  what that changes about which are verified.
+         Needs (2, "the requirement");
+         if E.Is_Ok (Status) then
+            declare
+               package Vf renames Model_Runner.Framework.Verification;
+               Evidence : Unbounded_String;
+               Passed   : Boolean;
+               Moved    : Names.Vector;
+            begin
+               Vf.Verify_Requirement (Store, Change, Word (2), Evidence, Passed, Status);
+               if E.Is_Ok (Status) then
+                  S.Commit (Store, Change, Status);
+               end if;
+               if E.Is_Ok (Status) then
+                  Vf.Reevaluate_Requirements (Store, Change, Moved, Status);
+               end if;
+               if E.Is_Ok (Status) then
+                  S.Commit (Store, Change, Status);
+               end if;
+               if E.Is_Error (Status) then
+                  Pres.Report (Screen, Status);
+                  return;
+               end if;
+               Pres.Put_Message
+                 (Screen, "cli.task.verified",
+                  [Loc.Named ("name", To_String (Evidence)),
+                   Loc.Named ("value", (if Passed then "passed" else "failed")),
+                   Loc.Named ("count", "1"), Loc.Named ("total", "0")]);
+               for Requirement of Moved loop
+                  Pres.Put_Message (Screen, "cli.work.requirement", [Loc.Named ("name", Requirement)]);
+               end loop;
             end;
          end if;
 
