@@ -896,8 +896,13 @@ package body Model_Runner.CLI.Tasks is
          Step;
       elsif Action = "plan" then
          Show_Plan;
-      else
+      elsif Action = "derive" then
          Derive;
+      else
+         --  Nothing the command does: said, not taken for another.
+         Outcome := E.Make (E.CLI_Unexpected_Operand);
+         E.Add_Text (Outcome, "value", Action);
+         Fail (Outcome);
       end if;
       S.Close (Store);
    end Run;

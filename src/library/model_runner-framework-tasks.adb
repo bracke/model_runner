@@ -38,6 +38,10 @@ package body Model_Runner.Framework.Tasks is
    --  project's components and it is not one of them; "" where it can.
    function Component_Problem (Item : Stores.Store; Component : String) return String;
 
+   --  How a task of a kind waits on its children: parent_runs, or the
+   --  default, parent_waits.
+   function Coordination_Of (Item : Stores.Store; Kind : String) return String;
+
    function Trim (Text : String) return String
    is (Ada.Strings.Fixed.Trim (Text, Ada.Strings.Both));
 
@@ -682,6 +686,30 @@ package body Model_Runner.Framework.Tasks is
          end if;
       end if;
       Stores.Put (Change, Tasks_Area, Id & State_Suffix, Value);
+
+      --  Accepted with children still open -- split while a candidate --
+      --  its work is theirs, as a split of an accepted task makes it,
+      --  unless the project lets it coordinate.
+      if Next = "accepted" then
+         declare
+            Defined : Records.Item;
+            Read    : E.Error_Info;
+            Open    : Name_Lists.Vector;
+         begin
+            Definition (Item, Id, Defined, Read);
+            for Child of Children (Item, Id) loop
+               if State_Of (Item, Child) not in "complete" | "cancelled" | "rejected" then
+                  Open.Append (Child);
+               end if;
+            end loop;
+            if E.Is_Ok (Read) and then not Open.Is_Empty
+              and then Coordination_Of (Item, Records.Get (Defined, "kind")) /= "parent_runs"
+            then
+               Move (Item, Change, Id, "blocked", Children_Reason & Joined (Open, ", "),
+                     Status => Status);
+            end if;
+         end;
+      end if;
    end Move;
 
    --  A task's state as the transaction will leave it.
@@ -1416,6 +1444,11 @@ package body Model_Runner.Framework.Tasks is
       end;
    end Component_Problem;
 
+   function Coordination_Of (Item : Stores.Store; Kind : String) return String
+   is (if Kind_Policy (Item, Kind, "coordination") /= ""
+       then Kind_Policy (Item, Kind, "coordination")
+       else Records.Get (Config (Item), "scalar.task.coordination"));
+
    -----------------
    -- Kind_Policy --
    -----------------
@@ -1605,10 +1638,7 @@ package body Model_Runner.Framework.Tasks is
 
          --  Its work is theirs now, unless the project lets it coordinate.
          declare
-            Coordination : constant String :=
-              (if Kind_Policy (Item, Kind, "coordination") /= ""
-               then Kind_Policy (Item, Kind, "coordination")
-               else Records.Get (Config (Item), "scalar.task.coordination"));
+            Coordination : constant String := Coordination_Of (Item, Kind);
          begin
             if Coordination /= "parent_runs" and then State_Of (Item, Parent) = "accepted"
               and then not Made.Is_Empty

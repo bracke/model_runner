@@ -2467,6 +2467,11 @@ package body Tests.Framework_Cases is
       Tk.Create (Store, Change, Fields ("The whole", "analysis"), "user", "",
                  Parent, Status);
       S.Commit (Store, Change, Status);
+      --  Accepted before its part is made: accepted after, it would wait on
+      --  it at once.
+      Tk.Move (Store, Change, To_String (Parent), "accepted", "",
+               Status => Status);
+      S.Commit (Store, Change, Status);
       Tk.Create (Store, Change,
                  Fields ("A part", "analysis", "parent", To_String (Parent)),
                  "user", "", Child, Status);
@@ -2474,8 +2479,6 @@ package body Tests.Framework_Cases is
       Assert (Tk.Children (Store, To_String (Parent)).First_Element
               = To_String (Child), "a child does not know its parent");
 
-      Tk.Move (Store, Change, To_String (Parent), "accepted", "",
-               Status => Status);
       Tk.Move (Store, Change, To_String (Child), "accepted", "",
                Status => Status);
       S.Commit (Store, Change, Status);
@@ -4727,8 +4730,10 @@ package body Tests.Framework_Cases is
                   Scripted_Agent'(File => Null_Unbounded_String,
                                   Answer => Null_Unbounded_String, Broken => True),
                   Model, Done, Status);
-      Assert (To_String (Done.Final_State) = "failed",
-              "a broken agent did not fail its task");
+      Assert (To_String (Done.Final_State) = "failed"
+              and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "MR-") > 0,
+              "a broken agent did not fail its task, saying why by its code: "
+              & To_String (Done.Reason));
 
       --  A running task whose agent's lease ran out goes back.
       Tk.Move (Store, Change, To_String (Ids (5)), "accepted", "", Status => Status);
@@ -6431,6 +6436,23 @@ package body Tests.Framework_Cases is
               "a part was made to wait for its own parent");
       Change := S.No_Changes;
 
+      --  Split while a candidate, it waits on its parts once accepted.
+      declare
+         Early : Unbounded_String;
+      begin
+         Tk.Create (Store, Change, Fields ("Split early", "analysis"), "user", "", Early, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Decompose (Store, Change, To_String (Early), Parts, Made, Status);
+         S.Commit (Store, Change, Status);
+         Assert (Tk.State_Of (Store, To_String (Early)) = "candidate",
+                 "a candidate split was moved");
+         Tk.Move (Store, Change, To_String (Early), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status) and then Tk.State_Of (Store, To_String (Early)) = "blocked",
+                 "a candidate split and then accepted did not wait on its parts: "
+                 & Tk.State_Of (Store, To_String (Early)) & " " & Code_Of (Status));
+      end;
+
       --  Unless its kind lets it coordinate.
       Configure ("scalar.task.coordination.analysis", "parent_runs");
       Make (B, "Coordinator");
@@ -7191,8 +7213,19 @@ package body Tests.Framework_Cases is
          "set execution.allowed = test" & LF
          & "profile checks = exists: test -f src/hello.adb" & LF
          & "scalar verification.default = checks" & LF);
-      Tk.Create (Store, Change, Fields ("Audited", "analysis"), "user", "", Id, Status);
-      S.Commit (Store, Change, Status);
+      declare
+         Req   : Unbounded_String;
+         Given : Tk.Field_Map := Fields ("Audited", "analysis");
+      begin
+         Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.", "",
+                     "user", "", "io", Req, Status);
+         Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted",
+                  Tr.Ordinary_Only, Status);
+         S.Commit (Store, Change, Status);
+         Given.Include ("requirements", To_String (Req));
+         Tk.Create (Store, Change, Given, "user", "", Id, Status);
+         S.Commit (Store, Change, Status);
+      end;
       Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
       S.Commit (Store, Change, Status);
       Wk.Execute (Store, To_String (Id),
@@ -7209,7 +7242,8 @@ package body Tests.Framework_Cases is
                  and then Has (Answer (Said, "files changed"), "src/hello.adb")
                  and then Has (Answer (Said, "verification"), "passed")
                  and then Has (Answer (Said, "context"), "CTX-")
-                 and then Has (Answer (Said, "completion"), "its gates passed"),
+                 and then Has (Answer (Said, "completion"), "its gates passed")
+                 and then Has (Answer (Said, "requirement revisions"), "REQ-"),
                  "the task did not answer for itself: " & Answer (Said, "why it could start"));
       end;
 
@@ -7314,6 +7348,40 @@ package body Tests.Framework_Cases is
          Model_Runner.CLI.Project_Commands.Run
            ("/work " & To_String (First), Screen, Agent);
          Model_Runner.CLI.Project_Commands.Run ("/work count the stars", Screen, Agent);
+
+         --  /task ID shows it, an action the command does not have says
+         --  so, and /req show ID shows the requirement.
+         declare
+            use Ada.Text_IO;
+            Said : File_Type;
+            Path : constant String := "said.txt";
+         begin
+            Create (Said, Out_File, Path);
+            Set_Output (Said);
+            Set_Error (Said);
+            Model_Runner.CLI.Project_Commands.Run ("/task " & To_String (First), Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/task nonsense", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/req new Stars counted", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/req show REQ-001", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/req move REQ-001 accepted", Screen, Agent);
+            Set_Output (Standard_Output);
+            Set_Error (Standard_Error);
+            Close (Said);
+            declare
+               Text : constant String := Read_Whole (Path);
+            begin
+               Assert (Ada.Strings.Fixed.Index (Text, "runtime.state") > 0
+                       and then Ada.Strings.Fixed.Index (Text, "nonsense") > 0
+                       and then Ada.Strings.Fixed.Index (Text, "Stars counted") > 0
+                       and then Ada.Strings.Fixed.Index (Text, "moved from") > 0,
+                       "/task ID, an unknown /task action or /req show said nothing: " & Text);
+            end;
+         exception
+            when others =>
+               Set_Output (Standard_Output);
+               Set_Error (Standard_Error);
+               raise;
+         end;
          Dirs.Set_Directory (Before);
          S.Open (Store, Root, Report, Status);
       exception

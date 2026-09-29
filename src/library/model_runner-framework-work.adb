@@ -612,6 +612,30 @@ package body Model_Runner.Framework.Work is
       end;
    end Recover_On_Opening;
 
+   --  A condition as a reason reads: its code, and what it names -- a
+   --  person acts on the detail, not on the name of a code.
+   function Why_Of (Condition : E.Error_Info) return String is
+      Result : Unbounded_String := To_Unbounded_String (E.Diagnostic_Code (Condition.Code));
+   begin
+      for Index in 1 .. Condition.Parameter_Total loop
+         declare
+            One : constant E.Parameter := Condition.Parameters (Index);
+         begin
+            Append (Result, (if Index = 1 then " (" else "; ")
+                            & Model_Runner.Text.To_String (One.Name) & ": "
+                            & (case One.Kind is
+                                  when E.Param_Integer | E.Param_Bytes | E.Param_Tokens
+                                     | E.Param_Offset => Model_Runner.Text.Image (One.Int_Value),
+                                  when E.Param_Boolean => (if One.Bool_Value then "yes" else "no"),
+                                  when others => Model_Runner.Text.To_String (One.Text_Value)));
+         end;
+      end loop;
+      if Condition.Parameter_Total > 0 then
+         Append (Result, ")");
+      end if;
+      return To_String (Result);
+   end Why_Of;
+
    --  Every file's fingerprint, by path.
    function Snapshot
      (Project : String;
@@ -654,8 +678,11 @@ package body Model_Runner.Framework.Work is
       end Say;
 
       --  The fields of a record whose names start with a prefix, as
-      --  NAME VALUE, joined.
-      function Fields_With (Value : Records.Item; Prefix : String) return String is
+      --  NAME VALUE, joined; the name without so much of it as Kept says
+      --  not to keep.
+      function Fields_With
+        (Value : Records.Item; Prefix : String; Kept : Natural := 0) return String
+      is
          Text : Unbounded_String;
       begin
          for Index in 1 .. Records.Field_Count (Value) loop
@@ -666,7 +693,7 @@ package body Model_Runner.Framework.Work is
                  and then Field (Field'First .. Field'First + Prefix'Length - 1) = Prefix
                then
                   Append (Text, (if Text = Null_Unbounded_String then "" else ", ")
-                          & Field (Field'First + Prefix'Length .. Field'Last) & " "
+                          & Field (Field'First + Prefix'Length - Kept .. Field'Last) & " "
                           & Records.Get (Value, Field));
                end if;
             end;
@@ -710,10 +737,10 @@ package body Model_Runner.Framework.Work is
                       Proof, Status);
       end if;
 
-      Say ("requirement revisions", Fields_With (Plan, "applies.REQ"));
+      Say ("requirement revisions", Fields_With (Plan, "applies.REQ", Kept => 3));
       Say ("task definition revision", Natural'Image (Records.Revision (Defined)));
       Say ("why it could start", Records.Get (State, "admission"));
-      Say ("decisions", Fields_With (Plan, "applies.DEC"));
+      Say ("decisions", Fields_With (Plan, "applies.DEC", Kept => 3));
       Say ("context", Records.Get (Call, "context_manifest")
            & (if Records.Get (Plan, "rendered") = "" then ""
               else ", rendered as " & Records.Get (Plan, "rendered")));
@@ -1167,7 +1194,7 @@ package body Model_Runner.Framework.Work is
          Agents.Charge (Host.Item.all, Change, Id, Tokens, Charged);
 
          if E.Is_Error (Ran) then
-            Why := To_Unbounded_String ("it could not be run: " & E.Error_Code'Image (Ran.Code));
+            Why := To_Unbounded_String ("it could not be run: " & Why_Of (Ran));
          else
             Invocations.Hold (Child_Claim, Answer, Said, Held);
             if E.Is_Error (Held) then
@@ -1420,7 +1447,7 @@ package body Model_Runner.Framework.Work is
       Context.Build (Item, Task_Id, Model, Built, Held, Instructions => Instructions);
       if E.Is_Error (Held) then
          Conclude ("blocked", "its context cannot be built: "
-                   & E.Error_Code'Image (Held.Code), "failed");
+                   & Why_Of (Held), "failed");
          return;
       end if;
       Result.Manifest_Id := To_Unbounded_String (Context.Manifest_Id (Built));
@@ -1440,7 +1467,7 @@ package body Model_Runner.Framework.Work is
       if E."=" (Status.Code, E.Framework_Limit_Exceeded) then
          --  Out of calls: blocked, deterministically, not run past its bound.
          Change := Stores.No_Changes;
-         Conclude ("blocked", "no model call is left to it: " & E.Error_Code'Image (Status.Code),
+         Conclude ("blocked", "no model call is left to it: " & Why_Of (Status),
                    "failed");
          return;
       end if;
@@ -1678,7 +1705,7 @@ package body Model_Runner.Framework.Work is
          Conclude ("blocked", "its work ran out of time", "failed");
          return;
       elsif E.Is_Error (Ran) then
-         Conclude ("failed", "the agent could not be run: " & E.Error_Code'Image (Ran.Code),
+         Conclude ("failed", "the agent could not be run: " & Why_Of (Ran),
                    "failed");
          return;
       end if;
@@ -2079,7 +2106,7 @@ package body Model_Runner.Framework.Work is
             if E.Is_Error (Held) then
                Change := Stores.No_Changes;
                Conclude ("blocked", "its workspace cannot be taken in: "
-                         & E.Error_Code'Image (Held.Code), "completed");
+                         & Why_Of (Held), "completed");
                return;
             end if;
             declare
@@ -2118,7 +2145,7 @@ package body Model_Runner.Framework.Work is
             Result.Evidence_Id := Null_Unbounded_String;
             Change := Stores.No_Changes;
             Conclude ("blocked", "its verification could not run: "
-                      & E.Error_Code'Image (Held.Code), "completed");
+                      & Why_Of (Held), "completed");
             return;
          end if;
          Annotate (Item, Change, Task_Id, "current_verification",
@@ -2266,7 +2293,7 @@ package body Model_Runner.Framework.Work is
               (Item, Change, To_String (Chosen.Profile), Task_Id, Result.Evidence_Id, Passed, Held,
                Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For));
             if E.Is_Error (Held) then
-               Leave ("blocked", "its verification could not run: " & E.Error_Code'Image (Held.Code));
+               Leave ("blocked", "its verification could not run: " & Why_Of (Held));
             else
                Annotate (Item, Change, Task_Id, "current_verification",
                          To_String (Result.Evidence_Id));

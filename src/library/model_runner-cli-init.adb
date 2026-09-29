@@ -239,6 +239,23 @@ package body Model_Runner.CLI.Init is
          Cf.Prepare (Composed, Directory, Given, Planned, Outcome);
          exit when E.Is_Ok (Outcome);
 
+         --  A program reading the answer is given an entry for each input
+         --  missing, each named in a field of its own.
+         if Outcome.Code = E.Framework_Input_Missing and then not Interactive
+           and then Pres.Is_Structured (Screen) and then not Planned.Missing.Is_Empty
+         then
+            for Missing of Planned.Missing loop
+               declare
+                  One : E.Error_Info := E.Make (E.Framework_Input_Missing);
+               begin
+                  E.Add_Text (One, "name", Missing);
+                  Pres.Report (Screen, One);
+               end;
+            end loop;
+            Status := E.Exit_Status (Outcome);
+            return;
+         end if;
+
          if Outcome.Code /= E.Framework_Input_Missing or else not Interactive
          then
             Fail (Outcome);

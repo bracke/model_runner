@@ -1303,8 +1303,14 @@ package body Model_Runner.CLI.Project_Commands is
 
       elsif Word = "/task" then
          Command.Kind := Opt.Command_Task;
-         Command.Action := T.To_Bounded (Argument (1));
-         Command.Action_Argument := T.To_Bounded (Rest (2));
+         --  /task TASK-X is the task shown.
+         if Ada.Strings.Fixed.Index (Argument (1), "TASK-") = 1 then
+            Command.Action := T.To_Bounded ("show");
+            Command.Action_Argument := T.To_Bounded (Argument (1));
+         else
+            Command.Action := T.To_Bounded (Argument (1));
+            Command.Action_Argument := T.To_Bounded (Rest (2));
+         end if;
          Model_Runner.CLI.Tasks.Run (Command, Screen, Status);
 
       elsif Word in "/accept" | "/reject" then

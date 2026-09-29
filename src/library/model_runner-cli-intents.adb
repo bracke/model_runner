@@ -142,6 +142,9 @@ package body Model_Runner.CLI.Intents is
 
       --  What was asked, read once the words are split.
       function Action return String is (Lower (Word (1)));
+
+      --  Where a moved one was, for saying where it went from.
+      From_State : Unbounded_String;
    begin
       for Part of Words loop
          declare
@@ -265,6 +268,13 @@ package body Model_Runner.CLI.Intents is
          --  To any state the project's lifecycle allows: its own among them.
          Needs (3, "the " & Word_Of (Kind) & " and the state");
          if E.Is_Ok (Status) then
+            declare
+               Held : Nt.Entity;
+               Read : E.Error_Info;
+            begin
+               Nt.Read (Store, Kind, Word (2), Held, Read);
+               From_State := Held.State;
+            end;
             Nt.Move (Store, Change, Kind, Word (2), Word (3), Tr.Ordinary_Only, Status,
                      Actor => Tr.User);
             if E.Is_Ok (Status) then
@@ -275,7 +285,9 @@ package body Model_Runner.CLI.Intents is
                return;
             end if;
             Pres.Put_Message
-              (Screen, "cli.task.moved", [Loc.Named ("name", Word (2)), Loc.Named ("value", Word (3))]);
+              (Screen, "cli.intent.moved",
+               [Loc.Named ("name", Word (2)), Loc.Named ("other", To_String (From_State)),
+                Loc.Named ("value", Word (3))]);
             Move_Along (Store, Screen);
          end if;
 
@@ -346,11 +358,17 @@ package body Model_Runner.CLI.Intents is
          end if;
 
       else
-         --  An identifier: what it is.
+         --  An identifier -- or show and one: what it is.
+         if Action = "show" then
+            Needs (2, "the " & Word_Of (Kind));
+         end if;
          declare
-            Held : Nt.Entity;
+            Held  : Nt.Entity;
+            Named : constant String := (if Action = "show" then Word (2) else Word (1));
          begin
-            Nt.Read (Store, Kind, Word (1), Held, Status);
+            if E.Is_Ok (Status) then
+               Nt.Read (Store, Kind, Named, Held, Status);
+            end if;
             if E.Is_Ok (Status) then
                Field ("title", To_String (Held.Title));
                Field ("state", To_String (Held.State));
@@ -366,7 +384,7 @@ package body Model_Runner.CLI.Intents is
                   Field ("superseded_by", To_String (Held.Superseded_By));
                end if;
                for Relation in Nt.Link_Kind loop
-                  for Target of Nt.Links (Store, Kind, Word (1), Relation) loop
+                  for Target of Nt.Links (Store, Kind, Named, Relation) loop
                      Field ("link." & Lower (Nt.Link_Kind'Image (Relation)), Target);
                   end loop;
                end loop;

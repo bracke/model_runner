@@ -51,6 +51,7 @@ with Model_Runner.Tokenizer;
 
 with Ada.Calendar;
 with Ada.Directories;
+with Ada.Environment_Variables;
 with Ada.Streams.Stream_IO;
 with GNAT.OS_Lib;
 with Ada.Strings.Fixed;
@@ -1563,6 +1564,37 @@ package body Tests.CLI_Cases is
       if Ada.Directories.Exists (Project) then
          Ada.Directories.Delete_Tree (Project);
       end if;
+      --  Every input missing is an entry of its own for a program.
+      declare
+         Home  : constant String := Ada.Directories.Full_Name ("obj/format-home");
+         Setup : Ada.Text_IO.File_Type;
+      begin
+         Ada.Directories.Create_Path (Home & "/templates");
+         Ada.Text_IO.Create (Setup, Ada.Text_IO.Out_File, Home & "/settings.conf");
+         Ada.Text_IO.Close (Setup);
+         Ada.Text_IO.Create (Setup, Ada.Text_IO.Out_File, Home & "/templates/two-inputs.template");
+         Ada.Text_IO.Put
+           (Setup, "template = two-inputs" & ASCII.LF & "name = Two inputs" & ASCII.LF
+                   & "version = 1" & ASCII.LF
+                   & "input alpha" & ASCII.LF & "  type = text" & ASCII.LF
+                   & "  required = true" & ASCII.LF
+                   & "input beta" & ASCII.LF & "  type = text" & ASCII.LF
+                   & "  required = true" & ASCII.LF);
+         Ada.Text_IO.Close (Setup);
+         Ada.Environment_Variables.Set ("MODEL_RUNNER_CONFIG", Home & "/settings.conf");
+         Assert (Command ("init|two-inputs", Json => True) /= 0
+                 and then Shows ("""name"": ""alpha""") and then Shows ("""name"": ""beta"""),
+                 "the inputs missing were not each an entry: " & Last_Output);
+         Ada.Environment_Variables.Clear ("MODEL_RUNNER_CONFIG");
+      exception
+         when others =>
+            Ada.Environment_Variables.Clear ("MODEL_RUNNER_CONFIG");
+            raise;
+      end;
+      if Ada.Directories.Exists (Project) then
+         Ada.Directories.Delete_Tree (Project);
+      end if;
+
       Assert (Command ("init|ada-cli|--set|project_name=demo") = 0, "no project was made");
       Assert (Command ("task|new|Lexer|--set|kind=analysis") = 0
               and then Command ("task|new|Parser|--set|kind=implementation|--set|component=demo") = 0

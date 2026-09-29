@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A task split while a candidate waits on its parts once accepted,** as
+  one split after acceptance does, unless its kind coordinates.
+- **`init --format json` gives each missing input an entry of its own.**
+- **`/req show ID`, `/task TASK-X`**, and an action `/task` does not have
+  is said rather than taken for `derive`.
+- **Messages say what happened:** `/req move` says the state it moved
+  from; `task audit` keeps the `REQ-`/`DEC-` of what applied; a stopped
+  task's reason gives the condition's code and what it names, not the name
+  of an enumeration.
+
 - **Task events are about the task:** a move's event names `TASK-X`, not
   its state record.
 - **`repo sym` lists every declaration** of an overloaded name.
