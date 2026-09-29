@@ -133,6 +133,26 @@ package body Model_Runner.CLI.Tasks is
                   end if;
                end;
             end loop;
+
+            --  Or written after list without --set, as the session takes
+            --  them: list kind=bugfix state=ready.
+            declare
+               Start : Natural := Argument'First;
+            begin
+               for Index in Argument'First .. Argument'Last + 1 loop
+                  if Index > Argument'Last or else Argument (Index) = ' ' then
+                     declare
+                        Pair : constant String := Argument (Start .. Index - 1);
+                        Cut  : constant Natural := Ada.Strings.Fixed.Index (Pair, "=");
+                     begin
+                        if Cut > Pair'First and then Pair (Pair'First .. Cut - 1) = Name then
+                           return Pair (Cut + 1 .. Pair'Last);
+                        end if;
+                     end;
+                     Start := Index + 1;
+                  end if;
+               end loop;
+            end;
             return "";
          end Wanted;
       begin

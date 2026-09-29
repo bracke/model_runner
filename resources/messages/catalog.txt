@@ -177,7 +177,7 @@ en.help.repo.verbose =   --verbose               report progress and detail on s
 en.help.repo.locale =   --locale NAME           locale for program messages
 en.help.repo.color =   --color=MODE            colour output: {value}
 en.help.work.usage = Usage: model_runner work [TASK] [options]
-en.help.work.summary = Run one ready task: an agent holds it in a new generation, its context is built and kept, the model call recorded, and what the agent answers is held to the work contract. The files show what changed; the task's verification runs, and it completes through its gates or ends blocked or failed with why. The agent is --set model=PATH, run as this program's agent with no shell, network or delegation, or the configuration's scalar work.agent command, with ${prompt} for its context's file. Without a task named, a terminal chooses one.
+en.help.work.summary = Run one ready task: an agent holds it in a new generation, its context is built and kept, the model call recorded, and what the agent answers is held to the work contract. The files show what changed; the task's verification runs, and it completes through its gates or ends blocked or failed with why. The agent is --set model=PATH, run as this program's agent with no shell, network or delegation, or the configuration's scalar work.agent command, with $PROMPT for its context's file. Without a task named, a terminal chooses one.
 en.help.work.options = Options:
 en.help.work.set =   --set NAME=VALUE        model=PATH, steps=N or profile=ID or all=yes; repeatable
 en.help.work.directory =   --directory DIR         the project in DIR rather than the current directory
@@ -943,7 +943,7 @@ da.help.repo.verbose =   --verbose               vis status og detaljer på stan
 da.help.repo.locale =   --locale NAVN           sprog for programmets beskeder
 da.help.repo.color =   --color=TILSTAND        farvet output: {value}
 da.help.work.usage = Brug: model_runner work [OPGAVE] [tilvalg]
-da.help.work.summary = Kør en klar opgave: en agent holder den i en ny generation, dens kontekst bygges og gemmes, modelkaldet registreres, og agentens svar holdes op mod arbejdskontrakten. Filerne viser hvad der ændredes; opgavens verifikation kører, og den fuldføres gennem sine porte eller ender blokeret eller fejlet med hvorfor. Agenten er --set model=STI, kørt som dette programs agent uden skal, netværk eller uddelegering, eller konfigurationens scalar work.agent-kommando med ${prompt} for kontekstens fil. Uden en navngivet opgave vælger en terminal en.
+da.help.work.summary = Kør en klar opgave: en agent holder den i en ny generation, dens kontekst bygges og gemmes, modelkaldet registreres, og agentens svar holdes op mod arbejdskontrakten. Filerne viser hvad der ændredes; opgavens verifikation kører, og den fuldføres gennem sine porte eller ender blokeret eller fejlet med hvorfor. Agenten er --set model=STI, kørt som dette programs agent uden skal, netværk eller uddelegering, eller konfigurationens scalar work.agent-kommando med $PROMPT for kontekstens fil. Uden en navngivet opgave vælger en terminal en.
 da.help.work.options = Tilvalg:
 da.help.work.set =   --set NAVN=VÆRDI        model=STI, steps=N eller profile=ID or all=yes; kan gentages
 da.help.work.directory =   --directory MAPPE       projektet i MAPPE i stedet for den aktuelle mappe
@@ -1790,7 +1790,7 @@ qps.help.repo.verbose = ⟦  --verbose               ŕépóŕŧ pŕógŕéßß 
 qps.help.repo.locale = ⟦  --locale NAME           ĺóçáĺé fóŕ pŕógŕám méßßágéß⟧
 qps.help.repo.color = ⟦  --color=MODE            çóĺóúŕ óúŧpúŧ: {value}⟧
 qps.help.work.usage = ⟦Úßágé: móðéĺ_ŕúññéŕ wóŕk [TASK] [ópŧíóñß]⟧
-qps.help.work.summary = ⟦Ŕúñ óñé ŕéáðý ŧáßk: áñ ágéñŧ hóĺðß íŧ íñ á ñéw géñéŕáŧíóñ, íŧß çóñŧéxŧ íß búíĺŧ áñð képŧ, ŧhé móðéĺ çáĺĺ ŕéçóŕðéð, áñð wháŧ ŧhé ágéñŧ áñßwéŕß íß héĺð ŧó ŧhé wóŕk çóñŧŕáçŧ. Ŧhé fíĺéß ßhów wháŧ çháñgéð; ŧhé ŧáßk'ß véŕífíçáŧíóñ ŕúñß, áñð íŧ çómpĺéŧéß ŧhŕóúgh íŧß gáŧéß óŕ éñðß bĺóçkéð óŕ fáíĺéð wíŧh whý. Ŧhé ágéñŧ íß --set móðéĺ=PATH, ŕúñ áß ŧhíß pŕógŕám'ß ágéñŧ wíŧh ñó ßhéĺĺ, ñéŧwóŕk óŕ ðéĺégáŧíóñ, óŕ ŧhé çóñfígúŕáŧíóñ'ß ßçáĺáŕ wóŕk.ágéñŧ çómmáñð, wíŧh ${prompt} fóŕ íŧß çóñŧéxŧ'ß fíĺé. Wíŧhóúŧ á ŧáßk ñáméð, á ŧéŕmíñáĺ çhóóßéß óñé.⟧
+qps.help.work.summary = ⟦Ŕúñ óñé ŕéáðý ŧáßk: áñ ágéñŧ hóĺðß íŧ íñ á ñéw géñéŕáŧíóñ, íŧß çóñŧéxŧ íß búíĺŧ áñð képŧ, ŧhé móðéĺ çáĺĺ ŕéçóŕðéð, áñð wháŧ ŧhé ágéñŧ áñßwéŕß íß héĺð ŧó ŧhé wóŕk çóñŧŕáçŧ. Ŧhé fíĺéß ßhów wháŧ çháñgéð; ŧhé ŧáßk'ß véŕífíçáŧíóñ ŕúñß, áñð íŧ çómpĺéŧéß ŧhŕóúgh íŧß gáŧéß óŕ éñðß bĺóçkéð óŕ fáíĺéð wíŧh whý. Ŧhé ágéñŧ íß --set móðéĺ=PATH, ŕúñ áß ŧhíß pŕógŕám'ß ágéñŧ wíŧh ñó ßhéĺĺ, ñéŧwóŕk óŕ ðéĺégáŧíóñ, óŕ ŧhé çóñfígúŕáŧíóñ'ß ßçáĺáŕ wóŕk.ágéñŧ çómmáñð, wíŧh $PROMPT fóŕ íŧß çóñŧéxŧ'ß fíĺé. Wíŧhóúŧ á ŧáßk ñáméð, á ŧéŕmíñáĺ çhóóßéß óñé.⟧
 qps.help.work.options = ⟦Ópŧíóñß:⟧
 qps.help.work.set = ⟦  --set NAME=VALUE        móðéĺ=PATH, ßŧépß=Ñ óŕ pŕófíĺé=ID; ŕépéáŧábĺé⟧
 qps.help.work.directory = ⟦  --directory DIR         ŧhé pŕójéçŧ íñ DIR ŕáŧhéŕ ŧháñ ŧhé çúŕŕéñŧ ðíŕéçŧóŕý⟧

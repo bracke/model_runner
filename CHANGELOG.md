@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Commands take what a person types.** `/trace REQ-X` and `/trace
+  src/a.adb` find the requirement at any revision and the file by its path;
+  `/reconfigure NAME=a value of words` takes the words up to the next
+  NAME= without quotes; `task list kind=bugfix` filters without `--set`;
+  an ambiguous `work` selector is an invalid value naming its matches as a
+  field of their own; the agent command's prompt marker is `$PROMPT` (or
+  `${prompt}`, which a template may now write); and `help work` renders.
 - **Every command that opens a project recovers it first:** `task` and
   `repo` from the shell too, not only the session and `work`.
 - **A project that lists no components is one component,** the project

@@ -1011,16 +1011,34 @@ package body Model_Runner.CLI.Project_Commands is
          Read     : E.Error_Info;
          Revision : Natural;
       begin
-         for Index in 2 .. Natural (All_Words.Length) loop
-            declare
-               Part  : constant String := All_Words (Index);
-               Equal : constant Natural := Ada.Strings.Fixed.Index (Part, "=");
-            begin
-               if Is_Setting (Part) then
-                  Changes.Include (Part (Part'First .. Equal - 1), Part (Equal + 1 .. Part'Last));
-               end if;
-            end;
-         end loop;
+         --  NAME=VALUE, the value running on to the next NAME=: a value of
+         --  several words needs no quotes.
+         declare
+            Name  : Unbounded_String;
+            Value : Unbounded_String;
+         begin
+            for Index in 2 .. Natural (All_Words.Length) loop
+               declare
+                  Part  : constant String := All_Words (Index);
+                  Equal : constant Natural := Ada.Strings.Fixed.Index (Part, "=");
+               begin
+                  if Is_Setting (Part)
+                    and then Ada.Strings.Fixed.Index (Part (Part'First .. Equal - 1), ".") > 0
+                  then
+                     if Name /= Null_Unbounded_String then
+                        Changes.Include (To_String (Name), To_String (Value));
+                     end if;
+                     Name := To_Unbounded_String (Part (Part'First .. Equal - 1));
+                     Value := To_Unbounded_String (Part (Equal + 1 .. Part'Last));
+                  elsif Name /= Null_Unbounded_String then
+                     Append (Value, " " & Part);
+                  end if;
+               end;
+            end loop;
+            if Name /= Null_Unbounded_String then
+               Changes.Include (To_String (Name), To_String (Value));
+            end if;
+         end;
 
          Cf.Plan_Change (Store, Changes, Planned, Read);
          if E.Is_Error (Read) then

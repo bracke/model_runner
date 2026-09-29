@@ -258,10 +258,22 @@ package body Model_Runner.Framework.Traceability is
 
    function Touching (From : Graph; Node : String) return Name_Lists.Vector is
       Result : Name_Lists.Vector;
+
+      --  A node as a person names it: the node itself, a requirement or
+      --  another entity by its identifier at any revision (REQ-X for
+      --  REQ-X@3), a file by its path (src/a.adb for file:src/a.adb), or a
+      --  symbol by its name.
+      function Names (Held : String) return Boolean
+      is (Held = Node
+          or else Held = "file:" & Node
+          or else Held = "symbol:" & Node
+          or else Held = "unit:" & Node
+          or else (Held'Length > Node'Length
+                   and then Held (Held'First .. Held'First + Node'Length) = Node & "@"));
    begin
       for Index in 1 .. Natural (From.Edges.Length) loop
-         if To_String (From.Edges (Index).From) = Node
-           or else To_String (From.Edges (Index).To) = Node
+         if Names (To_String (From.Edges (Index).From))
+           or else Names (To_String (From.Edges (Index).To))
          then
             Result.Append (Image (Index));
          end if;

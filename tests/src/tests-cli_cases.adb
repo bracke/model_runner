@@ -1577,6 +1577,9 @@ package body Tests.CLI_Cases is
       Assert (Command ("task|list|--set|kind=implementation") = 0
               and then Shows ("TASK-DEMO-001") and then not Shows ("Lexer"),
               "task list did not narrow by kind: " & Last_Output);
+      Assert (Command ("task|list|kind=implementation") = 0
+              and then Shows ("TASK-DEMO-001") and then not Shows ("Lexer"),
+              "task list did not narrow by a filter given without --set: " & Last_Output);
 
       --  Least privilege by kind, and work that changes code done only
       --  when it changed something.

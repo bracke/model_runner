@@ -1036,6 +1036,26 @@ package body Tests.Framework_Cases is
                 & "baseline tests = yes" & LF, "memory", Value, Status);
       Assert (Status.Code = E.Framework_Template_Invalid,
               "a baseline of neither the project nor its language was declared");
+
+      --  The agent command's prompt marker is no input, and passes through.
+      declare
+         Holding : Tp.Registry;
+         Made    : Tp.Composition;
+         Planned : Cf.Plan;
+         Given   : Cf.Value_Maps.Map;
+      begin
+         Tp.Add (Holding, Parsed ("template = agent" & LF & "name = A" & LF & "version = 1" & LF
+                                  & "scalar work.agent = my-agent ${prompt}" & LF));
+         Tp.Compose (Holding, "agent", Made, Status);
+         Cf.Prepare (Made, Fresh ("agent-marker"), Given, Planned, Status);
+         Assert (E.Is_Ok (Status)
+                 and then R.Get (Planned.Configuration, "scalar.work.agent") = "my-agent ${prompt}",
+                 "a template's agent command lost its prompt marker: " & Code_Of (Status));
+      end;
+      Tp.Parse ("template = x" & LF & "name = X" & LF & "version = 1" & LF
+                & "baseline tests = yes" & LF, "memory", Value, Status);
+      Assert (Status.Code = E.Framework_Template_Invalid,
+              "a baseline of neither the project nor its language was declared");
    end Template_Conflicts_Are_Refused;
 
    --  Inputs are given, found or defaulted, checked, and asked for by name
@@ -4999,6 +5019,9 @@ package body Tests.Framework_Cases is
       Assert (Tc.Edge_Count (Graph) > 0
               and then not Tc.Touching (Graph, To_String (Req) & "@1").Is_Empty,
               "the traceability graph does not reach the requirement");
+      Assert (not Tc.Touching (Graph, To_String (Req)).Is_Empty
+              and then not Tc.Touching (Graph, "src/parser.ads").Is_Empty,
+              "a requirement or a file named as a person names it was not traced");
       declare
          One : constant Tc.Edge :=
            Tc.Edge_At (Graph, Natural'Value

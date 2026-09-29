@@ -317,7 +317,13 @@ package body Model_Runner.Framework.Configurations is
                   declare
                      Name : constant String := Text (Index + 2 .. Close - 1);
                   begin
-                     if Secrets.Contains (Name) then
+                     if Name = "prompt" then
+                        --  Not an input: the agent command's marker for its
+                        --  prompt file, filled in when the command runs.
+                        Append (Output, "${prompt}");
+                        Index := Close + 1;
+                        goto Next_Character;
+                     elsif Secrets.Contains (Name) then
                         Invalid ("the secret " & Name
                                  & " would be written into the configuration");
                         return "";
@@ -334,6 +340,7 @@ package body Model_Runner.Framework.Configurations is
                Append (Output, Text (Index));
                Index := Index + 1;
             end if;
+            <<Next_Character>>
          end loop;
          return To_String (Output);
       end Substitute;

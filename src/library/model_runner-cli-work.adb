@@ -252,11 +252,17 @@ package body Model_Runner.CLI.Work is
         Ada.Directories.Containing_Directory (S.Root (Self.Store.all));
       Ran     : Model_Runner.Framework.Execution.Outcome;
       Written : constant String := To_String (Self.Command);
-      Marker  : constant Natural := Ada.Strings.Fixed.Index (Written, "${prompt}");
+      --  Where the command names its prompt file: $PROMPT, or ${prompt}.
+      Braced  : constant Natural := Ada.Strings.Fixed.Index (Written, "${prompt}");
+      Plain   : constant Natural := Ada.Strings.Fixed.Index (Written, "$PROMPT");
       Command : constant String :=
-        (if Marker = 0 then Written
-         else Written (Written'First .. Marker - 1) & Prompt_Path
-              & Written (Marker + 9 .. Written'Last));
+        (if Braced > 0
+         then Written (Written'First .. Braced - 1) & Prompt_Path
+              & Written (Braced + 9 .. Written'Last)
+         elsif Plain > 0
+         then Written (Written'First .. Plain - 1) & Prompt_Path
+              & Written (Plain + 7 .. Written'Last)
+         else Written);
    begin
       --  The command is the agent: off the network unless it may use it.
       declare
@@ -412,8 +418,12 @@ package body Model_Runner.CLI.Work is
             elsif Natural (Matching.Length) = 1 then
                Chosen := To_Unbounded_String (Matching.First_Element);
             elsif not Model_Runner.CLI.Choosers.Is_Available (Screen) then
-               Outcome := E.Make (E.Framework_Input_Missing);
-               E.Add_Text (Outcome, "name", "one task: " & To_String (Found) & " all match");
+               --  Which it could be, as a value of its own for a program.
+               Outcome := E.Make (E.Framework_Input_Invalid);
+               E.Add_Text (Outcome, "name", "the task to work on");
+               E.Add_Text (Outcome, "value", To_String (Chosen));
+               E.Add_Text (Outcome, "detail", "more than one matches: " & To_String (Found));
+               E.Add_Text (Outcome, "matches", To_String (Found));
                Fail (Outcome);
                S.Close (Store);
                return;
