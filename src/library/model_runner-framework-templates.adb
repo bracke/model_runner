@@ -714,53 +714,32 @@ package body Model_Runner.Framework.Templates is
       end Conflict;
 
       --  Fold one template's declarations into what is composed so far.
+      --  Every scalar or map value declared, from every template, decided
+      --  once all are in: what one template says is not settled by which
+      --  was folded in first.
+      Keyed_All : Setting_Vectors.Vector;
+
       procedure Merge (Next : Template) is
       begin
          for Given of Next.Settings loop
-            declare
-               Held : Natural := 0;
-            begin
-               for Index in 1 .. Natural (Result.Settings.Length) loop
-                  declare
-                     Other : Setting renames Result.Settings (Index);
-                  begin
-                     if Other.Kind = Given.Kind and then Other.Key = Given.Key
-                       and then (Keyed (Given.Kind)
-                                 or else Other.Value = Given.Value)
-                     then
-                        Held := Index;
-                        exit;
-                     end if;
-                  end;
-               end loop;
-
-               if Held = 0 then
-                  Result.Settings.Append (Given);
-               elsif not Keyed (Given.Kind) then
+            if Keyed (Given.Kind) then
+               Keyed_All.Append (Given);
+            else
+               declare
+                  Held : Boolean := False;
+               begin
                   --  A set's or a list's value it already has: kept where
                   --  it was first.
-                  null;
-               elsif Result.Settings (Held).Value = Given.Value then
-                  null;
-
-               --  Whichever comes first, the one that says override wins;
-               --  two that both say it, or neither, disagree.
-               elsif Given.Override /= Result.Settings (Held).Override then
-                  if Given.Override then
-                     Result.Settings (Held) := Given;
+                  for Other of Result.Settings loop
+                     Held := Held
+                       or else (Other.Kind = Given.Kind and then Other.Key = Given.Key
+                                and then Other.Value = Given.Value);
+                  end loop;
+                  if not Held then
+                     Result.Settings.Append (Given);
                   end if;
-               else
-                  Conflict
-                    (Kind_Word (Given.Kind) & " " & To_String (Given.Key),
-                     To_String (Result.Settings (Held).From) & " gives "
-                     & To_String (Result.Settings (Held).Value) & ", "
-                     & To_String (Given.From) & " gives "
-                     & To_String (Given.Value)
-                     & (if Given.Override then ", and both say override"
-                        else ", and neither says override"));
-                  return;
-               end if;
-            end;
+               end;
+            end if;
          end loop;
 
          for Given of Next.Inputs loop
@@ -830,6 +809,53 @@ package body Model_Runner.Framework.Templates is
       if E.Is_Error (Status) then
          return;
       end if;
+
+      --  Each key's value: the one value all say, or the one an override
+      --  says; two that disagree with no override, or two overrides that
+      --  disagree, are a conflict -- in whatever order they came.
+      declare
+         Done : Name_Lists.Vector;
+      begin
+         for First of Keyed_All loop
+            declare
+               Key_Of    : constant String :=
+                 Kind_Word (First.Kind) & " " & To_String (First.Key);
+               Winner    : Setting := First;
+               Values    : Name_Lists.Vector;
+               Overrides : Name_Lists.Vector;
+               Said      : Unbounded_String;
+            begin
+               if not Done.Contains (Key_Of) then
+                  Done.Append (Key_Of);
+                  for Other of Keyed_All loop
+                     if Other.Kind = First.Kind and then Other.Key = First.Key then
+                        Append (Said, (if Said = Null_Unbounded_String then "" else ", ")
+                                      & To_String (Other.From) & " gives "
+                                      & To_String (Other.Value)
+                                      & (if Other.Override then " (override)" else ""));
+                        if not Values.Contains (To_String (Other.Value)) then
+                           Values.Append (To_String (Other.Value));
+                        end if;
+                        if Other.Override then
+                           Winner := Other;
+                           if not Overrides.Contains (To_String (Other.Value)) then
+                              Overrides.Append (To_String (Other.Value));
+                           end if;
+                        end if;
+                     end if;
+                  end loop;
+                  if Natural (Overrides.Length) > 1 then
+                     Conflict (Key_Of, To_String (Said) & ", and the overrides disagree");
+                     return;
+                  elsif Overrides.Is_Empty and then Natural (Values.Length) > 1 then
+                     Conflict (Key_Of, To_String (Said) & ", and none says override");
+                     return;
+                  end if;
+                  Result.Settings.Append (Winner);
+               end if;
+            end;
+         end loop;
+      end;
 
       Result.Root := From.Templates (Position (From, Id));
       Result.Fingerprint := To_Unbounded_String (Fingerprint (To_String (Prints)));

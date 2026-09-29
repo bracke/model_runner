@@ -1053,6 +1053,17 @@ package body Tests.Framework_Cases is
          Tp.Compose (Holding, "rivals", Made, Status);
          Assert (Status.Code = E.Framework_Template_Conflict,
                  "two overrides that disagree composed: " & Code_Of (Status));
+         --  Two that disagree, and an override after them: the override is
+         --  what they compose to, whatever order they came in.
+         Tp.Add (Holding, Parsed ("template = third" & LF & "name = T" & LF
+                                  & "description = D" & LF & "version = 1" & LF
+                                  & "scalar k = middling" & LF));
+         Tp.Add (Holding, Parsed ("template = trio" & LF & "name = T3" & LF
+                                  & "description = D" & LF & "version = 1" & LF
+                                  & "includes = second, third, first" & LF));
+         Tp.Compose (Holding, "trio", Made, Status);
+         Assert (E.Is_Ok (Status), "an override after two that disagree was a conflict: "
+                 & Code_Of (Status));
       end;
 
       Tp.Add (Registry, Parsed ("template = loop-a" & LF & "name = A" & LF & "description = D" & LF

@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Template composition decides each value once every template is in:**
+  the one value all give, or the one an override gives, whatever order
+  they were included in; values that disagree with no override, or
+  overrides that disagree, are a conflict.
+- **`init` writes the project's files before its state,** so a run
+  stopped part way leaves files and no state -- which init makes again --
+  never state with files missing.
+
 - **One writer in the project tree at a time:** work that is not isolated
   holds the project (`project.write`) as well as its component; a task
   waits while another agent writes there, and dispatch starts one.

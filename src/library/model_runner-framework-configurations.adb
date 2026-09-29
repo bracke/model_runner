@@ -645,48 +645,9 @@ package body Model_Runner.Framework.Configurations is
          return;
       end if;
 
-      Stores.Put (Change, Config_Area, Current_Name, Planned.Configuration);
-      Stores.Put
-        (Change, Config_Area, First_History,
-         Copy (Planned.Configuration, History_Entity & "000001"));
-
-      for Position in Planned.Template_Facts.Iterate loop
-         if not Planned.Discovered_Facts.Contains (Value_Maps.Key (Position))
-         then
-            Add_Fact
-              (Value_Maps.Key (Position), Value_Maps.Element (Position),
-               Facts.Template, Facts.Authoritative);
-         end if;
-      end loop;
-      for Position in Planned.Discovered_Facts.Iterate loop
-         Add_Fact
-           (Value_Maps.Key (Position), Value_Maps.Element (Position),
-            Facts.Build_Metadata, Facts.Certain);
-      end loop;
-      if E.Is_Error (Status) then
-         return;
-      end if;
-
-      declare
-         Event : Unbounded_String;
-      begin
-         Events.Emit
-           (Item, Change, Events.Project_Initialized, "PROJECT",
-            Records.Get (Planned.Configuration, "template_id"), Event, Status);
-      end;
-      if E.Is_Error (Status) then
-         return;
-      end if;
-
-      Stores.Create
-        (Item, Project_Directory, To_String (Planned.Project_Name), Status,
-         Initial => Change);
-      if E.Is_Error (Status) then
-         return;
-      end if;
-
-      --  The project's own files, after its state: the state says what the
-      --  project is whether or not these could all be made, and a file the
+      --  The project's own files, before its state: a project stopped part
+      --  way is one with files and no state, which init makes again -- not
+      --  one with state and files missing, which it refuses. A file the
       --  project already has is its own and is left as it is.
       for Directory of Planned.Directories loop
          declare
@@ -727,6 +688,47 @@ package body Model_Runner.Framework.Configurations is
             end if;
          end;
       end loop;
+
+      Stores.Put (Change, Config_Area, Current_Name, Planned.Configuration);
+      Stores.Put
+        (Change, Config_Area, First_History,
+         Copy (Planned.Configuration, History_Entity & "000001"));
+
+      for Position in Planned.Template_Facts.Iterate loop
+         if not Planned.Discovered_Facts.Contains (Value_Maps.Key (Position))
+         then
+            Add_Fact
+              (Value_Maps.Key (Position), Value_Maps.Element (Position),
+               Facts.Template, Facts.Authoritative);
+         end if;
+      end loop;
+      for Position in Planned.Discovered_Facts.Iterate loop
+         Add_Fact
+           (Value_Maps.Key (Position), Value_Maps.Element (Position),
+            Facts.Build_Metadata, Facts.Certain);
+      end loop;
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      declare
+         Event : Unbounded_String;
+      begin
+         Events.Emit
+           (Item, Change, Events.Project_Initialized, "PROJECT",
+            Records.Get (Planned.Configuration, "template_id"), Event, Status);
+      end;
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
+      Stores.Create
+        (Item, Project_Directory, To_String (Planned.Project_Name), Status,
+         Initial => Change);
+      if E.Is_Error (Status) then
+         Undo;
+         return;
+      end if;
 
       --  The initial indexes, derived from the project as it now is -- its
       --  own files included -- so that the first session reads them rather
