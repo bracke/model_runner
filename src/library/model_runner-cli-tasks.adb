@@ -199,6 +199,10 @@ package body Model_Runner.CLI.Tasks is
          Id     : Unbounded_String;
          Offered_Optional : Boolean := False;
 
+         --  A field whose value was refused, asked for again whether or
+         --  not its kind requires it.
+         Again  : Unbounded_String;
+
          --  A condition's named value, or "".
          function Parameter_Of (Condition : E.Error_Info; Name : String) return String is
          begin
@@ -247,12 +251,16 @@ package body Model_Runner.CLI.Tasks is
                begin
                   exit when Named = "" or else not Fields.Contains (Named);
                   Fields.Exclude (Named);
+                  Again := To_Unbounded_String (Named);
                   Change := S.No_Changes;
                   Outcome := E.Make (E.Framework_Input_Missing);
                end;
             end if;
 
-            if Outcome.Code = E.Framework_Task_Kind_Unknown then
+            if Outcome.Code = E.Framework_Task_Kind_Unknown
+              or else (Outcome.Code = E.Framework_Input_Missing
+                       and then not Fields.Contains ("kind"))
+            then
                declare
                   Known : constant Model_Runner.Framework.Name_Lists.Vector :=
                     Tk.Kinds (Store);
@@ -282,11 +290,14 @@ package body Model_Runner.CLI.Tasks is
                   Kind   : constant String :=
                     (if Fields.Contains ("kind") then Fields ("kind") else "");
 
-                  --  The choices a choice field offers, as Ask takes them.
+                  --  The choices a choice field offers, as Ask takes them;
+                  --  a component is one of the project's.
                   function Choices (Field : String) return String is
                      Schema : constant String := Tk.Field_Schema (Store, Field);
                   begin
-                     if Schema'Length > 7 and then Schema (Schema'First .. Schema'First + 6) = "choice "
+                     if Field = "component" then
+                        return Joined (Tk.Components (Store));
+                     elsif Schema'Length > 7 and then Schema (Schema'First .. Schema'First + 6) = "choice "
                      then
                         return Ada.Strings.Fixed.Translate
                           (Schema (Schema'First + 7 .. Schema'Last),
@@ -296,6 +307,11 @@ package body Model_Runner.CLI.Tasks is
                   end Choices;
                begin
                   Wanted.Prepend ("title");
+                  if Again /= Null_Unbounded_String and then not Wanted.Contains (To_String (Again))
+                  then
+                     Wanted.Append (To_String (Again));
+                  end if;
+                  Again := Null_Unbounded_String;
                   for Field of Wanted loop
                      if not Fields.Contains (Field)
                        or else Ada.Strings.Fixed.Trim (Fields (Field), Ada.Strings.Both) = ""

@@ -4660,6 +4660,7 @@ package body Tests.Framework_Cases is
          Events : constant Model_Runner.Framework.Events.Event_List :=
            Model_Runner.Framework.Events.Since (Store, 0);
          Said   : Boolean := False;
+         Moved  : Boolean := False;
       begin
          S.Read (Store, Model_Runner.Framework.Runtime_Area, "agent." & To_String (Done.Agent_Id),
                  Agent, Status);
@@ -4671,7 +4672,14 @@ package body Tests.Framework_Cases is
                          = Model_Runner.Framework.Events.Agent_Completed
                        and then To_String (Model_Runner.Framework.Events.Element
                                              (Events, Index).Subject) = To_String (Done.Agent_Id));
+            --  A task's move is about the task, not its state record.
+            Moved := Moved
+              or else (Model_Runner.Framework.Events.Element (Events, Index).Kind
+                         = Model_Runner.Framework.Events.Task_Completed
+                       and then To_String (Model_Runner.Framework.Events.Element
+                                             (Events, Index).Subject) = To_String (Ids (1)));
          end loop;
+         Assert (Moved, "a task's completion was not an event about the task");
          Assert (R.Get (Agent, "generation") = R.Get (State, "generation")
                  and then R.Get (Agent, "state") = "completed"
                  and then R.Get (Agent, "result") /= "" and then Said,
@@ -4689,6 +4697,14 @@ package body Tests.Framework_Cases is
       Assert (To_String (Done.Final_State) = "failed" and then Done.Changed_Files.Is_Empty,
               "an agent's claim was taken over the failing check, or a change"
               & " it did not make was put on it: " & To_String (Done.Final_State));
+      declare
+         View : R.Item;
+      begin
+         Tk.Effective (Store, To_String (Ids (2)), View, Status);
+         Assert (R.Get (View, "runtime.current_failure") = To_String (Done.Reason)
+                 and then R.Get (View, "runtime.current_failure") /= "",
+                 "the effective task does not say why it failed");
+      end;
 
       Wk.Execute (Store, To_String (Ids (3)),
                   Scripted_Agent'(File => Null_Unbounded_String,
@@ -6262,14 +6278,28 @@ package body Tests.Framework_Cases is
       Assert (E.Is_Ok (Status), "a listed component was refused: " & Code_Of (Status));
       Tk.Create (Store, Change, Fields ("Other", "implementation", "component", "nowhere"),
                  "user", "", Id, Status);
-      Assert (Status.Code = E.Framework_Not_Found, "an unlisted component was taken");
+      Change := S.No_Changes;
+      Tk.Create (Store, Change, Fields ("Kindless", ""), "user", "", Id, Status);
+      Assert (Status.Code = E.Framework_Input_Missing
+              and then Ada.Strings.Fixed.Index
+                         (Model_Runner.Text.To_String (Status.Parameters (1).Text_Value),
+                          "kind (") = 1,
+              "a missing kind did not say which it may be");
+      Change := S.No_Changes;
+      Tk.Create (Store, Change, Fields ("Other", "implementation", "component", "nowhere"),
+                 "user", "", Id, Status);
+      Assert (Status.Code = E.Framework_Schema_Violation
+              and then Tk.Components (Store).Contains ("lexer")
+              and then not Tk.Components (Store).Contains ("nowhere"),
+              "an unlisted component was taken");
       Change := S.No_Changes;
       Tk.Create (Store, Change, Fields ("Lex again", "implementation", "component", "lexer"),
                  "user", "", Id, Status);
       S.Commit (Store, Change, Status);
       Revised.Include ("component", "nowhere");
       Tk.Revise (Store, Change, To_String (Id), Revised, Status);
-      Assert (Status.Code = E.Framework_Not_Found, "a task was revised to an unlisted component");
+      Assert (Status.Code = E.Framework_Schema_Violation,
+              "a task was revised to an unlisted component");
       Change := S.No_Changes;
 
       --  Checks, evidence, events.

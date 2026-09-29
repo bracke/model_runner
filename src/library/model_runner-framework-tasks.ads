@@ -296,6 +296,13 @@ package Model_Runner.Framework.Tasks is
       On     : String;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  The project's components: those it lists, or, listing none, the
+   --  project itself by its name.
+   --
+   --  @param Item The store.
+   --  @return Their names; none when the project has no name either.
+   function Components (Item : Stores.Store) return Name_Lists.Vector;
+
    --  The lease an agent writing a component in the project itself holds
    --  on it, so that no second agent writes it at the same time.
    --

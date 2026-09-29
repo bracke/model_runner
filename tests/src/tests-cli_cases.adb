@@ -1979,7 +1979,8 @@ package body Tests.CLI_Cases is
       Ada.Directories.Create_Path (Project & "/src");
       Write (Project & "/src/greet.ads",
              "package Greet is" & ASCII.LF
-             & "   procedure Hello;" & ASCII.LF & "end Greet;" & ASCII.LF);
+             & "   procedure Hello;" & ASCII.LF
+             & "   procedure Hello (Name : String);" & ASCII.LF & "end Greet;" & ASCII.LF);
       Write (Project & "/src/main.adb",
              "with Greet;" & ASCII.LF & "procedure Main is" & ASCII.LF
              & "begin" & ASCII.LF & "   Greet.Hello;" & ASCII.LF
@@ -1996,6 +1997,8 @@ package body Tests.CLI_Cases is
                          (Last_Output, "Greet.Hello  procedure  src/greet.ads:2")
                        > 0,
               "a symbol was not found where it is declared: " & Last_Output);
+      Assert (Ada.Strings.Fixed.Index (Last_Output, "src/greet.ads:3") > 0,
+              "an overload was not listed beside the first: " & Last_Output);
       Assert (Repo ("refs", "Hello") = 0
               and then Ada.Strings.Fixed.Index (Last_Output, "src/main.adb:4") > 0,
               "a use of a symbol was not found");

@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Task events are about the task:** a move's event names `TASK-X`, not
+  its state record.
+- **`repo sym` lists every declaration** of an overloaded name.
+- **Why a task stopped is shown:** `work` ends with "the task is blocked:
+  REASON", and `task show` gives `runtime.blocking_reasons` and
+  `runtime.current_failure`.
+- **The `task new` form offers the project's components** and asks again
+  for a component or requirement the project does not have; a missing kind
+  says which kinds there are, and a missing input no longer speaks of
+  initialization.
+
 - **The project's state is the harness's.** An agent run as a process of
   its own, or a verification check, that writes under `.model_runner`
   finds it put back: the work fails naming what it touched, and the

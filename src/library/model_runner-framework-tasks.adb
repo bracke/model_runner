@@ -381,7 +381,14 @@ package body Model_Runner.Framework.Tasks is
       Id := Null_Unbounded_String;
       Status := E.Success;
 
-      if not Known.Contains (Kind) then
+      if Kind = "" then
+         --  None given is an input missing, and which it may be is said.
+         Status := E.Make (E.Framework_Input_Missing);
+         E.Add_Text (Status, "name",
+                     (if Known.Is_Empty then "kind"
+                      else "kind (" & Joined (Known, ", ") & ")"));
+         return;
+      elsif not Known.Contains (Kind) then
          Status := E.Make (E.Framework_Task_Kind_Unknown);
          E.Add_Text (Status, "name", Kind);
          E.Add_Text
@@ -446,10 +453,13 @@ package body Model_Runner.Framework.Tasks is
          end;
       end loop;
 
+      --  A requirement or a component the project does not have is a
+      --  value its field does not take: a form asks for it again.
       for Requirement of Split (Given ("requirements")) loop
          if not Stores.Exists (Item, Requirements_Area, Requirement) then
-            Status := E.Make (E.Framework_Not_Found);
-            E.Add_Text (Status, "name", Requirement);
+            Status := E.Make (E.Framework_Schema_Violation);
+            E.Add_Text (Status, "name", "requirements");
+            E.Add_Text (Status, "detail", Requirement & " is not one of the project's requirements");
             return;
          end if;
       end loop;
@@ -462,8 +472,9 @@ package body Model_Runner.Framework.Tasks is
       end loop;
 
       if Component_Problem (Item, Given ("component")) /= "" then
-         Status := E.Make (E.Framework_Not_Found);
-         E.Add_Text (Status, "name", Component_Problem (Item, Given ("component")));
+         Status := E.Make (E.Framework_Schema_Violation);
+         E.Add_Text (Status, "name", "component");
+         E.Add_Text (Status, "detail", Component_Problem (Item, Given ("component")));
          return;
       end if;
 
@@ -642,7 +653,7 @@ package body Model_Runner.Framework.Tasks is
 
       Transitions.Apply
         (Item, Change, Lifecycle_Of (Item), Tasks_Area, Id & State_Suffix, Next, Granted,
-         Event_For (Next), Status, Actor);
+         Event_For (Next), Status, Actor, Subject => Id);
       if E.Is_Error (Status) then
          return;
       end if;
@@ -949,7 +960,9 @@ package body Model_Runner.Framework.Tasks is
          Trim (Natural'Image (Records.Revision (Defined))));
       Records.Set (Value, "runtime.state", Records.Get (State, "state"));
       Records.Set (Value, "runtime.generation", Records.Get (State, "generation"));
-      for Field of Name_Lists.Vector'(["moved_by", "accepted_by", "rejected_by"]) loop
+      for Field of Name_Lists.Vector'
+        (["moved_by", "accepted_by", "rejected_by", "blocking_reasons", "current_failure"])
+      loop
          if Records.Get (State, Field) /= "" then
             Records.Set (Value, "runtime." & Field, Records.Get (State, Field));
          end if;
@@ -1374,7 +1387,7 @@ package body Model_Runner.Framework.Tasks is
    -- Component_Problem --
    -----------------------
 
-   function Component_Problem (Item : Stores.Store; Component : String) return String is
+   function Components (Item : Stores.Store) return Name_Lists.Vector is
       Settings : Records.Item;
       Status   : E.Error_Info;
    begin
@@ -1387,6 +1400,15 @@ package body Model_Runner.Framework.Tasks is
          if Listed.Is_Empty and then Records.Get (Settings, "input.project_name") /= "" then
             Listed.Append (Records.Get (Settings, "input.project_name"));
          end if;
+         return Listed;
+      end;
+   end Components;
+
+   function Component_Problem (Item : Stores.Store; Component : String) return String is
+   begin
+      declare
+         Listed : constant Name_Lists.Vector := Components (Item);
+      begin
          if Component = "" or else Listed.Is_Empty or else Listed.Contains (Component) then
             return "";
          end if;
@@ -1506,14 +1528,17 @@ package body Model_Runner.Framework.Tasks is
                      end if;
                   end;
                elsif Name = "component" and then Component_Problem (Item, Given) /= "" then
-                  Status := E.Make (E.Framework_Not_Found);
-                  E.Add_Text (Status, "name", Component_Problem (Item, Given));
+                  Status := E.Make (E.Framework_Schema_Violation);
+                  E.Add_Text (Status, "name", "component");
+                  E.Add_Text (Status, "detail", Component_Problem (Item, Given));
                   return;
                elsif Name = "requirements" then
                   for Requirement of Split (Given) loop
                      if not Stores.Exists (Item, Requirements_Area, Requirement) then
-                        Status := E.Make (E.Framework_Not_Found);
-                        E.Add_Text (Status, "name", Requirement);
+                        Status := E.Make (E.Framework_Schema_Violation);
+                        E.Add_Text (Status, "name", "requirements");
+                        E.Add_Text (Status, "detail",
+                                    Requirement & " is not one of the project's requirements");
                         return;
                      end if;
                   end loop;

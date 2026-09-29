@@ -18,6 +18,11 @@ package body Library_Surface is
       --  that wants only the places asks.
       new String'("References_To"),
 
+      --  One symbol by its full name, the first declared. The sym command
+      --  lists every declaration of an overloaded name; a caller that wants
+      --  the one asks.
+      new String'("Symbol_Of"),
+
       --  The project state's operation its commands do not reach yet:
       --  blocking a parent on children made some other way than by a
       --  split, which blocks it as it makes them. Until something does,

@@ -104,6 +104,9 @@ package Model_Runner.Framework.Transitions is
    --  @param Actor Who made the move -- User, a policy's name, an agent --
    --    kept as the record's moved_by, as NEXT_by for an acceptance or a
    --    rejection, and in the event; empty when nobody is to be named.
+   --  @param Subject What the event is about, where that is not the
+   --    record's entity -- a task, whose state record is moved; empty for
+   --    the record's.
    procedure Apply
      (Item    : Stores.Store;
       Change  : in out Stores.Transaction;
@@ -114,7 +117,8 @@ package Model_Runner.Framework.Transitions is
       Granted : Permissions;
       Kind    : Events.Event_Kind;
       Status  : out Model_Runner.Errors.Error_Info;
-      Actor   : String := "");
+      Actor   : String := "";
+      Subject : String := "");
 
    --  The person at the terminal, as an actor: user and the login name,
    --  or user alone when the host does not say.

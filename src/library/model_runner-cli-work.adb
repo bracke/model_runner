@@ -574,7 +574,16 @@ package body Model_Runner.CLI.Work is
          for Requirement of Done.Requirements loop
             Say ("cli.work.requirement", Requirement, "");
          end loop;
-         Say ("cli.work.ended", To_String (Done.Final_State), To_String (Done.Reason));
+         --  Why, where it did not complete: blocked or failed, the reason
+         --  is what a person acts on.
+         if Done.Reason = Null_Unbounded_String then
+            Say ("cli.work.ended", To_String (Done.Final_State), "");
+         else
+            Pres.Put_Message
+              (Screen, "cli.work.ended_because",
+               [Loc.Named ("name", To_String (Done.Final_State)),
+                Loc.Named ("detail", To_String (Done.Reason))]);
+         end if;
 
          exit when Remaining.Is_Empty;
          Chosen := To_Unbounded_String (Remaining.First_Element);

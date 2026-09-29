@@ -173,23 +173,28 @@ package body Model_Runner.CLI.Repo is
          declare
             Names : constant Model_Runner.Framework.Name_Lists.Vector :=
               Rp.Find_Symbols (Found, Argument);
-            Here  : Boolean;
          begin
             if Names.Is_Empty then
                Not_Found;
                return;
             end if;
+            --  Every declaration of each: an overloaded name is declared
+            --  more than once, and each is its own line.
             for Name of Names loop
-               declare
-                  Named : constant Rp.Symbol := Rp.Symbol_Of (Found, Name, Here);
-               begin
-                  Pres.Put_Message
-                    (Screen, "cli.repo.symbol",
-                     [Loc.Named ("name", Name),
-                      Loc.Named ("value", To_String (Named.Kind)),
-                      Loc.Named ("path", To_String (Named.Path) & ":"
-                                         & Image (Named.Line))]);
-               end;
+               for Index in 1 .. Rp.Symbol_Count (Found) loop
+                  declare
+                     Named : constant Rp.Symbol := Rp.Symbol_At (Found, Index);
+                  begin
+                     if To_String (Named.Name) = Name then
+                        Pres.Put_Message
+                          (Screen, "cli.repo.symbol",
+                           [Loc.Named ("name", Name),
+                            Loc.Named ("value", To_String (Named.Kind)),
+                            Loc.Named ("path", To_String (Named.Path) & ":"
+                                               & Image (Named.Line))]);
+                     end if;
+                  end;
+               end loop;
             end loop;
          end;
 

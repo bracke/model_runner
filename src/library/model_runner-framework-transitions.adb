@@ -164,7 +164,8 @@ package body Model_Runner.Framework.Transitions is
       Granted : Permissions;
       Kind    : Events.Event_Kind;
       Status  : out Model_Runner.Errors.Error_Info;
-      Actor   : String := "")
+      Actor   : String := "";
+      Subject : String := "")
    is
       Value  : Records.Item;
       Staged : Boolean;
@@ -203,7 +204,7 @@ package body Model_Runner.Framework.Transitions is
          end if;
          Stores.Put (Change, Where, Name, Value);
          Events.Emit
-           (Item, Change, Kind, Records.Entity_Id (Value),
+           (Item, Change, Kind, (if Subject = "" then Records.Entity_Id (Value) else Subject),
             Previous & " -> " & Next & (if Actor = "" then "" else " by " & Actor),
             Event, Status);
       end;
