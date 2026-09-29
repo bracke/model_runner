@@ -688,6 +688,11 @@ package body Model_Runner.CLI.Tasks is
            (Screen, "cli.task.moved",
             [Loc.Named ("name", First_Word),
              Loc.Named ("value", To_String (Done.Final_State))]);
+         if Done.Reason /= Null_Unbounded_String then
+            Pres.Put_Message
+              (Screen, "cli.task.field",
+               [Loc.Named ("name", "reason"), Loc.Named ("value", To_String (Done.Reason))]);
+         end if;
          if To_String (Done.Final_State) /= "complete" then
             Status := E.Exit_Input_Output;
          end if;

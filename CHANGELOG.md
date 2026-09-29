@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Nothing is left stuck in verification.** Work taken in by hand is
+  concluded as work the harness ran is: failed when its checks fail,
+  blocked when they cannot run or its gates do not hold, the reason said;
+  its verification and an integration report (the files taken in, the
+  project's revision after) are recorded and Source_Changed emitted. A
+  person may fail or block a task waiting in verification, and opening a
+  project blocks one left there with nothing to wait for.
+- **Configuration history records are entities of their own**
+  (CONFIG-REV- and the revision), so a reconfigured project no longer
+  looks inconsistent.
+- **A requirement's new meaning does not leave a second task.** A task
+  derived from an earlier meaning that has not started takes the new one
+  on; only started or finished work is followed by a new task.
+- **A part cannot wait for its own parent.** Waiting counts the children a
+  parent waits for, in `task depend` and in the cycle check.
 - **Last small gaps.** Bootstrap reads `Fact: KEY = VALUE` lines as
   discovered facts, one that does not read an issue; a template input may
   take its choices from the project (`provider = directories` or

@@ -584,10 +584,14 @@ package body Model_Runner.Framework.Tasks is
       --  A person does not make the harness's moves: work starts a task,
       --  and its checks take it to verification and completion; a task at
       --  work is stopped by cancelling it, which lets go of what it holds.
+      --  A task waiting in verification -- its work not taken in, or its
+      --  checks gone wrong -- a person may also fail or block.
       if Transitions.By_Person (Actor)
         and then (Next in "running" | "verification" | "complete"
-                  or else (Records.Get (Value, "state") in "running" | "verification"
-                           and then Next /= "cancelled"))
+                  or else (Records.Get (Value, "state") = "running"
+                           and then Next /= "cancelled")
+                  or else (Records.Get (Value, "state") = "verification"
+                           and then Next not in "cancelled" | "failed" | "blocked"))
       then
          Status := E.Make (E.Framework_Transition_Invalid);
          E.Add_Text (Status, "name", Id);
@@ -1149,8 +1153,46 @@ package body Model_Runner.Framework.Tasks is
                         Id     : Unbounded_String;
                         Value  : Records.Item;
                         Staged : Boolean;
+                        --  A task already derived from an earlier meaning of
+                        --  it that nobody has started: the new meaning is its
+                        --  work now, not another task beside it.
+                        Earlier : Unbounded_String;
                      begin
                         if not Done.Contains (Key) then
+                           for Other of List (Item) loop
+                              declare
+                                 Defined : Records.Item;
+                                 Got     : E.Error_Info;
+                                 Stem    : constant String := "derive:" & Requirement & "#";
+                                 Held_Key : Unbounded_String;
+                              begin
+                                 Definition (Item, Other, Defined, Got);
+                                 Held_Key := To_Unbounded_String (Records.Get (Defined, "derivation_key"));
+                                 if E.Is_Ok (Got) and then Length (Held_Key) > Stem'Length
+                                   and then Slice (Held_Key, 1, Stem'Length) = Stem
+                                   and then State_In (Item, Change, Other)
+                                              in "candidate" | "accepted" | "blocked"
+                                 then
+                                    Earlier := To_Unbounded_String (Other);
+                                 end if;
+                              end;
+                           end loop;
+                        end if;
+                        if not Done.Contains (Key) and then Earlier /= Null_Unbounded_String then
+                           Stores.Pending (Change, Tasks_Area, To_String (Earlier), Value, Staged);
+                           if not Staged then
+                              Definition (Item, To_String (Earlier), Value, Status);
+                              if E.Is_Error (Status) then
+                                 return;
+                              end if;
+                              Records.Set_Revision (Value, Records.Revision (Value) + 1);
+                           end if;
+                           Records.Set (Value, "derivation_key", Key);
+                           Records.Set (Value, "origin",
+                                        Requirement & "@" & Trim (Natural'Image (Held.Revision)));
+                           Stores.Put (Change, Tasks_Area, To_String (Earlier), Value);
+                           Done.Append (Key);
+                        elsif not Done.Contains (Key) then
                            Fields.Include ("title", "Implement " & Requirement);
                            Fields.Include ("kind", Kind);
                            Fields.Include ("requirements", Requirement);
@@ -1217,8 +1259,23 @@ package body Model_Runner.Framework.Tasks is
       Target : String;
       Field  : String) return Boolean
    is
+      --  What a task waits for along a field; "waits" is everything it
+      --  waits for -- what it depends on, and, a parent, its children.
+      function Along (Name : String) return Name_Lists.Vector is
+      begin
+         if Field /= "waits" then
+            return Waits_For (Item, Change, Name, Field);
+         end if;
+         declare
+            Result : Name_Lists.Vector := Waits_For (Item, Change, Name, "depends_on");
+         begin
+            Result.Append (Children (Item, Name));
+            return Result;
+         end;
+      end Along;
+
       Seen  : Name_Lists.Vector;
-      Queue : Name_Lists.Vector := Waits_For (Item, Change, From, Field);
+      Queue : Name_Lists.Vector := Along (From);
    begin
       while not Queue.Is_Empty loop
          declare
@@ -1229,7 +1286,7 @@ package body Model_Runner.Framework.Tasks is
                return True;
             elsif not Seen.Contains (Next) then
                Seen.Append (Next);
-               Queue.Append (Waits_For (Item, Change, Next, Field));
+               Queue.Append (Along (Next));
             end if;
          end;
       end loop;
@@ -1262,7 +1319,9 @@ package body Model_Runner.Framework.Tasks is
          end if;
       end loop;
 
-      if On = Id or else Reaches (Item, Change, On, Id, "depends_on") then
+      --  Waiting counts the children a parent waits for too: a child that
+      --  waits for its own parent would wait for ever.
+      if On = Id or else Reaches (Item, Change, On, Id, "waits") then
          Status := E.Make (E.Framework_Dependency_Cycle);
          E.Add_Text (Status, "name", Id);
          E.Add_Text (Status, "detail", On & " already waits for it");
@@ -1516,7 +1575,7 @@ package body Model_Runner.Framework.Tasks is
       Result : Name_Lists.Vector;
    begin
       for Id of List (Item) loop
-         if Reaches (Item, Stores.No_Changes, Id, Id, "depends_on")
+         if Reaches (Item, Stores.No_Changes, Id, Id, "waits")
            or else Reaches (Item, Stores.No_Changes, Id, Id, "parent")
          then
             Result.Append (Id);

@@ -25,7 +25,9 @@ package body Model_Runner.Framework.Configurations is
    Current_Name     : constant String := "resolved";
    First_History    : constant String := "revision-000001";
    Current_Entity   : constant String := "CONFIG";
-   History_Entity   : constant String := "CONFIG-000001";
+   --  Each revision kept in the history is an entity of its own:
+   --  CONFIG-REV- and its revision.
+   History_Entity   : constant String := "CONFIG-REV-";
    Directory_Input  : constant String := "directory_name";
    Name_Input       : constant String := "project_name";
    Directories_Key  : constant String := "directories";
@@ -606,7 +608,7 @@ package body Model_Runner.Framework.Configurations is
       Stores.Put (Change, Config_Area, Current_Name, Planned.Configuration);
       Stores.Put
         (Change, Config_Area, First_History,
-         Copy (Planned.Configuration, History_Entity));
+         Copy (Planned.Configuration, History_Entity & "000001"));
 
       for Position in Planned.Template_Facts.Iterate loop
          if not Planned.Discovered_Facts.Contains (Value_Maps.Key (Position))
@@ -1104,7 +1106,7 @@ package body Model_Runner.Framework.Configurations is
       Padded : constant String :=
         [1 .. Integer'Max (0, 6 - (Number'Length - 1)) => '0']
         & Number (Number'First + 1 .. Number'Last);
-      Kept   : Records.Item := Copy (Planned.After, History_Entity);
+      Kept   : Records.Item := Copy (Planned.After, History_Entity & Padded);
    begin
       Status := E.Success;
       if Planned.Changed.Is_Empty then

@@ -2506,6 +2506,23 @@ package body Tests.Framework_Cases is
       S.Commit (Store, Change, Status);
       Tk.Derive (Store, Change, Made, Status);
       Assert (Made.Is_Empty, "a reworded requirement derived new work");
+
+      --  A new meaning while its task has not started is that task's work
+      --  now, not a second task beside it.
+      Nt.Revise (Store, Change, Nt.Requirement, To_String (Req), "Read it",
+                 "It SHALL read and then close.", "", Effect, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Derive (Store, Change, Made, Status);
+      S.Commit (Store, Change, Status);
+      declare
+         Defined : R.Item;
+      begin
+         Tk.Definition (Store, Tk.List (Store).First_Element, Defined, Status);
+         Assert (Made.Is_Empty and then Natural (Tk.List (Store).Length) = 1
+                 and then R.Get (Defined, "origin") = To_String (Req) & "@4",
+                 "a requirement's new meaning left a second task, or the first unchanged: "
+                 & R.Get (Defined, "origin"));
+      end;
       S.Close (Store);
 
       Change := S.No_Changes;
@@ -4684,6 +4701,33 @@ package body Tests.Framework_Cases is
       Assert (E.Is_Ok (Status) and then Taken.Contains ("src/parser.ads"),
               "work taken in anyway was not taken in: " & Code_Of (Status));
 
+      --  Taken in and failing its checks, a task fails and says why; it is
+      --  never left waiting in verification.
+      declare
+         Fourth : Unbounded_String;
+      begin
+         Tk.Create (Store, Change, Fields ("Fourth", "analysis"), "user", "", Fourth, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Fourth), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Wk.Execute (Store, To_String (Fourth),
+                     Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                                     Answer => To_Unbounded_String (Good), Broken => False),
+                     Cx.Profile (Store, ""), Done, Status);
+         --  The work removes the file the checks want.
+         declare
+            Space : Ws.Workspace;
+         begin
+            Ws.Read (Store, To_String (Done.Workspace_Id), Space, Status);
+            Dirs.Delete_File (To_String (Space.Path) & "/src/hello.adb");
+         end;
+         Wk.Take_In (Store, To_String (Fourth), Done, Status);
+         Assert (E.Is_Ok (Status) and then Tk.State_Of (Store, To_String (Fourth)) = "failed"
+                 and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "did not pass") > 0,
+                 "work taken in that failed its checks was left waiting: " & Code_Of (Status) & " "
+                 & Tk.State_Of (Store, To_String (Fourth)) & " " & To_String (Done.Reason));
+      end;
+
       --  A task waiting in verification with its workspace, cancelled: the
       --  workspace goes with it, and who cancelled it is kept.
       declare
@@ -6076,6 +6120,12 @@ package body Tests.Framework_Cases is
               and then Tk.Children (Store, To_String (A)).Contains (Made.First_Element),
               "a split task did not wait on its parts: " & Code_Of (Status));
 
+      --  A part cannot wait for the parent that waits for it.
+      Tk.Add_Dependency (Store, Change, Made.First_Element, To_String (A), Status);
+      Assert (Status.Code = E.Framework_Dependency_Cycle,
+              "a part was made to wait for its own parent");
+      Change := S.No_Changes;
+
       --  Unless its kind lets it coordinate.
       Configure ("scalar.task.coordination.analysis", "parent_runs");
       Make (B, "Coordinator");
@@ -6384,6 +6434,18 @@ package body Tests.Framework_Cases is
       S.Read (Store, Model_Runner.Framework.Config_Area, "revision-000002", Config, Status);
       Assert (E.Is_Ok (Status), "the new revision was not kept in the history");
       declare
+         Findings  : constant Cn.Finding_List := Cn.Check (Store);
+         Duplicate : Boolean := False;
+         use type Cn.Finding_Kind;
+      begin
+         for Index in 1 .. Cn.Length (Findings) loop
+            Duplicate := Duplicate
+              or else Cn.Element (Findings, Index).Kind in Cn.Duplicate_Identifier
+                                                          | Cn.Index_Mismatch;
+         end loop;
+         Assert (not Duplicate, "a configuration's history made the state look inconsistent");
+      end;
+      declare
          Seen : constant Ev.Event_List := Ev.Since (Store, 0);
       begin
          Assert (To_String (Ev.Element (Seen, Ev.Length (Seen)).Kind_Word)
@@ -6453,6 +6515,30 @@ package body Tests.Framework_Cases is
       Assert (E.Is_Ok (Status) and then Said.Is_Empty,
               "a second look found something to do: "
               & (if Said.Is_Empty then "" else Said.First_Element));
+
+      --  A task left in verification with nothing to wait for is blocked,
+      --  and a person may fail one that waits there.
+      declare
+         Task_V : Unbounded_String;
+         Task_W : Unbounded_String;
+      begin
+         Tk.Create (Store, Change, Fields ("Left verifying", "analysis"), "user", "", Task_V, Status);
+         Tk.Create (Store, Change, Fields ("Waiting", "analysis"), "user", "", Task_W, Status);
+         S.Commit (Store, Change, Status);
+         for Id of Model_Runner.Framework.Name_Lists.Vector'([To_String (Task_V), To_String (Task_W)])
+         loop
+            Tk.Move (Store, Change, Id, "accepted", "", Status => Status);
+            Tk.Move (Store, Change, Id, "running", "", Status => Status);
+            Tk.Move (Store, Change, Id, "verification", "", Status => Status);
+         end loop;
+         S.Commit (Store, Change, Status);
+         Wk.Recover_On_Opening (Store, (others => <>), Said, Status);
+         Assert (Tk.State_Of (Store, To_String (Task_V)) = "blocked",
+                 "a task left in verification was left there");
+         Tk.Move (Store, Change, To_String (Task_V), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Change := S.No_Changes;
+      end;
 
       --  Where the project says so, such a task is accepted again instead.
       declare

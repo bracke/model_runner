@@ -346,6 +346,24 @@ package body Model_Runner.Framework.Work is
             end;
          end if;
       end loop;
+
+      --  A task left in verification with nothing to wait for -- no work
+      --  written apart waiting to be taken in -- was being verified when
+      --  the harness stopped: blocked, saying so, its leases let go.
+      for Id of Tasks.List (Item, "verification") loop
+         if Workspaces.Active_For (Item, Id) = ""
+           and then Leases.Holder (Item, Lease_Of (Id)) = ""
+         then
+            Tasks.Move (Item, Change, Id, "blocked",
+                        "its verification stopped without finishing", Status => Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+            Leases.Release (Item, Change, Lease_Of (Id), Holder_Record (Item, Id), Status);
+            Status := E.Success;
+            Recovered.Append (Id);
+         end if;
+      end loop;
       Stores.Commit (Item, Change, Status);
    end Recover;
 
@@ -2114,6 +2132,41 @@ package body Model_Runner.Framework.Work is
       Result.Workspace_Id := To_Unbounded_String (Id);
 
       Workspaces.Integrate (Item, Change, Id, True, Taken, Status, Semantic_Accepted);
+
+      --  What was taken in, kept as a result: the files, and the project's
+      --  revision they made -- which integration made the state it is in.
+      if E.Is_Ok (Status) then
+         declare
+            Listed : Unbounded_String;
+            Event  : Unbounded_String;
+         begin
+            for Path of Taken loop
+               Append (Listed, Path & ASCII.LF);
+            end loop;
+            Stores.Commit (Item, Change, Status);
+            if E.Is_Ok (Status) then
+               declare
+                  Report_Of : Results.Result :=
+                    (Kind       => Results.Integration_Report,
+                     Producer   => To_Unbounded_String ("integration"),
+                     Summary    => To_Unbounded_String
+                                     (Id & " taken in for " & Task_Id & ", the project now at "
+                                      & Repository.Graph_Fingerprint (Repository.Now (Item))),
+                     Payload    => Listed,
+                     Provenance => To_Unbounded_String (Id),
+                     others     => <>);
+               begin
+                  Results.Add (Item, Change, Report_Of, Status);
+                  if E.Is_Ok (Status) then
+                     Annotate (Item, Change, Task_Id, "integration_report",
+                               To_String (Report_Of.Id));
+                     Events.Emit (Item, Change, Events.Source_Changed, Task_Id,
+                                  "taken in from " & Id, Event, Status);
+                  end if;
+               end;
+            end if;
+         end;
+      end if;
       if E.Is_Ok (Status) then
          Stores.Commit (Item, Change, Status);
       end if;
@@ -2123,39 +2176,68 @@ package body Model_Runner.Framework.Work is
       Result.Changed_Files := Taken;
 
       --  The project as it is now is what is verified, as widely as what was
-      --  taken in reaches.
+      --  taken in reaches -- and the task goes where that leaves it, as work
+      --  the harness ran goes: failed when the checks failed, blocked when
+      --  they could not run or its gates did not hold, never left waiting.
       declare
          Chosen : constant Verification.Choice := Verification.Choose (Item, Task_Id, Taken);
+
+         procedure Leave (Next, Why : String) is
+            Moved : E.Error_Info;
+         begin
+            Change := Stores.No_Changes;
+            Tasks.Move (Item, Change, Task_Id, Next, Why, Status => Moved);
+            if E.Is_Ok (Moved) then
+               Stores.Commit (Item, Change, Moved);
+            end if;
+            Result.Reason := To_Unbounded_String (Why);
+         end Leave;
       begin
          Result.Scope := Chosen.Scope;
          Result.Scope_Reason := Chosen.Reason;
-         Verification.Run_Profile
-           (Item, Change, To_String (Chosen.Profile), Task_Id, Result.Evidence_Id, Passed, Held,
-            Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For));
-      end;
-      if E.Is_Ok (Held) then
-         Stores.Commit (Item, Change, Status);
-      else
-         Change := Stores.No_Changes;
-      end if;
-
-      if E.Is_Ok (Held) and then Passed then
-         Verification.Complete_Task (Item, Change, Task_Id, Held);
-         if E.Is_Ok (Held) then
-            Verification.Reevaluate_Requirements (Item, Change, Result.Requirements, Status);
-            if E.Is_Ok (Status) then
-               Stores.Commit (Item, Change, Status);
-            end if;
+         if To_String (Chosen.Profile) = "" then
+            Leave ("blocked", "no verification profile applies to it");
          else
-            Change := Stores.No_Changes;
+            Verification.Run_Profile
+              (Item, Change, To_String (Chosen.Profile), Task_Id, Result.Evidence_Id, Passed, Held,
+               Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For));
+            if E.Is_Error (Held) then
+               Leave ("blocked", "its verification could not run: " & E.Error_Code'Image (Held.Code));
+            else
+               Annotate (Item, Change, Task_Id, "current_verification",
+                         To_String (Result.Evidence_Id));
+               Stores.Commit (Item, Change, Status);
+               if not Passed then
+                  Leave ("failed", To_String (Result.Evidence_Id) & " did not pass");
+               else
+                  Verification.Complete_Task (Item, Change, Task_Id, Held);
+                  if E.Is_Ok (Held) then
+                     Verification.Reevaluate_Requirements
+                       (Item, Change, Result.Requirements, Status);
+                     if E.Is_Ok (Status) then
+                        Stores.Commit (Item, Change, Status);
+                     end if;
+                  else
+                     declare
+                        Failing : Unbounded_String;
+                        Judged  : constant Verification.Gate_List :=
+                          Verification.Gates (Item, Task_Id);
+                     begin
+                        for Index in 1 .. Verification.Length (Judged) loop
+                           if not Verification.Element (Judged, Index).Passed then
+                              Append (Failing,
+                                      (if Failing = Null_Unbounded_String then "" else "; ")
+                                      & To_String (Verification.Element (Judged, Index).Name) & ": "
+                                      & To_String (Verification.Element (Judged, Index).Reason));
+                           end if;
+                        end loop;
+                        Leave ("blocked", "its gates did not pass: " & To_String (Failing));
+                     end;
+                  end if;
+               end if;
+            end if;
          end if;
-      end if;
-
-      if E.Is_Error (Held) or else not Passed then
-         Result.Reason := To_Unbounded_String
-           (if E.Is_Error (Held) then E.Error_Code'Image (Held.Code)
-            else To_String (Result.Evidence_Id) & " did not pass");
-      end if;
+      end;
       Result.Final_State := To_Unbounded_String (Tasks.State_Of (Item, Task_Id));
    end Take_In;
 
