@@ -247,6 +247,8 @@ package body Model_Runner.Framework.Templates is
                   Held.Kind := Text_Input;
                elsif Said = "identifier" then
                   Held.Kind := Identifier_Input;
+               elsif Said = "crate" then
+                  Held.Kind := Crate_Input;
                elsif Said = "natural" then
                   Held.Kind := Natural_Input;
                elsif Said = "path" then
@@ -375,6 +377,11 @@ package body Model_Runner.Framework.Templates is
             Value.Language := To_Unbounded_String (Said);
          elsif Key = "tags" then
             Value.Tags := To_Unbounded_String (Said);
+         elsif Key = "standalone" then
+            if Said not in "true" | "false" then
+               Refuse ("standalone is true or false");
+            end if;
+            Value.Standalone := Said = "true";
          elsif Key = "includes" then
             for Name of Split (Said) loop
                if not Is_Template_Id (Name) then
@@ -570,6 +577,9 @@ package body Model_Runner.Framework.Templates is
 
    function Template_Fingerprint (Value : Template) return String
    is (To_String (Value.Fingerprint));
+
+   function Is_Standalone (Value : Template) return Boolean
+   is (Value.Standalone);
 
    -------------
    -- Details --

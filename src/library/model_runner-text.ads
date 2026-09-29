@@ -74,8 +74,14 @@ package Model_Runner.Text is
    --  preserved so that valid UTF-8 remains readable.
    --
    --  @param Item Text to escape.
+   --  @param Keep_Line_Breaks Leave a line feed a line break, as a message
+   --    of several lines is read.
+   --  @param Indent With Keep_Line_Breaks, indent the line after each.
    --  @return Text with control characters rendered as \xNN escapes.
-   function Escape_Controls (Item : String) return String;
+   function Escape_Controls
+     (Item             : String;
+      Keep_Line_Breaks : Boolean := False;
+      Indent           : Boolean := True) return String;
 
    --  Report whether Item contains a C0 or C7F control character.
    --

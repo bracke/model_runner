@@ -206,9 +206,11 @@ package body Model_Runner.Localization is
 
       for Entry_Value of Arguments loop
          if not T.Is_Empty (Entry_Value.Name) then
+            --  A value cut to fit says so: what follows it was not shown.
             Messages.Arguments.Set
               (Values, T.To_String (Entry_Value.Name),
-               T.To_String (Entry_Value.Value));
+               T.To_String (Entry_Value.Value)
+               & (if Entry_Value.Value.Truncated then " [...]" else ""));
          end if;
       end loop;
 
@@ -223,7 +225,8 @@ package body Model_Runner.Localization is
          --  not be able to clear a screen or hide what follows any more than
          --  a model file can. Parameters were escaped as they went in and
          --  are plain ASCII by now, so this pass leaves them as they are.
-         return T.Escape_Controls (Messages.Result.Output_Text (Result.Text));
+         return T.Escape_Controls
+           (Messages.Result.Output_Text (Result.Text), Keep_Line_Breaks => True);
       else
          return Emergency;
       end if;
@@ -256,7 +259,8 @@ package body Model_Runner.Localization is
               --  Escaped: the value may be a tensor name or a metadata key
               --  from an untrusted file.
               T.Escape_Controls
-                (T.To_String (Condition.Parameters (Index).Text_Value)));
+                (T.To_String (Condition.Parameters (Index).Text_Value),
+                 Keep_Line_Breaks => True, Indent => False));
       end loop;
 
       return Text (Item, E.Message_Key (Condition.Code), Values (1 .. Used));

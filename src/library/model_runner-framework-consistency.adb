@@ -290,8 +290,6 @@ package body Model_Runner.Framework.Consistency is
       --  set.components names it, or a file of the repository is named
       --  after it, as the traceability graph ties them.
       declare
-         Settings : Records.Item;
-         Read     : E.Error_Info;
          Files    : constant Repository.Graph :=
            Repository.Now (Item);
          Listed   : Name_Lists.Vector;
@@ -314,8 +312,9 @@ package body Model_Runner.Framework.Consistency is
             return False;
          end Known;
       begin
-         Configurations.Read (Item, Settings, Read);
-         Listed := Lines_Of (Records.Get (Settings, "set.components"));
+         --  The components as tasks take them: listed, or the project
+         --  itself by its name.
+         Listed := Tasks.Components (Item);
          for Id of Tasks.List (Item) loop
             declare
                Defined   : Records.Item;

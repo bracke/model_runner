@@ -442,6 +442,18 @@ package body Model_Runner.Errors is
       Result := (others => <>);
    end Find_Parameter;
 
+   -------------
+   -- Text_Of --
+   -------------
+
+   function Text_Of (Item : Error_Info; Name : String) return String is
+      Found  : Boolean;
+      Result : Parameter;
+   begin
+      Find_Parameter (Item, Name, Found, Result);
+      return (if Found then T.To_String (Result.Text_Value) else "");
+   end Text_Of;
+
    -----------------
    -- Exit_Status --
    -----------------

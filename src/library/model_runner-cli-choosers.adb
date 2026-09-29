@@ -206,6 +206,18 @@ package body Model_Runner.CLI.Choosers is
                Item.Filtering := True;
             elsif Pressed.Char = 'q' then
                Item.Done := True;
+
+            --  A number is the choice of that number; any other character
+            --  starts a filter with it.
+            elsif Pressed.Char in '1' .. '9' then
+               if Character'Pos (Pressed.Char) - Character'Pos ('0') <= Count then
+                  Item.Cursor := Character'Pos (Pressed.Char) - Character'Pos ('0');
+               end if;
+            elsif Pressed.Char /= ' ' then
+               Item.Filtering := True;
+               Append (Item.Filter, Pressed.Char);
+               Refilter (Item);
+               return;
             end if;
          when Return_Key =>
             if Item.Cursor > 0 then
@@ -217,7 +229,16 @@ package body Model_Runner.CLI.Choosers is
                   Item.Details := True;
                end if;
             end if;
-         when Escape | Interrupt =>
+         when Escape =>
+            --  A filter still narrowing the list is let go of first.
+            if Length (Item.Filter) > 0 then
+               Item.Filter := Null_Unbounded_String;
+               Refilter (Item);
+               return;
+            end if;
+            Item.Done := True;
+            Item.Result := 0;
+         when Interrupt =>
             Item.Done := True;
             Item.Result := 0;
          when Backspace | Nothing =>

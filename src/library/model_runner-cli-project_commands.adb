@@ -69,6 +69,7 @@ package body Model_Runner.CLI.Project_Commands is
       new String'("/reject"), new String'("/work"), new String'("/cancel"),
       new String'("/check"), new String'("/req"), new String'("/result"),
       new String'("/tree"), new String'("/sym"), new String'("/refs"),
+      new String'("/deps"), new String'("/users"),
       new String'("/impact"), new String'("/trace"), new String'("/reconfigure"),
       new String'("/decision"), new String'("/spec"), new String'("/git"),
       new String'("/sandbox"), new String'("/instruct")];
@@ -643,29 +644,31 @@ package body Model_Runner.CLI.Project_Commands is
    procedure Help (Screen : in out Model_Runner.Presentation.Console) is
    begin
       --  One key each, spelled out, so the catalog's readers can be found.
-      Pres.Put_Note (Screen, "cli.interactive.help.init");
-      Pres.Put_Note (Screen, "cli.interactive.help.bootstrap");
-      Pres.Put_Note (Screen, "cli.interactive.help.state");
-      Pres.Put_Note (Screen, "cli.interactive.help.config");
-      Pres.Put_Note (Screen, "cli.interactive.help.git");
-      Pres.Put_Note (Screen, "cli.interactive.help.sandbox");
-      Pres.Put_Note (Screen, "cli.interactive.help.instruct");
-      Pres.Put_Note (Screen, "cli.interactive.help.reconfigure");
-      Pres.Put_Note (Screen, "cli.interactive.help.task");
-      Pres.Put_Note (Screen, "cli.interactive.help.accept");
-      Pres.Put_Note (Screen, "cli.interactive.help.reject");
-      Pres.Put_Note (Screen, "cli.interactive.help.work");
-      Pres.Put_Note (Screen, "cli.interactive.help.cancel");
-      Pres.Put_Note (Screen, "cli.interactive.help.check");
-      Pres.Put_Note (Screen, "cli.interactive.help.req");
-      Pres.Put_Note (Screen, "cli.interactive.help.decision");
-      Pres.Put_Note (Screen, "cli.interactive.help.spec");
-      Pres.Put_Note (Screen, "cli.interactive.help.result");
-      Pres.Put_Note (Screen, "cli.interactive.help.tree");
-      Pres.Put_Note (Screen, "cli.interactive.help.sym");
-      Pres.Put_Note (Screen, "cli.interactive.help.refs");
-      Pres.Put_Note (Screen, "cli.interactive.help.impact");
-      Pres.Put_Note (Screen, "cli.interactive.help.trace");
+      Pres.Put_Message (Screen, "cli.interactive.help.init");
+      Pres.Put_Message (Screen, "cli.interactive.help.bootstrap");
+      Pres.Put_Message (Screen, "cli.interactive.help.state");
+      Pres.Put_Message (Screen, "cli.interactive.help.config");
+      Pres.Put_Message (Screen, "cli.interactive.help.git");
+      Pres.Put_Message (Screen, "cli.interactive.help.sandbox");
+      Pres.Put_Message (Screen, "cli.interactive.help.instruct");
+      Pres.Put_Message (Screen, "cli.interactive.help.reconfigure");
+      Pres.Put_Message (Screen, "cli.interactive.help.task");
+      Pres.Put_Message (Screen, "cli.interactive.help.accept");
+      Pres.Put_Message (Screen, "cli.interactive.help.reject");
+      Pres.Put_Message (Screen, "cli.interactive.help.work");
+      Pres.Put_Message (Screen, "cli.interactive.help.cancel");
+      Pres.Put_Message (Screen, "cli.interactive.help.check");
+      Pres.Put_Message (Screen, "cli.interactive.help.req");
+      Pres.Put_Message (Screen, "cli.interactive.help.decision");
+      Pres.Put_Message (Screen, "cli.interactive.help.spec");
+      Pres.Put_Message (Screen, "cli.interactive.help.result");
+      Pres.Put_Message (Screen, "cli.interactive.help.tree");
+      Pres.Put_Message (Screen, "cli.interactive.help.sym");
+      Pres.Put_Message (Screen, "cli.interactive.help.refs");
+      Pres.Put_Message (Screen, "cli.interactive.help.deps");
+      Pres.Put_Message (Screen, "cli.interactive.help.users");
+      Pres.Put_Message (Screen, "cli.interactive.help.impact");
+      Pres.Put_Message (Screen, "cli.interactive.help.trace");
    end Help;
 
    --  The words of a line, with a quoted stretch kept whole.
@@ -702,7 +705,7 @@ package body Model_Runner.CLI.Project_Commands is
    begin
       return Equal > Word'First
         and then (for all C of Word (Word'First .. Equal - 1) =>
-                    C in 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '.');
+                    C in 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '.' | '+');
    end Is_Setting;
 
    ---------
@@ -746,6 +749,20 @@ package body Model_Runner.CLI.Project_Commands is
          Report : S.Recovery_Report;
       begin
          S.Open (Store, Here, Report, Outcome);
+
+         --  Held by a run in progress, what only looks can still look.
+         if E."=" (Outcome.Code, E.Framework_Locked)
+           and then (Word in "/state" | "/config" | "/result"
+                     or else (Word in "/req" | "/decision" | "/spec"
+                              and then Argument (1) not in "new" | "accept" | "reject"
+                                 | "reconsider" | "obsolete" | "block" | "unblock" | "revise"
+                                 | "link" | "supersede" | "govern" | "move"))
+         then
+            S.Open_To_Read (Store, Here, Outcome);
+            if E.Is_Ok (Outcome) then
+               Pres.Put_Note (Screen, "cli.project.read_only");
+            end if;
+         end if;
          if E.Is_Error (Outcome) then
             Pres.Report (Screen, Outcome);
             return;
@@ -769,13 +786,50 @@ package body Model_Runner.CLI.Project_Commands is
          function Count (State_Name : String) return String
          is (Image (Natural (Tk.List (Store, State_Name).Length)));
 
+         --  The tasks in a state that needs a person, each with why.
+         procedure Which (State_Name : String) is
+         begin
+            for Id of Tk.List (Store, State_Name) loop
+               declare
+                  Reasons : constant Names.Vector := Tk.Ready (Store, Id).Reasons;
+               begin
+                  Pres.Put_Message
+                    (Screen, "cli.project.which",
+                     [Loc.Named ("name", Id),
+                      Loc.Named ("value", (if Reasons.Is_Empty then State_Name
+                                           else Reasons.First_Element))]);
+               end;
+            end loop;
+         end Which;
+
          Ready : Natural := 0;
       begin
          Model_Runner.Framework.Configurations.Read (Store, Config, Read);
          Line_Of ("cli.project.template", R.Get (Config, "template_id"));
          Line_Of ("cli.project.configuration", Image (R.Revision (Config)));
-         Line_Of ("cli.project.requirements",
-                  Image (Natural (Nt.List (Store, Nt.Requirement).Length)));
+         --  Requirements that still stand: none rejected, retired or
+         --  replaced; those waiting to be decided counted apart.
+         declare
+            Standing : Natural := 0;
+         begin
+            for Id of Nt.List (Store, Nt.Requirement) loop
+               declare
+                  Held : Nt.Entity;
+                  Got  : E.Error_Info;
+               begin
+                  Nt.Read (Store, Nt.Requirement, Id, Held, Got);
+                  if E.Is_Ok (Got)
+                    and then To_String (Held.State) not in "rejected" | "obsolete" | "superseded"
+                  then
+                     Standing := Standing + 1;
+                  end if;
+               end;
+            end loop;
+            Line_Of ("cli.project.requirements", Image (Standing));
+         end;
+         Line_Of ("cli.project.candidate_requirements",
+                  Image (Natural (Nt.List (Store, Nt.Requirement,
+                                           Nt.First_State (Nt.Requirement)).Length)));
          Line_Of ("cli.project.verified",
                   Image (Natural (Nt.List (Store, Nt.Requirement, "verified").Length)));
          for Id of Tk.List (Store, "accepted") loop
@@ -787,9 +841,11 @@ package body Model_Runner.CLI.Project_Commands is
          Line_Of ("cli.project.accepted", Count ("accepted"));
          Line_Of ("cli.project.ready", Image (Ready));
          Line_Of ("cli.project.blocked", Count ("blocked"));
+         Which ("blocked");
          Line_Of ("cli.project.running", Count ("running"));
          Line_Of ("cli.project.complete", Count ("complete"));
          Line_Of ("cli.project.failed", Count ("failed"));
+         Which ("failed");
          declare
             Last : constant Names.Vector :=
               S.Names (Store, Model_Runner.Framework.Verification_Area);
@@ -865,8 +921,54 @@ package body Model_Runner.CLI.Project_Commands is
          Size  : constant Natural := Rs.Payload_Size (Store, Argument (1));
          --  A large payload is read only when asked for: /result ID full.
          Whole : constant Boolean := Size <= Rs.Inline_Limit or else Argument (2) = "full";
+         Id    : constant String := Argument (1);
+
+         --  Any identifier the harness prints: an invocation, a context's
+         --  manifest, evidence or an agent is shown as it is recorded.
+         function Starts (Prefix : String) return Boolean
+         is (Id'Length > Prefix'Length and then Id (Id'First .. Id'First + Prefix'Length - 1) = Prefix);
+
+         procedure Show_Record (Where : Model_Runner.Framework.Area; Name : String) is
+            Value : R.Item;
+         begin
+            S.Read (Store, Where, Name, Value, Read);
+            if E.Is_Error (Read) then
+               Pres.Report (Screen, Read);
+               return;
+            end if;
+            for Index in 1 .. R.Field_Count (Value) loop
+               declare
+                  Named : constant String := R.Field_Name (Value, Index);
+               begin
+                  if Named not in "schema_id" | "schema_version" | "entity_id" | "revision" then
+                     Field (Named, R.Get (Value, Named));
+                  end if;
+               end;
+            end loop;
+         end Show_Record;
       begin
-         Rs.Read (Store, Argument (1), Held, Read, With_Payload => Whole);
+         if Id = "" then
+            declare
+               Missing : E.Error_Info := E.Make (E.Framework_Input_Missing);
+            begin
+               E.Add_Text (Missing, "name", "the result: RES-, INV-, CTX-, VER- or AG- and its number");
+               Pres.Report (Screen, Missing);
+               return;
+            end;
+         elsif Starts ("INV-") then
+            Show_Record (Model_Runner.Framework.Invocations_Area, Id);
+            return;
+         elsif Starts ("CTX-") then
+            Show_Record (Model_Runner.Framework.Invocations_Area, "manifest." & Id);
+            return;
+         elsif Starts ("VER-") then
+            Show_Record (Model_Runner.Framework.Verification_Area, Id);
+            return;
+         elsif Starts ("AG-") then
+            Show_Record (Model_Runner.Framework.Runtime_Area, "agent." & Id);
+            return;
+         end if;
+         Rs.Read (Store, Id, Held, Read, With_Payload => Whole);
          if E.Is_Error (Read) then
             Pres.Report (Screen, Read);
             return;
@@ -1034,10 +1136,19 @@ package body Model_Runner.CLI.Project_Commands is
             [Loc.Named ("count", Image (Report.Created)),
              Loc.Named ("total", Image (Report.Existing)),
              Loc.Named ("extra", Image (Report.Issues))]);
+         for Id of Report.Made loop
+            Pres.Put_Message (Screen, "cli.project.bootstrap.made", [Loc.Named ("name", Id)]);
+         end loop;
+         for Line of Report.Stale loop
+            Pres.Put_Message (Screen, "cli.project.bootstrap.stale", [Loc.Named ("detail", Line)]);
+         end loop;
 
          --  What it imported as accepted is followed as any accepted
          --  requirement is: its tasks derived, readiness worked out.
          Model_Runner.CLI.Intents.Move_Along (Store, Screen);
+         if not Report.Made.Is_Empty then
+            Pres.Put_Note (Screen, "cli.next.bootstrap");
+         end if;
       end Bootstrap;
 
       --  A change to the settings: what it changes and reaches, and then,
@@ -1413,7 +1524,7 @@ package body Model_Runner.CLI.Project_Commands is
          Command.Action_Argument := T.To_Bounded (Rest (1));
          Model_Runner.CLI.Work.Run_With (Command, Screen, Agent, Status);
 
-      elsif Word in "/tree" | "/sym" | "/refs" | "/impact" | "/trace" then
+      elsif Word in "/tree" | "/sym" | "/refs" | "/deps" | "/users" | "/impact" | "/trace" then
          Command.Kind := Opt.Command_Repo;
          Command.Action := T.To_Bounded (Word (Word'First + 1 .. Word'Last));
          Command.Action_Argument := T.To_Bounded (Argument (1));
@@ -1471,5 +1582,98 @@ package body Model_Runner.CLI.Project_Commands is
          With_Store (Reconfigure'Access);
       end if;
    end Run;
+
+   --  The agent a command from the shell has: none. Work is the work
+   --  command's, which names its agent.
+   type No_Agent is new Model_Runner.Framework.Work.Agent_Runner with null record;
+
+   overriding procedure Run
+     (Self        : No_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Ada.Strings.Unbounded.Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding procedure Check_Start
+     (Self   : No_Agent;
+      Item   : Model_Runner.Framework.Stores.Store;
+      Status : in out E.Error_Info);
+
+   overriding procedure Run
+     (Self        : No_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Ada.Strings.Unbounded.Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path, Project);
+   begin
+      Answer := Ada.Strings.Unbounded.Null_Unbounded_String;
+      Status := E.Make (E.Framework_Input_Missing);
+      E.Add_Text (Status, "name", "model");
+   end Run;
+
+   overriding procedure Check_Start
+     (Self   : No_Agent;
+      Item   : Model_Runner.Framework.Stores.Store;
+      Status : in out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Item);
+   begin
+      Status := E.Make (E.Framework_Input_Missing);
+      E.Add_Text (Status, "name", "model");
+   end Check_Start;
+
+   --------------------
+   -- Run_From_Shell --
+   --------------------
+
+   procedure Run_From_Shell
+     (Item   : Model_Runner.CLI.Options.Command;
+      Screen : in out Model_Runner.Presentation.Console;
+      Status : out Natural)
+   is
+      Before    : constant String := Ada.Directories.Current_Directory;
+      Directory : constant String :=
+        (if T.Is_Empty (Item.Project_Directory) then "."
+         else T.To_String (Item.Project_Directory));
+      Word      : constant String := T.To_String (Item.Action);
+      Rest      : constant String := T.To_String (Item.Action_Argument);
+      Ignored   : constant Natural := Pres.First_Failure (Screen);
+      pragma Unreferenced (Ignored);
+   begin
+      if Word = "" then
+         declare
+            Missing : E.Error_Info := E.Make (E.Framework_Input_Missing);
+         begin
+            E.Add_Text (Missing, "name", "the project command: req, state, bootstrap, config,"
+                        & " reconfigure, check, decision, spec, result, sandbox, instruct,"
+                        & " accept or reject");
+            Pres.Report (Screen, Missing);
+            Status := E.Exit_Status (Missing);
+            return;
+         end;
+      end if;
+      if not Ada.Directories.Exists (Directory) then
+         declare
+            Missing : E.Error_Info := E.Make (E.Framework_Not_Initialized);
+         begin
+            E.Add_Text (Missing, "path", Directory, E.Param_Path);
+            Pres.Report (Screen, Missing);
+            Status := E.Exit_Status (Missing);
+            return;
+         end;
+      end if;
+      Ada.Directories.Set_Directory (Directory);
+      begin
+         Run ("/" & Word & (if Rest = "" then "" else " " & Rest), Screen, No_Agent'(null record));
+      exception
+         when others =>
+            Ada.Directories.Set_Directory (Before);
+            raise;
+      end;
+      Ada.Directories.Set_Directory (Before);
+      Status := Pres.First_Failure (Screen);
+   end Run_From_Shell;
 
 end Model_Runner.CLI.Project_Commands;

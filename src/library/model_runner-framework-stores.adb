@@ -1,6 +1,7 @@
 with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
+with Ada.Strings.Fixed;
 
 with Hostkit.Durability;
 with Hostkit.Fs;
@@ -244,8 +245,15 @@ package body Model_Runner.Framework.Stores is
          Status := E.Make (E.Framework_Name_Invalid);
          E.Add_Text (Status, "value", Name);
       elsif not Exists (Item, Where, Name) then
+         --  Said as what is missing -- TASK-001, not tasks/TASK-001.state.
          Status := E.Make (E.Framework_Not_Found);
-         E.Add_Text (Status, "name", Place_Of (Where, Name));
+         E.Add_Text
+           (Status, "name",
+            (declare
+               Dot : constant Natural := Ada.Strings.Fixed.Index (Name, ".");
+             begin
+               (if Dot > Name'First then Name (Name'First .. Dot - 1) else Name)));
+         E.Add_Text (Status, "path", Place_Of (Where, Name), E.Param_Path);
       else
          Read_Record
            (Record_Path (Root (Item), Where, Name), Place_Of (Where, Name),
@@ -1022,6 +1030,11 @@ package body Model_Runner.Framework.Stores is
       if Change_Count (Change) = 0 then
          return;
       end if;
+      if Item.Read_Only then
+         Status := E.Make (E.Framework_Locked);
+         E.Add_Text (Status, "path", Root (Item), E.Param_Path);
+         return;
+      end if;
 
       Stage (Item, Change, Status);
       if E.Is_Ok (Status) then
@@ -1314,6 +1327,34 @@ package body Model_Runner.Framework.Stores is
       end if;
    end Open;
 
+   ------------------
+   -- Open_To_Read --
+   ------------------
+
+   procedure Open_To_Read
+     (Item              : in out Store;
+      Project_Directory : String;
+      Status            : out Model_Runner.Errors.Error_Info)
+   is
+      State : constant String := State_Root (Project_Directory);
+   begin
+      Close (Item);
+      if not Dirs.Exists (Join (State, Format_File)) then
+         Status := E.Make (E.Framework_Not_Initialized);
+         E.Add_Text (Status, "path", Project_Directory, E.Param_Path);
+         return;
+      end if;
+      Item.Root := To_Unbounded_String (State);
+      Item.Opened := True;
+      Item.Read_Only := True;
+      Know_Identity (Item, Status);
+      if E.Is_Error (Status) then
+         Close (Item);
+      end if;
+   end Open_To_Read;
+
+   function Is_Read_Only (Item : Store) return Boolean is (Item.Read_Only);
+
    -----------
    -- Close --
    -----------
@@ -1324,6 +1365,7 @@ package body Model_Runner.Framework.Stores is
          Hostkit.Locks.Release (Item.Lock);
       end if;
       Item.Opened := False;
+      Item.Read_Only := False;
       Item.Root := Null_Unbounded_String;
       Item.Project_Id := Null_Unbounded_String;
       Item.Project_Name := Null_Unbounded_String;

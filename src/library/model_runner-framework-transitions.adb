@@ -99,7 +99,20 @@ package body Model_Runner.Framework.Transitions is
       elsif not Is_State (From, Next) then
          Refuse (Next & " is not a state");
       elsif Held = 0 then
-         Refuse ("no such move is allowed");
+         --  Where it can go instead, which is what a person wants next.
+         declare
+            Open : Unbounded_String;
+         begin
+            for One of From.Moves loop
+               if To_String (One.From) = Current and then Granted (One.Requires) then
+                  Append (Open, (if Open = Null_Unbounded_String then "" else ", ")
+                          & To_String (One.To));
+               end if;
+            end loop;
+            Refuse ("no such move is allowed"
+                    & (if Open = Null_Unbounded_String then ""
+                       else "; from " & Current & " it may go to " & To_String (Open)));
+         end;
       elsif not Granted (From.Moves (Held).Requires) then
          Refuse
            ("the move needs the "

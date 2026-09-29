@@ -1341,9 +1341,14 @@ package body Model_Runner.Framework.Verification is
       Judged : constant Gate_List := Gates (Item, Task_Id);
       Failed : Unbounded_String;
       Defined : Records.Item;
+      Was     : constant String := Tasks.State_Of (Item, Task_Id);
+      By_Hand : constant Boolean := Was in "accepted" | "failed" | "blocked";
    begin
       for Next of Judged.Items loop
-         if not Next.Passed then
+         --  A person completing a blocked task sets its block aside.
+         if not Next.Passed
+           and then not (Was = "blocked" and then To_String (Next.Name) = "no_blocking_issue")
+         then
             Append (Failed, (if Failed = Null_Unbounded_String then "" else "; ")
                             & To_String (Next.Name) & ": " & To_String (Next.Reason));
          end if;
@@ -1353,6 +1358,25 @@ package body Model_Runner.Framework.Verification is
          E.Add_Text (Status, "name", Task_Id);
          E.Add_Text (Status, "detail", To_String (Failed));
          return;
+      end if;
+
+      --  Done by hand: the generation the harness would have run, recorded
+      --  as what it was.
+      if By_Hand then
+         if Was /= "accepted" then
+            Tasks.Move (Item, Change, Task_Id, "accepted", "completed by hand",
+                        Status => Status, Actor => "user");
+         end if;
+         if E.Is_Ok (Status) or else Was = "accepted" then
+            Tasks.Move (Item, Change, Task_Id, "running", "completed by hand", Status => Status);
+         end if;
+         if E.Is_Ok (Status) then
+            Tasks.Move (Item, Change, Task_Id, "verification", "completed by hand",
+                        Status => Status);
+         end if;
+         if E.Is_Error (Status) then
+            return;
+         end if;
       end if;
 
       Tasks.Move (Item, Change, Task_Id, "complete", "", Gates_Passed => True,

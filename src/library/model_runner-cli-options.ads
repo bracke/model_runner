@@ -68,8 +68,20 @@ package Model_Runner.CLI.Options is
       Command_Task,
       Command_Repo,
       Command_Work,
+
+      --  One of the project commands a session has, run from the shell:
+      --  req, state, bootstrap, config, reconfigure, check, decision,
+      --  spec, result, sandbox, instruct, accept or reject -- the word in
+      --  Action, the rest in Action_Argument.
+      Command_Project,
       Command_Help,
       Command_Version);
+
+   --  Whether a word is one of the project commands run as Command_Project.
+   --
+   --  @param Word The command's word.
+   --  @return True when it is.
+   function Is_Project_Word (Word : String) return Boolean;
 
    --  How the positions of a text are reduced to one vector.
    --

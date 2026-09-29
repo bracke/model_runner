@@ -4,6 +4,7 @@ name = Ada
 description = The Ada language, 2022 edition.
 version = 1
 category = language
+standalone = false
 language = Ada
 
 fact language = Ada_2022

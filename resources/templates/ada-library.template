@@ -9,7 +9,7 @@ tags = ada, library
 includes = ada, alire, aunit, standard-development
 
 input project_name
-  type = identifier
+  type = crate
   label = Library name
   description = the library's name, which is its root package's too
   required = true

@@ -571,6 +571,13 @@ package Model_Runner.Errors is
       Found  : out Boolean;
       Result : out Parameter);
 
+   --  The text of a named parameter.
+   --
+   --  @param Item Condition to inspect.
+   --  @param Name Field name to find.
+   --  @return Its text, or the empty string when it has none.
+   function Text_Of (Item : Error_Info; Name : String) return String;
+
    --  Domain that owns a code.
    --
    --  @param Code Diagnostic code.

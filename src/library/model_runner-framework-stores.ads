@@ -114,6 +114,24 @@ package Model_Runner.Framework.Stores is
       Report            : out Recovery_Report;
       Status            : out Model_Runner.Errors.Error_Info);
 
+   --  Open a project's state to look at while another session holds it --
+   --  a run in progress -- without its lock, without putting anything
+   --  right, and without writing: a commit to it is refused.
+   --
+   --  @param Item The store.
+   --  @param Project_Directory The project.
+   --  @param Status Framework_Not_Initialized, or another failure to read.
+   procedure Open_To_Read
+     (Item              : in out Store;
+      Project_Directory : String;
+      Status            : out Model_Runner.Errors.Error_Info);
+
+   --  Whether a store was opened only to be read.
+   --
+   --  @param Item The store.
+   --  @return True after Open_To_Read.
+   function Is_Read_Only (Item : Store) return Boolean;
+
    --  Let the state directory go. Harmless on a store that is not open.
    --
    --  @param Item The store.
@@ -424,6 +442,7 @@ private
       Root         : Unbounded_String;
       Lock         : Hostkit.Locks.Lock;
       Opened       : Boolean := False;
+      Read_Only    : Boolean := False;
       Project_Id   : Unbounded_String;
       Project_Name : Unbounded_String;
    end record;

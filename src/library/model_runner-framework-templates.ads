@@ -68,6 +68,10 @@ package Model_Runner.Framework.Templates is
    type Input_Kind is
      (Text_Input,
       Identifier_Input,
+
+      --  An Alire crate's name: a lower-case identifier of 3 to 64
+      --  characters, no two underscores together and none last.
+      Crate_Input,
       Natural_Input,
       Path_Input,
       Choice_Input,
@@ -192,6 +196,13 @@ package Model_Runner.Framework.Templates is
    --  @return What it says about itself besides its name, or the empty
    --    string.
    function Details (Value : Template) return String;
+
+   --  Whether a template is a kind of project of its own, or a part only
+   --  other templates include (standalone = false).
+   --
+   --  @param Value The template.
+   --  @return True when init may start a project from it alone.
+   function Is_Standalone (Value : Template) return Boolean;
 
    --  Where a template was read from.
    --
@@ -346,6 +357,7 @@ private
       Category    : Unbounded_String;
       Language    : Unbounded_String;
       Tags        : Unbounded_String;
+      Standalone  : Boolean := True;
       Origin      : Unbounded_String;
       Fingerprint : Unbounded_String;
       Includes    : Name_Lists.Vector;

@@ -1,3 +1,4 @@
+with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
 with Ada.Strings.Unbounded;
@@ -85,6 +86,9 @@ package body Model_Runner.CLI.Tasks is
       end Fail;
 
       --  Commit a change, then say which tasks it made ready.
+      --  The tasks that became ready, said once what made them so is.
+      Became_Ready : Model_Runner.Framework.Name_Lists.Vector;
+
       procedure Commit is
          Became : Model_Runner.Framework.Name_Lists.Vector;
       begin
@@ -96,9 +100,7 @@ package body Model_Runner.CLI.Tasks is
             S.Commit (Store, Change, Outcome);
          end if;
          if E.Is_Ok (Outcome) then
-            for Id of Became loop
-               Pres.Put_Note (Screen, "cli.task.ready", [Loc.Named ("name", Id)]);
-            end loop;
+            Became_Ready.Append (Became);
          end if;
       end Commit;
 
@@ -110,6 +112,20 @@ package body Model_Runner.CLI.Tasks is
             Fail (Outcome);
             return False;
          end if;
+
+         --  One that is not there is said so before anything is done to it.
+         declare
+            Space : constant Natural := Ada.Strings.Fixed.Index (Argument, " ");
+            Id    : constant String :=
+              (if Space = 0 then Argument else Argument (Argument'First .. Space - 1));
+         begin
+            if Tk.State_Of (Store, Id) = "" then
+               Outcome := E.Make (E.Framework_Not_Found);
+               E.Add_Text (Outcome, "name", Id);
+               Fail (Outcome);
+               return False;
+            end if;
+         end;
          return True;
       end Needs_Task;
 
@@ -147,6 +163,10 @@ package body Model_Runner.CLI.Tasks is
                      begin
                         if Cut > Pair'First and then Pair (Pair'First .. Cut - 1) = Name then
                            return Pair (Cut + 1 .. Pair'Last);
+
+                        --  A word alone is a state: list ready, list blocked.
+                        elsif Name = "state" and then Cut = 0 and then Pair /= "" then
+                           return Pair;
                         end if;
                      end;
                      Start := Index + 1;
@@ -163,6 +183,7 @@ package body Model_Runner.CLI.Tasks is
                State   : constant String := Tk.State_Of (Store, Id);
                Shown_State : constant String :=
                  (if State = "accepted" and then Tk.Ready (Store, Id).Ready then "ready"
+                  elsif State = "accepted" then "waiting"
                   else State);
 
                function Fits (Name, Held : String) return Boolean
@@ -191,6 +212,9 @@ package body Model_Runner.CLI.Tasks is
          end loop;
          if Shown = 0 then
             Pres.Put_Note (Screen, "cli.task.none");
+         end if;
+         if Listed.Is_Empty then
+            Pres.Put_Note (Screen, "cli.next.tasks");
          end if;
       end Show_List;
 
@@ -350,6 +374,36 @@ package body Model_Runner.CLI.Tasks is
 
          if E.Is_Error (Outcome) then
             Fail (Outcome);
+
+            --  Off a terminal, everything still to give, each as it is
+            --  given: the kind with what each kind requires, else the
+            --  fields its kind requires with what they may be.
+            if Outcome.Code = E.Framework_Input_Missing then
+               if not Fields.Contains ("kind") then
+                  for Kind of Tk.Kinds (Store) loop
+                     Pres.Put_Note
+                       (Screen, "cli.input.needed",
+                        [Loc.Named ("name", "kind"),
+                         Loc.Named ("detail",
+                                    Kind & (if Tk.Required_Fields (Store, Kind).Is_Empty
+                                            then ", which needs nothing more"
+                                            else ", which needs "
+                                                 & Joined (Tk.Required_Fields (Store, Kind))))]);
+                  end loop;
+               else
+                  for Field of Tk.Required_Fields (Store, Fields ("kind")) loop
+                     if not Fields.Contains (Field) then
+                        Pres.Put_Note
+                          (Screen, "cli.input.needed",
+                           [Loc.Named ("name", Field),
+                            Loc.Named ("detail",
+                                       (if Field = "component"
+                                        then "one of " & Joined (Tk.Components (Store))
+                                        else Tk.Field_Schema (Store, Field)))]);
+                     end if;
+                  end loop;
+               end if;
+            end if;
             return;
          end if;
          Commit;
@@ -361,6 +415,28 @@ package body Model_Runner.CLI.Tasks is
            (Screen, "cli.task.created",
             [Loc.Named ("name", To_String (Id)),
              Loc.Named ("detail", Fields ("title"))]);
+
+         --  Said where another task not ended has the same title.
+         for Other of Tk.List (Store) loop
+            if Other /= To_String (Id)
+              and then Tk.State_Of (Store, Other) not in "complete" | "cancelled" | "rejected"
+            then
+               declare
+                  Its  : R.Item;
+                  Read : E.Error_Info;
+               begin
+                  Tk.Definition (Store, Other, Its, Read);
+                  if E.Is_Ok (Read)
+                    and then Ada.Characters.Handling.To_Lower (R.Get (Its, "title"))
+                             = Ada.Characters.Handling.To_Lower (Fields ("title"))
+                  then
+                     Pres.Put_Note
+                       (Screen, "cli.same_title",
+                        [Loc.Named ("name", To_String (Id)), Loc.Named ("other", Other)]);
+                  end if;
+               end;
+            end if;
+         end loop;
       end Create;
 
       procedure Move (Next : String) is
@@ -663,6 +739,10 @@ package body Model_Runner.CLI.Tasks is
                  (Screen, "cli.task.gate",
                   [Loc.Named ("name", To_String (One.Name)),
                    Loc.Named ("detail", (if One.Passed then "passed"
+                                         elsif To_String (One.Name) = "no_blocking_issue"
+                                           and then Model_Runner.Framework.Tasks.State_Of
+                                                      (Store, Argument) = "blocked"
+                                         then "set aside: it is completed by hand"
                                          else To_String (One.Reason)))]);
             end;
          end loop;
@@ -790,21 +870,33 @@ package body Model_Runner.CLI.Tasks is
       Status := E.Exit_Success;
 
       S.Open (Store, Directory, Report, Outcome);
+
+      --  Held by a run in progress, it can still be looked at.
+      if E."=" (Outcome.Code, E.Framework_Locked)
+        and then Action in "" | "list" | "show" | "plan" | "audit" | "context"
+      then
+         S.Open_To_Read (Store, Directory, Outcome);
+         if E.Is_Ok (Outcome) then
+            Pres.Put_Note (Screen, "cli.project.read_only");
+         end if;
+      end if;
       if E.Is_Error (Outcome) then
          Fail (Outcome);
          return;
       end if;
 
       --  What an interruption left is put right first, and said.
-      declare
-         Said : Model_Runner.Framework.Name_Lists.Vector;
-      begin
-         Model_Runner.Framework.Work.Recover_On_Opening (Store, Report, Said, Outcome);
-         for Line of Said loop
-            Pres.Put_Note (Screen, "cli.project.recovered", [Loc.Named ("detail", Line)]);
-         end loop;
-         Outcome := E.Success;
-      end;
+      if not S.Is_Read_Only (Store) then
+         declare
+            Said : Model_Runner.Framework.Name_Lists.Vector;
+         begin
+            Model_Runner.Framework.Work.Recover_On_Opening (Store, Report, Said, Outcome);
+            for Line of Said loop
+               Pres.Put_Note (Screen, "cli.project.recovered", [Loc.Named ("detail", Line)]);
+            end loop;
+            Outcome := E.Success;
+         end;
+      end if;
 
       if Action = "list" then
          Show_List;
@@ -916,6 +1008,9 @@ package body Model_Runner.CLI.Tasks is
          E.Add_Text (Outcome, "value", Action);
          Fail (Outcome);
       end if;
+      for Id of Became_Ready loop
+         Pres.Put_Note (Screen, "cli.task.ready", [Loc.Named ("name", Id)]);
+      end loop;
       S.Close (Store);
    end Run;
 

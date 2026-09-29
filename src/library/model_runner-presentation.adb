@@ -503,6 +503,12 @@ package body Model_Runner.Presentation is
       if E.Is_Ok (Condition) then
          return;
       end if;
+      if Condition.Severity = E.Severity_Error then
+         Item.Error_Count := Item.Error_Count + 1;
+         if Item.Failure = 0 then
+            Item.Failure := E.Exit_Status (Condition);
+         end if;
+      end if;
 
       if Item.Structured then
          --  Each of the condition's named values a field of its own -- a
@@ -594,6 +600,25 @@ package body Model_Runner.Presentation is
          end;
       end if;
    end Report;
+
+   -------------------
+   -- First_Failure --
+   -------------------
+
+   function First_Failure (Item : in out Console; Reset : Boolean := True) return Natural is
+      Result : constant Natural := Item.Failure;
+   begin
+      if Reset then
+         Item.Failure := 0;
+      end if;
+      return Result;
+   end First_Failure;
+
+   ---------------------
+   -- Errors_Reported --
+   ---------------------
+
+   function Errors_Reported (Item : Console) return Natural is (Item.Error_Count);
 
    ----------
    -- Warn --

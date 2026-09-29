@@ -82,6 +82,28 @@ package Model_Runner.Framework.Work is
       Answer      : out Ada.Strings.Unbounded.Unbounded_String;
       Status      : out Model_Runner.Errors.Error_Info) is abstract;
 
+   --  Whether the runner can start at all, asked before its task is moved:
+   --  a program the policy would refuse or cannot find, a model that is
+   --  not there. What it finds is a setup to put right, not a failed
+   --  attempt, and the task is left as it was.
+   --
+   --  @param Self The runner.
+   --  @param Item The store.
+   --  @param Status Unchanged when it can start; otherwise why not.
+   procedure Check_Start
+     (Self   : Agent_Runner;
+      Item   : Stores.Store;
+      Status : in out Model_Runner.Errors.Error_Info) is null;
+
+   --  What the runner is, for the record a person audits later: the
+   --  command it runs, or the model.
+   --
+   --  @param Self The runner.
+   --  @param Text Set to its description; left empty when it says none.
+   procedure Describe
+     (Self : Agent_Runner;
+      Text : in out Ada.Strings.Unbounded.Unbounded_String) is null;
+
    --  Where a working agent's children are made and answered for.
    type Child_Host (<>) is tagged limited private;
 
@@ -267,6 +289,10 @@ package Model_Runner.Framework.Work is
 
       --  The workspace the agent wrote in, when the project isolates work.
       Workspace_Id  : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  What the agent proposed that was not made, each with why: kept as
+      --  an issue for a person instead.
+      Kept_Back     : Name_Lists.Vector;
 
       --  What the agent claimed, and what the files show it changed.
       Claimed       : Ada.Strings.Unbounded.Unbounded_String;

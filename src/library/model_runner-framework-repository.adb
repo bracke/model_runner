@@ -762,9 +762,13 @@ package body Model_Runner.Framework.Repository is
                elsif Depth > 0 then
                   Depth := Depth - 1;
                end if;
+            --  Not an access-to-subprogram type's profile: access function
+            --  return Boolean declares no function called return.
             elsif Depth = 1
               and then Spelled in "procedure" | "function" | "type" | "subtype"
                              | "package" | "task" | "protected" | "entry"
+              and then not (Index > 1 and then (Is_Word (Tokens (Index - 1), "access")
+                                                or else Is_Word (Tokens (Index - 1), "protected")))
             then
                declare
                   At_Name : Positive := Index + 1;

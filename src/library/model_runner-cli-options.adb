@@ -228,11 +228,11 @@ package body Model_Runner.CLI.Options is
        [Command_Init | Command_Task | Command_Work => True, others => False],
        Text ("set")),
       (Text ("--directory"),
-       [Command_Init | Command_Task | Command_Repo | Command_Work => True,
+       [Command_Init | Command_Task | Command_Repo | Command_Work | Command_Project => True,
         others => False],
        Text ("directory")),
       (Text ("--format"),
-       [Command_Init | Command_Task | Command_Repo | Command_Work => True,
+       [Command_Init | Command_Task | Command_Repo | Command_Work | Command_Project => True,
         others => False],
        Text ("format")),
       (Text ("--quiet"), [others => True], Text ("quiet")),
@@ -284,6 +284,7 @@ package body Model_Runner.CLI.Options is
          when Command_Task    => "task",
          when Command_Repo    => "repo",
          when Command_Work    => "work",
+         when Command_Project => "project",
          when Command_Help    => "help",
          when Command_Version => "version");
 
@@ -395,8 +396,15 @@ package body Model_Runner.CLI.Options is
    -- Command_Of --
    ----------------
 
+   function Is_Project_Word (Word : String) return Boolean
+   is (Word in "req" | "state" | "bootstrap" | "config" | "reconfigure" | "check" | "decision"
+              | "spec" | "result" | "sandbox" | "instruct" | "accept" | "reject");
+
    function Command_Of (Word : String) return Command_Kind is
    begin
+      if Is_Project_Word (Word) then
+         return Command_Project;
+      end if;
       for Kind in Command_Kind loop
          if Kind /= Command_None and then Command_Word (Kind) = Word then
             return Kind;
@@ -2708,6 +2716,11 @@ package body Model_Runner.CLI.Options is
                      Result.Kind := Command_Repo;
                   elsif Argument = "work" then
                      Result.Kind := Command_Work;
+                  elsif Argument = "project" or else Is_Project_Word (Argument) then
+                     Result.Kind := Command_Project;
+                     if Argument /= "project" then
+                        Result.Action := T.To_Bounded (Argument);
+                     end if;
                   elsif Argument = "help" then
                      Result.Kind := Command_Help;
                   elsif Argument = "version" then
@@ -2733,6 +2746,20 @@ package body Model_Runner.CLI.Options is
                      return;
                   end if;
                   Result.Action := T.To_Bounded (Argument);
+
+               elsif Operands >= 2 and then Result.Kind = Command_Project then
+                  --  project WORD ...: the word, then the rest as given.
+                  if T.Is_Empty (Result.Action) then
+                     if not Is_Project_Word (Argument) then
+                        Fail (E.CLI_Unexpected_Operand, "", Argument);
+                        return;
+                     end if;
+                     Result.Action := T.To_Bounded (Argument);
+                  else
+                     Result.Action_Argument := T.To_Bounded
+                       (T.To_String (Result.Action_Argument)
+                        & (if T.Is_Empty (Result.Action_Argument) then "" else " ") & Argument);
+                  end if;
 
                elsif Operands = 2 and then Result.Kind = Command_Work then
                   --  work TASK: the task to run.

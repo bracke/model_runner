@@ -1,3 +1,4 @@
+with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 
 with Model_Runner.Errors;
@@ -59,20 +60,36 @@ package body Model_Runner.CLI.Init is
          Status := E.Exit_Status (Condition);
       end Fail;
 
-      --  Every template on offer, numbered, with why one cannot be used.
-      procedure List is
+      --  The templates a project may start from, by their place in the
+      --  registry: a part only other templates include is not one.
+      function Kinds return Model_Runner.Framework.Name_Lists.Vector is
+         Result : Model_Runner.Framework.Name_Lists.Vector;
       begin
          for Index in 1 .. Tp.Count (Registry) loop
+            if Tp.Is_Standalone (Tp.Template_At (Registry, Index)) then
+               Result.Append (T.Image (Long_Long_Integer (Index)));
+            end if;
+         end loop;
+         return Result;
+      end Kinds;
+
+      --  Every template on offer, numbered, with why one cannot be used.
+      procedure List is
+         Shown_Number : Natural := 0;
+      begin
+         for Place of Kinds loop
             declare
+               Index   : constant Positive := Positive'Value (Place);
                Shown   : constant Tp.Template := Tp.Template_At (Registry, Index);
                Problem : constant E.Error_Info := Tp.Problem (Registry, Index);
                Details : constant String := Tp.Details (Shown);
             begin
+               Shown_Number := Shown_Number + 1;
                Pres.Put_Message
                  (Screen,
                   (if E.Is_Ok (Problem) then "cli.init.template"
                    else "cli.init.unavailable"),
-                  [Loc.Named ("index", T.Image (Long_Long_Integer (Index))),
+                  [Loc.Named ("index", T.Image (Long_Long_Integer (Shown_Number))),
                    Loc.Named ("name", Tp.Id (Shown)),
                    Loc.Named ("value", Tp.Display_Name (Shown)),
                    Loc.Named ("detail",
@@ -109,6 +126,19 @@ package body Model_Runner.CLI.Init is
          end loop;
       end Show_Facts;
 
+      --  What an input is, what it takes and why its default did not do.
+      function Input_Detail (Declared : Tp.Input_Declaration; From : Cf.Plan) return String is
+         Label  : constant String := To_String (Declared.Label);
+         About  : constant String := To_String (Declared.Description);
+         Choice : constant String := To_String (Declared.Choices);
+         Id     : constant String := To_String (Declared.Id);
+      begin
+         return (if Label /= "" then Label else Id)
+           & (if About /= "" then ": " & About else "")
+           & (if Choice /= "" then "; one of " & Choice else "")
+           & (if From.Missing_Why.Contains (Id) then "; " & From.Missing_Why (Id) else "");
+      end Input_Detail;
+
       --  Ask for one input until it is given a value it takes, or the
       --  caller gives up.
       procedure Ask (Declared : Tp.Input_Declaration; Got : out Boolean) is
@@ -118,8 +148,13 @@ package body Model_Runner.CLI.Init is
          loop
             Choosers.Ask
               (Screen, To_String (Declared.Label),
-               To_String (Declared.Description), To_String (Declared.Choices),
-               To_String (Declared.Default), Typed, Got, Secret => Declared.Secret);
+               To_String (Declared.Description)
+               & (if Planned.Missing_Why.Contains (To_String (Declared.Id))
+                  then " (" & Planned.Missing_Why (To_String (Declared.Id)) & ")" else ""),
+               To_String (Declared.Choices),
+               (if Ada.Strings.Fixed.Index (To_String (Declared.Default), "${") > 0 then ""
+                else To_String (Declared.Default)),
+               Typed, Got, Secret => Declared.Secret);
             if not Got then
                return;
             end if;
@@ -137,8 +172,9 @@ package body Model_Runner.CLI.Init is
       function Offered return Choosers.Choice_List is
          Result : Choosers.Choice_List;
       begin
-         for Index in 1 .. Tp.Count (Registry) loop
+         for Place of Kinds loop
             declare
+               Index   : constant Positive := Positive'Value (Place);
                Shown   : constant Tp.Template := Tp.Template_At (Registry, Index);
                Problem : constant E.Error_Info := Tp.Problem (Registry, Index);
             begin
@@ -198,7 +234,7 @@ package body Model_Runner.CLI.Init is
          begin
             if Picked > 0 then
                Chosen := To_Unbounded_String
-                 (Tp.Id (Tp.Template_At (Registry, Picked)));
+                 (Tp.Id (Tp.Template_At (Registry, Positive'Value (Kinds.Element (Picked)))));
             end if;
          end;
          if Chosen = Null_Unbounded_String then
@@ -207,6 +243,34 @@ package body Model_Runner.CLI.Init is
             return;
          end if;
       end if;
+
+      --  A number is the template of that number in the list.
+      declare
+         Said : constant String := To_String (Chosen);
+      begin
+         if Said'Length in 1 .. 4 and then (for all C of Said => C in '0' .. '9')
+           and then Natural'Value (Said) in 1 .. Natural (Kinds.Length)
+         then
+            Chosen := To_Unbounded_String
+              (Tp.Id (Tp.Template_At (Registry, Positive'Value (Kinds.Element (Natural'Value (Said))))));
+         end if;
+      end;
+
+      --  A part other templates include is no project of its own.
+      for Index in 1 .. Tp.Count (Registry) loop
+         if Tp.Id (Tp.Template_At (Registry, Index)) = To_String (Chosen)
+           and then not Tp.Is_Standalone (Tp.Template_At (Registry, Index))
+         then
+            Pres.Put_Message (Screen, "cli.init.header");
+            List;
+            Outcome := E.Make (E.Framework_Input_Invalid);
+            E.Add_Text (Outcome, "name", "template");
+            E.Add_Text (Outcome, "value", To_String (Chosen));
+            E.Add_Text (Outcome, "detail", "it is a part other templates include, not a kind of project");
+            Fail (Outcome);
+            return;
+         end if;
+      end loop;
 
       Tp.Compose (Registry, To_String (Chosen), Composed, Outcome);
       if E.Is_Error (Outcome) then
@@ -259,6 +323,26 @@ package body Model_Runner.CLI.Init is
          if Outcome.Code /= E.Framework_Input_Missing or else not Interactive
          then
             Fail (Outcome);
+
+            --  Each input missing, as it is given, what it is, and why a
+            --  default did not do.
+            if Outcome.Code = E.Framework_Input_Missing then
+               for Missing of Planned.Missing loop
+                  for Index in 1 .. Tp.Input_Count (Composed) loop
+                     declare
+                        Declared : constant Tp.Input_Declaration :=
+                          Cf.Resolved (Tp.Input_At (Composed, Index), Directory);
+                     begin
+                        if To_String (Declared.Id) = Missing then
+                           Pres.Put_Note
+                             (Screen, "cli.input.needed",
+                              [Loc.Named ("name", Missing),
+                               Loc.Named ("detail", Input_Detail (Declared, Planned))]);
+                        end if;
+                     end;
+                  end loop;
+               end loop;
+            end if;
             return;
          end if;
 
@@ -282,22 +366,25 @@ package body Model_Runner.CLI.Init is
          end loop;
       end loop;
 
-      --  The plan, as an answer: what the project will be.
-      Pres.Put_Message
-        (Screen, "cli.init.plan",
-         [Loc.Named ("name", Tp.Id (Tp.Root (Composed))),
-          Loc.Named ("version", Tp.Version (Tp.Root (Composed))),
-          Loc.Named ("path", Directory)]);
-      for Made of Planned.Directories loop
-         Pres.Put_Message (Screen, "cli.init.directory", [Loc.Named ("path", Made)]);
-      end loop;
-      for Position in Planned.Files.Iterate loop
+      --  The plan, as an answer: what the project will be -- not shown
+      --  to one who asked for quiet.
+      if Model_Runner.CLI.Options."/=" (Item.Level, Model_Runner.CLI.Options.Quiet) then
          Pres.Put_Message
-           (Screen, "cli.init.file",
-            [Loc.Named ("path", Cf.Value_Maps.Key (Position))]);
-      end loop;
-      Show_Facts (Planned.Template_Facts, Declared => True);
-      Show_Facts (Planned.Discovered_Facts, Declared => False);
+           (Screen, "cli.init.plan",
+            [Loc.Named ("name", Tp.Id (Tp.Root (Composed))),
+             Loc.Named ("version", Tp.Version (Tp.Root (Composed))),
+             Loc.Named ("path", Directory)]);
+         for Made of Planned.Directories loop
+            Pres.Put_Message (Screen, "cli.init.directory", [Loc.Named ("path", Made)]);
+         end loop;
+         for Position in Planned.Files.Iterate loop
+            Pres.Put_Message
+              (Screen, "cli.init.file",
+               [Loc.Named ("path", Cf.Value_Maps.Key (Position))]);
+         end loop;
+         Show_Facts (Planned.Template_Facts, Declared => True);
+         Show_Facts (Planned.Discovered_Facts, Declared => False);
+      end if;
 
       --  Confirmed where the policy wants it: asked at a terminal, and
       --  otherwise given as confirm=yes or missing, never assumed.
@@ -376,6 +463,7 @@ package body Model_Runner.CLI.Init is
           Loc.Named
             ("detail",
              R.Get (Planned.Configuration, "configuration_fingerprint"))]);
+      Pres.Put_Note (Screen, "cli.next.init");
 
       S.Close (Store);
    end Run;

@@ -193,6 +193,23 @@ package Model_Runner.Presentation is
       Value : String;
       Where : Destination);
 
+   --  The exit status of the first error reported since the console was
+   --  opened or this was last asked with Reset: what a command that reports
+   --  its own failures ended with.
+   --
+   --  @param Item Console to ask.
+   --  @param Reset Forget it once asked.
+   --  @return The status, zero when no error was reported.
+   function First_Failure (Item : in out Console; Reset : Boolean := True) return Natural;
+
+   --  How many errors the console has reported since it was opened: a
+   --  caller that reports its own failures and might report one twice
+   --  compares it before and after.
+   --
+   --  @param Item Console to ask.
+   --  @return The count.
+   function Errors_Reported (Item : Console) return Natural;
+
    --  Report a structured condition on standard error.
    --
    --  Emits the severity word, the public diagnostic code and the localized
@@ -442,6 +459,8 @@ private
       Level         : Model_Runner.CLI.Options.Verbosity :=
         Model_Runner.CLI.Options.Normal;
       Structured    : Boolean := False;
+      Failure       : Natural := 0;
+      Error_Count   : Natural := 0;
    end record;
 
    type Standard_Output_Sink is limited new Model_Runner.Output.Sink with record

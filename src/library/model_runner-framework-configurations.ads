@@ -41,6 +41,10 @@ package Model_Runner.Framework.Configurations is
       --  The inputs that are required and have no value.
       Missing       : Name_Lists.Vector;
 
+      --  Why a missing input's default did not do, by input: the value it
+      --  came to and what it broke.
+      Missing_Why   : Value_Maps.Map;
+
       --  Facts to record: the templates' and what discovery found.
       Template_Facts   : Value_Maps.Map;
       Discovered_Facts : Value_Maps.Map;

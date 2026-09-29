@@ -5,6 +5,7 @@ name = AUnit
 description = Tests with AUnit, in a tests crate of their own.
 version = 1
 category = test
+standalone = false
 tags = aunit
 
 fact test_framework = AUnit

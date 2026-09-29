@@ -4,6 +4,7 @@ name = Alire
 description = Builds with the Alire package manager.
 version = 1
 category = build
+standalone = false
 tags = alire
 
 fact build_system = Alire

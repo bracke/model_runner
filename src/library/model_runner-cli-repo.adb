@@ -78,12 +78,16 @@ package body Model_Runner.CLI.Repo is
          Status := E.Exit_Status (Condition);
       end Fail;
 
+      --  Nothing of that name: said as the answer it is, with the status
+      --  a name not found has.
       procedure Not_Found is
       begin
-         Outcome := E.Make (E.Framework_Not_Found);
-         E.Add_Text (Outcome, "name", Argument);
-         Fail (Outcome);
+         Pres.Put_Message (Screen, "cli.repo.none", [Loc.Named ("name", Argument)]);
+         Status := E.Exit_Status (E.Make (E.Framework_Not_Found));
       end Not_Found;
+
+      Verbose : constant Boolean :=
+        Model_Runner.CLI.Options."=" (Item.Level, Model_Runner.CLI.Options.Verbose);
 
       --  Keep the graph in the project's state, when it has one and the
       --  graph changed since it was last kept.
@@ -212,6 +216,21 @@ package body Model_Runner.CLI.Repo is
             end if;
             --  Each with how it was found and how sure that is: a name that
             --  matches is a guess, and says so.
+            declare
+               Any : Boolean := False;
+            begin
+               for Index in 1 .. Rp.Relation_Count (Found) loop
+                  declare
+                     use type Rp.Relation_Kind;
+                     One : constant Rp.Relation := Rp.Relation_At (Found, Index);
+                  begin
+                     Any := Any or else (One.Kind = Rp.References and then Names.Contains (To_String (One.To)));
+                  end;
+               end loop;
+               if not Any then
+                  Pres.Put_Message (Screen, "cli.repo.no_refs", [Loc.Named ("name", Argument)]);
+               end if;
+            end;
             for Name of Names loop
                for Index in 1 .. Rp.Relation_Count (Found) loop
                   declare
@@ -246,21 +265,45 @@ package body Model_Runner.CLI.Repo is
                Graph : constant Tr.Graph := Tr.Build (Store, Found);
             begin
                if Action = "trace" then
-                  for Place of Tr.Touching (Graph, Argument) loop
-                     declare
-                        One : constant Tr.Edge := Tr.Edge_At (Graph, Natural'Value (Place));
-                     begin
-                        Pres.Put_Message
-                          (Screen, "cli.repo.edge",
-                           [Loc.Named ("name", To_String (One.From)),
-                            Loc.Named ("value", To_String (One.Kind)),
-                            Loc.Named ("other", To_String (One.To)),
-                            Loc.Named ("detail",
-                                       Ada.Characters.Handling.To_Lower
-                                         (Rp.Derivation'Image (One.Source) & ", "
-                                          & Rp.Confidence'Image (One.Sure)))]);
-                     end;
-                  end loop;
+                  declare
+                     --  The node as named, or as the file or the symbols a
+                     --  shorter name is: Quote is symbol:Hostkit.Shell.Quote.
+                     Nodes : Model_Runner.Framework.Name_Lists.Vector;
+                     Shown : Model_Runner.Framework.Name_Lists.Vector;
+                  begin
+                     Nodes.Append (Argument);
+                     Nodes.Append ("file:" & Argument);
+                     for Name of Rp.Find_Symbols (Found, Argument) loop
+                        Nodes.Append ("symbol:" & Name);
+                     end loop;
+                     for Node of Nodes loop
+                        for Place of Tr.Touching (Graph, Node) loop
+                           declare
+                              One  : constant Tr.Edge := Tr.Edge_At (Graph, Natural'Value (Place));
+                              Line : constant String :=
+                                To_String (One.From) & " " & To_String (One.Kind) & " "
+                                & To_String (One.To);
+                           begin
+                              --  Each edge once, however it was reached.
+                              if not Shown.Contains (Line) then
+                                 Shown.Append (Line);
+                                 Pres.Put_Message
+                                   (Screen, "cli.repo.edge",
+                                    [Loc.Named ("name", To_String (One.From)),
+                                     Loc.Named ("value", To_String (One.Kind)),
+                                     Loc.Named ("other", To_String (One.To)),
+                                     Loc.Named ("detail",
+                                                Ada.Characters.Handling.To_Lower
+                                                  (Rp.Derivation'Image (One.Source) & ", "
+                                                   & Rp.Confidence'Image (One.Sure)))]);
+                              end if;
+                           end;
+                        end loop;
+                     end loop;
+                     if Shown.Is_Empty then
+                        Pres.Put_Message (Screen, "cli.repo.no_edges", [Loc.Named ("name", Argument)]);
+                     end if;
+                  end;
                else
                   declare
                      Changed : Model_Runner.Framework.Name_Lists.Vector;
@@ -282,23 +325,68 @@ package body Model_Runner.CLI.Repo is
                            end loop;
                         end if;
                         if Changed.Is_Empty then
+                           --  A file or a symbol that is not there reaches
+                           --  nothing, and is said so; an entity of the
+                           --  project's state is asked of as it is.
+                           if not Is_File and then Ada.Strings.Fixed.Index (Argument, "-") = 0 then
+                              Not_Found;
+                              S.Close (Store);
+                              return;
+                           end if;
                            Changed.Append (Argument);
                         end if;
                      end;
                      Reach := Tr.Impact_Of (Graph, Changed);
-                     for Index in 1 .. Tr.Length (Reach) loop
-                        declare
-                           One : constant Tr.Reached := Tr.Element (Reach, Index);
-                        begin
-                           Pres.Put_Message
-                             (Screen, "cli.repo.reached",
-                              [Loc.Named ("value", To_String (One.Kind)),
-                               Loc.Named ("name", To_String (One.Id)),
-                               Loc.Named ("detail",
-                                          Ada.Characters.Handling.To_Lower
-                                            (Rp.Confidence'Image (One.Sure)))]);
-                        end;
-                     end loop;
+
+                     --  What matters first first: requirements, tasks and
+                     --  tests before files and symbols; a long run of one
+                     --  kind cut to its first ten unless asked for whole.
+                     declare
+                        Order  : constant Model_Runner.Framework.Name_Lists.Vector :=
+                          ["requirement", "task", "test", "specification", "decision",
+                           "component", "file", "unit", "symbol", "other"];
+                        Counts : Unbounded_String;
+                     begin
+                        for Kind of Order loop
+                           declare
+                              Of_Kind : Natural := 0;
+                           begin
+                              for Index in 1 .. Tr.Length (Reach) loop
+                                 declare
+                                    One : constant Tr.Reached := Tr.Element (Reach, Index);
+                                 begin
+                                    if To_String (One.Kind) = Kind then
+                                       Of_Kind := Of_Kind + 1;
+                                       if Verbose or else Of_Kind <= 10 then
+                                          Pres.Put_Message
+                                            (Screen, "cli.repo.reached",
+                                             [Loc.Named ("value", Kind),
+                                              Loc.Named ("name", To_String (One.Id)),
+                                              Loc.Named ("detail",
+                                                         Ada.Characters.Handling.To_Lower
+                                                           (Rp.Confidence'Image (One.Sure)))]);
+                                       end if;
+                                    end if;
+                                 end;
+                              end loop;
+                              if not Verbose and then Of_Kind > 10 then
+                                 Pres.Put_Message
+                                   (Screen, "cli.repo.more",
+                                    [Loc.Named ("count", Image (Of_Kind - 10)),
+                                     Loc.Named ("name", Kind)]);
+                              end if;
+                              if Of_Kind > 0 then
+                                 Append (Counts, (if Counts = Null_Unbounded_String then "" else ", ")
+                                         & Image (Of_Kind) & " " & Kind);
+                              end if;
+                           end;
+                        end loop;
+                        Pres.Put_Message
+                          (Screen, "cli.repo.impact_summary",
+                           [Loc.Named ("name", Argument),
+                            Loc.Named ("count", Image (Tr.Length (Reach))),
+                            Loc.Named ("detail", To_String (Counts))]);
+                     end;
                      Chosen := Tr.Select_Tests (Store, Reach);
                      Pres.Put_Message
                        (Screen, "cli.repo.selection",
@@ -322,6 +410,18 @@ package body Model_Runner.CLI.Repo is
                Pres.Put_Message
                  (Screen, "cli.repo.unit", [Loc.Named ("name", Unit)]);
             end loop;
+            if Units.Is_Empty then
+               if Rp.Find_Symbols (Found, Argument).Is_Empty
+                 and then Rp.Dependencies_Of (Found, Argument).Is_Empty
+                 and then Rp.Dependents_Of (Found, Argument).Is_Empty
+               then
+                  Not_Found;
+               else
+                  Pres.Put_Message
+                    (Screen, (if Action = "deps" then "cli.repo.no_deps" else "cli.repo.no_users"),
+                     [Loc.Named ("name", Argument)]);
+               end if;
+            end if;
          end;
       end if;
    end Run;

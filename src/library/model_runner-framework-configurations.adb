@@ -1,3 +1,4 @@
+with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 with Ada.Directories;
 
@@ -184,6 +185,26 @@ package body Model_Runner.Framework.Configurations is
       return False;
    end Matches;
 
+   --  A text made an identifier: what is not a letter, digit or _ an _,
+   --  no two together and none at either end; lower case for a crate.
+   function Nearest_Identifier (Text : String; Lower : Boolean) return String is
+      Result : Unbounded_String;
+   begin
+      for Char of Text loop
+         if Char in 'a' .. 'z' | '0' .. '9' then
+            Append (Result, Char);
+         elsif Char in 'A' .. 'Z' then
+            Append (Result, (if Lower then Ada.Characters.Handling.To_Lower (Char) else Char));
+         elsif Length (Result) > 0 and then Element (Result, Length (Result)) /= '_' then
+            Append (Result, '_');
+         end if;
+      end loop;
+      while Length (Result) > 0 and then Element (Result, Length (Result)) = '_' loop
+         Delete (Result, Length (Result), Length (Result));
+      end loop;
+      return To_String (Result);
+   end Nearest_Identifier;
+
    procedure Check_Input
      (Declared : Templates.Input_Declaration;
       Value    : String;
@@ -214,6 +235,17 @@ package body Model_Runner.Framework.Configurations is
                              Char in 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_')
             then
                Refuse ("it is not an identifier");
+            end if;
+
+         when Templates.Crate_Input =>
+            if Value'Length not in 3 .. 64 then
+               Refuse ("a crate's name is 3 to 64 characters");
+            elsif Value (Value'First) not in 'a' .. 'z'
+              or else not (for all Char of Value => Char in 'a' .. 'z' | '0' .. '9' | '_')
+            then
+               Refuse ("a crate's name is lower-case letters, digits and _, a letter first");
+            elsif Value (Value'Last) = '_' or else Ada.Strings.Fixed.Index (Value, "__") > 0 then
+               Refuse ("a crate's name has no _ last and no two together");
             end if;
 
          when Templates.Natural_Input =>
@@ -415,12 +447,33 @@ package body Model_Runner.Framework.Configurations is
             if Has then
                Check_Input (Declared, To_String (Value), Status);
 
+               --  A default that does not fit as it is may as its nearest
+               --  identifier: My-App is the crate my_app.
+               if E.Is_Error (Status) and then not Given.Contains (Id)
+                 and then not Found.Contains (Id)
+                 and then Declared.Kind in Templates.Identifier_Input | Templates.Crate_Input
+               then
+                  declare
+                     Near : constant String :=
+                       Nearest_Identifier (To_String (Value), Declared.Kind = Templates.Crate_Input);
+                     Again : E.Error_Info;
+                  begin
+                     Check_Input (Declared, Near, Again);
+                     if E.Is_Ok (Again) then
+                        Value := To_Unbounded_String (Near);
+                        Status := E.Success;
+                     end if;
+                  end;
+               end if;
+
                --  A value the caller gave that the input does not take is
                --  their mistake to hear about. One a default or the project
                --  supplied is only a suggestion that did not fit -- a
-               --  directory named my-app is no identifier -- and the input
-               --  is still to be asked for.
+               --  directory named p1 is no crate -- and the input is still
+               --  to be asked for, with why.
                if E.Is_Error (Status) and then not Given.Contains (Id) then
+                  Result.Missing_Why.Include
+                    (Id, To_String (Value) & " does not do: " & E.Text_Of (Status, "detail"));
                   Status := E.Success;
                   Has := False;
                elsif E.Is_Error (Status) then
@@ -796,6 +849,58 @@ package body Model_Runner.Framework.Configurations is
       new String'("adapter."), new String'("task_kind."), new String'("schema."),
       new String'("baseline.")];
 
+   --  The settings the harness reads, by their whole names: where a name
+   --  is given without its kind and the configuration holds none of it
+   --  yet, the one of these it is.
+   Known_Settings : constant array (1 .. 47) of access constant String :=
+     [new String'("list.automation.rules"),
+      new String'("list.verification.full"),
+      new String'("scalar.agents.max_active"),
+      new String'("scalar.agents.max_children"),
+      new String'("scalar.agents.max_depth"),
+      new String'("scalar.agents.max_invocations"),
+      new String'("scalar.agents.max_steps"),
+      new String'("scalar.agents.on_child_failure"),
+      new String'("scalar.agents.token_budget"),
+      new String'("scalar.bootstrap.import"),
+      new String'("scalar.context.rules"),
+      new String'("scalar.execution.max_cpu_seconds"),
+      new String'("scalar.execution.max_file_mb"),
+      new String'("scalar.execution.max_memory_mb"),
+      new String'("scalar.execution.max_processes"),
+      new String'("scalar.execution.network"),
+      new String'("scalar.execution.output_limit"),
+      new String'("scalar.execution.process_slots"),
+      new String'("scalar.execution.shell"),
+      new String'("scalar.execution.timeout"),
+      new String'("scalar.init.confirm"),
+      new String'("scalar.model.default"),
+      new String'("scalar.recovery.running"),
+      new String'("scalar.repository.state_policy"),
+      new String'("scalar.requirement.after_criteria_change"),
+      new String'("scalar.requirement.after_text_change"),
+      new String'("scalar.task.auto_accept"),
+      new String'("scalar.task.coordination"),
+      new String'("scalar.task.derived_kind"),
+      new String'("scalar.verification.default"),
+      new String'("scalar.verification.escalation"),
+      new String'("scalar.verification.requirements"),
+      new String'("scalar.verification.toolchain"),
+      new String'("scalar.work.agent"),
+      new String'("scalar.work.isolation"),
+      new String'("scalar.work.lease"),
+      new String'("scalar.work.max_workspaces"),
+      new String'("set.bootstrap.propose"),
+      new String'("set.bootstrap.sources"),
+      new String'("set.components"),
+      new String'("set.execution.allowed"),
+      new String'("set.execution.environment"),
+      new String'("set.requirement.transitions"),
+      new String'("set.task.auto_accept"),
+      new String'("set.task.forbidden"),
+      new String'("set.task.gates"),
+      new String'("set.task.transitions")];
+
    function Starts (Text, Prefix : String) return Boolean
    is (Text'Length > Prefix'Length
        and then Text (Text'First .. Text'First + Prefix'Length - 1) = Prefix);
@@ -1153,17 +1258,62 @@ package body Model_Runner.Framework.Configurations is
 
       for Position in Changes.Iterate loop
          declare
-            Name  : constant String := Value_Maps.Key (Position);
+            Written : constant String := Value_Maps.Key (Position);
+
+            --  NAME+=VALUE adds to a set or a list what it holds already.
+            Adding  : constant Boolean :=
+              Written'Length > 1 and then Written (Written'Last) = '+';
+            Short   : constant String :=
+              (if Adding then Written (Written'First .. Written'Last - 1) else Written);
+
+            --  A name without its kind is the setting of that name there
+            --  is: work.agent is scalar.work.agent when that is the one.
+            function Full_Name return String is
+               Found : Unbounded_String;
+               Count : Natural := 0;
+            begin
+               if (for some Prefix of Changeable => Starts (Short, Prefix.all)) then
+                  return Short;
+               end if;
+               for Prefix of Changeable loop
+                  if Records.Get (Result.Before, Prefix.all & Short) /= "" then
+                     Found := To_Unbounded_String (Prefix.all & Short);
+                     Count := Count + 1;
+                  end if;
+               end loop;
+               if Count = 0 then
+                  for Known of Known_Settings loop
+                     if Known'Length > Short'Length
+                       and then Known (Known'Last - Short'Length + 1 .. Known'Last) = Short
+                       and then Known (Known'Last - Short'Length) = '.'
+                       and then (for some Prefix of Changeable =>
+                                   Prefix.all & Short = Known.all)
+                     then
+                        Found := To_Unbounded_String (Known.all);
+                        Count := Count + 1;
+                     end if;
+                  end loop;
+               end if;
+               return (if Count = 1 then To_String (Found) else Short);
+            end Full_Name;
+
+            Name  : constant String := Full_Name;
             Given : constant String := Value_Maps.Element (Position);
+            Old   : constant String := Records.Get (Result.Before, Name);
             Value : constant String :=
               (if Starts (Name, "set.") or else Starts (Name, "list.")
-               then Lines_From (Given) else Given);
-            Old   : constant String := Records.Get (Result.Before, Name);
+               then (if Adding and then Old /= "" then Old & ASCII.LF & Lines_From (Given)
+                     else Lines_From (Given))
+               else Given);
          begin
             if not (for some Prefix of Changeable => Starts (Name, Prefix.all)) then
-               Status := Refused (Name, "only the settings can be changed: "
-                                  & "scalar., set., list., map., profile., fact., adapter."
-                                  & " and task_kind. fields");
+               Status := Refused (Name, "a setting is named with its kind: scalar." & Name
+                                  & " for one value, set." & Name & " for several; the kinds"
+                                  & " are scalar., set., list., map., profile., fact., adapter.,"
+                                  & " task_kind., schema. and baseline.");
+               return;
+            elsif Adding and then not (Starts (Name, "set.") or else Starts (Name, "list.")) then
+               Status := Refused (Name, "+= adds to a set. or a list.; this is one value");
                return;
             elsif not Records.Is_Field_Name (Name)
               or else (Starts (Name, "fact.") and then not Facts.Is_Key (Name (Name'First + 5 .. Name'Last)))

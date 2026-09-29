@@ -95,7 +95,15 @@ package body Model_Runner.Framework.Bootstrap is
       Titled  : Boolean := False;
       Start   : Natural := Text'First;
 
-      procedure Found (Kind : Output_Kind; Provenance, Title, Body_Text : String)
+      --  A heading naming a requirement, until its first normative line.
+      Heading_Id    : Unbounded_String;
+      Heading_Title : Unbounded_String;
+
+      --  The requirement an Acceptance: line is about: the last one found.
+      Last_Requirement : Natural := 0;
+
+      procedure Found
+        (Kind : Output_Kind; Provenance, Title, Body_Text : String; Given : String := "")
       is
       begin
          Append
@@ -105,8 +113,18 @@ package body Model_Runner.Framework.Bootstrap is
              Key        => To_Unbounded_String (Key),
              Title      => To_Unbounded_String (Title),
              Text       => To_Unbounded_String (Body_Text),
-             Source     => To_Unbounded_String (Path)));
+             Source     => To_Unbounded_String (Path),
+             Criteria   => Null_Unbounded_String,
+             Given_Id   => To_Unbounded_String (Given)));
+         if Kind in Imported_Item | Requirement_Candidate then
+            Last_Requirement := Length (Result);
+         end if;
       end Found;
+
+      function Starts_With (Item, Prefix : String) return Boolean
+      is (Item'Length > Prefix'Length
+          and then Ada.Characters.Handling.To_Lower (Item (Item'First .. Item'First + Prefix'Length - 1))
+                   = Ada.Characters.Handling.To_Lower (Prefix));
 
       procedure Line_Of (Raw : String) is
          Line : constant String := Trim (Raw);
@@ -121,13 +139,48 @@ package body Model_Runner.Framework.Bootstrap is
          end if;
 
          if Item (Item'First) = '#' then
-            if not Titled then
-               Titled := True;
-               Found (Specification_Candidate, Path,
-                      Trim (Ada.Strings.Fixed.Trim
-                              (Item, Ada.Strings.Maps.To_Set ('#'),
-                               Ada.Strings.Maps.Null_Set)),
-                      Text);
+            declare
+               Heading : constant String :=
+                 Trim (Ada.Strings.Fixed.Trim
+                         (Item, Ada.Strings.Maps.To_Set ('#'), Ada.Strings.Maps.Null_Set));
+               Space   : constant Natural := Ada.Strings.Fixed.Index (Heading & " ", " ");
+               First   : constant String := Heading (Heading'First .. Space - 1);
+            begin
+               if not Titled then
+                  Titled := True;
+                  Found (Specification_Candidate, Path, Heading, Text);
+               end if;
+
+               --  ## REQ-SHELL-001 Quoting: the requirement's identifier and
+               --  title, its statement the next normative line.
+               Heading_Id := Null_Unbounded_String;
+               if First'Length > 4 and then First (First'First .. First'First + 3) = "REQ-"
+                 and then Identifiers.Is_Valid (First)
+               then
+                  Heading_Id := To_Unbounded_String (First);
+                  Heading_Title := To_Unbounded_String
+                    (Trim (Heading (Space .. Heading'Last)));
+               end if;
+            end;
+            return;
+         end if;
+
+         --  Acceptance: what the requirement just stated is judged by.
+         if Starts_With (Item, "Acceptance:") or else Starts_With (Item, "Acceptance criteria:") then
+            if Last_Requirement > 0 then
+               declare
+                  Held : Output := Result.Outputs (Last_Requirement);
+                  Said : constant String := Trim (Item (Colon + 1 .. Item'Last));
+               begin
+                  if Said /= "" then
+                     Held.Criteria :=
+                       (if Held.Criteria = Null_Unbounded_String then To_Unbounded_String (Said)
+                        else Held.Criteria & ASCII.LF & Said);
+                     Result.Outputs (Last_Requirement) := Held;
+                  end if;
+               end;
+            else
+               Found (Issue, Path & "#" & Item, "acceptance criteria before any requirement", Item);
             end if;
             return;
          end if;
@@ -150,7 +203,8 @@ package body Model_Runner.Framework.Bootstrap is
                       Key        => To_Unbounded_String (Name),
                       Title      => To_Unbounded_String (Name),
                       Text       => To_Unbounded_String (Value),
-                      Source     => To_Unbounded_String (Path)));
+                      Source     => To_Unbounded_String (Path),
+                      others     => <>));
                else
                   Found (Issue, Path & "#" & Item, "a fact that does not read", Item);
                end if;
@@ -168,7 +222,22 @@ package body Model_Runner.Framework.Bootstrap is
                Said : constant String := Trim (Item (Colon + 1 .. Item'Last));
             begin
                Found (Imported_Item, Path & "#" & Id, Id & " " & Headline (Said),
-                      Said);
+                      Said, Given => Id);
+            end;
+            return;
+         end if;
+
+         --  DEC-001: text -- a decision the document names.
+         if Colon > Item'First
+           and then Item'Length > 4
+           and then Item (Item'First .. Item'First + 3) = "DEC-"
+           and then Identifiers.Is_Valid (Item (Item'First .. Colon - 1))
+         then
+            declare
+               Id   : constant String := Item (Item'First .. Colon - 1);
+               Said : constant String := Trim (Item (Colon + 1 .. Item'Last));
+            begin
+               Found (Decision_Candidate, Path & "#" & Id, Headline (Said), Said, Given => Id);
             end;
             return;
          end if;
@@ -184,11 +253,20 @@ package body Model_Runner.Framework.Bootstrap is
             return;
          end if;
 
-         if Has_Word (Item, "SHALL") or else Has_Word (Item, "MUST") then
+         if Has_Word (Item, "SHALL") or else Has_Word (Item, "MUST")
+           or else Has_Word (Item, "SHOULD")
+         then
             declare
                Print : constant String := Fingerprint (Item);
             begin
-               if Seen.Contains (Print) then
+               if Heading_Id /= Null_Unbounded_String then
+                  --  The statement of the requirement its heading names.
+                  Found (Imported_Item, Path & "#" & To_String (Heading_Id),
+                         (if Heading_Title = Null_Unbounded_String then Headline (Item)
+                          else To_String (Heading_Title)),
+                         Item, Given => To_String (Heading_Id));
+                  Heading_Id := Null_Unbounded_String;
+               elsif Seen.Contains (Print) then
                   Found (Issue, Path & "#twice-" & Print,
                          "stated twice: " & Headline (Item), Item);
                else
@@ -416,11 +494,12 @@ package body Model_Runner.Framework.Bootstrap is
                end if;
                Intent.Propose
                  (Item, Change, Kind, Field (Next.Key), Field (Next.Title),
-                  Field (Next.Text), "", Field (Next.Source), Provenance,
-                  "project", Id, Status);
+                  Field (Next.Text), Field (Next.Criteria), Field (Next.Source), Provenance,
+                  "project", Id, Status, Given => Field (Next.Given_Id));
                if E.Is_Ok (Status) then
                   Mark_Imported (Kind, To_String (Id));
                   Result.Created := Result.Created + 1;
+                  Result.Made.Append (To_String (Id));
                end if;
             end Propose;
          begin
@@ -501,7 +580,7 @@ package body Model_Runner.Framework.Bootstrap is
                         end if;
                         Intent.Propose
                           (Item, Change, Intent.Requirement, Field (Next.Key),
-                           Field (Next.Title), Field (Next.Text), "",
+                           Field (Next.Title), Field (Next.Text), Field (Next.Criteria),
                            Field (Next.Source), Provenance, "project", Id, Status,
                            Given => Given);
                         Moved := Moved and then E.Is_Ok (Status);
@@ -515,6 +594,7 @@ package body Model_Runner.Framework.Bootstrap is
                         end if;
                         if E.Is_Ok (Status) then
                            Result.Created := Result.Created + 1;
+                           Result.Made.Append (To_String (Id));
                         end if;
                         if Moved then
                            declare
@@ -569,6 +649,67 @@ package body Model_Runner.Framework.Bootstrap is
          end;
          <<Next_Output>>
       end loop;
+
+      --  What came from a document it read and that document no longer
+      --  says: an issue for a person, who retires it or keeps it -- with
+      --  what was made from the document now, which may be its successor.
+      declare
+         Read_From : Name_Lists.Vector;
+         Said_Now  : Name_Lists.Vector;
+      begin
+         for Next of Found.Outputs loop
+            if not Read_From.Contains (Field (Next.Source)) then
+               Read_From.Append (Field (Next.Source));
+            end if;
+            Said_Now.Append (Field (Next.Provenance));
+         end loop;
+         for Kind in Intent.Requirement .. Intent.Decision loop
+            for Known of Intent.List (Item, Kind) loop
+               declare
+                  Held : Intent.Entity;
+                  Read : E.Error_Info;
+               begin
+                  Intent.Read (Item, Kind, Known, Held, Read);
+                  if E.Is_Ok (Read)
+                    and then Read_From.Contains (To_String (Held.Source))
+                    and then Length (Held.Provenance) > 0
+                    and then not Said_Now.Contains (To_String (Held.Provenance))
+                    and then To_String (Held.State) not in "obsolete" | "superseded" | "rejected"
+                  then
+                     declare
+                        Instead : Unbounded_String;
+                        Said    : Results.Result;
+                        Why     : constant String :=
+                          Known & ": " & To_String (Held.Source) & " no longer says it";
+                     begin
+                        for Made of Result.Made loop
+                           Append (Instead, (if Instead = Null_Unbounded_String then "" else ", ")
+                                   & Made);
+                        end loop;
+                        Said :=
+                          (Kind       => Results.Diagnostic,
+                           Producer   => To_Unbounded_String ("bootstrap"),
+                           Summary    => To_Unbounded_String
+                                           (Why & "; req move " & Known
+                                            & " obsolete retires it, or keep it"
+                                            & (if Instead = Null_Unbounded_String then ""
+                                               else "; made from the document now: "
+                                                    & To_String (Instead))),
+                           Payload    => Held.Text,
+                           Provenance => Held.Provenance,
+                           others     => <>);
+                        Results.Add (Item, Change, Said, Status);
+                        if E.Is_Error (Status) then
+                           return;
+                        end if;
+                        Result.Issues := Result.Issues + 1;
+                        Result.Stale.Append (To_String (Said.Summary));
+                     end;
+                  end if;
+               end;
+            end loop;
+         end loop;
+      end;
 
       --  What it did, kept as a result: each output it was given, and how
       --  many it made, found there already, and raised as issues.

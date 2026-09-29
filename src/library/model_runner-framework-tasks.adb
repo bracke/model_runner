@@ -1000,7 +1000,8 @@ package body Model_Runner.Framework.Tasks is
                          (Records.Get (Value, "blocking_reasons"),
                           Children_Reason) = 1
               and then (for all Child of Children (Item, Id) =>
-                          not Holds_Parent (Item, Child, State_Of (Item, Child)))
+                          not Holds_Parent (Item, Child, State_Of (Item, Child))
+                          and then State_Of (Item, Child) /= "candidate")
             then
                Move (Item, Change, Id, "accepted", "its children are done",
                      Status => Status);
@@ -1046,6 +1047,13 @@ package body Model_Runner.Framework.Tasks is
          Stores.Put (Change, Indexes_Area, Readiness_Name, Cache);
       end if;
    end Recompute_Readiness;
+
+   -----------------
+   -- Waiting_For --
+   -----------------
+
+   function Waiting_For (Children : Name_Lists.Vector) return String
+   is (Children_Reason & Joined (Children, ", "));
 
    -----------------------
    -- Block_On_Children --
@@ -1441,7 +1449,7 @@ package body Model_Runner.Framework.Tasks is
                            Stores.Put (Change, Tasks_Area, To_String (Earlier), Value);
                            Done.Append (Key);
                         elsif not Done.Contains (Key) then
-                           Fields.Include ("title", "Implement " & Requirement);
+                           Fields.Include ("title", Requirement & ": " & To_String (Held.Title));
                            Fields.Include ("kind", Kind);
                            Fields.Include ("requirements", Requirement);
                            if To_String (Held.Scope) /= "project" then

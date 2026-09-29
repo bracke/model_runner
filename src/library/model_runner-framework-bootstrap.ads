@@ -46,6 +46,12 @@ package Model_Runner.Framework.Bootstrap is
       Title      : Ada.Strings.Unbounded.Unbounded_String;
       Text       : Ada.Strings.Unbounded.Unbounded_String;
       Source     : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  What it is judged by, from the document's Acceptance: lines.
+      Criteria   : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  The identifier the document gives it, where it gives one.
+      Given_Id   : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    --  Things found.
@@ -56,6 +62,13 @@ package Model_Runner.Framework.Bootstrap is
       Created  : Natural := 0;
       Existing : Natural := 0;
       Issues   : Natural := 0;
+
+      --  What it made, by identifier.
+      Made     : Name_Lists.Vector;
+
+      --  Each entry a document it read no longer says, and why that
+      --  matters: an issue each.
+      Stale    : Name_Lists.Vector;
    end record;
 
    --  Add an output.
@@ -81,12 +94,16 @@ package Model_Runner.Framework.Bootstrap is
    --
    --  Its first heading makes it a specification candidate. A line naming
    --  a requirement by its identifier -- REQ-IO-003: text -- is an item the
-   --  document has accepted, and is imported. Any other line with SHALL or
-   --  MUST in capitals is a requirement candidate; a line starting
-   --  Decision: is a decision candidate; a line Fact: KEY = VALUE is a
-   --  discovered fact, and one that does not read an issue; a normative
-   --  line said twice is an issue. Identifiers are given under a key made
-   --  from the document's name.
+   --  document has accepted, and is imported; so is the first normative
+   --  line under a heading that names one -- ## REQ-IO-003 Title -- with
+   --  the heading's title. Any other line with SHALL, MUST or SHOULD in
+   --  capitals is a requirement candidate; a line Acceptance: says what
+   --  the requirement before it is judged by. A line starting Decision: is
+   --  a decision candidate, and one naming a decision by its identifier --
+   --  DEC-001: text -- is one under that identifier. A line Fact: KEY =
+   --  VALUE is a discovered fact, and one that does not read an issue; a
+   --  normative line said twice is an issue. Identifiers not given are
+   --  given under a key made from the document's name.
    --
    --  @param Path The document's path, which provenance keys start with.
    --  @param Text Its text.

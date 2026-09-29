@@ -132,4 +132,16 @@ package Model_Runner.CLI.Project_Commands is
       Screen : in out Model_Runner.Presentation.Console;
       Agent  : Model_Runner.Framework.Work.Agent_Runner'Class);
 
+   --  Carry out a project command given on the command line -- req,
+   --  state, bootstrap and the rest -- in the project --directory names,
+   --  as the session carries out its slash form.
+   --
+   --  @param Item The parsed command, its word in Action.
+   --  @param Screen Where to write.
+   --  @param Status The exit status: that of the first error reported.
+   procedure Run_From_Shell
+     (Item   : Model_Runner.CLI.Options.Command;
+      Screen : in out Model_Runner.Presentation.Console;
+      Status : out Natural);
+
 end Model_Runner.CLI.Project_Commands;

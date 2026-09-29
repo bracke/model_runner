@@ -5979,6 +5979,29 @@ package body Tests.Framework_Cases is
                  "a proposed task does not say which agent made it, from which task: "
                  & R.Get (Defined, "created_by") & " / " & R.Get (Defined, "origin"));
       end;
+
+      --  Proposed again, it is made once; one that cannot be made is said
+      --  with why, not dropped.
+      Work (Proposing & LF & "Fix the parser; kind=nowhere");
+      Assert (Done.Proposed.Is_Empty and then Natural (Done.Kept_Back.Length) = 3
+              and then Contains (Done.Kept_Back.First_Element, "already")
+              and then Contains (Done.Kept_Back.Last_Element, "nowhere is not a kind"),
+              "proposals made twice or dropped unsaid: "
+              & (if Done.Kept_Back.Is_Empty then "" else Done.Kept_Back.Last_Element));
+
+      --  A runner is asked whether it can start before its task moves,
+      --  and says what it is for the record.
+      declare
+         Runner : constant Scripted_Agent :=
+           (File => Null_Unbounded_String, Answer => Null_Unbounded_String, Broken => False);
+         Asked  : E.Error_Info := E.Success;
+         Named  : Unbounded_String;
+      begin
+         Runner.Check_Start (Store, Asked);
+         Runner.Describe (Named);
+         Assert (E.Is_Ok (Asked) and then Named = Null_Unbounded_String,
+                 "a runner that says nothing stopped its start or said something");
+      end;
       S.Close (Store);
 
       --  Where it may not propose, it is an issue and nothing more.
@@ -8386,7 +8409,7 @@ package body Tests.Framework_Cases is
          Wk.Recover_On_Opening (Store, (others => <>), Said, Status);
          for Line of Said loop
             Said_Back := Said_Back or else Ada.Strings.Fixed.Index (Line, "from its history") > 0;
-            Acted := Acted or else Ada.Strings.Fixed.Index (Line, "events nothing had acted on") > 0;
+            Acted := Acted or else Ada.Strings.Fixed.Index (Line, "derived TASK-") > 0;
          end loop;
          Cf.Read (Store, Config, Status);
          Assert (E.Is_Ok (Status) and then Said_Back,

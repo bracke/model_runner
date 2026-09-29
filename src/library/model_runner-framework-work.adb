@@ -22,6 +22,8 @@ with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Verification;
 with Model_Runner.Framework.Workspaces;
+with Model_Runner.Localization;
+with Model_Runner.Platform;
 with Model_Runner.Text;
 
 package body Model_Runner.Framework.Work is
@@ -409,6 +411,69 @@ package body Model_Runner.Framework.Work is
       Stores.Commit (Item, Change, Status);
    end Recover;
 
+   function Raw_Why_Of (Condition : E.Error_Info) return String is
+      Result : Unbounded_String := To_Unbounded_String (E.Diagnostic_Code (Condition.Code));
+   begin
+      for Index in 1 .. Condition.Parameter_Total loop
+         declare
+            One : constant E.Parameter := Condition.Parameters (Index);
+         begin
+            Append (Result, (if Index = 1 then " (" else "; ")
+                            & Model_Runner.Text.To_String (One.Name) & ": "
+                            & (case One.Kind is
+                                  when E.Param_Integer | E.Param_Bytes | E.Param_Tokens
+                                     | E.Param_Offset => Model_Runner.Text.Image (One.Int_Value),
+                                  when E.Param_Boolean => (if One.Bool_Value then "yes" else "no"),
+                                  when others => Model_Runner.Text.To_String (One.Text_Value)));
+         end;
+      end loop;
+      if Condition.Parameter_Total > 0 then
+         Append (Result, ")");
+      end if;
+      return To_String (Result);
+   end Raw_Why_Of;
+
+   --  The words a condition is said in -- the catalog's English, which the
+   --  records a person reads later are kept in -- and its code, for looking
+   --  it up.
+   English : Model_Runner.Localization.Catalog;
+
+   function Why_Of (Condition : E.Error_Info) return String is
+   begin
+      if not Model_Runner.Localization.Is_Ready (English) then
+         Model_Runner.Localization.Open (English, Model_Runner.Platform.Catalog_Path, "en");
+      end if;
+      if Model_Runner.Localization.Is_Ready (English) then
+         return Model_Runner.Localization.Describe (English, Condition)
+           & " [" & E.Diagnostic_Code (Condition.Code) & "]";
+      end if;
+      return Raw_Why_Of (Condition);
+   end Why_Of;
+
+   --  The first few diagnostics a piece of evidence recorded, said after
+   --  a colon: what a person looks at first.
+   function First_Diagnostics (Item : Stores.Store; Evidence : String) return String is
+      Found  : constant Verification.Diagnostic_List :=
+        Verification.Diagnostics_Of (Item, Evidence);
+      Result : Unbounded_String;
+   begin
+      for Index in 1 .. Natural'Min (3, Verification.Length (Found)) loop
+         declare
+            One : constant Verification.Diagnostic := Verification.Element (Found, Index);
+         begin
+            Append (Result, (if Index = 1 then ": " else "; ")
+                    & (if Length (One.File) > 0
+                       then To_String (One.File) & ":" & Trim (Natural'Image (One.Line)) & ": "
+                       else "")
+                    & To_String (One.Message));
+         end;
+      end loop;
+      if Verification.Length (Found) > 3 then
+         Append (Result, "; and" & Natural'Image (Verification.Length (Found) - 3) & " more");
+      end if;
+      return To_String (Result);
+   end First_Diagnostics;
+
    ------------------------
    -- Recover_On_Opening --
    ------------------------
@@ -659,10 +724,14 @@ package body Model_Runner.Framework.Work is
          Done : Orchestration.Step_Report;
          Ran  : E.Error_Info;
       begin
+         --  Routine, and not said as such: only what it made -- a task a
+         --  requirement implies -- and what it could not do.
          Orchestration.Step (Item, Done, Ran);
-         if Done.Events_Seen > 0 then
-            Said.Append ("acted on" & Natural'Image (Done.Events_Seen)
-                         & " events nothing had acted on yet");
+         for Id of Done.Derived loop
+            Said.Append ("derived " & Id & " from an accepted requirement");
+         end loop;
+         if E.Is_Error (Ran) then
+            Said.Append ("the rules could not all be acted on: " & Why_Of (Ran));
          end if;
       end;
 
@@ -683,27 +752,6 @@ package body Model_Runner.Framework.Work is
 
    --  A condition as a reason reads: its code, and what it names -- a
    --  person acts on the detail, not on the name of a code.
-   function Why_Of (Condition : E.Error_Info) return String is
-      Result : Unbounded_String := To_Unbounded_String (E.Diagnostic_Code (Condition.Code));
-   begin
-      for Index in 1 .. Condition.Parameter_Total loop
-         declare
-            One : constant E.Parameter := Condition.Parameters (Index);
-         begin
-            Append (Result, (if Index = 1 then " (" else "; ")
-                            & Model_Runner.Text.To_String (One.Name) & ": "
-                            & (case One.Kind is
-                                  when E.Param_Integer | E.Param_Bytes | E.Param_Tokens
-                                     | E.Param_Offset => Model_Runner.Text.Image (One.Int_Value),
-                                  when E.Param_Boolean => (if One.Bool_Value then "yes" else "no"),
-                                  when others => Model_Runner.Text.To_String (One.Text_Value)));
-         end;
-      end loop;
-      if Condition.Parameter_Total > 0 then
-         Append (Result, ")");
-      end if;
-      return To_String (Result);
-   end Why_Of;
 
    --  What an agent's call may use, as its invocation records it: the
    --  tools it is offered -- reading always, checks, writing and helpers
@@ -840,14 +888,16 @@ package body Model_Runner.Framework.Work is
       end if;
 
       Say ("requirement revisions", Fields_With (Plan, "applies.REQ", Kept => 3));
-      Say ("task definition revision", Natural'Image (Records.Revision (Defined)));
+      Say ("task definition revision", Trim (Natural'Image (Records.Revision (Defined))));
       Say ("why it could start", Records.Get (State, "admission"));
       Say ("decisions", Fields_With (Plan, "applies.DEC", Kept => 3));
       Say ("context", Records.Get (Call, "context_manifest")
            & (if Records.Get (Plan, "rendered") = "" then ""
               else ", rendered as " & Records.Get (Plan, "rendered")));
-      Say ("model", Records.Get (Call, "model_profile")
+      Say ("agent", (if Records.Get (State, "runner") /= "" then Records.Get (State, "runner")
+                     else Records.Get (Call, "model_profile"))
            & (if Invocation = "" then "" else ", in " & Invocation));
+      Say ("answer", Records.Get (Call, "result"));
       Say ("files changed", Records.Get (State, "changed_files"));
       Say ("workspace", Records.Get (State, "current_workspace"));
       Say ("verification", Records.Get (State, "current_verification")
@@ -1480,6 +1530,9 @@ package body Model_Runner.Framework.Work is
       --  The result its answer was kept as, which its end names.
       Last_Result : Unbounded_String;
 
+      --  The parts its answer split the task into, as candidate children.
+      Split_Into  : Name_Lists.Vector;
+
       --  Whether it went over its token budget.
       Over_Budget : Boolean := False;
 
@@ -1583,6 +1636,14 @@ package body Model_Runner.Framework.Work is
          end if;
       end;
 
+      --  A runner that cannot start is a setup to put right: said, and the
+      --  task left ready, no attempt spent on it.
+      Status := E.Success;
+      Runner.Check_Start (Item, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
       --  An agent of its own, holding the task, in a new generation, with
       --  what its task's kind and its role allow.
       declare
@@ -1621,6 +1682,12 @@ package body Model_Runner.Framework.Work is
       end if;
       if E.Is_Ok (Status) then
          Annotate (Item, Change, Task_Id, "admission", Admission (Item, Task_Id, Isolated));
+         declare
+            Named : Unbounded_String;
+         begin
+            Runner.Describe (Named);
+            Annotate (Item, Change, Task_Id, "runner", To_String (Named));
+         end;
          Annotate (Item, Change, Task_Id, "active_agent", To_String (Result.Agent_Id));
          Stores.Commit (Item, Change, Status);
       end if;
@@ -1925,8 +1992,7 @@ package body Model_Runner.Framework.Work is
          Conclude ("blocked", "its work ran out of time", "failed");
          return;
       elsif E.Is_Error (Ran) then
-         Conclude ("failed", "the agent could not be run: " & Why_Of (Ran),
-                   "failed");
+         Conclude ("failed", Why_Of (Ran), "failed");
          return;
       end if;
 
@@ -1976,7 +2042,10 @@ package body Model_Runner.Framework.Work is
 
       Invocations.Hold (Invocations.Work_Claim, To_String (Answer), Said, Held);
       if E.Is_Error (Held) then
-         Conclude ("failed", "its answer did not keep to the work contract", "failed");
+         Conclude ("failed", "its answer did not keep to the work contract: "
+                   & E.Text_Of (Held, "name") & ": " & E.Text_Of (Held, "detail")
+                   & "; the answer is kept as "
+                   & To_String (Last_Result), "failed");
          return;
       end if;
       Result.Claimed := To_Unbounded_String (Invocations.Claim (Said, "status"));
@@ -2029,6 +2098,29 @@ package body Model_Runner.Framework.Work is
          Tasks.Definition (Item, Task_Id, Defined, Held);
          for Line of Proposed loop
             declare
+               --  A task of that title there already: this one, or one not
+               --  ended. What is proposed twice is made once.
+               function Same_Title (Title : String) return String is
+                  Lower : constant String := Ada.Characters.Handling.To_Lower (Title);
+               begin
+                  for Other of Tasks.List (Item) loop
+                     if Tasks.State_Of (Item, Other) not in "complete" | "cancelled" | "rejected" then
+                        declare
+                           Its  : Records.Item;
+                           Read : E.Error_Info;
+                        begin
+                           Tasks.Definition (Item, Other, Its, Read);
+                           if E.Is_Ok (Read)
+                             and then Ada.Characters.Handling.To_Lower (Records.Get (Its, "title")) = Lower
+                           then
+                              return Other;
+                           end if;
+                        end;
+                     end if;
+                  end loop;
+                  return "";
+               end Same_Title;
+
                --  TITLE, then as it may say, ; kind=K ; component=C ;
                --  depends_on=TASK -- a candidate's own, not assumed from this
                --  task; it is proposal data until a person accepts it.
@@ -2056,6 +2148,8 @@ package body Model_Runner.Framework.Work is
             begin
                if Title = "" or else Title = "-" then
                   null;
+               elsif May_Propose and then Same_Title (Title) /= "" then
+                  Result.Kept_Back.Append (Title & ": it is " & Same_Title (Title) & " already");
                elsif May_Propose then
                   Fields.Include ("title", Title);
                   Fields.Include ("kind", Said_Of ("kind", Records.Get (Defined, "kind")));
@@ -2075,9 +2169,11 @@ package body Model_Runner.Framework.Work is
                      Result.Proposed.Append (To_String (Made));
                   else
                      Append (Kept_Back, ASCII.LF & "proposed: " & Title);
+                     Result.Kept_Back.Append (Title & ": " & Why_Of (Held));
                   end if;
                else
                   Append (Kept_Back, ASCII.LF & "proposed: " & Title);
+                  Result.Kept_Back.Append (Title & ": this task's agent may not propose tasks");
                end if;
             end;
          end loop;
@@ -2105,6 +2201,7 @@ package body Model_Runner.Framework.Work is
                      Made, Held);
                   if E.Is_Ok (Held) then
                      Result.Proposed.Append (To_String (Made));
+                     Split_Into.Append (To_String (Made));
                   else
                      Append (Kept_Back, ASCII.LF & "part: " & Title);
                   end if;
@@ -2210,7 +2307,12 @@ package body Model_Runner.Framework.Work is
       end if;
 
       if To_String (Result.Claimed) in "blocked" | "issue" then
-         Conclude ("blocked", To_String (Result.Summary), "completed");
+         --  Split into parts, it waits for them: once they are accepted and
+         --  done it goes back to work on its own, and not before.
+         Conclude ("blocked",
+                   (if Split_Into.Is_Empty then To_String (Result.Summary)
+                    else Tasks.Waiting_For (Split_Into) & " (" & To_String (Result.Summary) & ")"),
+                   "completed");
          return;
       elsif To_String (Result.Claimed) = "failed" then
          Conclude ("failed", To_String (Result.Summary), "completed");
@@ -2452,7 +2554,8 @@ package body Model_Runner.Framework.Work is
          end if;
 
          if not Passed then
-            Conclude ("failed", To_String (Result.Evidence_Id) & " did not pass",
+            Conclude ("failed", To_String (Result.Evidence_Id) & " did not pass"
+                      & First_Diagnostics (Item, To_String (Result.Evidence_Id)),
                       "completed");
             return;
          end if;

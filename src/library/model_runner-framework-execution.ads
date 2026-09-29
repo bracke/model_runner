@@ -103,6 +103,14 @@ package Model_Runner.Framework.Execution is
    --  @return True when it has.
    function Work_Withdrawn return Boolean;
 
+   --  Whether whoever runs the harness has asked it to stop -- Ctrl-C --
+   --  through the token Watch was given: asked by a runner whose program
+   --  ended before the harness stopped it, the interrupt having reached it
+   --  first.
+   --
+   --  @return True when the watched token is cancelled.
+   function Cancel_Requested return Boolean;
+
    --  The project's policy, from its configuration.
    --
    --  @param Item The store.
@@ -121,6 +129,16 @@ package Model_Runner.Framework.Execution is
    --  @param Command The command.
    --  @return Its words.
    function Words_Of (Command : String) return Name_Lists.Vector;
+
+   --  Why the policy would not run a command, before anything is run: it
+   --  is empty, it needs a shell the policy does not allow, its program is
+   --  not one the policy allows -- listed by its name or by its path -- or
+   --  a limit it asks for cannot be set.
+   --
+   --  @param Rules The policy.
+   --  @param Command What would be run.
+   --  @return Why not, or the empty string when it would be run.
+   function Refusal (Rules : Policy; Command : String) return String;
 
    --  Run a command.
    --

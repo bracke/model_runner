@@ -251,7 +251,10 @@ package Model_Runner.Framework.Verification is
    function Gates (Item : Stores.Store; Task_Id : String) return Gate_List;
 
    --  Complete a task through its gates, and mark the requirements it
-   --  serves implemented.
+   --  serves implemented. A task not in verification -- accepted, failed,
+   --  or blocked with nothing of its own open -- whose work was done by hand
+   --  is taken through running and verification to completion, as one
+   --  generation the harness records; a block is set aside by it.
    --
    --  @param Item The store.
    --  @param Change The transaction.

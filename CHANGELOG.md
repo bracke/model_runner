@@ -7,6 +7,36 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The session's project commands run from the shell:** `model_runner req`,
+  `state`, `bootstrap`, `config`, `reconfigure`, `check`, `decision`,
+  `spec`, `result`, `sandbox`, `instruct`, `accept` and `reject`, with
+  `--directory` and `--format`, and the exit status of what failed. A
+  requirement, a status or a setting no longer needs a model loaded.
+- **Settings by their short name and added to:** `reconfigure
+  work.agent=...` finds `scalar.work.agent`; `set.NAME+=A,B` adds to a set
+  instead of replacing it; `config` shows a set a line an item.
+- **Every step says what comes next:** a failed or blocked task names
+  `task accept` and `task complete`; work waiting to be taken in names
+  `task integrate`; `work` with nothing named lists what is ready, else the
+  candidates, else how to make a task; `init`, `bootstrap` and empty lists
+  say how to go on. Missing inputs are listed all at once, each as
+  `--set NAME=...` with what it takes -- the kinds and what each needs, the
+  project's components, why a directory's name did not do as a default.
+- **A task can always be finished:** `task complete` on a task done by
+  hand -- accepted, failed or blocked -- takes it through running and
+  verification to completion when its gates pass. A task split into parts
+  waits for them and goes back to work once they are done.
+- **A project a run holds can be looked at:** `task list`, `show`, `plan`,
+  `audit`, `state`, `config`, `result` and the registers' listings read it
+  as it is, and say so, instead of failing.
+- **Bootstrap keeps what the author wrote:** `## REQ-ID Title` headings keep
+  the identifier and title, `Acceptance:` lines are the requirement's
+  criteria, `DEC-001:` lines are decisions under that identifier, SHOULD
+  lines are candidates, and what a document no longer says is named with
+  what was made from it now.
+- **`/deps` and `/users`** in the session, and `/result` for any
+  identifier the harness prints: INV-, CTX-, VER- and AG- as well as RES-.
+
 - **The specification is a gate:** every one of its 690 requirements is met
   or not applicable, each met one names the test that shows it, and the
   repository checks fail when a row is not met, its test is gone, or the
@@ -1521,6 +1551,12 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- `generic` projects no longer report their own component as unknown: the
+  consistency check takes the components as tasks do.
+- An access-to-subprogram type (`access function return Boolean`) no
+  longer declares a symbol called `return`.
+- `work --directory` with a relative path no longer fails the model agent.
+
 - **A fresh Ada project builds.** `ada-cli` and `ada-library` wrote an
   `alire.toml` naming a project file they did not write; each now writes
   its `.gpr`. A fresh project's tests check is optional until it has a
@@ -1741,6 +1777,47 @@ Keep a Changelog and the project uses semantic versioning.
   group form.
 
 ### Changed
+
+- **Only kinds of project are offered by `init`:** a template that is only
+  a part others include (`standalone = false`: ada, alire, aunit,
+  standard-development) is not listed and is refused by name; `init N`
+  takes the template of that number. The Alire templates' project name is a
+  crate's name, and a directory's name is made the nearest one (`My-App` is
+  `my_app`) or said why it does not do (`p1` is too short).
+- **A setup problem is not a failed attempt:** an agent command the policy
+  would not run or that is not there, and a model file that is not there,
+  are said before the task is touched, which stays ready. The allow-list
+  takes a program by its name or its path.
+- **The agent the project configures does the work,** from the session as
+  from the shell, and `work` says which agent it is before it starts;
+  `task audit` records the command or model that ran and its answer.
+- **Failures say why:** an agent that ends badly says its exit status and
+  the last of what it said; an answer that breaks the work contract names
+  the field and keeps the answer as a result; a verification that did not
+  pass names its first diagnostics; conditions are said in words with their
+  code, not as the code alone; a move not allowed names the moves there
+  are; a thing not found is named, not its path in the state.
+- **Ctrl-C during `work`** stops the agent and everything it started,
+  sets the task aside with why, and ends with status 7.
+- **Quieter and clearer output:** routine processing at opening is not
+  reported, only what it made; messages keep their line breaks rather than
+  printing `\x0A`, and say when a value was cut short; `/help` lines have
+  no prefix; `--quiet` leaves out the init plan; the session's banner and
+  continuation prompt say an empty line sends; a derived task is titled by
+  its requirement's title; `/state` counts standing and candidate
+  requirements apart and names the blocked and failed tasks with why;
+  `task list` shows an accepted task waiting on others as `waiting` and
+  takes a state alone as its filter (`task list ready`); `repo` answers say
+  when nothing was found, `trace` takes a symbol's short name and shows each
+  edge once, and `impact` leads with requirements, tasks and tests, cuts a
+  long run of symbols short and ends with a count by kind.
+- **Choosers:** a digit picks that item, typing starts a filter, and Escape
+  clears a filter before it closes the list.
+- **Proposals are not lost or doubled:** one the agent may not make, or
+  that cannot be made, is said with why; one with the title of a task not
+  yet ended is not made again. `task new` and `req new` say when the title
+  is another's already. `req link` lists the kinds of link, says once what
+  went wrong, and says when what it links to is not in the repository.
 
 - **A draft model's rounds follow what was kept.** With no
   `--draft-tokens` named, a round proposes one more after a round that kept

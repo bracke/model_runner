@@ -121,6 +121,10 @@ package body Model_Runner.Framework.Execution is
       return Withdrawn;
    end Work_Withdrawn;
 
+   function Cancel_Requested return Boolean
+   is (Model_Runner.Cancellation."/=" (Watched, null)
+       and then Model_Runner.Cancellation.Is_Cancelled (Watched));
+
    --  Whether the run has been cancelled, asked while a command waits: by
    --  whoever runs it, or by the work being ended elsewhere.
    function Stop_Asked return Boolean
@@ -257,6 +261,32 @@ package body Model_Runner.Framework.Execution is
       return Result;
    end Words_Of;
 
+   -------------
+   -- Refusal --
+   -------------
+
+   function Refusal (Rules : Policy; Command : String) return String is
+      Words : constant Name_Lists.Vector := Words_Of (Command);
+   begin
+      if Words.Is_Empty then
+         return "there is nothing to run";
+      elsif Needs_Shell (Command) then
+         return (if Rules.Shell_Allowed then ""
+                 else "it needs a shell, and the policy does not allow one");
+      elsif not Rules.Allowed.Contains (Words.First_Element)
+        and then not Rules.Allowed.Contains (Ada.Directories.Simple_Name (Words.First_Element))
+      then
+         return Words.First_Element & " is not a program the policy allows; allow it with"
+           & " reconfigure set.execution.allowed+=" & Ada.Directories.Simple_Name (Words.First_Element);
+      elsif (Rules.Memory_MB > 0 or else Rules.CPU_Seconds > 0 or else Rules.Processes > 0
+             or else Rules.File_MB > 0)
+        and then Hostkit.Process.Locate ("prlimit") = ""
+      then
+         return "the policy limits its resources, and prlimit is not here to set them";
+      end if;
+      return "";
+   end Refusal;
+
    ---------
    -- Run --
    ---------
@@ -291,8 +321,8 @@ package body Model_Runner.Framework.Execution is
                  others    => <>);
       Status := E.Success;
 
-      if Words.Is_Empty then
-         Refuse ("there is nothing to run");
+      if Refusal (Rules, Command) /= "" then
+         Refuse (Refusal (Rules, Command));
          return;
       elsif Base /= ""
         and then (Base'Length <= Workspaces_Root'Length
@@ -303,21 +333,6 @@ package body Model_Runner.Framework.Execution is
          return;
       elsif Directory /= "" and then not Templates.Is_Project_Path (Directory) then
          Refuse (Directory & " is not a directory inside the project");
-         return;
-      elsif Shell and then not Rules.Shell_Allowed then
-         Refuse ("it needs a shell, and the policy does not allow one");
-         return;
-      elsif not Shell
-        and then not Rules.Allowed.Contains
-                       (Ada.Directories.Simple_Name (Words.First_Element))
-      then
-         Refuse (Words.First_Element & " is not a program the policy allows");
-         return;
-      elsif (Rules.Memory_MB > 0 or else Rules.CPU_Seconds > 0 or else Rules.Processes > 0
-             or else Rules.File_MB > 0)
-        and then Hostkit.Process.Locate ("prlimit") = ""
-      then
-         Refuse ("the policy limits its resources, and prlimit is not here to set them");
          return;
       end if;
 
@@ -403,6 +418,7 @@ package body Model_Runner.Framework.Execution is
                  Arguments         => Arguments,
                  Working_Directory => Where,
                  Stdin_Path        => Hostkit.Fs.Null_Device,
+           Whole_Group       => True,
                  Stdout_Path       => Output,
                  Stderr_Path       => Output,
                  Timeout_Ms        => Rules.Timeout * 1000,
@@ -507,6 +523,7 @@ package body Model_Runner.Framework.Execution is
            Arguments         => Words,
            Working_Directory => Directory,
            Stdin_Path        => Hostkit.Fs.Null_Device,
+                 Whole_Group       => True,
            Stdout_Path       => Output,
            Stderr_Path       => Output & ".stderr",
            Timeout_Ms        => Timeout * 1000,

@@ -17,8 +17,10 @@ with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Project_Commands;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
+with Model_Runner.Framework.Templates;
 with Project_Tools.Files;
 with Project_Tools.Processes;
 with Project_Tools.Text;
@@ -1845,6 +1847,329 @@ package body Tests.CLI_Cases is
          Assert (Now = "blocked", "an agent command out of time left its task " & Now);
       end;
    end Agent_Command_Out_Of_Time;
+
+   --  The workflows as a person walks them, from the shell: each step says
+   --  what happened and what comes next; what cannot be done is said
+   --  before anything is spent on it; a task can always be finished; and
+   --  a project a run holds can still be looked at.
+   procedure Workflows_Say_What_Comes_Next
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use Ada.Strings.Unbounded;
+      Root  : constant String := Ada.Directories.Full_Name ("obj/usability");
+      Said  : Unbounded_String;
+      Code  : Natural;
+      LF    : constant Character := ASCII.LF;
+
+      --  Words split at |, in the project DIRECTORY when one is named;
+      --  what it wrote on both streams is Said.
+      procedure Run (Words : String; Directory : String := "g") is
+         use Ada.Text_IO;
+         Errors : File_Type;
+         Path   : constant String := "obj/usability-errors.txt";
+         Source : Fixed_Arguments;
+         Start  : Natural := Words'First;
+      begin
+         for Index in Words'First .. Words'Last + 1 loop
+            if Index > Words'Last or else Words (Index) = '|' then
+               Add (Source, Words (Start .. Index - 1));
+               Start := Index + 1;
+            end if;
+         end loop;
+         if Directory /= "" then
+            Add (Source, "--directory");
+            Add (Source, Root & "/" & Directory);
+         end if;
+         Create (Errors, Out_File, Path);
+         Set_Error (Errors);
+         begin
+            Ran (Source, Code);
+         exception
+            when others =>
+               Set_Error (Standard_Error);
+               Close (Errors);
+               raise;
+         end;
+         Set_Error (Standard_Error);
+         Close (Errors);
+         Said := To_Unbounded_String (Last_Output & Text_Of (Path));
+      end Run;
+
+      function Shows (Part : String) return Boolean
+      is (Ada.Strings.Fixed.Index (To_String (Said), Part) > 0);
+
+      procedure Write (Path, Text : String; Executable : Boolean := False) is
+         File : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Path);
+         Ada.Text_IO.Put (File, Text);
+         Ada.Text_IO.Close (File);
+         if Executable then
+            GNAT.OS_Lib.Set_Executable (Path);
+         end if;
+      end Write;
+
+      --  An agent that answers as given, whatever it is asked.
+      procedure Agent (Name, Answer : String) is
+      begin
+         Write (Root & "/" & Name, "#!/bin/sh" & LF & "printf '" & Answer & "'" & LF,
+                Executable => True);
+      end Agent;
+   begin
+      if Ada.Directories.Exists (Root) then
+         Ada.Directories.Delete_Tree (Root);
+      end if;
+      Ada.Directories.Create_Path (Root & "/p1");
+      Ada.Directories.Create_Path (Root & "/My-App");
+      Ada.Directories.Create_Path (Root & "/g/docs");
+      Ada.Directories.Create_Path (Root & "/g/src");
+
+      --  1. Only kinds of project are offered; a part is refused as one; a
+      --     directory name that is no crate is said so, and one near a
+      --     crate's name is made one.
+      Run ("init", "g");
+      Assert (Shows (") ada-cli") and then not Shows (") aunit"),
+              "init offered a template that is only a part: " & To_String (Said));
+      Run ("init|aunit");
+      Assert (Code /= 0 and then Shows ("not a kind of project"),
+              "a part was not refused as a kind of project: " & To_String (Said));
+      Run ("init|ada-cli", "p1");
+      Assert (Code /= 0 and then Shows ("--set project_name=") and then Shows ("3 to 64"),
+              "a directory name that is no crate was not said so: " & To_String (Said));
+      Run ("init|ada-cli|--set|confirm=yes", "My-App");
+      Assert (Code = 0 and then Ada.Directories.Exists (Root & "/My-App/my_app.gpr"),
+              "a directory name near a crate's was not made one: " & To_String (Said));
+      Run ("init|3|--set|confirm=yes|--set|check_command=true|--set|check_program=true");
+      Assert (Code = 0 and then Shows ("next: bootstrap"),
+              "init by number did not start the project and say what next: " & To_String (Said));
+
+      --  2. The session's project commands from the shell.
+      Run ("state");
+      Assert (Code = 0 and then Shows ("candidate requirements"),
+              "state did not report from the shell: " & To_String (Said));
+      Run ("req");
+      Assert (Shows ("no requirements yet"), "an empty register did not say how to begin");
+      Run ("reconfigure|work.lease=90|confirm=yes");
+      Assert (Code = 0 and then Shows ("scalar.work.lease"),
+              "a setting named without its kind was not found: " & To_String (Said));
+
+      --  3. An agent the policy would not run is said before the task is
+      --     touched; allowed, it works, and the record says what it was.
+      Agent ("done.sh", "status: done\nsummary: looked\n");
+      Run ("reconfigure|work.agent=" & Root & "/done.sh $PROMPT|confirm=yes");
+      Run ("task|new|Look|--set|kind=analysis");
+      Run ("task|accept|TASK-001");
+      Run ("work|TASK-001");
+      Assert (Code /= 0 and then Shows ("is not a program the policy allows")
+              and then Shows ("set.execution.allowed+=done.sh"),
+              "an agent the policy refuses was not said so: " & To_String (Said));
+      Run ("task|list");
+      Assert (Shows ("TASK-001  [ready]"),
+              "a task whose agent could not start was not left ready: " & To_String (Said));
+      Run ("reconfigure|execution.allowed+=done.sh,bad.sh,split.sh|confirm=yes");
+      Assert (Shows ("true, done.sh, bad.sh, split.sh"), "+= did not add to the set: " & To_String (Said));
+      Run ("config");
+      Assert (Shows (LF & "    done.sh"), "a set was not shown a line an item: " & To_String (Said));
+      Run ("work|TASK-001");
+      Assert (Code = 0 and then Shows ("the agent is") and then Shows ("the task is complete"),
+              "work with an allowed agent did not complete: " & To_String (Said));
+      Run ("task|audit|TASK-001");
+      Assert (Shows ("agent: the command") and then Shows ("answer: RES-"),
+              "the audit did not say which agent ran and what it answered: " & To_String (Said));
+      Run ("result|INV-000001");
+      Assert (Shows ("result: RES-"), "result did not show an invocation: " & To_String (Said));
+
+      --  4. What goes wrong says why and what next.
+      Agent ("bad.sh", "hello\n");
+      Run ("reconfigure|work.agent=" & Root & "/bad.sh $PROMPT|confirm=yes");
+      Run ("task|new|Bad|--set|kind=analysis");
+      Run ("task|accept|TASK-002");
+      Run ("work|TASK-002");
+      Assert (Code /= 0 and then Shows ("the answer is kept as RES-")
+              and then Shows ("next: task accept TASK-002"),
+              "a broken answer did not say why and what next: " & To_String (Said));
+      Run ("task|accept|TASK-404");
+      Assert (Code /= 0 and then Shows ("TASK-404 is not in the project state")
+              and then not Shows (".state"),
+              "an unknown task was not said by its name: " & To_String (Said));
+      Run ("task|new|Nothing");
+      Assert (Code /= 0 and then Shows ("--set kind=...  analysis"),
+              "the kinds to choose from were not listed: " & To_String (Said));
+      Run ("task|cancel|TASK-404");
+      Assert (Code /= 0, "an unknown task was cancelled");
+
+      --  5. Done by hand, a task is completed through its gates.
+      Run ("task|accept|TASK-002");
+      Run ("task|verify|TASK-002");
+      Run ("task|complete|TASK-002");
+      Assert (Code = 0 and then Shows ("TASK-002 is complete"),
+              "a task done by hand could not be completed: " & To_String (Said));
+
+      --  6. Split into parts, a task waits for them and goes back to work
+      --     once they are done.
+      Agent ("split.sh", "status: blocked\nsummary: too large\nparts:\nFirst part\nSecond part\n");
+      Run ("reconfigure|work.agent=" & Root & "/split.sh $PROMPT|confirm=yes");
+      Run ("task|new|Big|--set|kind=analysis");
+      Run ("task|accept|TASK-003");
+      Run ("work|TASK-003");
+      Assert (Shows ("waiting for its children"),
+              "a split task did not wait for its parts: " & To_String (Said));
+      for Part of Model_Runner.Framework.Name_Lists.Vector'(["TASK-004", "TASK-005"]) loop
+         Run ("task|accept|" & Part);
+         Run ("task|verify|" & Part);
+         Run ("task|complete|" & Part);
+      end loop;
+      Run ("task|list");
+      Assert (Shows ("TASK-003  [ready]"),
+              "a split task did not go back to work with its parts done: " & To_String (Said));
+
+      --  7. A document's own identifiers, criteria and decisions are kept;
+      --     what it no longer says is named.
+      Write (Root & "/g/docs/spec.md",
+             "# Shell" & LF & LF & "## REQ-SHELL-001 Quoting" & LF
+             & "Arguments SHALL be quoted." & LF & "Acceptance: a space survives" & LF & LF
+             & "- DEC-001: We use posix_spawn." & LF & LF & "It SHOULD retry once." & LF);
+      Run ("bootstrap");
+      Assert (Shows ("REQ-SHELL-001") and then Shows ("DEC-001") and then Shows ("next: req accept"),
+              "bootstrap did not keep the document's identifiers: " & To_String (Said));
+      Run ("req|show|REQ-SHELL-001");
+      Assert (Shows ("criteria: a space survives") and then Shows ("title: Quoting"),
+              "a requirement's criteria and title were not read: " & To_String (Said));
+      Write (Root & "/g/docs/spec.md",
+             "# Shell" & LF & LF & "## REQ-SHELL-001 Quoting" & LF
+             & "Arguments SHALL be quoted." & LF & "Acceptance: a space survives" & LF & LF
+             & "- DEC-001: We use posix_spawn." & LF & LF & "It SHOULD retry twice." & LF);
+      Run ("bootstrap");
+      Assert (Shows ("no longer says it"), "what a document stopped saying was not named: " & To_String (Said));
+
+      --  8. The repository's answers say when there is nothing.
+      Write (Root & "/g/src/greet.ads",
+             "package Greet is" & LF & "   procedure Hello;" & LF
+             & "   type Check is access function return Boolean;" & LF & "end Greet;" & LF);
+      Run ("repo|sym|return");
+      Assert (Code /= 0 and then Shows ("nothing in the repository is called return"),
+              "an access-to-function type made a symbol, or a miss was not said: " & To_String (Said));
+      Run ("repo|impact|src/none.adb");
+      Assert (Shows ("nothing in the repository is called"),
+              "a file that is not there was said to reach something: " & To_String (Said));
+      Run ("repo|impact|src/greet.ads");
+      Assert (Shows ("src/greet.ads reaches"), "impact gave no summary: " & To_String (Said));
+      Run ("repo|trace|Hello");
+      Assert (Shows ("Greet.Hello"), "trace did not take a symbol's short name: " & To_String (Said));
+
+      --  9. Held by a run, the project can still be looked at, and not
+      --     changed.
+      declare
+         package S renames Model_Runner.Framework.Stores;
+         Holder : S.Store;
+         Looker : S.Store;
+         Report : S.Recovery_Report;
+         Status : Model_Runner.Errors.Error_Info;
+         Change : S.Transaction;
+      begin
+         S.Open (Holder, Root & "/g", Report, Status);
+         Run ("task|list");
+         Assert (Code = 0 and then Shows ("another session holds the project")
+                 and then Shows ("TASK-001"),
+                 "a held project could not be looked at: " & To_String (Said));
+         Run ("state");
+         Assert (Code = 0 and then Shows ("another session holds the project"),
+                 "state could not look at a held project: " & To_String (Said));
+         Run ("task|accept|TASK-003");
+         Assert (Code /= 0, "a held project was changed");
+         S.Open_To_Read (Looker, Root & "/g", Status);
+         Assert (Model_Runner.Errors.Is_Ok (Status) and then S.Is_Read_Only (Looker),
+                 "a project could not be opened to read");
+         Model_Runner.Framework.Tasks.Move
+           (Looker, Change, "TASK-003", "cancelled", "", Status => Status);
+         S.Commit (Looker, Change, Status);
+         Assert (Model_Runner.Errors.Is_Error (Status), "a store opened to read was written");
+         S.Close (Looker);
+         S.Close (Holder);
+      end;
+
+      --  10. What the steps above rest on, asked directly.
+      Assert (Model_Runner.CLI.Options.Is_Project_Word ("req")
+              and then not Model_Runner.CLI.Options.Is_Project_Word ("run"),
+              "the project commands were not told from the others");
+      Assert (Model_Runner.Text.Escape_Controls ("a" & LF & "b", Keep_Line_Breaks => True)
+              = "a" & LF & "    b"
+              and then Model_Runner.Text.Escape_Controls
+                         ("a" & LF & "b", Keep_Line_Breaks => True, Indent => False)
+                       = "a" & LF & "b",
+              "a line break in a message was not kept");
+      declare
+         Missing : Model_Runner.Errors.Error_Info :=
+           Model_Runner.Errors.Make (Model_Runner.Errors.Framework_Input_Missing);
+      begin
+         Model_Runner.Errors.Add_Text (Missing, "name", "kind");
+         Assert (Model_Runner.Errors.Text_Of (Missing, "name") = "kind"
+                 and then Model_Runner.Errors.Text_Of (Missing, "other") = "",
+                 "a condition's named text was not found");
+      end;
+      Assert (Ada.Strings.Fixed.Index
+                (Model_Runner.Framework.Tasks.Waiting_For (["TASK-1", "TASK-2"]),
+                 "TASK-1, TASK-2") > 0,
+              "the reason a task waits for its children did not name them");
+      declare
+         Registry : Model_Runner.Framework.Templates.Registry;
+         Places   : Model_Runner.Framework.Name_Lists.Vector;
+         Found    : Boolean := False;
+      begin
+         Places.Append (Model_Runner.Platform.Installed_Templates_Directory);
+         Model_Runner.Framework.Templates.Discover (Places, Registry);
+         for Index in 1 .. Model_Runner.Framework.Templates.Count (Registry) loop
+            declare
+               One : constant Model_Runner.Framework.Templates.Template :=
+                 Model_Runner.Framework.Templates.Template_At (Registry, Index);
+            begin
+               if Model_Runner.Framework.Templates.Id (One) = "aunit" then
+                  Found := not Model_Runner.Framework.Templates.Is_Standalone (One);
+               end if;
+            end;
+         end loop;
+         Assert (Found, "a template that is only a part was not marked so");
+      end;
+      declare
+         Catalog : aliased Model_Runner.Localization.Catalog;
+         Screen  : Model_Runner.Presentation.Console;
+         Command : Opt.Command;
+         Status  : Natural;
+         Before  : Natural;
+      begin
+         Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+         Model_Runner.Presentation.Open
+           (Screen, Catalog'Unchecked_Access, Opt.Color_Never,
+            (Output_Is_Terminal => False, Error_Is_Terminal => False,
+             Input_Is_Terminal  => False, Colour_Suppressed => True),
+            Opt.Quiet);
+         Before := Model_Runner.Presentation.Errors_Reported (Screen);
+         Command.Kind := Opt.Command_Project;
+         Command.Action := Model_Runner.Text.To_Bounded ("req");
+         Command.Action_Argument := Model_Runner.Text.To_Bounded ("show REQ-404");
+         Command.Project_Directory := Model_Runner.Text.To_Bounded (Root & "/g");
+         Model_Runner.CLI.Project_Commands.Run_From_Shell (Command, Screen, Status);
+         Assert (Status /= 0 and then Model_Runner.Presentation.Errors_Reported (Screen) = Before + 1
+                 and then Model_Runner.Presentation.First_Failure (Screen) = 0,
+                 "a project command's failure was not its status, or was said twice");
+      end;
+      declare
+         package S renames Model_Runner.Framework.Stores;
+         Store  : S.Store;
+         Report : S.Recovery_Report;
+         Status : Model_Runner.Errors.Error_Info;
+      begin
+         S.Open (Store, Root & "/g", Report, Status);
+         Assert (Model_Runner.Framework.Execution.Refusal
+                   (Model_Runner.Framework.Execution.Policy_Of (Store), "nonesuch --now") /= ""
+                 and then Model_Runner.Framework.Execution.Refusal
+                            (Model_Runner.Framework.Execution.Policy_Of (Store), "done.sh x") = ""
+                 and then not Model_Runner.Framework.Execution.Cancel_Requested,
+                 "the policy's refusal was not said before running");
+         S.Close (Store);
+      end;
+   end Workflows_Say_What_Comes_Next;
 
    procedure Task_Command_Manages_Work
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
@@ -12487,6 +12812,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Agent_Command_Out_Of_Time'Access,
          "an agent command out of time sets its task aside");
+      Register_Routine
+        (T, Workflows_Say_What_Comes_Next'Access,
+         "the workflows say what happened and what comes next");
       Register_Routine
         (T, Task_Command_Manages_Work'Access,
          "task creates, moves, lists and shows the project's work");

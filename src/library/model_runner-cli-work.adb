@@ -6,7 +6,9 @@ with Ada.Strings.Unbounded;
 
 with Hostkit;
 with Hostkit.Fs;
+with Hostkit.Process;
 
+with Model_Runner.Cancellation;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.Errors;
 with Model_Runner.Framework;
@@ -19,6 +21,8 @@ with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Localization;
+with Model_Runner.Platform;
+with Model_Runner.Platform.Signals;
 with Model_Runner.Text;
 with Model_Runner.Tools.Builtin;
 
@@ -66,6 +70,29 @@ package body Model_Runner.CLI.Work is
          return "";
    end Whole;
 
+   --  Why an agent's process did not end well, with the last of what it
+   --  said: what a person needs to put it right.
+   function Ended_Because (Started : Boolean; Code : Integer; Output : String) return String is
+      Lines : Natural := 0;
+      From  : Natural := Output'Last + 1;
+   begin
+      if not Started then
+         return "the agent did not start";
+      end if;
+      --  Its last three lines, and no more than 400 characters of them.
+      for Index in reverse Output'Range loop
+         if Output (Index) = ASCII.LF and then Index < Output'Last then
+            Lines := Lines + 1;
+            exit when Lines = 3;
+         end if;
+         From := Index;
+         exit when Output'Last - Index >= 400;
+      end loop;
+      return "the agent ended with" & Integer'Image (Code)
+        & (if From > Output'Last then ""
+           else ": " & Ada.Strings.Fixed.Trim (Output (From .. Output'Last), Ada.Strings.Both));
+   end Ended_Because;
+
    --  A model, run as this program's own agent in the project.
    type Model_Agent is new W.Agent_Runner with record
       Model   : Unbounded_String;
@@ -83,6 +110,35 @@ package body Model_Runner.CLI.Work is
       Project     : String;
       Answer      : out Unbounded_String;
       Status      : out E.Error_Info);
+
+   overriding procedure Describe (Self : Model_Agent; Text : in out Unbounded_String);
+
+   overriding procedure Check_Start
+     (Self   : Model_Agent;
+      Item   : S.Store;
+      Status : in out E.Error_Info);
+
+   overriding procedure Describe (Self : Model_Agent; Text : in out Unbounded_String) is
+   begin
+      Text := "the model " & Self.Model;
+   end Describe;
+
+   --  The model it names must be there to be run.
+   overriding procedure Check_Start
+     (Self   : Model_Agent;
+      Item   : S.Store;
+      Status : in out E.Error_Info)
+   is
+      pragma Unreferenced (Item);
+      Named : constant String := To_String (Self.Model);
+   begin
+      if not Ada.Directories.Exists (Model_Runner.Platform.Resolve_Model_Path (Named)) then
+         Status := E.Make (E.Framework_Input_Invalid);
+         E.Add_Text (Status, "name", "model");
+         E.Add_Text (Status, "value", Named);
+         E.Add_Text (Status, "detail", "there is no such model file here or among the models");
+      end if;
+   end Check_Start;
 
    overriding procedure Run
      (Self        : Model_Agent;
@@ -226,11 +282,13 @@ package body Model_Runner.CLI.Work is
       if Happened.Timed_Out then
          Status := E.Make (E.Framework_Limit_Exceeded);
          E.Add_Text (Status, "name", "time");
+      elsif Model_Runner.Framework.Execution.Cancel_Requested then
+         Status := E.Make (E.Generation_Cancelled);
       elsif not Happened.Started or else Happened.Exit_Status /= 0 then
-         Status := E.Make (E.Generation_Invalid_Request);
-         if Length (Happened.Output) > 0 then
-            E.Add_Text (Status, "detail", To_String (Happened.Output));
-         end if;
+         Status := E.Make (E.Framework_Contract_Violation);
+         E.Add_Text (Status, "name", "the work contract");
+         E.Add_Text (Status, "detail", Ended_Because (Happened.Started, Happened.Exit_Status,
+                                                      To_String (Happened.Output)));
       end if;
    end Run;
 
@@ -246,6 +304,59 @@ package body Model_Runner.CLI.Work is
       Project     : String;
       Answer      : out Unbounded_String;
       Status      : out E.Error_Info);
+
+   overriding procedure Describe (Self : Command_Agent; Text : in out Unbounded_String);
+
+   overriding procedure Check_Start
+     (Self   : Command_Agent;
+      Item   : S.Store;
+      Status : in out E.Error_Info);
+
+   overriding procedure Describe (Self : Command_Agent; Text : in out Unbounded_String) is
+   begin
+      Text := "the command " & Self.Command;
+   end Describe;
+
+   --  The command must be one the policy runs, and its program there.
+   overriding procedure Check_Start
+     (Self   : Command_Agent;
+      Item   : S.Store;
+      Status : in out E.Error_Info)
+   is
+      package Ex renames Model_Runner.Framework.Execution;
+      Written : constant String := To_String (Self.Command);
+
+      --  As it will run: its prompt file's place filled in.
+      function Filled (Text, Mark : String) return String is
+         At_Mark : constant Natural := Ada.Strings.Fixed.Index (Text, Mark);
+      begin
+         return (if At_Mark = 0 then Text
+                 else Filled (Text (Text'First .. At_Mark - 1) & "prompt.txt"
+                              & Text (At_Mark + Mark'Length .. Text'Last), Mark));
+      end Filled;
+
+      Command : constant String := Filled (Filled (Written, "${prompt}"), "$PROMPT");
+      Words   : constant Model_Runner.Framework.Name_Lists.Vector := Ex.Words_Of (Command);
+      Why     : constant String := Ex.Refusal (Ex.Policy_Of (Item), Command);
+      Program : constant String := (if Words.Is_Empty then "" else Words.First_Element);
+   begin
+      if Why /= "" then
+         Status := E.Make (E.Framework_Execution_Refused);
+         E.Add_Text (Status, "name", Command);
+         E.Add_Text (Status, "detail", Why);
+      elsif not Ex.Needs_Shell (Command)
+        and then (if Ada.Strings.Fixed.Index (Program, "/") > 0
+                  then not Ada.Directories.Exists
+                             (Hostkit.Fs.Join
+                                (Ada.Directories.Containing_Directory (S.Root (Item)), Program))
+                       and then not Ada.Directories.Exists (Program)
+                  else Hostkit.Process.Locate (Program) = "")
+      then
+         Status := E.Make (E.Framework_Execution_Refused);
+         E.Add_Text (Status, "name", Command);
+         E.Add_Text (Status, "detail", Program & " is not there to run");
+      end if;
+   end Check_Start;
 
    overriding procedure Run
      (Self        : Command_Agent;
@@ -290,15 +401,18 @@ package body Model_Runner.CLI.Work is
          S.Commit (Self.Store.all, Change, Status);
       end if;
       Answer := Ran.Output;
-      if E.Is_Ok (Status) and then Ran.Cancelled then
+      if E.Is_Ok (Status)
+        and then (Ran.Cancelled or else Model_Runner.Framework.Execution.Cancel_Requested)
+      then
          Status := E.Make (E.Generation_Cancelled);
       elsif E.Is_Ok (Status) and then Ran.Timed_Out then
          Status := E.Make (E.Framework_Limit_Exceeded);
          E.Add_Text (Status, "name", "time");
       elsif E.Is_Ok (Status) and then (not Ran.Started or else Ran.Exit_Status /= 0) then
-         Status := E.Make (E.Framework_Execution_Refused);
-         E.Add_Text (Status, "name", Command);
-         E.Add_Text (Status, "detail", "it ended with" & Integer'Image (Ran.Exit_Status));
+         Status := E.Make (E.Framework_Contract_Violation);
+         E.Add_Text (Status, "name", "the work contract");
+         E.Add_Text (Status, "detail", Ended_Because (Ran.Started, Ran.Exit_Status,
+                                                      To_String (Ran.Output)));
       end if;
    end Run;
 
@@ -309,9 +423,12 @@ package body Model_Runner.CLI.Work is
       Given_Runner : access constant W.Agent_Runner'Class;
       Status : out Natural)
    is
+      --  Whole: the agent runs elsewhere, and a relative path would be
+      --  read from there.
       Directory : constant String :=
-        (if T.Is_Empty (Item.Project_Directory) then "."
-         else T.To_String (Item.Project_Directory));
+        Ada.Directories.Full_Name
+          (if T.Is_Empty (Item.Project_Directory) then "."
+           else T.To_String (Item.Project_Directory));
       Store     : aliased S.Store;
       Report    : S.Recovery_Report;
       Outcome   : E.Error_Info;
@@ -341,6 +458,36 @@ package body Model_Runner.CLI.Work is
          Pres.Put_Message
            (Screen, Key, [Loc.Named ("name", Name), Loc.Named ("value", Value)]);
       end Say;
+
+      --  What there is to do instead, where nothing was named or ready:
+      --  the tasks ready now, else the candidates waiting, else how to
+      --  make one.
+      procedure Say_What_Is_Ready is
+         Ready     : Natural := 0;
+         Candidate : constant Natural := Natural (Tk.List (Store, "candidate").Length);
+      begin
+         for Id of Tk.List (Store, "accepted") loop
+            if Tk.Ready (Store, Id).Ready then
+               declare
+                  Defined : R.Item;
+                  Read    : E.Error_Info;
+               begin
+                  Tk.Definition (Store, Id, Defined, Read);
+                  Pres.Put_Note
+                    (Screen, "cli.next.ready",
+                     [Loc.Named ("name", Id), Loc.Named ("value", R.Get (Defined, "title"))]);
+                  Ready := Ready + 1;
+               end;
+            end if;
+         end loop;
+         if Ready = 0 and then Candidate > 0 then
+            Pres.Put_Note
+              (Screen, "cli.next.accept",
+               [Loc.Named ("count", T.Image (Long_Long_Integer (Candidate)))]);
+         elsif Ready = 0 then
+            Pres.Put_Note (Screen, "cli.next.create");
+         end if;
+      end Say_What_Is_Ready;
    begin
       Status := E.Exit_Success;
 
@@ -382,6 +529,7 @@ package body Model_Runner.CLI.Work is
          begin
             if Planned.Start.Is_Empty then
                Pres.Put_Note (Screen, "cli.work.nothing");
+               Say_What_Is_Ready;
                S.Close (Store);
                return;
             end if;
@@ -450,6 +598,7 @@ package body Model_Runner.CLI.Work is
             Outcome := E.Make (E.Framework_Input_Missing);
             E.Add_Text (Outcome, "name", "task");
             Fail (Outcome);
+            Say_What_Is_Ready;
             S.Close (Store);
             return;
          end if;
@@ -468,6 +617,16 @@ package body Model_Runner.CLI.Work is
                else
                   Waiting.Append (Id);
                end if;
+            end loop;
+
+            --  Blocked and failed ones are shown too, with why, and not
+            --  taken: where a person looks for them.
+            for State of Model_Runner.Framework.Name_Lists.Vector'(["blocked", "failed"]) loop
+               for Id of Tk.List (Store, State) loop
+                  if Matching.Is_Empty or else Matching.Contains (Id) then
+                     Waiting.Append (Id);
+                  end if;
+               end loop;
             end loop;
             declare
                procedure Offer_All
@@ -492,7 +651,10 @@ package body Model_Runner.CLI.Work is
                            (Label      => To_Unbounded_String
                                             (Id & "  " & R.Get (Defined, "title")),
                             Tag        => To_Unbounded_String
-                                            (if Now.Ready then "[ready]" else "[blocked]"),
+                                            (if Now.Ready then "[ready]"
+                                             elsif Tk.State_Of (Store, Id) = "accepted"
+                                             then "[waiting]"
+                                             else "[" & Tk.State_Of (Store, Id) & "]"),
                             Details    => Why,
                             Selectable => Now.Ready));
                         Listed.Append (Id);
@@ -531,7 +693,17 @@ package body Model_Runner.CLI.Work is
             Command : constant String := R.Get (Config, "scalar.work.agent");
             Path    : constant String := Setting ("model", "");
          begin
-            if Given_Runner /= null then
+            --  Which agent does the work, said before it starts: the one the
+            --  project configures, wherever the work is started from.
+            if Command /= "" then
+               Say ("cli.work.runner", Command, To_String (Chosen));
+            elsif Given_Runner /= null then
+               Say ("cli.work.runner", Pres.Message_Value (Screen, "cli.work.runner.session"),
+                    To_String (Chosen));
+            elsif Path /= "" then
+               Say ("cli.work.runner", Path, To_String (Chosen));
+            end if;
+            if Given_Runner /= null and then Command = "" then
                W.Execute
                  (Store, To_String (Chosen), Given_Runner.all, Model, Done, Outcome);
             elsif Command /= "" then
@@ -556,6 +728,10 @@ package body Model_Runner.CLI.Work is
 
          if E.Is_Error (Outcome) then
             Fail (Outcome);
+            if E."=" (Outcome.Code, E.Framework_Input_Missing) and then E.Text_Of (Outcome, "name") = "model"
+            then
+               Pres.Put_Note (Screen, "cli.next.model");
+            end if;
             S.Close (Store);
             return;
          end if;
@@ -570,6 +746,9 @@ package body Model_Runner.CLI.Work is
          end loop;
          for Candidate of Done.Proposed loop
             Say ("cli.work.proposed", Candidate, "");
+         end loop;
+         for Line of Done.Kept_Back loop
+            Pres.Put_Message (Screen, "cli.work.kept_back", [Loc.Named ("detail", Line)]);
          end loop;
          for Other of Done.Waits_For loop
             Say ("cli.work.waits_for", Other, To_String (Done.Task_Id));
@@ -597,12 +776,26 @@ package body Model_Runner.CLI.Work is
                 Loc.Named ("detail", To_String (Done.Reason))]);
          end if;
 
+         --  And what a person does next, where it did not complete.
+         if To_String (Done.Final_State) in "failed" | "blocked" then
+            Pres.Put_Note (Screen, "cli.next.retry", [Loc.Named ("name", To_String (Done.Task_Id))]);
+         elsif To_String (Done.Final_State) = "verification"
+           and then Done.Workspace_Id /= Null_Unbounded_String
+         then
+            Pres.Put_Note
+              (Screen, "cli.next.integrate", [Loc.Named ("name", To_String (Done.Task_Id))]);
+         end if;
+
          exit when Remaining.Is_Empty;
          Chosen := To_Unbounded_String (Remaining.First_Element);
          Remaining.Delete_First;
       end loop;
 
-      if To_String (Done.Final_State) /= "complete" then
+      --  Waiting to be taken in is where isolated work ends well.
+      if To_String (Done.Final_State) /= "complete"
+        and then not (To_String (Done.Final_State) = "verification"
+                      and then Done.Workspace_Id /= Null_Unbounded_String)
+      then
          Status := E.Exit_Input_Output;
       end if;
       S.Close (Store);
@@ -615,9 +808,28 @@ package body Model_Runner.CLI.Work is
    procedure Run
      (Item   : Model_Runner.CLI.Options.Command;
       Screen : in out Model_Runner.Presentation.Console;
-      Status : out Natural) is
+      Status : out Natural)
+   is
+      --  Ctrl-C stops the agent and whatever it runs, as a session's does:
+      --  the task is set aside, said so, and the command ends cancelled.
+      Cancel   : aliased Model_Runner.Cancellation.Token;
+      Attached : Boolean;
    begin
-      Drive (Item, Screen, null, Status);
+      Model_Runner.Platform.Signals.Install (Cancel'Unchecked_Access, Attached);
+      Model_Runner.Framework.Execution.Watch (Cancel'Unchecked_Access);
+      begin
+         Drive (Item, Screen, null, Status);
+      exception
+         when others =>
+            Model_Runner.Framework.Execution.Watch (null);
+            Model_Runner.Platform.Signals.Remove;
+            raise;
+      end;
+      Model_Runner.Framework.Execution.Watch (null);
+      Model_Runner.Platform.Signals.Remove;
+      if Model_Runner.Cancellation.Is_Cancelled (Cancel'Unchecked_Access) then
+         Status := E.Exit_Cancelled;
+      end if;
    end Run;
 
    --------------

@@ -4,6 +4,7 @@ with Ada.Strings.Unbounded;
 
 with Model_Runner.Errors;
 with Model_Runner.Framework.Orchestration;
+with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Transitions;
 with Model_Runner.Framework.Verification;
 with Model_Runner.Localization;
@@ -100,6 +101,10 @@ package body Model_Runner.CLI.Intents is
       Change   : S.Transaction;
       Status   : E.Error_Info;
 
+      --  Errors said before this command: one it says itself is not said
+      --  again at its end.
+      Said_Before : constant Natural := Pres.Errors_Reported (Screen);
+
       --  A NAME=VALUE given, or "".
       function Given (Name : String) return String is
       begin
@@ -178,6 +183,10 @@ package body Model_Runner.CLI.Intents is
                   [Loc.Named ("name", Id), Loc.Named ("value", To_String (Held.State)),
                    Loc.Named ("detail", To_String (Held.Title))]);
             end loop;
+            --  None at all: how to make the first.
+            if Nt."=" (Kind, Nt.Requirement) and then Nt.List (Store, Kind).Is_Empty then
+               Pres.Put_Note (Screen, "cli.next.requirements");
+            end if;
          end;
 
       elsif Action = "new" then
@@ -201,6 +210,26 @@ package body Model_Runner.CLI.Intents is
                   Given ("criteria"), "user", "", Scope, Id, Status);
                Settle (Store, Change, Status, Screen, "cli.task.created",
                        To_String (Id) & " " & From (2));
+
+               --  Made, and said where another has the same title.
+               if E.Is_Ok (Status) then
+                  for Other of Nt.List (Store, Kind) loop
+                     declare
+                        Held : Nt.Entity;
+                        Read : E.Error_Info;
+                     begin
+                        Nt.Read (Store, Kind, Other, Held, Read);
+                        if E.Is_Ok (Read) and then Other /= To_String (Id)
+                          and then Lower (To_String (Held.Title)) = Lower (From (2))
+                          and then To_String (Held.State) not in "rejected" | "obsolete" | "superseded"
+                        then
+                           Pres.Put_Note
+                             (Screen, "cli.same_title",
+                              [Loc.Named ("name", To_String (Id)), Loc.Named ("other", Other)]);
+                        end if;
+                     end;
+                  end loop;
+               end if;
             end;
          end if;
 
@@ -321,7 +350,8 @@ package body Model_Runner.CLI.Intents is
          end if;
 
       elsif Action = "link" then
-         Needs (4, "the " & Word_Of (Kind) & ", what kind of link, and its target");
+         Needs (4, "link ID KIND TARGET, whose KIND is dependency, component,"
+                & " implementation, task, test or verification");
          if E.Is_Ok (Status) then
             declare
                Relation : Nt.Link_Kind := Nt.Dependency;
@@ -344,6 +374,24 @@ package body Model_Runner.CLI.Intents is
                   Nt.Link (Store, Change, Kind, Word (2), Relation, From (4), Status);
                end if;
                Settle (Store, Change, Status, Screen, "cli.intent.linked", Word (2));
+
+               --  What it implements or tests is looked for, and said when
+               --  the repository has no such thing.
+               if E.Is_Ok (Status) and then Relation in Nt.Implementation | Nt.Test then
+                  declare
+                     package Rp renames Model_Runner.Framework.Repository;
+                     Now    : constant Rp.Graph := Rp.Now (Store);
+                     Target : constant String := From (4);
+                     Known  : Boolean := not Rp.Find_Symbols (Now, Target).Is_Empty;
+                  begin
+                     for Index in 1 .. Rp.File_Count (Now) loop
+                        Known := Known or else To_String (Rp.File_At (Now, Index).Path) = Target;
+                     end loop;
+                     if not Known then
+                        Pres.Put_Note (Screen, "cli.intent.link_unknown", [Loc.Named ("name", Target)]);
+                     end if;
+                  end;
+               end if;
             end;
          end if;
 
@@ -377,7 +425,7 @@ package body Model_Runner.CLI.Intents is
             if E.Is_Ok (Status) then
                Field ("title", To_String (Held.Title));
                Field ("state", To_String (Held.State));
-               Field ("revision", Natural'Image (Held.Revision));
+               Field ("revision", Ada.Strings.Fixed.Trim (Natural'Image (Held.Revision), Ada.Strings.Both));
                Field ("scope", To_String (Held.Scope));
                Field ("text", To_String (Held.Text));
                Field ("criteria", To_String (Held.Criteria));
@@ -397,7 +445,7 @@ package body Model_Runner.CLI.Intents is
          end;
       end if;
 
-      if E.Is_Error (Status) then
+      if E.Is_Error (Status) and then Pres.Errors_Reported (Screen) = Said_Before then
          Pres.Report (Screen, Status);
       end if;
    end Run;

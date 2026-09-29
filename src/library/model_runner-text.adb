@@ -41,12 +41,21 @@ package body Model_Runner.Text is
    -- Escape_Controls --
    ----------------------
 
-   function Escape_Controls (Item : String) return String is
-      Result : String (1 .. Item'Length * 4);
+   function Escape_Controls
+     (Item             : String;
+      Keep_Line_Breaks : Boolean := False;
+      Indent           : Boolean := True) return String
+   is
+      Margin : constant String := (if Indent then "    " else "");
+      Result : String (1 .. Item'Length * 5);
       Last   : Natural := 0;
    begin
       for Char of Item loop
-         if Is_Control (Char) then
+         if Keep_Line_Breaks and then Char = ASCII.LF then
+            Result (Last + 1) := ASCII.LF;
+            Result (Last + 2 .. Last + 1 + Margin'Length) := Margin;
+            Last := Last + 1 + Margin'Length;
+         elsif Is_Control (Char) then
             declare
                Code : constant Natural := Character'Pos (Char);
             begin

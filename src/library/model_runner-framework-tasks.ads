@@ -227,6 +227,13 @@ package Model_Runner.Framework.Tasks is
       Became : out Name_Lists.Vector;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  The reason a task blocked on its children gives: once none of them
+   --  holds it and none waits to be decided, it goes back to work.
+   --
+   --  @param Children The children it waits for.
+   --  @return The reason, as Recompute_Readiness knows it.
+   function Waiting_For (Children : Name_Lists.Vector) return String;
+
    --  Block a parent on its children: the parent waits, with a reason
    --  naming them, while the children carry the work.
    --
