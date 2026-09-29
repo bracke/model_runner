@@ -387,7 +387,9 @@ package body Model_Runner.Framework.Context is
                   Intent.Read (Item, Intent.Decision, Id, Held, Read);
                   if E.Is_Ok (Read) then
                      Result.Revisions.Append (Id & "@" & Image (Held.Revision));
-                     Offer (Id & "@" & Image (Held.Revision), "decision", High,
+                     --  Mandatory: a decision that applies is in the context,
+                     --  or the context does not fit -- never quietly left out.
+                     Offer (Id & "@" & Image (Held.Revision), "decision", Mandatory,
                             Id & " " & To_String (Held.Title) & ": "
                             & To_String (Held.Text));
                   end if;
@@ -398,7 +400,7 @@ package body Model_Runner.Framework.Context is
 
       --  What governs the work, above the configuration, and every override
       --  and conflict: the model is told what holds, not left to guess.
-      Offer (Task_Id & "#authority", "authority", High,
+      Offer (Task_Id & "#authority", "authority", Mandatory,
              Fields_Of (View, "authority.") & Fields_Of (View, "override.")
              & Fields_Of (View, "conflict."));
 

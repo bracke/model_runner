@@ -1447,6 +1447,40 @@ package body Model_Runner.Framework.Verification is
       Changed.Clear;
       Status := E.Success;
 
+      --  An accepted requirement every task serving it has completed is
+      --  implemented -- come back from blocked, say, after they did.
+      for Requirement of Intent.List (Item, Intent.Requirement, "accepted") loop
+         declare
+            Serving : Natural := 0;
+            Open    : Boolean := False;
+         begin
+            for Id of Everything loop
+               declare
+                  Defined : Records.Item;
+                  Read    : E.Error_Info;
+                  State   : constant String := Tasks.State_Of (Item, Id);
+               begin
+                  Tasks.Definition (Item, Id, Defined, Read);
+                  if E.Is_Ok (Read)
+                    and then Lines_Of (Records.Get (Defined, "requirements")).Contains (Requirement)
+                    and then State not in "cancelled" | "rejected"
+                  then
+                     Serving := Serving + 1;
+                     Open := Open or else State /= "complete";
+                  end if;
+               end;
+            end loop;
+            if Serving > 0 and then not Open then
+               Intent.Move (Item, Change, Intent.Requirement, Requirement, "implemented",
+                            Transitions.Ordinary_Only, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+               Changed.Append (Requirement);
+            end if;
+         end;
+      end loop;
+
       for Requirement of Intent.List (Item, Intent.Requirement, "implemented") loop
          declare
             Evidence : constant String := Supporting (Requirement);

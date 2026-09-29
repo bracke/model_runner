@@ -38,6 +38,12 @@ package body Model_Runner.Framework.Tasks is
    --  project's components and it is not one of them; "" where it can.
    function Component_Problem (Item : Stores.Store; Component : String) return String;
 
+   --  A task's state as the transaction will leave it.
+   function State_In
+     (Item   : Stores.Store;
+      Change : Stores.Transaction;
+      Id     : String) return String;
+
    --  Whether From waits, along a field, for Target.
    function Reaches
      (Item   : Stores.Store;
@@ -486,6 +492,19 @@ package body Model_Runner.Framework.Tasks is
          if not Task_Exists (Item, Change, Other) then
             Status := E.Make (E.Framework_Not_Found);
             E.Add_Text (Status, "name", Other);
+            return;
+         end if;
+      end loop;
+
+      --  A part of work that has ended is no work: its parent is one still
+      --  to be done.
+      for Parent of Split (Given ("parent")) loop
+         if State_In (Item, Change, Parent) in "complete" | "cancelled" | "rejected" then
+            Status := E.Make (E.Framework_Transition_Invalid);
+            E.Add_Text (Status, "name", Parent);
+            E.Add_Text (Status, "value", State_In (Item, Change, Parent));
+            E.Add_Text (Status, "expected", "a task still to be done");
+            E.Add_Text (Status, "detail", "an ended task is not split");
             return;
          end if;
       end loop;

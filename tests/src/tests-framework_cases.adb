@@ -887,7 +887,7 @@ package body Tests.Framework_Cases is
    Base_Text : constant String :=
      "# a language" & LF
      & "template = lang" & LF
-     & "name = A Language" & LF
+     & "name = A Language" & LF & "description = D" & LF
      & "version = 3" & LF
      & "language = Lang" & LF
      & "fact language = Lang_2022" & LF
@@ -898,7 +898,7 @@ package body Tests.Framework_Cases is
 
    Tool_Text : constant String :=
      "template = tool" & LF
-     & "name = A Build Tool" & LF
+     & "name = A Build Tool" & LF & "description = D" & LF
      & "version = 1" & LF
      & "discover tool.toml fact build_system = Tool" & LF
      & "discover tool.toml input project_name = from_tool" & LF
@@ -1021,7 +1021,7 @@ package body Tests.Framework_Cases is
       Status   : E.Error_Info;
       Value    : Tp.Template;
    begin
-      Tp.Add (Registry, Parsed ("template = clash" & LF & "name = C" & LF
+      Tp.Add (Registry, Parsed ("template = clash" & LF & "name = C" & LF & "description = D" & LF
                                 & "version = 1" & LF & "includes = lang" & LF
                                 & "scalar build.command = other" & LF));
       Tp.Compose (Registry, "clash", Composed, Status);
@@ -1033,35 +1033,39 @@ package body Tests.Framework_Cases is
          Holding : Tp.Registry;
          Made    : Tp.Composition;
       begin
-         Tp.Add (Holding, Parsed ("template = first" & LF & "name = F" & LF & "version = 1" & LF
+         Tp.Add (Holding, Parsed ("template = first" & LF & "name = F" & LF
+                                  & "description = D" & LF & "version = 1" & LF
                                   & "override scalar k = strong" & LF));
-         Tp.Add (Holding, Parsed ("template = second" & LF & "name = S" & LF & "version = 1" & LF
+         Tp.Add (Holding, Parsed ("template = second" & LF & "name = S" & LF
+                                  & "description = D" & LF & "version = 1" & LF
                                   & "scalar k = weak" & LF));
-         Tp.Add (Holding, Parsed ("template = both" & LF & "name = B" & LF & "version = 1" & LF
+         Tp.Add (Holding, Parsed ("template = both" & LF & "name = B" & LF & "description = D" & LF & "version = 1" & LF
                                   & "includes = first, second" & LF));
          Tp.Compose (Holding, "both", Made, Status);
          Assert (E.Is_Ok (Status), "an override met first was taken for a conflict: "
                  & Code_Of (Status));
-         Tp.Add (Holding, Parsed ("template = rival" & LF & "name = R" & LF & "version = 1" & LF
+         Tp.Add (Holding, Parsed ("template = rival" & LF & "name = R" & LF
+                                  & "description = D" & LF & "version = 1" & LF
                                   & "override scalar k = other" & LF));
-         Tp.Add (Holding, Parsed ("template = rivals" & LF & "name = RR" & LF & "version = 1" & LF
+         Tp.Add (Holding, Parsed ("template = rivals" & LF & "name = RR" & LF
+                                  & "description = D" & LF & "version = 1" & LF
                                   & "includes = first, rival" & LF));
          Tp.Compose (Holding, "rivals", Made, Status);
          Assert (Status.Code = E.Framework_Template_Conflict,
                  "two overrides that disagree composed: " & Code_Of (Status));
       end;
 
-      Tp.Add (Registry, Parsed ("template = loop-a" & LF & "name = A" & LF
+      Tp.Add (Registry, Parsed ("template = loop-a" & LF & "name = A" & LF & "description = D" & LF
                                 & "version = 1" & LF & "includes = loop-b"
                                 & LF));
-      Tp.Add (Registry, Parsed ("template = loop-b" & LF & "name = B" & LF
+      Tp.Add (Registry, Parsed ("template = loop-b" & LF & "name = B" & LF & "description = D" & LF
                                 & "version = 1" & LF & "includes = loop-a"
                                 & LF));
       Tp.Compose (Registry, "loop-a", Composed, Status);
       Assert (Status.Code = E.Framework_Template_Invalid,
               "a template including itself composed");
 
-      Tp.Add (Registry, Parsed ("template = lonely" & LF & "name = L" & LF
+      Tp.Add (Registry, Parsed ("template = lonely" & LF & "name = L" & LF & "description = D" & LF
                                 & "version = 1" & LF & "includes = absent"
                                 & LF));
       Tp.Compose (Registry, "lonely", Composed, Status);
@@ -1071,18 +1075,22 @@ package body Tests.Framework_Cases is
       Assert (Status.Code = E.Framework_Template_Not_Found,
               "a template that is not there composed");
 
-      Tp.Parse ("template = x" & LF & "name = X" & LF & "version = 1" & LF
+      Tp.Parse ("template = x" & LF & "name = X" & LF & "description = D" & LF & "version = 1" & LF
                 & "colour blue = yes" & LF, "memory", Value, Status);
       Assert (Status.Code = E.Framework_Template_Invalid,
               "a line nobody understands was read");
       Tp.Parse ("name = X" & LF & "version = 1" & LF, "memory", Value, Status);
       Assert (Status.Code = E.Framework_Template_Invalid,
               "a template that does not say which it is was read");
-      Tp.Parse ("template = x" & LF & "name = X" & LF & "version = 1" & LF
+      Tp.Parse ("template = x" & LF & "name = X" & LF & "version = 1" & LF, "memory", Value,
+                Status);
+      Assert (Status.Code = E.Framework_Template_Invalid,
+              "a template that does not say what it is for was read");
+      Tp.Parse ("template = x" & LF & "name = X" & LF & "description = D" & LF & "version = 1" & LF
                 & "file ../outside = no" & LF, "memory", Value, Status);
       Assert (Status.Code = E.Framework_Template_Invalid,
               "a file outside the project was declared");
-      Tp.Parse ("template = x" & LF & "name = X" & LF & "version = 1" & LF
+      Tp.Parse ("template = x" & LF & "name = X" & LF & "description = D" & LF & "version = 1" & LF
                 & "baseline tests = yes" & LF, "memory", Value, Status);
       Assert (Status.Code = E.Framework_Template_Invalid,
               "a baseline of neither the project nor its language was declared");
@@ -1094,7 +1102,8 @@ package body Tests.Framework_Cases is
          Planned : Cf.Plan;
          Given   : Cf.Value_Maps.Map;
       begin
-         Tp.Add (Holding, Parsed ("template = agent" & LF & "name = A" & LF & "version = 1" & LF
+         Tp.Add (Holding, Parsed ("template = agent" & LF & "name = A" & LF
+                                  & "description = D" & LF & "version = 1" & LF
                                   & "scalar work.agent = my-agent ${prompt}" & LF));
          Tp.Compose (Holding, "agent", Made, Status);
          Cf.Prepare (Made, Fresh ("agent-marker"), Given, Planned, Status);
@@ -1102,7 +1111,7 @@ package body Tests.Framework_Cases is
                  and then R.Get (Planned.Configuration, "scalar.work.agent") = "my-agent ${prompt}",
                  "a template's agent command lost its prompt marker: " & Code_Of (Status));
       end;
-      Tp.Parse ("template = x" & LF & "name = X" & LF & "version = 1" & LF
+      Tp.Parse ("template = x" & LF & "name = X" & LF & "description = D" & LF & "version = 1" & LF
                 & "baseline tests = yes" & LF, "memory", Value, Status);
       Assert (Status.Code = E.Framework_Template_Invalid,
               "a baseline of neither the project nor its language was declared");
@@ -1146,7 +1155,7 @@ package body Tests.Framework_Cases is
          Holding : Tp.Registry;
          Made    : Tp.Composition;
       begin
-         Tp.Parse ("template = r" & LF & "name = R" & LF & "version = 1" & LF
+         Tp.Parse ("template = r" & LF & "name = R" & LF & "description = D" & LF & "version = 1" & LF
                    & "input port" & LF & "  type = natural" & LF
                    & "  minimum = 1024" & LF & "  maximum = 65535" & LF
                    & "input tag" & LF & "  type = text" & LF & "  max_length = 8" & LF
@@ -1175,7 +1184,7 @@ package body Tests.Framework_Cases is
             Dirs.Create_Path (Where & "/src");
             Dirs.Create_Path (Where & "/lib");
             Dirs.Create_Path (Where & "/.git");
-            Tp.Parse ("template = p" & LF & "name = P" & LF & "version = 1" & LF
+            Tp.Parse ("template = p" & LF & "name = P" & LF & "description = D" & LF & "version = 1" & LF
                       & "input root" & LF & "  type = text" & LF
                       & "  provider = directories" & LF, "memory", Offering, Status);
             Tp.Add (Holding2, Offering);
@@ -1191,7 +1200,7 @@ package body Tests.Framework_Cases is
                Assert (Checked.Code = E.Framework_Input_Invalid,
                        "a value none of the provided choices was taken");
             end;
-            Tp.Parse ("template = q" & LF & "name = Q" & LF & "version = 1" & LF
+            Tp.Parse ("template = q" & LF & "name = Q" & LF & "description = D" & LF & "version = 1" & LF
                       & "input root" & LF & "  provider = elsewhere" & LF, "memory", Offering,
                       Status);
             Assert (Status.Code = E.Framework_Template_Invalid,
@@ -1264,10 +1273,10 @@ package body Tests.Framework_Cases is
       A, B     : Cf.Plan;
       Moved    : Tp.Template;
    begin
-      Tp.Add (First, Parsed ("template = t" & LF & "name = T" & LF
+      Tp.Add (First, Parsed ("template = t" & LF & "name = T" & LF & "description = D" & LF
                              & "version = 1" & LF & "scalar a = 1" & LF
                              & "set s = x" & LF & "set s = y" & LF));
-      Tp.Parse ("template = t" & LF & "name = T" & LF & "version = 1" & LF
+      Tp.Parse ("template = t" & LF & "name = T" & LF & "description = D" & LF & "version = 1" & LF
                 & "set s = y" & LF & "set s = x" & LF & "scalar a = 1" & LF,
                 "elsewhere/t.template", Moved, Status);
       Tp.Add (Second, Moved);
@@ -2067,7 +2076,7 @@ package body Tests.Framework_Cases is
          return False;
       end Conflicted;
    begin
-      Tp.Add (Registry, Parsed ("template = t" & LF & "name = T" & LF
+      Tp.Add (Registry, Parsed ("template = t" & LF & "name = T" & LF & "description = D" & LF
                                 & "version = 1" & LF
                                 & "scalar build.command = make" & LF
                                 & "baseline project.tests = a change comes with its test" & LF
@@ -2345,7 +2354,7 @@ package body Tests.Framework_Cases is
       Status   : E.Error_Info;
    begin
       Tp.Add (Registry, Parsed
-        ("template = work" & LF & "name = W" & LF & "version = 1" & LF
+        ("template = work" & LF & "name = W" & LF & "description = D" & LF & "version = 1" & LF
          & "task_kind implementation = component, requirements?, notes?" & LF
          & "task_kind analysis = estimate?" & LF
          & "map task_field.estimate = text" & LF
@@ -3493,7 +3502,8 @@ package body Tests.Framework_Cases is
          Dirs.Create_Path (Home & "/templates");
          Put_File (Home & "/settings.conf", "");
          Put_File (Home & "/templates/secret-demo.template",
-                   "template = secret-demo" & LF & "name = Secret demo" & LF & "version = 1" & LF
+                   "template = secret-demo" & LF & "name = Secret demo" & LF
+                   & "description = D" & LF & "version = 1" & LF
                    & "input token" & LF
                    & "  type = text" & LF & "  label = Token" & LF
                    & "  description = the service's token" & LF
@@ -3679,7 +3689,7 @@ package body Tests.Framework_Cases is
       Store    : S.Store;
    begin
       Tp.Add (Registry, Parsed
-        ("template = unsound" & LF & "name = U" & LF & "version = 1" & LF
+        ("template = unsound" & LF & "name = U" & LF & "description = D" & LF & "version = 1" & LF
          & "task_kind analysis = notes?" & LF
          & "map permission.kind.analysis.use_network =" & LF
          & "file NOTES.txt = made by init" & LF));
@@ -6720,6 +6730,9 @@ package body Tests.Framework_Cases is
       Tk.Move (Store, Change, To_String (C), "accepted", "", Status => Status);
       Assert (E.Is_Error (Status), "a complete task was reopened without a grant");
       Change := S.No_Changes;
+      Tk.Decompose (Store, Change, To_String (C), Parts, Made, Status);
+      Assert (Status.Code = E.Framework_Transition_Invalid, "an ended task was split");
+      Change := S.No_Changes;
       Granted (Model_Runner.Framework.Transitions.Reopen) := True;
       Tk.Move (Store, Change, To_String (C), "accepted", "reopened", Granted, Status => Status);
       S.Commit (Store, Change, Status);
@@ -7208,6 +7221,41 @@ package body Tests.Framework_Cases is
                  and then S.Exists (Store, Model_Runner.Framework.Tasks_Area,
                                     To_String (Third) & ".rev-000001"),
                  "a dependency added did not keep the task as it was: " & Code_Of (Status));
+      end;
+
+      --  A requirement whose tasks are all complete is implemented, however
+      --  it came to be accepted again.
+      declare
+         Req2  : Unbounded_String;
+         Done2 : Unbounded_String;
+         Held2 : Nt.Entity;
+         Moved : Model_Runner.Framework.Name_Lists.Vector;
+         Given : Tk.Field_Map := Fields ("Serves two", "analysis");
+      begin
+         Nt.Propose (Store, Change, Nt.Requirement, "IO", "Write", "It SHALL write.", "",
+                     "user", "", "io", Req2, Status);
+         S.Commit (Store, Change, Status);
+         Nt.Move (Store, Change, Nt.Requirement, To_String (Req2), "accepted", Tr.Ordinary_Only,
+                  Status);
+         S.Commit (Store, Change, Status);
+         Given.Include ("requirements", To_String (Req2));
+         Tk.Create (Store, Change, Given, "user", "", Done2, Status);
+         S.Commit (Store, Change, Status);
+         for Next of Model_Runner.Framework.Name_Lists.Vector'
+           (["accepted", "running", "verification"])
+         loop
+            Tk.Move (Store, Change, To_String (Done2), Next, "", Status => Status);
+            S.Commit (Store, Change, Status);
+         end loop;
+         Tk.Move (Store, Change, To_String (Done2), "complete", "", Gates_Passed => True,
+                  Status => Status);
+         S.Commit (Store, Change, Status);
+         Vf.Reevaluate_Requirements (Store, Change, Moved, Status);
+         S.Commit (Store, Change, Status);
+         Nt.Read (Store, Nt.Requirement, To_String (Req2), Held2, Status);
+         Assert (To_String (Held2.State) = "implemented" and then Moved.Contains (To_String (Req2)),
+                 "an accepted requirement whose tasks were all complete stayed accepted: "
+                 & To_String (Held2.State));
       end;
 
       --  What supersedes keeps what it was.
@@ -8347,7 +8395,7 @@ package body Tests.Framework_Cases is
       Given  : Tk.Field_Map;
    begin
       Task_Project (Store, "orchestration", "scalar agents.max_active = 2" & LF);
-      Assert (Natural (Or_ch.Rules (Store).Length) = 5,
+      Assert (Natural (Or_ch.Rules (Store).Length) = 9,
               "a project that says nothing did not get the rules it needs");
 
       Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.", "",

@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **An accepted requirement whose tasks are all complete is implemented**
+  when requirements are judged -- come back from blocked, say.
+- **Changing what a decision or specification means re-judges the
+  requirements** by default: their revisions and supersessions are among
+  the automation's rules.
+- **A decision that applies, and what governs the work, are mandatory in
+  the context:** in it, or the context does not fit.
+- **An ended task is not split,** and a task is not made a part of one.
+- **A template says what it is for:** one without a description is not
+  read.
+
 - **A decision or specification scoped to a component governs that
   component's work alone,** and two for different components are no
   conflict; conflicts are found within the project and each component.

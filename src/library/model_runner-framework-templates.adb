@@ -536,6 +536,8 @@ package body Model_Runner.Framework.Templates is
          Refuse ("it has no name to be shown by");
       elsif Value.Version = Null_Unbounded_String then
          Refuse ("it has no version");
+      elsif Value.Description = Null_Unbounded_String then
+         Refuse ("it does not say what it is for: it has no description");
       end if;
 
       for Held of Value.Inputs loop

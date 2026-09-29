@@ -44,6 +44,12 @@ package body Model_Runner.Framework.Orchestration is
       Result.Append ("Requirement_Revised: derive_tasks");
       Result.Append ("Task_Completed: reevaluate_requirements");
       Result.Append ("Source_Changed: reevaluate_requirements");
+      --  What governs the work changing its meaning takes verification
+      --  from what rested on it.
+      Result.Append ("Decision_Revised: reevaluate_requirements");
+      Result.Append ("Decision_Superseded: reevaluate_requirements");
+      Result.Append ("Specification_Revised: reevaluate_requirements");
+      Result.Append ("Specification_Superseded: reevaluate_requirements");
       Result.Append ("*: recompute_readiness");
       return Result;
    end Rules;

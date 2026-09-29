@@ -1578,7 +1578,7 @@ package body Tests.CLI_Cases is
          Ada.Text_IO.Create (Setup, Ada.Text_IO.Out_File, Home & "/templates/two-inputs.template");
          Ada.Text_IO.Put
            (Setup, "template = two-inputs" & ASCII.LF & "name = Two inputs" & ASCII.LF
-                   & "version = 1" & ASCII.LF
+                   & "description = D" & ASCII.LF & "version = 1" & ASCII.LF
                    & "input alpha" & ASCII.LF & "  type = text" & ASCII.LF
                    & "  required = true" & ASCII.LF
                    & "input beta" & ASCII.LF & "  type = text" & ASCII.LF
