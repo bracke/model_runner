@@ -1194,11 +1194,30 @@ package body Model_Runner.Framework.Work is
          if E.Is_Ok (Read) then
             Stores.Commit (Host.Item.all, Change, Read);
          end if;
+
+         --  Not made after all: the child ends failed, and is no longer the
+         --  one working -- its parent goes on as itself, charged and held
+         --  as itself, with nothing left open in its name.
+         if E.Is_Error (Read) then
+            --  Cancelled, not failed: it never worked, and a helper the
+            --  model was told was not made holds nothing up.
+            declare
+               Ended : E.Error_Info;
+               Close : Stores.Transaction;
+            begin
+               Agent_State (Host.Item.all, Close, To_String (Child_Id), "cancelled",
+                            "it could not be started: " & Why_Of (Read));
+               Stores.Commit (Host.Item.all, Close, Ended);
+            end;
+            Host.Open.Delete_Last;
+            Host.Opened.Delete_Last;
+            Child_Id := Null_Unbounded_String;
+            Budget := 0;
+            Status := Read;
+            return;
+         end if;
          Host.Calls.Append (To_String (Called));
          Context := To_Unbounded_String (Framework.Context.Rendered (Made));
-         if E.Is_Error (Read) then
-            Status := Read;
-         end if;
       end;
    end Open_Child;
 
@@ -1557,8 +1576,20 @@ package body Model_Runner.Framework.Work is
       --  Its own copy to write in, when the project isolates work.
       if Isolated then
          declare
-            Made : Workspaces.Workspace;
+            Made  : Workspaces.Workspace;
+            Stale : constant String := Workspaces.Active_For (Item, Task_Id);
          begin
+            --  A workspace an earlier attempt left -- set aside, not taken in
+            --  -- is that attempt's: this generation starts from the project
+            --  as it is, and the task has one workspace, not two.
+            if Stale /= "" then
+               Workspaces.Abandon (Item, Change, Stale, Held);
+               if E.Is_Error (Held) then
+                  Change := Stores.No_Changes;
+                  Conclude ("blocked", "its earlier workspace cannot be set aside", "failed");
+                  return;
+               end if;
+            end if;
             Workspaces.Create
               (Item, Change, Task_Id, To_String (Result.Agent_Id),
                Generation_Of (Item, Task_Id), Work_Setting (Item, "backend") /= "copy",

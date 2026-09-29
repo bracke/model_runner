@@ -7,6 +7,12 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A helper that cannot be started is not left the one working:** it is
+  recorded cancelled, and its parent goes on charged, held and recorded as
+  itself.
+- **A task tried again has one workspace:** the one an earlier attempt left
+  is abandoned before the new generation's is made.
+
 - **An accepted requirement whose tasks are all complete is implemented**
   when requirements are judged -- come back from blocked, say.
 - **Changing what a decision or specification means re-judges the

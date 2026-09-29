@@ -6974,6 +6974,46 @@ package body Tests.Framework_Cases is
       end;
       S.Close (Store);
 
+      --  Set aside and tried again, a task has one workspace: the earlier
+      --  attempt's is abandoned, not left standing beside the new one.
+      Task_Project
+        (Store, "retry-workspace",
+         "set execution.allowed = test" & LF
+         & "profile checks = exists: test -f src/hello.adb" & LF
+         & "scalar verification.default = checks" & LF
+         & "scalar work.isolation = workspace" & LF);
+      Tk.Create (Store, Change, Fields ("Again", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Execute (Store, To_String (Id),
+                  Scripted_Agent'(File => Null_Unbounded_String,
+                                  Answer => To_Unbounded_String
+                                    ("status: blocked" & LF & "summary: needs a decision"),
+                                  Broken => False),
+                  Cx.Profile (Store, ""), Done, Status);
+      declare
+         First_Space : constant String := Ws.Active_For (Store, To_String (Id));
+         Held        : Ws.Workspace;
+      begin
+         Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Wk.Execute (Store, To_String (Id),
+                     Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                                     Answer => To_Unbounded_String
+                                       ("status: done" & LF & "summary: x"),
+                                     Broken => False),
+                     Cx.Profile (Store, ""), Done, Status);
+         Ws.Read (Store, First_Space, Held, Status);
+         Assert (First_Space /= ""
+                 and then To_String (Held.Status) = "abandoned"
+                 and then Ws.Active_For (Store, To_String (Id)) = To_String (Done.Workspace_Id)
+                 and then To_String (Done.Workspace_Id) /= First_Space,
+                 "a task tried again kept its earlier workspace beside the new one: "
+                 & First_Space & " " & To_String (Held.Status));
+      end;
+      S.Close (Store);
+
       Task_Project (Store, "git-workspace", "");
       declare
          Root      : constant String := Dirs.Full_Name (Fresh_Root (Store));
@@ -7669,7 +7709,7 @@ package body Tests.Framework_Cases is
    --  An agent that asks for children through the host, as a plan says.
    type Parent_Plan is
      (Helped, Fails_Twice, Fails_Then_Good, Optional_Fails, Left_Open, Denied,
-      Checks_First, Interrupted, Out_Of_Time, Grandchild_Fails);
+      Checks_First, Interrupted, Out_Of_Time, Grandchild_Fails, Child_Unstarted);
 
    type Scripted_Parent is new Wk.Parenting_Runner with record
       Plan : Parent_Plan := Helped;
@@ -7796,6 +7836,14 @@ package body Tests.Framework_Cases is
             Status := E.Make (E.Framework_Limit_Exceeded);
             E.Add_Text (Status, "name", "time");
             return;
+         when Child_Unstarted =>
+            --  A helper that cannot be started is not left the one working:
+            --  its parent goes on as itself, and nothing is held up by it.
+            Children.Open_Child
+              ("reviewer", "required", "look at hello", "", Id, Context, Budget, Parent_Status);
+            Assert (E.Is_Error (Parent_Status) and then Children.Current = Root,
+                    "a helper that could not be started was left the one working: "
+                    & Children.Current);
          when Grandchild_Fails =>
             --  Where the project may test but not build, a check is judged
             --  by what the configuration says it takes, and by its name
@@ -8360,6 +8408,13 @@ package body Tests.Framework_Cases is
       Assert (To_String (Done.Final_State) = "complete",
               "a child run again past its failed child did not let the task complete: "
               & To_String (Done.Reason));
+      S.Close (Store);
+
+      --  No invocation left for a helper: it is not made, and the work goes on.
+      Task_Project (Store, "child-unstarted", Checks & "scalar agents.max_invocations = 1" & LF);
+      Work (Child_Unstarted);
+      Assert (To_String (Done.Final_State) = "complete",
+              "a helper that could not be started held its task: " & To_String (Done.Reason));
       S.Close (Store);
 
       --  The root is held to its token budget as its children are.
