@@ -906,6 +906,14 @@ package body Model_Runner.Framework.Configurations is
    function Whole_Problem (Config : Records.Item) return String is
       function Has (Field : String) return Boolean is (Records.Get (Config, Field) /= "");
 
+      --  What a meaning begins with, up to its first comma.
+      function First_Word (Meaning : String) return String is
+         Stop : constant Natural := Ada.Strings.Fixed.Index (Meaning, ",");
+      begin
+         return Ada.Strings.Fixed.Trim
+           ((if Stop = 0 then Meaning else Meaning (Meaning'First .. Stop - 1)), Ada.Strings.Both);
+      end First_Word;
+
       function Among (Field : String; Words : String) return Boolean
       is (Records.Get (Config, Field) = ""
           or else Choices_Of (Words).Contains (Records.Get (Config, Field)));
@@ -1003,6 +1011,11 @@ package body Model_Runner.Framework.Configurations is
               and then Tasks.Core_Task_States.Contains (Name (Name'First + 15 .. Name'Last))
             then
                return Name & ": a core state's meaning is the harness's";
+            elsif Starts (Name, "map.task.state.")
+              and then not Tasks.Core_Task_States.Contains (First_Word (Records.Get (Config, Name)))
+            then
+               return Name & " says first the core state it counts as -- for what waits on it --"
+                 & " as accepted, and set aside";
             end if;
          end;
       end loop;
@@ -1038,6 +1051,12 @@ package body Model_Runner.Framework.Configurations is
                          (Name (Name'First + 22 .. Name'Last))
             then
                return Name & ": a core state's meaning is the harness's";
+            elsif Starts (Name, "map.requirement.state.")
+              and then not Intent.Core_Requirement_States.Contains
+                             (First_Word (Records.Get (Config, Name)))
+            then
+               return Name & " says first the core state it counts as -- for the work serving it"
+                 & " -- as accepted, and waiting for sign-off";
             end if;
          end;
       end loop;
@@ -1073,6 +1092,10 @@ package body Model_Runner.Framework.Configurations is
             return Said ("scalar.agents.on_child_failure", "block, fail, continue");
          elsif Off ("scalar.recovery.running", "blocked, failed, accepted") then
             return Said ("scalar.recovery.running", "blocked, failed, accepted");
+         elsif Off ("scalar.requirement.after_text_change", "accepted, blocked") then
+            return Said ("scalar.requirement.after_text_change", "accepted, blocked");
+         elsif Off ("scalar.requirement.after_criteria_change", "implemented, accepted") then
+            return Said ("scalar.requirement.after_criteria_change", "implemented, accepted");
          end if;
       end;
 

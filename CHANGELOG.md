@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A move's consequences are the move's:** leaving running or verification
+  lets go of what the task held, and failing, cancelling or rejecting it
+  abandons its workspace -- whoever makes the move, a person included.
+- **A project's own state says how it counts:** its meaning begins with the
+  core state it counts as for dependencies, parents, gates and the work
+  serving a requirement (`map task.state.parked = accepted, and set
+  aside`); one that does not is refused.
+- **What a revision does to a requirement is policy:**
+  `scalar requirement.after_text_change` (accepted, or blocked) and
+  `after_criteria_change` (implemented, or accepted).
+- **Acceptance criteria can name the check that shows them** (`It reads
+  [check: tests]`); a requirement is verified only once each such check
+  passed in its current evidence.
+
 - **The spec's requirements, each checked:** `docs/spec-conformance.tsv`
   lists every SHALL and MUST of the specification -- every item of every
   list, 690 in all -- with whether it is met, the code that meets it and

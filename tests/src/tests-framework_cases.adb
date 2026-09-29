@@ -4026,7 +4026,7 @@ package body Tests.Framework_Cases is
       end Refused;
    begin
       Task_Project (Store, "requirement-lifecycle",
-                    "map requirement.state.in_review = agreed, and waiting for sign-off" & LF
+                    "map requirement.state.in_review = accepted, and waiting for sign-off" & LF
                     & "set requirement.transitions = accepted -> in_review" & LF
                     & "set requirement.transitions = in_review -> accepted" & LF);
       Assert (Nt.Core_Requirement_States.Contains ("verified")
@@ -4065,6 +4065,10 @@ package body Tests.Framework_Cases is
               "a move to a state whose meaning nobody said was taken");
       Assert (Refused ("map.requirement.state.verified", "whatever"),
               "a core state was given a meaning by the project");
+      Assert (Refused ("map.requirement.state.pending", "waiting on someone"),
+              "a project state that says nothing of how it counts was taken");
+      Assert (Nt.Counts_As (Store, "in_review") = "accepted",
+              "a project requirement state did not count as the core state it says");
 
       --  A setting read as one of some words, or as a count, is one.
       Assert (Refused ("scalar.bootstrap.import", "maybe")
@@ -4176,6 +4180,10 @@ package body Tests.Framework_Cases is
       Change := S.No_Changes;
       Assert (Refused ("set.task.forbidden", "accepted -> running"),
               "a move the harness makes was taken away");
+      Assert (Refused ("map.task.state.shelved", "set aside for later"),
+              "a task state that says nothing of how it counts was taken");
+      Assert (Tk.Counts_As (Store, "parked") = "accepted" and then Tk.Counts_As (Store, "running")
+                = "running", "a project state did not count as the core state it says");
       Assert (Refused ("map.task.state.running", "whatever"),
               "a core task state was given a meaning by the project");
       Assert (Refused ("set.task.transitions", "accepted -> limbo"),
@@ -4798,6 +4806,35 @@ package body Tests.Framework_Cases is
       Nt.Read (Store, Nt.Requirement, To_String (Req), Held, Status);
       Assert (To_String (Held.State) = "verified" and then Natural (Changed.Length) = 1,
               "a requirement with current evidence was not verified");
+
+      --  Its criteria say how they are shown: one naming a check that was
+      --  not run holds it back; one naming a check that passed does not.
+      declare
+         Effect : Nt.Impact;
+      begin
+         Nt.Revise (Store, Change, Nt.Requirement, To_String (Req), "Read", "It SHALL read.",
+                    "It reads [check: absent]", Effect, Status);
+         S.Commit (Store, Change, Status);
+         Vf.Run_Profile (Store, Change, "passing", To_String (Id), Evidence, Passed, Status);
+         S.Commit (Store, Change, Status);
+         Vf.Reevaluate_Requirements (Store, Change, Changed, Status);
+         S.Commit (Store, Change, Status);
+         Nt.Read (Store, Nt.Requirement, To_String (Req), Held, Status);
+         Assert (To_String (Held.State) = "implemented",
+                 "a requirement whose criterion's check never ran was verified: "
+                 & To_String (Held.State));
+         Nt.Revise (Store, Change, Nt.Requirement, To_String (Req), "Read", "It SHALL read.",
+                    "It reads [check: say]", Effect, Status);
+         S.Commit (Store, Change, Status);
+         Vf.Run_Profile (Store, Change, "passing", To_String (Id), Evidence, Passed, Status);
+         S.Commit (Store, Change, Status);
+         Vf.Reevaluate_Requirements (Store, Change, Changed, Status);
+         S.Commit (Store, Change, Status);
+         Nt.Read (Store, Nt.Requirement, To_String (Req), Held, Status);
+         Assert (To_String (Held.State) = "verified",
+                 "a requirement whose criterion's check passed was not verified: "
+                 & To_String (Held.State));
+      end;
 
       --  A file changes: the evidence no longer applies.
       Put_File (Fresh_Root (Store) & "/changed.txt", "new");
@@ -7502,6 +7539,36 @@ package body Tests.Framework_Cases is
                  "an accepted part did not hold its parent");
       end;
 
+      --  A move's consequences are the move's, whoever makes it: a person
+      --  failing a task in verification lets go of what its agent held and
+      --  abandons its workspace.
+      declare
+         Held_Task : Unbounded_String;
+         Space     : Ws.Workspace;
+         Kept      : Ws.Workspace;
+      begin
+         Tk.Create (Store, Change, Fields ("Held", "analysis"), "user", "", Held_Task, Status);
+         S.Commit (Store, Change, Status);
+         for Next of Model_Runner.Framework.Name_Lists.Vector'
+           (["accepted", "running", "verification"])
+         loop
+            Tk.Move (Store, Change, To_String (Held_Task), Next, "", Status => Status);
+            S.Commit (Store, Change, Status);
+         end loop;
+         Model_Runner.Framework.Leases.Acquire
+           (Store, Change, "task." & To_String (Held_Task), "AG-WORKER", 600, Status);
+         Ws.Create (Store, Change, To_String (Held_Task), "AG-WORKER", "1", False, Space, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Held_Task), "failed", "not wanted",
+                  Status => Status, Actor => Tr.User);
+         S.Commit (Store, Change, Status);
+         Ws.Read (Store, To_String (Space.Id), Kept, Status);
+         Assert (Model_Runner.Framework.Leases.Holder (Store, "task." & To_String (Held_Task)) = ""
+                 and then To_String (Kept.Status) = "abandoned",
+                 "a person's move left the task held, or its workspace standing: "
+                 & To_String (Kept.Status));
+      end;
+
       --  What supersedes keeps what it was.
       declare
          Dec2 : Unbounded_String;
@@ -7521,6 +7588,28 @@ package body Tests.Framework_Cases is
                  and then S.Exists (Store, Model_Runner.Framework.Decisions_Area,
                                     To_String (Dec2) & ".rev-000001"),
                  "what superseded did not keep what it was: " & Code_Of (Status));
+      end;
+      S.Close (Store);
+
+      --  What a revision does to a requirement is the project's to say.
+      Task_Project (Store, "revision-policy", "scalar requirement.after_text_change = blocked" & LF);
+      declare
+         Held   : Nt.Entity;
+         Effect : Nt.Impact;
+      begin
+         Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.", "",
+                     "user", "", "io", Req, Status);
+         S.Commit (Store, Change, Status);
+         for Next of Model_Runner.Framework.Name_Lists.Vector'(["accepted", "implemented"]) loop
+            Nt.Move (Store, Change, Nt.Requirement, To_String (Req), Next, Tr.Ordinary_Only, Status);
+            S.Commit (Store, Change, Status);
+         end loop;
+         Nt.Revise (Store, Change, Nt.Requirement, To_String (Req), "Read", "It SHALL read twice.",
+                    "", Effect, Status);
+         S.Commit (Store, Change, Status);
+         Nt.Read (Store, Nt.Requirement, To_String (Req), Held, Status);
+         Assert (To_String (Held.State) = "blocked",
+                 "a revision did not do what the project's policy says: " & To_String (Held.State));
       end;
       S.Close (Store);
    end Readiness_Follows_What_Is_Served;

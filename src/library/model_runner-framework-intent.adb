@@ -136,6 +136,29 @@ package body Model_Runner.Framework.Intent is
       return Result;
    end Core_Requirement_States;
 
+   ---------------
+   -- Counts_As --
+   ---------------
+
+   function Counts_As (Item : Stores.Store; State : String) return String is
+      Config : Records.Item;
+      Read   : E.Error_Info;
+   begin
+      if State = "" or else Core_Requirement_States.Contains (State) then
+         return State;
+      end if;
+      Configurations.Read (Item, Config, Read);
+      declare
+         Meaning : constant String := Records.Get (Config, "map.requirement.state." & State);
+         Stop    : constant Natural := Ada.Strings.Fixed.Index (Meaning, ",");
+         First   : constant String :=
+           Ada.Strings.Fixed.Trim
+             ((if Stop = 0 then Meaning else Meaning (Meaning'First .. Stop - 1)), Ada.Strings.Both);
+      begin
+         return (if Core_Requirement_States.Contains (First) then First else State);
+      end;
+   end Counts_As;
+
    ------------------
    -- Lifecycle_Of --
    ------------------
@@ -480,12 +503,33 @@ package body Model_Runner.Framework.Intent is
          --  What the new meaning leaves no longer true, for a requirement:
          --  an implementation made for other words, evidence gathered
          --  against other criteria.
+         --  Where the policy says, by what no longer applies: new words
+         --  leave no implementation standing (requirement.after_text_change,
+         --  accepted unless it says blocked), new criteria no evidence
+         --  (requirement.after_criteria_change, implemented unless it says
+         --  accepted).
          if Kind = Requirement then
-            if New_Text and then State in "implemented" | "verified" then
-               Next := To_Unbounded_String ("accepted");
-            elsif New_Rules and then State = "verified" then
-               Next := To_Unbounded_String ("implemented");
-            end if;
+            declare
+               Config : Records.Item;
+               Read   : E.Error_Info;
+            begin
+               Configurations.Read (Item, Config, Read);
+               declare
+                  After_Text     : constant String :=
+                    Records.Get (Config, "scalar.requirement.after_text_change");
+                  After_Criteria : constant String :=
+                    Records.Get (Config, "scalar.requirement.after_criteria_change");
+               begin
+                  if New_Text and then State in "implemented" | "verified" then
+                     Next := To_Unbounded_String
+                       (if After_Text = "blocked" then "blocked" else "accepted");
+                  elsif New_Rules and then State in "implemented" | "verified" then
+                     Next := To_Unbounded_String
+                       (if After_Criteria = "accepted" then "accepted"
+                        elsif State = "verified" then "implemented" else State);
+                  end if;
+               end;
+            end;
             Result.Invalidated := State = "verified" and then Next /= State;
             Records.Set (Value, "state", To_String (Next));
          end if;

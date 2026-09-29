@@ -9,6 +9,7 @@ with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Leases;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Schemas;
+with Model_Runner.Framework.Workspaces;
 
 package body Model_Runner.Framework.Tasks is
 
@@ -130,6 +131,25 @@ package body Model_Runner.Framework.Tasks is
          To := To_Unbounded_String (Trim (Line (Arrow + 2 .. Line'Last)));
       end if;
    end Sides;
+
+   ---------------
+   -- Counts_As --
+   ---------------
+
+   function Counts_As (Item : Stores.Store; State : String) return String is
+   begin
+      if State = "" or else Core_Task_States.Contains (State) then
+         return State;
+      end if;
+      declare
+         Meaning : constant String := Records.Get (Config (Item), "map.task.state." & State);
+         Stop    : constant Natural := Ada.Strings.Fixed.Index (Meaning, ",");
+         First   : constant String :=
+           Trim (if Stop = 0 then Meaning else Meaning (Meaning'First .. Stop - 1));
+      begin
+         return (if Core_Task_States.Contains (First) then First else State);
+      end;
+   end Counts_As;
 
    function Lifecycle_Of (Item : Stores.Store) return Transitions.Machine is
       Result   : Transitions.Machine := Transitions.Task_Machine;
@@ -650,6 +670,7 @@ package body Model_Runner.Framework.Tasks is
          E.Add_Text (Status, "name", Id);
          E.Add_Text (Status, "detail", Detail);
       end Not_Ready;
+      Leaving : constant String := State_In (Item, Change, Id);
    begin
       Runtime (Item, Change, Id, Value, Status);
       if E.Is_Error (Status) then
@@ -754,6 +775,43 @@ package body Model_Runner.Framework.Tasks is
       end if;
       Stores.Put (Change, Tasks_Area, Id & State_Suffix, Value);
 
+      --  What the move does beyond the state, the same whoever makes it:
+      --
+      --    out of running or verification -> the task, its component and
+      --      the project are no longer held by the agent that worked it;
+      --    to failed, cancelled or rejected -> its workspace, not taken in,
+      --      is abandoned (blocked keeps it to be looked at; the next
+      --      attempt sets it aside);
+      --    to complete -> what it served is noted (above).
+      if Leaving in "running" | "verification" and then Next not in "running" | "verification" then
+         declare
+            Holder : constant String := Leases.Holder (Item, "task." & Id);
+            Defined : Records.Item;
+            Read    : E.Error_Info;
+         begin
+            Definition (Item, Id, Defined, Read);
+            for Held of Name_Lists.Vector'
+              ([1 => "task." & Id, 2 => Project_Lease,
+                3 => Component_Lease (Records.Get (Defined, "component"))])
+            loop
+               if Holder /= "" and then Leases.Holder (Item, Held) = Holder then
+                  Leases.Release (Item, Change, Held, Holder, Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+               end if;
+            end loop;
+         end;
+      end if;
+      if Next in "failed" | "cancelled" | "rejected"
+        and then Workspaces.Active_For (Item, Id) /= ""
+      then
+         Workspaces.Abandon (Item, Change, Workspaces.Active_For (Item, Id), Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+      end if;
+
       --  Accepted with children still open -- split while a candidate --
       --  its work is theirs, as a split of an accepted task makes it,
       --  unless the project lets it coordinate.
@@ -831,7 +889,7 @@ package body Model_Runner.Framework.Tasks is
       end if;
 
       for Other of Split (Records.Get (Defined, "depends_on")) loop
-         if State_In (Item, Change, Other) /= "complete" then
+         if Counts_As (Item, State_In (Item, Change, Other)) /= "complete" then
             Result.Reasons.Append
               ("it waits for " & Other & ", which is "
                & (if State_In (Item, Change, Other) = "" then "not there"
@@ -855,7 +913,8 @@ package body Model_Runner.Framework.Tasks is
                Result.Reasons.Append (Requirement & " is not there");
             --  Work goes on only for what is agreed: blocked, and any state a
             --  project adds of its own, holds it as much as rejected does.
-            elsif To_String (Held.State) not in "accepted" | "implemented" | "verified"
+            elsif Intent.Counts_As (Item, To_String (Held.State))
+                    not in "accepted" | "implemented" | "verified"
             then
                Result.Reasons.Append
                  (Requirement & " is " & To_String (Held.State));
@@ -1016,10 +1075,11 @@ package body Model_Runner.Framework.Tasks is
    function Holds_Parent (Item : Stores.Store; Child : String; State : String) return Boolean is
       Defined : Records.Item;
       Read    : E.Error_Info;
+      As      : constant String := Counts_As (Item, State);
    begin
-      if State in "complete" | "cancelled" | "rejected" then
+      if As in "complete" | "cancelled" | "rejected" then
          return False;
-      elsif State = "candidate" then
+      elsif As = "candidate" then
          Definition (Item, Child, Defined, Read);
          declare
             By : constant String := Records.Get (Defined, "created_by");

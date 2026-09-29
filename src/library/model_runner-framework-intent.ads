@@ -104,6 +104,16 @@ package Model_Runner.Framework.Intent is
    --  @return Them.
    function Core_Requirement_States return Name_Lists.Vector;
 
+   --  The core state a requirement's state counts as for the work that
+   --  serves it: a core state itself, and a project's own the core state its
+   --  meaning begins with, as map requirement.state.in_review = accepted,
+   --  and waiting for sign-off.
+   --
+   --  @param Item The store.
+   --  @param State The state.
+   --  @return The core state.
+   function Counts_As (Item : Stores.Store; State : String) return String;
+
    --  A kind's lifecycle in a project: the default one, and for
    --  requirements what the project's policy adds -- a state of its own
    --  with what it means, map requirement.state.NAME = MEANING, and moves

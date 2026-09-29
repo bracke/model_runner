@@ -1459,17 +1459,21 @@ package body Model_Runner.Framework.Work is
                Agent_State (Item, Change, To_String (Result.Agent_Id), Agent_End, Reason);
             end if;
          end;
-         Leases.Release
-           (Item, Change, Lease_Of (Task_Id), To_String (Result.Agent_Id), Status);
-         if E.Is_Ok (Status) and then not Isolated and then Component_Of (Item, Task_Id) /= ""
-         then
+         --  A move lets go of what the task held; staying in verification,
+         --  its work waiting to be taken in, it is let go of here.
+         if Next = "" then
             Leases.Release
-              (Item, Change, Tasks.Component_Lease (Component_Of (Item, Task_Id)),
-               To_String (Result.Agent_Id), Status);
-         end if;
-         if E.Is_Ok (Status) and then not Isolated then
-            Leases.Release
-              (Item, Change, Tasks.Project_Lease, To_String (Result.Agent_Id), Status);
+              (Item, Change, Lease_Of (Task_Id), To_String (Result.Agent_Id), Status);
+            if E.Is_Ok (Status) and then not Isolated and then Component_Of (Item, Task_Id) /= ""
+            then
+               Leases.Release
+                 (Item, Change, Tasks.Component_Lease (Component_Of (Item, Task_Id)),
+                  To_String (Result.Agent_Id), Status);
+            end if;
+            if E.Is_Ok (Status) and then not Isolated then
+               Leases.Release
+                 (Item, Change, Tasks.Project_Lease, To_String (Result.Agent_Id), Status);
+            end if;
          end if;
          if E.Is_Ok (Status) then
             Stores.Commit (Item, Change, Status);
@@ -2554,29 +2558,22 @@ package body Model_Runner.Framework.Work is
       if E.Is_Error (Status) then
          return;
       end if;
-      --  Work written apart for it is not taken in.
-      declare
-         Open : constant String := Workspaces.Active_For (Item, Task_Id);
-      begin
-         if Open /= "" then
-            Workspaces.Abandon (Item, Change, Open, Status);
-
-            --  Not cancelled with its workspace still standing for it.
-            if E.Is_Error (Status) then
-               return;
-            end if;
-         end if;
-      end;
+      --  The move lets go of what a live agent held and abandons its
+      --  workspace; its agent and children are stopped here, and holds a
+      --  gone process left are let go of too.
       if Agent /= "" then
          Stop_Children (Item, Change, Agent);
          Agent_State (Item, Change, Agent, "cancelled", "the task was cancelled");
-         Leases.Release (Item, Change, Lease_Of (Task_Id), Agent, Status);
-         if E.Is_Ok (Status) and then Component_Of (Item, Task_Id) /= "" then
-            Leases.Release
-              (Item, Change, Tasks.Component_Lease (Component_Of (Item, Task_Id)), Agent, Status);
-         end if;
-         if E.Is_Ok (Status) and then Leases.Holder (Item, Tasks.Project_Lease) = Agent then
-            Leases.Release (Item, Change, Tasks.Project_Lease, Agent, Status);
+         if Leases.Holder (Item, Lease_Of (Task_Id)) = "" then
+            Leases.Release (Item, Change, Lease_Of (Task_Id), Agent, Status);
+            if E.Is_Ok (Status) and then Component_Of (Item, Task_Id) /= "" then
+               Leases.Release
+                 (Item, Change, Tasks.Component_Lease (Component_Of (Item, Task_Id)), Agent,
+                  Status);
+            end if;
+            if E.Is_Ok (Status) then
+               Leases.Release (Item, Change, Tasks.Project_Lease, Agent, Status);
+            end if;
          end if;
          if Status.Code = E.Framework_Lease_Held then
             Status := E.Success;

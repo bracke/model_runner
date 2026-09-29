@@ -1360,6 +1360,47 @@ package body Model_Runner.Framework.Verification is
       Policy_Profile : constant String :=
         Records.Get (Config (Item), "scalar.verification.requirements");
 
+      --  Whether evidence shows each acceptance criterion that says how it
+      --  is shown -- a criterion ending [check: LABEL] names the check whose
+      --  passing shows it -- by that check having passed in it.
+      function Criteria_Shown (Requirement : String; Value : Records.Item) return Boolean is
+         Held : Intent.Entity;
+         Read : E.Error_Info;
+      begin
+         Intent.Read (Item, Intent.Requirement, Requirement, Held, Read);
+         for Criterion of Lines_Of (To_String (Held.Criteria)) loop
+            declare
+               Mark  : constant Natural := Ada.Strings.Fixed.Index (Criterion, "[check:");
+               Close : constant Natural := Ada.Strings.Fixed.Index (Criterion, "]", Ada.Strings.Backward);
+            begin
+               if Mark > 0 and then Close > Mark then
+                  declare
+                     Label  : constant String := Trim (Criterion (Mark + 7 .. Close - 1));
+                     Passed : Boolean := False;
+                  begin
+                     for Index in 1 .. Records.Field_Count (Value) loop
+                        declare
+                           Field : constant String := Records.Field_Name (Value, Index);
+                           Line  : constant String := Records.Get (Value, Field);
+                           Tab_1 : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => Tab]);
+                        begin
+                           Passed := Passed
+                             or else (Starts (Field, "check.") and then Tab_1 > Line'First
+                                      and then Line (Line'First .. Tab_1 - 1) = Label
+                                      and then Ada.Strings.Fixed.Index
+                                                 (Line, Tab & "passed" & Tab) > 0);
+                        end;
+                     end loop;
+                     if not Passed then
+                        return False;
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
+         return True;
+      end Criteria_Shown;
+
       function Supporting (Requirement : String) return String is
          Found : Unbounded_String;
          Any   : Boolean := False;
@@ -1405,6 +1446,7 @@ package body Model_Runner.Framework.Verification is
                      Stores.Read (Item, Verification_Area, Evidence, Value, Read);
                      if Records.Get (Value, "passed") /= "true"
                        or else not Is_Current (Item, Evidence, Reasons, Configuration)
+                       or else not Criteria_Shown (Requirement, Value)
                      then
                         return "";
                      end if;

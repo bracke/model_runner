@@ -72,6 +72,16 @@ package Model_Runner.Framework.Tasks is
    --  @return Them.
    function Core_Task_States return Name_Lists.Vector;
 
+   --  The core state a state counts as, for what waits on it -- dependencies,
+   --  parents, gates: a core state itself, and a project's own state the
+   --  core state its meaning begins with, as map task.state.parked =
+   --  accepted, and set aside says it counts as accepted.
+   --
+   --  @param Item The store.
+   --  @param State The state.
+   --  @return The core state.
+   function Counts_As (Item : Stores.Store; State : String) return String;
+
    --  Whether a project may forbid a move of the default lifecycle: only
    --  one a person makes -- rejecting a candidate, blocking or failing by
    --  hand, taking a failed task up again, reopening, reconsidering. The
