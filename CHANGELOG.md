@@ -12,6 +12,8 @@ Keep a Changelog and the project uses semantic versioning.
   repository checks fail when a row is not met, its test is gone, or the
   specification changed since the rows were made from it
   (`docs/spec-conformance.sha1`).
+- **`repo` says what opening the project put right,** as `task` and `work`
+  do, instead of recovering silently.
 - **Diagnostics are read from more tools:** rustc (`error[E0308]` with its
   `-->` place), MSVC's `FILE(LINE,COL)`, AUnit's `FAIL` with `at FILE:LINE`,
   and pytest's `FAILED PATH::TEST`.

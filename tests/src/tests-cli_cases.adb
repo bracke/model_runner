@@ -1901,6 +1901,46 @@ package body Tests.CLI_Cases is
       Assert (Task_Run ("list", "", "") = 0
               and then Last_Output = "",
               "an empty project listed tasks");
+
+      --  Opened from the shell, task and repo each put right what an
+      --  interruption left, and say what they could not settle.
+      declare
+         use Ada.Text_IO;
+         Stray  : constant String := Project & "/.model_runner/workspaces/WS-999999";
+         Path   : constant String := "obj/shell-recovery.txt";
+         Errors : File_Type;
+         Code   : Natural;
+         Source : Fixed_Arguments;
+      begin
+         Ada.Directories.Create_Path (Stray);
+         Create (Errors, Out_File, Path);
+         Set_Error (Errors);
+         begin
+            Code := Task_Run ("list", "", "");
+            Add (Source, "repo");
+            Add (Source, "scan");
+            Add (Source, "--directory");
+            Add (Source, Project);
+            Ran (Source, Code);
+         exception
+            when others =>
+               Set_Error (Standard_Error);
+               Close (Errors);
+               raise;
+         end;
+         Set_Error (Standard_Error);
+         Close (Errors);
+         Ada.Directories.Delete_Tree (Stray);
+         declare
+            Text  : constant String := Text_Of (Path);
+            First : constant Natural := Ada.Strings.Fixed.Index (Text, "WS-999999 has no record");
+         begin
+            Assert (First > 0
+                    and then Ada.Strings.Fixed.Index
+                               (Text (First + 1 .. Text'Last), "WS-999999 has no record") > 0,
+                    "task or repo opened from the shell did not say what recovery found: " & Text);
+         end;
+      end;
       Assert (Task_Run ("new", "Look into it", "kind=analysis") = 0
               and then Ada.Strings.Fixed.Index (Last_Output, "TASK-001") > 0,
               "a task was not created: " & Last_Output);

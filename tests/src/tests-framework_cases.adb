@@ -8792,6 +8792,10 @@ package body Tests.Framework_Cases is
             Model_Runner.CLI.Project_Commands.Run ("/task " & To_String (First), Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/task nonsense", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/work zebra", Screen, Agent);
+            --  For a program, the tasks it could be are a field of their own.
+            Model_Runner.Presentation.Use_Structured (Screen, True);
+            Model_Runner.CLI.Project_Commands.Run ("/work zebra", Screen, Agent);
+            Model_Runner.Presentation.Use_Structured (Screen, False);
             Model_Runner.CLI.Project_Commands.Run ("/req new Stars counted", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/req new Other thing", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/accept", Screen, Agent);
@@ -8824,6 +8828,8 @@ package body Tests.Framework_Cases is
             Model_Runner.CLI.Project_Commands.Run ("/reconfigure scalar.work.lease=120", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run
               ("/reconfigure scalar.work.lease=90 confirm=yes", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run
+              ("/reconfigure profile.checks=exists: test -d src confirm=yes", Screen, Agent);
             Set_Output (Standard_Output);
             Set_Error (Standard_Error);
             Close (Said);
@@ -8832,6 +8838,8 @@ package body Tests.Framework_Cases is
             begin
                Assert (Ada.Strings.Fixed.Index (Text, "more than one matches: TASK-") > 0,
                        "an ambiguous work selector off a terminal did not fail with its matches");
+               Assert (Ada.Strings.Fixed.Index (Text, """matches"": ""TASK-") > 0,
+                       "an ambiguous work selector for a program did not give its matches: " & Text);
                Assert (Ada.Strings.Fixed.Index (Text, "decide one by name") > 0,
                        "a bare /accept with more than one waiting did not refuse and list them");
                Assert (Ada.Strings.Fixed.Index (Text, "REQ-001") > 0
@@ -8884,6 +8892,8 @@ package body Tests.Framework_Cases is
          Assert (R.Get (Config, "scalar.work.lease") = "90",
                  "/reconfigure was not refused unconfirmed off a terminal, or not taken"
                  & " confirmed: " & R.Get (Config, "scalar.work.lease"));
+         Assert (R.Get (Config, "profile.checks") = "exists: test -d src",
+                 "a value of several words was not taken whole: " & R.Get (Config, "profile.checks"));
       end;
       Assert (Tk.State_Of (Store, To_String (First)) = "complete",
               "/work by identifier did not run the task: " & Tk.State_Of (Store, To_String (First)));

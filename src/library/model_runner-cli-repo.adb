@@ -30,7 +30,10 @@ package body Model_Runner.CLI.Repo is
 
    --  The roots of the project in a directory: its configuration's, or
    --  the defaults for a directory that has no project state.
-   function Roots_In (Directory : String) return Rp.Roots is
+   function Roots_In
+     (Directory : String;
+      Said      : in out Model_Runner.Framework.Name_Lists.Vector) return Rp.Roots
+   is
       Store   : S.Store;
       Report  : S.Recovery_Report;
       Outcome : E.Error_Info;
@@ -40,12 +43,8 @@ package body Model_Runner.CLI.Repo is
          S.Open (Store, Directory, Report, Outcome);
          if E.Is_Ok (Outcome) then
             --  What an interruption left is put right on opening, as every
-            --  command that opens a project does.
-            declare
-               Said : Model_Runner.Framework.Name_Lists.Vector;
-            begin
-               Model_Runner.Framework.Work.Recover_On_Opening (Store, Report, Said, Outcome);
-            end;
+            --  command that opens a project does; the caller says it.
+            Model_Runner.Framework.Work.Recover_On_Opening (Store, Report, Said, Outcome);
             Result := Rp.Roots_Of (Store);
          end if;
          S.Close (Store);
@@ -69,7 +68,8 @@ package body Model_Runner.CLI.Repo is
         (if T.Is_Empty (Item.Action) then "scan"
          else T.To_String (Item.Action));
       Argument  : constant String := T.To_String (Item.Action_Argument);
-      Found     : constant Rp.Graph := Rp.Scan (Directory, Roots_In (Directory));
+      Recovered : Model_Runner.Framework.Name_Lists.Vector;
+      Found     : constant Rp.Graph := Rp.Scan (Directory, Roots_In (Directory, Recovered));
       Outcome   : E.Error_Info;
 
       procedure Fail (Condition : E.Error_Info) is
@@ -132,6 +132,9 @@ package body Model_Runner.CLI.Repo is
       end Keep;
    begin
       Status := E.Exit_Success;
+      for Line of Recovered loop
+         Pres.Put_Note (Screen, "cli.project.recovered", [Loc.Named ("detail", Line)]);
+      end loop;
 
       if Action in "sym" | "refs" | "deps" | "users" | "impact" | "trace"
         and then Argument = ""
