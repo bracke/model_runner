@@ -13,6 +13,11 @@ package body Library_Surface is
    --  The codec's other half.
    Held : constant Text_List :=
      [
+      --  The places a symbol is referred to, as path:line. The refs command
+      --  reads the relations themselves, for how sure each is; a caller
+      --  that wants only the places asks.
+      new String'("References_To"),
+
       --  The project state's operation its commands do not reach yet:
       --  blocking a parent on children made some other way than by a
       --  split, which blocks it as it makes them. Until something does,
