@@ -213,4 +213,17 @@ package Model_Runner.Framework.Configurations is
       Value  : out Records.Item;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Put the configuration right from its history, where it cannot be
+   --  read or no longer matches its fingerprint: the newest revision the
+   --  history keeps that does, made current again.
+   --
+   --  @param Item The store.
+   --  @param Restored The revision put back, or 0 when nothing was wrong
+   --    or nothing in the history could be used.
+   --  @param Status Any failure to keep it.
+   procedure Recover
+     (Item     : in out Stores.Store;
+      Restored : out Natural;
+      Status   : out Model_Runner.Errors.Error_Info);
+
 end Model_Runner.Framework.Configurations;

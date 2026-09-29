@@ -1740,6 +1740,8 @@ package body Tests.CLI_Cases is
                  and then Ada.Strings.Fixed.Index (Resolved, "scalar.task.profile.bugfix") > 0
                  and then Ada.Strings.Fixed.Index (Resolved, "scalar.task.profile.test") > 0,
                  "a shipped template left a kind of task with nothing to verify it");
+         Assert (Ada.Strings.Fixed.Index (Resolved, "scalar.profile_capability.analysis") > 0,
+                 "a shipped Ada template gave the harness no static analysis to run");
       end;
 
       Assert (Init ("ada-cli", "project_name=demo") = 2,

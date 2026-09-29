@@ -106,19 +106,23 @@ package Model_Runner.Framework.Results is
    --  reports are kept -- and what goes is what can go: the raw logs of
    --  checks, whose diagnostics the evidence keeps, after Raw_Log_Days,
    --  and the contexts kept for audit, which can be built again, after
-   --  Context_Days. Zero keeps them.
+   --  Context_Days; and what is only a cache -- an impact report, worked
+   --  out again from the graph whenever it is asked for -- after
+   --  Cache_Days. Zero keeps them.
    --
    --  @param Item The store.
    --  @param Change The transaction.
    --  @param Raw_Log_Days How old a raw log may grow.
    --  @param Context_Days How old a kept context may grow.
    --  @param Removed How many went.
+   --  @param Cache_Days How old a cache-like result may grow.
    procedure Prune
      (Item         : Stores.Store;
       Change       : in out Stores.Transaction;
       Raw_Log_Days : Natural;
       Context_Days : Natural;
-      Removed      : out Natural);
+      Removed      : out Natural;
+      Cache_Days   : Natural := 0);
 
    --  Remove the payloads kept apart that no result refers to any more:
    --  those of results pruned, and any a write left that was never

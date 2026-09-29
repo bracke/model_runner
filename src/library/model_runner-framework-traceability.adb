@@ -223,7 +223,14 @@ package body Model_Runner.Framework.Traceability is
             Path : constant String := Lower (To_String (File.Path));
          begin
             for Name of Result.Components loop
-               if Ada.Strings.Fixed.Index (Path, Lower (Name)) > 0 then
+               --  A component that says where its files are is certain of
+               --  them; one that does not, only probably by their names.
+               if not Repository.Component_Roots (Item, Name).Is_Empty then
+                  if Repository.In_Component (Item, Name, To_String (File.Path)) then
+                     Link (Result, "component:" & Name, "file:" & To_String (File.Path),
+                           "names", Repository.Explicit, Repository.Certain);
+                  end if;
+               elsif Ada.Strings.Fixed.Index (Path, Lower (Name)) > 0 then
                   Link (Result, "component:" & Name, "file:" & To_String (File.Path),
                         "names", Repository.Naming_Convention, Repository.Probable);
                end if;

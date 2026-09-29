@@ -7,6 +7,30 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The specification is a gate:** every one of its 690 requirements is met
+  or not applicable, each met one names the test that shows it, and the
+  repository checks fail when a row is not met, its test is gone, or the
+  specification changed since the rows were made from it
+  (`docs/spec-conformance.sha1`).
+- **Diagnostics are read from more tools:** rustc (`error[E0308]` with its
+  `-->` place), MSVC's `FILE(LINE,COL)`, AUnit's `FAIL` with `at FILE:LINE`,
+  and pytest's `FAILED PATH::TEST`.
+- **The harness runs a project's generators and formatter:** `scalar
+  stage.generate` and `stage.format` name profiles run after an agent's
+  work and before it is verified; their changes are the task's, and one
+  that does not pass sets the task aside. The Ada templates give the
+  harness a static analysis profile.
+- **A call records what it could use** -- the tools offered, its call bound,
+  its permissions -- and a failed call refers to a record of its failure.
+- **A context's manifest names the results and evidence it took in.**
+- **Evidence names the harness and adapter versions that took it.**
+- **Impact reports are cache-like results,** let go after
+  `retention.cache_days`.
+- **A component can say where its files are** (`map component.NAME =
+  roots=...`), which the repository engine takes as certain.
+- **Opening a project puts an unreadable configuration back from its
+  history, and acts on the events nothing had acted on yet.**
+
 - **A move's consequences are the move's:** leaving running or verification
   lets go of what the task held, and failing, cancelling or rejecting it
   abandons its workspace -- whoever makes the move, a person included.

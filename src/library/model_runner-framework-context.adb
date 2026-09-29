@@ -532,6 +532,10 @@ package body Model_Runner.Framework.Context is
          State    : Records.Item;
          Read     : E.Error_Info;
          Listed   : Unbounded_String;
+
+         --  The results and evidence it came from, by their identifiers:
+         --  the manifest names what went in, not only that something did.
+         Sources  : Unbounded_String;
       begin
          Stores.Read (Item, Tasks_Area, Task_Id & ".state", State, Read);
          if Records.Get (State, "last_result") /= "" then
@@ -542,6 +546,7 @@ package body Model_Runner.Framework.Context is
                if E.Is_Ok (Read) then
                   Append (Listed, "The last answer (" & Records.Get (State, "last_result") & "):"
                           & ASCII.LF & To_String (Held.Payload) & ASCII.LF);
+                  Append (Sources, "," & Records.Get (State, "last_result"));
                end if;
             end;
          end if;
@@ -554,6 +559,7 @@ package body Model_Runner.Framework.Context is
             begin
                Stores.Read (Item, Verification_Area, Evidence, Value, Read);
                if E.Is_Ok (Read) and then Records.Get (Value, "passed") /= "true" then
+                  Append (Sources, "," & Evidence);
                   Append (Listed, Evidence & " did not pass:" & ASCII.LF);
                   for Index in 1 .. Verification.Length (Said) loop
                      declare
@@ -567,7 +573,10 @@ package body Model_Runner.Framework.Context is
                end if;
             end;
          end if;
-         Offer (Task_Id & "#results", "results", High, To_String (Listed));
+         Offer (Task_Id & "#results"
+                & (if Sources = Null_Unbounded_String then ""
+                   else ":" & Slice (Sources, 2, Length (Sources))),
+                "results", High, To_String (Listed));
       end;
 
       Settle (Candidates, Task_Id, Result, Status);

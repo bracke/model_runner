@@ -6,6 +6,8 @@ with Ada.Strings.Fixed;
 with Project_Tools.Files;
 
 with Checks;
+with Spec_Conformance;
+with GNAT.SHA1;
 with Conformance;
 with Tiny_Model;
 
@@ -287,6 +289,49 @@ package body Tests.Gate_Cases is
       end;
    end The_Breaking_Catalog_Line_Is_Found_Either_Way;
 
+   --  The specification holds as a gate: a matrix whose rows are all met,
+   --  each by a test there is, passes; a row not met, a met row whose test
+   --  is gone, or a specification changed since fails -- and the project's
+   --  own matrix passes.
+   procedure The_Specification_Is_A_Gate
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Root : constant String := Dirs.Full_Name ("obj/spec-gate");
+      Spec : constant String := "The harness SHALL keep what it is told." & ASCII.LF;
+      Head : constant String := "id" & ASCII.HT & "section" & ASCII.HT & "requirement" & ASCII.HT
+        & "status" & ASCII.HT & "code" & ASCII.HT & "test" & ASCII.HT & "note" & ASCII.LF;
+
+      procedure Row (Status, Test : String) is
+      begin
+         Put (Root & "/docs/spec-conformance.tsv",
+              Head & "R1.1" & ASCII.HT & "1" & ASCII.HT & "keep it" & ASCII.HT & Status & ASCII.HT
+              & "x.adb" & ASCII.HT & Test & ASCII.HT & "why" & ASCII.LF);
+      end Row;
+   begin
+      Fresh (Root);
+      Put (Root & "/docs/spec_driven_development_framework_v3_revised.md", Spec);
+      Put (Root & "/docs/spec-conformance.sha1", GNAT.SHA1.Digest (Spec) & ASCII.LF);
+      Put (Root & "/tests/src/a.adb",
+           "procedure A is begin Assert (True, ""what it is " & """ & ""told is kept""); end A;");
+      Row ("met", "what it is told is kept");
+      Assert (Spec_Conformance.Problem (Root) = "",
+              "a matrix met by its tests failed: " & Spec_Conformance.Problem (Root));
+      Row ("partial", "what it is told is kept");
+      Assert (Ada.Strings.Fixed.Index (Spec_Conformance.Problem (Root), "R1.1 is partial") > 0,
+              "a requirement not met passed");
+      Row ("met", "a test nobody wrote");
+      Assert (Ada.Strings.Fixed.Index (Spec_Conformance.Problem (Root), "met by no test") > 0,
+              "a requirement met by no test there is passed");
+      Row ("met", "what it is told is kept");
+      Put (Root & "/docs/spec_driven_development_framework_v3_revised.md", Spec & "More." & ASCII.LF);
+      Assert (Ada.Strings.Fixed.Index (Spec_Conformance.Problem (Root), "has changed") > 0,
+              "a specification changed since its rows were made passed");
+
+      Assert (Spec_Conformance.Problem ("..") = "",
+              "the project does not meet its specification: " & Spec_Conformance.Problem (".."));
+   end The_Specification_Is_A_Gate;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -294,6 +339,9 @@ package body Tests.Gate_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, The_Specification_Is_A_Gate'Access,
+         "the specification is a gate: every requirement met, by a test there is");
       Register_Routine
         (T, Short_Sweep_Crosses_Binary32_Alone'Access,
          "the short conformance sweep crosses binary32 weights alone, on "

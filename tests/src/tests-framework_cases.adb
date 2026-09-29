@@ -1125,6 +1125,44 @@ package body Tests.Framework_Cases is
       Assert (Status.Code = E.Framework_Template_Invalid,
               "a baseline of neither the project nor its language was declared");
 
+      --  Every keyed kind merges by the same rule: two templates that give
+      --  one key two values, and neither says override, do not compose --
+      --  a map, an adapter, a profile, a task kind, a schema, an input.
+      declare
+         procedure Clash (Word, Key, One, Two : String) is
+            Holding : Tp.Registry;
+            Made    : Tp.Composition;
+         begin
+            Tp.Add (Holding, Parsed ("template = a" & LF & "name = A" & LF & "description = D" & LF
+                                     & "version = 1" & LF & Word & " " & Key & " = " & One & LF));
+            Tp.Add (Holding, Parsed ("template = b" & LF & "name = B" & LF & "description = D" & LF
+                                     & "version = 1" & LF & Word & " " & Key & " = " & Two & LF));
+            Tp.Add (Holding, Parsed ("template = both" & LF & "name = AB" & LF & "description = D"
+                                     & LF & "version = 1" & LF & "includes = a, b" & LF));
+            Tp.Compose (Holding, "both", Made, Status);
+            Assert (Status.Code = E.Framework_Template_Conflict,
+                    "two values for one " & Word & " composed: " & Code_Of (Status));
+         end Clash;
+         Holding : Tp.Registry;
+         Made    : Tp.Composition;
+      begin
+         Clash ("map", "permission.kind.x.read_source", "roots=src/", "roots=lib/");
+         Clash ("adapter", "build", "alire", "make");
+         Clash ("profile", "tests", "run: make test", "run: alr test");
+         Clash ("task_kind", "review", "notes?", "component?");
+         Clash ("schema", "task_field.verdict", "choice pass|fail", "text");
+         Tp.Add (Holding, Parsed ("template = a" & LF & "name = A" & LF & "description = D" & LF
+                                  & "version = 1" & LF & "input x" & LF & "  type = text" & LF));
+         Tp.Add (Holding, Parsed ("template = b" & LF & "name = B" & LF & "description = D" & LF
+                                  & "version = 1" & LF & "input x" & LF & "  type = identifier"
+                                  & LF));
+         Tp.Add (Holding, Parsed ("template = both" & LF & "name = AB" & LF & "description = D" & LF
+                                  & "version = 1" & LF & "includes = a, b" & LF));
+         Tp.Compose (Holding, "both", Made, Status);
+         Assert (Status.Code = E.Framework_Template_Conflict,
+                 "an input declared two ways composed: " & Code_Of (Status));
+      end;
+
       --  Two files that are one once the inputs are in, with different
       --  text, are a conflict.
       declare
@@ -4658,6 +4696,32 @@ package body Tests.Framework_Cases is
                  & To_String (Vf.Element (More, 3).Related) & "]");
       end;
 
+      --  Other tools' ways of saying where: rustc's --> below the error,
+      --  MSVC's FILE(LINE,COL), and the failures of AUnit and pytest.
+      declare
+         Foreign : constant Vf.Diagnostic_List :=
+           Vf.Normalize
+             ("mixed",
+              "error[E0308]: mismatched types" & LF
+              & "  --> src/main.rs:4:5" & LF
+              & "src\\x.c(12,5): warning C4101: unreferenced local" & LF
+              & "FAIL parser : rejects bad input" & LF
+              & "    expected an error" & LF
+              & "    at parser_tests.adb:42" & LF
+              & "FAILED tests/test_io.py::test_read - AssertionError: 3 != 4" & LF);
+      begin
+         Assert (Vf.Length (Foreign) = 4
+                 and then To_String (Vf.Element (Foreign, 1).File) = "src/main.rs"
+                 and then Vf.Element (Foreign, 1).Line = 4
+                 and then To_String (Vf.Element (Foreign, 1).Code) = "E0308"
+                 and then Vf.Element (Foreign, 2).Line = 12 and then Vf.Element (Foreign, 2).Column = 5
+                 and then To_String (Vf.Element (Foreign, 2).Severity) = "warning"
+                 and then To_String (Vf.Element (Foreign, 3).File) = "parser_tests.adb"
+                 and then Vf.Element (Foreign, 3).Line = 42
+                 and then To_String (Vf.Element (Foreign, 4).File) = "tests/test_io.py",
+                 "another tool's diagnostics were not read:" & Vf.Length (Foreign)'Image);
+      end;
+
       Assert (Vf.Length (Checks) = 3
               and then To_String (Vf.Element (Checks, 2).Directory) = "tests"
               and then To_String (Vf.Element (Checks, 2).Label) = "unit"
@@ -5025,6 +5089,17 @@ package body Tests.Framework_Cases is
                   Scripted_Agent'(File => Null_Unbounded_String,
                                   Answer => Null_Unbounded_String, Broken => True),
                   Model, Done, Status);
+      declare
+         Call : R.Item;
+         Kept : Model_Runner.Framework.Results.Result;
+      begin
+         S.Read (Store, Model_Runner.Framework.Invocations_Area, To_String (Done.Invocation_Id),
+                 Call, Status);
+         Model_Runner.Framework.Results.Read (Store, R.Get (Call, "failure_result"), Kept, Status);
+         Assert (E.Is_Ok (Status) and then Length (Kept.Payload) > 0,
+                 "a failed call did not refer to a record of its failure: "
+                 & R.Get (Call, "failure_result"));
+      end;
       Assert (To_String (Done.Final_State) = "failed"
               and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "MR-") > 0,
               "a broken agent did not fail its task, saying why by its code: "
@@ -6011,6 +6086,28 @@ package body Tests.Framework_Cases is
                  and then S.Exists (Store, Model_Runner.Framework.Results_Area,
                                     To_String (Kept.Id)),
                  "retention let the wrong results go:" & Removed'Image);
+
+         --  What is only a cache goes after its own days.
+         declare
+            Cached : Rs.Result :=
+              (Kind => Rs.Impact_Report, Producer => To_Unbounded_String ("impact"),
+               Summary => To_Unbounded_String ("cached"), Payload => To_Unbounded_String ("w"),
+               others => <>);
+         begin
+            Rs.Add (Store, Change, Cached, Status);
+            S.Commit (Store, Change, Status);
+            Age (To_String (Cached.Id));
+            S.Commit (Store, Change, Status);
+            Rs.Prune (Store, Change, Raw_Log_Days => 0, Context_Days => 0, Removed => Removed,
+                      Cache_Days => 7);
+            S.Commit (Store, Change, Status);
+            Assert (Removed = 1
+                    and then not S.Exists (Store, Model_Runner.Framework.Results_Area,
+                                           To_String (Cached.Id))
+                    and then S.Exists (Store, Model_Runner.Framework.Results_Area,
+                                       To_String (Kept.Id)),
+                    "a cache-like result was not let go after its days, or a kept one was");
+         end;
       end;
 
       --  The Ada adapter: instantiation, derivation, interfaces, overriding.
@@ -6657,6 +6754,7 @@ package body Tests.Framework_Cases is
       Task_Project
         (Store, "components-evidence",
          "set components = parser, lexer" & LF
+         & "map component.parser = roots=src/parse/|tests/parse/" & LF
          & "set execution.allowed = test" & LF
          & "set execution.environment = MR_EVIDENCE_PROBE" & LF
          & "scalar verification.toolchain = strict" & LF
@@ -6680,6 +6778,14 @@ package body Tests.Framework_Cases is
       Change := S.No_Changes;
       Tk.Create (Store, Change, Fields ("Other", "implementation", "component", "nowhere"),
                  "user", "", Id, Status);
+      Assert (Model_Runner.Framework.Repository.In_Component (Store, "parser", "src/parse/x.adb")
+              and then Model_Runner.Framework.Repository.In_Component (Store, "parser", "./tests/parse/t.adb")
+              and then not Model_Runner.Framework.Repository.In_Component
+                             (Store, "parser", "src/parser_other/x.adb"),
+              "a component's declared roots did not say which files are its");
+      Assert (not Model_Runner.Framework.Repository.In_Component (Store, "lexer", "src/lexer.adb")
+              and then Model_Runner.Framework.Repository.Component_Roots (Store, "lexer").Is_Empty,
+              "a component with no roots declared was given some");
       Assert (Status.Code = E.Framework_Schema_Violation
               and then Tk.Components (Store).Contains ("lexer")
               and then not Tk.Components (Store).Contains ("nowhere"),
@@ -6753,6 +6859,8 @@ package body Tests.Framework_Cases is
               and then R.Has (Value, "template_version"),
               "the evidence does not say how its checks ran and with what: "
               & R.Get (Value, "check.0002"));
+      Assert (R.Get (Value, "harness_version") = Model_Runner.Version,
+              "evidence did not say which harness -- and so which adapters -- took it");
       declare
          Seen   : constant Ev.Event_List := Ev.Since (Store, 0);
          Builds : Natural := 0;
@@ -7256,6 +7364,245 @@ package body Tests.Framework_Cases is
       end;
       S.Close (Store);
    end Workspaces_Start_And_End_Whole;
+
+   --  A model profile says what the model can do; a context holds the
+   --  decisions and specifications that govern the work, within what the
+   --  model leaves room for; its manifest names the decision revisions it
+   --  took; evidence says when and in which generation and configuration it
+   --  was taken, and stops applying when a requirement's words change; the
+   --  project is made with an event saying so; and neither the events nor
+   --  what is machine-local is needed to know what the project is.
+   procedure Contexts_Models_And_Evidence_Say_What_They_Must
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store    : S.Store;
+      Status   : E.Error_Info;
+      Change   : S.Transaction;
+      Dec, Spec, Req, Id : Unbounded_String;
+      Built    : Cx.Built;
+      Evidence : Unbounded_String;
+      Passed   : Boolean;
+      Value    : R.Item;
+      Reasons  : Model_Runner.Framework.Name_Lists.Vector;
+      Report   : S.Recovery_Report;
+      Root     : Unbounded_String;
+      Given    : Tk.Field_Map := Fields ("Governed", "analysis");
+      Model    : Cx.Model_Profile;
+   begin
+      Task_Project
+        (Store, "contexts-say",
+         "set execution.allowed = echo" & LF
+         & "profile passing = say: echo all good" & LF
+         & "scalar verification.default = passing" & LF
+         & "map model.full = context=6000, reserve=100, overhead=300, provider=remote,"
+         & " structured=no, reasoning=yes, streaming=no, parallel=yes" & LF);
+      Model := Cx.Profile (Store, "full");
+      Assert (To_String (Model.Provider) = "remote" and then Model.Tool_Overhead = 300
+              and then not Model.Structured and then Model.Reasoning
+              and then not Model.Streaming and then Model.Parallel_Calls,
+              "a model profile did not say what the model can do");
+
+      declare
+         Seen : constant Model_Runner.Framework.Events.Event_List :=
+           Model_Runner.Framework.Events.Since (Store, 0);
+      begin
+         Assert ((for some Index in 1 .. Model_Runner.Framework.Events.Length (Seen) =>
+                    Model_Runner.Framework.Events.Element (Seen, Index).Kind
+                      = Model_Runner.Framework.Events.Project_Initialized),
+                 "the project was made with no event saying so");
+      end;
+
+      Nt.Propose (Store, Change, Nt.Decision, "", "One binary", "Ship one binary.", "",
+                  "user", "", "project", Dec, Status);
+      Nt.Propose (Store, Change, Nt.Specification, "", "Formats", "Reads UTF-8 only.", "",
+                  "user", "", "project", Spec, Status);
+      Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.", "",
+                  "user", "", "project", Req, Status);
+      S.Commit (Store, Change, Status);
+      Nt.Move (Store, Change, Nt.Decision, To_String (Dec), "accepted", Tr.Ordinary_Only, Status);
+      Nt.Move (Store, Change, Nt.Specification, To_String (Spec), "accepted", Tr.Ordinary_Only,
+               Status);
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted", Tr.Ordinary_Only,
+               Status);
+      S.Commit (Store, Change, Status);
+      Given.Include ("requirements", To_String (Req));
+      Tk.Create (Store, Change, Given, "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+
+      Cx.Build (Store, To_String (Id), Model, Built, Status);
+      Assert (E.Is_Ok (Status)
+              and then Ada.Strings.Fixed.Index (Cx.Rendered (Built), "Ship one binary.") > 0
+              and then Ada.Strings.Fixed.Index (Cx.Rendered (Built), "Reads UTF-8 only.") > 0
+              and then Cx.Budget (Built) = 6000 - 100 - 300,
+              "the context did not hold what governs the work, or took no account of the"
+              & " tools' room: " & Code_Of (Status) & Cx.Budget (Built)'Image);
+      Cx.Keep (Store, Change, Built, Status);
+      S.Commit (Store, Change, Status);
+      S.Read (Store, Model_Runner.Framework.Invocations_Area, "manifest." & Cx.Manifest_Id (Built),
+              Value, Status);
+      Assert (R.Get (Value, "applies." & To_String (Dec)) /= "",
+              "the manifest did not name the decision revision it took");
+
+      Vf.Run_Profile (Store, Change, "passing", To_String (Id), Evidence, Passed, Status);
+      S.Commit (Store, Change, Status);
+      S.Read (Store, Model_Runner.Framework.Verification_Area, To_String (Evidence), Value, Status);
+      Assert (R.Get (Value, "generation") /= "" and then R.Get (Value, "configuration_revision") /= ""
+              and then R.Get (Value, "started_at") /= "" and then R.Get (Value, "ended_at") /= "",
+              "evidence did not say when, in which generation, under which configuration");
+      declare
+         Effect : Nt.Impact;
+      begin
+         Nt.Revise (Store, Change, Nt.Requirement, To_String (Req), "Read", "It SHALL read fast.",
+                    "", Effect, Status);
+         S.Commit (Store, Change, Status);
+      end;
+      Assert (not Vf.Is_Current (Store, To_String (Evidence), Reasons)
+              and then Ada.Strings.Fixed.Index (Reasons.First_Element, To_String (Req)) > 0,
+              "evidence held after the requirement it was taken for changed its words");
+
+      --  Without the events and what is machine-local, the project is the
+      --  same project.
+      Root := To_Unbounded_String (Fresh_Root (Store));
+      S.Close (Store);
+      Remove_Tree (To_String (Root) & "/.model_runner/events");
+      Remove_Tree (To_String (Root) & "/.model_runner/runtime");
+      S.Open (Store, To_String (Root), Report, Status);
+      Assert (E.Is_Ok (Status) and then Tk.State_Of (Store, To_String (Id)) = "accepted"
+              and then Tk.List (Store).Contains (To_String (Id)),
+              "the project was not what it was without its events and machine-local state: "
+              & Code_Of (Status));
+      S.Close (Store);
+   end Contexts_Models_And_Evidence_Say_What_They_Must;
+
+   --  The consistency check sees every kind of wrong reference: a task
+   --  that waits for, or is part of, one that is not there; tasks that wait
+   --  for each other, or are each other's parts; a task of no kind the
+   --  project has; and a requirement implemented by a symbol the repository
+   --  does not declare.
+   procedure Consistency_Sees_Every_Wrong_Reference
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Cn.Finding_Kind;
+      Store  : S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Ids    : array (1 .. 6) of Unbounded_String;
+      Req    : Unbounded_String;
+
+      --  Written straight into the record, past every check that would
+      --  refuse it -- as a hand edit, or a bug, would.
+      procedure Set (Which : Positive; Field, Value : String) is
+         Defined : R.Item;
+      begin
+         S.Read (Store, Model_Runner.Framework.Tasks_Area, To_String (Ids (Which)), Defined, Status);
+         R.Set (Defined, Field, Value);
+         R.Set_Revision (Defined, R.Revision (Defined) + 1);
+         S.Put (Change, Model_Runner.Framework.Tasks_Area, To_String (Ids (Which)), Defined);
+         S.Commit (Store, Change, Status);
+      end Set;
+
+      function Has (Kind : Cn.Finding_Kind; Subject : String) return Boolean is
+         Found : constant Cn.Finding_List := Cn.Check (Store);
+      begin
+         return (for some Index in 1 .. Cn.Length (Found) =>
+                   Cn.Element (Found, Index).Kind = Kind
+                   and then Ada.Strings.Fixed.Index
+                              (To_String (Cn.Element (Found, Index).Subject), Subject) > 0);
+      end Has;
+   begin
+      Task_Project (Store, "wrong-references");
+      for Index in Ids'Range loop
+         Tk.Create (Store, Change, Fields ("Task" & Index'Image, "analysis"), "user", "",
+                    Ids (Index), Status);
+      end loop;
+      S.Commit (Store, Change, Status);
+      Set (1, "depends_on", "TASK-NOPE");
+      Set (2, "parent", "TASK-GONE");
+      Set (3, "depends_on", To_String (Ids (4)));
+      Set (4, "depends_on", To_String (Ids (3)));
+      Set (5, "parent", To_String (Ids (6)));
+      Set (6, "parent", To_String (Ids (5)));
+      Set (1, "kind", "nonsense");
+      Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.", "",
+                  "user", "", "io", Req, Status);
+      S.Commit (Store, Change, Status);
+      Nt.Link (Store, Change, Nt.Requirement, To_String (Req), Nt.Implementation,
+               "Nowhere.Missing", Status);
+      S.Commit (Store, Change, Status);
+      declare
+         Graph : Rp.Graph;
+      begin
+         Rp.Current (Store, Graph, Status);
+      end;
+      Assert (Has (Cn.Unknown_Task_Reference, To_String (Ids (1))),
+              "a task waiting for one that is not there was not found");
+      Assert (Has (Cn.Unknown_Task_Reference, To_String (Ids (2))),
+              "a task part of one that is not there was not found");
+      Assert (Has (Cn.Cyclic_Dependency, To_String (Ids (3)))
+              or else Has (Cn.Cyclic_Dependency, To_String (Ids (4))),
+              "tasks waiting for each other were not found");
+      Assert (Has (Cn.Cyclic_Dependency, To_String (Ids (5)))
+              or else Has (Cn.Cyclic_Dependency, To_String (Ids (6))),
+              "tasks each other's parts were not found");
+      Assert (Has (Cn.Invalid_Task_Kind, To_String (Ids (1))),
+              "a task of no kind the project has was not found");
+      Assert (Has (Cn.Missing_Symbol, To_String (Req)),
+              "a requirement implemented by a symbol nobody declares was not found");
+      S.Close (Store);
+   end Consistency_Sees_Every_Wrong_Reference;
+
+   --  The routine is the harness's: a project's generators and formatter
+   --  run after the work, before it is verified, their changes the task's,
+   --  and one that does not pass sets the task aside.
+   procedure Harness_Runs_Routine_Stages
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Done   : Wk.Report;
+
+      procedure Work (Name, Stage_Profile : String) is
+         Id : Unbounded_String;
+      begin
+         Task_Project
+           (Store, Name,
+            "set execution.allowed = test" & LF & "set execution.allowed = touch" & LF
+            & "set execution.allowed = false" & LF
+            & "profile checks = exists: test -f src/hello.adb" & LF
+            & "profile tidy = format: touch src/formatted.adb" & LF
+            & "profile broken = format: false" & LF
+            & "scalar verification.default = checks" & LF
+            & "scalar stage.format = " & Stage_Profile & LF);
+         Tk.Create (Store, Change, Fields ("Formatted", "analysis"), "user", "", Id, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Wk.Execute (Store, To_String (Id),
+                     Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                                     Answer => To_Unbounded_String
+                                       ("status: done" & LF & "summary: x"),
+                                     Broken => False),
+                     Cx.Profile (Store, ""), Done, Status);
+      end Work;
+   begin
+      Work ("format-stage", "tidy");
+      Assert (To_String (Done.Final_State) = "complete"
+              and then Done.Changed_Files.Contains ("src/formatted.adb"),
+              "the harness's format stage did not run, or its change was not the task's: "
+              & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+      S.Close (Store);
+      Work ("format-stage-broken", "broken");
+      Assert (To_String (Done.Final_State) = "blocked"
+              and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "format stage") > 0,
+              "a format stage that did not pass let the task go on: " & To_String (Done.Reason));
+      S.Close (Store);
+   end Harness_Runs_Routine_Stages;
 
    --  A task is ready only while what it serves is agreed; it names only
    --  tasks and requirements, not records beside them; and a requirement
@@ -8022,6 +8369,31 @@ package body Tests.Framework_Cases is
                  "the recovery policy was not followed: "
                  & Tk.State_Of (Store, To_String (Task_B)) & " " & Code_Of (Status));
       end;
+
+      --  The configuration cut short on disk is put back from its history,
+      --  and an event nothing acted on is acted on.
+      declare
+         Config : R.Item;
+         Req    : Unbounded_String;
+         Said_Back, Acted : Boolean := False;
+      begin
+         Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.", "",
+                     "user", "", "io", Req, Status);
+         Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted", Tr.Ordinary_Only,
+                  Status);
+         S.Commit (Store, Change, Status);
+         Put_File (S.Root (Store) & "/config/resolved.rec", "model_runner-rec");
+         Wk.Recover_On_Opening (Store, (others => <>), Said, Status);
+         for Line of Said loop
+            Said_Back := Said_Back or else Ada.Strings.Fixed.Index (Line, "from its history") > 0;
+            Acted := Acted or else Ada.Strings.Fixed.Index (Line, "events nothing had acted on") > 0;
+         end loop;
+         Cf.Read (Store, Config, Status);
+         Assert (E.Is_Ok (Status) and then Said_Back,
+                 "a configuration that could not be read was not put back from its history: "
+                 & Code_Of (Status));
+         Assert (Acted, "events nothing had acted on were not acted on at opening");
+      end;
       S.Close (Store);
    end Opening_Recovers;
 
@@ -8169,6 +8541,9 @@ package body Tests.Framework_Cases is
             --  only where it says nothing -- a compile is a build.
             Assert (Children.May_Check ("quick") and then not Children.May_Check ("compile"),
                     "what a check takes was guessed from its name over what is declared");
+            Assert (Children.Tool_Budget = 40,
+                    "the agent was not held to the tool calls the project allows:"
+                    & Children.Tool_Budget'Image);
 
             --  A child whose own required child fails is not done, whatever
             --  it says: it is run again, as any failed required child is.
@@ -8366,7 +8741,7 @@ package body Tests.Framework_Cases is
         (Screen, Catalog'Unchecked_Access, Model_Runner.CLI.Options.Color_Never,
          (Output_Is_Terminal => False, Error_Is_Terminal => False,
           Input_Is_Terminal  => False, Colour_Suppressed => True),
-         Model_Runner.CLI.Options.Quiet);
+         Model_Runner.CLI.Options.Normal);
 
       --  A console writing for a program never asks.
       Model_Runner.Presentation.Use_Structured (Screen, True);
@@ -8382,6 +8757,16 @@ package body Tests.Framework_Cases is
       Tk.Create (Store, Change, Fields ("Greet the world", "analysis"), "user", "", First, Status);
       Tk.Create (Store, Change, Fields ("Count the stars", "analysis"), "user", "", Second, Status);
       S.Commit (Store, Change, Status);
+      declare
+         Zebra : Unbounded_String;
+      begin
+         for Title of Model_Runner.Framework.Name_Lists.Vector'(["Zebra one", "Zebra two"]) loop
+            Tk.Create (Store, Change, Fields (Title, "analysis"), "user", "", Zebra, Status);
+            S.Commit (Store, Change, Status);
+            Tk.Move (Store, Change, To_String (Zebra), "accepted", "", Status => Status);
+            S.Commit (Store, Change, Status);
+         end loop;
+      end;
       Tk.Move (Store, Change, To_String (First), "accepted", "", Status => Status);
       Tk.Move (Store, Change, To_String (Second), "accepted", "", Status => Status);
       S.Commit (Store, Change, Status);
@@ -8406,8 +8791,29 @@ package body Tests.Framework_Cases is
             Set_Error (Said);
             Model_Runner.CLI.Project_Commands.Run ("/task " & To_String (First), Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/task nonsense", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/work zebra", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/req new Stars counted", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/req new Other thing", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/accept", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/trace REQ-001", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/check", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/check full", Screen, Agent);
+            declare
+               Search : Dirs.Search_Type;
+               Found  : Dirs.Directory_Entry_Type;
+               Name   : Unbounded_String := To_Unbounded_String ("RES-NONE.rec");
+            begin
+               Dirs.Start_Search (Search, ".model_runner/results", "RES-*.rec");
+               if Dirs.More_Entries (Search) then
+                  Dirs.Get_Next_Entry (Search, Found);
+                  Name := To_Unbounded_String (Dirs.Simple_Name (Found));
+               end if;
+               Dirs.End_Search (Search);
+               Model_Runner.CLI.Project_Commands.Run
+                 ("/result " & Slice (Name, 1, Length (Name) - 4), Screen, Agent);
+            end;
+            Model_Runner.CLI.Project_Commands.Run ("/cancel", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/state", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/accept REQ-002", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/accept REQ-404", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/bootstrap nowhere.md", Screen, Agent);
@@ -8424,6 +8830,21 @@ package body Tests.Framework_Cases is
             declare
                Text : constant String := Read_Whole (Path);
             begin
+               Assert (Ada.Strings.Fixed.Index (Text, "more than one matches: TASK-") > 0,
+                       "an ambiguous work selector off a terminal did not fail with its matches");
+               Assert (Ada.Strings.Fixed.Index (Text, "decide one by name") > 0,
+                       "a bare /accept with more than one waiting did not refuse and list them");
+               Assert (Ada.Strings.Fixed.Index (Text, "REQ-001") > 0
+                       and then Ada.Strings.Fixed.Index (Text, "checks,") > 0,
+                       "/trace or /check said nothing of what it was asked: " & Text);
+               Assert (Ada.Strings.Fixed.Index (Text, "kind: ") > 0
+                       and then Ada.Strings.Fixed.Index (Text, "payload: ") > 0,
+                       "/result did not show the result it names");
+               Assert (Ada.Strings.Fixed.Index (Text, "nothing is running in the foreground") > 0,
+                       "/cancel with nothing running did not say so");
+               Assert (Ada.Strings.Fixed.Index (Text, "complete tasks: 2") > 0
+                       and then Ada.Strings.Fixed.Index (Text, "candidate tasks: 0") > 0,
+                       "/state did not count the tasks as the state holds them: " & Text);
                Assert (Ada.Strings.Fixed.Index (Text, "runtime.state") > 0
                        and then Ada.Strings.Fixed.Index (Text, "nonsense") > 0
                        and then Ada.Strings.Fixed.Index (Text, "Stars counted") > 0
@@ -8534,6 +8955,18 @@ package body Tests.Framework_Cases is
       Assert (Holds ("What the last attempt left") and then Holds ("did not pass")
               and then Holds ("tried"),
               "a retry was not told what the last attempt left");
+      declare
+         Named : Boolean := False;
+      begin
+         for Index in 1 .. Cx.Included_Count (Built) loop
+            Named := Named
+              or else (Ada.Strings.Fixed.Index (To_String (Cx.Included_At (Built, Index).Id),
+                                                "#results:RES-") > 0
+                       and then Ada.Strings.Fixed.Index
+                                  (To_String (Cx.Included_At (Built, Index).Id), "VER-") > 0);
+         end loop;
+         Assert (Named, "the manifest did not name the results and evidence the context took in");
+      end;
 
       --  Out of time: set aside.
       Tk.Create (Store, Change, Fields ("Slow", "analysis"), "user", "", Id, Status);
@@ -8628,6 +9061,10 @@ package body Tests.Framework_Cases is
                  "the child's call was not recorded with its own manifest");
          Assert (Contains (R.Get (Root_Call, "call.0001"), "read_file"),
                  "the root's tool call was not recorded on its call");
+         Assert (Contains (R.Get (Root_Call, "tool_policy"), "tools: read_file")
+                 and then Contains (R.Get (Root_Call, "tool_policy"), "delegate")
+                 and then Contains (R.Get (Root_Call, "tool_policy"), "permissions:"),
+                 "the call did not record what it could use: " & R.Get (Root_Call, "tool_policy"));
       end;
 
       Work (Fails_Twice);
@@ -8722,7 +9159,8 @@ package body Tests.Framework_Cases is
          & "scalar agents.max_depth = 2" & LF
          & "scalar agents.max_children = 8" & LF
          & "scalar agents.max_active = 8" & LF
-         & "scalar profile_capability.quick = run_tests" & LF);
+         & "scalar profile_capability.quick = run_tests" & LF
+         & "scalar agents.max_tool_calls = 40" & LF);
       Work (Grandchild_Fails);
       Assert (To_String (Done.Final_State) = "complete",
               "a child run again past its failed child did not let the task complete: "
@@ -9033,6 +9471,15 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Verification_Follows_What_Changed'Access,
          "how widely work is verified follows what it changed and the policy");
+      Register_Routine
+        (T, Contexts_Models_And_Evidence_Say_What_They_Must'Access,
+         "contexts, model profiles, manifests and evidence say what they must");
+      Register_Routine
+        (T, Consistency_Sees_Every_Wrong_Reference'Access,
+         "the consistency check sees every kind of wrong reference");
+      Register_Routine
+        (T, Harness_Runs_Routine_Stages'Access,
+         "the harness runs a project's generators and formatter before verifying the work");
       Register_Routine
         (T, Workspaces_Start_And_End_Whole'Access,
          "workspaces start from the project as it is and end once their work is kept");

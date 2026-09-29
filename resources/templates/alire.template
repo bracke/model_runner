@@ -12,6 +12,13 @@ scalar build.command = alr build
 profile build = build: alr build
 scalar profile_capability.build = run_build
 
+# Static analysis, the harness's to run: the compiler's every warning, as an
+# error. A formatter or a generator is a profile named by scalar
+# stage.format or stage.generate, run after an agent's work and before it is
+# verified -- none is assumed installed.
+profile analysis = analysis: alr -n build -- -cargs -gnatwa -gnatwe
+scalar profile_capability.analysis = run_static_analysis
+
 # What any task is verified by, unless its kind names its own.
 scalar verification.default = build
 set execution.allowed = alr

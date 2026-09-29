@@ -258,10 +258,39 @@ package body Model_Runner.Framework.Verification is
          end if;
       end Number;
 
+      --  Give the diagnostic before, found with no place, the place a
+      --  line under it names: FILE:LINE, or FILE:LINE:COL.
+      procedure Place_Last (Place : String) is
+         Colon : constant Natural := Ada.Strings.Fixed.Index (Place, ":");
+         At_Line, After_Line, At_Column, After_Column : Natural;
+      begin
+         if Result.Items.Is_Empty or else Result.Items.Last_Element.File /= Null_Unbounded_String
+           or else Colon <= Place'First or else Colon = Place'Last
+         then
+            return;
+         end if;
+         Number (Place (Colon + 1 .. Place'Last) & ":", At_Line, After_Line);
+         At_Column := 0;
+         if After_Line > 0 and then After_Line <= Place'Last then
+            Number (Place (After_Line .. Place'Last) & ":", At_Column, After_Column);
+         end if;
+         if At_Line > 0 then
+            declare
+               Last : Diagnostic := Result.Items.Last_Element;
+            begin
+               Last.File := To_Unbounded_String (Place (Place'First .. Colon - 1));
+               Last.Line := At_Line;
+               Last.Column := At_Column;
+               Result.Items.Replace_Element (Result.Items.Last_Index, Last);
+            end;
+         end if;
+      end Place_Last;
+
       procedure Found (File : String; Line, Column : Natural; Said : String) is
          Message  : constant String := Trim (Said);
          Severity : constant String :=
-           (if Starts (Lower (Message), "warning:") or else Starts (Message, "(style)")
+           (if Starts (Lower (Message), "warning:") or else Starts (Lower (Message), "warning ")
+              or else Starts (Message, "(style)")
             then "warning"
             elsif Starts (Lower (Message), "note:") or else Starts (Lower (Message), "info:")
             then "note"
@@ -316,6 +345,60 @@ package body Model_Runner.Framework.Verification is
             elsif Starts (Lower (Line), "error:") or else Starts (Lower (Line), "warning:")
             then
                Found ("", 0, 0, Line);
+
+            --  rustc: error[E0308]: what, then --> FILE:LINE:COL below it.
+            elsif Starts (Lower (Line), "error[") or else Starts (Lower (Line), "warning[") then
+               declare
+                  Close : constant Natural := Ada.Strings.Fixed.Index (Line, "]:");
+               begin
+                  if Close > 0 then
+                     Found ("", 0, 0,
+                            Line (Line'First .. Ada.Strings.Fixed.Index (Line, "[") - 1) & ": "
+                            & Trim (Line (Close + 2 .. Line'Last)) & " "
+                            & Line (Ada.Strings.Fixed.Index (Line, "[") .. Close));
+                  end if;
+               end;
+            elsif Starts (Line, "--> ") or else Starts (Line, "at ") then
+               --  Where the one before it is: rustc's --> FILE:LINE:COL, and
+               --  AUnit's "at FILE:LINE" under a failure.
+               Place_Last (Trim (Line (Line'First + (if Starts (Line, "at ") then 3 else 4)
+                                      .. Line'Last)));
+
+            --  AUnit: FAIL or ERROR and the test's name; pytest: FAILED
+            --  PATH::TEST - why.
+            elsif Starts (Line, "FAIL ") or else Starts (Line, "ERROR ") then
+               Found ("", 0, 0,
+                      "error: " & Trim (Line (Ada.Strings.Fixed.Index (Line, " ") + 1 .. Line'Last)));
+            elsif Starts (Line, "FAILED ") and then Ada.Strings.Fixed.Index (Line, "::") > 0 then
+               declare
+                  Rest : constant String := Trim (Line (Line'First + 7 .. Line'Last));
+               begin
+                  Found (Rest (Rest'First .. Ada.Strings.Fixed.Index (Rest, "::") - 1), 0, 0,
+                         "error: " & Rest (Ada.Strings.Fixed.Index (Rest, "::") + 2 .. Rest'Last));
+               end;
+
+            --  MSVC and its kin: FILE(LINE) or FILE(LINE,COL): what.
+            elsif Ada.Strings.Fixed.Index (Line, "): ") > 0
+              and then Ada.Strings.Fixed.Index (Line, "(") in Line'First + 1 .. Ada.Strings.Fixed.Index (Line, "): ")
+            then
+               declare
+                  Open  : constant Natural := Ada.Strings.Fixed.Index (Line, "(");
+                  Close : constant Natural := Ada.Strings.Fixed.Index (Line, "): ");
+                  Inner : constant String := Line (Open + 1 .. Close - 1);
+                  Comma : constant Natural := Ada.Strings.Fixed.Index (Inner, ",");
+                  At_Line, At_Column, Ignored : Natural;
+               begin
+                  if Inner'Length > 0 and then (for all C of Inner => C in '0' .. '9' | ',') then
+                     Number ((if Comma = 0 then Inner else Inner (Inner'First .. Comma - 1)) & ":",
+                             At_Line, Ignored);
+                     At_Column := 0;
+                     if Comma > 0 then
+                        Number (Inner (Comma + 1 .. Inner'Last) & ":", At_Column, Ignored);
+                     end if;
+                     Found (Line (Line'First .. Open - 1), At_Line, At_Column,
+                            Line (Close + 3 .. Line'Last));
+                  end if;
+               end;
             end if;
          end;
       end loop;
@@ -561,10 +644,16 @@ package body Model_Runner.Framework.Verification is
                begin
                   if Starts (Field, "adapter.") then
                      Records.Set (Value, Field, Records.Get (Settings, Field));
+
+                     --  Its version: the adapters are the harness's own, so
+                     --  theirs is the harness's.
+                     Records.Set (Value, "adapter_version." & Field (Field'First + 8 .. Field'Last),
+                                  Records.Get (Settings, Field) & " " & Model_Runner.Version);
                   end if;
                end;
             end loop;
             Records.Set (Value, "template_version", Records.Get (Settings, "template_version"));
+            Records.Set (Value, "harness_version", Model_Runner.Version);
          end;
 
          Passed := True;

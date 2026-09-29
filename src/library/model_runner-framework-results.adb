@@ -268,7 +268,8 @@ package body Model_Runner.Framework.Results is
       Change       : in out Stores.Transaction;
       Raw_Log_Days : Natural;
       Context_Days : Natural;
-      Removed      : out Natural)
+      Removed      : out Natural;
+      Cache_Days   : Natural := 0)
    is
       --  The moment some days ago, written as a result's created_at is.
       function Before (Days : Natural) return String is
@@ -282,6 +283,7 @@ package body Model_Runner.Framework.Results is
 
       Raw_Cut     : constant String := (if Raw_Log_Days = 0 then "" else Before (Raw_Log_Days));
       Context_Cut : constant String := (if Context_Days = 0 then "" else Before (Context_Days));
+      Cache_Cut   : constant String := (if Cache_Days = 0 then "" else Before (Cache_Days));
    begin
       Removed := 0;
       for Id of Stores.Names (Item, Results_Area) loop
@@ -300,6 +302,8 @@ package body Model_Runner.Framework.Results is
                       and then Made_At < Raw_Cut)
                     or else (Context_Cut /= "" and then Kind = Kind_Word (Context_Report)
                              and then Made_At < Context_Cut)
+                    or else (Cache_Cut /= "" and then Kind = Kind_Word (Impact_Report)
+                             and then Made_At < Cache_Cut)
                   then
                      Stores.Remove (Change, Results_Area, Id);
                      Removed := Removed + 1;

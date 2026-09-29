@@ -225,6 +225,76 @@ package body Model_Runner.Framework.Repository is
    -- Roots_Of --
    --------------
 
+   ---------------------
+   -- Component_Roots --
+   ---------------------
+
+   function Component_Roots (Item : Stores.Store; Component : String) return Name_Lists.Vector is
+      Config : Records.Item;
+      Read   : E.Error_Info;
+      Result : Name_Lists.Vector;
+   begin
+      Configurations.Read (Item, Config, Read);
+      declare
+         Text  : constant String := Records.Get (Config, "map.component." & Component);
+         Mark  : constant Natural := Ada.Strings.Fixed.Index (Text, "roots=");
+         Start : Natural;
+      begin
+         if Mark = 0 then
+            return Result;
+         end if;
+         Start := Mark + 6;
+         for Index in Mark + 6 .. Text'Last + 1 loop
+            if Index > Text'Last or else Text (Index) in '|' | ',' | ' ' then
+               if Index > Start then
+                  Result.Append (Text (Start .. Index - 1));
+               end if;
+               Start := Index + 1;
+               exit when Index <= Text'Last and then Text (Index) in ',' | ' ';
+            end if;
+         end loop;
+      end;
+      return Result;
+   end Component_Roots;
+
+   ------------------
+   -- In_Component --
+   ------------------
+
+   function In_Component (Item : Stores.Store; Component, Path : String) return Boolean is
+      function Clean (Text : String) return String is
+         Result : String := Text;
+         Last   : Natural := Result'Last;
+      begin
+         for C of Result loop
+            if C = '\' then
+               C := '/';
+            end if;
+         end loop;
+         while Last >= Result'First and then Result (Last) = '/' loop
+            Last := Last - 1;
+         end loop;
+         return (if Last >= Result'First and then Result (Result'First .. Result'First + 1 - 1) = "."
+                   and then Last > Result'First and then Result (Result'First + 1) = '/'
+                 then Result (Result'First + 2 .. Last) else Result (Result'First .. Last));
+      end Clean;
+      File : constant String := Clean (Path);
+   begin
+      for Root of Component_Roots (Item, Component) loop
+         declare
+            R : constant String := Clean (Root);
+         begin
+            if File = R or else (File'Length > R'Length
+                                 and then File (File'First .. File'First + R'Length - 1) = R
+                                 and then File (File'First + R'Length) = '/')
+            then
+               return True;
+            end if;
+         end;
+      end loop;
+      return False;
+   end In_Component;
+
    function Roots_Of (Item : Stores.Store) return Roots is
       Result : Roots := Default_Roots;
       Config : Records.Item;

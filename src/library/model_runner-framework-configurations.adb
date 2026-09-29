@@ -1337,4 +1337,75 @@ package body Model_Runner.Framework.Configurations is
       end if;
    end Read;
 
+   -------------
+   -- Recover --
+   -------------
+
+   procedure Recover
+     (Item     : in out Stores.Store;
+      Restored : out Natural;
+      Status   : out Model_Runner.Errors.Error_Info)
+   is
+      use type Model_Runner.Errors.Error_Code;
+      Current : Records.Item;
+      Best    : Records.Item;
+      Found   : Natural := 0;
+   begin
+      Restored := 0;
+      Read (Item, Current, Status);
+      if E.Is_Ok (Status) then
+         return;
+      end if;
+
+      --  The newest revision the history keeps whole.
+      for Name of Stores.Names (Item, Config_Area) loop
+         if Starts (Name, "revision-") then
+            declare
+               Kept : Records.Item;
+               Got  : E.Error_Info;
+               Rev  : constant Natural :=
+                 Natural'Value ("0" & Name (Name'First + 9 .. Name'Last));
+            begin
+               Stores.Read (Item, Config_Area, Name, Kept, Got);
+               if E.Is_Ok (Got) and then Rev > Found
+                 and then Records.Get (Kept, "configuration_fingerprint")
+                            = Configuration_Fingerprint (Kept)
+               then
+                  Found := Rev;
+                  Best := Kept;
+               end if;
+            end;
+         end if;
+      end loop;
+      if Found = 0 then
+         return;
+      end if;
+
+      --  A record that cannot be read at all is no revision to follow: it
+      --  goes, and the history's takes its place from the first.
+      if Status.Code /= E.Framework_Integrity_Failed then
+         Files.Discard
+           (Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), Directory_Name (Config_Area)),
+                             Current_Name & ".rec"));
+      end if;
+      declare
+         Change : Stores.Transaction;
+         Back   : Records.Item := Copy (Best, Current_Entity);
+         Now    : constant Natural :=
+           (if Status.Code = E.Framework_Integrity_Failed
+            then Stores.Current_Revision (Item, Config_Area, Current_Name) else 0);
+      begin
+         Records.Remove (Back, "configuration_revision");
+         Records.Set_Revision (Back, Now + 1);
+         Stores.Put (Change, Config_Area, Current_Name, Back);
+         Stores.Commit (Item, Change, Status);
+         if E.Is_Ok (Status) then
+            Restored := Found;
+         end if;
+      end;
+   exception
+      when Constraint_Error =>
+         Restored := 0;
+   end Recover;
+
 end Model_Runner.Framework.Configurations;

@@ -15,6 +15,7 @@ with Model_Runner.Framework.Indexes;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Invocations;
 with Model_Runner.Framework.Leases;
+with Model_Runner.Framework.Orchestration;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Results;
@@ -444,6 +445,19 @@ package body Model_Runner.Framework.Work is
    begin
       Said.Clear;
 
+      --  0: the configuration, which everything after reads, put right from
+      --  its history where it cannot be read.
+      declare
+         Restored : Natural;
+         Kept     : E.Error_Info;
+      begin
+         Configurations.Recover (Item, Restored, Kept);
+         if Restored > 0 then
+            Said.Append ("the configuration could not be read and was put back from its history,"
+                         & " revision" & Natural'Image (Restored));
+         end if;
+      end;
+
       --  1, 2 and 6: what opening the store did.
       if Opened.Rolled_Forward > 0 then
          Said.Append ("finished" & Natural'Image (Opened.Rolled_Forward)
@@ -603,7 +617,8 @@ package body Model_Runner.Framework.Work is
            (Item, Change,
             Raw_Log_Days => Number_Of (Scalar (Item, "retention.raw_log_days"), 0),
             Context_Days => Number_Of (Scalar (Item, "retention.context_days"), 0),
-            Removed      => Removed);
+            Removed      => Removed,
+            Cache_Days   => Number_Of (Scalar (Item, "retention.cache_days"), 0));
          if Removed > 0 then
             Stores.Commit (Item, Change, Status);
             if E.Is_Error (Status) then
@@ -635,6 +650,19 @@ package body Model_Runner.Framework.Work is
             if E.Is_Ok (Kept) then
                Stores.Commit (Item, Change, Kept);
             end if;
+         end if;
+      end;
+
+      --  7: the events nothing has acted on yet -- a session that stopped
+      --  between an event and what it calls for -- acted on now.
+      declare
+         Done : Orchestration.Step_Report;
+         Ran  : E.Error_Info;
+      begin
+         Orchestration.Step (Item, Done, Ran);
+         if Done.Events_Seen > 0 then
+            Said.Append ("acted on" & Natural'Image (Done.Events_Seen)
+                         & " events nothing had acted on yet");
          end if;
       end;
 
@@ -676,6 +704,39 @@ package body Model_Runner.Framework.Work is
       end if;
       return To_String (Result);
    end Why_Of;
+
+   --  What an agent's call may use, as its invocation records it: the
+   --  tools it is offered -- reading always, checks, writing and helpers
+   --  where its permissions let it -- what those permissions are, and how
+   --  many calls it may make.
+   function Tool_Policy (Item : Stores.Store; Agent_Id : String; Max_Calls : Natural) return String is
+      Held : Agents.Agent;
+      Read : E.Error_Info;
+      Said : Unbounded_String := To_Unbounded_String ("tools: read_file, list_directory");
+   begin
+      Agents.Read (Item, Agent_Id, Held, Read);
+      if E.Is_Error (Read) then
+         return To_String (Said);
+      end if;
+      if Permissions.Allows (Held.Allowed, Permissions.Run_Tests)
+        or else Permissions.Allows (Held.Allowed, Permissions.Run_Build)
+      then
+         Append (Said, ", run_checks");
+      end if;
+      if Permissions.Allows (Held.Allowed, Permissions.Write_Source) then
+         Append (Said, ", write_file");
+      end if;
+      if Permissions.Allows (Held.Allowed, Permissions.Create_Children) then
+         Append (Said, ", delegate");
+      end if;
+      Append (Said, "; calls: " & (if Max_Calls = 0 then "bounded by steps"
+                                   else Trim (Natural'Image (Max_Calls))));
+      Append (Said, "; permissions: ");
+      for Line of Lines_Of (Permissions.Image (Held.Allowed)) loop
+         Append (Said, Line & "; ");
+      end loop;
+      return To_String (Said);
+   end Tool_Policy;
 
    --  Every file's fingerprint, by path.
    function Snapshot
@@ -1187,7 +1248,8 @@ package body Model_Runner.Framework.Work is
             Invocations.Start
               (Host.Item.all, Change, To_String (Child_Id), To_String (Host.Task_Id),
                Generation_Of (Host.Item.all, To_String (Host.Task_Id)),
-               To_String (Host.Model.Id), Framework.Context.Manifest_Id (Made), "files",
+               To_String (Host.Model.Id), Framework.Context.Manifest_Id (Made),
+               Tool_Policy (Host.Item.all, To_String (Child_Id), Host.Max_Calls),
                Child_Claim, Called, Read,
                Resource_Class => To_String (Host.Model.Resource_Class));
             if E.Is_Ok (Read) then
@@ -1579,7 +1641,13 @@ package body Model_Runner.Framework.Work is
          Invocations.Start
            (Item, Change, To_String (Result.Agent_Id), Task_Id,
             Generation_Of (Item, Task_Id), To_String (Model.Id),
-            To_String (Result.Manifest_Id), "files", Invocations.Work_Claim,
+            To_String (Result.Manifest_Id),
+            Tool_Policy
+              (Item, To_String (Result.Agent_Id),
+               Number_Of ((if Tasks.Kind_Policy (Item, Kind, "max_tool_calls") /= ""
+                           then Tasks.Kind_Policy (Item, Kind, "max_tool_calls")
+                           else Scalar (Item, "agents.max_tool_calls")), 0)),
+            Invocations.Work_Claim,
             Result.Invocation_Id, Status, Resource_Class => To_String (Model.Resource_Class));
          if E.Is_Ok (Status) then
             Agents.Record_Holding
@@ -2193,6 +2261,69 @@ package body Model_Runner.Framework.Work is
             end;
          end if;
       end;
+
+      --  The routine the project gives the harness, not the model: its
+      --  generators, then its formatter, each a profile named by scalar
+      --  stage.generate and stage.format, run where the work was written.
+      --  What they change is the task's change; one that does not pass
+      --  sets the task aside with its evidence.
+      for Stage of Name_Lists.Vector'(["generate", "format"]) loop
+         declare
+            Profile  : constant String := Scalar (Item, "stage." & Stage);
+            Evidence : Unbounded_String;
+            Passed   : Boolean;
+            Ran      : E.Error_Info;
+         begin
+            if Profile /= "" then
+               declare
+                  Before : constant Configurations.Value_Maps.Map :=
+                    Snapshot (To_String (Place), Repository.Roots_Of (Item));
+               begin
+                  Verification.Run_Profile
+                    (Item, Change, Profile, Task_Id, Evidence, Passed, Ran,
+                     Workspace => (if Isolated then To_String (Place) else ""));
+                  if E.Is_Ok (Ran) then
+                     Stores.Commit (Item, Change, Ran);
+                  end if;
+                  if E.Is_Error (Ran) or else not Passed then
+                     Conclude ("blocked",
+                               "its " & Stage & " stage did not pass"
+                               & (if Evidence = Null_Unbounded_String then ": " & Why_Of (Ran)
+                                  else " (" & To_String (Evidence) & ")"),
+                               "completed");
+                     return;
+                  end if;
+                  declare
+                     After : constant Configurations.Value_Maps.Map :=
+                       Snapshot (To_String (Place), Repository.Roots_Of (Item));
+                  begin
+                     for Position in After.Iterate loop
+                        declare
+                           Path : constant String := Configurations.Value_Maps.Key (Position);
+                        begin
+                           if (not Before.Contains (Path)
+                               or else Before (Path) /= Configurations.Value_Maps.Element (Position))
+                             and then not Result.Changed_Files.Contains (Path)
+                           then
+                              Result.Changed_Files.Append (Path);
+                           end if;
+                        end;
+                     end loop;
+                     declare
+                        Files_Text : Unbounded_String;
+                     begin
+                        for Path of Result.Changed_Files loop
+                           Append (Files_Text, (if Files_Text = Null_Unbounded_String then ""
+                                                else [1 => ASCII.LF]) & Path);
+                        end loop;
+                        Annotate (Item, Change, Task_Id, "changed_files", To_String (Files_Text));
+                        Stores.Commit (Item, Change, Status);
+                     end;
+                  end;
+               end;
+            end if;
+         end;
+      end loop;
 
       --  Done, it says. The harness decides -- held again for as long as
       --  that may take.

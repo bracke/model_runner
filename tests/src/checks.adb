@@ -27,6 +27,7 @@ with Model_Runner.Shaders.Low;
 with Model_Runner.Shaders.Attend;
 with Shader_Generation;
 with Tool_Commands;
+with Spec_Conformance;
 
 with Model_Runner;
 with Model_Runner.Errors;
@@ -4972,6 +4973,14 @@ package body Checks is
       --  file is a failure, not a surprise at release time.
       Check (Docs_Generation.Error_Reference_Is_Current (Root),
              "docs/error-codes.md is stale; run 'tests docs'");
+
+      --  Every requirement of the specification met, and shown by a test
+      --  there is, against the specification the rows were made from.
+      declare
+         Wrong : constant String := Spec_Conformance.Problem (Root);
+      begin
+         Check (Wrong = "", "the specification is not met: " & Wrong);
+      end;
 
       --  Which diagnostics the program can actually emit.
       --

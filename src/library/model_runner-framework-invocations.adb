@@ -2,6 +2,7 @@ with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 
 with Model_Runner.Framework.Records;
+with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Schemas;
 with Model_Runner.Framework.Transitions;
 
@@ -311,6 +312,24 @@ package body Model_Runner.Framework.Invocations is
       end if;
       if Failure /= "" then
          Records.Set (Value, "failure", Failure);
+
+         --  And kept as a record of its own, which the call refers to: a
+         --  failure is looked up, not only read off a line.
+         declare
+            Kept : Results.Result :=
+              (Kind       => Results.Diagnostic,
+               Producer   => Ada.Strings.Unbounded.To_Unbounded_String (Records.Get (Value, "agent")),
+               Summary    => Ada.Strings.Unbounded.To_Unbounded_String (Id & " failed: " & Failure),
+               Payload    => Ada.Strings.Unbounded.To_Unbounded_String (Failure),
+               Provenance => Ada.Strings.Unbounded.To_Unbounded_String (Id),
+               others     => <>);
+            Kept_Status : E.Error_Info;
+         begin
+            Results.Add (Item, Change, Kept, Kept_Status);
+            if E.Is_Ok (Kept_Status) then
+               Records.Set (Value, "failure_result", Ada.Strings.Unbounded.To_String (Kept.Id));
+            end if;
+         end;
       end if;
       Stores.Put (Change, Invocations_Area, Id, Value);
    end Finish;

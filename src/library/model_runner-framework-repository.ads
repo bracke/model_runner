@@ -218,6 +218,23 @@ package Model_Runner.Framework.Repository is
    --  @return The roots.
    function Roots_Of (Item : Stores.Store) return Roots;
 
+   --  Where a component's files are, as the configuration declares them:
+   --  map component.NAME = roots=src/parser/|tests/parser/.
+   --
+   --  @param Item The store.
+   --  @param Component The component.
+   --  @return Its roots; none where it declares none.
+   function Component_Roots (Item : Stores.Store; Component : String) return Name_Lists.Vector;
+
+   --  Whether a file is a component's by the roots declared for it: at or
+   --  under one of them, part by part.
+   --
+   --  @param Item The store.
+   --  @param Component The component.
+   --  @param Path The file, relative to the project.
+   --  @return True when it lies in one of the component's roots.
+   function In_Component (Item : Stores.Store; Component, Path : String) return Boolean;
+
    --  What a file's place says it is for.
    --
    --  @param Path The file, within the project.
