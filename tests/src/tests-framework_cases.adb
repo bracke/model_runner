@@ -5921,6 +5921,21 @@ package body Tests.Framework_Cases is
               and then Done.Waits_For.Contains ("TASK-999"),
               "the agent's claims were not each taken as a proposal: "
               & To_String (Done.Final_State) & Natural'Image (Natural (Done.Proposed.Length)));
+      --  What it says without being able to propose is an issue, kept to be
+      --  seen, not a proposal.
+      declare
+         Held  : Model_Runner.Framework.Results.Result;
+         Found : Boolean := False;
+      begin
+         for Name of S.Names (Store, Model_Runner.Framework.Results_Area) loop
+            Model_Runner.Framework.Results.Read (Store, Name, Held, Status);
+            Found := Found
+              or else (E.Is_Ok (Status)
+                       and then Held.Kind = Model_Runner.Framework.Results.Diagnostic
+                       and then Ada.Strings.Fixed.Index (To_String (Held.Payload), "TASK-999") > 0);
+         end loop;
+         Assert (Found, "what an agent says it waits for was not kept as an issue");
+      end;
       declare
          Defined : R.Item;
       begin
@@ -6902,6 +6917,41 @@ package body Tests.Framework_Cases is
       S.Commit (Store, Change, Status);
       Assert (Tk.Ready (Store, To_String (First)).Ready, "a task serving an accepted requirement waits");
 
+      --  The profile that will run is what the effective task says, the
+      --  default among them; a title is not revised away; and why a task
+      --  was blocked stays in the move's event.
+      declare
+         View    : R.Item;
+         Revised : Tk.Field_Map;
+         Events  : Model_Runner.Framework.Events.Event_List;
+         Kept    : Boolean := False;
+      begin
+         Tk.Effective (Store, To_String (First), View, Status);
+         Assert (Ada.Strings.Fixed.Index (R.Get (View, "verification_profile"), "passing") = 1,
+                 "the effective task left out the default profile: "
+                 & R.Get (View, "verification_profile"));
+         Revised.Include ("title", "");
+         Tk.Revise (Store, Change, To_String (First), Revised, Status);
+         Assert (Status.Code = E.Framework_Schema_Violation, "a task's title was revised away");
+         Change := S.No_Changes;
+         Tk.Move (Store, Change, To_String (Second), "blocked", "waiting on the design",
+                  Status => Status);
+         S.Commit (Store, Change, Status);
+         Events := Model_Runner.Framework.Events.Since (Store, 0);
+         for Index in 1 .. Model_Runner.Framework.Events.Length (Events) loop
+            Kept := Kept
+              or else (Model_Runner.Framework.Events.Element (Events, Index).Kind
+                         = Model_Runner.Framework.Events.Task_Blocked
+                       and then Ada.Strings.Fixed.Index
+                                  (To_String (Model_Runner.Framework.Events.Element
+                                                (Events, Index).Detail),
+                                   "waiting on the design") > 0);
+         end loop;
+         Assert (Kept, "why a task was blocked was not kept in its event");
+         Tk.Move (Store, Change, To_String (Second), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+      end;
+
       --  A decision made to govern is revised: the one before kept, what
       --  it governs part of its meaning.
       declare
@@ -7743,6 +7793,7 @@ package body Tests.Framework_Cases is
             Model_Runner.CLI.Project_Commands.Run ("/req new Other thing", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/accept REQ-002", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/accept REQ-404", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/bootstrap nowhere.md", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/req show REQ-001", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/req move REQ-001 accepted", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run
@@ -7761,6 +7812,7 @@ package body Tests.Framework_Cases is
                        and then Ada.Strings.Fixed.Index (Text, "Stars counted") > 0
                        and then Ada.Strings.Fixed.Index (Text, "moved from") > 0
                        and then Ada.Strings.Fixed.Index (Text, "a proposal REQ-404") > 0
+                       and then Ada.Strings.Fixed.Index (Text, "nowhere.md within the project") > 0
                        and then Ada.Strings.Fixed.Index (Text, "a value for confirm") > 0,
                        "/task ID, an unknown /task action or /req show said nothing: " & Text);
             end;

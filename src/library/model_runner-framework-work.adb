@@ -1983,8 +1983,10 @@ package body Model_Runner.Framework.Work is
 
          declare
             Found : constant String := Invocations.Claim (Said, "issues") & To_String (Kept_Back);
+            --  An issue, not a proposal: what it may not propose is
+            --  returned to be seen, not kept as work to be accepted.
             Issue : Results.Result :=
-              (Kind       => Results.Task_Proposal,
+              (Kind       => Results.Diagnostic,
                Producer   => Result.Agent_Id,
                Summary    => To_Unbounded_String ("issues found working on " & Task_Id),
                Payload    => To_Unbounded_String (Found),
@@ -2381,6 +2383,11 @@ package body Model_Runner.Framework.Work is
       begin
          if Open /= "" then
             Workspaces.Abandon (Item, Change, Open, Status);
+
+            --  Not cancelled with its workspace still standing for it.
+            if E.Is_Error (Status) then
+               return;
+            end if;
          end if;
       end;
       if Agent /= "" then
@@ -2395,7 +2402,9 @@ package body Model_Runner.Framework.Work is
             Status := E.Success;
          end if;
       end if;
-      Stores.Commit (Item, Change, Status);
+      if E.Is_Ok (Status) then
+         Stores.Commit (Item, Change, Status);
+      end if;
    end Cancel;
 
 end Model_Runner.Framework.Work;

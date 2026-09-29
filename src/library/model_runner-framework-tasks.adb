@@ -664,7 +664,8 @@ package body Model_Runner.Framework.Tasks is
 
       Transitions.Apply
         (Item, Change, Lifecycle_Of (Item), Tasks_Area, Id & State_Suffix, Next, Granted,
-         Event_For (Next), Status, Actor, Subject => Id);
+         Event_For (Next), Status, Actor, Subject => Id,
+         Reason => (if Next in "blocked" | "failed" | "cancelled" then Reason else ""));
       if E.Is_Error (Status) then
          return;
       end if;
@@ -1046,8 +1047,12 @@ package body Model_Runner.Framework.Tasks is
 
       declare
          Kind    : constant String := Records.Get (Defined, "kind");
+         --  The profile that will run: the kind's own, or the default --
+         --  as Verification.Profile_Of chooses it.
          Profile : constant String :=
-           Records.Get (Settings, "scalar.task.profile." & Kind);
+           (if Records.Get (Settings, "scalar.task.profile." & Kind) /= ""
+            then Records.Get (Settings, "scalar.task.profile." & Kind)
+            else Records.Get (Settings, "scalar.verification.default"));
       begin
          Records.Set
            (Value, "kind.fields", Records.Get (Settings, "task_kind." & Kind));
@@ -1530,7 +1535,9 @@ package body Model_Runner.Framework.Tasks is
       declare
          Kind    : constant String := Records.Get (Value, "kind");
          Allowed : constant Name_Lists.Vector := Allowed_Fields (Item, Kind);
+         Required_Here, Ignored : Name_Lists.Vector;
       begin
+         Kind_Fields (Item, Kind, Required_Here, Ignored);
          for Position in Fields.Iterate loop
             declare
                Name  : constant String := Configurations.Value_Maps.Key (Position);
@@ -1549,6 +1556,11 @@ package body Model_Runner.Framework.Tasks is
                   Status := E.Make (E.Framework_Schema_Violation);
                   E.Add_Text (Status, "name", Name);
                   E.Add_Text (Status, "detail", "no field of a " & Kind & " task is called so");
+                  return;
+               elsif Given = "" and then (Name = "title" or else Required_Here.Contains (Name)) then
+                  Status := E.Make (E.Framework_Schema_Violation);
+                  E.Add_Text (Status, "name", Name);
+                  E.Add_Text (Status, "detail", "a " & Kind & " task must have it");
                   return;
                elsif Field_Problem (Item, Name, Given) /= "" then
                   Status := E.Make (E.Framework_Schema_Violation);

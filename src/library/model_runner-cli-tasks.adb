@@ -863,18 +863,30 @@ package body Model_Runner.CLI.Tasks is
                   [Loc.Named ("name", First_Word), Loc.Named ("value", After_First)]);
             end if;
          else
-            Tk.Move (Store, Change, First_Word, After_First, "", Status => Outcome,
-                     Actor => Model_Runner.Framework.Transitions.User);
-            if E.Is_Ok (Outcome) then
-               Commit;
-            end if;
-            if E.Is_Error (Outcome) then
-               Fail (Outcome);
-            else
-               Pres.Put_Message
-                 (Screen, "cli.task.moved",
-                  [Loc.Named ("name", First_Word), Loc.Named ("value", After_First)]);
-            end if;
+            --  move TASK STATE WHY: the state, and why, which the move's
+            --  event keeps.
+            declare
+               Rest  : constant String := After_First;
+               Space : constant Natural := Ada.Strings.Fixed.Index (Rest, " ");
+               Next  : constant String :=
+                 (if Space = 0 then Rest else Rest (Rest'First .. Space - 1));
+               Why   : constant String :=
+                 (if Space = 0 then ""
+                  else Ada.Strings.Fixed.Trim (Rest (Space + 1 .. Rest'Last), Ada.Strings.Both));
+            begin
+               Tk.Move (Store, Change, First_Word, Next, Why, Status => Outcome,
+                        Actor => Model_Runner.Framework.Transitions.User);
+               if E.Is_Ok (Outcome) then
+                  Commit;
+               end if;
+               if E.Is_Error (Outcome) then
+                  Fail (Outcome);
+               else
+                  Pres.Put_Message
+                    (Screen, "cli.task.moved",
+                     [Loc.Named ("name", First_Word), Loc.Named ("value", Next)]);
+               end if;
+            end;
          end if;
       elsif Action = "depend" then
          Depend;

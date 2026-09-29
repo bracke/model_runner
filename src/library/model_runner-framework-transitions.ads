@@ -107,6 +107,8 @@ package Model_Runner.Framework.Transitions is
    --  @param Subject What the event is about, where that is not the
    --    record's entity -- a task, whose state record is moved; empty for
    --    the record's.
+   --  @param Reason Why, as the move's event says after it: a failure's or
+   --    a block's reason stays on record however often the task is tried.
    procedure Apply
      (Item    : Stores.Store;
       Change  : in out Stores.Transaction;
@@ -118,7 +120,8 @@ package Model_Runner.Framework.Transitions is
       Kind    : Events.Event_Kind;
       Status  : out Model_Runner.Errors.Error_Info;
       Actor   : String := "";
-      Subject : String := "");
+      Subject : String := "";
+      Reason  : String := "");
 
    --  The person at the terminal, as an actor: user and the login name,
    --  or user alone when the host does not say.

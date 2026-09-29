@@ -972,6 +972,21 @@ package body Model_Runner.CLI.Project_Commands is
            (if Positional.Is_Empty then Model_Runner.Framework.Bootstrap.Documents (Store)
             else Positional);
       begin
+         --  A document named is one within the project, outside its state,
+         --  and there to be read: nothing is taken from one that is not.
+         for Path of Positional loop
+            if Path = "" or else Path (Path'First) in '/' | '\'
+              or else Ada.Strings.Fixed.Index (Path, "..") > 0
+              or else Ada.Strings.Fixed.Index (Path, ".model_runner") > 0
+              or else not Ada.Directories.Exists (Path)
+              or else Ada.Directories."/=" (Ada.Directories.Kind (Path), Ada.Directories.Ordinary_File)
+            then
+               Outcome := E.Make (E.Framework_Not_Found);
+               E.Add_Text (Outcome, "name", Path & " within the project");
+               Pres.Report (Screen, Outcome);
+               return;
+            end if;
+         end loop;
          for Path of Files loop
             declare
                Scanned : constant Model_Runner.Framework.Bootstrap.Output_List :=

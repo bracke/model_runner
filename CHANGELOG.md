@@ -7,6 +7,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **`/bootstrap FILE` refuses a file it cannot read,** or one outside the
+  project or in its state, instead of reporting nothing made.
+- **Why a task was blocked, failed or cancelled stays on record** in the
+  move's event; `task move TASK STATE WHY` gives the reason.
+- **What an agent may not propose is kept as an issue** (a diagnostic
+  result), not as a task proposal.
+- **Cancelling a task whose workspace cannot be abandoned** keeps nothing
+  and says why, rather than leaving the workspace standing for it.
+- **The effective task names the default verification profile** when its
+  kind names none.
+- **A revision cannot clear a field the task's kind requires,** its title
+  among them.
+
 - **A project whose files cannot all be written is taken back whole** at
   `init`, state and files, so it can be made again.
 - **Every change to a requirement, decision or specification keeps the
