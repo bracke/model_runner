@@ -605,6 +605,26 @@ package body Model_Runner.Framework.Configurations is
                Status);
          end if;
       end Add_Fact;
+
+      --  Take back what was made: the state, and the files and directories
+      --  it made -- a project half made is refused when made again.
+      procedure Undo is
+      begin
+         Stores.Close (Item);
+         Files.Remove_Tree (Stores.State_Root (Project_Directory));
+         for Name of Done.Written_Files loop
+            Files.Discard (Hostkit.Fs.Join (Project_Directory, Name));
+         end loop;
+         for Index in reverse 1 .. Natural (Done.Made_Directories.Length) loop
+            begin
+               Ada.Directories.Delete_Directory
+                 (Hostkit.Fs.Join (Project_Directory, Done.Made_Directories (Index)));
+            exception
+               when others =>
+                  null;
+            end;
+         end loop;
+      end Undo;
    begin
       Done := (others => <>);
       Status := E.Success;
@@ -675,6 +695,7 @@ package body Model_Runner.Framework.Configurations is
             if not Ada.Directories.Exists (Path) then
                if not Files.Make_Directory (Path) then
                   Files.Write_Failed (Path, Status);
+                  Undo;
                   return;
                end if;
                Done.Made_Directories.Append (Directory);
@@ -694,10 +715,12 @@ package body Model_Runner.Framework.Configurations is
                         (Ada.Directories.Containing_Directory (Path))
                then
                   Files.Write_Failed (Path, Status);
+                  Undo;
                   return;
                end if;
                Files.Write_Text (Path, Value_Maps.Element (Position), Status);
                if E.Is_Error (Status) then
+                  Undo;
                   return;
                end if;
                Done.Written_Files.Append (Name);
@@ -741,20 +764,7 @@ package body Model_Runner.Framework.Configurations is
                          | Consistency.Incomplete_Transaction | Consistency.Index_Mismatch;
          end loop;
          if Broken then
-            Stores.Close (Item);
-            Files.Remove_Tree (Stores.State_Root (Project_Directory));
-            for Name of Done.Written_Files loop
-               Files.Discard (Hostkit.Fs.Join (Project_Directory, Name));
-            end loop;
-            for Index in reverse 1 .. Natural (Done.Made_Directories.Length) loop
-               begin
-                  Ada.Directories.Delete_Directory
-                    (Hostkit.Fs.Join (Project_Directory, Done.Made_Directories (Index)));
-               exception
-                  when others =>
-                     null;
-               end;
-            end loop;
+            Undo;
             Status := E.Make (E.Framework_Schema_Violation);
             E.Add_Text (Status, "name", "the project as initialized");
             E.Add_Text (Status, "detail", Done.Findings.First_Element
@@ -1114,7 +1124,9 @@ package body Model_Runner.Framework.Configurations is
                                   & "scalar., set., list., map., profile., fact., adapter."
                                   & " and task_kind. fields");
                return;
-            elsif not Records.Is_Field_Name (Name) then
+            elsif not Records.Is_Field_Name (Name)
+              or else (Starts (Name, "fact.") and then not Facts.Is_Key (Name (Name'First + 5 .. Name'Last)))
+            then
                Status := E.Make (E.Framework_Name_Invalid);
                E.Add_Text (Status, "value", Name);
                return;
@@ -1193,6 +1205,29 @@ package body Model_Runner.Framework.Configurations is
       end if;
 
       Stores.Put (Change, Config_Area, Current_Name, Planned.After);
+
+      --  A fact set here is the registry's too, as the person's word: the
+      --  two do not drift apart, and what bootstrap compares with is this.
+      for Index in 1 .. Records.Field_Count (Planned.After) loop
+         declare
+            Name  : constant String := Records.Field_Name (Planned.After, Index);
+            Value : constant String := Records.Get (Planned.After, Name);
+         begin
+            if Starts (Name, "fact.") and then Value /= Records.Get (Planned.Before, Name) then
+               Facts.Record_Fact
+                 (Item, Change,
+                  (Key        => To_Unbounded_String (Name (Name'First + 5 .. Name'Last)),
+                   Value      => To_Unbounded_String (Value),
+                   Source     => Facts.Explicit,
+                   Confidence => Facts.Authoritative,
+                   Origin     => To_Unbounded_String ("reconfiguration")),
+                  Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+         end;
+      end loop;
       --  A record of its own in the history, saying which revision it was.
       Records.Set (Kept, "configuration_revision", Number (Number'First + 1 .. Number'Last));
       Stores.Put (Change, Config_Area, "revision-" & Padded, Kept);

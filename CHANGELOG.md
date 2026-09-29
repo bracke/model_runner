@@ -7,6 +7,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A project whose files cannot all be written is taken back whole** at
+  `init`, state and files, so it can be made again.
+- **Every change to a requirement, decision or specification keeps the
+  revision before it** -- moves and links as well as revisions -- so an
+  `ID@N` can always be read back; `/decision govern` is such a revision,
+  with what it governs part of its meaning and an event saying so.
+- **Evidence holds only while the decisions and specifications governing
+  the work mean what they meant.**
+- **Facts are one record:** `/reconfigure fact.K=V` updates the registry
+  too (and refuses a key no fact has), and facts only the registry holds,
+  bootstrap's among them, reach the context.
+- **Template composition does not depend on order:** an override wins
+  whichever comes first, and two overrides that disagree are a conflict.
+
 - **A Git workspace starts from the project as it is:** modified and new
   files are copied over the checkout, so the work and its conflicts are
   judged against what is there, not the last commit.

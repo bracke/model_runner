@@ -740,8 +740,13 @@ package body Model_Runner.Framework.Templates is
                   null;
                elsif Result.Settings (Held).Value = Given.Value then
                   null;
-               elsif Given.Override then
-                  Result.Settings (Held) := Given;
+
+               --  Whichever comes first, the one that says override wins;
+               --  two that both say it, or neither, disagree.
+               elsif Given.Override /= Result.Settings (Held).Override then
+                  if Given.Override then
+                     Result.Settings (Held) := Given;
+                  end if;
                else
                   Conflict
                     (Kind_Word (Given.Kind) & " " & To_String (Given.Key),
@@ -749,7 +754,8 @@ package body Model_Runner.Framework.Templates is
                      & To_String (Result.Settings (Held).Value) & ", "
                      & To_String (Given.From) & " gives "
                      & To_String (Given.Value)
-                     & ", and neither says override");
+                     & (if Given.Override then ", and both say override"
+                        else ", and neither says override"));
                   return;
                end if;
             end;

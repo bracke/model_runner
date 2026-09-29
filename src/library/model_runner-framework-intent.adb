@@ -241,6 +241,43 @@ package body Model_Runner.Framework.Intent is
       end if;
    end Current;
 
+   --  Keep the revision as the project holds it, under a name of its own,
+   --  before anything changes it: whatever names ID@N -- evidence, the
+   --  traceability graph -- can read what N was. Kept once.
+   procedure Keep_Earlier
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Kind   : Intent_Kind;
+      Id     : String)
+   is
+      Before : Records.Item;
+      Read   : E.Error_Info;
+      Held   : Records.Item;
+      Staged : Boolean;
+   begin
+      Stores.Read (Item, Area_Of (Kind), Id, Before, Read);
+      if E.Is_Error (Read) then
+         return;
+      end if;
+      declare
+         Earlier : constant Natural := Records.Revision (Before);
+         Name    : constant String := Id & History_Mark & Six (Earlier);
+         Kept    : Records.Item :=
+           Records.Create (Schemas.Intent_Schema, 1, Id & "-REV-" & Six (Earlier), 1);
+      begin
+         Stores.Pending (Change, Area_Of (Kind), Name, Held, Staged);
+         if Staged or else Stores.Exists (Item, Area_Of (Kind), Name) then
+            return;
+         end if;
+         for Field_At in 1 .. Records.Field_Count (Before) loop
+            Records.Set (Kept, Records.Field_Name (Before, Field_At),
+                         Records.Get (Before, Records.Field_Name (Before, Field_At)));
+         end loop;
+         Records.Set (Kept, "revision_of", Id);
+         Stores.Put (Change, Area_Of (Kind), Name, Kept);
+      end;
+   end Keep_Earlier;
+
    -------------
    -- Propose --
    -------------
@@ -382,6 +419,7 @@ package body Model_Runner.Framework.Intent is
                      & " evidence, not by being said to be");
          return;
       end if;
+      Keep_Earlier (Item, Change, Kind, Id);
       Transitions.Apply
         (Item, Change, Lifecycle_Of (Item, Kind), Area_Of (Kind), Id, Next, Granted,
          Event_For (Kind, Next), Status, Actor);
@@ -431,32 +469,7 @@ package body Model_Runner.Framework.Intent is
          end if;
 
          --  The revision it replaces stays, under a name of its own.
-         declare
-            Earlier : constant Natural := Records.Revision (Value) - 1;
-            Kept    : Records.Item :=
-              Records.Create
-                (Schemas.Intent_Schema, 1, Id & "-REV-" & Six (Earlier), 1);
-            Before  : Records.Item;
-         begin
-            if Earlier > 0 then
-               Stores.Read (Item, Area_Of (Kind), Id, Before, Status);
-               if E.Is_Ok (Status) then
-                  for Field_At in 1 .. Records.Field_Count (Before) loop
-                     Records.Set
-                       (Kept, Records.Field_Name (Before, Field_At),
-                        Records.Get
-                          (Before, Records.Field_Name (Before, Field_At)));
-                  end loop;
-                  Records.Set (Kept, "revision_of", Id);
-                  Stores.Put
-                    (Change, Area_Of (Kind), Id & History_Mark & Six (Earlier),
-                     Kept);
-               elsif Status.Code /= E.Framework_Not_Found then
-                  return;
-               end if;
-               Status := E.Success;
-            end if;
-         end;
+         Keep_Earlier (Item, Change, Kind, Id);
 
          Records.Set (Value, "title", Title);
          Records.Set (Value, "text", Text);
@@ -527,6 +540,7 @@ package body Model_Runner.Framework.Intent is
          Records.Set
            (Value, Field,
             (if Held = "" then Target else Held & ASCII.LF & Target));
+         Keep_Earlier (Item, Change, Kind, Id);
          Stores.Put (Change, Area_Of (Kind), Id, Value);
       end;
    end Link;
@@ -566,13 +580,30 @@ package body Model_Runner.Framework.Intent is
       Status    : out Model_Runner.Errors.Error_Info)
    is
       Value : Records.Item;
+      Event : Unbounded_String;
    begin
       Current (Item, Change, Kind, Id, Value, Status);
       if E.Is_Ok (Status) then
+         --  A revision, as any change to what it says is: the one before
+         --  is kept, what it governs is part of what it means, and it is
+         --  said.
+         Keep_Earlier (Item, Change, Kind, Id);
          Records.Set (Value, "governs", Subject);
          Records.Set (Value, "ruling", Ruling);
          Records.Set (Value, "overrides", Overrides);
+         Records.Set
+           (Value, "meaning",
+            Meaning_Of (Records.Get (Value, "text"),
+                        Records.Get (Value, "criteria") & ASCII.LF & "governs " & Subject
+                        & " = " & Ruling & (if Overrides = "" then "" else " over " & Overrides)));
          Stores.Put (Change, Area_Of (Kind), Id, Value);
+         Events.Emit
+           (Item, Change,
+            (case Kind is
+               when Specification => Events.Specification_Revised,
+               when Requirement   => Events.Requirement_Revised,
+               when Decision      => Events.Decision_Revised),
+            Id, "governs " & Subject, Event, Status);
       end if;
    end Govern;
 

@@ -502,6 +502,37 @@ package body Model_Runner.Framework.Verification is
                         Records.Set (Value, "meaning." & Requirement,
                                      To_String (Held.Meaning));
                      end if;
+
+                     --  The specifications it is linked to, by what they mean.
+                     for Relation in Intent.Link_Kind loop
+                        for Target of Intent.Links (Item, Intent.Requirement, Requirement, Relation)
+                        loop
+                           if Starts (Target, "SPEC-") then
+                              Intent.Read (Item, Intent.Specification, Target, Held, Read);
+                              if E.Is_Ok (Read) then
+                                 Records.Set (Value, "specification_meaning." & Target,
+                                              To_String (Held.Meaning));
+                              end if;
+                           end if;
+                        end loop;
+                     end loop;
+                  end;
+               end loop;
+
+               --  And the decisions that govern it, by what they mean.
+               for Index in 1 .. Records.Field_Count (View) loop
+                  declare
+                     Field : constant String := Records.Field_Name (View, Index);
+                     Held  : Intent.Entity;
+                  begin
+                     if Starts (Field, "decision.") then
+                        Intent.Read (Item, Intent.Decision, Field (Field'First + 9 .. Field'Last),
+                                     Held, Read);
+                        if E.Is_Ok (Read) then
+                           Records.Set (Value, "decision_meaning." & Field (Field'First + 9 .. Field'Last),
+                                        To_String (Held.Meaning));
+                        end if;
+                     end if;
                   end;
                end loop;
             end;
@@ -899,7 +930,23 @@ package body Model_Runner.Framework.Verification is
          declare
             Field : constant String := Records.Field_Name (Value, Index);
          begin
-            if Starts (Field, "requirement.") then
+            if Starts (Field, "specification_meaning.") or else Starts (Field, "decision_meaning.")
+            then
+               declare
+                  Cut  : constant Natural := Ada.Strings.Fixed.Index (Field, ".");
+                  Id   : constant String := Field (Cut + 1 .. Field'Last);
+                  Held : Intent.Entity;
+                  Read : E.Error_Info;
+               begin
+                  Intent.Read (Item, (if Starts (Field, "decision_") then Intent.Decision
+                                      else Intent.Specification), Id, Held, Read);
+                  if E.Is_Error (Read)
+                    or else To_String (Held.Meaning) /= Records.Get (Value, Field)
+                  then
+                     Reasons.Append (Id & " has changed its meaning since " & Evidence);
+                  end if;
+               end;
+            elsif Starts (Field, "requirement.") then
                declare
                   Id   : constant String := Field (Field'First + 12 .. Field'Last);
                   Held : Intent.Entity;

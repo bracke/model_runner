@@ -1001,6 +1001,29 @@ package body Tests.Framework_Cases is
       Assert (Status.Code = E.Framework_Template_Conflict,
               "two values for one scalar composed: " & Code_Of (Status));
 
+      --  Override wins whichever comes first; two overrides disagree.
+      declare
+         Holding : Tp.Registry;
+         Made    : Tp.Composition;
+      begin
+         Tp.Add (Holding, Parsed ("template = first" & LF & "name = F" & LF & "version = 1" & LF
+                                  & "override scalar k = strong" & LF));
+         Tp.Add (Holding, Parsed ("template = second" & LF & "name = S" & LF & "version = 1" & LF
+                                  & "scalar k = weak" & LF));
+         Tp.Add (Holding, Parsed ("template = both" & LF & "name = B" & LF & "version = 1" & LF
+                                  & "includes = first, second" & LF));
+         Tp.Compose (Holding, "both", Made, Status);
+         Assert (E.Is_Ok (Status), "an override met first was taken for a conflict: "
+                 & Code_Of (Status));
+         Tp.Add (Holding, Parsed ("template = rival" & LF & "name = R" & LF & "version = 1" & LF
+                                  & "override scalar k = other" & LF));
+         Tp.Add (Holding, Parsed ("template = rivals" & LF & "name = RR" & LF & "version = 1" & LF
+                                  & "includes = first, rival" & LF));
+         Tp.Compose (Holding, "rivals", Made, Status);
+         Assert (Status.Code = E.Framework_Template_Conflict,
+                 "two overrides that disagree composed: " & Code_Of (Status));
+      end;
+
       Tp.Add (Registry, Parsed ("template = loop-a" & LF & "name = A" & LF
                                 & "version = 1" & LF & "includes = loop-b"
                                 & LF));
@@ -6879,10 +6902,46 @@ package body Tests.Framework_Cases is
       S.Commit (Store, Change, Status);
       Assert (Tk.Ready (Store, To_String (First)).Ready, "a task serving an accepted requirement waits");
 
+      --  A decision made to govern is revised: the one before kept, what
+      --  it governs part of its meaning.
+      declare
+         Dec    : Unbounded_String;
+         Before : Nt.Entity;
+         After  : Nt.Entity;
+      begin
+         Nt.Propose (Store, Change, Nt.Decision, "", "One binary", "Ship one binary.", "",
+                     "user", "", "project", Dec, Status);
+         S.Commit (Store, Change, Status);
+         Nt.Read (Store, Nt.Decision, To_String (Dec), Before, Status);
+         Nt.Govern (Store, Change, Nt.Decision, To_String (Dec), "work.isolation", "project", "",
+                    Status);
+         S.Commit (Store, Change, Status);
+         Nt.Read (Store, Nt.Decision, To_String (Dec), After, Status);
+         Assert (E.Is_Ok (Status)
+                 and then S.Exists (Store, Model_Runner.Framework.Decisions_Area,
+                                    To_String (Dec) & ".rev-" & "000001")
+                 and then To_String (After.Meaning) /= To_String (Before.Meaning),
+                 "a governing decision was rewritten in place: " & Code_Of (Status));
+      end;
+
       Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "blocked", Tr.Ordinary_Only, Status);
       S.Commit (Store, Change, Status);
       Assert (E.Is_Ok (Status) and then not Tk.Ready (Store, To_String (First)).Ready,
               "a task serving a blocked requirement was ready: " & Code_Of (Status));
+
+      --  The revision a move leaves behind is kept, as a revise's is.
+      declare
+         Kept  : R.Item;
+         Found : Boolean := False;
+      begin
+         for Name of S.Names (Store, Model_Runner.Framework.Requirements_Area) loop
+            if Ada.Strings.Fixed.Index (Name, To_String (Req) & ".rev-") = 1 then
+               S.Read (Store, Model_Runner.Framework.Requirements_Area, Name, Kept, Status);
+               Found := Found or else R.Get (Kept, "state") = "accepted";
+            end if;
+         end loop;
+         Assert (Found, "a moved requirement's earlier revision was not kept");
+      end;
       Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted", Tr.Ordinary_Only, Status);
       S.Commit (Store, Change, Status);
 
@@ -6911,6 +6970,30 @@ package body Tests.Framework_Cases is
               and then To_String (Held.State) = "accepted",
               "a requirement was implemented with a task serving it still open: "
               & To_String (Held.State));
+
+      --  Evidence holds while the decisions governing the work mean what
+      --  they meant, and not once one says something else.
+      declare
+         Dec     : Unbounded_String;
+         Reasons : Model_Runner.Framework.Name_Lists.Vector;
+      begin
+         Nt.Propose (Store, Change, Nt.Decision, "", "Isolate", "Work apart.", "",
+                     "user", "", "project", Dec, Status);
+         S.Commit (Store, Change, Status);
+         Nt.Move (Store, Change, Nt.Decision, To_String (Dec), "accepted", Tr.Ordinary_Only,
+                  Status);
+         S.Commit (Store, Change, Status);
+         Vf.Run_Profile (Store, Change, "passing", To_String (Second), Evidence, Passed, Status);
+         S.Commit (Store, Change, Status);
+         Assert (Vf.Is_Current (Store, To_String (Evidence), Reasons),
+                 "fresh evidence under a decision was not current");
+         Nt.Govern (Store, Change, Nt.Decision, To_String (Dec), "work.isolation", "workspace", "",
+                    Status);
+         S.Commit (Store, Change, Status);
+         Assert (not Vf.Is_Current (Store, To_String (Evidence), Reasons)
+                 and then Ada.Strings.Fixed.Index (Reasons.First_Element, To_String (Dec)) > 0,
+                 "evidence held after a decision governing the work changed its meaning");
+      end;
       S.Close (Store);
    end Readiness_Follows_What_Is_Served;
 
@@ -7171,6 +7254,20 @@ package body Tests.Framework_Cases is
       Cf.Reconfigure (Store, Stale, Revision, Status);
       Assert (Status.Code = E.Framework_Revision_Conflict,
               "a change planned against an older revision was made");
+
+      --  A fact set is the registry's too, and a key no fact has is refused.
+      Assert (Refused ("fact.Bad-Key", "x"), "a fact with no key a fact has was taken");
+      Changes.Clear;
+      Changes.Include ("fact.build_system", "make");
+      Cf.Plan_Change (Store, Changes, Planned, Status);
+      Cf.Reconfigure (Store, Planned, Revision, Status);
+      declare
+         Held : Model_Runner.Framework.Facts.Fact;
+      begin
+         Model_Runner.Framework.Facts.Find (Store, "build_system", Held, Status);
+         Assert (E.Is_Ok (Status) and then To_String (Held.Value) = "make",
+                 "a fact reconfigured left the registry saying otherwise: " & Code_Of (Status));
+      end;
       S.Close (Store);
    end Configuration_Changes_Explicitly;
 

@@ -1702,6 +1702,20 @@ package body Tests.CLI_Cases is
          Ada.Directories.Delete_Tree (Project);
       end if;
 
+      --  A file that cannot be written takes the whole project back: a
+      --  file stands where its directory must be.
+      Ada.Directories.Create_Path (Project);
+      declare
+         Blocker : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (Blocker, Ada.Text_IO.Out_File, Project & "/src");
+         Ada.Text_IO.Close (Blocker);
+      end;
+      Assert (Init ("ada-cli", "project_name=demo") /= 0
+              and then not Ada.Directories.Exists (Project & "/.model_runner"),
+              "a project whose files could not all be written was left half made");
+      Ada.Directories.Delete_Tree (Project);
+
       Assert (Init ("ada-cli", "project_name=demo") = 0,
               "a project was not initialized from a shipped template");
       Assert (Ada.Strings.Fixed.Index (Last_Output, "src/demo.adb") > 0

@@ -5,6 +5,7 @@ with Ada.Strings.Fixed;
 with Hostkit.Fs;
 
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Facts;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Records;
@@ -266,6 +267,30 @@ package body Model_Runner.Framework.Context is
          end loop;
          return To_String (Text);
       end Fields_Of;
+
+      --  The facts the registry holds that the configuration does not say
+      --  -- found by bootstrap, say -- with where they came from.
+      function Registry_Facts (Config : Records.Item) return String is
+         Text : Unbounded_String;
+      begin
+         for Key of Facts.Keys (Item) loop
+            if Records.Get (Config, "fact." & Key) = "" then
+               declare
+                  Held : Facts.Fact;
+                  Read : E.Error_Info;
+               begin
+                  Facts.Find (Item, Key, Held, Read);
+                  if E.Is_Ok (Read) then
+                     Append (Text, Key & ": " & To_String (Held.Value)
+                             & (if Length (Held.Origin) = 0 then ""
+                                else " (from " & To_String (Held.Origin) & ")")
+                             & ASCII.LF);
+                  end if;
+               end;
+            end if;
+         end loop;
+         return To_String (Text);
+      end Registry_Facts;
    begin
       Result := (Model => Model, others => <>);
       Result.Instructions := To_Unbounded_String (Instructions);
@@ -390,7 +415,8 @@ package body Model_Runner.Framework.Context is
             else Records.Get (Config, "scalar.verification.default"));
       begin
          Offer ("CONFIG@" & Image (Result.Config_Revision), "configuration", High,
-                Fields_Of (Config, "fact.") & Fields_Of (Config, "scalar.build.")
+                Fields_Of (Config, "fact.") & Registry_Facts (Config)
+                & Fields_Of (Config, "scalar.build.")
                 & Fields_Of (Config, "adapter.")
                 & (if Records.Get (Config, "profile." & Profile_Name) = "" then ""
                    else "verification: " & Records.Get (Config, "profile." & Profile_Name)
