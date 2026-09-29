@@ -2,6 +2,7 @@ with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
 
+with Hostkit.Durability;
 with Hostkit.Fs;
 
 with Model_Runner.Framework.Files;
@@ -633,6 +634,25 @@ package body Model_Runner.Framework.Stores is
         and then Delete_If_Present (Join (Journal, Manifest_File));
    end Clear_Journal;
 
+   --  Put what was written on the device, before anything that depends on
+   --  it: a commit is durable before it is exposed. A host that cannot say
+   --  whether it is goes on -- it has no better answer -- and one that
+   --  says it failed fails the step.
+   procedure Made_Durable
+     (Path      : String;
+      Directory : Boolean;
+      Status    : in out Model_Runner.Errors.Error_Info)
+   is
+      use type Hostkit.Durability.Outcome;
+      Got : constant Hostkit.Durability.Outcome :=
+        (if Directory then Hostkit.Durability.Sync_Directory (Path)
+         else Hostkit.Durability.Sync_File (Path));
+   begin
+      if E.Is_Ok (Status) and then Got = Hostkit.Durability.Failed then
+         Write_Failed (Path, Status);
+      end if;
+   end Made_Durable;
+
    -----------
    -- Stage --
    -----------
@@ -717,6 +737,8 @@ package body Model_Runner.Framework.Stores is
                   Write_Text
                     (Join (Journal, "op-" & Six (Index) & Record_Suffix),
                      Records.Serialize (Next.Value), Status);
+                  Made_Durable
+                    (Join (Journal, "op-" & Six (Index) & Record_Suffix), False, Status);
                   if E.Is_Error (Status) then
                      return;
                   end if;
@@ -742,6 +764,8 @@ package body Model_Runner.Framework.Stores is
       end if;
       Write_Text
         (Join (Journal, Pending_File), Records.Serialize (Manifest), Status);
+      Made_Durable (Join (Journal, Pending_File), False, Status);
+      Made_Durable (Journal, True, Status);
    end Stage;
 
    ----------
@@ -763,6 +787,9 @@ package body Model_Runner.Framework.Stores is
                        Join (Journal, Manifest_File))
       then
          Write_Failed (Journal, Status);
+      else
+         --  The mark itself on the device: a commit once it says so.
+         Made_Durable (Journal, True, Status);
       end if;
    end Mark;
 
@@ -877,6 +904,26 @@ package body Model_Runner.Framework.Stores is
                  Join (Journal, "op-" & Six (Op) & Record_Suffix);
             begin
                if Verb = "put" then
+                  --  What is installed is a record: a staged file cut short
+                  --  -- by a machine that went down before it was on the
+                  --  device -- is not taken for one.
+                  if Dirs.Exists (Staged) then
+                     declare
+                        Text   : Unbounded_String;
+                        Read   : E.Error_Info;
+                        Parsed : Records.Item;
+                     begin
+                        Files.Read_Text (Staged, Text, Read);
+                        if E.Is_Ok (Read) then
+                           Records.Parse (To_String (Text), Staged, Parsed, Read);
+                        end if;
+                        if E.Is_Error (Read) then
+                           Unrecoverable
+                             ("the change to " & Place_Of (Where, Name) & " is not a whole record");
+                           return;
+                        end if;
+                     end;
+                  end if;
                   if Dirs.Exists (Staged) then
                      if not Make_Directory
                               (Area_Directory (Root (Item), Where))
@@ -898,6 +945,24 @@ package body Model_Runner.Framework.Stores is
             end;
          end;
       end loop;
+
+      --  What was installed on the device before the journal that installs
+      --  it again can go: each area it went into.
+      for Op in 1 .. Count loop
+         declare
+            Line  : constant String := Records.Get (Manifest, "op." & Six (Op));
+            Where : Area;
+            Known : Boolean;
+         begin
+            Area_Of (Word (Line, 2), Where, Known);
+            if Known and then Dirs.Exists (Area_Directory (Root (Item), Where)) then
+               Made_Durable (Area_Directory (Root (Item), Where), True, Status);
+            end if;
+         end;
+      end loop;
+      if E.Is_Error (Status) then
+         return;
+      end if;
 
       --  Then the index, which is derived and so is brought up to date
       --  rather than journaled: from the changes when it can be read, and

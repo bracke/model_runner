@@ -4,6 +4,7 @@ with Ada.Environment_Variables;
 with Ada.Characters.Handling;
 with Ada.Strings.Unbounded;
 with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Records;
@@ -21,6 +22,34 @@ package body Model_Runner.Framework.Permissions is
    function Starts (Text, Prefix : String) return Boolean
    is (Text'Length >= Prefix'Length
        and then Text (Text'First .. Text'First + Prefix'Length - 1) = Prefix);
+
+   --  A path as its parts say it: separators of either kind, no empty
+   --  part and no ".", joined by "/" -- so ./src//x and src/x are one path,
+   --  and no spelling of a path reaches past a rule written another way.
+   function Normal (Path : String) return String is
+      Result : Unbounded_String;
+      Start  : Natural := Path'First;
+   begin
+      for Index in Path'First .. Path'Last + 1 loop
+         if Index > Path'Last or else Path (Index) in '/' | '\' then
+            if Index > Start and then Path (Start .. Index - 1) /= "." then
+               Append (Result, (if Result = Null_Unbounded_String then "" else "/")
+                               & Path (Start .. Index - 1));
+            end if;
+            Start := Index + 1;
+         end if;
+      end loop;
+      return To_String (Result);
+   end Normal;
+
+   --  Whether a path lies at or under another, part by part: src/parser
+   --  holds src/parser/x, and not src/parser_other.
+   function Within (Path, Prefix : String) return Boolean is
+      P : constant String := Normal (Path);
+      R : constant String := Normal (Prefix);
+   begin
+      return R = "" or else P = R or else Starts (P, R & "/");
+   end Within;
 
    ----------
    -- Word --
@@ -183,9 +212,9 @@ package body Model_Runner.Framework.Permissions is
       end if;
       for A of Left loop
          for B of Right loop
-            if Starts (A, B) and then not Result.Contains (A) then
+            if Within (A, B) and then not Result.Contains (A) then
                Result.Append (A);
-            elsif Starts (B, A) and then not Result.Contains (B) then
+            elsif Within (B, A) and then not Result.Contains (B) then
                Result.Append (B);
             end if;
          end loop;
@@ -363,11 +392,11 @@ package body Model_Runner.Framework.Permissions is
          return True;
       end if;
       for Denied of G.Deny loop
-         if Starts (Path, Denied) then
+         if Within (Path, Denied) then
             return False;
          end if;
       end loop;
-      return G.Roots.Is_Empty or else (for some Root of G.Roots => Starts (Path, Root));
+      return G.Roots.Is_Empty or else (for some Root of G.Roots => Within (Path, Root));
    end Allows;
 
    --------------
@@ -441,7 +470,11 @@ package body Model_Runner.Framework.Permissions is
    begin
       for Line of Lines_Of (Text) loop
          declare
-            Tokens : constant Name_Lists.Vector := Parts (Line, ' ');
+            --  Constraints are written "roots=A, deny=B", as Image writes
+            --  them: the comma between is no part of the value before it.
+            Tokens : constant Name_Lists.Vector :=
+              Parts (Ada.Strings.Fixed.Translate
+                       (Line, Ada.Strings.Maps.To_Mapping (",", " ")), ' ');
          begin
             for Item in Capability loop
                if not Tokens.Is_Empty and then Tokens.First_Element = Word (Item) then

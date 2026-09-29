@@ -1393,7 +1393,8 @@ package body Model_Runner.Framework.Work is
    -- Execute --
    -------------
 
-   procedure Execute
+   --  The work itself; Execute holds it to ending the task it started.
+   procedure Execute_Work
      (Item    : aliased in out Stores.Store;
       Task_Id : String;
       Runner  : Agent_Runner'Class;
@@ -2355,6 +2356,61 @@ package body Model_Runner.Framework.Work is
             Conclude ("", "", "completed");
          end if;
       end;
+   end Execute_Work;
+
+   -------------
+   -- Execute --
+   -------------
+
+   procedure Execute
+     (Item    : aliased in out Stores.Store;
+      Task_Id : String;
+      Runner  : Agent_Runner'Class;
+      Model   : Context.Model_Profile;
+      Result  : out Report;
+      Status  : out Model_Runner.Errors.Error_Info) is
+   begin
+      Execute_Work (Item, Task_Id, Runner, Model, Result, Status);
+      Execution.Watch_Lease (null);
+
+      --  Whatever way the work ended, a task it started is not left running
+      --  with nobody working it: set aside, with why, its agent ended and
+      --  what it held let go -- every path, including those no one wrote a
+      --  conclusion for.
+      declare
+         Agent : constant String := To_String (Result.Agent_Id);
+      begin
+         if Agent /= "" and then Tasks.State_Of (Item, Task_Id) = "running"
+           and then Leases.Holder (Item, Lease_Of (Task_Id)) = Agent
+         then
+            declare
+               Change : Stores.Transaction;
+               Moved  : E.Error_Info;
+               Why    : constant String :=
+                 "its work stopped: "
+                 & (if E.Is_Error (Status) then Why_Of (Status) else "it ended with no outcome");
+               Holds  : Name_Lists.Vector;
+            begin
+               Tasks.Move (Item, Change, Task_Id, "blocked", Why, Status => Moved);
+               Agent_State (Item, Change, Agent, "failed", Why);
+               Holds.Append (Lease_Of (Task_Id));
+               Holds.Append (Tasks.Project_Lease);
+               if Component_Of (Item, Task_Id) /= "" then
+                  Holds.Append (Tasks.Component_Lease (Component_Of (Item, Task_Id)));
+               end if;
+               for Held of Holds loop
+                  if E.Is_Ok (Moved) and then Leases.Holder (Item, Held) = Agent then
+                     Leases.Release (Item, Change, Held, Agent, Moved);
+                  end if;
+               end loop;
+               if E.Is_Ok (Moved) then
+                  Stores.Commit (Item, Change, Moved);
+               end if;
+               Result.Final_State := To_Unbounded_String (Tasks.State_Of (Item, Task_Id));
+               Result.Reason := To_Unbounded_String (Why);
+            end;
+         end if;
+      end;
    end Execute;
 
    -------------
@@ -2375,6 +2431,17 @@ package body Model_Runner.Framework.Work is
       Held   : E.Error_Info;
    begin
       Result := (Task_Id => To_Unbounded_String (Task_Id), others => <>);
+
+      --  Work is taken in for a task that waits for it -- in verification,
+      --  its agent done -- and not for one set aside or still being worked.
+      if Tasks.State_Of (Item, Task_Id) /= "verification" then
+         Status := E.Make (E.Framework_Transition_Invalid);
+         E.Add_Text (Status, "name", Task_Id);
+         E.Add_Text (Status, "value", Tasks.State_Of (Item, Task_Id));
+         E.Add_Text (Status, "expected", "verification");
+         E.Add_Text (Status, "detail", "only work that waits to be taken in is taken in");
+         return;
+      end if;
       if Id = "" then
          Status := E.Make (E.Framework_Not_Found);
          E.Add_Text (Status, "name", "a workspace of " & Task_Id);

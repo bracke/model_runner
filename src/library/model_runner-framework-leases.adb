@@ -96,11 +96,18 @@ package body Model_Runner.Framework.Leases is
       end if;
 
       declare
+         --  Renewed, the lease it was, so what this does not set is kept.
          Next : Records.Item :=
            Records.Create
              (Schemas.Lease_Schema, 1, "LEASE",
               (if Found then Records.Revision (Held) + 1 else 1));
       begin
+         if Found then
+            for Index in 1 .. Records.Field_Count (Held) loop
+               Records.Set (Next, Records.Field_Name (Held, Index),
+                            Records.Get (Held, Records.Field_Name (Held, Index)));
+            end loop;
+         end if;
          Records.Set (Next, "resource", Resource);
          Records.Set (Next, "owner", Owner);
          Records.Set

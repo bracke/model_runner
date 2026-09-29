@@ -7,6 +7,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Commits are durable:** each staged record, the journal, the commit
+  mark and every area written are put on the device (`Hostkit.Durability`)
+  before what depends on them; a staged record cut short is refused on
+  recovery rather than installed.
+- **Paths are judged by their parts:** `./src/x`, `src//x` and `src/x` are
+  one path to every permission, and a root holds what lies under it, not
+  what begins like it (`src/parser` is not `src/parser_other`). A
+  permission written and read back -- as an agent process is given it --
+  keeps its last root.
+- **A task work started is never left running:** whatever way the work
+  ends, a task still running under its agent is set aside, blocked, with
+  why, its agent ended and its leases let go.
+- **Work is taken in only for a task waiting for it** (in verification).
+- **The invocation limit counts calls,** not the context manifests kept
+  beside them.
+- **A renewed lease keeps the fields it does not set.**
+
 - **Template composition decides each value once every template is in:**
   the one value all give, or the one an override gives, whatever order
   they were included in; values that disagree with no override, or

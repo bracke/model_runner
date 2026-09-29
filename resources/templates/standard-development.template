@@ -34,7 +34,7 @@ map permission.kind.analysis.run_tests =
 map permission.kind.analysis.propose_tasks =
 map permission.kind.documentation.read_source =
 map permission.kind.documentation.read_specs =
-map permission.kind.documentation.write_source = roots=docs/|doc/|README
+map permission.kind.documentation.write_source = roots=docs/|doc/|README.md|README
 map permission.kind.documentation.write_specs = roots=docs/|doc/
 map permission.kind.documentation.propose_tasks =
 map permission.kind.test.read_source =

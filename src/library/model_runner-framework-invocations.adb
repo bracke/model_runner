@@ -218,7 +218,10 @@ package body Model_Runner.Framework.Invocations is
                      Held : Records.Item;
                   begin
                      Stores.Read (Item, Invocations_Area, Name, Held, Read);
-                     if E.Is_Ok (Read) and then Records.Get (Held, "task") = Task_Id
+                     --  Calls only: the context manifests kept beside them
+                     --  name the task and generation too, and are no call.
+                     if Name'Length > 4 and then Name (Name'First .. Name'First + 3) = "INV-"
+                       and then E.Is_Ok (Read) and then Records.Get (Held, "task") = Task_Id
                        and then Records.Get (Held, "generation") = Generation
                      then
                         Made := Made + 1;

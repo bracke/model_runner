@@ -610,7 +610,26 @@ package body Tests.Framework_Cases is
       --  Finishing again finds nothing to do.
       S.Finish (Store, Status);
       Assert (E.Is_Ok (Status), "finishing twice failed");
-      S.Close (Store);
+
+      --  Marked, and a record it installs cut short -- as a machine that
+      --  went down before it was on the device leaves it: not installed.
+      declare
+         Torn  : S.Transaction;
+         Value : R.Item := R.Create ("project.fact", 1, "FACT-TORN", 1);
+      begin
+         R.Set (Value, "key", "torn");
+         R.Set (Value, "value", "x");
+         R.Set (Value, "source", "explicit");
+         R.Set (Value, "confidence", "authoritative");
+         S.Put (Torn, F.Project_Area, "fact.torn", Value);
+         S.Stage (Store, Torn, Status);
+         S.Mark (Store, Status);
+         Put_File (S.Root (Store) & "/runtime/journal/op-000001.rec", "model_runner-re");
+         S.Close (Store);
+         S.Open (Store, Project, Report, Status);
+         Assert (Status.Code = E.Framework_Recovery_Required,
+                 "a record cut short was installed: " & Code_Of (Status));
+      end;
    end Committed_Change_Rolls_Forward;
 
    --  A change interrupted before it was committed is thrown away, and so
@@ -3599,6 +3618,25 @@ package body Tests.Framework_Cases is
                  and then Pm.Path_Refusal (Root, "src/new.adb", Writing => True) = ""
                  and then Pm.Path_Refusal (Root, "../x", Writing => False) /= "",
                  "an agent's path into the state or version control was allowed");
+         --  A path is judged as its parts say it, however it is spelled,
+         --  and a root holds what lies under it, not what begins like it.
+         declare
+            Rules : constant Pm.Permission_Set :=
+              Pm.Value ("write_source roots=src/|lib/parser, deny=src/security/");
+         begin
+            Assert (not Pm.Allows (Rules, Pm.Write_Source, "./src/security/x.adb")
+                    and then not Pm.Allows (Rules, Pm.Write_Source, "src//security/x.adb")
+                    and then not Pm.Allows (Rules, Pm.Write_Source, "src/./security/x.adb")
+                    and then Pm.Allows (Rules, Pm.Write_Source, "./src/main.adb")
+                    and then Pm.Allows (Rules, Pm.Write_Source, "lib/parser/x.adb")
+                    and then not Pm.Allows (Rules, Pm.Write_Source, "lib/parser_other/x.adb"),
+                    "a path spelled otherwise reached past its rule");
+            --  Written and read back, as an agent process is given them.
+            Assert (Pm.Allows (Pm.Value (Pm.Image (Rules)), Pm.Write_Source, "lib/parser/x.adb")
+                    and then not Pm.Allows (Pm.Value (Pm.Image (Rules)), Pm.Write_Source,
+                                            "src/security/x.adb"),
+                    "a permission written and read back was not the same: " & Pm.Image (Rules));
+         end;
          Assert (Pm.Path_Refusal (Root, "src/new.adb", True, Pm.Value ("write_source roots=docs/"))
                  = "you may not write src/new.adb",
                  "the grants did not narrow what may be written");
@@ -5019,6 +5057,16 @@ package body Tests.Framework_Cases is
       Assert (Status.Code = E.Framework_Integration_Refused,
               "work was taken in without the right to integrate");
 
+      declare
+         Other : Unbounded_String;
+         Taken : Wk.Report;
+      begin
+         Tk.Create (Store, Change, Fields ("Not waiting", "analysis"), "user", "", Other, Status);
+         S.Commit (Store, Change, Status);
+         Wk.Take_In (Store, To_String (Other), Taken, Status);
+         Assert (Status.Code = E.Framework_Transition_Invalid,
+                 "work was taken in for a task not waiting for it: " & Code_Of (Status));
+      end;
       Wk.Take_In (Store, To_String (Id), Done, Status);
       Assert (E.Is_Ok (Status) and then To_String (Done.Final_State) = "complete"
               and then Dirs.Exists (Fresh_Root (Store) & "/src/hello.adb"),
@@ -8459,6 +8507,37 @@ package body Tests.Framework_Cases is
       Assert (To_String (Done.Final_State) = "complete",
               "a child run again past its failed child did not let the task complete: "
               & To_String (Done.Reason));
+      S.Close (Store);
+
+      --  Stopped where nothing concludes it -- its prompt cannot be written --
+      --  a task is still not left running.
+      Task_Project (Store, "unwritable-prompt", Checks);
+      if Dirs.Exists (S.Root (Store) & "/runtime/exec") then
+         Remove_Tree (S.Root (Store) & "/runtime/exec");
+      end if;
+      Put_File (S.Root (Store) & "/runtime/exec", "not a directory");
+      declare
+         Id : Unbounded_String;
+      begin
+         Tk.Create (Store, Change, Fields ("Nowhere to write", "analysis"), "user", "", Id, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Wk.Execute (Store, To_String (Id), Scripted_Parent'(Plan => Helped),
+                     Cx.Profile (Store, ""), Done, Status);
+         Assert (Tk.State_Of (Store, To_String (Id)) = "blocked"
+                 and then Contains (To_String (Done.Reason), "its work stopped"),
+                 "work that stopped with no conclusion left its task "
+                 & Tk.State_Of (Store, To_String (Id)));
+      end;
+      S.Close (Store);
+
+      --  Two calls allowed: the root's and its helper's -- the context kept
+      --  beside a call is no call of its own.
+      Task_Project (Store, "two-invocations", Checks & "scalar agents.max_invocations = 2" & LF);
+      Work (Helped);
+      Assert (To_String (Done.Final_State) = "complete",
+              "a helper within the calls allowed was refused: " & To_String (Done.Reason));
       S.Close (Store);
 
       --  No invocation left for a helper: it is not made, and the work goes on.
