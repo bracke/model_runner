@@ -1069,7 +1069,7 @@ package body Model_Runner.Framework.Verification is
                Open : Unbounded_String;
             begin
                for Child of Tasks.Children (Item, Task_Id) loop
-                  if Tasks.State_Of (Item, Child) not in "complete" | "cancelled" then
+                  if Tasks.State_Of (Item, Child) not in "complete" | "cancelled" | "rejected" then
                      Append (Open, (if Open = Null_Unbounded_String then "" else ", ") & Child);
                   end if;
                end loop;
@@ -1194,16 +1194,33 @@ package body Model_Runner.Framework.Verification is
          return;
       end if;
 
-      --  The requirements it served are implemented now; whether they are
-      --  verified is worked out from evidence, not from this.
+      --  The requirements it served are implemented once every task serving
+      --  them is complete -- this one now; whether they are verified is
+      --  worked out from evidence, not from this.
       Tasks.Definition (Item, Task_Id, Defined, Status);
       for Requirement of Lines_Of (Records.Get (Defined, "requirements")) loop
          declare
             Held : Intent.Entity;
             Read : E.Error_Info;
+            Open : Boolean := False;
          begin
+            for Other of Tasks.List (Item) loop
+               if Other /= Task_Id
+                 and then Tasks.State_Of (Item, Other) not in "complete" | "cancelled" | "rejected"
+               then
+                  declare
+                     Its : Records.Item;
+                     Got : E.Error_Info;
+                  begin
+                     Tasks.Definition (Item, Other, Its, Got);
+                     Open := Open or else
+                       (E.Is_Ok (Got)
+                        and then Lines_Of (Records.Get (Its, "requirements")).Contains (Requirement));
+                  end;
+               end if;
+            end loop;
             Intent.Read (Item, Intent.Requirement, Requirement, Held, Read);
-            if E.Is_Ok (Read) and then To_String (Held.State) = "accepted" then
+            if E.Is_Ok (Read) and then To_String (Held.State) = "accepted" and then not Open then
                Intent.Move (Item, Change, Intent.Requirement, Requirement, "implemented",
                             Transitions.Ordinary_Only, Status);
                if E.Is_Error (Status) then

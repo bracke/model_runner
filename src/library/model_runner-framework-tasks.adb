@@ -256,6 +256,11 @@ package body Model_Runner.Framework.Tasks is
       Value  : Records.Item;
       Staged : Boolean;
    begin
+      --  A task by its identifier: a kept revision or a runtime record
+      --  beside it has a name, not an identifier.
+      if not Identifiers.Is_Valid (Id) then
+         return False;
+      end if;
       Stores.Pending (Change, Tasks_Area, Id, Value, Staged);
       return Staged or else Stores.Exists (Item, Tasks_Area, Id);
    end Task_Exists;
@@ -460,7 +465,9 @@ package body Model_Runner.Framework.Tasks is
       --  A requirement or a component the project does not have is a
       --  value its field does not take: a form asks for it again.
       for Requirement of Split (Given ("requirements")) loop
-         if not Stores.Exists (Item, Requirements_Area, Requirement) then
+         if not Identifiers.Is_Valid (Requirement)
+                       or else not Stores.Exists (Item, Requirements_Area, Requirement)
+                     then
             Status := E.Make (E.Framework_Schema_Violation);
             E.Add_Text (Status, "name", "requirements");
             E.Add_Text (Status, "detail", Requirement & " is not one of the project's requirements");
@@ -772,7 +779,9 @@ package body Model_Runner.Framework.Tasks is
             Intent.Read (Item, Intent.Requirement, Requirement, Held, Status);
             if E.Is_Error (Status) then
                Result.Reasons.Append (Requirement & " is not there");
-            elsif To_String (Held.State) in "obsolete" | "rejected" | "candidate"
+            --  Work goes on only for what is agreed: blocked, and any state a
+            --  project adds of its own, holds it as much as rejected does.
+            elsif To_String (Held.State) not in "accepted" | "implemented" | "verified"
             then
                Result.Reasons.Append
                  (Requirement & " is " & To_String (Held.State));
@@ -842,7 +851,7 @@ package body Model_Runner.Framework.Tasks is
                          (Records.Get (Value, "blocking_reasons"),
                           Children_Reason) = 1
               and then (for all Child of Children (Item, Id) =>
-                          State_Of (Item, Child) in "complete" | "cancelled")
+                          State_Of (Item, Child) in "complete" | "cancelled" | "rejected")
             then
                Move (Item, Change, Id, "accepted", "its children are done",
                      Status => Status);
@@ -1567,7 +1576,9 @@ package body Model_Runner.Framework.Tasks is
                   return;
                elsif Name = "requirements" then
                   for Requirement of Split (Given) loop
-                     if not Stores.Exists (Item, Requirements_Area, Requirement) then
+                     if not Identifiers.Is_Valid (Requirement)
+                       or else not Stores.Exists (Item, Requirements_Area, Requirement)
+                     then
                         Status := E.Make (E.Framework_Schema_Violation);
                         E.Add_Text (Status, "name", "requirements");
                         E.Add_Text (Status, "detail",

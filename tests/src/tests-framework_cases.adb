@@ -6451,6 +6451,27 @@ package body Tests.Framework_Cases is
          Assert (E.Is_Ok (Status) and then Tk.State_Of (Store, To_String (Early)) = "blocked",
                  "a candidate split and then accepted did not wait on its parts: "
                  & Tk.State_Of (Store, To_String (Early)) & " " & Code_Of (Status));
+
+         --  Its parts turned down, it goes back to work, and they hold
+         --  nothing of its completion.
+         declare
+            Became : Model_Runner.Framework.Name_Lists.Vector;
+            Judged : Vf.Gate_List;
+         begin
+            for Part of Made loop
+               Tk.Move (Store, Change, Part, "rejected", "", Status => Status);
+            end loop;
+            S.Commit (Store, Change, Status);
+            Tk.Recompute_Readiness (Store, Change, Became, Status);
+            S.Commit (Store, Change, Status);
+            Judged := Vf.Gates (Store, To_String (Early));
+            Assert (Tk.State_Of (Store, To_String (Early)) = "accepted"
+                    and then (for all Index in 1 .. Vf.Length (Judged) =>
+                                To_String (Vf.Element (Judged, Index).Name) /= "children"
+                                or else Vf.Element (Judged, Index).Passed),
+                    "a parent whose parts were rejected still waits on them: "
+                    & Tk.State_Of (Store, To_String (Early)));
+         end;
       end;
 
       --  Unless its kind lets it coordinate.
@@ -6658,6 +6679,82 @@ package body Tests.Framework_Cases is
               "evidence for some tests stayed current over a change nothing can trace");
       S.Close (Store);
    end Verification_Follows_What_Changed;
+
+   --  A task is ready only while what it serves is agreed; it names only
+   --  tasks and requirements, not records beside them; and a requirement
+   --  is implemented once every task serving it is complete.
+   procedure Readiness_Follows_What_Is_Served
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Req    : Unbounded_String;
+      First, Second, Other : Unbounded_String;
+      Held   : Nt.Entity;
+      Evidence : Unbounded_String;
+      Passed : Boolean;
+
+      function Serving (Title : String) return Tk.Field_Map is
+         Given : Tk.Field_Map := Fields (Title, "analysis");
+      begin
+         Given.Include ("requirements", To_String (Req));
+         return Given;
+      end Serving;
+   begin
+      Task_Project
+        (Store, "readiness-served",
+         "set execution.allowed = echo" & LF
+         & "profile passing = say: echo all good" & LF
+         & "scalar verification.default = passing" & LF);
+      Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.", "",
+                  "user", "", "io", Req, Status);
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted",
+               Tr.Ordinary_Only, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Create (Store, Change, Serving ("One"), "user", "", First, Status);
+      Tk.Create (Store, Change, Serving ("Two"), "user", "", Second, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (First), "accepted", "", Status => Status);
+      Tk.Move (Store, Change, To_String (Second), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Assert (Tk.Ready (Store, To_String (First)).Ready, "a task serving an accepted requirement waits");
+
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "blocked", Tr.Ordinary_Only, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then not Tk.Ready (Store, To_String (First)).Ready,
+              "a task serving a blocked requirement was ready: " & Code_Of (Status));
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted", Tr.Ordinary_Only, Status);
+      S.Commit (Store, Change, Status);
+
+      --  A record beside a task or a requirement is neither.
+      Tk.Create (Store, Change, Fields ("Waits", "analysis", "depends_on",
+                                        To_String (First) & ".state"),
+                 "user", "", Other, Status);
+      Assert (E.Is_Error (Status), "a task was made to wait on a runtime record");
+      Change := S.No_Changes;
+      Tk.Create (Store, Change, Fields ("Serves", "analysis", "requirements",
+                                        To_String (Req) & ".rev-000001"),
+                 "user", "", Other, Status);
+      Assert (E.Is_Error (Status), "a task was made to serve a kept revision");
+      Change := S.No_Changes;
+
+      --  One of two tasks done: the requirement is not implemented yet.
+      Tk.Move (Store, Change, To_String (First), "running", "", Status => Status);
+      Tk.Move (Store, Change, To_String (First), "verification", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Vf.Run_Profile (Store, Change, "passing", To_String (First), Evidence, Passed, Status);
+      S.Commit (Store, Change, Status);
+      Vf.Complete_Task (Store, Change, To_String (First), Status);
+      S.Commit (Store, Change, Status);
+      Nt.Read (Store, Nt.Requirement, To_String (Req), Held, Status);
+      Assert (Tk.State_Of (Store, To_String (First)) = "complete"
+              and then To_String (Held.State) = "accepted",
+              "a requirement was implemented with a task serving it still open: "
+              & To_String (Held.State));
+      S.Close (Store);
+   end Readiness_Follows_What_Is_Served;
 
    --  The project's state is the harness's: an agent run as a process of
    --  its own that writes it, and checks that do, find it put back and
@@ -7362,6 +7459,9 @@ package body Tests.Framework_Cases is
             Model_Runner.CLI.Project_Commands.Run ("/task " & To_String (First), Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/task nonsense", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/req new Stars counted", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/req new Other thing", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/accept REQ-002", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/accept REQ-404", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/req show REQ-001", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/req move REQ-001 accepted", Screen, Agent);
             Set_Output (Standard_Output);
@@ -7373,7 +7473,8 @@ package body Tests.Framework_Cases is
                Assert (Ada.Strings.Fixed.Index (Text, "runtime.state") > 0
                        and then Ada.Strings.Fixed.Index (Text, "nonsense") > 0
                        and then Ada.Strings.Fixed.Index (Text, "Stars counted") > 0
-                       and then Ada.Strings.Fixed.Index (Text, "moved from") > 0,
+                       and then Ada.Strings.Fixed.Index (Text, "moved from") > 0
+                       and then Ada.Strings.Fixed.Index (Text, "a proposal REQ-404") > 0,
                        "/task ID, an unknown /task action or /req show said nothing: " & Text);
             end;
          exception
@@ -7388,6 +7489,13 @@ package body Tests.Framework_Cases is
          when others =>
             Dirs.Set_Directory (Before);
             raise;
+      end;
+      declare
+         Held : Nt.Entity;
+      begin
+         Nt.Read (Store, Nt.Requirement, "REQ-002", Held, Status);
+         Assert (To_String (Held.State) = "accepted",
+                 "/accept ID did not decide the one it names: " & To_String (Held.State));
       end;
       Assert (Tk.State_Of (Store, To_String (First)) = "complete",
               "/work by identifier did not run the task: " & Tk.State_Of (Store, To_String (First)));
@@ -7862,6 +7970,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Verification_Follows_What_Changed'Access,
          "how widely work is verified follows what it changed and the policy");
+      Register_Routine
+        (T, Readiness_Follows_What_Is_Served'Access,
+         "a task is ready only while what it serves is agreed, and names only what is there");
       Register_Routine
         (T, State_Is_The_Harness_Own'Access,
          "the project's state is put back after an agent or a check writes it");

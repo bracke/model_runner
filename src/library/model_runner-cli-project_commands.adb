@@ -1235,6 +1235,30 @@ package body Model_Runner.CLI.Project_Commands is
          Listed  : Unbounded_String;
       begin
          Waiting.Append (Intent_Waiting);
+
+         --  One named: that one, and only if it waits to be decided.
+         if Argument (1) /= "" then
+            if Tasks_Waiting.Contains (Argument (1)) then
+               Command.Action := T.To_Bounded (if Word = "/accept" then "accept" else "reject");
+               Command.Action_Argument := T.To_Bounded (Argument (1));
+               Command.Kind := Opt.Command_Task;
+               return;
+            end if;
+            for Which of Intent_Waiting loop
+               if Which (Ada.Strings.Fixed.Index (Which, ":") + 1 .. Which'Last) = Argument (1) then
+                  Model_Runner.CLI.Intents.Decide (Store, Which, Word = "/accept", Screen);
+                  return;
+               end if;
+            end loop;
+            declare
+               Missing : E.Error_Info := E.Make (E.Framework_Not_Found);
+            begin
+               E.Add_Text (Missing, "name", "a proposal " & Argument (1));
+               Pres.Report (Screen, Missing);
+            end;
+            return;
+         end if;
+
          if Waiting.Is_Empty then
             Pres.Put_Note (Screen, "cli.project.no_pending");
          elsif Natural (Waiting.Length) > 1 then

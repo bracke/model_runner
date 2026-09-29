@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A rejected child counts as done:** its parent goes back to work and
+  passes its `children` gate.
+- **A task is ready only while its requirements are accepted, implemented
+  or verified** -- a blocked one, or a project state of its own, holds it.
+- **`/accept ID` and `/reject ID` decide the one named,** and say so when
+  it is not a pending proposal.
+- **Tasks and requirements are named by identifier:** a runtime record or
+  kept revision beside one (`TASK-1.state`, `REQ-X.rev-000001`) is refused.
+- **A requirement is implemented once every task serving it is complete,**
+  not the first.
+
 - **A task split while a candidate waits on its parts once accepted,** as
   one split after acceptance does, unless its kind coordinates.
 - **`init --format json` gives each missing input an entry of its own.**
