@@ -160,24 +160,37 @@ package body Model_Runner.Framework.Consistency is
 
       --  Statements that disagree with what governs their subject, and do
       --  not say they override it.
+      --  Within the project, and within each component: statements for
+      --  two components do not meet.
       declare
          use type Authority.Relation;
-         Resolved : constant Authority.Resolution :=
-           Authority.Resolve (Authority.Gather (Item));
+         Scopes : Name_Lists.Vector := Tasks.Components (Item);
+         Said   : Name_Lists.Vector;
       begin
-         for Index in 1 .. Authority.Length (Resolved) loop
+         Scopes.Prepend ("");
+         for Scope of Scopes loop
             declare
-               Standing : constant Authority.Standing_Of :=
-                 Authority.Element (Resolved, Index);
+               Resolved : constant Authority.Resolution :=
+                 Authority.Resolve (Authority.Gather (Item, Scope));
             begin
-               if Standing.Relation = Authority.Conflict then
-                  Found (Conflicting_Authority,
-                         To_String (Standing.Governing.Subject),
-                         To_String (Standing.Governing.Source) & " says "
-                         & To_String (Standing.Governing.Value) & " and "
-                         & To_String (Standing.Other.Source) & " says "
-                         & To_String (Standing.Other.Value));
-               end if;
+               for Index in 1 .. Authority.Length (Resolved) loop
+                  declare
+                     Standing : constant Authority.Standing_Of :=
+                       Authority.Element (Resolved, Index);
+                     Line : constant String :=
+                       To_String (Standing.Governing.Source) & " says "
+                       & To_String (Standing.Governing.Value) & " and "
+                       & To_String (Standing.Other.Source) & " says "
+                       & To_String (Standing.Other.Value);
+                  begin
+                     if Standing.Relation = Authority.Conflict and then not Said.Contains (Line)
+                     then
+                        Said.Append (Line);
+                        Found (Conflicting_Authority, To_String (Standing.Governing.Subject),
+                               Line);
+                     end if;
+                  end;
+               end loop;
             end;
          end loop;
       end;

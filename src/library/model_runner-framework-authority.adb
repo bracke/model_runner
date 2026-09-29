@@ -136,7 +136,7 @@ package body Model_Runner.Framework.Authority is
    -- Gather --
    ------------
 
-   function Gather (Item : Stores.Store) return Statement_List is
+   function Gather (Item : Stores.Store; Component : String := "") return Statement_List is
       Result : Statement_List;
 
       procedure From_Register
@@ -151,7 +151,11 @@ package body Model_Runner.Framework.Authority is
                Status : E.Error_Info;
             begin
                Stores.Read (Item, Where, Name, Held, Status);
+               --  The project's, and the component's own; one scoped to
+               --  another component governs nothing here.
                if E.Is_Ok (Status) and then Records.Get (Held, "governs") /= ""
+                 and then (Records.Get (Held, "scope") in "" | "project"
+                           or else (Component /= "" and then Records.Get (Held, "scope") = Component))
                then
                   Append
                     (Result,

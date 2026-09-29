@@ -474,8 +474,8 @@ package body Model_Runner.Framework.Tasks is
       --  value its field does not take: a form asks for it again.
       for Requirement of Split (Given ("requirements")) loop
          if not Identifiers.Is_Valid (Requirement)
-                       or else not Stores.Exists (Item, Requirements_Area, Requirement)
-                     then
+           or else not Stores.Exists (Item, Requirements_Area, Requirement)
+         then
             Status := E.Make (E.Framework_Schema_Violation);
             E.Add_Text (Status, "name", "requirements");
             E.Add_Text (Status, "detail", Requirement & " is not one of the project's requirements");
@@ -1108,7 +1108,7 @@ package body Model_Runner.Framework.Tasks is
          use type Authority.Level;
          use type Authority.Relation;
          Resolved : constant Authority.Resolution :=
-           Authority.Resolve (Authority.Gather (Item));
+           Authority.Resolve (Authority.Gather (Item, Records.Get (Defined, "component")));
          function Word (Standing : Authority.Level) return String
          is (Ada.Characters.Handling.To_Lower (Authority.Level'Image (Standing)));
       begin

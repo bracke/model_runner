@@ -7,6 +7,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A decision or specification scoped to a component governs that
+  component's work alone,** and two for different components are no
+  conflict; conflicts are found within the project and each component.
+- **The AUnit template's tests are run:** it makes a tests crate with a
+  runner whose exit status is the result, and its profile fetches the
+  crate's dependencies and runs it, required.
+- **An existing repository is checked by what it is built with:** the
+  generic template finds the check command from the build system (Alire,
+  Make, CMake, Cargo, npm, Python) or asks for it, and verifies by it.
+
 - **The root agent is held to its token budget:** the session's root runs
   with what its budget leaves as its cap, and a root that goes over is set
   aside -- blocked -- as its children are.

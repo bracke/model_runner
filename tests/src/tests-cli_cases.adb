@@ -1762,9 +1762,20 @@ package body Tests.CLI_Cases is
       Assert (Init ("generic", "") = 2
               and then not Ada.Directories.Exists (Project & "/.model_runner"),
               "a project whose policy wants confirmation was made unconfirmed");
+      --  An existing repository is checked by what its build system is.
+      Ada.Directories.Create_Path (Project);
+      declare
+         Build : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (Build, Ada.Text_IO.Out_File, Project & "/Makefile");
+         Ada.Text_IO.Close (Build);
+      end;
       Assert (Init ("generic", "confirm=yes") = 0
               and then Ada.Directories.Exists (Project & "/.model_runner/indexes/tasks.rec"),
               "a confirmed project was not made, or without its indexes: " & Last_Output);
+      Assert (Ada.Strings.Fixed.Index
+                (Text_Of (Project & "/.model_runner/config/resolved.rec"), "make check") > 0,
+              "an existing repository's build system did not give it its checks");
       Ada.Directories.Delete_Tree (Project);
    end Init_Starts_A_Project;
 
@@ -1877,6 +1888,10 @@ package body Tests.CLI_Cases is
          Add (Source, Project);
          Add (Source, "--set");
          Add (Source, "confirm=yes");
+         Add (Source, "--set");
+         Add (Source, "check_command=true");
+         Add (Source, "--set");
+         Add (Source, "check_program=true");
          Ran (Source, Status);
          Assert (Status = 0, "a project for tasks was not made");
       end;

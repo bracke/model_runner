@@ -25,3 +25,35 @@ discover CMakeLists.txt fact build_system = CMake
 discover Cargo.toml fact build_system = Cargo
 discover package.json fact build_system = npm
 discover pyproject.toml fact build_system = Python
+
+# How the repository is checked: found from its build system where there is
+# one, asked for where there is not. Its program is the one checks may run.
+input check_command
+  type = text
+  label = Check command
+  description = the command that builds and tests the repository
+  required = true
+
+input check_program
+  type = text
+  label = Check program
+  description = the program that command runs, which checks may run
+  required = true
+
+discover alire.toml input check_command = alr build
+discover alire.toml input check_program = alr
+discover Makefile input check_command = make check
+discover Makefile input check_program = make
+discover CMakeLists.txt input check_command = ctest --test-dir build
+discover CMakeLists.txt input check_program = ctest
+discover Cargo.toml input check_command = cargo test
+discover Cargo.toml input check_program = cargo
+discover package.json input check_command = npm test
+discover package.json input check_program = npm
+discover pyproject.toml input check_command = python3 -m pytest
+discover pyproject.toml input check_program = python3
+
+profile checks = check: ${check_command}
+scalar profile_capability.checks = run_tests
+scalar verification.default = checks
+set execution.allowed = ${check_program}

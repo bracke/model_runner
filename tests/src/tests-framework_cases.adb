@@ -6492,6 +6492,50 @@ package body Tests.Framework_Cases is
               "a task was revised to an unlisted component");
       Change := S.No_Changes;
 
+      --  A decision for one component governs that component's work, not
+      --  another's, and two for different components do not conflict.
+      declare
+         For_Lexer, For_Parser : Unbounded_String;
+         View     : R.Item;
+         Clash    : Boolean := False;
+         use type Model_Runner.Framework.Consistency.Finding_Kind;
+      begin
+         Nt.Propose (Store, Change, Nt.Decision, "", "Lexer isolated", "Apart.", "",
+                     "user", "", "lexer", For_Lexer, Status);
+         Nt.Propose (Store, Change, Nt.Decision, "", "Parser in place", "In place.", "",
+                     "user", "", "parser", For_Parser, Status);
+         S.Commit (Store, Change, Status);
+         for Dec of Model_Runner.Framework.Name_Lists.Vector'([To_String (For_Lexer),
+                                                              To_String (For_Parser)])
+         loop
+            Nt.Move (Store, Change, Nt.Decision, Dec, "accepted", Tr.Ordinary_Only, Status);
+         end loop;
+         S.Commit (Store, Change, Status);
+         Nt.Govern (Store, Change, Nt.Decision, To_String (For_Lexer), "scalar.work.isolation",
+                    "workspace", "", Status);
+         Nt.Govern (Store, Change, Nt.Decision, To_String (For_Parser), "scalar.work.isolation",
+                    "project", "", Status);
+         S.Commit (Store, Change, Status);
+         Tk.Effective (Store, To_String (Id), View, Status);
+         declare
+            Findings : constant Model_Runner.Framework.Consistency.Finding_List :=
+              Model_Runner.Framework.Consistency.Check (Store);
+         begin
+            for Index in 1 .. Model_Runner.Framework.Consistency.Length (Findings) loop
+               Clash := Clash
+                 or else Model_Runner.Framework.Consistency.Element (Findings, Index).Kind
+                           = Model_Runner.Framework.Consistency.Conflicting_Authority;
+            end loop;
+         end;
+         Assert (Ada.Strings.Fixed.Index (R.Get (View, "authority.scalar.work.isolation"),
+                                          To_String (For_Lexer)) > 0
+                 and then Ada.Strings.Fixed.Index (R.Get (View, "authority.scalar.work.isolation"),
+                                                   To_String (For_Parser)) = 0
+                 and then not Clash,
+                 "a component's decision governed another's work, or clashed with it: "
+                 & R.Get (View, "authority.scalar.work.isolation"));
+      end;
+
       --  Checks, evidence, events.
       Ada.Environment_Variables.Set ("MR_EVIDENCE_PROBE", "one");
       Vf.Run_Profile (Store, Change, "careful", "", Evidence, Passed, Status);

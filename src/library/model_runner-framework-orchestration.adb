@@ -307,17 +307,31 @@ package body Model_Runner.Framework.Orchestration is
             Result.Append (Id & ": blocked, " & Records.Get (Value, "blocking_reasons"));
          end;
       end loop;
+      --  Within the project, and within each component.
       declare
          use type Authority.Relation;
-         Resolved : constant Authority.Resolution :=
-           Authority.Resolve (Authority.Gather (Item));
+         Scopes : Name_Lists.Vector := Tasks.Components (Item);
       begin
-         for Index in 1 .. Authority.Length (Resolved) loop
-            if Authority.Element (Resolved, Index).Relation = Authority.Conflict then
-               Result.Append
-                 (To_String (Authority.Element (Resolved, Index).Governing.Subject)
-                  & ": a conflict of authority to resolve");
-            end if;
+         Scopes.Prepend ("");
+         for Scope of Scopes loop
+            declare
+               Resolved : constant Authority.Resolution :=
+                 Authority.Resolve (Authority.Gather (Item, Scope));
+            begin
+               for Index in 1 .. Authority.Length (Resolved) loop
+                  if Authority.Element (Resolved, Index).Relation = Authority.Conflict then
+                     declare
+                        Line : constant String :=
+                          To_String (Authority.Element (Resolved, Index).Governing.Subject)
+                          & ": a conflict of authority to resolve";
+                     begin
+                        if not Result.Contains (Line) then
+                           Result.Append (Line);
+                        end if;
+                     end;
+                  end if;
+               end loop;
+            end;
          end loop;
       end;
       return Result;

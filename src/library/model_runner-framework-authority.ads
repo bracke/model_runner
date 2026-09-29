@@ -121,8 +121,11 @@ package Model_Runner.Framework.Authority is
    --  resolved configuration's settings and the baselines.
    --
    --  @param Item The store.
+   --  @param Component The component the statements are for: a decision or
+   --    specification scoped to another is not among them; "" for the
+   --    project's alone.
    --  @return The statements.
-   function Gather (Item : Stores.Store) return Statement_List;
+   function Gather (Item : Stores.Store; Component : String := "") return Statement_List;
 
    --  Resolve statements.
    --
