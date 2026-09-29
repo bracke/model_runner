@@ -8,6 +8,7 @@ with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Traceability;
+with Model_Runner.Framework.Work;
 with Model_Runner.Localization;
 with Model_Runner.Text;
 
@@ -38,6 +39,13 @@ package body Model_Runner.CLI.Repo is
       if S.Is_Initialized (Directory) then
          S.Open (Store, Directory, Report, Outcome);
          if E.Is_Ok (Outcome) then
+            --  What an interruption left is put right on opening, as every
+            --  command that opens a project does.
+            declare
+               Said : Model_Runner.Framework.Name_Lists.Vector;
+            begin
+               Model_Runner.Framework.Work.Recover_On_Opening (Store, Report, Said, Outcome);
+            end;
             Result := Rp.Roots_Of (Store);
          end if;
          S.Close (Store);

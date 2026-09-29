@@ -759,6 +759,17 @@ package body Model_Runner.CLI.Tasks is
          return;
       end if;
 
+      --  What an interruption left is put right first, and said.
+      declare
+         Said : Model_Runner.Framework.Name_Lists.Vector;
+      begin
+         Model_Runner.Framework.Work.Recover_On_Opening (Store, Report, Said, Outcome);
+         for Line of Said loop
+            Pres.Put_Note (Screen, "cli.project.recovered", [Loc.Named ("detail", Line)]);
+         end loop;
+         Outcome := E.Success;
+      end;
+
       if Action = "list" then
          Show_List;
       elsif Action = "new" then

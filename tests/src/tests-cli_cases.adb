@@ -1580,6 +1580,8 @@ package body Tests.CLI_Cases is
 
       --  Least privilege by kind, and work that changes code done only
       --  when it changed something.
+      Assert (Command ("task|new|Elsewhere|--set|kind=implementation|--set|component=nowhere") /= 0,
+              "a task named a component the project does not have");
       Assert (Command ("task|show|TASK-001") = 0
               and then Shows ("permissions: read_source; read_specs; run_build; run_tests;"
                               & " propose_tasks")

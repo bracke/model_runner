@@ -1380,8 +1380,13 @@ package body Model_Runner.Framework.Tasks is
    begin
       Configurations.Read (Item, Settings, Status);
       declare
-         Listed : constant Name_Lists.Vector := Split (Records.Get (Settings, "set.components"));
+         Listed : Name_Lists.Vector := Split (Records.Get (Settings, "set.components"));
       begin
+         --  A project that lists no components is one: the project itself,
+         --  by its name.
+         if Listed.Is_Empty and then Records.Get (Settings, "input.project_name") /= "" then
+            Listed.Append (Records.Get (Settings, "input.project_name"));
+         end if;
          if Component = "" or else Listed.Is_Empty or else Listed.Contains (Component) then
             return "";
          end if;

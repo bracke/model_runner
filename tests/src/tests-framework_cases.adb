@@ -2220,6 +2220,18 @@ package body Tests.Framework_Cases is
          Model_Runner.Framework.Facts.Find (Store, "vcs", Held, Status);
          Assert (To_String (Held.Value) = "git" and then To_String (Held.Origin) = "docs/build.md",
                  "a document's fact does not say where it came from");
+         declare
+            Reports : Natural := 0;
+            Stored  : R.Item;
+         begin
+            for Name of S.Names (Store, Model_Runner.Framework.Results_Area) loop
+               S.Read (Store, Model_Runner.Framework.Results_Area, Name, Stored, Status);
+               if R.Get (Stored, "result_type") = "bootstrap_report" then
+                  Reports := Reports + 1;
+               end if;
+            end loop;
+            Assert (Reports > 0, "bootstrap kept no report of what it did");
+         end;
       end;
       S.Close (Store);
    end Bootstrap_Is_Repeatable;
@@ -3164,6 +3176,19 @@ package body Tests.Framework_Cases is
                                       Hostkit.Descriptors.Transfer_Ok)
               and then Last >= Buffer'First,
               "task new drew nothing on a terminal");
+      --  What it says first may come before the chooser: wait, reading,
+      --  until the terminal is raw.
+      for Try in 1 .. 30 loop
+         exit when Hostkit.Terminal_Control.Save_Mode (Pair.To_Child, During)
+           and then Hostkit.Terminal_Control.Differences.First_Difference
+                      (Before, During, Was, Became) /= 0;
+         if Hostkit.Descriptors.Wait_Readable (Pair.From_Child, 100) then
+            Last := Buffer'First - 1;
+            exit when Hostkit.Descriptors."/="
+                        (Hostkit.Descriptors.Read (Pair.From_Child, Buffer, Last),
+                         Hostkit.Descriptors.Transfer_Ok);
+         end if;
+      end loop;
       Assert (Hostkit.Terminal_Control.Save_Mode (Pair.To_Child, During)
               and then Hostkit.Terminal_Control.Differences.First_Difference
                          (Before, During, Was, Became) /= 0,
@@ -4756,6 +4781,19 @@ package body Tests.Framework_Cases is
               and then Dirs.Exists (Fresh_Root (Store) & "/src/hello.adb"),
               "taken in and verified on the project, the task did not complete: "
               & Code_Of (Status) & " " & To_String (Done.Reason));
+      declare
+         Runtime_Value : R.Item;
+         Report_Held   : Model_Runner.Framework.Results.Result;
+      begin
+         S.Read (Store, Model_Runner.Framework.Tasks_Area, To_String (Id) & ".state",
+                 Runtime_Value, Status);
+         Model_Runner.Framework.Results.Read
+           (Store, R.Get (Runtime_Value, "integration_report"), Report_Held, Status);
+         Assert (R.Get (Runtime_Value, "current_verification") /= ""
+                 and then E.Is_Ok (Status)
+                 and then Ada.Strings.Fixed.Index (To_String (Report_Held.Payload), "src/hello.adb") > 0,
+                 "work taken in by hand left no verification or integration report behind");
+      end;
 
       --  A second workspace, changed where the project changes too.
       Ws.Create (Store, Change, To_String (Other), "AG-TEST", "1", False, Made, Status);

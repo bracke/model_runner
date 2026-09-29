@@ -7,6 +7,12 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Every command that opens a project recovers it first:** `task` and
+  `repo` from the shell too, not only the session and `work`.
+- **A project that lists no components is one component,** the project
+  itself by its name; a task naming another is refused.
+- **Bootstrap keeps a report** of what it was given and what it made, found
+  and raised, as a result.
 - **Least privilege by kind, and code work must change something.** The
   standard template narrows analysis to reading and checking, documentation
   to writing documents, and tests to writing tests, and gives implementation

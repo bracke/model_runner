@@ -17,6 +17,9 @@ package body Model_Runner.Framework.Bootstrap is
 
    package E renames Model_Runner.Errors;
 
+   function Image (Value : Natural) return String
+   is (Ada.Strings.Fixed.Trim (Natural'Image (Value), Ada.Strings.Both));
+
    ------------
    -- Append --
    ------------
@@ -467,6 +470,26 @@ package body Model_Runner.Framework.Bootstrap is
          end;
          <<Next_Output>>
       end loop;
+
+      --  What it did, kept as a result: each output it was given, and how
+      --  many it made, found there already, and raised as issues.
+      declare
+         Listed : Unbounded_String;
+         Kept   : Results.Result;
+      begin
+         for Next of Found.Outputs loop
+            Append (Listed, Output_Kind'Image (Next.Kind) & ASCII.HT & Next.Provenance & ASCII.LF);
+         end loop;
+         Kept :=
+           (Kind       => Results.Bootstrap_Report,
+            Producer   => To_Unbounded_String ("bootstrap"),
+            Summary    => To_Unbounded_String
+                            (Image (Result.Created) & " made, " & Image (Result.Existing)
+                             & " there already, " & Image (Result.Issues) & " issues"),
+            Payload    => Listed,
+            others     => <>);
+         Results.Add (Item, Change, Kept, Status);
+      end;
    end Apply;
 
 end Model_Runner.Framework.Bootstrap;
