@@ -43,12 +43,29 @@ package body Model_Runner.Framework.Facts is
       end if;
 
       declare
+         --  The next revision of the one there, so that what this does not
+         --  set -- a field of a later version, say -- is kept.
          Stored : Records.Item :=
            Records.Create
              (Schemas.Fact_Schema, 1,
               "FACT-" & Ada.Characters.Handling.To_Upper (Key),
               Stores.Current_Revision (Item, Project_Area, Prefix & Key) + 1);
+         Held   : Records.Item;
+         Staged : Boolean;
+         Read   : E.Error_Info;
       begin
+         Stores.Pending (Change, Project_Area, Prefix & Key, Held, Staged);
+         if not Staged then
+            Stores.Read (Item, Project_Area, Prefix & Key, Held, Read);
+            Staged := E.Is_Ok (Read);
+         end if;
+         if Staged then
+            for Index in 1 .. Records.Field_Count (Held) loop
+               Records.Set (Stored, Records.Field_Name (Held, Index),
+                            Records.Get (Held, Records.Field_Name (Held, Index)));
+            end loop;
+            Records.Remove (Stored, "origin");
+         end if;
          Records.Set (Stored, "key", Key);
          Records.Set (Stored, "value", To_String (Value.Value));
          Records.Set (Stored, "source", Word (Value.Source'Image));
@@ -60,6 +77,20 @@ package body Model_Runner.Framework.Facts is
       end;
       Status := E.Success;
    end Record_Fact;
+
+   ------------
+   -- Retire --
+   ------------
+
+   procedure Retire
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Key    : String) is
+   begin
+      if Is_Key (Key) and then Stores.Exists (Item, Project_Area, Prefix & Key) then
+         Stores.Remove (Change, Project_Area, Prefix & Key);
+      end if;
+   end Retire;
 
    ----------
    -- Find --

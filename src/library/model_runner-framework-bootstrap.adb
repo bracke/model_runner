@@ -335,9 +335,30 @@ package body Model_Runner.Framework.Bootstrap is
             Id         : Unbounded_String;
 
             procedure Propose (Kind : Intent.Intent_Kind) is
+               Known : constant String := Intent.Find_By_Provenance (Item, Kind, Provenance);
             begin
-               if Intent.Find_By_Provenance (Item, Kind, Provenance) /= "" then
-                  Result.Existing := Result.Existing + 1;
+               --  Found again: as it was, or what the document now says, as
+               --  its next revision -- unless it has been replaced.
+               if Known /= "" then
+                  declare
+                     Held   : Intent.Entity;
+                     Effect : Intent.Impact;
+                  begin
+                     Intent.Read (Item, Kind, Known, Held, Status);
+                     if E.Is_Ok (Status) and then Held.Text /= Next.Text
+                       and then To_String (Held.State) not in "obsolete" | "superseded"
+                     then
+                        Intent.Revise
+                          (Item, Change, Kind, Known, Field (Next.Title), Field (Next.Text),
+                           To_String (Held.Criteria), Effect, Status);
+                        if E.Is_Ok (Status) then
+                           Result.Created := Result.Created + 1;
+                        end if;
+                     else
+                        Status := E.Success;
+                        Result.Existing := Result.Existing + 1;
+                     end if;
+                  end;
                   return;
                end if;
                Intent.Propose
@@ -409,7 +430,9 @@ package body Model_Runner.Framework.Bootstrap is
                         Effect  : Intent.Impact;
                      begin
                         Intent.Read (Item, Intent.Requirement, Known, Held, Status);
-                        if E.Is_Ok (Status) and then Held.Text /= Next.Text then
+                        if E.Is_Ok (Status) and then Held.Text /= Next.Text
+                          and then To_String (Held.State) not in "obsolete" | "superseded"
+                        then
                            Intent.Revise
                              (Item, Change, Intent.Requirement, Known, Field (Next.Title),
                               Field (Next.Text), To_String (Held.Criteria), Effect, Status);

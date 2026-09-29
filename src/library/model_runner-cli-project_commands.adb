@@ -794,7 +794,11 @@ package body Model_Runner.CLI.Project_Commands is
             Latest : Unbounded_String;
             Result : Unbounded_String;
          begin
-            if Full.Is_Empty then
+            --  As /check full chooses it: a profile called full first.
+            if R.Has (Config, "profile.full") then
+               Full.Clear;
+               Full.Append ("full");
+            elsif Full.Is_Empty then
                Full.Append (R.Get (Config, "scalar.verification.default"));
             end if;
             for Name of S.Names (Store, Model_Runner.Framework.Verification_Area) loop

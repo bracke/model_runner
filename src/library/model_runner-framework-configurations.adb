@@ -1233,6 +1233,16 @@ package body Model_Runner.Framework.Configurations is
             end if;
          end;
       end loop;
+      --  And one no longer set is no longer the registry's.
+      for Index in 1 .. Records.Field_Count (Planned.Before) loop
+         declare
+            Name : constant String := Records.Field_Name (Planned.Before, Index);
+         begin
+            if Starts (Name, "fact.") and then Records.Get (Planned.After, Name) = "" then
+               Facts.Retire (Item, Change, Name (Name'First + 5 .. Name'Last));
+            end if;
+         end;
+      end loop;
       --  A record of its own in the history, saying which revision it was.
       Records.Set (Kept, "configuration_revision", Number (Number'First + 1 .. Number'Last));
       Stores.Put (Change, Config_Area, "revision-" & Padded, Kept);

@@ -59,6 +59,16 @@ package Model_Runner.Framework.Facts is
       Value  : Fact;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Take a fact out of the registry: nobody says it any longer.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Key Its key; nothing is done when there is no such fact.
+   procedure Retire
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Key    : String);
+
    --  Read a fact.
    --
    --  @param Item The store.

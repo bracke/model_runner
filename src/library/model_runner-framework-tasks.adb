@@ -38,6 +38,14 @@ package body Model_Runner.Framework.Tasks is
    --  project's components and it is not one of them; "" where it can.
    function Component_Problem (Item : Stores.Store; Component : String) return String;
 
+   --  Whether From waits, along a field, for Target.
+   function Reaches
+     (Item   : Stores.Store;
+      Change : Stores.Transaction;
+      From   : String;
+      Target : String;
+      Field  : String) return Boolean;
+
    --  How a task of a kind waits on its children: parent_runs, or the
    --  default, parent_waits.
    function Coordination_Of (Item : Stores.Store; Kind : String) return String;
@@ -482,6 +490,19 @@ package body Model_Runner.Framework.Tasks is
          end if;
       end loop;
 
+      --  Its parent waits for it: what it waits for may not be that parent,
+      --  nor anything that waits for the parent.
+      for Parent of Split (Given ("parent")) loop
+         for Other of Split (Given ("depends_on")) loop
+            if Other = Parent or else Reaches (Item, Change, Other, Parent, "waits") then
+               Status := E.Make (E.Framework_Dependency_Cycle);
+               E.Add_Text (Status, "name", Other);
+               E.Add_Text (Status, "detail", Parent & " would wait for it and it for " & Parent);
+               return;
+            end if;
+         end loop;
+      end loop;
+
       if Component_Problem (Item, Given ("component")) /= "" then
          Status := E.Make (E.Framework_Schema_Violation);
          E.Add_Text (Status, "name", "component");
@@ -752,7 +773,23 @@ package body Model_Runner.Framework.Tasks is
       end if;
 
       if State /= "accepted" then
-         Result.Reasons.Append ("it is " & State);
+         --  Blocked or failed, it says why: what was recorded when it
+         --  stopped is what a person acts on.
+         declare
+            Runtime_Value : Records.Item;
+            Got           : E.Error_Info;
+            Why           : Unbounded_String;
+         begin
+            Stores.Read (Item, Tasks_Area, Id & State_Suffix, Runtime_Value, Got);
+            if E.Is_Ok (Got) then
+               Why := To_Unbounded_String
+                 (if State = "blocked" then Records.Get (Runtime_Value, "blocking_reasons")
+                  elsif State = "failed" then Records.Get (Runtime_Value, "current_failure")
+                  else "");
+            end if;
+            Result.Reasons.Append
+              ("it is " & State & (if Why = Null_Unbounded_String then "" else ": " & To_String (Why)));
+         end;
       end if;
 
       for Other of Split (Records.Get (Defined, "depends_on")) loop
@@ -1396,6 +1433,18 @@ package body Model_Runner.Framework.Tasks is
          end if;
       end loop;
 
+      --  A dependency is part of what a task is: added as a revision, and
+      --  not to one being worked or ended.
+      if State_Of (Item, Id) in "running" | "verification" | "complete" | "cancelled" | "rejected"
+      then
+         Status := E.Make (E.Framework_Transition_Invalid);
+         E.Add_Text (Status, "name", Id);
+         E.Add_Text (Status, "value", State_Of (Item, Id));
+         E.Add_Text (Status, "expected", "a state it is not worked in");
+         E.Add_Text (Status, "detail", "a task is made to wait only while it is not being worked");
+         return;
+      end if;
+
       --  Waiting counts the children a parent waits for too: a child that
       --  waits for its own parent would wait for ever.
       if On = Id or else Reaches (Item, Change, On, Id, "waits") then
@@ -1411,16 +1460,22 @@ package body Model_Runner.Framework.Tasks is
          if E.Is_Error (Status) then
             return;
          end if;
+         if Split (Records.Get (Value, "depends_on")).Contains (On) then
+            return;
+         end if;
+         Keep_Revision (Change, Id, Value);
          Records.Set_Revision (Value, Records.Revision (Value) + 1);
       end if;
 
       declare
-         Held : Name_Lists.Vector := Split (Records.Get (Value, "depends_on"));
+         Held  : Name_Lists.Vector := Split (Records.Get (Value, "depends_on"));
+         Event : Unbounded_String;
       begin
          if not Held.Contains (On) then
             Held.Append (On);
             Records.Set (Value, "depends_on", Joined (Held, [1 => ASCII.LF]));
             Stores.Put (Change, Tasks_Area, Id, Value);
+            Events.Emit (Item, Change, Events.Task_Revised, Id, "waits for " & On, Event, Status);
          end if;
       end;
    end Add_Dependency;

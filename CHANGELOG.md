@@ -7,6 +7,21 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A task made to wait for its own parent, or for what waits for it, is
+  refused at creation** as a dependency cycle.
+- **`task depend` is a revision:** not on a task being worked or ended,
+  the task as it was kept, and a `task_revised` event.
+- **A blocked or failed task's readiness says why** -- what was recorded
+  when it stopped -- so `/work` on it gives the reason.
+- **Bootstrap run again revises an edited specification or decision,** as
+  it does an imported requirement, and leaves an obsolete or superseded one
+  as it is rather than failing.
+- **A fact no longer set is retired from the registry** (`Facts.Retire`),
+  and a fact recorded again keeps the fields it does not set.
+- **Superseding keeps what the superseding record was.**
+- **`/state`'s last full test is what `/check full` runs:** a profile
+  named full first.
+
 - **What the harness's own programs say on their error stream is kept:**
   the agent subprocess and workspace Git write it to the harness log, and
   an agent that fails says why in its words.

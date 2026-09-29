@@ -2195,9 +2195,10 @@ package body Tests.Framework_Cases is
                          Document & "Output MUST be flushed." & LF),
                 Report, Status);
       S.Commit (Store, Change, Status);
-      Assert (Report.Created = 1,
+      --  The new line, and the specification the document is, revised.
+      Assert (Report.Created = 2,
               "bootstrap over an edited document did not make only what is"
-              & " new");
+              & " new and revise what changed:" & Report.Created'Image);
       Assert (Natural (Nt.List (Store, Nt.Requirement).Length) = 4
               and then Nt.Find_By_Provenance
                          (Store, Nt.Requirement, "docs/parser.md#REQ-PARSE-003")
@@ -2220,6 +2221,22 @@ package body Tests.Framework_Cases is
                  and then Natural (Nt.List (Store, Nt.Requirement).Length) = 4,
                  "a changed imported line was not revised: " & Code_Of (Status));
       end;
+
+      --  An imported requirement made obsolete is not revised, and does
+      --  not stop bootstrap.
+      declare
+         Imported : constant String := "REQ-PARSE-003";
+      begin
+         Nt.Move (Store, Change, Nt.Requirement, Imported, "obsolete", Tr.Ordinary_Only, Status);
+         S.Commit (Store, Change, Status);
+      end;
+      Bs.Apply (Store, Change,
+                Bs.Scan ("docs/parser.md",
+                         "- REQ-PARSE-003: Input is read in two passes." & LF),
+                Report, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status),
+              "an obsolete import stopped bootstrap: " & Code_Of (Status));
 
       --  A discovered fact, made once.
       declare
@@ -7000,6 +7017,10 @@ package body Tests.Framework_Cases is
                                    "waiting on the design") > 0);
          end loop;
          Assert (Kept, "why a task was blocked was not kept in its event");
+         Assert (Ada.Strings.Fixed.Index
+                   (Tk.Ready (Store, To_String (Second)).Reasons.First_Element,
+                    "waiting on the design") > 0,
+                 "a blocked task's readiness did not say why it is blocked");
          Tk.Move (Store, Change, To_String (Second), "accepted", "", Status => Status);
          S.Commit (Store, Change, Status);
       end;
@@ -7095,6 +7116,52 @@ package body Tests.Framework_Cases is
          Assert (not Vf.Is_Current (Store, To_String (Evidence), Reasons)
                  and then Ada.Strings.Fixed.Index (Reasons.First_Element, To_String (Dec)) > 0,
                  "evidence held after a decision governing the work changed its meaning");
+      end;
+
+      --  A task made to wait for its own parent is a cycle; one being
+      --  worked or ended is not made to wait; one that is keeps what it was.
+      declare
+         Given : Tk.Field_Map := Fields ("Cyclic", "analysis", "parent", To_String (Second));
+         Third : Unbounded_String;
+      begin
+         Given.Include ("depends_on", To_String (Second));
+         Tk.Create (Store, Change, Given, "user", "", Other, Status);
+         Assert (Status.Code = E.Framework_Dependency_Cycle,
+                 "a task was made waiting for its own parent: " & Code_Of (Status));
+         Change := S.No_Changes;
+         Tk.Add_Dependency (Store, Change, To_String (First), To_String (Second), Status);
+         Assert (Status.Code = E.Framework_Transition_Invalid,
+                 "a complete task was made to wait: " & Code_Of (Status));
+         Change := S.No_Changes;
+         Tk.Create (Store, Change, Fields ("Third", "analysis"), "user", "", Third, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Add_Dependency (Store, Change, To_String (Third), To_String (Second), Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status)
+                 and then S.Exists (Store, Model_Runner.Framework.Tasks_Area,
+                                    To_String (Third) & ".rev-000001"),
+                 "a dependency added did not keep the task as it was: " & Code_Of (Status));
+      end;
+
+      --  What supersedes keeps what it was.
+      declare
+         Dec2 : Unbounded_String;
+         Dec1 : Unbounded_String;
+      begin
+         Nt.Propose (Store, Change, Nt.Decision, "", "Old", "Old way.", "", "user", "", "project",
+                     Dec1, Status);
+         Nt.Propose (Store, Change, Nt.Decision, "", "New", "New way.", "", "user", "", "project",
+                     Dec2, Status);
+         S.Commit (Store, Change, Status);
+         Nt.Move (Store, Change, Nt.Decision, To_String (Dec1), "accepted", Tr.Ordinary_Only,
+                  Status);
+         S.Commit (Store, Change, Status);
+         Nt.Supersede (Store, Change, Nt.Decision, To_String (Dec1), To_String (Dec2), Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status)
+                 and then S.Exists (Store, Model_Runner.Framework.Decisions_Area,
+                                    To_String (Dec2) & ".rev-000001"),
+                 "what superseded did not keep what it was: " & Code_Of (Status));
       end;
       S.Close (Store);
    end Readiness_Follows_What_Is_Served;
@@ -7369,6 +7436,15 @@ package body Tests.Framework_Cases is
          Model_Runner.Framework.Facts.Find (Store, "build_system", Held, Status);
          Assert (E.Is_Ok (Status) and then To_String (Held.Value) = "make",
                  "a fact reconfigured left the registry saying otherwise: " & Code_Of (Status));
+         Changes.Clear;
+         Changes.Include ("fact.build_system", "");
+         Cf.Plan_Change (Store, Changes, Planned, Status);
+         Cf.Reconfigure (Store, Planned, Revision, Status);
+         Model_Runner.Framework.Facts.Find (Store, "build_system", Held, Status);
+         Assert (Status.Code = E.Framework_Not_Found,
+                 "a fact no longer set stayed in the registry: " & Code_Of (Status));
+         Model_Runner.Framework.Facts.Retire (Store, Change, "never_said");
+         Assert (S.Change_Count (Change) = 0, "a fact nobody held was retired");
       end;
       S.Close (Store);
    end Configuration_Changes_Explicitly;

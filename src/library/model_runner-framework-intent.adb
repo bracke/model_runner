@@ -639,10 +639,17 @@ package body Model_Runner.Framework.Intent is
          end if;
          Current (Item, Change, Kind, New_Id, Value, Status);
       end if;
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      Keep_Earlier (Item, Change, Kind, New_Id);
       Records.Set (Value, "supersedes", Old_Id);
       Stores.Put (Change, Area_Of (Kind), New_Id, Value);
 
       Current (Item, Change, Kind, Old_Id, Value, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
       Records.Set (Value, "superseded_by", New_Id);
       Stores.Put (Change, Area_Of (Kind), Old_Id, Value);
    end Supersede;
