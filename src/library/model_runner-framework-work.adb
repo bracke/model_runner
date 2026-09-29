@@ -873,6 +873,19 @@ package body Model_Runner.Framework.Work is
 
    function Tool_Budget (Host : Child_Host) return Natural is (Host.Max_Calls);
 
+   ------------------
+   -- Token_Budget --
+   ------------------
+
+   function Token_Budget (Host : Child_Host) return Positive is
+      Held   : Agents.Agent;
+      Status : E.Error_Info;
+   begin
+      Agents.Read (Host.Item.all, Current (Host), Held, Status);
+      return (if E.Is_Error (Status) or else Held.Used >= Held.Budget then 1
+              else Held.Budget - Held.Used);
+   end Token_Budget;
+
    -----------
    -- Steps --
    -----------
@@ -1061,6 +1074,10 @@ package body Model_Runner.Framework.Work is
       --  What it used is recorded; going over is the loop's to stop, and the
       --  record says so.
       Agents.Charge (Host.Item.all, Change, Current (Host), Tokens, Status);
+      if Natural (Host.Open.Length) = 1 and then E."=" (Status.Code, E.Framework_Limit_Exceeded) then
+         Host.Root_Over := True;
+         Status := E.Success;
+      end if;
       Stores.Commit (Host.Item.all, Change, Status);
       if Natural (Host.Open.Length) = 1 then
          Host.Root_Out := Host.Root_Out + Tokens;
@@ -1377,6 +1394,9 @@ package body Model_Runner.Framework.Work is
       --  The result its answer was kept as, which its end names.
       Last_Result : Unbounded_String;
 
+      --  Whether it went over its token budget.
+      Over_Budget : Boolean := False;
+
       --  What the call used, as the agent reports it.
       Used    : Invocations.Usage;
 
@@ -1668,6 +1688,7 @@ package body Model_Runner.Framework.Work is
             end if;
             Abandon (Host);
             By_Checks := Host.Written;
+            Over_Budget := Host.Root_Over;
             Used :=
               (Prompt_Tokens =>
                  (if Host.Root_Prompt > 0 then Host.Root_Prompt else Context.Cost (Built)),
@@ -1763,6 +1784,13 @@ package body Model_Runner.Framework.Work is
       elsif E.Is_Error (Ran) then
          Conclude ("failed", "the agent could not be run: " & Why_Of (Ran),
                    "failed");
+         return;
+      end if;
+
+      --  What it used is bounded as its children's is: past its budget the
+      --  work is set aside, whatever it says it did.
+      if Over_Budget then
+         Conclude ("blocked", "it went over its token budget", "failed");
          return;
       end if;
 

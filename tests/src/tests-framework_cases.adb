@@ -3622,22 +3622,18 @@ package body Tests.Framework_Cases is
                     "a confined agent process lost a tool that reaches nothing: "
                     & Said (1 .. Last));
 
-            --  A program runs only where execute_external_process is granted.
+            --  A program is the harness's to run, by its checks, through
+            --  its execution policy: never the agent's own, whatever it holds.
             Env.Set (Pm.Agent_Root_Variable, Root);
-            Env.Set (Pm.Agent_Permissions_Variable, Pm.Image (Pm.Value ("read_source")));
-            Model_Runner.Tools.Builtin.Run
-              (Runner, "shell", "{""command"": ""echo ran-it""}", Said, Last, Status);
-            Assert (Ada.Strings.Fixed.Index (Said (1 .. Last), "execute_external_process") > 0,
-                    "a confined agent ran a program it was not granted: " & Said (1 .. Last));
             Env.Set (Pm.Agent_Permissions_Variable,
                      Pm.Image (Pm.Value ("read_source" & ASCII.LF & "execute_external_process")));
             Model_Runner.Tools.Builtin.Run
               (Runner, "shell", "{""command"": ""echo ran-it""}", Said, Last, Status);
             Env.Clear (Pm.Agent_Root_Variable);
             Env.Clear (Pm.Agent_Permissions_Variable);
-            Assert (Ada.Strings.Fixed.Index (Said (1 .. Last), "ran-it") > 0,
-                    "a confined agent granted execute_external_process could not run one: "
-                    & Said (1 .. Last));
+            Assert (Ada.Strings.Fixed.Index (Said (1 .. Last), "ran-it") = 0
+                    and then Ada.Strings.Fixed.Index (Said (1 .. Last), "harness runs programs") > 0,
+                    "a confined agent ran a program past the harness: " & Said (1 .. Last));
          end;
 
          --  The harness's own program: only PATH, HOME and what is given.
@@ -7688,6 +7684,7 @@ package body Tests.Framework_Cases is
             Assert (Children.May_Check (Children.Task_Profile),
                     "an agent may not run its own task's checks");
             Assert (not Children.May_Check (""), "an agent may run no profile at all");
+            Assert (Children.Token_Budget >= 1, "an agent was given no tokens to spend");
             declare
                Report : Unbounded_String;
                Ran    : E.Error_Info;
@@ -8270,6 +8267,15 @@ package body Tests.Framework_Cases is
       Work (Grandchild_Fails);
       Assert (To_String (Done.Final_State) = "complete",
               "a child run again past its failed child did not let the task complete: "
+              & To_String (Done.Reason));
+      S.Close (Store);
+
+      --  The root is held to its token budget as its children are.
+      Task_Project (Store, "root-budget", Checks & "scalar agents.token_budget = 3" & LF);
+      Work (Checks_First);
+      Assert (To_String (Done.Final_State) = "blocked"
+              and then Contains (To_String (Done.Reason), "budget"),
+              "a root past its token budget went on: " & To_String (Done.Final_State) & " "
               & To_String (Done.Reason));
       S.Close (Store);
    end Children_Work_Within_Their_Parent;

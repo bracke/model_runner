@@ -172,6 +172,14 @@ package Model_Runner.Framework.Work is
    --  @return The budget.
    function Tool_Budget (Host : Child_Host) return Natural;
 
+   --  How many tokens the agent now working may still generate: its budget
+   --  less what it has used; at least one, so that a spent budget is a
+   --  bound and not taken for none.
+   --
+   --  @param Host The host.
+   --  @return The tokens left.
+   function Token_Budget (Host : Child_Host) return Positive;
+
    --  How long the agents on the task may still work, root and children
    --  together: from the kind's scalar task.max_seconds.KIND, else
    --  agents.max_seconds, else the task's lease, which work must not
@@ -436,6 +444,9 @@ private
       --  What the root generated, and how long its conversation came to be.
       Root_Out    : Natural := 0;
       Root_Prompt : Natural := 0;
+
+      --  Whether the root went over its token budget.
+      Root_Over   : Boolean := False;
 
       --  The root, then each child still open, innermost last.
       Open    : Name_Lists.Vector;

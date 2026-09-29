@@ -514,7 +514,8 @@ package body Model_Runner.CLI.Project_Commands is
       --  screen's is read back into afterwards.
       L.Reset (Self.Session.all);
       Ada.Directories.Set_Directory (Project);
-      Run_Loop (Self, Prompt, Host, 0, True, Answer, Tokens, Status, Read);
+      Run_Loop (Self, Prompt, Host, (if Host = null then 0 else Host.Token_Budget), True, Answer,
+                Tokens, Status, Read);
       Ada.Directories.Set_Directory (Before);
       L.Reset (Self.Session.all);
       if Host /= null then

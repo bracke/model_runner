@@ -1051,10 +1051,13 @@ package body Model_Runner.Tools.Builtin is
          return "";
       elsif Named not in "read_file" | "write_file" | "list_directory" then
          --  Held where it works, it has the file tools and those that reach
-         --  nothing; a program it runs or the network it reaches only where
-         --  its permissions grant execute_external_process or use_network.
-         --  A tool that reads a whole folder would take it past what the
-         --  file tools check, and is never its.
+         --  nothing, and the network only where its permissions grant
+         --  use_network. A program is run for it by the harness -- its
+         --  checks, through the execution policy, their output kept -- and
+         --  never by it: a shell of its own would pass the allowed programs,
+         --  the limits, the network cut and the roots it may write by. A
+         --  tool that reads a whole folder would take it past what the file
+         --  tools check, and is never its.
          declare
             Allowed : constant Pm.Permission_Set :=
               (if Env.Exists (Pm.Agent_Permissions_Variable)
@@ -1065,15 +1068,12 @@ package body Model_Runner.Tools.Builtin is
                               | "base64_encode" | "base64_decode" | "now"
                               | "memory_put" | "memory_get"
                     then ""
-                    elsif Named in "shell" | "run_python"
-                      and then Pm.Allows (Allowed, Pm.Execute_External_Process)
-                    then ""
                     elsif Named in "http_get" | "web_search"
                       and then Pm.Allows (Allowed, Pm.Use_Network)
                     then ""
                     else "an agent the harness started does not use " & Named
                          & (if Named in "shell" | "run_python"
-                            then " without execute_external_process"
+                            then ": the harness runs programs, by its checks"
                             elsif Named in "http_get" | "web_search"
                             then " without use_network" else ""));
          end;

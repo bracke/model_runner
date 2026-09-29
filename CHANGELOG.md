@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **The root agent is held to its token budget:** the session's root runs
+  with what its budget leaves as its cap, and a root that goes over is set
+  aside -- blocked -- as its children are.
+- **An agent the harness starts runs no program of its own:** `shell` and
+  `run_python` are refused it whatever it holds; programs are the
+  harness's to run, by its checks, through the execution policy.
+
 - **An event is consumed only with what it calls for done:** an action
   that fails, or a stop in between, leaves its events to be acted on
   again, while the others' are consumed.
