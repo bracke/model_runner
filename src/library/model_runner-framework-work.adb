@@ -2101,7 +2101,13 @@ package body Model_Runner.Framework.Work is
             end;
             return;
          end if;
-         Verification.Reevaluate_Requirements (Item, Change, Result.Requirements, Status);
+         --  Committed before the requirements are judged: a requirement is
+         --  judged by its tasks as the store holds them, and until then this
+         --  one is still in verification.
+         Stores.Commit (Item, Change, Status);
+         if E.Is_Ok (Status) then
+            Verification.Reevaluate_Requirements (Item, Change, Result.Requirements, Status);
+         end if;
          if E.Is_Ok (Status) then
             Conclude ("", "", "completed");
          end if;
@@ -2214,8 +2220,13 @@ package body Model_Runner.Framework.Work is
                else
                   Verification.Complete_Task (Item, Change, Task_Id, Held);
                   if E.Is_Ok (Held) then
-                     Verification.Reevaluate_Requirements
-                       (Item, Change, Result.Requirements, Status);
+                     --  Committed first, as Execute does: the requirements
+                     --  are judged by the task as complete.
+                     Stores.Commit (Item, Change, Status);
+                     if E.Is_Ok (Status) then
+                        Verification.Reevaluate_Requirements
+                          (Item, Change, Result.Requirements, Status);
+                     end if;
                      if E.Is_Ok (Status) then
                         Stores.Commit (Item, Change, Status);
                      end if;

@@ -350,6 +350,8 @@ package body Model_Runner.Framework.Verification is
    is (Repository.Graph_Fingerprint
          (Repository.Now (Item)));
 
+   function File_Lines (Files : Repository.Graph) return String;
+
    --  What a program says its version is: the first line of its --version,
    --  run as any check is; "unknown" where it will not say.
    function Version_Of
@@ -633,6 +635,12 @@ package body Model_Runner.Framework.Verification is
                     (Repository.Scan (Workspace, Repository.Roots_Of (Item)))));
          if Workspace /= "" then
             Records.Set (Value, "workspace", Workspace);
+         elsif Records.Get (Value, "given.scope") in "certain_tests" | "component_tests"
+           and then Records.Get (Value, "given.tests") /= ""
+         then
+            --  Evidence for some tests stays current while what changes
+            --  afterwards does not reach them: the files it was taken on.
+            Records.Set (Value, "scope_files", File_Lines (Repository.Now (Item)));
          end if;
          Records.Set (Value, "passed", (if Passed then "true" else "false"));
          Records.Set (Value, "ended_at", Timestamp);
@@ -697,6 +705,93 @@ package body Model_Runner.Framework.Verification is
       return Result;
    end Diagnostics_Of;
 
+   --  The files as they are, one "FINGERPRINT<TAB>PATH" line each: what a
+   --  scoped evidence is later compared with.
+   function File_Lines (Files : Repository.Graph) return String is
+      Result : Unbounded_String;
+   begin
+      for Index in 1 .. Repository.File_Count (Files) loop
+         declare
+            One : constant Repository.File_Entry := Repository.File_At (Files, Index);
+         begin
+            Append (Result, (if Index = 1 then "" else [1 => ASCII.LF])
+                            & To_String (One.Fingerprint) & Tab & To_String (One.Path));
+         end;
+      end loop;
+      return To_String (Result);
+   end File_Lines;
+
+   --  Whether evidence taken for some tests is untouched by what has
+   --  changed since: it recorded the files as they were, and nothing that
+   --  changed reaches any of its tests. A change that cannot be traced, or
+   --  that reaches the whole suite, reaches them.
+   function Outside_Scope (Item : Stores.Store; Value : Records.Item) return Boolean is
+      use type Traceability.Scope;
+      Recorded : constant Name_Lists.Vector := Lines_Of (Records.Get (Value, "scope_files"));
+      Files    : constant Repository.Graph := Repository.Now (Item);
+      Now      : constant Name_Lists.Vector := Lines_Of (File_Lines (Files));
+      Tests    : Name_Lists.Vector;
+      Changed  : Name_Lists.Vector;
+
+      function Path_Of (Line : String) return String is
+         Stop : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => Tab]);
+      begin
+         return (if Stop = 0 then Line else Line (Stop + 1 .. Line'Last));
+      end Path_Of;
+   begin
+      declare
+         Given : constant String := Records.Get (Value, "given.tests");
+         Start : Positive := Given'First;
+      begin
+         for Index in Given'Range loop
+            if Given (Index) = ' ' or else Index = Given'Last then
+               declare
+                  Word : constant String :=
+                    Given (Start .. (if Given (Index) = ' ' then Index - 1 else Index));
+               begin
+                  if Word /= "" then
+                     Tests.Append (Word);
+                  end if;
+               end;
+               Start := Index + 1;
+            end if;
+         end loop;
+      end;
+      if Recorded.Is_Empty or else Tests.Is_Empty then
+         return False;
+      end if;
+
+      for Line of Now loop
+         if not Recorded.Contains (Line) then
+            Changed.Append (Path_Of (Line));
+         end if;
+      end loop;
+      for Line of Recorded loop
+         if not Now.Contains (Line) and then not Changed.Contains (Path_Of (Line)) then
+            Changed.Append (Path_Of (Line));
+         end if;
+      end loop;
+      if Changed.Is_Empty then
+         return True;
+      end if;
+
+      declare
+         Selected : constant Traceability.Selection :=
+           Traceability.Select_Tests
+             (Item, Traceability.Impact_Of (Traceability.Build (Item, Files), Changed));
+      begin
+         if Selected.Width = Traceability.Full_Suite then
+            return False;
+         end if;
+         for Test of Selected.Tests loop
+            if Tests.Contains (Test) then
+               return False;
+            end if;
+         end loop;
+      end;
+      return True;
+   end Outside_Scope;
+
    ----------------
    -- Is_Current --
    ----------------
@@ -720,7 +815,9 @@ package body Model_Runner.Framework.Verification is
 
       if Records.Get (Value, "workspace") /= "" then
          Reasons.Append (Evidence & " was taken in a workspace, before its work was taken in");
-      elsif Records.Get (Value, "repository_revision") /= Repository_Now (Item) then
+      elsif Records.Get (Value, "repository_revision") /= Repository_Now (Item)
+        and then not Outside_Scope (Item, Value)
+      then
          Reasons.Append ("the files have changed since " & Evidence);
       end if;
       if Records.Get (Value, "configuration_fingerprint")

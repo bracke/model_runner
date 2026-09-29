@@ -10,5 +10,8 @@ fact build_system = Alire
 adapter build = alire
 scalar build.command = alr build
 profile build = build: alr build
+
+# What any task is verified by, unless its kind names its own.
+scalar verification.default = build
 set execution.allowed = alr
 discover alire.toml fact build_system = Alire

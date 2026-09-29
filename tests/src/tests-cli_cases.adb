@@ -1681,6 +1681,17 @@ package body Tests.CLI_Cases is
               and then Ada.Directories.Exists
                          (Project & "/.model_runner/config/resolved.rec"),
               "the project's files and state were not made");
+      --  Every kind of task the template gives is verified by something:
+      --  a kind of its own names its profile, and any other the default.
+      declare
+         Resolved : constant String :=
+           Text_Of (Project & "/.model_runner/config/resolved.rec");
+      begin
+         Assert (Ada.Strings.Fixed.Index (Resolved, "scalar.verification.default") > 0
+                 and then Ada.Strings.Fixed.Index (Resolved, "scalar.task.profile.bugfix") > 0
+                 and then Ada.Strings.Fixed.Index (Resolved, "scalar.task.profile.test") > 0,
+                 "a shipped template left a kind of task with nothing to verify it");
+      end;
 
       Assert (Init ("ada-cli", "project_name=demo") = 2,
               "a project was initialized twice");
@@ -10285,6 +10296,8 @@ package body Tests.CLI_Cases is
             Model_Runner.Presentation.Put_Field
               (Screen, "statistics.backend", "cpu",
                Model_Runner.Presentation.Diagnostic);
+            Model_Runner.Presentation.Report
+              (Screen, E.Make (E.Backend_Unknown));
          exception
             when others =>
                Set_Output (Standard_Output);
@@ -10333,6 +10346,11 @@ package body Tests.CLI_Cases is
               "a report going to a file carried escape sequences");
       Assert (Coloured (Complained),
               "a diagnostic going to a terminal was not styled");
+      --  The error's label is coloured, not escaped into its text: the
+      --  colour was passed through the message renderer, which printed its
+      --  escape sequence as the characters \x1B.
+      Assert (Ada.Strings.Fixed.Index (Complained, "\x1B") = 0,
+              "an error label's colour was printed as escaped text");
 
       --  And the three modes are three. --color always wrote nothing
       --  whenever the destination was not a terminal, which is the only

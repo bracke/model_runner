@@ -7,6 +7,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Evidence for some tests stays current while nothing it covers
+  changes.** Scoped evidence records the files it was taken on; a later
+  change that reaches none of its tests leaves it current, one that cannot
+  be traced or reaches the whole suite does not.
+- **Every kind of task is verified in the shipped templates:** Alire gives
+  `verification.default = build`, AUnit `bugfix` and `test` the tests.
+- **An error's severity is coloured, not printed as `\x1B[...`.**
+- **A requirement is judged with its task complete:** work and taking in a
+  workspace keep the completion before they judge the requirements it
+  served, which verifies them the same run.
+
 - **Commands take what a person types.** `/trace REQ-X` and `/trace
   src/a.adb` find the requirement at any revision and the file by its path;
   `/reconfigure NAME=a value of words` takes the words up to the next

@@ -1,3 +1,4 @@
+with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.IO_Exceptions;
 with Ada.Text_IO;
@@ -531,17 +532,30 @@ package body Model_Runner.Presentation is
          return;
       end if;
 
-      Error_Line
-        (Item,
-         Message
-           (Item, "diagnostic.line",
-            [Loc.Named
-               ("severity",
-                (if Styles_Diagnostics (Item)
-                 then Terminal_Styles.Decorate (Severity, Role)
-                 else Severity)),
-             Loc.Named ("code", E.Diagnostic_Code (Condition.Code)),
-             Loc.Named ("detail", Detail)]));
+      --  The label is coloured after the line is rendered: a rendered
+      --  argument has its control characters escaped, which would print the
+      --  colour's escape sequence as text.
+      declare
+         Line : constant String :=
+           Message
+             (Item, "diagnostic.line",
+              [Loc.Named ("severity", Severity),
+               Loc.Named ("code", E.Diagnostic_Code (Condition.Code)),
+               Loc.Named ("detail", Detail)]);
+         At_Label : constant Natural :=
+           (if Severity'Length = 0 then 0
+            else Ada.Strings.Fixed.Index (Line, Severity));
+      begin
+         if Styles_Diagnostics (Item) and then At_Label > 0 then
+            Error_Line
+              (Item,
+               Line (Line'First .. At_Label - 1)
+               & Terminal_Styles.Decorate (Severity, Role)
+               & Line (At_Label + Severity'Length .. Line'Last));
+         else
+            Error_Line (Item, Line);
+         end if;
+      end;
 
       --  Technical context is verbose-only, and never carries prompt text,
       --  system messages or generated output.

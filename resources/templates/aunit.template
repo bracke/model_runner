@@ -14,3 +14,5 @@ list verification.full = build
 list verification.full = tests
 profile tests = build: alr build; tests? in tests: alr build
 scalar task.profile.implementation = tests
+scalar task.profile.bugfix = tests
+scalar task.profile.test = tests

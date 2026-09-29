@@ -6404,6 +6404,35 @@ package body Tests.Framework_Cases is
       Status : E.Error_Info;
       Done   : Wk.Report;
       Value  : R.Item;
+      Evidence : Unbounded_String;
+      Reasons  : Model_Runner.Framework.Name_Lists.Vector;
+
+      --  Evidence taken for one test, and then a file changed that no test
+      --  is known to depend on.
+      procedure Scoped (Name, Policy : String) is
+         Change : S.Transaction;
+         Id     : Unbounded_String;
+         Passed : Boolean;
+      begin
+         Task_Project
+           (Store, Name,
+            "set execution.allowed = test" & LF
+            & "profile checks = exists: test -f src/hello.adb" & LF & Policy);
+         Ada.Directories.Create_Path (Fresh_Root (Store) & "/src");
+         Put_File (Fresh_Root (Store) & "/src/hello.adb", "procedure Hello is begin null; end Hello;");
+         Tk.Create (Store, Change, Fields ("Scoped", "analysis"), "user", "", Id, Status);
+         S.Commit (Store, Change, Status);
+         Vf.Run_Profile
+           (Store, Change, "checks", To_String (Id), Evidence, Passed, Status,
+            Given => Model_Runner.Framework.Lines_Of
+                       ("scope=certain_tests" & LF & "tests=tests/hello_test.adb"));
+         S.Commit (Store, Change, Status);
+         S.Read (Store, Model_Runner.Framework.Verification_Area, To_String (Evidence),
+                 Value, Status);
+         Assert (Passed and then R.Get (Value, "scope_files") /= "",
+                 "scoped evidence did not record the files it was taken on");
+         Put_File (Fresh_Root (Store) & "/changed.txt", "new");
+      end Scoped;
 
       procedure Work (Name : String) is
          Change : S.Transaction;
@@ -6432,6 +6461,38 @@ package body Tests.Framework_Cases is
               and then Length (Done.Scope_Reason) > 0,
               "work was not verified whole, with why: " & To_String (Done.Scope) & " "
               & To_String (Done.Reason));
+
+      --  A requirement the work served is judged with the task complete:
+      --  judged before that was kept, the task still stood in verification.
+      declare
+         Change : S.Transaction;
+         Req, Id : Unbounded_String;
+         Given  : Tk.Field_Map := Fields ("Served", "analysis");
+         Held   : Nt.Entity;
+      begin
+         Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.", "",
+                     "user", "", "io", Req, Status);
+         Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted",
+                  Tr.Ordinary_Only, Status);
+         S.Commit (Store, Change, Status);
+         Given.Include ("requirements", To_String (Req));
+         Tk.Create (Store, Change, Given, "user", "", Id, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Wk.Execute (Store, To_String (Id),
+                     Scripted_Agent'(File => To_Unbounded_String ("src/served.adb"),
+                                     Answer => To_Unbounded_String
+                                       ("status: done" & LF & "summary: x"),
+                                     Broken => False),
+                     Cx.Profile (Store, ""), Done, Status);
+         Nt.Read (Store, Nt.Requirement, To_String (Req), Held, Status);
+         Assert (To_String (Done.Final_State) = "complete"
+                 and then To_String (Held.State) = "verified"
+                 and then Natural (Done.Requirements.Length) = 1,
+                 "work that completed did not verify the requirement it served: "
+                 & To_String (Held.State));
+      end;
       S.Close (Store);
 
       Task_Project
@@ -6452,6 +6513,19 @@ package body Tests.Framework_Cases is
       Assert (R.Get (Value, "profile") = "quick" and then R.Get (Value, "stands_for") = "checks"
               and then R.Get (Value, "given.scope") = "certain_tests",
               "the evidence does not say what it was run for");
+
+      --  Evidence for some tests stays current while what changes does
+      --  not reach them, and not once something does.
+      S.Close (Store);
+      Scoped ("scoped-current", "scalar verification.escalation = narrow" & LF);
+      Assert (Vf.Is_Current (Store, To_String (Evidence), Reasons),
+              "evidence for some tests went stale over a change that reaches none of them: "
+              & (if Reasons.Is_Empty then "" else Reasons.First_Element));
+      S.Close (Store);
+      Scoped ("scoped-stale", "");
+      Assert (not Vf.Is_Current (Store, To_String (Evidence), Reasons)
+              and then not Reasons.Is_Empty,
+              "evidence for some tests stayed current over a change nothing can trace");
       S.Close (Store);
    end Verification_Follows_What_Changed;
 
