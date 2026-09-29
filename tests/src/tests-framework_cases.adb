@@ -2321,8 +2321,8 @@ package body Tests.Framework_Cases is
                          Document & "Output MUST be flushed." & LF),
                 Report, Status);
       S.Commit (Store, Change, Status);
-      --  The new line, and the specification the document is, revised.
-      Assert (Report.Created = 2,
+      --  The new line made, and the specification the document is revised.
+      Assert (Report.Created = 1 and then Natural (Report.Revised.Length) = 1,
               "bootstrap over an edited document did not make only what is"
               & " new and revise what changed:" & Report.Created'Image);
       Assert (Natural (Nt.List (Store, Nt.Requirement).Length) = 4
@@ -2342,7 +2342,8 @@ package body Tests.Framework_Cases is
          Held : Nt.Entity;
       begin
          Nt.Read (Store, Nt.Requirement, "REQ-PARSE-003", Held, Status);
-         Assert (E.Is_Ok (Status) and then Report.Created = 1 and then Held.Revision = 2
+         Assert (E.Is_Ok (Status) and then Report.Created = 0 and then Natural (Report.Revised.Length) = 1
+                 and then Held.Revision = 2
                  and then Ada.Strings.Fixed.Index (To_String (Held.Text), "never twice") > 0
                  and then Natural (Nt.List (Store, Nt.Requirement).Length) = 4,
                  "a changed imported line was not revised: " & Code_Of (Status));
@@ -2523,8 +2524,9 @@ package body Tests.Framework_Cases is
       Tk.Create (Store, Change,
                  Fields ("x", "analysis", "colour", "blue"), "user", "", Id,
                  Status);
-      Assert (Status.Code = E.Framework_Schema_Violation,
-              "a field no kind defines was carried");
+      Assert (Status.Code = E.Framework_Input_Invalid
+              and then Ada.Strings.Fixed.Index (E.Text_Of (Status, "detail"), "they are title") > 0,
+              "a field no kind defines was carried, or refused without the fields there are");
       Tk.Create (Store, Change,
                  Fields ("x", "analysis", "depends_on", "TASK-NONE-001"), "user",
                  "", Id, Status);
@@ -2982,7 +2984,12 @@ package body Tests.Framework_Cases is
                   Explicit_With := Link.Source = Rp.Explicit
                     and then Link.Sure = Rp.Certain;
                elsif Link.Kind = Rp.References then
-                  Assert (Link.Source = Rp.Heuristic,
+                  --  A with clause names its unit for certain; a name
+                  --  matched is a heuristic.
+                  Assert (Link.Source = Rp.Heuristic
+                          or else (Link.Source = Rp.Explicit
+                                   and then not Rp.Dependents_Of (Found, To_String (Link.To))
+                                                  .Is_Empty),
                           "a name match claims more than a heuristic");
                end if;
             end;
@@ -5898,6 +5905,11 @@ package body Tests.Framework_Cases is
               and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "may not write") > 0,
               "a write outside the agent's roots was accepted: "
               & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+      --  And what it wrote there is put back as it was: a file it made,
+      --  gone.
+      Assert (Ada.Strings.Fixed.Index (To_String (Done.Reason), "put back") > 0
+              and then not Dirs.Exists (Dirs.Containing_Directory (S.Root (Store)) & "/src/hello.adb"),
+              "a file an agent may not write was left in the project: " & To_String (Done.Reason));
       S.Close (Store);
    end Writes_Stay_In_Bounds;
 
@@ -8222,7 +8234,7 @@ package body Tests.Framework_Cases is
                  and then Vf.Is_Current (Store, To_String (Evidence), Reasons)
                  and then not Vf.Is_Current
                                 (Store, To_String (Evidence), Reasons,
-                                 Configuration => R.Get (Got.After, "configuration_fingerprint")),
+                                 Configuration => Cf.Verification_Fingerprint (Got.After)),
                  "evidence was not held to the configuration being staged");
          Change := S.No_Changes;
       end;
@@ -8267,10 +8279,17 @@ package body Tests.Framework_Cases is
                    = Ev.Kind_Name (Ev.Configuration_Changed),
                  "Configuration_Changed was not emitted");
       end;
-      Assert (not Vf.Is_Current (Store, To_String (Evidence), Reasons)
-              and then (for some Line of Reasons =>
-                          Ada.Strings.Fixed.Index (Line, "configuration") > 0),
-              "evidence taken under the old configuration still applied");
+      --  Who works and what it may run bear on no check: evidence stands.
+      if not Vf.Is_Current (Store, To_String (Evidence), Reasons) then
+         Assert (not (for some Line of Reasons =>
+                        Ada.Strings.Fixed.Index (Line, "configuration") > 0),
+                 "evidence was made stale by a change of isolation and allowed programs");
+      end if;
+      Assert (Cf.Verification_Fingerprint (Planned.Before)
+                = Cf.Verification_Fingerprint (Planned.After)
+              and then Cf.Configuration_Fingerprint (Planned.Before)
+                         /= Cf.Configuration_Fingerprint (Planned.After),
+              "the verification fingerprint followed settings that bear on no check");
 
       Cf.Reconfigure (Store, Stale, Revision, Status);
       Assert (Status.Code = E.Framework_Revision_Conflict,
@@ -8337,6 +8356,30 @@ package body Tests.Framework_Cases is
               and then Model_Runner.Framework.Execution.Cancel_Asked_From_Outside,
               "a cancel asked from outside was not seen as one");
       Model_Runner.Framework.Execution.Watch_Lease (null);
+      Assert (Model_Runner.Framework.Execution.Cancel_Asked_From_Outside,
+              "ending the watch forgot that the run was cancelled from outside, before it was"
+              & " concluded");
+
+      --  A sandbox that refuses a path is named as what refused it.
+      declare
+         Set : E.Error_Info;
+      begin
+         Model_Runner.Framework.Permissions.Set_Sandbox ("write_source roots=docs/; read_source", Set);
+         Assert (E.Is_Ok (Set)
+                 and then Model_Runner.Framework.Permissions.Sandbox_Refuses ("src/x.adb", True)
+                 and then not Model_Runner.Framework.Permissions.Sandbox_Refuses ("docs/x.md", True),
+                 "a sandbox written as it is shown was not taken, or not said to refuse");
+         Model_Runner.Framework.Permissions.Set_Sandbox ("", Set);
+         Assert (not Model_Runner.Framework.Permissions.Sandbox_Refuses ("src/x.adb", True),
+                 "no sandbox refused a path");
+      end;
+
+      --  What makes a task that cannot wait so say why.
+      Tk.Add_Dependency (Store, Change, To_String (Task_A), To_String (Task_A), Status);
+      Assert (Status.Code = E.Framework_Dependency_Cycle
+              and then Ada.Strings.Fixed.Index (E.Text_Of (Status, "detail"), "itself") > 0,
+              "a task waiting for itself was not said so");
+      Change := S.No_Changes;
 
       --  What a killed run left running is stopped when the project opens.
       if Dirs.Exists ("/usr/bin/setsid") then
@@ -8387,6 +8430,16 @@ package body Tests.Framework_Cases is
          Assert (E.Is_Ok (Status)
                  and then Nt.Links (Store, Nt.Requirement, To_String (R1), Nt.Component).Is_Empty,
                  "a link was not taken off");
+         Assert (Nt.State_Of (Store, Nt.Requirement, To_String (R1)) = "candidate"
+                 and then Nt.State_Of (Store, Nt.Requirement, "REQ-NONE-999") = "",
+                 "the state of an entry, or of none, was not said");
+         Nt.Govern (Store, Change, Nt.Requirement, To_String (R1), "scalar.work.isolation",
+                    "workspace", "", Status);
+         S.Commit (Store, Change, Status);
+         Assert (Nt.Governs (Store, Nt.Requirement, To_String (R1))
+                   = "scalar.work.isolation = workspace",
+                 "what an entry governs was not said: "
+                 & Nt.Governs (Store, Nt.Requirement, To_String (R1)));
          Assert (Model_Runner.Framework.Configurations.Known_Names.Contains ("scalar.work.agent"),
                  "the settings the harness reads were not known");
       end;
@@ -8450,6 +8503,14 @@ package body Tests.Framework_Cases is
          Model_Runner.Presentation.Put_Note
            (Screen, "cli.next.retry", [Model_Runner.Localization.Named ("name", "TASK-7")]);
          Model_Runner.Presentation.Put_Aside (Screen, "cli.interactive.help.projects");
+         Assert (Model_Runner.Presentation.Session_Form (Screen, "or reconfigure x+=y")
+                   = "or /reconfigure x+=y"
+                 and then Ada.Strings.Fixed.Index
+                            (Model_Runner.Presentation.Next_Step_Value
+                               (Screen, "cli.next.accept_task",
+                                [Model_Runner.Localization.Named ("name", "TASK-8")]),
+                             "/task accept TASK-8") > 0,
+                 "text naming a command was not written as a session types it");
          Set_Error (Standard_Error);
          Close (Said);
          Assert (Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"),
@@ -9053,7 +9114,8 @@ package body Tests.Framework_Cases is
                        and then Ada.Strings.Fixed.Index (Text, "Stars counted") > 0
                        and then Ada.Strings.Fixed.Index (Text, "moved from") > 0
                        and then Ada.Strings.Fixed.Index (Text, "a proposal REQ-404") > 0
-                       and then Ada.Strings.Fixed.Index (Text, "nowhere.md within the project") > 0
+                       and then Ada.Strings.Fixed.Index (Text, "nowhere.md is not a value for a document"
+                                                           & " to read: there is no such file") > 0
                        and then Ada.Strings.Fixed.Index (Text, "a value for confirm") > 0,
                        "/task ID, an unknown /task action or /req show said nothing: " & Text);
             end;

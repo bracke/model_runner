@@ -243,7 +243,7 @@ package Model_Runner.Framework.Verification is
    --  @param Item The store.
    --  @param Evidence The evidence.
    --  @param Reasons Why not, when it does not.
-   --  @param Configuration The configuration fingerprint to hold it to:
+   --  @param Configuration The verification fingerprint to hold it to:
    --    empty for the one in force, or one being staged.
    --  @return True when it applies.
    function Is_Current
@@ -321,7 +321,7 @@ package Model_Runner.Framework.Verification is
    --  @param Change The transaction.
    --  @param Changed The requirements whose state changed.
    --  @param Status A failure staging a change.
-   --  @param Configuration The configuration fingerprint evidence is held
+   --  @param Configuration The verification fingerprint evidence is held
    --    to: empty for the one in force, or that of a change staged in the
    --    same transaction, so that both are committed as one.
    procedure Reevaluate_Requirements

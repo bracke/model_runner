@@ -16,11 +16,13 @@ with Model_Runner.Framework;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Context;
 with Model_Runner.Framework.Execution;
+with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Orchestration;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
+with Model_Runner.Framework.Verification;
 with Model_Runner.Localization;
 with Model_Runner.Platform;
 with Model_Runner.Platform.Signals;
@@ -654,9 +656,11 @@ package body Model_Runner.CLI.Work is
                end if;
             end loop;
 
-            --  Blocked and failed ones are shown too, with why, and not
-            --  taken: where a person looks for them.
-            for State of Model_Runner.Framework.Name_Lists.Vector'(["blocked", "failed"]) loop
+            --  Blocked, failed and candidate ones are shown too, with why
+            --  and what makes them workable, and not taken: where a person
+            --  looks for them.
+            for State of Model_Runner.Framework.Name_Lists.Vector'(["blocked", "failed", "candidate"])
+            loop
                for Id of Tk.List (Store, State) loop
                   if Matching.Is_Empty or else Matching.Contains (Id) then
                      Waiting.Append (Id);
@@ -681,6 +685,15 @@ package body Model_Runner.CLI.Work is
                         for Reason of Now.Reasons loop
                            Append (Why, Reason & ASCII.LF);
                         end loop;
+                        if Tk.State_Of (Store, Id) = "candidate" then
+                           Append (Why, Pres.Next_Step_Value
+                                          (Screen, "cli.next.accept_task", [Loc.Named ("name", Id)])
+                                   & ASCII.LF);
+                        elsif Tk.State_Of (Store, Id) in "blocked" | "failed" then
+                           Append (Why, Pres.Next_Step_Value
+                                          (Screen, "cli.next.retry", [Loc.Named ("name", Id)])
+                                   & ASCII.LF);
+                        end if;
                         Model_Runner.CLI.Choosers.Append
                           (Offer,
                            (Label      => To_Unbounded_String
@@ -707,7 +720,7 @@ package body Model_Runner.CLI.Work is
             begin
                if Picked = 0 then
                   Pres.Put_Note (Screen, "cli.work.nothing");
-                  if Listed.Is_Empty then
+                  if Ready.Is_Empty then
                      Say_What_Is_Ready;
                   end if;
                   Status := E.Exit_Cancelled;
@@ -787,6 +800,12 @@ package body Model_Runner.CLI.Work is
             if E."=" (Outcome.Code, E.Framework_Input_Missing) and then E.Text_Of (Outcome, "name") = "model"
             then
                Pres.Put_Note (Screen, "cli.next.model");
+
+            --  A task that cannot be worked on: what makes it workable.
+            elsif Tk.State_Of (Store, To_String (Chosen)) = "candidate" then
+               Pres.Put_Note (Screen, "cli.next.accept_task", [Loc.Named ("name", To_String (Chosen))]);
+            elsif Tk.State_Of (Store, To_String (Chosen)) in "blocked" | "failed" then
+               Pres.Put_Note (Screen, "cli.next.retry", [Loc.Named ("name", To_String (Chosen))]);
             end if;
             S.Close (Store);
             return;
@@ -806,6 +825,21 @@ package body Model_Runner.CLI.Work is
               (Screen, "cli.work.kept_back",
                [Loc.Named ("detail", Line), Loc.Named ("name", To_String (Done.Issue_Id))]);
          end loop;
+         --  What it proposed waits for a person: said how.
+         declare
+            Waiting : Unbounded_String;
+         begin
+            for Candidate of Done.Proposed loop
+               if Tk.State_Of (Store, Candidate) = "candidate" then
+                  Append (Waiting, (if Waiting = Null_Unbounded_String then "" else ", ")
+                                   & Candidate);
+               end if;
+            end loop;
+            if Waiting /= Null_Unbounded_String then
+               Pres.Put_Note
+                 (Screen, "cli.next.proposed", [Loc.Named ("detail", To_String (Waiting))]);
+            end if;
+         end;
          for Other of Done.Waits_For loop
             Say ("cli.work.waits_for", Other, To_String (Done.Task_Id));
          end loop;
@@ -819,8 +853,47 @@ package body Model_Runner.CLI.Work is
             Say ("cli.work.evidence", To_String (Done.Evidence_Id), "");
          end if;
          for Requirement of Done.Requirements loop
-            Say ("cli.work.requirement", Requirement, "");
+            Say ("cli.work.requirement", Requirement,
+                 Model_Runner.Framework.Intent.State_Of
+                   (Store, Model_Runner.Framework.Intent.Requirement, Requirement));
          end loop;
+
+         --  Complete, and what it served that is still not verified: said,
+         --  with why, not left to be found.
+         if To_String (Done.Final_State) = "complete" then
+            declare
+               Defined : R.Item;
+               Read    : E.Error_Info;
+            begin
+               Tk.Definition (Store, To_String (Done.Task_Id), Defined, Read);
+               for Requirement of Model_Runner.Framework.Lines_Of (R.Get (Defined, "requirements"))
+               loop
+                  if not Done.Requirements.Contains (Requirement)
+                    and then Model_Runner.Framework.Intent.State_Of
+                               (Store, Model_Runner.Framework.Intent.Requirement, Requirement)
+                             not in "verified" | ""
+                  then
+                     Pres.Put_Note
+                       (Screen, "cli.work.requirement_stays",
+                        [Loc.Named ("name", Requirement),
+                         Loc.Named ("value", Model_Runner.Framework.Intent.State_Of
+                                               (Store, Model_Runner.Framework.Intent.Requirement,
+                                                Requirement)),
+                         Loc.Named ("detail", Model_Runner.Framework.Verification.Why_Not_Verified
+                                                (Store, Requirement))]);
+                  end if;
+               end loop;
+
+               --  The last of its parent's parts done: the parent goes on.
+               if R.Get (Defined, "parent") /= ""
+                 and then Tk.State_Of (Store, R.Get (Defined, "parent")) = "accepted"
+                 and then Tk.Ready (Store, R.Get (Defined, "parent")).Ready
+               then
+                  Pres.Put_Note
+                    (Screen, "cli.work.parent_ready", [Loc.Named ("name", R.Get (Defined, "parent"))]);
+               end if;
+            end;
+         end if;
          --  Why, where it did not complete: blocked or failed, the reason
          --  is what a person acts on.
          if Done.Reason = Null_Unbounded_String then
@@ -832,7 +905,7 @@ package body Model_Runner.CLI.Work is
               (Screen, "cli.work.ended_because",
                [Loc.Named ("name", (if To_String (Done.Final_State) = "verification"
                                     then "in verification" else To_String (Done.Final_State))),
-                Loc.Named ("detail", To_String (Done.Reason))]);
+                Loc.Named ("detail", Pres.Session_Form (Screen, To_String (Done.Reason)))]);
          end if;
 
          --  And what a person does next, where it did not complete.
@@ -848,6 +921,16 @@ package body Model_Runner.CLI.Work is
                  (Screen, "cli.next.parts",
                   [Loc.Named ("detail", Reason (From .. (if Stop = 0 then Reason'Last else Stop - 1)))]);
             end;
+         elsif To_String (Done.Final_State) = "blocked"
+           and then not Done.Kept_Back.Is_Empty and then Done.Proposed.Is_Empty
+           and then Done.Issue_Id /= Null_Unbounded_String
+         then
+            --  Its parts or proposals refused: trying again gives the same;
+            --  a person makes them, or lets its agent.
+            Pres.Put_Note
+              (Screen, "cli.next.refused_parts",
+               [Loc.Named ("name", To_String (Done.Task_Id)),
+                Loc.Named ("value", To_String (Done.Issue_Id))]);
          elsif To_String (Done.Final_State) in "failed" | "blocked" then
             Pres.Put_Note (Screen, "cli.next.retry", [Loc.Named ("name", To_String (Done.Task_Id))]);
          elsif To_String (Done.Final_State) = "verification"
@@ -866,10 +949,14 @@ package body Model_Runner.CLI.Work is
       if To_String (Done.Final_State) = "cancelled" then
          Status := E.Exit_Cancelled;
 
-      --  Waiting to be taken in is where isolated work ends well.
+      --  Waiting to be taken in is where isolated work ends well; and so
+      --  is a split, waiting for its parts.
       elsif To_String (Done.Final_State) /= "complete"
         and then not (To_String (Done.Final_State) = "verification"
                       and then Done.Workspace_Id /= Null_Unbounded_String)
+        and then not (To_String (Done.Final_State) = "blocked"
+                      and then Ada.Strings.Fixed.Index
+                                 (To_String (Done.Reason), "waiting for its children: ") = 1)
       then
          Status := E.Exit_Input_Output;
       end if;

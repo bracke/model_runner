@@ -2740,7 +2740,7 @@ package body Model_Runner.CLI.Options is
                                    | "cancel" | "show" | "context" | "verify"
                                    | "complete" | "integrate" | "derive" | "step"
                                    | "plan" | "reopen" | "reconsider" | "edit"
-                                   | "depend" | "split" | "audit" | "move"
+                                   | "depend" | "split" | "audit" | "move" | "rehome"
                   then
                      Fail (E.CLI_Unexpected_Operand, "", Argument);
                      return;
@@ -2783,6 +2783,7 @@ package body Model_Runner.CLI.Options is
 
                elsif Operands > 3 and then Result.Kind = Command_Task
                  and then T.To_String (Result.Action) in "depend" | "split" | "move" | "integrate"
+                                                        | "rehome"
                then
                   --  What the task waits for, its parts' titles, the state it
                   --  moves to, or anyway: the rest of the words, as they were

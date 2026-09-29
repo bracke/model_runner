@@ -2013,16 +2013,21 @@ package body Tests.CLI_Cases is
       Run ("task|new|Big|--set|kind=analysis");
       Run ("task|accept|TASK-003");
       Run ("work|TASK-003");
-      Assert (Shows ("waiting for its children"),
-              "a split task did not wait for its parts: " & To_String (Said));
+      Assert (Code = 0 and then Shows ("waiting for its children"),
+              "a split task did not wait for its parts, or ended as a failure: " & To_String (Said));
       for Part of Model_Runner.Framework.Name_Lists.Vector'(["TASK-004", "TASK-005"]) loop
          Run ("task|accept|" & Part);
          Run ("task|verify|" & Part);
          Run ("task|complete|" & Part);
       end loop;
+      Assert (Shows ("TASK-003, its parent, is ready again"),
+              "the last part done did not say its parent goes on: " & To_String (Said));
       Run ("task|list");
       Assert (Shows ("TASK-003  [ready]"),
               "a split task did not go back to work with its parts done: " & To_String (Said));
+      Run ("task|show|TASK-003");
+      Assert (Shows ("parts: TASK-004 complete, TASK-005 complete"),
+              "a parent did not show its parts: " & To_String (Said));
 
       --  7. A document's own identifiers, criteria and decisions are kept;
       --     what it no longer says is named.
@@ -2031,8 +2036,10 @@ package body Tests.CLI_Cases is
              & "Arguments SHALL be quoted." & LF & "Acceptance: a space survives" & LF & LF
              & "- DEC-001: We use posix_spawn." & LF & LF & "It SHOULD retry once." & LF);
       Run ("bootstrap");
-      Assert (Shows ("REQ-SHELL-001") and then Shows ("DEC-001") and then Shows ("next: req accept"),
-              "bootstrap did not keep the document's identifiers: " & To_String (Said));
+      Assert (Shows ("REQ-SHELL-001") and then Shows ("DEC-001") and then Shows ("next: req accept")
+              and then Shows ("made REQ-SHELL-001, accepted"),
+              "bootstrap did not keep the document's identifiers, or say what it made is: "
+              & To_String (Said));
       Run ("req|show|REQ-SHELL-001");
       Assert (Shows ("criteria: a space survives") and then Shows ("title: Quoting"),
               "a requirement's criteria and title were not read: " & To_String (Said));
@@ -2122,6 +2129,7 @@ package body Tests.CLI_Cases is
       Run ("reconfigure|profile.checks=check: true|confirm=yes");
       --  A requirement not verified says what it lacks.
       Run ("req|new|Shouts|text=It SHALL shout.");
+      Assert (Shows ("next: req accept REQ-001"), "a new requirement gave no next step: " & To_String (Said));
       Run ("req|accept|REQ-001");
       Run ("req|show|REQ-001");
       Assert (Shows ("not verified: "), "a requirement not verified did not say why: " & To_String (Said));
@@ -2244,6 +2252,40 @@ package body Tests.CLI_Cases is
       Assert (Code = 0, "result with nothing named failed: " & To_String (Said));
       Run ("result|TASK-001");
       Assert (Shows ("task show TASK-001"), "result of a task did not point to it");
+
+      --  13. A fourth round.
+      Run ("reconfigure|execution.allowed-=nothing|confirm=yes");
+      Assert (Code /= 0 and then Shows ("nothing is not in it"),
+              "-= of what a set does not hold was not said so: " & To_String (Said));
+      Run ("decision|govern|DEC-001|nosuch.setting|5");
+      Assert (Code /= 0 and then Shows ("no setting is called so"),
+              "a decision governing no setting was taken: " & To_String (Said));
+      Run ("task|new|Coloured|--set|kind=analysis|--set|colour=blue");
+      Assert (Code = 2 and then Shows ("they are title"),
+              "a field no task has was not refused with those it has: " & To_String (Said));
+      Run ("task|depend|TASK-003|TASK-003");
+      Assert (Code /= 0 and then Shows ("cannot wait for itself"),
+              "a task waiting for itself was not said so: " & To_String (Said));
+      Run ("task|new|Waiting one|--set|kind=analysis");
+      Run ("task|list");
+      declare
+         Text  : constant String := To_String (Said);
+         At_Id : constant Natural := Ada.Strings.Fixed.Index (Text, "  [candidate]  Waiting one");
+         Start : constant Natural :=
+           (if At_Id = 0 then Text'First
+            else Ada.Strings.Fixed.Index (Text (Text'First .. At_Id), [1 => LF], Ada.Strings.Backward) + 1);
+         Id    : constant String := (if At_Id > Start then Text (Start .. At_Id - 1) else "TASK-000");
+      begin
+         Run ("work|" & Id);
+         Assert (Code /= 0 and then Shows ("next: task accept " & Id),
+                 "work on a candidate gave no next step: " & To_String (Said));
+      end;
+      Run ("task|rehome|nowhere|elsewhere");
+      Assert (Code = 0 and then Shows ("0 tasks placed in elsewhere from nowhere"),
+              "rehome did not say what it placed: " & To_String (Said));
+      Run ("config|map.permission.project");
+      Assert (Shows ("map.permission.project") and then Shows ("(the default)"),
+              "the permissions a project is given unasked were not shown: " & To_String (Said));
 
       --  10. What the steps above rest on, asked directly.
       Assert (Model_Runner.CLI.Options.Is_Project_Word ("req")

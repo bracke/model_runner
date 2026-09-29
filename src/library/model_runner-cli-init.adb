@@ -206,6 +206,9 @@ package body Model_Runner.CLI.Init is
          E.Add_Text (Outcome, "path", Directory, E.Param_Path);
          Fail (Outcome);
          Pres.Put_Note (Screen, "cli.next.initialized");
+         if not T.Is_Empty (Item.Project_Directory) then
+            Pres.Put_Note (Screen, "cli.next.in_directory", [Loc.Named ("path", Directory)]);
+         end if;
          return;
       end if;
 
@@ -370,6 +373,18 @@ package body Model_Runner.CLI.Init is
                      end;
                   end loop;
                end loop;
+
+               --  And the confirmation it will want, with the rest, not
+               --  asked for once they are given.
+               if not Confirmed
+                 and then (for some Index in 1 .. Tp.Setting_Count (Composed) =>
+                             Tp."=" (Tp.Setting_At (Composed, Index).Kind, Tp.Scalar_Setting)
+                             and then To_String (Tp.Setting_At (Composed, Index).Key) = "init.confirm"
+                             and then To_String (Tp.Setting_At (Composed, Index).Value)
+                                        in "yes" | "true" | "required")
+               then
+                  Pres.Put_Note (Screen, "cli.next.confirm_init");
+               end if;
             end if;
             return;
          end if;
@@ -497,6 +512,10 @@ package body Model_Runner.CLI.Init is
             ("detail",
              R.Get (Planned.Configuration, "configuration_fingerprint"))]);
       Pres.Put_Note (Screen, "cli.next.init");
+      --  Started elsewhere: each of those in the directory it names.
+      if not T.Is_Empty (Item.Project_Directory) then
+         Pres.Put_Note (Screen, "cli.next.in_directory", [Loc.Named ("path", Directory)]);
+      end if;
 
       S.Close (Store);
    end Run;

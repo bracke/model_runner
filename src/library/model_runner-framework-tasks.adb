@@ -33,6 +33,29 @@ package body Model_Runner.Framework.Tasks is
    function Is_Core (Name : String) return Boolean
    is (for some Field of Core => Field.all = Name);
 
+   --  A field no task of a kind has: refused, with those it has.
+   procedure No_Such_Field
+     (Status  : out E.Error_Info;
+      Name    : String;
+      Kind    : String;
+      Allowed : Name_Lists.Vector)
+   is
+      Fields : Unbounded_String;
+   begin
+      for Field of Core loop
+         Append (Fields, (if Fields = Null_Unbounded_String then "" else ", ") & Field.all);
+      end loop;
+      for Field of Allowed loop
+         if not Is_Core (Field) then
+            Append (Fields, ", " & Field);
+         end if;
+      end loop;
+      Status := E.Make (E.Framework_Input_Invalid);
+      E.Add_Text (Status, "name", "a field of a " & Kind & " task");
+      E.Add_Text (Status, "value", Name);
+      E.Add_Text (Status, "detail", "no field is called so; they are " & To_String (Fields));
+   end No_Such_Field;
+
    function Is_Core_Field (Name : String) return Boolean renames Is_Core;
 
    --  Why a component cannot be named, where the configuration lists the
@@ -502,10 +525,7 @@ package body Model_Runner.Framework.Tasks is
             Name : constant String := Configurations.Value_Maps.Key (Position);
          begin
             if not Is_Core (Name) and then not Allowed.Contains (Name) then
-               Status := E.Make (E.Framework_Schema_Violation);
-               E.Add_Text (Status, "name", Name);
-               E.Add_Text
-                 (Status, "detail", "no field of a " & Kind & " task is called so");
+               No_Such_Field (Status, Name, Kind, Allowed);
                return;
             elsif not Records.Is_Field_Name ("field." & Name) then
                Status := E.Make (E.Framework_Name_Invalid);
@@ -1520,6 +1540,40 @@ package body Model_Runner.Framework.Tasks is
                            Made.Append (To_String (Id));
 
                         end if;
+
+                        --  A task derived from it and not yet done carries
+                        --  its title as it is now.
+                        for Other of List (Item) loop
+                           declare
+                              Defined : Records.Item;
+                              Got     : E.Error_Info;
+                              Stem    : constant String := "derive:" & Requirement & "#";
+                              Title   : constant String :=
+                                Requirement & ": " & To_String (Held.Title);
+                              Key_Of  : Unbounded_String;
+                           begin
+                              Stores.Pending (Change, Tasks_Area, Other, Defined, Staged);
+                              if not Staged then
+                                 Definition (Item, Other, Defined, Got);
+                              end if;
+                              Key_Of := To_Unbounded_String (Records.Get (Defined, "derivation_key"));
+                              if Length (Key_Of) > Stem'Length
+                                and then Slice (Key_Of, 1, Stem'Length) = Stem
+                                and then State_In (Item, Change, Other)
+                                           in "candidate" | "accepted" | "blocked" | "failed"
+                                and then Records.Get (Defined, "title") /= Title
+                                and then Ada.Strings.Fixed.Index
+                                           (Records.Get (Defined, "title"), Requirement & ": ") = 1
+                              then
+                                 if not Staged then
+                                    Keep_Revision (Change, Other, Defined);
+                                    Records.Set_Revision (Defined, Records.Revision (Defined) + 1);
+                                 end if;
+                                 Records.Set (Defined, "title", Title);
+                                 Stores.Put (Change, Tasks_Area, Other, Defined);
+                              end if;
+                           end;
+                        end loop;
                      end;
                   end if;
                end;
@@ -1634,7 +1688,10 @@ package body Model_Runner.Framework.Tasks is
       if On = Id or else Reaches (Item, Change, On, Id, "waits") then
          Status := E.Make (E.Framework_Dependency_Cycle);
          E.Add_Text (Status, "name", Id);
-         E.Add_Text (Status, "detail", On & " already waits for it");
+         E.Add_Text (Status, "detail",
+                     (if On = Id then "a task cannot wait for itself"
+                      else "that would make a cycle: " & On & " already waits for " & Id
+                           & ", directly or through the tasks it waits for"));
          return;
       end if;
 
@@ -1725,6 +1782,18 @@ package body Model_Runner.Framework.Tasks is
       begin
          --  A project that lists no components is one: the project itself,
          --  by its name.
+         --  One placed with map.component.NAME is one too.
+         for Index in 1 .. Records.Field_Count (Settings) loop
+            declare
+               Field : constant String := Records.Field_Name (Settings, Index);
+            begin
+               if Field'Length > 14 and then Field (Field'First .. Field'First + 13) = "map.component."
+                 and then not Listed.Contains (Field (Field'First + 14 .. Field'Last))
+               then
+                  Listed.Append (Field (Field'First + 14 .. Field'Last));
+               end if;
+            end;
+         end loop;
          if Listed.Is_Empty and then Records.Get (Settings, "input.project_name") /= "" then
             Listed.Append (Records.Get (Settings, "input.project_name"));
          end if;
@@ -1839,9 +1908,7 @@ package body Model_Runner.Framework.Tasks is
                                  else "add a dependency instead"));
                   return;
                elsif not Is_Core (Name) and then not Allowed.Contains (Name) then
-                  Status := E.Make (E.Framework_Schema_Violation);
-                  E.Add_Text (Status, "name", Name);
-                  E.Add_Text (Status, "detail", "no field of a " & Kind & " task is called so");
+                  No_Such_Field (Status, Name, Kind, Allowed);
                   return;
                elsif Given = "" and then (Name = "title" or else Required_Here.Contains (Name)) then
                   Status := E.Make (E.Framework_Schema_Violation);

@@ -1782,6 +1782,63 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Fourth usability round:**
+  - A task cancelled from another terminal ends cancelled, with status 7.
+  - `spec revise` and `req revise ID from-document` read a document in a
+    subdirectory, and take only the entry's own section of it.
+  - A write refused by the session's sandbox says the sandbox refused it;
+    `/sandbox` takes the form it shows (`write_source roots=docs/; ...`).
+  - `repo impact REQ` reaches the requirement's implementation and
+    component; reach through a shared component is probable, not certain.
+    A child unit depends on its parent, and a `with` clause is a use of the
+    unit it names, so `refs` and `impact` find uses across units.
+  - `task integrate ID resolved` checks the settled work in its workspace
+    first and takes in nothing that fails, with the diagnostics.
+  - Files an agent was not allowed to write are put back as they were.
+  - A gate set aside by completing a task by hand no longer fails the
+    consistency check; the audit says it was completed by hand, on which
+    evidence, and what was set aside.
+  - Proposals and parts are kept as an issue when the harness fails the
+    answer, and a refused part is named. A task is not proposed again once
+    rejected or cancelled, and never as itself.
+  - Changing the agent, its permissions or other settings no check reads no
+    longer takes verification away; `state` names each requirement that is
+    implemented and not verified, and how to verify it.
+  - A test task's passing evidence verifies the requirement it serves over
+    the earlier tasks' stale evidence; after `work`, a requirement still not
+    verified is named with why.
+  - The agent is shown the project's test files and the harness that lists
+    them.
+  - `work` offers candidates and blocked tasks with what makes them
+    workable, and names it when one is asked for by name.
+  - A task waiting for itself, or a cycle, is said so.
+  - `task audit` lists every attempt and agent, delegated ones among them,
+    and the parent and splitter of a part.
+  - A split waiting for its parts exits 0; the last part done says its
+    parent goes on; `task show` lists a parent's parts.
+  - `req supersede` says when it accepts the candidate that replaces.
+  - A component placed with `map.component.NAME` is one of the project's;
+    `task rehome OLD NEW` moves every open task of a component.
+  - `decision govern` refuses a setting that is none, and `decision show`
+    names what a decision governs.
+  - `config` shows the project's default permissions and no blank lines
+    inside a set; a narrower kind is no longer reported as widening.
+  - `check full` no longer says it runs no tests; "changed its
+    verification" says the state it is now in.
+  - Bootstrap says what each made item is and counts revised items apart;
+    `result` leaves out issues already acted on and command output; derived
+    task titles follow the requirement's; `result VER-` labels its columns.
+  - Child summaries are one line each, without stray fences or braces.
+  - Next steps after `req new`, `task split` and an agent's proposals;
+    `init --directory` says to keep `--directory`; `help` names `depend ...
+    remove`, `integrate ... resolved`, `rehome` and `decision supersede`.
+  - `--set` of a field no task has exits 2 and lists the fields; a bad link
+    kind exits 2; `-=` of what a set lacks says so; `bootstrap` of a missing
+    file says there is no such file; Esc in the kind chooser cancels.
+  - A retry's diagnostics are given once, without the build tool's summary.
+  - A cancelled call is recorded as cancelled, not as an issue;
+    `delegate` is not offered when no child can be made.
+
 - **Third usability round:**
   - `help req`, `check`, `decision`, `spec`, `accept`, `reject`, `sandbox`
     and `instruct` give their syntax (two entries had been cut short).

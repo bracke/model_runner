@@ -402,8 +402,10 @@ package body Model_Runner.Framework.Traceability is
       is (Kind in "contains" | "implements");
 
       Queue : Name_Lists.Vector;
+      Seeds : Name_Lists.Vector;
    begin
       for Path of Changed loop
+         Seeds.Append (Seed_Of (Path));
          if Reach (Seed_Of (Path), Repository.Certain) then
             Queue.Append (Seed_Of (Path));
          end if;
@@ -418,9 +420,25 @@ package body Model_Runner.Framework.Traceability is
             for Next of From.Edges loop
                declare
                   Kind : constant String := To_String (Next.Kind);
-                  Along : constant Repository.Confidence := Weaker (Sure, Next.Sure);
+
+                  --  Reached only through sharing a component is not
+                  --  reached surely: the component is wider than the change.
+                  Along : constant Repository.Confidence :=
+                    (if Kind in "scope" | "belongs_to" | "part_of"
+                     then Weaker (Weaker (Sure, Next.Sure), Repository.Probable)
+                     else Weaker (Sure, Next.Sure));
                begin
                   if Forward (Kind) and then To_String (Next.From) = Node then
+                     if Reach (To_String (Next.To), Along) then
+                        Queue.Append (To_String (Next.To));
+                     end if;
+
+                  --  A requirement changed reaches what it is carried out
+                  --  in: its implementation, and its component.
+                  elsif Seeds.Contains (Node)
+                    and then Kind in "implemented_by" | "scope" | "belongs_to"
+                    and then To_String (Next.From) = Node
+                  then
                      if Reach (To_String (Next.To), Along) then
                         Queue.Append (To_String (Next.To));
                      end if;

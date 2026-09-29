@@ -181,6 +181,22 @@ package Model_Runner.Framework.Intent is
       Value  : out Entity;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  The state an entity is in.
+   --
+   --  @param Item The store.
+   --  @param Kind Which register.
+   --  @param Id Its identifier.
+   --  @return Its state, or the empty string when there is none.
+   function State_Of (Item : Stores.Store; Kind : Intent_Kind; Id : String) return String;
+
+   --  What an entity governs: the setting and its ruling.
+   --
+   --  @param Item The store.
+   --  @param Kind Which register.
+   --  @param Id Its identifier.
+   --  @return SETTING = RULING, or the empty string when it governs none.
+   function Governs (Item : Stores.Store; Kind : Intent_Kind; Id : String) return String;
+
    --  Move an entity through its lifecycle, with the event that says so.
    --
    --  @param Item The store.

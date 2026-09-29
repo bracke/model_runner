@@ -592,7 +592,6 @@ package body Model_Runner.Framework.Bootstrap is
                         Effect, Status);
                      if E.Is_Ok (Status) then
                         Mark_Imported (Kind, Known);
-                        Result.Created := Result.Created + 1;
                         Result.Revised.Append (Known);
                      end if;
                   end if;

@@ -376,6 +376,35 @@ package body Model_Runner.Framework.Intent is
          To_String (Id), Title, Event, Status);
    end Propose;
 
+   -------------
+   -- Governs --
+   -------------
+
+   function Governs (Item : Stores.Store; Kind : Intent_Kind; Id : String) return String is
+      Value  : Records.Item;
+      Status : E.Error_Info;
+   begin
+      Stores.Read (Item, Area_Of (Kind), Id, Value, Status);
+      if E.Is_Error (Status) or else Records.Get (Value, "governs") = "" then
+         return "";
+      end if;
+      return Records.Get (Value, "governs") & " = " & Records.Get (Value, "ruling")
+        & (if Records.Get (Value, "overrides") = "" then ""
+           else " (over " & Records.Get (Value, "overrides") & ")");
+   end Governs;
+
+   --------------
+   -- State_Of --
+   --------------
+
+   function State_Of (Item : Stores.Store; Kind : Intent_Kind; Id : String) return String is
+      Held   : Entity;
+      Status : E.Error_Info;
+   begin
+      Read (Item, Kind, Id, Held, Status);
+      return (if E.Is_Ok (Status) then To_String (Held.State) else "");
+   end State_Of;
+
    ----------
    -- Read --
    ----------

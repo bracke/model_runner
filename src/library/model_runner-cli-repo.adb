@@ -303,24 +303,32 @@ package body Model_Runner.CLI.Repo is
                   Pres.Put_Message (Screen, "cli.repo.no_refs", [Loc.Named ("name", Argument)]);
                end if;
             end;
-            for Name of Names loop
-               for Index in 1 .. Rp.Relation_Count (Found) loop
-                  declare
-                     use type Rp.Relation_Kind;
-                     One : constant Rp.Relation := Rp.Relation_At (Found, Index);
-                  begin
-                     if One.Kind = Rp.References and then To_String (One.To) = Name then
-                        Pres.Put_Message
-                          (Screen, "cli.repo.reference",
-                           [Loc.Named ("name", Name), Loc.Named ("path", To_String (One.Where)),
-                            Loc.Named ("detail",
-                                       Ada.Characters.Handling.To_Lower
-                                         (Rp.Derivation'Image (One.Source) & ", "
-                                          & Rp.Confidence'Image (One.Sure)))]);
-                     end if;
-                  end;
+            declare
+               Shown : Model_Runner.Framework.Name_Lists.Vector;
+            begin
+               for Name of Names loop
+                  for Index in 1 .. Rp.Relation_Count (Found) loop
+                     declare
+                        use type Rp.Relation_Kind;
+                        One : constant Rp.Relation := Rp.Relation_At (Found, Index);
+                     begin
+                        --  Each place once: the surest way it was found.
+                        if One.Kind = Rp.References and then To_String (One.To) = Name
+                          and then not Shown.Contains (Name & " " & To_String (One.Where))
+                        then
+                           Shown.Append (Name & " " & To_String (One.Where));
+                           Pres.Put_Message
+                             (Screen, "cli.repo.reference",
+                              [Loc.Named ("name", Name), Loc.Named ("path", To_String (One.Where)),
+                               Loc.Named ("detail",
+                                          Ada.Characters.Handling.To_Lower
+                                            (Rp.Derivation'Image (One.Source) & ", "
+                                             & Rp.Confidence'Image (One.Sure)))]);
+                        end if;
+                     end;
+                  end loop;
                end loop;
-            end loop;
+            end;
          end;
 
       elsif Action in "impact" | "trace" then

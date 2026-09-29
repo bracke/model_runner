@@ -108,6 +108,14 @@ package Model_Runner.Framework.Permissions is
      (Text   : String;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Whether the session's sandbox, rather than the project, keeps a
+   --  path from being written or read.
+   --
+   --  @param Path The path within the project.
+   --  @param Writing Whether it is written.
+   --  @return True when a sandbox is set and does not allow it.
+   function Sandbox_Refuses (Path : String; Writing : Boolean) return Boolean;
+
    --  What two levels both allow.
    --
    --  @param Left One level.

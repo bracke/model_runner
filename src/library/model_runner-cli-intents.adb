@@ -4,7 +4,12 @@ with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
+with Hostkit.Fs;
+
 with Model_Runner.Errors;
+with Model_Runner.Framework.Bootstrap;
+with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Orchestration;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Tasks;
@@ -25,6 +30,23 @@ package body Model_Runner.CLI.Intents is
    package Names renames Model_Runner.Framework.Name_Lists;
 
    use type Nt.Link_Kind;
+
+   --  A title made from a text: the text, cut at a hundred characters.
+   function Headline (Text : String) return String
+   is (if Text'Length <= 100 then Text else Text (Text'First .. Text'First + 96) & "...");
+
+   --  Whether an entry's title is its text's headline, as one made from a
+   --  document's line is: a new text brings a new title with it.
+   function Title_From_Text (Held : Nt.Entity) return Boolean is
+      Title : constant String := To_String (Held.Title);
+      Text  : constant String := To_String (Held.Text);
+      Stem  : constant String :=
+        (if Title'Length > 3 and then Title (Title'Last - 2 .. Title'Last) = "..."
+         then Title (Title'First .. Title'Last - 3) else Title);
+   begin
+      return Stem /= "" and then Text'Length >= Stem'Length
+        and then Text (Text'First .. Text'First + Stem'Length - 1) = Stem;
+   end Title_From_Text;
 
    function Lower (Text : String) return String
    renames Ada.Characters.Handling.To_Lower;
@@ -247,6 +269,17 @@ package body Model_Runner.CLI.Intents is
                         end if;
                      end;
                   end loop;
+
+                  --  A candidate: how it comes to count.
+                  if Nt.State_Of (Store, Kind, To_String (Id)) = Nt.First_State (Kind) then
+                     Pres.Put_Note
+                       (Screen, "cli.next.accept_intent",
+                        [Loc.Named ("name", To_String (Id)),
+                         Loc.Named ("value", (case Kind is
+                                                when Nt.Requirement   => "req",
+                                                when Nt.Specification => "spec",
+                                                when Nt.Decision      => "decision"))]);
+                  end if;
                end if;
             end;
          end if;
@@ -311,7 +344,10 @@ package body Model_Runner.CLI.Intents is
                    Loc.Named ("value", (if Passed then "passed" else "failed")),
                    Loc.Named ("count", "1"), Loc.Named ("total", "0")]);
                for Requirement of Moved loop
-                  Pres.Put_Message (Screen, "cli.work.requirement", [Loc.Named ("name", Requirement)]);
+                  Pres.Put_Message
+                    (Screen, "cli.work.requirement",
+                     [Loc.Named ("name", Requirement),
+                      Loc.Named ("value", Nt.State_Of (Store, Nt.Requirement, Requirement))]);
                end loop;
             end;
          end if;
@@ -356,7 +392,7 @@ package body Model_Runner.CLI.Intents is
                if E.Is_Ok (Status) and then Lower (Word (3)) = "from-document" then
                   declare
                      Path : constant String :=
-                       Ada.Directories.Compose
+                       Hostkit.Fs.Join
                          (Ada.Directories.Containing_Directory (S.Root (Store)),
                           To_String (Held.Source));
                      Text : Ada.Strings.Unbounded.Unbounded_String;
@@ -371,8 +407,48 @@ package body Model_Runner.CLI.Intents is
                            Ada.Strings.Unbounded.Append (Text, Ada.Text_IO.Get_Line (File) & ASCII.LF);
                         end loop;
                         Ada.Text_IO.Close (File);
-                        Nt.Revise (Store, Change, Kind, Word (2), To_String (Held.Title),
-                                   To_String (Text), To_String (Held.Criteria), Result, Status);
+
+                        --  Only its own part of the document: what the
+                        --  document says at the place it was taken from.
+                        declare
+                           Found : constant Model_Runner.Framework.Bootstrap.Output_List :=
+                             Model_Runner.Framework.Bootstrap.Scan
+                               (To_String (Held.Source), To_String (Text));
+                           Taken : Boolean := False;
+                        begin
+                           for Index in 1 .. Model_Runner.Framework.Bootstrap.Length (Found) loop
+                              declare
+                                 One : constant Model_Runner.Framework.Bootstrap.Output :=
+                                   Model_Runner.Framework.Bootstrap.Element (Found, Index);
+                              begin
+                                 if not Taken and then One.Provenance = Held.Provenance then
+                                    Taken := True;
+                                    if One.Text = Held.Text and then One.Title = Held.Title
+                                      and then (One.Criteria = Held.Criteria
+                                                or else One.Criteria = Null_Unbounded_String)
+                                    then
+                                       Pres.Put_Note
+                                         (Screen, "cli.intent.unchanged", [Loc.Named ("name", Word (2))]);
+                                       return;
+                                    end if;
+                                    Nt.Revise
+                                      (Store, Change, Kind, Word (2), To_String (One.Title),
+                                       To_String (One.Text),
+                                       (if One.Criteria = Null_Unbounded_String
+                                        then To_String (Held.Criteria)
+                                        else To_String (One.Criteria)),
+                                       Result, Status);
+                                 end if;
+                              end;
+                           end loop;
+                           if not Taken then
+                              Status := E.Make (E.Framework_Not_Found);
+                              E.Add_Text
+                                (Status, "name",
+                                 "what " & Word (2) & " says, in " & To_String (Held.Source)
+                                 & " (it no longer says it where it did; revise it with text=...)");
+                           end if;
+                        end;
                         Settle (Store, Change, Status, Screen, "cli.task.revised", Word (2));
                         return;
                      end if;
@@ -397,7 +473,10 @@ package body Model_Runner.CLI.Intents is
                if E.Is_Ok (Status) then
                   Nt.Revise
                     (Store, Change, Kind, Word (2),
-                     (if Given ("title") = "" then To_String (Held.Title) else Given ("title")),
+                     (if Given ("title") /= "" then Given ("title")
+                      elsif Given ("text") /= "" and then Title_From_Text (Held)
+                      then Headline (Given ("text"))
+                      else To_String (Held.Title)),
                      (if Given ("text") = "" then To_String (Held.Text) else Given ("text")),
                      (if Given ("criteria") = "" then To_String (Held.Criteria)
                       else Given ("criteria")),
@@ -427,8 +506,9 @@ package body Model_Runner.CLI.Intents is
                   end if;
                end loop;
                if not Found then
-                  Status := E.Make (E.Framework_Schema_Violation);
-                  E.Add_Text (Status, "name", Word (3));
+                  Status := E.Make (E.Framework_Input_Invalid);
+                  E.Add_Text (Status, "name", "the kind of link");
+                  E.Add_Text (Status, "value", Word (3));
                   E.Add_Text (Status, "detail", "a link is a dependency, component,"
                               & " implementation, task, test or verification");
                else
@@ -455,8 +535,9 @@ package body Model_Runner.CLI.Intents is
                   end if;
                end loop;
                if not Found then
-                  Status := E.Make (E.Framework_Schema_Violation);
-                  E.Add_Text (Status, "name", Word (3));
+                  Status := E.Make (E.Framework_Input_Invalid);
+                  E.Add_Text (Status, "name", "the kind of link");
+                  E.Add_Text (Status, "value", Word (3));
                   E.Add_Text (Status, "detail", "a link is a dependency, component,"
                               & " implementation, task, test or verification");
                else
@@ -495,12 +576,65 @@ package body Model_Runner.CLI.Intents is
       elsif Action = "supersede" then
          Needs (3, "the " & Word_Of (Kind) & " replaced and the one replacing it");
          if E.Is_Ok (Status) then
-            Nt.Supersede (Store, Change, Kind, Word (2), Word (3), Status);
-            Settle (Store, Change, Status, Screen, "cli.intent.superseded", Word (2));
+            declare
+               Was : constant String := Nt.State_Of (Store, Kind, Word (3));
+            begin
+               Nt.Supersede (Store, Change, Kind, Word (2), Word (3), Status);
+               Settle (Store, Change, Status, Screen, "cli.intent.superseded", Word (2));
+
+               --  What replaces it stands in its place: a candidate is
+               --  accepted by being made its replacement, and said so.
+               if E.Is_Ok (Status) and then Was = Nt.First_State (Kind) then
+                  Pres.Put_Message
+                    (Screen, "cli.intent.moved",
+                     [Loc.Named ("name", Word (3)), Loc.Named ("other", Was),
+                      Loc.Named ("value", Nt.State_Of (Store, Kind, Word (3)))]);
+               end if;
+            end;
          end if;
 
       elsif Action = "govern" then
          Needs (4, "the " & Word_Of (Kind) & ", the setting it governs, and its ruling");
+         --  A setting there is: one the configuration holds, one the
+         --  harness reads, or a baseline; another is refused with the
+         --  nearest there are.
+         if E.Is_Ok (Status) then
+            declare
+               Setting : constant String := Word (3);
+               Config  : Model_Runner.Framework.Records.Item;
+               Read    : E.Error_Info;
+               Near    : Unbounded_String;
+            begin
+               Model_Runner.Framework.Configurations.Read (Store, Config, Read);
+               if not Model_Runner.Framework.Records.Has (Config, Setting)
+                 and then not Model_Runner.Framework.Configurations.Known_Names.Contains (Setting)
+                 and then Ada.Strings.Fixed.Index (Setting, "baseline.") /= 1
+               then
+                  for Index in 1 .. Model_Runner.Framework.Records.Field_Count (Config) loop
+                     declare
+                        Name : constant String := Model_Runner.Framework.Records.Field_Name (Config, Index);
+                     begin
+                        if Setting'Length >= 4
+                          and then (Ada.Strings.Fixed.Index (Name, Setting) > 0
+                                    or else Ada.Strings.Fixed.Index
+                                              (Name, Setting (Setting'First .. Setting'First + 3))
+                                            > 0)
+                          and then Length (Near) < 200
+                        then
+                           Append (Near, (if Near = Null_Unbounded_String then "" else ", ") & Name);
+                        end if;
+                     end;
+                  end loop;
+                  Status := E.Make (E.Framework_Input_Invalid);
+                  E.Add_Text (Status, "name", "the setting a decision governs");
+                  E.Add_Text (Status, "value", Setting);
+                  E.Add_Text (Status, "detail",
+                              "no setting is called so; a decision governs one config shows"
+                              & (if Near = Null_Unbounded_String then ""
+                                 else ", as " & To_String (Near)));
+               end if;
+            end;
+         end if;
          if E.Is_Ok (Status) then
             Nt.Govern (Store, Change, Kind, Word (2), Word (3), From (4), Given ("overrides"),
                        Status);
@@ -526,6 +660,9 @@ package body Model_Runner.CLI.Intents is
                Field ("scope", To_String (Held.Scope));
                Field ("text", To_String (Held.Text));
                Field ("criteria", To_String (Held.Criteria));
+               if Nt.Governs (Store, Kind, Named) /= "" then
+                  Field ("governs", Nt.Governs (Store, Kind, Named));
+               end if;
 
                --  Not verified yet: what it still lacks, and what supplies it.
                if Nt."=" (Kind, Nt.Requirement)

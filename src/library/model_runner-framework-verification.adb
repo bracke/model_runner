@@ -551,6 +551,8 @@ package body Model_Runner.Framework.Verification is
            (Value, "configuration_fingerprint",
             Records.Get (Settings, "configuration_fingerprint"));
          Records.Set
+           (Value, "verification_fingerprint", Configurations.Verification_Fingerprint (Settings));
+         Records.Set
            (Value, "environment_fingerprint",
             Fingerprint (Model_Runner.Platform.Passed_Environment
                            (To_String (Rules.Environment))));
@@ -868,11 +870,18 @@ package body Model_Runner.Framework.Verification is
                   --  Six fields as evidence first kept them, ten since. A
                   --  build tool's own summary -- "Command [...] failed",
                   --  "Build failed" -- is no diagnostic of the project's.
+                  --  Nor is one said twice, as a tool that reports a
+                  --  failure again in its summary says it.
                   if Natural (Parts.Length) in 6 | 10
                     and then not (Parts (3) = ""
                                   and then (Starts (Parts (6), "Command [")
                                             or else Starts (Parts (6), "Build failed")
+                                            or else Starts (Parts (6), "Compilation failed")
                                             or else Starts (Parts (6), "compilation of")))
+                    and then not (for some Held of Result.Items =>
+                                    To_String (Held.File) = In_Project (Parts (3))
+                                    and then Image (Held.Line) = Parts (4)
+                                    and then To_String (Held.Message) = Parts (6))
                   then
                      Result.Items.Append
                        (Diagnostic'(Tool     => To_Unbounded_String (Parts (1)),
@@ -1089,9 +1098,17 @@ package body Model_Runner.Framework.Verification is
       then
          Reasons.Append ("the files have changed since " & Evidence);
       end if;
-      if Records.Get (Value, "configuration_fingerprint")
-           /= (if Configuration /= "" then Configuration
-               else Records.Get (Settings, "configuration_fingerprint"))
+      --  Only what bears on verification: a change of agent or of its
+      --  permissions leaves evidence as it was.
+      if Records.Get (Value, "verification_fingerprint") /= "" then
+         if Records.Get (Value, "verification_fingerprint")
+              /= (if Configuration /= "" then Configuration
+                  else Configurations.Verification_Fingerprint (Settings))
+         then
+            Reasons.Append ("the configuration of its checks has changed since " & Evidence);
+         end if;
+      elsif Records.Get (Value, "configuration_fingerprint")
+              /= Records.Get (Settings, "configuration_fingerprint")
       then
          Reasons.Append ("the configuration has changed since " & Evidence);
       end if;
@@ -1504,6 +1521,38 @@ package body Model_Runner.Framework.Verification is
          return;
       end if;
 
+      --  What it was completed on, and what a person set aside for it: the
+      --  evidence its verification gate judged, and the gates it did not
+      --  pass that completing it by hand set aside.
+      declare
+         Held      : Records.Item;
+         Staged    : Boolean;
+         Set_Aside : Unbounded_String;
+         Profile   : constant String := Profile_Of (Item, Task_Id);
+         Evidence  : constant String :=
+           (if Profile = "" then "" else Latest (Item, Task_Id, Profile));
+      begin
+         for Next of Judged.Items loop
+            if not Next.Passed then
+               Append (Set_Aside, (if Set_Aside = Null_Unbounded_String then "" else ASCII.LF & "")
+                                  & To_String (Next.Name));
+            end if;
+         end loop;
+         Stores.Pending (Change, Tasks_Area, Task_Id & ".state", Held, Staged);
+         if Staged then
+            if Evidence /= "" then
+               Records.Set (Held, "current_verification", Evidence);
+            end if;
+            if By_Hand then
+               Records.Set (Held, "completed_by", "hand");
+            end if;
+            if Set_Aside /= Null_Unbounded_String then
+               Records.Set (Held, "set_aside", To_String (Set_Aside));
+            end if;
+            Stores.Put (Change, Tasks_Area, Task_Id & ".state", Held);
+         end if;
+      end;
+
       --  The requirements it served are implemented once every task serving
       --  them is complete -- this one now; whether they are verified is
       --  worked out from evidence, not from this.
@@ -1711,6 +1760,47 @@ package body Model_Runner.Framework.Verification is
          return True;
       end Criteria_Shown;
 
+      --  The latest current, passing evidence of any complete task
+      --  serving it that ran tests: taken over the project as it is now,
+      --  it stands for the earlier tasks' evidence the later work made
+      --  stale -- a test task's run over the implementation it tests.
+      function Standing_Evidence return String is
+         Best : Unbounded_String;
+      begin
+         for Id of Everything loop
+            declare
+               Defined : Records.Item;
+               Read    : E.Error_Info;
+            begin
+               Tasks.Definition (Item, Id, Defined, Read);
+               if E.Is_Ok (Read)
+                 and then Lines_Of (Records.Get (Defined, "requirements")).Contains (Requirement)
+                 and then Tasks.State_Of (Item, Id) = "complete"
+               then
+                  declare
+                     Evidence : constant String := Latest (Item, Id, Profile_Of (Item, Id));
+                     Value    : Records.Item;
+                     Reasons  : Name_Lists.Vector;
+                  begin
+                     if Evidence /= "" then
+                        Stores.Read (Item, Verification_Area, Evidence, Value, Read);
+                        if E.Is_Ok (Read) and then Records.Get (Value, "passed") = "true"
+                          and then Is_Current (Item, Evidence, Reasons, Configuration)
+                          and then Showing (Item, Value) = Tests_Ran
+                          and then (Best = Null_Unbounded_String or else Evidence > To_String (Best))
+                        then
+                           Best := To_Unbounded_String (Evidence);
+                        end if;
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
+         return To_String (Best);
+      end Standing_Evidence;
+
+      Standing : constant String := Standing_Evidence;
+
       Found : Unbounded_String;
       Any   : Boolean := False;
       Tested : Boolean := False;
@@ -1756,6 +1846,12 @@ package body Model_Runner.Framework.Verification is
                      return Lacks (Id & " has no evidence; task verify " & Id & " takes it");
                   end if;
                   Stores.Read (Item, Verification_Area, Evidence, Value, Read);
+                  if Standing /= "" and then Standing > Evidence
+                    and then not Is_Current (Item, Evidence, Reasons, Configuration)
+                  then
+                     --  Stale, and stood for by later evidence over it.
+                     goto Next_Task;
+                  end if;
                   if Records.Get (Value, "passed") /= "true" then
                      return Lacks (Evidence & ", " & Id & "'s latest, did not pass;"
                                    & " task verify " & Id & " takes it again");
@@ -1778,6 +1874,7 @@ package body Model_Runner.Framework.Verification is
                end;
             end if;
          end;
+         <<Next_Task>>
       end loop;
       if not Any then
          return Lacks ("no task serves it");

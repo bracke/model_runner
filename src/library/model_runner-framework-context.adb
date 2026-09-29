@@ -238,6 +238,12 @@ package body Model_Runner.Framework.Context is
 
       procedure Offer (Id, Kind : String; Rank : Priority; Text : String) is
       begin
+         --  Each once, however many ways it is reached.
+         for Held of Candidates loop
+            if To_String (Held.Id) = Id then
+               return;
+            end if;
+         end loop;
          if Text /= "" then
             Candidates.Append
               (Context.Item'(Id   => To_Unbounded_String (Id),
@@ -522,6 +528,45 @@ package body Model_Runner.Framework.Context is
                   Append (Listed, Test & " (tests " & Requirement & ")" & ASCII.LF);
                end loop;
             end loop;
+
+            --  How the project's tests are laid out, and what runs them: a
+            --  test that is not registered where the harness lists its
+            --  tests does not run.
+            declare
+               Layout : Unbounded_String;
+               Shown  : Natural := 0;
+            begin
+               for Index in 1 .. Repository.File_Count (Graph) loop
+                  declare
+                     use type Repository.File_Role;
+                     File : constant Repository.File_Entry := Repository.File_At (Graph, Index);
+                     Path : constant String := To_String (File.Path);
+                     Base : constant String :=
+                       Lower (Ada.Directories.Base_Name (Ada.Directories.Simple_Name (Path)));
+                     Text : Unbounded_String;
+                  begin
+                     if File.Role = Repository.Test then
+                        if Shown < 40 then
+                           Append (Layout, Path & ASCII.LF);
+                           Shown := Shown + 1;
+                        end if;
+                        if Base in "tests" | "test_main" | "all_tests" | "test_runner" | "suite"
+                                 | "test_suite" | "harness" | "conftest"
+                        then
+                           Files.Read_Text (Hostkit.Fs.Join (Project, Path), Text, Read);
+                           if E.Is_Ok (Read) then
+                              Offer ("file:" & Path, "test", Normal, To_String (Text));
+                           end if;
+                        end if;
+                     end if;
+                  end;
+               end loop;
+               if Layout /= Null_Unbounded_String then
+                  Append (Listed, "The project's test files -- a new test runs only once it is"
+                          & " registered where the test harness lists its tests:" & ASCII.LF
+                          & Layout);
+               end if;
+            end;
             Offer (Task_Id & "#tests", "tests", Normal, To_String (Listed));
          end;
       end;

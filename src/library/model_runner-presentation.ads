@@ -137,6 +137,26 @@ package Model_Runner.Presentation is
    --  @return Rendered text.
    function Message_Value (Item : Console; Key : String) return String;
 
+   --  Text that names commands, as it reads where it is shown: in a
+   --  session, each command as its slash command.
+   --
+   --  @param Item Console to read through.
+   --  @param Text The text.
+   --  @return It, as shown.
+   function Session_Form (Item : Console; Text : String) return String;
+
+   --  Look up a next step for embedding in other text: with its values,
+   --  and in a session with the commands it names as typed there.
+   --
+   --  @param Item Console to read through.
+   --  @param Key Stable message identifier.
+   --  @param Arguments Values to substitute.
+   --  @return Rendered text.
+   function Next_Step_Value
+     (Item      : Console;
+      Key       : String;
+      Arguments : Model_Runner.Localization.Argument_List) return String;
+
    --  Which stream a line belongs on.
    --
    --  An answer is what the command was asked for, and belongs on standard

@@ -331,7 +331,9 @@ package body Model_Runner.Framework.Consistency is
                      then
                         Found (Missing_Component, Id,
                                "its component " & Component
-                               & " is neither listed nor found in the repository");
+                               & " is neither listed nor found in the repository: task edit "
+                               & Id & " --set component=NAME places it, and task rehome "
+                               & Component & " NAME every task of " & Component);
                      end if;
                   end;
                end if;
@@ -408,7 +410,9 @@ package body Model_Runner.Framework.Consistency is
                if not Tasks.Components (Item).Contains (Target) then
                   Found (Missing_Component, Id,
                          "it belongs to the component " & Target
-                         & ", which is not one of the project's");
+                         & ", which is not one of the project's: reconfigure set.components+="
+                         & Target & " makes it one, or req unlink " & Id & " component " & Target
+                         & " takes the link away");
                end if;
             end loop;
          end loop;
@@ -516,8 +520,18 @@ package body Model_Runner.Framework.Consistency is
                --  completion; a project's own gate by whether its evidence
                --  passed, not whether it is still current.
                declare
-                  Judged : constant Verification.Gate_List := Verification.Gates (Item, Id);
+                  Judged    : constant Verification.Gate_List := Verification.Gates (Item, Id);
+
+                  --  What a person set aside completing it by hand holds as
+                  --  they said.
+                  Set_Aside : Name_Lists.Vector;
+                  Its_State : Records.Item;
+                  Got_State : E.Error_Info;
                begin
+                  Stores.Read (Item, Tasks_Area, Id & ".state", Its_State, Got_State);
+                  if E.Is_Ok (Got_State) then
+                     Set_Aside := Lines_Of (Records.Get (Its_State, "set_aside"));
+                  end if;
                   for Index in 1 .. Verification.Length (Judged) loop
                      declare
                         One  : constant Verification.Gate := Verification.Element (Judged, Index);
@@ -526,6 +540,7 @@ package body Model_Runner.Framework.Consistency is
                         if not One.Passed
                           and then Name in "implementation_present" | "traceability_sufficient"
                                          | "integration" | "documentation_current"
+                          and then not Set_Aside.Contains (Name)
                         then
                            Found (Completed_Without_Gate, Id,
                                   "it is complete and its gate " & Name & " does not hold: "

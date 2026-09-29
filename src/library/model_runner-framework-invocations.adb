@@ -339,7 +339,11 @@ package body Model_Runner.Framework.Invocations is
       if Result_Id /= "" then
          Records.Set (Value, "result", Result_Id);
       end if;
-      if Failure /= "" then
+      --  Stopped by whoever ran it is not a failure to look into: said on
+      --  the call, and kept as nothing more.
+      if Failure /= "" and then Next = "cancelled" then
+         Records.Set (Value, "failure", "cancelled: " & Failure);
+      elsif Failure /= "" then
          Records.Set (Value, "failure", Failure);
 
          --  And kept as a record of its own, which the call refers to: a

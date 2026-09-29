@@ -80,6 +80,15 @@ package Model_Runner.Framework.Configurations is
    --  @return Sixteen hexadecimal digits.
    function Configuration_Fingerprint (Value : Records.Item) return String;
 
+   --  The fingerprint of what in a configuration bears on verification:
+   --  all of it but who works and how -- the agent, its permissions, work
+   --  and bootstrap settings, the task kinds and the programs it may run --
+   --  so that changing those leaves evidence as it was.
+   --
+   --  @param Value The configuration record.
+   --  @return Sixteen hexadecimal digits.
+   function Verification_Fingerprint (Value : Records.Item) return String;
+
    --  Work out what initializing a project from a composition will do.
    --
    --  @param Composed The composed template.

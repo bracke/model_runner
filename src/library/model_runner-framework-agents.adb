@@ -629,6 +629,24 @@ package body Model_Runner.Framework.Agents is
 
    function Child_Results (Item : Stores.Store; Parent : String) return String is
       Text : Unbounded_String;
+
+      --  A summary a line: its first that says something, as a model may
+      --  open with a fence or a brace.
+      function First_Line (Summary : String) return String is
+      begin
+         for Line of Lines_Of (Summary) loop
+            declare
+               Said : constant String := Ada.Strings.Fixed.Trim (Line, Ada.Strings.Both);
+            begin
+               if Said /= "" and then Said not in "{" | "}" | "```" | "[" | "]"
+                 and then not (Said'Length >= 3 and then Said (Said'First .. Said'First + 2) = "```")
+               then
+                  return Said;
+               end if;
+            end;
+         end loop;
+         return "";
+      end First_Line;
    begin
       for Child of Children (Item, Parent) loop
          declare
@@ -640,8 +658,8 @@ package body Model_Runner.Framework.Agents is
                     & To_String (Held.Status) & ")"
                     & (if Held.Result = Null_Unbounded_String then ""
                        else " " & To_String (Held.Result))
-                    & (if Held.Summary = Null_Unbounded_String then ""
-                       else ": " & To_String (Held.Summary))
+                    & (if First_Line (To_String (Held.Summary)) = "" then ""
+                       else ": " & First_Line (To_String (Held.Summary)))
                     & ASCII.LF);
          end;
       end loop;

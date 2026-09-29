@@ -105,7 +105,10 @@ package body Model_Runner.Framework.Execution is
       Watched_Lease := To_Unbounded_String (Resource);
       Watched_Owner := To_Unbounded_String (Owner);
       Withdrawn := False;
-      Outside_Cancel := False;
+      --  Kept when the watch ends, for the run to be concluded as asked.
+      if Item /= null then
+         Outside_Cancel := False;
+      end if;
       Last_Asked := Ada.Calendar.Clock;
    end Watch_Lease;
 

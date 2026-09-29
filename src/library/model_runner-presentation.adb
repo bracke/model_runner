@@ -367,7 +367,9 @@ package body Model_Runner.Presentation is
            or else Here ("req unlink") or else Here ("req supersede") or else Here ("req revise")
            or else Here ("decision revise") or else Here ("decision reject")
            or else Here ("spec revise") or else Here ("check REQ-") or else Here ("check full")
-           or else Here ("config shows");
+           or else Here ("config shows") or else Here ("decision accept") or else Here ("spec accept")
+           or else Here ("decision supersede") or else Here ("task split") or else Here ("task edit")
+           or else Here ("task rehome") or else Here ("req link") or else Here ("sandbox off");
       end Names_A_Command;
    begin
       for Index in Text'Range loop
@@ -380,6 +382,24 @@ package body Model_Runner.Presentation is
       end loop;
       return Ada.Strings.Unbounded.To_String (Result);
    end As_Typed_In_Session;
+
+   ------------------
+   -- Session_Form --
+   ------------------
+
+   function Session_Form (Item : Console; Text : String) return String
+   is (if Item.Session then As_Typed_In_Session (Text) else Text);
+
+   ---------------------
+   -- Next_Step_Value --
+   ---------------------
+
+   function Next_Step_Value
+     (Item      : Console;
+      Key       : String;
+      Arguments : Loc.Argument_List) return String
+   is (if Item.Session then As_Typed_In_Session (Message (Item, Key, Arguments))
+       else Message (Item, Key, Arguments));
 
    procedure Put_Note
      (Item      : in out Console;
@@ -560,9 +580,11 @@ package body Model_Runner.Presentation is
          then "error"
          else Loc.Severity_Label (Item.Catalog.all, Condition.Severity));
 
+      --  In a session, the commands it names as typed there.
       Detail : constant String :=
         (if Item.Catalog = null
          then E.Message_Key (Condition.Code)
+         elsif Item.Session then As_Typed_In_Session (Loc.Describe (Item.Catalog.all, Condition))
          else Loc.Describe (Item.Catalog.all, Condition));
    begin
       if E.Is_Ok (Condition) then

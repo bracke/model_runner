@@ -611,6 +611,20 @@ package body Model_Runner.Framework.Repository is
              Sure => Certain, Where => Null_Unbounded_String, Origin => <>));
       end if;
 
+      --  A child unit sees its parent's declarations without withing it:
+      --  it depends on its parent as if it did.
+      declare
+         Dot : constant Natural := Ada.Strings.Fixed.Index (Unit, ".", Ada.Strings.Backward);
+      begin
+         if Dot > Unit'First then
+            Add_Relation
+              (Into,
+               (Kind => Depends_On, From => To_Unbounded_String (Unit),
+                To => To_Unbounded_String (Unit (Unit'First .. Dot - 1)), Source => Explicit,
+                Sure => Certain, Where => Null_Unbounded_String, Origin => <>));
+         end if;
+      end;
+
       --  The context clause: what this unit withs.
       while Index <= Count loop
          exit when Is_Word (Tokens (Index), "package")
@@ -851,12 +865,47 @@ package body Model_Runner.Framework.Repository is
          return;
       end if;
 
-      --  The units whose names this file can use.
+      --  The units whose names this file can use: its own, what it
+      --  withs, and the parents of each, which a child sees and a with of
+      --  a child names too.
       Seen.Append (Unit);
-      for Link of Into.Relations loop
-         if Link.Kind = Depends_On and then To_String (Link.From) = Unit then
-            Seen.Append (To_String (Link.To));
-         end if;
+      declare
+         Withs : Name_Lists.Vector;
+         Lines : Name_Lists.Vector;
+      begin
+         for Link of Into.Relations loop
+            if Link.Kind = Depends_On and then To_String (Link.From) = Unit then
+               Seen.Append (To_String (Link.To));
+               if Ada.Strings.Fixed.Index (To_String (Link.Where), Path & ":") = 1 then
+                  Withs.Append (To_String (Link.To));
+                  Lines.Append (To_String (Link.Where));
+               end if;
+            end if;
+         end loop;
+
+         --  Its with clause is a use of the unit it names.
+         for Index in 1 .. Natural (Withs.Length) loop
+            Add_Relation
+              (Into,
+               (Kind   => References,
+                From   => To_Unbounded_String (Path),
+                To     => To_Unbounded_String (Withs (Index)),
+                Source => Explicit,
+                Sure   => Certain,
+                Where  => To_Unbounded_String (Lines (Index)),
+                Origin => <>));
+         end loop;
+      end;
+      for Index in 1 .. Natural (Seen.Length) loop
+         declare
+            Name : constant String := Seen (Index);
+         begin
+            for Cut in reverse Name'Range loop
+               if Name (Cut) = '.' and then not Seen.Contains (Name (Name'First .. Cut - 1)) then
+                  Seen.Append (Name (Name'First .. Cut - 1));
+               end if;
+            end loop;
+         end;
       end loop;
 
       for Item of Into.Symbols loop

@@ -321,6 +321,14 @@ package body Model_Runner.CLI.Tasks is
                          others  => <>));
                   end loop;
                   Taken := Choosers.Choose (Screen, "cli.task.choose_kind", Offer);
+                  --  Left without a kind, on a terminal: nothing made, as
+                  --  a field left unanswered is.
+                  if Taken = 0 and then Choosers.Is_Available (Screen) then
+                     Pres.Put_Note (Screen, "cli.task.cancelled");
+                     Status := E.Exit_Cancelled;
+                     Outcome := E.Success;
+                     return;
+                  end if;
                   exit when Taken = 0;
                   Fields.Include ("kind", Known (Taken));
                end;
@@ -698,7 +706,64 @@ package body Model_Runner.CLI.Tasks is
            (Screen, "cli.task.moved",
             [Loc.Named ("name", First_Word),
              Loc.Named ("value", Tk.State_Of (Store, First_Word))]);
+         declare
+            Waiting : Unbounded_String;
+         begin
+            for Part of Made loop
+               if Tk.State_Of (Store, Part) = "candidate" then
+                  Append (Waiting, (if Waiting = Null_Unbounded_String then "" else ", ") & Part);
+               end if;
+            end loop;
+            if Waiting /= Null_Unbounded_String then
+               Pres.Put_Note (Screen, "cli.next.parts", [Loc.Named ("detail", To_String (Waiting))]);
+            end if;
+         end;
       end Split_Task;
+
+      --  Every open task of one component placed in another: task rehome
+      --  OLD NEW.
+      procedure Rehome is
+         Space : constant Natural := Ada.Strings.Fixed.Index (After_First, " ");
+         Moved : Natural := 0;
+      begin
+         if First_Word = "" or else After_First = "" or else Space /= 0 then
+            Outcome := E.Make (E.Framework_Input_Missing);
+            E.Add_Text (Outcome, "name", "the component its tasks are in, and the one to place"
+                        & " them in: task rehome OLD NEW");
+            Fail (Outcome);
+            Status := E.Exit_Usage;
+            return;
+         end if;
+         for Id of Tk.List (Store) loop
+            declare
+               Defined : R.Item;
+               Read    : E.Error_Info;
+               Fields  : Tk.Field_Map;
+            begin
+               Tk.Definition (Store, Id, Defined, Read);
+               if E.Is_Ok (Read) and then R.Get (Defined, "component") = First_Word
+                 and then Tk.State_Of (Store, Id) not in "complete" | "cancelled" | "rejected"
+               then
+                  Fields.Include ("component", After_First);
+                  Tk.Revise (Store, Change, Id, Fields, Outcome);
+                  if E.Is_Error (Outcome) then
+                     Fail (Outcome);
+                     return;
+                  end if;
+                  Moved := Moved + 1;
+               end if;
+            end;
+         end loop;
+         Commit;
+         if E.Is_Error (Outcome) then
+            Fail (Outcome);
+            return;
+         end if;
+         Pres.Put_Message
+           (Screen, "cli.task.rehomed",
+            [Loc.Named ("count", T.Image (Long_Long_Integer (Moved))),
+             Loc.Named ("name", First_Word), Loc.Named ("value", After_First)]);
+      end Rehome;
 
       procedure Show is
          View : R.Item;
@@ -747,6 +812,21 @@ package body Model_Runner.CLI.Tasks is
                   Line (R.Field_Name (View, Index));
                end if;
             end loop;
+         end;
+
+         --  Its parts, each with how it stands, whatever the parent's state.
+         declare
+            Parts : Unbounded_String;
+         begin
+            for Child of Tk.Children (Store, Argument) loop
+               Append (Parts, (if Parts = Null_Unbounded_String then "" else ", ")
+                              & Child & " " & Tk.State_Of (Store, Child));
+            end loop;
+            if Parts /= Null_Unbounded_String then
+               Pres.Put_Message
+                 (Screen, "cli.task.field",
+                  [Loc.Named ("name", "parts"), Loc.Named ("value", To_String (Parts))]);
+            end if;
          end;
 
          --  Work waiting in a workspace: which, and where.
@@ -1019,6 +1099,21 @@ package body Model_Runner.CLI.Tasks is
                    Loc.Named ("value", To_String (Held.State))]);
             end;
          end loop;
+
+         --  The last of its parent's parts done: the parent goes on.
+         declare
+            Defined : R.Item;
+            Read    : E.Error_Info;
+         begin
+            Tk.Definition (Store, Argument, Defined, Read);
+            if E.Is_Ok (Read) and then R.Get (Defined, "parent") /= ""
+              and then Tk.State_Of (Store, R.Get (Defined, "parent")) = "accepted"
+              and then Tk.Ready (Store, R.Get (Defined, "parent")).Ready
+            then
+               Pres.Put_Note
+                 (Screen, "cli.work.parent_ready", [Loc.Named ("name", R.Get (Defined, "parent"))]);
+            end if;
+         end;
       end Complete_Judged;
 
       --  Take a task's workspace in, and verify and complete it.
@@ -1054,6 +1149,26 @@ package body Model_Runner.CLI.Tasks is
             end if;
             return;
          end if;
+
+         --  Settled, but not passing where it was settled: nothing taken
+         --  in, and the work still where it can be put right.
+         if Done.Changed_Files.Is_Empty and then To_String (Done.Final_State) = "verification" then
+            Pres.Put_Message
+              (Screen, "cli.task.field",
+               [Loc.Named ("name", "reason"), Loc.Named ("value", To_String (Done.Reason))]);
+            declare
+               Place : Model_Runner.Framework.Workspaces.Workspace;
+               Read  : E.Error_Info;
+            begin
+               Model_Runner.Framework.Workspaces.Read
+                 (Store, To_String (Done.Workspace_Id), Place, Read);
+               Pres.Put_Note
+                 (Screen, "cli.next.conflict",
+                  [Loc.Named ("name", First_Word), Loc.Named ("path", To_String (Place.Path))]);
+            end;
+            Status := E.Exit_Input_Output;
+            return;
+         end if;
          Pres.Put_Message
            (Screen, "cli.task.integrated",
             [Loc.Named ("name", To_String (Done.Workspace_Id)),
@@ -1067,6 +1182,9 @@ package body Model_Runner.CLI.Tasks is
             Pres.Put_Message
               (Screen, "cli.task.field",
                [Loc.Named ("name", "reason"), Loc.Named ("value", To_String (Done.Reason))]);
+         end if;
+         if To_String (Done.Final_State) in "failed" | "blocked" then
+            Pres.Put_Note (Screen, "cli.next.retry", [Loc.Named ("name", First_Word)]);
          end if;
          if To_String (Done.Final_State) /= "complete" then
             Status := E.Exit_Input_Output;
@@ -1260,6 +1378,8 @@ package body Model_Runner.CLI.Tasks is
          Depend;
       elsif Action = "edit" then
          Edit;
+      elsif Action = "rehome" then
+         Rehome;
       elsif Action = "split" then
          Split_Task;
       elsif Action = "show" then

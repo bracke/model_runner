@@ -167,11 +167,24 @@ package body Model_Runner.Framework.Permissions is
    begin
       Result := Nothing;
       Status := E.Success;
-      for Entry_Text of Parts (Text, ';') loop
+      --  As written -- write_source: roots=docs/, max_depth=1; read_source
+      --  -- or as it is shown, a capability a line with its constraints
+      --  after a space: write_source roots=docs/.
+      for Entry_Text of Parts (Ada.Strings.Fixed.Translate
+                                 (Text, Ada.Strings.Maps.To_Mapping ([1 => ASCII.LF], ";")), ';')
+      loop
          declare
             Colon : constant Natural := Ada.Strings.Fixed.Index (Entry_Text, ":");
+            Space : constant Natural := Ada.Strings.Fixed.Index (Entry_Text, " ");
+            Cut   : constant Natural :=
+              (if Colon = 0 then Space elsif Space = 0 then Colon else Natural'Min (Colon, Space));
             Name  : constant String :=
-              (if Colon = 0 then Entry_Text else Entry_Text (Entry_Text'First .. Colon - 1));
+              (if Cut = 0 then Entry_Text else Entry_Text (Entry_Text'First .. Cut - 1));
+            Rest  : constant String :=
+              (if Cut = 0 then ""
+               else Ada.Strings.Fixed.Translate
+                      (Trim (Entry_Text (Cut + 1 .. Entry_Text'Last)),
+                       Ada.Strings.Maps.To_Mapping (" ", ",")));
             Found : Boolean;
             Which : Capability;
          begin
@@ -183,12 +196,12 @@ package body Model_Runner.Framework.Permissions is
                            & "; they are read_source, write_source, read_specs, write_specs,"
                            & " run_build, run_tests, run_static_analysis, create_children,"
                            & " propose_tasks, request_integration, use_network and"
-                           & " execute_external_process");
+                           & " execute_external_process, written as write_source roots=docs/;"
+                           & " read_source");
                Result := Nothing;
                return;
             end if;
-            Result (Which) :=
-              Constrained (if Colon = 0 then "" else Entry_Text (Colon + 1 .. Entry_Text'Last));
+            Result (Which) := Constrained (Rest);
          end;
       end loop;
    end Restriction;
@@ -295,6 +308,24 @@ package body Model_Runner.Framework.Permissions is
       Restriction (Text, Result, Status);
       return (if E.Is_Ok (Status) then Result else Nothing);
    end Sandbox;
+
+   ---------------------
+   -- Sandbox_Refuses --
+   ---------------------
+
+   function Sandbox_Refuses (Path : String; Writing : Boolean) return Boolean is
+      Confined : constant Permission_Set := Sandbox;
+   begin
+      if Confined = Unrestricted then
+         return False;
+      elsif Writing then
+         return not Allows (Confined, Write_Source, Path)
+           and then not Allows (Confined, Write_Specs, Path);
+      else
+         return not Allows (Confined, Read_Source, Path)
+           and then not Allows (Confined, Read_Specs, Path);
+      end if;
+   end Sandbox_Refuses;
 
    -----------------
    -- Set_Sandbox --
@@ -414,13 +445,19 @@ package body Model_Runner.Framework.Permissions is
    function Widening (Wider, Than : Permission_Set) return String is
       Within : constant Permission_Set := Intersect (Wider, Than);
    begin
+      --  What a level leaves unsaid -- no roots, no profiles, no limit --
+      --  it takes from the level above: not wider for being unsaid.
       for Item in Capability loop
          if Wider (Item).Granted
            and then (not Within (Item).Granted
-                     or else Within (Item).Roots /= Wider (Item).Roots
-                     or else Within (Item).Profiles /= Wider (Item).Profiles
-                     or else Within (Item).Max_Depth /= Wider (Item).Max_Depth
-                     or else Within (Item).Max_Children /= Wider (Item).Max_Children)
+                     or else (not Wider (Item).Roots.Is_Empty
+                              and then Within (Item).Roots /= Wider (Item).Roots)
+                     or else (not Wider (Item).Profiles.Is_Empty
+                              and then Within (Item).Profiles /= Wider (Item).Profiles)
+                     or else (Wider (Item).Max_Depth /= Natural'Last
+                              and then Within (Item).Max_Depth /= Wider (Item).Max_Depth)
+                     or else (Wider (Item).Max_Children /= Natural'Last
+                              and then Within (Item).Max_Children /= Wider (Item).Max_Children))
          then
             return Word (Item);
          end if;
@@ -598,12 +635,14 @@ package body Model_Runner.Framework.Permissions is
         and then not Allows (Allowed, Write_Source, Path)
         and then not Allows (Allowed, Write_Specs, Path)
       then
-         return "you may not write " & Path;
+         return "you may not write " & Path
+           & (if Sandbox_Refuses (Path, True) then " (the session's sandbox confines it)" else "");
       elsif not Writing
         and then not Allows (Allowed, Read_Source, Path)
         and then not Allows (Allowed, Read_Specs, Path)
       then
-         return "you may not read " & Path;
+         return "you may not read " & Path
+           & (if Sandbox_Refuses (Path, False) then " (the session's sandbox confines it)" else "");
       end if;
       return "";
    end Path_Refusal;

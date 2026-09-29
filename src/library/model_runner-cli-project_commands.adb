@@ -855,6 +855,10 @@ package body Model_Runner.CLI.Project_Commands is
                                            Nt.First_State (Nt.Requirement)).Length)));
          Line_Of ("cli.project.verified",
                   Image (Natural (Nt.List (Store, Nt.Requirement, "verified").Length)));
+         --  Done and not verified: each, and how it is.
+         for Id of Nt.List (Store, Nt.Requirement, "implemented") loop
+            Pres.Put_Note (Screen, "cli.project.not_verified", [Loc.Named ("name", Id)]);
+         end loop;
          for Id of Tk.List (Store, "accepted") loop
             if Tk.Ready (Store, Id).Ready then
                Ready := Ready + 1;
@@ -943,10 +947,26 @@ package body Model_Runner.CLI.Project_Commands is
                   then
                      return Value;
                   end if;
-                  return Ada.Strings.Fixed.Translate
-                    (Ada.Strings.Fixed.Translate
-                       (Value, Ada.Strings.Maps.To_Mapping (", ", [ASCII.LF, ASCII.LF])),
-                     Ada.Strings.Maps.To_Mapping ([1 => ASCII.HT], [1 => ASCII.LF]));
+                  declare
+                     Result : Unbounded_String;
+                     Start  : Positive := Value'First;
+                  begin
+                     for Index in Value'First .. Value'Last + 1 loop
+                        if Index > Value'Last or else Value (Index) in ASCII.LF | ASCII.HT | ',' then
+                           declare
+                              Item : constant String :=
+                                Ada.Strings.Fixed.Trim (Value (Start .. Index - 1), Ada.Strings.Both);
+                           begin
+                              if Item /= "" then
+                                 Append (Result, (if Result = Null_Unbounded_String then ""
+                                                  else [1 => ASCII.LF]) & Item);
+                              end if;
+                           end;
+                           Start := Index + 1;
+                        end if;
+                     end loop;
+                     return To_String (Result);
+                  end;
                end Shown;
             begin
                --  Those NAME names, when one is given.
@@ -957,6 +977,27 @@ package body Model_Runner.CLI.Project_Commands is
                end if;
             end;
          end loop;
+
+         --  The project's permissions where the configuration says none:
+         --  what agents are given all the same.
+         if (Argument (1) = "" or else Ada.Strings.Fixed.Index ("map.permission.project", Argument (1)) > 0)
+           and then not (for some Index in 1 .. R.Field_Count (Config) =>
+                           Ada.Strings.Fixed.Index (R.Field_Name (Config, Index),
+                                                    "map.permission.project") = 1)
+         then
+            declare
+               Given : Unbounded_String;
+            begin
+               for Line of Model_Runner.Framework.Lines_Of
+                 (Model_Runner.Framework.Permissions.Image
+                    (Model_Runner.Framework.Permissions.Effective
+                       (Store, "", "", Within_Sandbox => False)))
+               loop
+                  Append (Given, (if Given = Null_Unbounded_String then "" else "; ") & Line);
+               end loop;
+               Field ("map.permission.project", "(the default) " & To_String (Given));
+            end;
+         end if;
 
          --  Settings a name picks out that are not set: said so, as they
          --  mean something unset too.
@@ -996,8 +1037,37 @@ package body Model_Runner.CLI.Project_Commands is
                declare
                   Named : constant String := R.Field_Name (Value, Index);
                begin
-                  --  Columns a tab apart shown as columns.
-                  if Named not in "schema_id" | "schema_version" | "entity_id" | "revision" then
+                  --  A check's columns by what each is; other columns a tab
+                  --  apart shown as columns.
+                  if Named'Length > 6 and then Named (Named'First .. Named'First + 5) = "check."
+                  then
+                     declare
+                        function Split_Cells (Text : String) return Names.Vector is
+                           Result : Names.Vector;
+                           Start  : Positive := Text'First;
+                        begin
+                           for Index in Text'First .. Text'Last + 1 loop
+                              if Index > Text'Last or else Text (Index) = ASCII.HT then
+                                 Result.Append (Ada.Strings.Fixed.Trim
+                                                  (Text (Start .. Index - 1), Ada.Strings.Both));
+                                 Start := Index + 1;
+                              end if;
+                           end loop;
+                           return Result;
+                        end Split_Cells;
+                        Cells : constant Names.Vector := Split_Cells (R.Get (Value, Named));
+                        function Cell (At_Index : Positive) return String
+                        is (if Natural (Cells.Length) >= At_Index then Cells (At_Index) else "");
+                     begin
+                        Field (Named, Cell (1) & ": " & Cell (5)
+                               & " (exit " & Cell (3)
+                               & ", " & Cell (4) & " s, " & Cell (6)
+                               & (if Cell (8) = "warning" then ", a warning" else "")
+                               & (if Cell (9) not in "" | "1" then ", tries " & Cell (9) else "")
+                               & ")" & (if Cell (7) = "" then "" else "; log " & Cell (7))
+                               & (if Cell (2) = "" then "" else "; ran " & Cell (2)));
+                     end;
+                  elsif Named not in "schema_id" | "schema_version" | "entity_id" | "revision" then
                      Field (Named, Ada.Strings.Fixed.Translate
                                      (R.Get (Value, Named),
                                       Ada.Strings.Maps.To_Mapping ([1 => ASCII.HT], " ")));
@@ -1008,9 +1078,28 @@ package body Model_Runner.CLI.Project_Commands is
       begin
          if Id = "" then
             --  None named: the issues kept -- what bootstrap raised, what
-            --  agents reported -- each by its identifier and what it says.
+            --  agents reported -- each by its identifier and what it says;
+            --  not a command's output, which its evidence shows, and not
+            --  one about an entry since retired or replaced: acted on.
             declare
                Shown : Natural := 0;
+
+               function Acted_On (Summary : String) return Boolean is
+                  Colon : constant Natural := Ada.Strings.Fixed.Index (Summary, ": ");
+                  Named : constant String :=
+                    (if Colon > Summary'First then Summary (Summary'First .. Colon - 1) else "");
+                  Kind  : constant Nt.Intent_Kind :=
+                    (if Ada.Strings.Fixed.Index (Named, "DEC-") = 1 then Nt.Decision
+                     elsif Ada.Strings.Fixed.Index (Named, "SPEC-") = 1 then Nt.Specification
+                     else Nt.Requirement);
+               begin
+                  if Ada.Strings.Fixed.Index (Summary, "output of ") = 1 then
+                     return True;
+                  end if;
+                  return Named /= "" and then Ada.Strings.Fixed.Index (Named, " ") = 0
+                    and then Nt.State_Of (Store, Kind, Named)
+                               in "rejected" | "obsolete" | "superseded";
+               end Acted_On;
             begin
                for Name of S.Names (Store, Model_Runner.Framework.Results_Area) loop
                   declare
@@ -1021,7 +1110,9 @@ package body Model_Runner.CLI.Project_Commands is
                      Got       : E.Error_Info;
                   begin
                      Rs.Read (Store, Result_Id, One, Got, With_Payload => False);
-                     if E.Is_Ok (Got) and then Rs."=" (One.Kind, Rs.Diagnostic) then
+                     if E.Is_Ok (Got) and then Rs."=" (One.Kind, Rs.Diagnostic)
+                       and then not Acted_On (To_String (One.Summary))
+                     then
                         Field (Result_Id, To_String (One.Summary));
                         Shown := Shown + 1;
                      end if;
@@ -1233,7 +1324,9 @@ package body Model_Runner.CLI.Project_Commands is
                   end if;
                   for Requirement of Changed loop
                      Pres.Put_Message
-                       (Screen, "cli.work.requirement", [Loc.Named ("name", Requirement)]);
+                       (Screen, "cli.work.requirement",
+                        [Loc.Named ("name", Requirement),
+                         Loc.Named ("value", Nt.State_Of (Store, Nt.Requirement, Requirement))]);
                   end loop;
                   Outcome := E.Success;
                end;
@@ -1262,7 +1355,11 @@ package body Model_Runner.CLI.Project_Commands is
                end;
 
                --  A profile that runs no tests, said so, with what does.
-               if R.Get (Config, "scalar.profile_capability." & Profile) /= "run_tests" then
+               --  Not when others that run them run with it.
+               if R.Get (Config, "scalar.profile_capability." & Profile) /= "run_tests"
+                 and then not (for some Other of Profiles =>
+                                 R.Get (Config, "scalar.profile_capability." & Other) = "run_tests")
+               then
                   Pres.Put_Note (Screen, "cli.check.no_tests", [Loc.Named ("name", Profile)]);
                end if;
 
@@ -1353,8 +1450,12 @@ package body Model_Runner.CLI.Project_Commands is
               or else not Ada.Directories.Exists (Path)
               or else Ada.Directories."/=" (Ada.Directories.Kind (Path), Ada.Directories.Ordinary_File)
             then
-               Outcome := E.Make (E.Framework_Not_Found);
-               E.Add_Text (Outcome, "name", Path & " within the project");
+               Outcome := E.Make (E.Framework_Input_Invalid);
+               E.Add_Text (Outcome, "name", "a document to read");
+               E.Add_Text (Outcome, "value", Path);
+               E.Add_Text (Outcome, "detail",
+                           (if not Ada.Directories.Exists (Path) then "there is no such file"
+                            else "it is not a file within the project, outside its state"));
                Pres.Report (Screen, Outcome);
                return;
             end if;
@@ -1388,7 +1489,17 @@ package body Model_Runner.CLI.Project_Commands is
              Loc.Named ("total", Image (Report.Existing)),
              Loc.Named ("extra", Image (Report.Issues))]);
          for Id of Report.Made loop
-            Pres.Put_Message (Screen, "cli.project.bootstrap.made", [Loc.Named ("name", Id)]);
+            --  Each with what it is now: a candidate waits to be accepted.
+            declare
+               Kind : constant Nt.Intent_Kind :=
+                 (if Ada.Strings.Fixed.Index (Id, "DEC-") = 1 then Nt.Decision
+                  elsif Ada.Strings.Fixed.Index (Id, "SPEC-") = 1 then Nt.Specification
+                  else Nt.Requirement);
+            begin
+               Pres.Put_Message
+                 (Screen, "cli.project.bootstrap.made",
+                  [Loc.Named ("name", Id), Loc.Named ("value", Nt.State_Of (Store, Kind, Id))]);
+            end;
          end loop;
          for Id of Report.Revised loop
             Pres.Put_Message (Screen, "cli.project.bootstrap.revised", [Loc.Named ("name", Id)]);
@@ -1507,7 +1618,7 @@ package body Model_Runner.CLI.Project_Commands is
             if E.Is_Ok (Read) then
                Vf.Reevaluate_Requirements
                  (Store, Change, Moved, Read,
-                  Configuration => R.Get (Planned.After, "configuration_fingerprint"));
+                  Configuration => Cf.Verification_Fingerprint (Planned.After));
             end if;
             if E.Is_Ok (Read) then
                S.Commit (Store, Change, Read);
@@ -1527,8 +1638,10 @@ package body Model_Runner.CLI.Project_Commands is
                S.Commit (Store, Change, Read);
             end if;
             for Requirement of Moved loop
-               Pres.Put_Message (Screen, "cli.work.requirement", [Loc.Named ("name", Requirement),
-                                                                  Loc.Named ("value", "")]);
+               Pres.Put_Message
+                 (Screen, "cli.work.requirement",
+                  [Loc.Named ("name", Requirement),
+                   Loc.Named ("value", Nt.State_Of (Store, Nt.Requirement, Requirement))]);
             end loop;
          end;
          declare
@@ -1844,9 +1957,18 @@ package body Model_Runner.CLI.Project_Commands is
             if Now = Model_Runner.Framework.Permissions.Unrestricted then
                Pres.Put_Note (Screen, "cli.project.sandbox.none");
             else
-               Pres.Put_Message
-                 (Screen, "cli.project.sandbox.set",
-                  [Loc.Named ("value", Model_Runner.Framework.Permissions.Image (Now))]);
+               --  In the form /sandbox takes back: capabilities a ; apart.
+               declare
+                  Shown : Unbounded_String;
+               begin
+                  for Line of Model_Runner.Framework.Lines_Of
+                    (Model_Runner.Framework.Permissions.Image (Now))
+                  loop
+                     Append (Shown, (if Shown = Null_Unbounded_String then "" else "; ") & Line);
+                  end loop;
+                  Pres.Put_Message
+                    (Screen, "cli.project.sandbox.set", [Loc.Named ("value", To_String (Shown))]);
+               end;
             end if;
          end;
       elsif Word = "/reconfigure" then

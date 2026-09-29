@@ -106,6 +106,38 @@ package body Model_Runner.Framework.Configurations is
       return Records.Fingerprint_Of (Meaning);
    end Configuration_Fingerprint;
 
+   ------------------------------
+   -- Verification_Fingerprint --
+   ------------------------------
+
+   function Verification_Fingerprint (Value : Records.Item) return String is
+      Meaning : Records.Item := Copy (Value, Current_Entity);
+      Aside   : constant Name_Lists.Vector :=
+        ["scalar.work.", "input.work_", "scalar.agents.", "map.permission.", "set.bootstrap.",
+         "scalar.bootstrap.", "list.automation.", "map.task_field.", "scalar.task.",
+         "set.task.", "task_kind.", "baseline.", "set.execution.allowed", "file.",
+         "decision."];
+      Names   : Name_Lists.Vector;
+   begin
+      for Index in 1 .. Records.Field_Count (Value) loop
+         Names.Append (Records.Field_Name (Value, Index));
+      end loop;
+      Records.Remove (Meaning, "configuration_fingerprint");
+      for Field of Provenance loop
+         Records.Remove (Meaning, Field.all);
+      end loop;
+      for Name of Names loop
+         for Prefix of Aside loop
+            if Name'Length >= Prefix'Length
+              and then Name (Name'First .. Name'First + Prefix'Length - 1) = Prefix
+            then
+               Records.Remove (Meaning, Name);
+            end if;
+         end loop;
+      end loop;
+      return Records.Fingerprint_Of (Meaning);
+   end Verification_Fingerprint;
+
    -----------------
    -- Check_Input --
    -----------------
@@ -1432,6 +1464,27 @@ package body Model_Runner.Framework.Configurations is
             then
                Status := Refused (Name, "+= and -= change a set. or a list.; this is one value");
                return;
+            elsif Taking
+              and then (for some Taken of Lines_Of (Lines_From (Given)) =>
+                          not Lines_Of (Old).Contains (Taken))
+            then
+               --  What is not there is not taken out: said, with what is.
+               declare
+                  Held : Unbounded_String;
+               begin
+                  for One of Lines_Of (Old) loop
+                     Append (Held, (if Held = Null_Unbounded_String then "" else ", ") & One);
+                  end loop;
+                  for Taken of Lines_Of (Lines_From (Given)) loop
+                     if not Lines_Of (Old).Contains (Taken) then
+                        Status := Refused
+                          (Name, Taken & " is not in it"
+                           & (if Held = Null_Unbounded_String then ", which is empty"
+                              else "; it holds " & To_String (Held)));
+                        return;
+                     end if;
+                  end loop;
+               end;
             elsif not Records.Is_Field_Name (Name)
               or else (Starts (Name, "fact.") and then not Facts.Is_Key (Name (Name'First + 5 .. Name'Last)))
             then
@@ -1457,8 +1510,8 @@ package body Model_Runner.Framework.Configurations is
                         Records.Remove (Result.After, Name);
                      end if;
                      Result.Changed.Append
-                       (Name & ": " & (if not Was then "(not granted)" elsif Old = "" then "granted"
-                                       else Old)
+                       (Name & ": " & (if not Was then "(not set here: the level above holds)"
+                                       elsif Old = "" then "granted" else Old)
                         & " -> " & (if not Now then "(not granted)" elsif Given = "" then "granted"
                                     else Given));
                      if not Result.Impact.Contains (Reach (Name)) then
