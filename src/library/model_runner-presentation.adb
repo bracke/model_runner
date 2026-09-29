@@ -361,7 +361,13 @@ package body Model_Runner.Presentation is
            or else Here ("task list") or else Here ("req accept") or else Here ("req new")
            or else Here ("req reject") or else Here ("req obsolete") or else Here ("req lists")
            or else Here ("bootstrap FILE") or else Here ("reconfigure ")
-           or else Here ("check consistency") or else Here ("work TASK-") or else Here ("result RES-");
+           or else Here ("check consistency") or else Here ("work TASK-") or else Here ("result RES-")
+           or else Here ("task cancel") or else Here ("task reject") or else Here ("task depend")
+           or else Here ("task show") or else Here ("task audit") or else Here ("req show")
+           or else Here ("req unlink") or else Here ("req supersede") or else Here ("req revise")
+           or else Here ("decision revise") or else Here ("decision reject")
+           or else Here ("spec revise") or else Here ("check REQ-") or else Here ("check full")
+           or else Here ("config shows");
       end Names_A_Command;
    begin
       for Index in Text'Range loop
@@ -381,8 +387,7 @@ package body Model_Runner.Presentation is
       Arguments : Loc.Argument_List := Loc.Empty_Arguments)
    is
       Said : constant String :=
-        (if Item.Session and then Key'Length > 9 and then Key (Key'First .. Key'First + 8) = "cli.next."
-         then As_Typed_In_Session (Message (Item, Key, Arguments))
+        (if Item.Session then As_Typed_In_Session (Message (Item, Key, Arguments))
          else Message (Item, Key, Arguments));
    begin
       if Item.Structured then

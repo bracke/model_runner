@@ -438,6 +438,9 @@ package body Model_Runner.CLI.Tasks is
            (Screen, "cli.task.created",
             [Loc.Named ("name", To_String (Id)),
              Loc.Named ("detail", Fields ("title"))]);
+         if Tk.State_Of (Store, To_String (Id)) = "candidate" then
+            Pres.Put_Note (Screen, "cli.next.accept_task", [Loc.Named ("name", To_String (Id))]);
+         end if;
 
          --  Said where another task not ended has the same title.
          for Other of Tk.List (Store) loop
@@ -462,6 +465,57 @@ package body Model_Runner.CLI.Tasks is
          end loop;
       end Create;
 
+      --  Cancelled with parts still waiting: they are left as they are,
+      --  and said so, with how to let each go.
+      procedure Say_Parts_Left (Parent : String) is
+      begin
+         for Child of Tk.Children (Store, Parent) loop
+            if Tk.State_Of (Store, Child) in "candidate" | "accepted" | "blocked" then
+               Pres.Put_Message
+                 (Screen, "cli.task.field",
+                  [Loc.Named ("name", "left"),
+                   Loc.Named ("value", Child & " " & Tk.State_Of (Store, Child)
+                              & "; task " & (if Tk.State_Of (Store, Child) = "candidate"
+                                             then "reject " else "cancel ")
+                              & Child & " lets it go")]);
+            end if;
+         end loop;
+      end Say_Parts_Left;
+
+      --  Ended: the tasks still waiting for it, and how to free them.
+      procedure Say_Left_Waiting (Ended : String) is
+         Own  : R.Item;
+         Seen : E.Error_Info;
+      begin
+         --  A part let go: its parent is said.
+         Tk.Definition (Store, Ended, Own, Seen);
+         if E.Is_Ok (Seen) and then R.Get (Own, "parent") /= "" then
+            Pres.Put_Note
+              (Screen, "cli.task.part_of",
+               [Loc.Named ("name", R.Get (Own, "parent")), Loc.Named ("value", Ended)]);
+         end if;
+         for Other of Tk.List (Store) loop
+            if Tk.State_Of (Store, Other) not in "complete" | "cancelled" | "rejected" then
+               declare
+                  Defined : R.Item;
+                  Read    : E.Error_Info;
+               begin
+                  Tk.Definition (Store, Other, Defined, Read);
+                  if E.Is_Ok (Read)
+                    and then Model_Runner.Framework.Lines_Of
+                               (Ada.Strings.Fixed.Translate
+                                  (R.Get (Defined, "depends_on"),
+                                   Ada.Strings.Maps.To_Mapping (",", [1 => ASCII.LF]))).Contains (Ended)
+                  then
+                     Pres.Put_Note
+                       (Screen, "cli.task.left_waiting",
+                        [Loc.Named ("name", Other), Loc.Named ("value", Ended)]);
+                  end if;
+               end;
+            end if;
+         end loop;
+      end Say_Left_Waiting;
+
       procedure Move (Next : String) is
       begin
          if not Needs_Task then
@@ -481,20 +535,10 @@ package body Model_Runner.CLI.Tasks is
          Pres.Put_Message
            (Screen, "cli.task.moved",
             [Loc.Named ("name", Argument), Loc.Named ("value", Tk.State_Of (Store, Argument))]);
-         --  Cancelled with parts still waiting: they are left as they are,
-         --  and said so.
-         if Next = "cancelled" then
-            for Child of Tk.Children (Store, Argument) loop
-               if Tk.State_Of (Store, Child) in "candidate" | "accepted" | "blocked" then
-                  Pres.Put_Message
-                    (Screen, "cli.task.field",
-                     [Loc.Named ("name", "left"),
-                      Loc.Named ("value", Child & " " & Tk.State_Of (Store, Child)
-                                 & "; task " & (if Tk.State_Of (Store, Child) = "candidate"
-                                                then "reject " else "cancel ")
-                                 & Child & " lets it go")]);
-               end if;
-            end loop;
+         if Next in "rejected" | "cancelled" then
+            Say_Left_Waiting (Argument);
+         elsif Next = "accepted" and then Tk.Ready (Store, Argument).Ready then
+            Pres.Put_Note (Screen, "cli.next.work", [Loc.Named ("name", Argument)]);
          end if;
          if Tk.State_Of (Store, Argument) /= Next then
             Pres.Put_Message
@@ -555,17 +599,32 @@ package body Model_Runner.CLI.Tasks is
             Fail (Outcome);
             return;
          end if;
-         Tk.Add_Dependency (Store, Change, First_Word, After_First, Outcome);
-         if E.Is_Ok (Outcome) then
-            Commit;
-         end if;
-         if E.Is_Error (Outcome) then
-            Fail (Outcome);
-            return;
-         end if;
-         Pres.Put_Message
-           (Screen, "cli.task.depends", [Loc.Named ("name", First_Word),
-                                         Loc.Named ("value", After_First)]);
+         --  depend TASK ON remove: it stops waiting for it.
+         declare
+            Space  : constant Natural := Ada.Strings.Fixed.Index (After_First, " ");
+            On     : constant String :=
+              (if Space = 0 then After_First else After_First (After_First'First .. Space - 1));
+            Undo   : constant Boolean :=
+              Space > 0 and then Ada.Strings.Fixed.Trim
+                                   (After_First (Space + 1 .. After_First'Last),
+                                    Ada.Strings.Both) = "remove";
+         begin
+            if Undo then
+               Tk.Remove_Dependency (Store, Change, First_Word, On, Outcome);
+            else
+               Tk.Add_Dependency (Store, Change, First_Word, After_First, Outcome);
+            end if;
+            if E.Is_Ok (Outcome) then
+               Commit;
+            end if;
+            if E.Is_Error (Outcome) then
+               Fail (Outcome);
+               return;
+            end if;
+            Pres.Put_Message
+              (Screen, (if Undo then "cli.task.undepends" else "cli.task.depends"),
+               [Loc.Named ("name", First_Word), Loc.Named ("value", On)]);
+         end;
       end Depend;
 
       --  A task revised: task edit TASK with NAME=VALUE for each field.
@@ -652,12 +711,43 @@ package body Model_Runner.CLI.Tasks is
             Fail (Outcome);
             return;
          end if;
-         for Index in 1 .. R.Field_Count (View) loop
-            Pres.Put_Message
-              (Screen, "cli.task.field",
-               [Loc.Named ("name", R.Field_Name (View, Index)),
-                Loc.Named ("value", R.Get (View, R.Field_Name (View, Index)))]);
-         end loop;
+         --  What it is and where it stands first; what governs it last.
+         declare
+            First : constant Model_Runner.Framework.Name_Lists.Vector :=
+              ["definition.title", "runtime.state", "blocked_by", "definition.kind",
+               "definition.component", "definition.requirements", "definition.depends_on"];
+
+            procedure Line (Name : String) is
+            begin
+               Pres.Put_Message
+                 (Screen, "cli.task.field",
+                  [Loc.Named ("name", Name), Loc.Named ("value", R.Get (View, Name))]);
+            end Line;
+
+            function Leading (Name : String) return Boolean
+            is (First.Contains (Name));
+
+            function Governing (Name : String) return Boolean
+            is (Name'Length > 10 and then Name (Name'First .. Name'First + 9) = "authority.");
+         begin
+            for One of First loop
+               if R.Has (View, One) then
+                  Line (One);
+               end if;
+            end loop;
+            for Index in 1 .. R.Field_Count (View) loop
+               if not Leading (R.Field_Name (View, Index))
+                 and then not Governing (R.Field_Name (View, Index))
+               then
+                  Line (R.Field_Name (View, Index));
+               end if;
+            end loop;
+            for Index in 1 .. R.Field_Count (View) loop
+               if Governing (R.Field_Name (View, Index)) then
+                  Line (R.Field_Name (View, Index));
+               end if;
+            end loop;
+         end;
 
          --  Work waiting in a workspace: which, and where.
          if Model_Runner.Framework.Workspaces.Active_For (Store, Argument) /= "" then
@@ -846,6 +936,17 @@ package body Model_Runner.CLI.Tasks is
             return;
          end if;
 
+         --  A candidate is accepted first: nothing is run for one.
+         if Tk.State_Of (Store, Argument) = "candidate" then
+            Outcome := E.Make (E.Framework_Transition_Invalid);
+            E.Add_Text (Outcome, "name", Argument);
+            E.Add_Text (Outcome, "value", "candidate");
+            E.Add_Text (Outcome, "expected", "complete");
+            E.Add_Text (Outcome, "detail", "a candidate is accepted first: task accept " & Argument);
+            Fail (Outcome);
+            return;
+         end if;
+
          --  Its evidence missing or stale, it is verified now: a task done
          --  by hand is checked as the harness would check it.
          if not Verified then
@@ -875,6 +976,10 @@ package body Model_Runner.CLI.Tasks is
                                            and then Model_Runner.Framework.Tasks.State_Of
                                                       (Store, Argument) = "blocked"
                                          then "set aside: it is completed by hand"
+                                         elsif To_String (One.Name) = "implementation_present"
+                                           and then Tk.State_Of (Store, Argument)
+                                                    in "accepted" | "failed" | "blocked"
+                                         then "set aside: it is completed by hand"
                                          else To_String (One.Reason)))]);
             end;
          end loop;
@@ -893,6 +998,9 @@ package body Model_Runner.CLI.Tasks is
          end if;
          if E.Is_Error (Outcome) then
             Fail (Outcome);
+            if E."=" (Outcome.Code, E.Framework_Task_Not_Ready) then
+               Pres.Put_Note (Screen, "cli.next.gates", [Loc.Named ("name", Argument)]);
+            end if;
             return;
          end if;
          Pres.Put_Message
@@ -922,7 +1030,8 @@ package body Model_Runner.CLI.Tasks is
          end if;
          --  integrate TASK anyway: taken in whatever the code joins it to.
          Model_Runner.Framework.Work.Take_In
-           (Store, First_Word, Done, Outcome, Semantic_Accepted => After_First = "anyway");
+           (Store, First_Word, Done, Outcome, Semantic_Accepted => After_First = "anyway",
+            Text_Resolved => After_First = "resolved");
          if E.Is_Error (Outcome) then
             Fail (Outcome);
 
@@ -1083,6 +1192,8 @@ package body Model_Runner.CLI.Tasks is
                Pres.Put_Message
                  (Screen, "cli.task.moved",
                   [Loc.Named ("name", Argument), Loc.Named ("value", "cancelled")]);
+               Say_Parts_Left (Argument);
+               Say_Left_Waiting (Argument);
             end if;
          end if;
       elsif Action = "audit" then

@@ -1,5 +1,6 @@
 with Ada.Calendar;
 with Ada.Text_IO;
+with GNAT.OS_Lib;
 with Hostkit;
 with Interfaces;
 with Ada.Environment_Variables;
@@ -8332,8 +8333,63 @@ package body Tests.Framework_Cases is
       Model_Runner.Framework.Execution.Ask_To_Stop
         (Dirs.Containing_Directory (S.Root (Store)), To_String (Task_A));
       delay 1.1;
-      Assert (Model_Runner.Framework.Execution.Work_Withdrawn, "a stop asked from outside was not seen");
+      Assert (Model_Runner.Framework.Execution.Work_Withdrawn
+              and then Model_Runner.Framework.Execution.Cancel_Asked_From_Outside,
+              "a cancel asked from outside was not seen as one");
       Model_Runner.Framework.Execution.Watch_Lease (null);
+
+      --  What a killed run left running is stopped when the project opens.
+      if Dirs.Exists ("/usr/bin/setsid") then
+         declare
+            Args    : GNAT.OS_Lib.Argument_List (1 .. 2) :=
+              [new String'("sleep"), new String'("30")];
+            Child   : constant GNAT.OS_Lib.Process_Id :=
+              GNAT.OS_Lib.Non_Blocking_Spawn ("/usr/bin/setsid", Args);
+            Stopped : Model_Runner.Framework.Name_Lists.Vector;
+         begin
+            for A of Args loop
+               GNAT.OS_Lib.Free (A);
+            end loop;
+            delay 0.3;
+            Put_File (S.Root (Store) & "/runtime/group." & To_String (Task_A),
+                      Ada.Strings.Fixed.Trim
+                        (Integer'Image (GNAT.OS_Lib.Pid_To_Integer (Child)), Ada.Strings.Both));
+            Model_Runner.Framework.Execution.Stop_Left_Groups (Store, Stopped);
+            Assert (Natural (Stopped.Length) = 1
+                    and then not Dirs.Exists (S.Root (Store) & "/runtime/group." & To_String (Task_A)),
+                    "what a killed run left running was not stopped");
+         end;
+      end if;
+
+      --  Links and waits taken off again; the settings known unset.
+      declare
+         Other : Unbounded_String;
+         R1    : Unbounded_String;
+      begin
+         Tk.Create (Store, Change, Fields ("Other", "analysis"), "user", "", Other, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Add_Dependency (Store, Change, To_String (Task_A), To_String (Other), Status);
+         S.Commit (Store, Change, Status);
+         Tk.Remove_Dependency (Store, Change, To_String (Task_A), To_String (Other), Status);
+         S.Commit (Store, Change, Status);
+         declare
+            Defined : R.Item;
+         begin
+            Tk.Definition (Store, To_String (Task_A), Defined, Status);
+            Assert (E.Is_Ok (Status) and then R.Get (Defined, "depends_on") = "",
+                    "a dependency taken off still held");
+         end;
+         Nt.Propose (Store, Change, Nt.Requirement, "IO", "Linked", "It SHALL link.", "",
+                     "user", "", "project", R1, Status);
+         Nt.Link (Store, Change, Nt.Requirement, To_String (R1), Nt.Component, "nowhere", Status);
+         Nt.Unlink (Store, Change, Nt.Requirement, To_String (R1), Nt.Component, "nowhere", Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status)
+                 and then Nt.Links (Store, Nt.Requirement, To_String (R1), Nt.Component).Is_Empty,
+                 "a link was not taken off");
+         Assert (Model_Runner.Framework.Configurations.Known_Names.Contains ("scalar.work.agent"),
+                 "the settings the harness reads were not known");
+      end;
 
       --  A lease run out is let go of, once.
       declare

@@ -435,7 +435,9 @@ package body Model_Runner.Framework.Consistency is
                         Found (Undefined_Requirement, Id,
                                "it serves " & Requirement & ", which is "
                                & Ada.Strings.Unbounded.To_String (Held.State)
-                               & "; task cancel " & Id & " lets it go");
+                               & (if Tasks.State_Of (Item, Id) = "candidate"
+                                  then "; task reject " else "; task cancel ")
+                               & Id & " lets it go");
                      end if;
                   end;
                end loop;

@@ -125,6 +125,9 @@ package Model_Runner.Framework.Workspaces is
    --    Framework_Transition_Invalid when it is not active.
    --  @param Semantic_Accepted Whether a person has seen the semantic
    --    conflicts and takes the work in anyway.
+   --  @param Text_Resolved Whether a person has settled the conflicts of
+   --    text in the workspace's files, which are then taken over the
+   --    project's.
    procedure Integrate
      (Item      : Stores.Store;
       Change    : in out Stores.Transaction;
@@ -132,7 +135,8 @@ package Model_Runner.Framework.Workspaces is
       Permitted : Boolean;
       Taken     : out Name_Lists.Vector;
       Status    : out Model_Runner.Errors.Error_Info;
-      Semantic_Accepted : Boolean := False);
+      Semantic_Accepted : Boolean := False;
+      Text_Resolved     : Boolean := False);
 
    --  Give a workspace up: its files removed and its record marked
    --  abandoned.

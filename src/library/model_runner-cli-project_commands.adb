@@ -376,9 +376,31 @@ package body Model_Runner.CLI.Project_Commands is
          E.Add_Text (Status, "name", "time");
          E.Add_Text (Status, "detail", "the work ran out of the time it was given");
       elsif Outcome.Reason /= Model_Runner.Agent.Answered then
-         Status :=
-           (if E.Is_Error (Outcome.Error) then Outcome.Error
-            else E.Make (E.Generation_Invalid_Request));
+         if E.Is_Error (Outcome.Error) then
+            Status := Outcome.Error;
+         else
+            --  Why the model stopped without answering, in words.
+            Status := E.Make (E.Generation_Invalid_Request);
+            E.Add_Text
+              (Status, "field",
+               (case Outcome.Reason is
+                  when Model_Runner.Agent.Step_Limit =>
+                     "the model used all its steps with a call still open (agents.max_steps)",
+                  when Model_Runner.Agent.Token_Limit =>
+                     "the model used all its tokens (agents.token_budget)",
+                  when Model_Runner.Agent.Repeating =>
+                     "the model made only calls it had made already, and got no further",
+                  when Model_Runner.Agent.Render_Failed =>
+                     "the conversation would not render in the model's template",
+                  when Model_Runner.Agent.Grammar_Failed =>
+                     "the tool grammar would not compile",
+                  when Model_Runner.Agent.History_Failed =>
+                     "a turn would not fit the context (a larger --context-size helps)",
+                  when Model_Runner.Agent.Declined =>
+                     "a call was declined before it ran",
+                  when others =>
+                     "the model stopped without answering"));
+         end if;
       end if;
    end Run_Loop;
 
@@ -882,7 +904,12 @@ package body Model_Runner.CLI.Project_Commands is
                   Held : R.Item;
                begin
                   S.Read (Store, Model_Runner.Framework.Verification_Area, Name, Held, Read);
-                  if E.Is_Ok (Read) and then Full.Contains (R.Get (Held, "profile")) then
+                  --  A test is a profile that runs tests: a build in the
+                  --  full verification is not one.
+                  if E.Is_Ok (Read) and then Full.Contains (R.Get (Held, "profile"))
+                    and then R.Get (Config, "scalar.profile_capability." & R.Get (Held, "profile"))
+                             = "run_tests"
+                  then
                      Latest := To_Unbounded_String (Name);
                      Result := To_Unbounded_String
                        (if R.Get (Held, "passed") = "true" then "PASS" else "FAIL");
@@ -917,7 +944,9 @@ package body Model_Runner.CLI.Project_Commands is
                      return Value;
                   end if;
                   return Ada.Strings.Fixed.Translate
-                    (Value, Ada.Strings.Maps.To_Mapping (",", [1 => ASCII.LF]));
+                    (Ada.Strings.Fixed.Translate
+                       (Value, Ada.Strings.Maps.To_Mapping (", ", [ASCII.LF, ASCII.LF])),
+                     Ada.Strings.Maps.To_Mapping ([1 => ASCII.HT], [1 => ASCII.LF]));
                end Shown;
             begin
                --  Those NAME names, when one is given.
@@ -928,6 +957,17 @@ package body Model_Runner.CLI.Project_Commands is
                end if;
             end;
          end loop;
+
+         --  Settings a name picks out that are not set: said so, as they
+         --  mean something unset too.
+         if Argument (1) /= "" then
+            for Known of Model_Runner.Framework.Configurations.Known_Names loop
+               if Ada.Strings.Fixed.Index (Known, Argument (1)) > 0 and then not R.Has (Config, Known)
+               then
+                  Field (Known, "(not set)");
+               end if;
+            end loop;
+         end if;
       end Show_Config;
 
       procedure Show_Result (Store : in out S.Store) is
@@ -967,13 +1007,41 @@ package body Model_Runner.CLI.Project_Commands is
          end Show_Record;
       begin
          if Id = "" then
+            --  None named: the issues kept -- what bootstrap raised, what
+            --  agents reported -- each by its identifier and what it says.
             declare
-               Missing : E.Error_Info := E.Make (E.Framework_Input_Missing);
+               Shown : Natural := 0;
             begin
-               E.Add_Text (Missing, "name", "the result: RES-, INV-, CTX-, VER- or AG- and its number");
-               Pres.Report (Screen, Missing);
-               return;
+               for Name of S.Names (Store, Model_Runner.Framework.Results_Area) loop
+                  declare
+                     Result_Id : constant String :=
+                       (if Name'Length > 4 and then Name (Name'Last - 3 .. Name'Last) = ".rec"
+                        then Name (Name'First .. Name'Last - 4) else Name);
+                     One       : Rs.Result;
+                     Got       : E.Error_Info;
+                  begin
+                     Rs.Read (Store, Result_Id, One, Got, With_Payload => False);
+                     if E.Is_Ok (Got) and then Rs."=" (One.Kind, Rs.Diagnostic) then
+                        Field (Result_Id, To_String (One.Summary));
+                        Shown := Shown + 1;
+                     end if;
+                  end;
+               end loop;
+               if Shown = 0 then
+                  Pres.Put_Note (Screen, "cli.result.none");
+               end if;
             end;
+            return;
+         elsif Starts ("TASK-") or else Starts ("REQ-") or else Starts ("DEC-") or else Starts ("SPEC-")
+         then
+            Pres.Put_Note
+              (Screen, "cli.result.elsewhere",
+               [Loc.Named ("name", Id),
+                Loc.Named ("value", (if Starts ("TASK-") then "task show " & Id & " and task audit " & Id
+                                     elsif Starts ("REQ-") then "req " & Id
+                                     elsif Starts ("DEC-") then "decision " & Id
+                                     else "spec " & Id))]);
+            return;
          elsif Starts ("INV-") then
             Show_Record (Model_Runner.Framework.Invocations_Area, Id);
             return;
@@ -1026,6 +1094,7 @@ package body Model_Runner.CLI.Project_Commands is
                Evidence    : Unbounded_String;
                Passed      : Boolean;
                Changed     : Names.Vector;
+               Failing     : Names.Vector;
             begin
                Model_Runner.Framework.Intent.Read
                  (Store, Model_Runner.Framework.Intent.Requirement, Requirement, Held, Got);
@@ -1049,6 +1118,9 @@ package body Model_Runner.CLI.Project_Commands is
                         if E.Is_Ok (Got) then
                            S.Commit (Store, Change, Got);
                            Field (Id, To_String (Evidence) & (if Passed then " passed" else " failed"));
+                           if not Passed then
+                              Failing.Append (To_String (Evidence));
+                           end if;
                         end if;
                      end if;
                   end;
@@ -1057,6 +1129,9 @@ package body Model_Runner.CLI.Project_Commands is
                if E.Is_Ok (Got) then
                   S.Commit (Store, Change, Got);
                   Field (Requirement, To_String (Evidence) & (if Passed then " passed" else " failed"));
+                  if not Passed then
+                     Failing.Append (To_String (Evidence));
+                  end if;
                end if;
                Change := S.No_Changes;
                Vf.Reevaluate_Requirements (Store, Change, Changed, Got);
@@ -1067,6 +1142,22 @@ package body Model_Runner.CLI.Project_Commands is
                if To_String (Held.State) /= "verified" then
                   Field ("not verified", Vf.Why_Not_Verified (Store, Requirement));
                end if;
+
+               --  Checks that did not pass: a failure, with why.
+               for Evidence_Id of Failing loop
+                  declare
+                     Failed : E.Error_Info := E.Make (E.Framework_Verification_Failed);
+                     Why    : Unbounded_String;
+                  begin
+                     for Line of Vf.Why_Failed (Store, Evidence_Id) loop
+                        Append (Why, (if Why = Null_Unbounded_String then "" else ASCII.LF & "")
+                                & Line);
+                     end loop;
+                     E.Add_Text (Failed, "name", Evidence_Id);
+                     E.Add_Text (Failed, "detail", To_String (Why));
+                     Pres.Report (Screen, Failed);
+                  end;
+               end loop;
             end;
             return;
          end if;
@@ -1095,6 +1186,19 @@ package body Model_Runner.CLI.Project_Commands is
                end loop;
                Pres.Put_Message
                  (Screen, "cli.project.consistency", [Loc.Named ("count", Image (Cs.Length (Found)))]);
+
+               --  Something that does not hold together is a check that did
+               --  not pass.
+               if Cs.Length (Found) > 0 then
+                  declare
+                     Failed : E.Error_Info := E.Make (E.Framework_Verification_Failed);
+                  begin
+                     E.Add_Text (Failed, "name", "consistency");
+                     E.Add_Text (Failed, "detail", Image (Cs.Length (Found))
+                                 & " things in the state do not hold together, listed above");
+                     Pres.Report (Screen, Failed);
+                  end;
+               end if;
             end;
             return;
          end if;
@@ -1157,6 +1261,11 @@ package body Model_Runner.CLI.Project_Commands is
                       Loc.Named ("total", Image (Vf.Length (Said)))]);
                end;
 
+               --  A profile that runs no tests, said so, with what does.
+               if R.Get (Config, "scalar.profile_capability." & Profile) /= "run_tests" then
+                  Pres.Put_Note (Screen, "cli.check.no_tests", [Loc.Named ("name", Profile)]);
+               end if;
+
                --  Not passed: a failure, with what failed and how it ended.
                if not Passed then
                   declare
@@ -1183,9 +1292,29 @@ package body Model_Runner.CLI.Project_Commands is
             elsif Argument (1) /= "" and then R.Has (Config, "profile." & Argument (1)) then
                Profiles.Append (Argument (1));
             elsif Argument (1) /= "" then
-               Outcome := E.Make (E.Framework_Not_Found);
-               E.Add_Text (Outcome, "name", "the profile " & Argument (1));
-               Pres.Report (Screen, Outcome);
+               --  Not one: said with those there are.
+               declare
+                  Named : Unbounded_String;
+               begin
+                  for Index in 1 .. R.Field_Count (Config) loop
+                     declare
+                        Field_Name : constant String := R.Field_Name (Config, Index);
+                     begin
+                        if Field_Name'Length > 8
+                          and then Field_Name (Field_Name'First .. Field_Name'First + 7) = "profile."
+                        then
+                           Append (Named, (if Named = Null_Unbounded_String then "" else ", ")
+                                   & Field_Name (Field_Name'First + 8 .. Field_Name'Last));
+                        end if;
+                     end;
+                  end loop;
+                  Outcome := E.Make (E.Framework_Input_Invalid);
+                  E.Add_Text (Outcome, "name", "what to check");
+                  E.Add_Text (Outcome, "value", Argument (1));
+                  E.Add_Text (Outcome, "detail", "it is a profile (" & To_String (Named)
+                              & "), full, consistency or a requirement");
+                  Pres.Report (Screen, Outcome);
+               end;
                return;
             end if;
             if Profiles.Is_Empty and then R.Get (Config, "scalar.verification.default") /= "" then
@@ -1241,6 +1370,10 @@ package body Model_Runner.CLI.Project_Commands is
                end loop;
             end;
          end loop;
+         if Files.Is_Empty then
+            Pres.Put_Note (Screen, "cli.next.no_documents");
+            return;
+         end if;
          Model_Runner.Framework.Bootstrap.Apply (Store, Change, Found, Report, Outcome);
          if E.Is_Ok (Outcome) then
             S.Commit (Store, Change, Outcome);
@@ -1256,6 +1389,9 @@ package body Model_Runner.CLI.Project_Commands is
              Loc.Named ("extra", Image (Report.Issues))]);
          for Id of Report.Made loop
             Pres.Put_Message (Screen, "cli.project.bootstrap.made", [Loc.Named ("name", Id)]);
+         end loop;
+         for Id of Report.Revised loop
+            Pres.Put_Message (Screen, "cli.project.bootstrap.revised", [Loc.Named ("name", Id)]);
          end loop;
          for Line of Report.Stale loop
             Pres.Put_Message (Screen, "cli.project.bootstrap.stale", [Loc.Named ("detail", Line)]);
@@ -1553,8 +1689,15 @@ package body Model_Runner.CLI.Project_Commands is
          elsif Natural (Waiting.Length) > 1 then
             --  Each as the command that decides it.
             for Id of Tasks_Waiting loop
-               Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ")
-                       & "/task accept " & Id);
+               declare
+                  Defined : R.Item;
+                  Got     : E.Error_Info;
+               begin
+                  Model_Runner.Framework.Tasks.Definition (Store, Id, Defined, Got);
+                  Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ")
+                          & "/task " & (if Word = "/accept" then "accept " else "reject ") & Id
+                          & " (" & R.Get (Defined, "title") & ")");
+               end;
             end loop;
             for Which of Intent_Waiting loop
                declare
@@ -1564,7 +1707,8 @@ package body Model_Runner.CLI.Project_Commands is
                   Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ")
                           & (if Kind = "requirement" then "/req"
                              elsif Kind = "decision" then "/decision" else "/spec")
-                          & " accept " & Which (Colon + 1 .. Which'Last));
+                          & (if Word = "/accept" then " accept " else " reject ")
+                          & Which (Colon + 1 .. Which'Last));
                end;
             end loop;
             Pres.Put_Note

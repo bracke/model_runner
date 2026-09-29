@@ -2167,6 +2167,84 @@ package body Tests.CLI_Cases is
       Assert (Shows ("most like it") and then Shows ("req reject"),
               "an edited line was not paired with what it became: " & To_String (Said));
 
+      --  12. A third round.
+      --  A heading's statement may follow a blank line.
+      Write (Root & "/g/docs/third.md",
+             "# Third" & LF & LF & "## REQ-TH-001 Spaced" & LF & LF & "Its text is here." & LF);
+      Run ("bootstrap|docs/third.md");
+      Run ("req|show|REQ-TH-001");
+      Assert (Shows ("text: Its text is here."),
+              "a heading's statement after a blank line was lost: " & To_String (Said));
+      --  A requirement is superseded, and a wrong link taken off.
+      Run ("req|new|Old words|text=It SHALL do the old thing.");
+      Run ("req|new|New words|text=It SHALL do the new thing.");
+      Run ("req|list");
+      declare
+         Text : constant String := To_String (Said);
+         function Id_Of (Title : String) return String is
+            At_Title : constant Natural := Ada.Strings.Fixed.Index (Text, "  " & Title);
+            Start    : constant Natural :=
+              Ada.Strings.Fixed.Index (Text (Text'First .. At_Title), [1 => LF], Ada.Strings.Backward) + 1;
+            Space    : constant Natural := Ada.Strings.Fixed.Index (Text (Start .. At_Title), " ");
+         begin
+            return Text (Start .. Space - 1);
+         end Id_Of;
+         Old_Id : constant String := Id_Of ("[candidate]  Old words");
+         New_Id : constant String := Id_Of ("[candidate]  New words");
+      begin
+         Run ("req|supersede|" & Old_Id & "|" & New_Id);
+         Assert (Code = 0, "a requirement could not be superseded: " & To_String (Said));
+         Run ("req|link|" & New_Id & "|component|nowhere");
+         Assert (Shows ("not one of the project's components"),
+                 "a link to no component was not said: " & To_String (Said));
+         Run ("req|unlink|" & New_Id & "|component|nowhere");
+         Assert (Code = 0 and then Shows ("link is taken off"),
+                 "a link could not be taken off: " & To_String (Said));
+      end;
+      --  A dependency is taken off, and a task left waiting is named.
+      Run ("task|new|First step|--set|kind=analysis");
+      Run ("task|new|Second step|--set|kind=analysis");
+      Run ("task|list");
+      declare
+         Text : constant String := To_String (Said);
+         function Id_Of (Title : String) return String is
+            At_Title : constant Natural := Ada.Strings.Fixed.Index (Text, "  " & Title);
+            Start    : constant Natural :=
+              Ada.Strings.Fixed.Index (Text (Text'First .. At_Title), [1 => LF], Ada.Strings.Backward) + 1;
+            Space    : constant Natural := Ada.Strings.Fixed.Index (Text (Start .. At_Title), " ");
+         begin
+            return Text (Start .. Space - 1);
+         end Id_Of;
+         One : constant String := Id_Of ("[candidate]  First step");
+         Two : constant String := Id_Of ("[candidate]  Second step");
+      begin
+         Run ("task|depend|" & Two & "|" & One);
+         Run ("task|reject|" & One);
+         Assert (Shows (Two & " still waits for " & One), "a task left waiting was not named: "
+                 & To_String (Said));
+         Run ("task|depend|" & Two & "|" & One & "|remove");
+         Assert (Code = 0 and then Shows ("no longer waits for"),
+                 "a dependency could not be taken off: " & To_String (Said));
+         Run ("task|complete|" & Two);
+         Assert (Code /= 0 and then Shows ("accepted first"),
+                 "completing a candidate did not say to accept it first: " & To_String (Said));
+         Run ("task|accept|" & Two);
+         Assert (Shows ("next: work " & Two), "an accepted task gave no next step");
+      end;
+      --  check of a setting that is none, and a profile that is none.
+      Run ("reconfigure|scalar.work.agnt=x|confirm=yes");
+      Assert (Code /= 0 and then Shows ("did you mean scalar.work.agent"),
+              "a misspelled setting with its kind was taken: " & To_String (Said));
+      Run ("check|nope");
+      Assert (Code /= 0 and then Shows ("it is a profile ("),
+              "check of no profile did not list them: " & To_String (Said));
+      Run ("config|auto_accept");
+      Assert (Shows ("(not set)"), "config did not show a setting that is not set: " & To_String (Said));
+      Run ("result");
+      Assert (Code = 0, "result with nothing named failed: " & To_String (Said));
+      Run ("result|TASK-001");
+      Assert (Shows ("task show TASK-001"), "result of a task did not point to it");
+
       --  10. What the steps above rest on, asked directly.
       Assert (Model_Runner.CLI.Options.Is_Project_Word ("req")
               and then not Model_Runner.CLI.Options.Is_Project_Word ("run"),

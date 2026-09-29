@@ -7,6 +7,7 @@ with Ada.Strings.Fixed;
 with Hostkit.Fs;
 with Hostkit.Host;
 with Hostkit.Process;
+with Hostkit.Signals;
 
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Files;
@@ -88,6 +89,9 @@ package body Model_Runner.Framework.Execution is
    Last_Asked    : Ada.Calendar.Time := Ada.Calendar.Clock;
    Withdrawn     : Boolean := False;
 
+   --  Whether what withdrew it asked for its task to be cancelled.
+   Outside_Cancel : Boolean := False;
+
    -----------------
    -- Watch_Lease --
    -----------------
@@ -101,6 +105,7 @@ package body Model_Runner.Framework.Execution is
       Watched_Lease := To_Unbounded_String (Resource);
       Watched_Owner := To_Unbounded_String (Owner);
       Withdrawn := False;
+      Outside_Cancel := False;
       Last_Asked := Ada.Calendar.Clock;
    end Watch_Lease;
 
@@ -129,6 +134,13 @@ package body Model_Runner.Framework.Execution is
                                           then Lease (Lease'First + 5 .. Lease'Last) else Lease));
          begin
             if Ada.Directories.Exists (Request) then
+               declare
+                  Said : Unbounded_String;
+                  Read : E.Error_Info;
+               begin
+                  Files.Read_Text (Request, Said, Read);
+                  Outside_Cancel := Ada.Strings.Fixed.Index (To_String (Said), "cancel") > 0;
+               end;
                Ada.Directories.Delete_File (Request);
                Withdrawn := True;
             end if;
@@ -140,19 +152,87 @@ package body Model_Runner.Framework.Execution is
       return Withdrawn;
    end Work_Withdrawn;
 
+   --  Where a work run keeps the process group of what it runs, for a
+   --  later opening to stop should the run be killed: runtime/group.TASK.
+   function Group_File (Root : String; Lease : String) return String
+   is (Hostkit.Fs.Join (Hostkit.Fs.Join (Root, "runtime"),
+                        "group." & (if Lease'Length > 5
+                                      and then Lease (Lease'First .. Lease'First + 4) = "task."
+                                    then Lease (Lease'First + 5 .. Lease'Last) else Lease)));
+
+   --  Told the process a command started as, which leads its own group.
+   procedure Record_Group (Process_Id : Integer) is
+      Ignored : E.Error_Info;
+   begin
+      if Watched_Store /= null and then Length (Watched_Lease) > 0 then
+         Files.Write_Text
+           (Group_File (Stores.Root (Watched_Store.all), To_String (Watched_Lease)),
+            Trim (Integer'Image (Process_Id)), Ignored);
+      end if;
+   end Record_Group;
+
+   ----------------------
+   -- Stop_Left_Groups --
+   ----------------------
+
+   procedure Stop_Left_Groups (Item : Stores.Store; Stopped : out Name_Lists.Vector) is
+      Runtime : constant String := Hostkit.Fs.Join (Stores.Root (Item), "runtime");
+   begin
+      Stopped.Clear;
+      for Name of Files.Files_In (Runtime) loop
+         if Name'Length > 6 and then Name (Name'First .. Name'First + 5) = "group." then
+            declare
+               use type Hostkit.Process.Presence;
+               Path : constant String := Hostkit.Fs.Join (Runtime, Name);
+               Text : Unbounded_String;
+               Read : E.Error_Info;
+               Pid  : Integer := 0;
+            begin
+               Files.Read_Text (Path, Text, Read);
+               declare
+                  Said : constant String := Trim (To_String (Text));
+               begin
+                  if Said'Length in 1 .. 9 and then (for all C of Said => C in '0' .. '9') then
+                     Pid := Integer'Value (Said);
+                  end if;
+               end;
+               if Pid > 1 and then Hostkit.Process.Presence_Of (Pid) = Hostkit.Process.Present
+               then
+                  if Hostkit.Signals.Send_To_Group (Pid, Hostkit.Signals.Signal_Terminate) then
+                     delay 0.2;
+                     if Hostkit.Signals.Send_To_Group (Pid, Hostkit.Signals.Signal_Kill) then
+                        null;
+                     end if;
+                  end if;
+                  Stopped.Append
+                    ("stopped process" & Integer'Image (Pid) & " and what it started, left running"
+                     & " for " & Name (Name'First + 6 .. Name'Last) & " by a run that was killed");
+               end if;
+               Files.Discard (Path);
+            end;
+         end if;
+      end loop;
+   end Stop_Left_Groups;
+
    -----------------
    -- Ask_To_Stop --
    -----------------
 
-   procedure Ask_To_Stop (Project_Directory : String; Task_Id : String) is
+   procedure Ask_To_Stop
+     (Project_Directory : String;
+      Task_Id           : String;
+      Cancel            : Boolean := True)
+   is
       Ignored : E.Error_Info;
    begin
       Files.Write_Text
         (Hostkit.Fs.Join (Hostkit.Fs.Join (Hostkit.Fs.Join (Project_Directory, State_Directory),
                                            "runtime"),
                           "stop." & Task_Id),
-         Task_Id, Ignored);
+         (if Cancel then "cancel" else "stop"), Ignored);
    end Ask_To_Stop;
+
+   function Cancel_Asked_From_Outside return Boolean is (Outside_Cancel);
 
    function Cancel_Requested return Boolean
    is (Model_Runner.Cancellation."/=" (Watched, null)
@@ -455,7 +535,11 @@ package body Model_Runner.Framework.Execution is
                  Stdout_Path       => Output,
                  Stderr_Path       => Output,
                  Timeout_Ms        => Rules.Timeout * 1000,
-                 Cancelled         => Stop_Asked'Access);
+                 Cancelled         => Stop_Asked'Access,
+                 Started           => Record_Group'Access);
+            if Watched_Store /= null and then Length (Watched_Lease) > 0 then
+               Files.Discard (Group_File (Stores.Root (Watched_Store.all), To_String (Watched_Lease)));
+            end if;
             if Slot /= "" then
                Files.Discard (Slot);
             end if;
@@ -560,7 +644,11 @@ package body Model_Runner.Framework.Execution is
            Stdout_Path       => Output,
            Stderr_Path       => Output & ".stderr",
            Timeout_Ms        => Timeout * 1000,
-           Cancelled         => Stop_Asked'Access);
+           Cancelled         => Stop_Asked'Access,
+           Started           => Record_Group'Access);
+      if Watched_Store /= null and then Length (Watched_Lease) > 0 then
+         Files.Discard (Group_File (Stores.Root (Watched_Store.all), To_String (Watched_Lease)));
+      end if;
       Result := (Command     => Command,
                  Directory   => To_Unbounded_String (Directory),
                  Started     => Happened.Started,

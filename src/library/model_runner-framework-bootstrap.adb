@@ -81,8 +81,8 @@ package body Model_Runner.Framework.Bootstrap is
    end Key_Of;
 
    function Headline (Text : String) return String
-   is (if Text'Length <= 72 then Text
-       else Text (Text'First .. Text'First + 68) & "...");
+   is (if Text'Length <= 100 then Text
+       else Text (Text'First .. Text'First + 96) & "...");
 
    ----------
    -- Scan --
@@ -137,7 +137,11 @@ package body Model_Runner.Framework.Bootstrap is
          --  A blank line ends a heading's statement: what follows is said
          --  apart, though Acceptance: lines still go to the requirement.
          if Item = "" then
-            Section := 0;
+            --  Only once it has said something: a blank line under the
+            --  heading is Markdown's, not the end of the statement.
+            if Section > 0 and then Result.Outputs (Section).Text /= Null_Unbounded_String then
+               Section := 0;
+            end if;
             return;
          end if;
 
@@ -468,7 +472,8 @@ package body Model_Runner.Framework.Bootstrap is
                         when Specification_Candidate => "specifications",
                         when Issue                   => "issues"));
       --  The texts of what it made, as Result.Made has them.
-      Made_Texts : Name_Lists.Vector;
+      Made_Texts   : Name_Lists.Vector;
+      Made_Sources : Name_Lists.Vector;
 
       --  An issue, kept as a diagnostic result -- the same issue found
       --  again being the same result -- and said once, when it is new.
@@ -545,15 +550,32 @@ package body Model_Runner.Framework.Bootstrap is
                     or else To_String (Held.State) in "obsolete" | "superseded"
                   then
                      Result.Existing := Result.Existing + 1;
-                  elsif To_String (Held.State) /= Intent.First_State (Kind) and then not Settled then
+                  elsif (To_String (Held.State) /= Intent.First_State (Kind) and then not Settled)
+                    or else (Records.Get (Kept, "imported_text") /= ""
+                             and then To_String (Held.Text) /= Imported)
+                  then
+                     --  Agreed on, or revised by a person since: a person
+                     --  decides whether the document's new words replace it.
                      declare
+                        Word : constant String :=
+                          (case Kind is
+                              when Intent.Requirement   => "req",
+                              when Intent.Decision      => "decision",
+                              when Intent.Specification => "spec");
                         Said : Results.Result :=
                           (Kind       => Results.Diagnostic,
                            Producer   => To_Unbounded_String ("bootstrap"),
                            Summary    => To_Unbounded_String
                                            (Field (Next.Source) & " now says what " & Known
-                                            & " does not; revise " & Known
-                                            & " to take it, which a person decides"),
+                                            & " does not"
+                                            & (if To_String (Held.Text) /= Imported
+                                               then ", and " & Known & " holds a person's revision,"
+                                                    & " kept"
+                                               else "")
+                                            & "; " & Word & " revise " & Known
+                                            & (if Intent."=" (Kind, Intent.Specification)
+                                               then " from-document" else " text=...")
+                                            & " takes the document's words"),
                            Payload    => Next.Text,
                            Provenance => Next.Provenance,
                            others     => <>);
@@ -571,6 +593,7 @@ package body Model_Runner.Framework.Bootstrap is
                      if E.Is_Ok (Status) then
                         Mark_Imported (Kind, Known);
                         Result.Created := Result.Created + 1;
+                        Result.Revised.Append (Known);
                      end if;
                   end if;
                end;
@@ -592,6 +615,7 @@ package body Model_Runner.Framework.Bootstrap is
                   Result.Created := Result.Created + 1;
                   Result.Made.Append (To_String (Id));
                   Made_Texts.Append (Field (Next.Text));
+                  Made_Sources.Append (Field (Next.Source));
                end if;
             end Propose;
          begin
@@ -687,6 +711,7 @@ package body Model_Runner.Framework.Bootstrap is
                            Result.Created := Result.Created + 1;
                            Result.Made.Append (To_String (Id));
                            Made_Texts.Append (Field (Next.Text));
+                           Made_Sources.Append (Field (Next.Source));
                         end if;
                         if Moved then
                            declare
@@ -780,7 +805,9 @@ package body Model_Runner.Framework.Bootstrap is
                            Score : Float := 0.5;
                         begin
                            for Index in 1 .. Natural (Result.Made.Length) loop
-                              if Likeness (To_String (Held.Text), Made_Texts (Index)) > Score then
+                              if Made_Sources (Index) = To_String (Held.Source)
+                                and then Likeness (To_String (Held.Text), Made_Texts (Index)) > Score
+                              then
                                  Score := Likeness (To_String (Held.Text), Made_Texts (Index));
                                  Best := Index;
                               end if;
@@ -790,9 +817,11 @@ package body Model_Runner.Framework.Bootstrap is
                                 (Result.Made (Best) & ", most like it -- req supersede " & Known
                                  & " " & Result.Made (Best) & " keeps it as that one's history");
                            else
-                              for Made of Result.Made loop
-                                 Append (Instead, (if Instead = Null_Unbounded_String then "" else ", ")
-                                         & Made);
+                              for Index in 1 .. Natural (Result.Made.Length) loop
+                                 if Made_Sources (Index) = To_String (Held.Source) then
+                                    Append (Instead, (if Instead = Null_Unbounded_String then ""
+                                                      else ", ") & Result.Made (Index));
+                                 end if;
                               end loop;
                            end if;
                         end;

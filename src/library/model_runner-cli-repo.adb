@@ -7,6 +7,7 @@ with Model_Runner.Errors;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Repository;
+with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
@@ -129,6 +130,33 @@ package body Model_Runner.CLI.Repo is
          end loop;
          return Result;
       end Files_Of;
+
+      --  An entity's identifier without the revision a node carries.
+      function Bare_Id (Node : String) return String is
+         At_Sign : constant Natural := Ada.Strings.Fixed.Index (Node, "@");
+      begin
+         return (if At_Sign = 0 then Node else Node (Node'First .. At_Sign - 1));
+      end Bare_Id;
+
+      --  A requirement's node as the graph names it: at its revision.
+      function Revision_Node (Name : String) return String is
+         Store  : S.Store;
+         Got    : E.Error_Info;
+         Held   : Model_Runner.Framework.Intent.Entity;
+      begin
+         if Name'Length < 5 or else Name (Name'First .. Name'First + 3) /= "REQ-"
+           or else not S.Is_Initialized (Directory)
+         then
+            return Name;
+         end if;
+         S.Open_To_Read (Store, Directory, Got);
+         if E.Is_Ok (Got) then
+            Model_Runner.Framework.Intent.Read
+              (Store, Model_Runner.Framework.Intent.Requirement, Name, Held, Got);
+         end if;
+         S.Close (Store);
+         return (if E.Is_Ok (Got) then Name & "@" & Image (Held.Revision) else Name);
+      end Revision_Node;
 
       Verbose : constant Boolean :=
         Model_Runner.CLI.Options."=" (Item.Level, Model_Runner.CLI.Options.Verbose);
@@ -314,9 +342,11 @@ package body Model_Runner.CLI.Repo is
                      --  shorter name is: Quote is symbol:Hostkit.Shell.Quote.
                      Nodes : Model_Runner.Framework.Name_Lists.Vector;
                      Shown : Model_Runner.Framework.Name_Lists.Vector;
+                     State_Edges, Code_Edges : Model_Runner.Framework.Name_Lists.Vector;
                   begin
                      Nodes.Append (Argument);
                      Nodes.Append ("file:" & Argument);
+                     Nodes.Append (Revision_Node (Argument));
                      for Name of Rp.Find_Symbols (Found, Argument) loop
                         Nodes.Append ("symbol:" & Name);
                      end loop;
@@ -328,22 +358,45 @@ package body Model_Runner.CLI.Repo is
                                 To_String (One.From) & " " & To_String (One.Kind) & " "
                                 & To_String (One.To);
                            begin
-                              --  Each edge once, however it was reached.
+                              --  Each edge once, however it was reached;
+                              --  what the project's state says of it first.
                               if not Shown.Contains (Line) then
                                  Shown.Append (Line);
-                                 Pres.Put_Message
-                                   (Screen, "cli.repo.edge",
-                                    [Loc.Named ("name", To_String (One.From)),
-                                     Loc.Named ("value", To_String (One.Kind)),
-                                     Loc.Named ("other", To_String (One.To)),
-                                     Loc.Named ("detail",
-                                                Ada.Characters.Handling.To_Lower
-                                                  (Rp.Derivation'Image (One.Source) & ", "
-                                                   & Rp.Confidence'Image (One.Sure)))]);
+                                 declare
+                                    Said : constant String :=
+                                      To_String (One.From) & " " & To_String (One.Kind) & " "
+                                      & To_String (One.To) & " ("
+                                      & Ada.Characters.Handling.To_Lower
+                                          (Rp.Derivation'Image (One.Source) & ", "
+                                           & Rp.Confidence'Image (One.Sure)) & ")";
+                                 begin
+                                    if Ada.Strings.Fixed.Index (Line, "REQ-") > 0
+                                      or else Ada.Strings.Fixed.Index (Line, "TASK-") > 0
+                                    then
+                                       State_Edges.Append (Said);
+                                    else
+                                       Code_Edges.Append (Said);
+                                    end if;
+                                 end;
                               end if;
                            end;
                         end loop;
                      end loop;
+                     for Line of State_Edges loop
+                        Pres.Put_Message (Screen, "cli.repo.unit", [Loc.Named ("name", Line)]);
+                     end loop;
+                     for Index in 1 .. Natural (Code_Edges.Length) loop
+                        if Verbose or else Index <= 30 then
+                           Pres.Put_Message
+                             (Screen, "cli.repo.unit", [Loc.Named ("name", Code_Edges (Index))]);
+                        end if;
+                     end loop;
+                     if not Verbose and then Natural (Code_Edges.Length) > 30 then
+                        Pres.Put_Message
+                          (Screen, "cli.repo.more",
+                           [Loc.Named ("count", Image (Natural (Code_Edges.Length) - 30)),
+                            Loc.Named ("name", "edges")]);
+                     end if;
                      if Shown.Is_Empty then
                         Pres.Put_Message (Screen, "cli.repo.no_edges", [Loc.Named ("name", Argument)]);
                      end if;
@@ -372,6 +425,10 @@ package body Model_Runner.CLI.Repo is
                            for Path of Files_Of (Argument) loop
                               Changed.Append (Path);
                            end loop;
+                        end if;
+                        --  A requirement is its node at its revision.
+                        if Revision_Node (Argument) /= Argument then
+                           Changed.Append (Revision_Node (Argument));
                         end if;
                         if Changed.Is_Empty then
                            --  A file or a symbol that is not there reaches
@@ -426,7 +483,7 @@ package body Model_Runner.CLI.Repo is
                                             and then Model_Runner.Framework.Lines_Of
                                                        (Model_Runner.Framework.Records.Get
                                                           (Defined, "requirements")).Contains
-                                                          (To_String (One.Id))
+                                                          (Bare_Id (To_String (One.Id)))
                                           then
                                              Ids.Append (Id);
                                              All_Reached.Append

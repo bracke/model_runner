@@ -1782,6 +1782,60 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Third usability round:**
+  - `help req`, `check`, `decision`, `spec`, `accept`, `reject`, `sandbox`
+    and `instruct` give their syntax (two entries had been cut short).
+  - A `## REQ-ID Title` heading's statement may follow a blank line.
+  - Proposals and parts twice in one answer are made once; a split reuses
+    only the task's own parts, never the task itself, and one into parts
+    all done ends saying so rather than splitting again; parts are held to
+    `create_children`'s `max_children` and `max_depth` where it is granted.
+    A parent's prompt says how its parts stand.
+  - Cancelling a parent names the parts it leaves; rejecting or cancelling
+    a task names those still waiting for it; a part let go names its
+    parent. `task depend ID ON remove` takes a dependency off.
+  - `req supersede` works for requirements (the old one rejected or made
+    obsolete); `req unlink ID KIND TARGET` takes a link off; a link to a
+    component the project has not is said at once.
+  - A task an earlier attempt left changed counts that work; completing it
+    by hand vouches for it. `check REQ-ID` fails when its checks fail.
+  - A workspace conflict is none where the project already says what the
+    workspace does; `task integrate ID resolved` takes the workspace's files
+    once a person has settled them there.
+  - A command agent is told its permissions and its parts; a refused write
+    names every violation and that the file is still there.
+  - A killed `work` leaves no agent running: the agent's process group is
+    recorded and stopped when the project is next opened. The lock message
+    names the command that holds it.
+  - A task cancelled from another terminal ends cancelled (status 7).
+  - The session model agent's failures say why it stopped.
+  - "Not verified" says when a suite found no tests; the AUnit tests crate
+    depends on the project; `state` counts only a test run as a full test;
+    `check` says when its profile runs no tests.
+  - Next steps after `req accept`, `task new` and `task accept`; `work`
+    takes the one ready task; `task complete` on a candidate says to accept
+    it; `task show` leads with title and state.
+  - Bootstrap keeps a person's revision and says so, lists what it revised,
+    pairs edited lines only within their document, and keeps titles to 100
+    characters; `result` alone lists the issues kept; `spec revise ID
+    from-document` takes what its document says now.
+  - Consistency advice fits the task's state, and `check consistency` fails
+    when something does not hold together; it is said once, not on every
+    command.
+  - `impact` and `trace` of a requirement reach its links; `trace` leads with
+    requirements and tasks and cuts a long list short.
+  - An `issue:` line after a list is that field, not part of the list.
+  - Misspelled settings, with or without their kind, are refused with the
+    one meant; `config NAME` shows settings not set; `check NAME` for no
+    profile lists them.
+  - Alire projects get a `.gitignore`, and Alire's `config/` is kept out of
+    agents' context; diagnostics name files by their path in the project and
+    leave out the build tool's summary lines.
+  - Session notes name slash commands; `/reject` hints say reject and give
+    titles; `/help` says `/work` uses the project's agent; `init` lists files
+    once; `init --format json` carries each missing input's detail;
+    `bootstrap` with no documents says where it looked.
+
 - **`work` says which agent, context and call it started as it starts
   them**, not only once the agent has finished.
 - **Task identifiers are keyed by component only where a project has more

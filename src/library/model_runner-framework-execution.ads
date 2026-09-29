@@ -109,7 +109,25 @@ package Model_Runner.Framework.Execution is
    --
    --  @param Project_Directory The project.
    --  @param Task_Id The task.
-   procedure Ask_To_Stop (Project_Directory : String; Task_Id : String);
+   --  @param Cancel Whether the task is to end cancelled, not set aside.
+   procedure Ask_To_Stop
+     (Project_Directory : String;
+      Task_Id           : String;
+      Cancel            : Boolean := True);
+
+   --  Whether the run watched was stopped because another process asked
+   --  for its task to be cancelled, rather than only set aside.
+   --
+   --  @return True when it was.
+   function Cancel_Asked_From_Outside return Boolean;
+
+   --  Stop what a run that ended without finishing -- killed outright --
+   --  left running: each agent's process group it recorded as it started
+   --  them, still there.
+   --
+   --  @param Item The store, opened: no run of it is going on.
+   --  @param Stopped A line for each group stopped.
+   procedure Stop_Left_Groups (Item : Stores.Store; Stopped : out Name_Lists.Vector);
 
    --  Whether whoever runs the harness has asked it to stop -- Ctrl-C --
    --  through the token Watch was given: asked by a runner whose program

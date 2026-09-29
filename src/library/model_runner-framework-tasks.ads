@@ -324,6 +324,22 @@ package Model_Runner.Framework.Tasks is
       On     : String;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Stop one task waiting for another, as the next revision of its
+   --  definition.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Id The task that waits.
+   --  @param On The task it no longer waits for.
+   --  @param Status Framework_Not_Found when Id is not there or does not
+   --    wait for On.
+   procedure Remove_Dependency
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Id     : String;
+      On     : String;
+      Status : out Model_Runner.Errors.Error_Info);
+
    --  The project's components: those it lists, or, listing none, the
    --  project itself by its name.
    --

@@ -24,3 +24,8 @@ scalar profile_capability.analysis = run_static_analysis
 scalar verification.default = build
 set execution.allowed = alr
 discover alire.toml fact build_system = Alire
+
+# What Alire builds and generates stays out of the repository and out of
+# what agents are shown: its build output, and the config/ it writes.
+set repository.skip = config
+file .gitignore = alire/\nbin/\nobj/\nlib/\nconfig/\n

@@ -329,6 +329,18 @@ package body Model_Runner.CLI.Init is
                   One : E.Error_Info := E.Make (E.Framework_Input_Missing);
                begin
                   E.Add_Text (One, "name", Missing);
+                  --  What it is and how it is given, as plain output says.
+                  for Index in 1 .. Tp.Input_Count (Composed) loop
+                     declare
+                        Declared : constant Tp.Input_Declaration :=
+                          Cf.Resolved (Tp.Input_At (Composed, Index), Directory);
+                     begin
+                        if To_String (Declared.Id) = Missing then
+                           E.Add_Text (One, "detail", Input_Detail (Declared, Planned));
+                           E.Add_Text (One, "value", "--set " & Missing & "=...");
+                        end if;
+                     end;
+                  end loop;
                   Pres.Report (Screen, One);
                end;
             end loop;
@@ -448,12 +460,16 @@ package body Model_Runner.CLI.Init is
          return;
       end if;
 
-      for Made of Done.Made_Directories loop
-         Pres.Put_Note (Screen, "cli.init.made", [Loc.Named ("path", Made)]);
-      end loop;
-      for Made of Done.Written_Files loop
-         Pres.Put_Note (Screen, "cli.init.made", [Loc.Named ("path", Made)]);
-      end loop;
+      --  What was made, where the plan did not already list it: asked for
+      --  in detail only.
+      if Model_Runner.CLI.Options."=" (Item.Level, Model_Runner.CLI.Options.Verbose) then
+         for Made of Done.Made_Directories loop
+            Pres.Put_Note (Screen, "cli.init.made", [Loc.Named ("path", Made)]);
+         end loop;
+         for Made of Done.Written_Files loop
+            Pres.Put_Note (Screen, "cli.init.made", [Loc.Named ("path", Made)]);
+         end loop;
+      end if;
       --  What the check of the result found and left standing.
       for Line of Done.Findings loop
          Pres.Put_Note (Screen, "cli.task.field",

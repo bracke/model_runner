@@ -459,13 +459,22 @@ package body Model_Runner.Framework.Workspaces is
       Baseline : constant Maps.Map := Baseline_Of (Item, Id);
       Project  : constant String := Project_Of (Item);
       Result   : Name_Lists.Vector;
+      Held     : Workspace;
+      Read_It  : E.Error_Info;
    begin
+      Read (Item, Id, Held, Read_It);
       for Path of Changes (Item, Id) loop
          declare
             Before : constant String :=
               (if Baseline.Contains (Path) then Baseline (Path) else "");
+            Now    : constant String := Print_Of (Hostkit.Fs.Join (Project, Path));
          begin
-            if Print_Of (Hostkit.Fs.Join (Project, Path)) /= Before then
+            --  Changed in the project since, and not to what the workspace
+            --  has: a project that already says the same is no conflict.
+            if Now /= Before
+              and then (E.Is_Error (Read_It)
+                        or else Now /= Print_Of (Hostkit.Fs.Join (To_String (Held.Path), Path)))
+            then
                Result.Append (Path);
             end if;
          end;
@@ -627,7 +636,8 @@ package body Model_Runner.Framework.Workspaces is
       Permitted : Boolean;
       Taken     : out Name_Lists.Vector;
       Status    : out Model_Runner.Errors.Error_Info;
-      Semantic_Accepted : Boolean := False)
+      Semantic_Accepted : Boolean := False;
+      Text_Resolved     : Boolean := False)
    is
       Held    : Workspace;
       Project : constant String := Project_Of (Item);
@@ -656,7 +666,7 @@ package body Model_Runner.Framework.Workspaces is
          Clashes : constant Name_Lists.Vector := Conflicts (Item, Id);
          Listed  : Unbounded_String;
       begin
-         if not Clashes.Is_Empty then
+         if not Clashes.Is_Empty and then not Text_Resolved then
             for Path of Clashes loop
                Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ") & Path);
             end loop;

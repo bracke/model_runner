@@ -1665,6 +1665,53 @@ package body Model_Runner.Framework.Tasks is
    end Add_Dependency;
 
    -----------------------
+   -- Remove_Dependency --
+   -----------------------
+
+   procedure Remove_Dependency
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Id     : String;
+      On     : String;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Value  : Records.Item;
+      Staged : Boolean;
+      Event  : Unbounded_String;
+   begin
+      Status := E.Success;
+      Stores.Pending (Change, Tasks_Area, Id, Value, Staged);
+      if not Staged then
+         Definition (Item, Id, Value, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+      end if;
+      declare
+         Held : Name_Lists.Vector := Split (Records.Get (Value, "depends_on"));
+      begin
+         if not Held.Contains (On) then
+            Status := E.Make (E.Framework_Not_Found);
+            E.Add_Text (Status, "name", Id & " waiting for " & On);
+            return;
+         end if;
+         if not Staged then
+            Keep_Revision (Change, Id, Value);
+            Records.Set_Revision (Value, Records.Revision (Value) + 1);
+         end if;
+         Held.Delete (Held.Find_Index (On));
+         if Held.Is_Empty then
+            Records.Remove (Value, "depends_on");
+         else
+            Records.Set (Value, "depends_on", Joined (Held, [1 => ASCII.LF]));
+         end if;
+         Stores.Put (Change, Tasks_Area, Id, Value);
+         Events.Emit (Item, Change, Events.Task_Revised, Id, "no longer waits for " & On, Event,
+                      Status);
+      end;
+   end Remove_Dependency;
+
+   -----------------------
    -- Component_Problem --
    -----------------------
 

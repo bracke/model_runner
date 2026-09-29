@@ -589,6 +589,52 @@ package body Model_Runner.Framework.Intent is
       end;
    end Link;
 
+   ------------
+   -- Unlink --
+   ------------
+
+   procedure Unlink
+     (Item     : Stores.Store;
+      Change   : in out Stores.Transaction;
+      Kind     : Intent_Kind;
+      Id       : String;
+      Relation : Link_Kind;
+      Target   : String;
+      Status   : out Model_Runner.Errors.Error_Info)
+   is
+      Value : Records.Item;
+   begin
+      Current (Item, Change, Kind, Id, Value, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      declare
+         Field : constant String := Link_Field (Relation);
+         Kept  : Unbounded_String;
+         Found : Boolean := False;
+      begin
+         for Existing of Split_Lines (Records.Get (Value, Field)) loop
+            if Existing = Target then
+               Found := True;
+            else
+               Append (Kept, (if Kept = Null_Unbounded_String then "" else ASCII.LF & "") & Existing);
+            end if;
+         end loop;
+         if not Found then
+            Status := E.Make (E.Framework_Not_Found);
+            E.Add_Text (Status, "name", Id & "'s link to " & Target);
+            return;
+         end if;
+         if Kept = Null_Unbounded_String then
+            Records.Remove (Value, Field);
+         else
+            Records.Set (Value, Field, To_String (Kept));
+         end if;
+         Keep_Earlier (Item, Change, Kind, Id);
+         Stores.Put (Change, Area_Of (Kind), Id, Value);
+      end;
+   end Unlink;
+
    -----------
    -- Links --
    -----------
@@ -664,9 +710,18 @@ package body Model_Runner.Framework.Intent is
       Status : out Model_Runner.Errors.Error_Info)
    is
       Value : Records.Item;
+      Held  : Records.Item;
+      Read  : E.Error_Info;
    begin
-      Move (Item, Change, Kind, Old_Id, "superseded", Transitions.Ordinary_Only,
-            Status);
+      --  Where its register has no superseded state -- requirements -- the
+      --  one replaced is retired as the state it is in allows: rejected as
+      --  a candidate, obsolete once accepted; the links say what replaced it.
+      Current (Item, Change, Kind, Old_Id, Held, Read);
+      Move (Item, Change, Kind, Old_Id,
+            (if Transitions.Is_State (Lifecycle_Of (Item, Kind), "superseded") then "superseded"
+             elsif Records.Get (Held, "state") = First_State (Kind) then "rejected"
+             else "obsolete"),
+            Transitions.Ordinary_Only, Status);
       if E.Is_Error (Status) then
          return;
       end if;

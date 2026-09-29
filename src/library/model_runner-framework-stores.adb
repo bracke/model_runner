@@ -1,4 +1,5 @@
 with Ada.Characters.Handling;
+with Ada.Command_Line;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
@@ -1066,6 +1067,16 @@ package body Model_Runner.Framework.Stores is
       return Made and then Make_Directory (Journal_Directory (Root));
    end Make_Areas;
 
+   --  What this program was asked to do, as its command line said it.
+   function Command_Said return String is
+      Text : Unbounded_String := To_Unbounded_String ("model_runner");
+   begin
+      for Index in 1 .. Ada.Command_Line.Argument_Count loop
+         Append (Text, " " & Ada.Command_Line.Argument (Index));
+      end loop;
+      return To_String (Text);
+   end Command_Said;
+
    --  Beside the lock, the process that holds it.
    Holder_Suffix : constant String := ".holder";
 
@@ -1076,15 +1087,21 @@ package body Model_Runner.Framework.Stores is
       Held   : Unbounded_String;
       Read   : E.Error_Info;
       Pid    : Integer := 0;
+      Doing  : Unbounded_String;
    begin
       if Dirs.Exists (Lock_Path & Holder_Suffix) then
          Files.Read_Text (Lock_Path & Holder_Suffix, Held, Read);
       end if;
       declare
-         Text : constant String := Ada.Strings.Fixed.Trim (To_String (Held), Ada.Strings.Both);
+         Text  : constant String := Ada.Strings.Fixed.Trim (To_String (Held), Ada.Strings.Both);
+         Space : constant Natural := Ada.Strings.Fixed.Index (Text & " ", " ");
+         Num   : constant String := Text (Text'First .. Space - 1);
       begin
-         if Text'Length in 1 .. 9 and then (for all C of Text => C in '0' .. '9') then
-            Pid := Integer'Value (Text);
+         if Num'Length in 1 .. 9 and then (for all C of Num => C in '0' .. '9') then
+            Pid := Integer'Value (Num);
+         end if;
+         if Space < Text'Last then
+            Doing := To_Unbounded_String (Text (Space + 1 .. Text'Last));
          end if;
       end;
       if Pid = 0 then
@@ -1093,7 +1110,9 @@ package body Model_Runner.Framework.Stores is
          return "process" & Pid'Image & " took it and has ended; a program it started still"
            & " holds it -- end that program";
       end if;
-      return "process" & Pid'Image & "; stop it there, or wait for it to finish";
+      return "process" & Pid'Image
+        & (if Doing = Null_Unbounded_String then "" else " (" & To_String (Doing) & ")")
+        & "; stop it there, or wait for it to finish";
    end Holder_Of;
 
    --  Take the state directory for this session.
@@ -1135,7 +1154,8 @@ package body Model_Runner.Framework.Stores is
          begin
             Files.Write_Whole
               (Lock_Path & Holder_Suffix,
-               Ada.Strings.Fixed.Trim (Hostkit.Host.Own_Process_Id'Image, Ada.Strings.Both),
+               Ada.Strings.Fixed.Trim (Hostkit.Host.Own_Process_Id'Image, Ada.Strings.Both)
+               & " " & Command_Said,
                Ignored);
          end;
       end if;
@@ -1456,9 +1476,11 @@ package body Model_Runner.Framework.Stores is
                end if;
             elsif Ada.Directories.Kind (Found) = Ada.Directories.Ordinary_File
               and then Relative not in "runtime/lock" | "runtime/lock.holder" | "runtime/written.log"
-                                     | "runtime/harness.log"
+                                     | "runtime/harness.log" | "runtime/consistency.said"
               and then not (Relative'Length > 13
                             and then Relative (Relative'First .. Relative'First + 12) = "runtime/stop.")
+              and then not (Relative'Length > 14
+                            and then Relative (Relative'First .. Relative'First + 13) = "runtime/group.")
             then
                declare
                   Text : Unbounded_String;

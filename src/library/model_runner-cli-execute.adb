@@ -1943,8 +1943,7 @@ package body Model_Runner.CLI.Execute is
 
                --  One of the project commands asked about: its own syntax.
                if Kind = Opt.Command_Project and then Topic /= "project"
-                 and then Topic in "req" | "state" | "bootstrap" | "config" | "reconfigure"
-                                 | "check" | "result"
+                 and then Model_Runner.CLI.Options.Is_Project_Word (Topic)
                then
                   Screen.Put_Line ("");
                   Screen.Put_Message
@@ -1954,6 +1953,12 @@ package body Model_Runner.CLI.Execute is
                       elsif Topic = "config" then "help.project.config"
                       elsif Topic = "reconfigure" then "help.project.reconfigure"
                       elsif Topic = "check" then "help.project.check"
+                      elsif Topic = "decision" then "help.project.decision"
+                      elsif Topic = "spec" then "help.project.spec"
+                      elsif Topic = "accept" then "help.project.accept"
+                      elsif Topic = "reject" then "help.project.reject"
+                      elsif Topic = "sandbox" then "help.project.sandbox"
+                      elsif Topic = "instruct" then "help.project.instruct"
                       else "help.project.result"));
                end if;
                Screen.Put_Line ("");

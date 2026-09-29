@@ -230,4 +230,10 @@ package Model_Runner.Framework.Configurations is
       Restored : out Natural;
       Status   : out Model_Runner.Errors.Error_Info);
 
+   --  The settings the harness reads, by their whole names: those that
+   --  mean something whether or not a configuration sets them.
+   --
+   --  @return The names.
+   function Known_Names return Name_Lists.Vector;
+
 end Model_Runner.Framework.Configurations;

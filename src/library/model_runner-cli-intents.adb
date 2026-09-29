@@ -1,10 +1,13 @@
 with Ada.Characters.Handling;
+with Ada.Directories;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
+with Ada.Text_IO;
 
 with Model_Runner.Errors;
 with Model_Runner.Framework.Orchestration;
 with Model_Runner.Framework.Repository;
+with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Transitions;
 with Model_Runner.Framework.Verification;
 with Model_Runner.Localization;
@@ -48,11 +51,26 @@ package body Model_Runner.CLI.Intents is
       end if;
       for Id of Done.Derived loop
          Pres.Put_Message (Screen, "cli.task.derived", [Loc.Named ("name", Id)]);
+         --  A candidate until someone takes it up.
+         if Model_Runner.Framework.Tasks.State_Of (Store, Id) = "candidate" then
+            Pres.Put_Note (Screen, "cli.next.accept_task", [Loc.Named ("name", Id)]);
+         end if;
       end loop;
       for Id of Done.Became_Ready loop
          Pres.Put_Note (Screen, "cli.task.ready", [Loc.Named ("name", Id)]);
       end loop;
    end Move_Along;
+
+   --  The project's components, a comma apart.
+   function Joined_Components (Store : Model_Runner.Framework.Stores.Store) return String is
+      Text : Ada.Strings.Unbounded.Unbounded_String;
+   begin
+      for Name of Model_Runner.Framework.Tasks.Components (Store) loop
+         Ada.Strings.Unbounded.Append
+           (Text, (if Ada.Strings.Unbounded.Length (Text) = 0 then "" else ", ") & Name);
+      end loop;
+      return Ada.Strings.Unbounded.To_String (Text);
+   end Joined_Components;
 
    --  Commit a change, report a failure, and move along after a success.
    procedure Settle
@@ -334,8 +352,34 @@ package body Model_Runner.CLI.Intents is
             begin
                Nt.Read (Store, Kind, Word (2), Held, Status);
 
+               --  from-document: its text as its document says it now.
+               if E.Is_Ok (Status) and then Lower (Word (3)) = "from-document" then
+                  declare
+                     Path : constant String :=
+                       Ada.Directories.Compose
+                         (Ada.Directories.Containing_Directory (S.Root (Store)),
+                          To_String (Held.Source));
+                     Text : Ada.Strings.Unbounded.Unbounded_String;
+                     File : Ada.Text_IO.File_Type;
+                  begin
+                     if To_String (Held.Source) = "" or else not Ada.Directories.Exists (Path) then
+                        Status := E.Make (E.Framework_Not_Found);
+                        E.Add_Text (Status, "name", "the document " & Word (2) & " came from");
+                     else
+                        Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
+                        while not Ada.Text_IO.End_Of_File (File) loop
+                           Ada.Strings.Unbounded.Append (Text, Ada.Text_IO.Get_Line (File) & ASCII.LF);
+                        end loop;
+                        Ada.Text_IO.Close (File);
+                        Nt.Revise (Store, Change, Kind, Word (2), To_String (Held.Title),
+                                   To_String (Text), To_String (Held.Criteria), Result, Status);
+                        Settle (Store, Change, Status, Screen, "cli.task.revised", Word (2));
+                        return;
+                     end if;
+                  end;
+
                --  Something to revise, and something that differs.
-               if E.Is_Ok (Status)
+               elsif E.Is_Ok (Status)
                  and then Given ("title") = "" and then Given ("text") = ""
                  and then Given ("criteria") = ""
                then
@@ -363,6 +407,34 @@ package body Model_Runner.CLI.Intents is
                if E.Is_Ok (Status) and then Result.Invalidated then
                   Pres.Put_Note (Screen, "cli.intent.invalidated", [Loc.Named ("name", Word (2))]);
                end if;
+            end;
+         end if;
+
+      elsif Action = "unlink" then
+         Needs (4, "unlink ID KIND TARGET, whose KIND is dependency, component,"
+                & " implementation, task, test or verification");
+         if E.Is_Ok (Status) then
+            declare
+               Relation : Nt.Link_Kind := Nt.Dependency;
+               Found    : Boolean := False;
+            begin
+               for One in Nt.Link_Kind loop
+                  if Lower (Nt.Link_Kind'Image (One)) = Lower (Word (3))
+                    or else (Nt."=" (One, Nt.Task_Link) and then Lower (Word (3)) = "task")
+                  then
+                     Relation := One;
+                     Found := True;
+                  end if;
+               end loop;
+               if not Found then
+                  Status := E.Make (E.Framework_Schema_Violation);
+                  E.Add_Text (Status, "name", Word (3));
+                  E.Add_Text (Status, "detail", "a link is a dependency, component,"
+                              & " implementation, task, test or verification");
+               else
+                  Nt.Unlink (Store, Change, Kind, Word (2), Relation, From (4), Status);
+               end if;
+               Settle (Store, Change, Status, Screen, "cli.intent.unlinked", Word (2));
             end;
          end if;
 
@@ -394,6 +466,14 @@ package body Model_Runner.CLI.Intents is
 
                --  What it implements or tests is looked for, and said when
                --  the repository has no such thing.
+               if E.Is_Ok (Status) and then Nt."=" (Relation, Nt.Component)
+                 and then not Model_Runner.Framework.Tasks.Components (Store).Contains (From (4))
+               then
+                  Pres.Put_Note
+                    (Screen, "cli.intent.link_component",
+                     [Loc.Named ("name", From (4)),
+                      Loc.Named ("value", Joined_Components (Store))]);
+               end if;
                if E.Is_Ok (Status) and then Relation in Nt.Implementation | Nt.Test then
                   declare
                      package Rp renames Model_Runner.Framework.Repository;

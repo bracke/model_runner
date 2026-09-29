@@ -91,6 +91,16 @@ package body Model_Runner.Framework.Work is
        & " task is too large to do as one, say blocked and name its parts under"
        & " parts:, one a line." & ASCII.LF);
 
+   --  Names a comma apart.
+   function Comma_Separated (Names : Name_Lists.Vector) return String is
+      Text : Unbounded_String;
+   begin
+      for Name of Names loop
+         Append (Text, (if Text = Null_Unbounded_String then "" else ", ") & Name);
+      end loop;
+      return To_String (Text);
+   end Comma_Separated;
+
    --  The fields of a tab-separated line.
    function Fields_Of (Text : String) return Name_Lists.Vector is
       Result : Name_Lists.Vector;
@@ -465,8 +475,15 @@ package body Model_Runner.Framework.Work is
          Model_Runner.Localization.Open (English, Model_Runner.Platform.Catalog_Path, "en");
       end if;
       if Model_Runner.Localization.Is_Ready (English) then
-         return Model_Runner.Localization.Describe (English, Condition)
-           & " [" & E.Diagnostic_Code (Condition.Code) & "]";
+         declare
+            Said : constant String := Model_Runner.Localization.Describe (English, Condition);
+         begin
+            --  One that will not render -- a value its message names is
+            --  missing -- is said as what it holds instead.
+            if Said'Length > 0 and then Said (Said'First) /= '<' then
+               return Said & " [" & E.Diagnostic_Code (Condition.Code) & "]";
+            end if;
+         end;
       end if;
       return Raw_Why_Of (Condition);
    end Why_Of;
@@ -568,7 +585,14 @@ package body Model_Runner.Framework.Work is
          Said.Append ("built the entity index again");
       end if;
 
-      --  3: tasks left running with no one running them.
+      --  3: what a killed run left running is stopped, and the tasks it
+      --  left running with no one running them put back.
+      declare
+         Stopped : Name_Lists.Vector;
+      begin
+         Execution.Stop_Left_Groups (Item, Stopped);
+         Said.Append (Stopped);
+      end;
       Recover (Item, Put_Back, Status);
       if E.Is_Error (Status) then
          return;
@@ -781,8 +805,26 @@ package body Model_Runner.Framework.Work is
       --  9: what is still wrong, for someone to settle.
       declare
          Wrong : constant Consistency.Finding_List := Consistency.Check (Item);
+
+         --  Said once: the same findings as last time are not said again.
+         Mark    : constant String :=
+           Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "runtime"), "consistency.said");
+         Summary : Unbounded_String;
+         Before  : Unbounded_String;
+         Read    : E.Error_Info;
+         Kept    : E.Error_Info;
       begin
-         if Consistency.Length (Wrong) > 0 then
+         for Index in 1 .. Consistency.Length (Wrong) loop
+            Append (Summary, To_String (Consistency.Element (Wrong, Index).Subject) & " "
+                    & To_String (Consistency.Element (Wrong, Index).Detail) & ASCII.LF);
+         end loop;
+         if Ada.Directories.Exists (Mark) then
+            Files.Read_Text (Mark, Before, Read);
+         end if;
+         if Before /= Summary then
+            Files.Write_Text (Mark, To_String (Summary), Kept);
+         end if;
+         if Consistency.Length (Wrong) > 0 and then Before /= Summary then
             Said.Append
               ("what does not hold together in the state:"
                & Natural'Image (Consistency.Length (Wrong)) & ", first "
@@ -963,6 +1005,24 @@ package body Model_Runner.Framework.Work is
            & (if Invocation = "" then "" else ", in " & Invocation));
       Say ("answer", Records.Get (Call, "result"));
       Say ("issues", Records.Get (State, "issues"));
+
+      --  Every move it made, when and why, not only the last attempt's.
+      declare
+         Happened : constant Events.Event_List := Events.Since (Item, 0);
+      begin
+         for Index in 1 .. Events.Length (Happened) loop
+            declare
+               One : constant Events.Event := Events.Element (Happened, Index);
+            begin
+               if To_String (One.Subject) = Task_Id then
+                  Result.Append
+                    ("history: " & To_String (One.Occurred_At) & " "
+                     & To_String (One.Kind_Word)
+                     & (if Length (One.Detail) = 0 then "" else " -- " & To_String (One.Detail)));
+               end if;
+            end;
+         end loop;
+      end;
       Say ("proposed", Proposals_Of (Item, Task_Id));
       Say ("files changed", Records.Get (State, "changed_files"));
       Say ("workspace", Records.Get (State, "current_workspace"));
@@ -1597,8 +1657,11 @@ package body Model_Runner.Framework.Work is
       --  The result its answer was kept as, which its end names.
       Last_Result : Unbounded_String;
 
-      --  The parts its answer split the task into, as candidate children.
+      --  The parts its answer split the task into, as candidate children,
+      --  how many it may have, and why not more.
       Split_Into  : Name_Lists.Vector;
+      Split_Room  : Natural := Natural'Last;
+      Split_Why   : Unbounded_String;
 
       --  What an earlier attempt left changed in the project, which this
       --  one may say it changed though it did not touch it again.
@@ -1622,6 +1685,65 @@ package body Model_Runner.Framework.Work is
       end Runner_Said;
 
       Runner_Named : constant String := Runner_Said;
+
+      --  What it changed that its permissions do not let it write.
+      function Beyond_Permissions return String is
+         Held_Agent : Agents.Agent;
+         Read       : E.Error_Info;
+         Named      : Unbounded_String;
+      begin
+         Agents.Read (Item, To_String (Result.Agent_Id), Held_Agent, Read);
+         for Path of Result.Changed_Files loop
+            if not Permissions.Allows (Held_Agent.Allowed, Permissions.Write_Source, Path)
+              and then not Permissions.Allows (Held_Agent.Allowed, Permissions.Write_Specs, Path)
+            then
+               Append (Named, (if Named = Null_Unbounded_String then "" else ", ") & Path);
+            end if;
+         end loop;
+         return To_String (Named);
+      end Beyond_Permissions;
+
+      --  What its agent may do, said before it does anything: where it may
+      --  write, and whether it may propose work.
+      function Allowed_Here return String is
+         Held_Agent : Agents.Agent;
+         Read       : E.Error_Info;
+      begin
+         Agents.Read (Item, To_String (Result.Agent_Id), Held_Agent, Read);
+         if E.Is_Error (Read) then
+            return "";
+         end if;
+         return ASCII.LF & "## What you may do" & ASCII.LF
+           & "Your permissions: " & Permissions.Image (Held_Agent.Allowed) & "." & ASCII.LF
+           & "Change only files write_source or write_specs lets you write; a change"
+           & " to any other file fails the work."
+           & (if Permissions.Allows (Held_Agent.Allowed, Permissions.Propose_Tasks) then ""
+              else " You may not propose tasks or parts.")
+           & ASCII.LF;
+      end Allowed_Here;
+
+      --  Its parts, where an earlier answer split it: each as it stands, so
+      --  that work coming back to it knows what they did.
+      function Its_Parts return String is
+         Text : Unbounded_String;
+      begin
+         for Child of Tasks.Children (Item, Task_Id) loop
+            declare
+               Defined : Records.Item;
+               Read    : E.Error_Info;
+            begin
+               Tasks.Definition (Item, Child, Defined, Read);
+               Append (Text, "- " & Child & " " & Records.Get (Defined, "title") & ": "
+                       & Tasks.State_Of (Item, Child) & ASCII.LF);
+            end;
+         end loop;
+         if Text = Null_Unbounded_String then
+            return "";
+         end if;
+         return ASCII.LF & "## Your parts" & ASCII.LF & To_String (Text)
+           & "Those complete are done: do what is left of the task itself, and do not split"
+           & " it into them again." & ASCII.LF;
+      end Its_Parts;
 
       --  Whether it went over its token budget.
       Over_Budget : Boolean := False;
@@ -1805,7 +1927,8 @@ package body Model_Runner.Framework.Work is
       Context.Build
         (Item, Task_Id, Model, Built, Held,
          Instructions => (if Ada.Strings.Fixed.Index (Runner_Named, "the command ") = 1
-                          then Command_Instructions else Instructions));
+                          then Command_Instructions else Instructions)
+                         & Allowed_Here & Its_Parts);
       if E.Is_Error (Held) then
          Conclude ("blocked", "its context cannot be built: "
                    & Why_Of (Held), "failed");
@@ -2073,6 +2196,17 @@ package body Model_Runner.Framework.Work is
             Append (Files_Text, (if Files_Text = Null_Unbounded_String then "" else ASCII.LF & "")
                                 & Path);
          end loop;
+
+         --  In the project itself, what an earlier attempt left changed is
+         --  still this task's work: counted with this one's.
+         if not Isolated then
+            for Path of Earlier_Changed loop
+               if not Result.Changed_Files.Contains (Path) then
+                  Append (Files_Text, (if Files_Text = Null_Unbounded_String then ""
+                                       else ASCII.LF & "") & Path);
+               end if;
+            end loop;
+         end if;
          Annotate (Item, Change, Task_Id, "changed_files", To_String (Files_Text));
          if not Result.Changed_Files.Is_Empty and then not Isolated then
             declare
@@ -2100,7 +2234,12 @@ package body Model_Runner.Framework.Work is
       --  Stopped by whoever started it: the agent and what it made are
       --  cancelled, and the task is put aside, not failed -- nothing is
       --  known against it -- until it is accepted again.
-      if Interrupted (Ran) then
+      if Interrupted (Ran) and then Execution.Cancel_Asked_From_Outside then
+         --  Cancelled from another terminal: cancelled, as asked.
+         Stop_Children (Item, Change, To_String (Result.Agent_Id));
+         Conclude ("cancelled", "it was cancelled from another terminal", "cancelled");
+         return;
+      elsif Interrupted (Ran) then
          Stop_Children (Item, Change, To_String (Result.Agent_Id));
          Conclude ("blocked", "its work was cancelled", "cancelled");
          return;
@@ -2122,7 +2261,8 @@ package body Model_Runner.Framework.Work is
          return;
       end if;
 
-      --  Its state is not the agent's to write, whatever it may.
+      --  Its state is not the agent's to write, whatever it may; and what
+      --  it wrote outside its permissions is named with that, every one.
       if not Tampered.Is_Empty then
          declare
             Named : Unbounded_String;
@@ -2132,7 +2272,11 @@ package body Model_Runner.Framework.Work is
                        & State_Directory & "/" & Path);
             end loop;
             Conclude ("failed", "it changed the project's state, which was put back: "
-                      & To_String (Named), "failed");
+                      & To_String (Named)
+                      & (if Beyond_Permissions = "" then ""
+                         else "; and it changed files it may not write, which are still there:"
+                              & " " & Beyond_Permissions & " -- take them out before task complete"),
+                      "failed");
          end;
          return;
       end if;
@@ -2155,6 +2299,9 @@ package body Model_Runner.Framework.Work is
                Workspaces.Abandon (Item, Change, To_String (Result.Workspace_Id), Held);
             end if;
             Conclude ("failed", "it changed files it may not write: " & To_String (Denied)
+                      & (if Isolated then ""
+                         else "; they are still in the project -- take them out before task"
+                              & " complete")
                       & (if Permissions."=" (Permissions.Sandbox, Permissions.Unrestricted) then ""
                          else " -- the session's sandbox confines it; /sandbox off lifts it"),
                       "failed");
@@ -2222,11 +2369,24 @@ package body Model_Runner.Framework.Work is
 
          --  A task of that title there already: this one, or one not
          --  ended. What is proposed twice is made once.
-         function Same_Title (Title : String) return String is
+         --  A task of that title there already, which this answer's line
+         --  is: one made from this same answer; for a proposal, one not
+         --  ended; for a part, one of this task's own parts, done or not.
+         --  Never this task itself.
+         function Same_Title (Title : String; Part : Boolean := False) return String is
             Lower : constant String := Ada.Characters.Handling.To_Lower (Title);
          begin
+            for Made in 1 .. Natural (Made_Titles.Length) loop
+               if Made_Titles (Made) = Lower then
+                  return Made_Ids (Made);
+               end if;
+            end loop;
             for Other of Tasks.List (Item) loop
-               if Tasks.State_Of (Item, Other) not in "complete" | "cancelled" | "rejected" then
+               if Other /= Task_Id
+                 and then (Part
+                           or else Tasks.State_Of (Item, Other) not in "complete" | "cancelled"
+                                                                     | "rejected")
+               then
                   declare
                      Its  : Records.Item;
                      Read : E.Error_Info;
@@ -2234,6 +2394,9 @@ package body Model_Runner.Framework.Work is
                      Tasks.Definition (Item, Other, Its, Read);
                      if E.Is_Ok (Read)
                        and then Ada.Characters.Handling.To_Lower (Records.Get (Its, "title")) = Lower
+                       and then (not Part or else Records.Get (Its, "parent") = Task_Id)
+                       and then (not Part
+                                 or else Tasks.State_Of (Item, Other) not in "cancelled" | "rejected")
                      then
                         return Other;
                      end if;
@@ -2312,6 +2475,37 @@ package body Model_Runner.Framework.Work is
          --  The parts it would split its task into: proposal data, not a
          --  split -- candidate children, which a person accepts or not, and
          --  the task itself is left as the answer leaves it.
+         --  A split is held to the limits children are: no more parts than
+         --  create_children's max_children, and none below its max_depth.
+         declare
+            Limit : constant Permissions.Grant := Held_Root.Allowed (Permissions.Create_Children);
+            Depth : Natural := 0;
+            Up    : Unbounded_String := To_Unbounded_String (Task_Id);
+         begin
+            loop
+               declare
+                  Defined_Up : Records.Item;
+                  Read_Up    : E.Error_Info;
+               begin
+                  Tasks.Definition (Item, To_String (Up), Defined_Up, Read_Up);
+                  exit when E.Is_Error (Read_Up) or else Records.Get (Defined_Up, "parent") = ""
+                    or else Depth > 64;
+                  Up := To_Unbounded_String (Records.Get (Defined_Up, "parent"));
+                  Depth := Depth + 1;
+               end;
+            end loop;
+            --  Where the agent may create children, their limits bound its
+            --  parts too; a split is otherwise proposal, which propose_tasks
+            --  governs.
+            Split_Room := (if not Limit.Granted then Natural'Last
+                           elsif Depth + 1 > Limit.Max_Depth then 0
+                           else Limit.Max_Children);
+            Split_Why := To_Unbounded_String
+              (if Depth + 1 > Limit.Max_Depth
+               then "a part here would be" & Natural'Image (Depth + 1) & " below the task it came"
+                    & " from, past create_children's max_depth" & Natural'Image (Limit.Max_Depth)
+               else "past create_children's max_children" & Natural'Image (Limit.Max_Children));
+         end;
          for Line of Parts loop
             declare
                Title  : constant String := Trim (Line);
@@ -2320,12 +2514,17 @@ package body Model_Runner.Framework.Work is
             begin
                if Title = "" or else Title = "-" then
                   null;
+               elsif May_Propose and then Same_Title (Title, Part => True) = ""
+                 and then Natural (Split_Into.Length) >= Split_Room
+               then
+                  Append (Kept_Back, ASCII.LF & "part: " & Title);
+                  Result.Kept_Back.Append (Title & ": " & To_String (Split_Why));
 
                --  A part there already -- from an earlier split, or twice in
                --  this answer -- is that part, not another.
-               elsif May_Propose and then Same_Title (Title) /= "" then
-                  if not Split_Into.Contains (Same_Title (Title)) then
-                     Split_Into.Append (Same_Title (Title));
+               elsif May_Propose and then Same_Title (Title, Part => True) /= "" then
+                  if not Split_Into.Contains (Same_Title (Title, Part => True)) then
+                     Split_Into.Append (Same_Title (Title, Part => True));
                   end if;
                elsif May_Propose then
                   Fields.Include ("title", Title);
@@ -2462,7 +2661,16 @@ package body Model_Runner.Framework.Work is
          end;
       end if;
 
-      if To_String (Result.Claimed) in "blocked" | "issue" then
+      if To_String (Result.Claimed) in "blocked" | "issue" and then not Split_Into.Is_Empty
+        and then (for all Part of Split_Into => Tasks.State_Of (Item, Part) = "complete")
+      then
+         --  Split again into parts all done: nothing is left to wait for,
+         --  and waiting would only bring it back here.
+         Conclude ("blocked", "its parts " & Comma_Separated (Split_Into) & " are complete and it"
+                   & " asked for them again; task complete " & Task_Id & " takes it as done",
+                   "completed");
+         return;
+      elsif To_String (Result.Claimed) in "blocked" | "issue" then
          --  Split into parts, it waits for them: once they are accepted and
          --  done it goes back to work on its own, and not before.
          Conclude ("blocked",
@@ -2817,7 +3025,8 @@ package body Model_Runner.Framework.Work is
       Task_Id : String;
       Result  : out Report;
       Status  : out Model_Runner.Errors.Error_Info;
-      Semantic_Accepted : Boolean := False)
+      Semantic_Accepted : Boolean := False;
+      Text_Resolved     : Boolean := False)
    is
       Change : Stores.Transaction;
       Id     : constant String := Workspaces.Active_For (Item, Task_Id);
@@ -2844,7 +3053,8 @@ package body Model_Runner.Framework.Work is
       end if;
       Result.Workspace_Id := To_Unbounded_String (Id);
 
-      Workspaces.Integrate (Item, Change, Id, True, Taken, Status, Semantic_Accepted);
+      Workspaces.Integrate (Item, Change, Id, True, Taken, Status, Semantic_Accepted,
+                            Text_Resolved);
 
       if E.Is_Ok (Status) then
          Report_Integration (Item, Change, Id, Task_Id, Taken, Status);

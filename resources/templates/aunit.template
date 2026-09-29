@@ -1,5 +1,6 @@
 # Testing with AUnit in a tests crate beside the project, for a template
-# to include.
+# to include: one that asks for project_name, which the tests crate
+# depends on, so that its tests have the project to test.
 template = aunit
 name = AUnit
 description = Tests with AUnit, in a tests crate of their own.
@@ -14,8 +15,8 @@ directory tests
 list verification.full = build
 list verification.full = tests
 profile tests = build: alr build; dependencies in tests: alr -n update; tests in tests: alr -n run
-file tests/alire.toml = name = "tests"\ndescription = "The project's tests"\nversion = "0.1.0-dev"\n\nexecutables = ["tests"]\n\n[[depends-on]]\naunit = "*"\n
-file tests/tests.gpr = with "aunit.gpr";\n\nproject Tests is\n   for Source_Dirs use ("src/");\n   for Object_Dir use "obj/";\n   for Exec_Dir use "bin";\n   for Main use ("tests.adb");\n   for Create_Missing_Dirs use "True";\nend Tests;\n
+file tests/alire.toml = name = "tests"\ndescription = "The project's tests"\nversion = "0.1.0-dev"\n\nexecutables = ["tests"]\n\n[[depends-on]]\naunit = "*"\n${project_name} = "*"\n\n[[pins]]\n${project_name} = { path = ".." }\n
+file tests/tests.gpr = with "aunit.gpr";\nwith "${project_name}.gpr";\n\nproject Tests is\n   for Source_Dirs use ("src/");\n   for Object_Dir use "obj/";\n   for Exec_Dir use "bin";\n   for Main use ("tests.adb");\n   for Create_Missing_Dirs use "True";\nend Tests;\n
 file tests/src/tests.adb = with Ada.Command_Line;\nwith AUnit;\nwith AUnit.Reporter.Text;\nwith AUnit.Run;\nwith AUnit.Test_Suites;\n\n--  Every test the project has, run; a failure is the exit status.\nprocedure Tests is\n   use type AUnit.Status;\n\n   function Suite return AUnit.Test_Suites.Access_Test_Suite is\n     (AUnit.Test_Suites.New_Suite);\n\n   function Run is new AUnit.Run.Test_Runner_With_Status (Suite);\n\n   Reporter : AUnit.Reporter.Text.Text_Reporter;\nbegin\n   if Run (Reporter) /= AUnit.Success then\n      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);\n   end if;\nend Tests;\n
 scalar profile_capability.tests = run_tests
 scalar task.profile.implementation = tests

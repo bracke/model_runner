@@ -226,6 +226,25 @@ package Model_Runner.Framework.Intent is
       Result   : out Impact;
       Status   : out Model_Runner.Errors.Error_Info);
 
+   --  Take a link off an entity, as its next revision.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Kind Which register.
+   --  @param Id Its identifier.
+   --  @param Relation What kind of link.
+   --  @param Target What it links to.
+   --  @param Status Framework_Not_Found when there is no such entity, or it
+   --    has no such link.
+   procedure Unlink
+     (Item     : Stores.Store;
+      Change   : in out Stores.Transaction;
+      Kind     : Intent_Kind;
+      Id       : String;
+      Relation : Link_Kind;
+      Target   : String;
+      Status   : out Model_Runner.Errors.Error_Info);
+
    --  Link an entity to something, as its next revision.
    --
    --  @param Item The store.

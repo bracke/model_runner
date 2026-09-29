@@ -610,6 +610,24 @@ package body Model_Runner.CLI.Work is
          end;
       end if;
 
+      --  Nothing named and one task ready: that one, said so.
+      if Chosen = Null_Unbounded_String then
+         declare
+            Ready_Ones : Model_Runner.Framework.Name_Lists.Vector;
+         begin
+            for Id of Tk.List (Store, "accepted") loop
+               if (Matching.Is_Empty or else Matching.Contains (Id)) and then Tk.Ready (Store, Id).Ready
+               then
+                  Ready_Ones.Append (Id);
+               end if;
+            end loop;
+            if Natural (Ready_Ones.Length) = 1 and then Setting ("all", "") /= "yes" then
+               Chosen := To_Unbounded_String (Ready_Ones.First_Element);
+               Pres.Put_Note (Screen, "cli.work.only_ready", [Loc.Named ("name", To_String (Chosen))]);
+            end if;
+         end;
+      end if;
+
       if Chosen = Null_Unbounded_String then
          if not Model_Runner.CLI.Choosers.Is_Available (Screen) then
             Outcome := E.Make (E.Framework_Input_Missing);
@@ -844,8 +862,12 @@ package body Model_Runner.CLI.Work is
          Remaining.Delete_First;
       end loop;
 
+      --  Cancelled, from here or from elsewhere, ends as a cancellation.
+      if To_String (Done.Final_State) = "cancelled" then
+         Status := E.Exit_Cancelled;
+
       --  Waiting to be taken in is where isolated work ends well.
-      if To_String (Done.Final_State) /= "complete"
+      elsif To_String (Done.Final_State) /= "complete"
         and then not (To_String (Done.Final_State) = "verification"
                       and then Done.Workspace_Id /= Null_Unbounded_String)
       then

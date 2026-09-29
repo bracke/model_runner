@@ -1232,6 +1232,41 @@ package body Model_Runner.Framework.Configurations is
       return "";
    end Whole_Problem;
 
+   --  How many letters apart two names are: added, taken out or changed.
+   function Distance (Left, Right : String) return Natural is
+      Row : array (0 .. Right'Length) of Natural;
+      Before, Diagonal : Natural;
+   begin
+      for J in Row'Range loop
+         Row (J) := J;
+      end loop;
+      for I in 1 .. Left'Length loop
+         Diagonal := Row (0);
+         Row (0) := I;
+         for J in 1 .. Right'Length loop
+            Before := Row (J);
+            Row (J) := Natural'Min
+              (Natural'Min (Row (J) + 1, Row (J - 1) + 1),
+               Diagonal + (if Left (Left'First + I - 1) = Right (Right'First + J - 1) then 0 else 1));
+            Diagonal := Before;
+         end loop;
+      end loop;
+      return Row (Right'Length);
+   end Distance;
+
+   ----------------
+   -- Known_Names --
+   ----------------
+
+   function Known_Names return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+   begin
+      for Known of Known_Settings loop
+         Result.Append (Known.all);
+      end loop;
+      return Result;
+   end Known_Names;
+
    -----------------
    -- Plan_Change --
    -----------------
@@ -1348,6 +1383,23 @@ package body Model_Runner.Framework.Configurations is
                      Count := Count + 1;
                   end if;
                end loop;
+               --  Then those a letter or two from it, the kind left out.
+               if Count = 0 then
+                  for Known of Known_Settings loop
+                     declare
+                        Dot  : constant Natural := Ada.Strings.Fixed.Index (Known.all, ".");
+                        Bare : constant String := Known (Dot + 1 .. Known'Last);
+                     begin
+                        if Count < 3
+                          and then (Distance (Bare, Short) <= 2 or else Distance (Known.all, Short) <= 2)
+                        then
+                           Append (Found, (if Found = Null_Unbounded_String then "" else ", ")
+                                   & Known.all);
+                           Count := Count + 1;
+                        end if;
+                     end;
+                  end loop;
+               end if;
                if Count = 0 then
                   for Known of Known_Settings loop
                      if Count < 3 and then Ada.Strings.Fixed.Index (Known.all, Short) > 0 then
@@ -1363,6 +1415,17 @@ package body Model_Runner.Framework.Configurations is
                Status := Refused (Name, "no setting is called so" & Near
                                   & "; a new one is named with its kind: scalar." & Name
                                   & " for one value, set." & Name & " for several");
+               return;
+            --  Named with its kind, and none such is set or known, but one
+            --  is a letter or two from it: the one meant, most likely.
+            elsif not Records.Has (Result.Before, Name)
+              and then not (for some Known of Known_Settings => Known.all = Name)
+              and then (for some Known of Known_Settings =>
+                          Distance (Known.all, Name) in 1 .. 2)
+              and then not Starts (Name, "profile.") and then not Starts (Name, "fact.")
+              and then not Starts (Name, "map.") and then not Starts (Name, "task_kind.")
+            then
+               Status := Refused (Name, "no setting is called so" & Near);
                return;
             elsif (Adding or else Taking)
               and then not (Starts (Name, "set.") or else Starts (Name, "list."))

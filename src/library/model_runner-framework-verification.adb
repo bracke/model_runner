@@ -813,6 +813,37 @@ package body Model_Runner.Framework.Verification is
       Result : Diagnostic_List;
       Value  : Records.Item;
       Status : E.Error_Info;
+      Files  : Repository.Graph;
+      Loaded : Boolean := False;
+
+      --  A file a tool named by its name alone, as the project's one file
+      --  of that name where there is one: tests.adb is tests/src/tests.adb.
+      function In_Project (Named : String) return String is
+         Found : Unbounded_String;
+         Count : Natural := 0;
+      begin
+         if Named = "" or else Ada.Strings.Fixed.Index (Named, "/") > 0 then
+            return Named;
+         end if;
+         if not Loaded then
+            Files := Repository.Now (Item);
+            Loaded := True;
+         end if;
+         for Index in 1 .. Repository.File_Count (Files) loop
+            declare
+               Path : constant String := To_String (Repository.File_At (Files, Index).Path);
+            begin
+               if Path = Named
+                 or else (Path'Length > Named'Length
+                          and then Path (Path'Last - Named'Length .. Path'Last) = "/" & Named)
+               then
+                  Found := To_Unbounded_String (Path);
+                  Count := Count + 1;
+               end if;
+            end;
+         end loop;
+         return (if Count = 1 then To_String (Found) else Named);
+      end In_Project;
    begin
       Stores.Read (Item, Verification_Area, Evidence, Value, Status);
       if E.Is_Error (Status) then
@@ -834,12 +865,19 @@ package body Model_Runner.Framework.Verification is
                         Start := Place + 1;
                      end if;
                   end loop;
-                  --  Six fields as evidence first kept them, ten since.
-                  if Natural (Parts.Length) in 6 | 10 then
+                  --  Six fields as evidence first kept them, ten since. A
+                  --  build tool's own summary -- "Command [...] failed",
+                  --  "Build failed" -- is no diagnostic of the project's.
+                  if Natural (Parts.Length) in 6 | 10
+                    and then not (Parts (3) = ""
+                                  and then (Starts (Parts (6), "Command [")
+                                            or else Starts (Parts (6), "Build failed")
+                                            or else Starts (Parts (6), "compilation of")))
+                  then
                      Result.Items.Append
                        (Diagnostic'(Tool     => To_Unbounded_String (Parts (1)),
                                     Severity => To_Unbounded_String (Parts (2)),
-                                    File     => To_Unbounded_String (Parts (3)),
+                                    File     => To_Unbounded_String (In_Project (Parts (3))),
                                     Line     => Natural'Value (Parts (4)),
                                     Column   => Natural'Value (Parts (5)),
                                     Message  => To_Unbounded_String (Parts (6)),
@@ -1424,8 +1462,11 @@ package body Model_Runner.Framework.Verification is
    begin
       for Next of Judged.Items loop
          --  A person completing a blocked task sets its block aside.
+         --  A person completing it sets aside a block, and vouches for the
+         --  work being there.
          if not Next.Passed
            and then not (Was = "blocked" and then To_String (Next.Name) = "no_blocking_issue")
+           and then not (By_Hand and then To_String (Next.Name) = "implementation_present")
          then
             Append (Failed, (if Failed = Null_Unbounded_String then "" else "; ")
                             & To_String (Next.Name) & ": " & To_String (Next.Reason));
@@ -1539,6 +1580,24 @@ package body Model_Runner.Framework.Verification is
 
    --  Whether a piece of evidence ran tests: taken by a profile whose
    --  capability is to run them, and with no check's log saying none ran.
+   --  What a piece of evidence says of tests: ran some, ran a runner that
+   --  found none (and the log saying so), or was no test run at all.
+   type Test_Showing is (Tests_Ran, Found_None, Not_Tests);
+
+   Last_Empty_Log : Unbounded_String;
+
+   function Ran_Tests (Item : Stores.Store; Value : Records.Item) return Boolean;
+
+   function Showing (Item : Stores.Store; Value : Records.Item) return Test_Showing is
+      Capable : constant String :=
+        Records.Get (Config (Item), "scalar.profile_capability." & Records.Get (Value, "profile"));
+   begin
+      if Capable /= "run_tests" then
+         return Not_Tests;
+      end if;
+      return (if Ran_Tests (Item, Value) then Tests_Ran else Found_None);
+   end Showing;
+
    function Ran_Tests (Item : Stores.Store; Value : Records.Item) return Boolean is
       Profile : constant String := Records.Get (Value, "profile");
       Capable : constant String :=
@@ -1576,6 +1635,7 @@ package body Model_Runner.Framework.Verification is
                           or else Ada.Strings.Fixed.Index (Said, "no tests ran") > 0
                           or else Ada.Strings.Fixed.Index (Said, "no tests were found") > 0
                         then
+                           Last_Empty_Log := To_Unbounded_String (Line (Last .. Stop));
                            return False;
                         end if;
                      end;
@@ -1654,6 +1714,7 @@ package body Model_Runner.Framework.Verification is
       Found : Unbounded_String;
       Any   : Boolean := False;
       Tested : Boolean := False;
+      Empty_Suite : Unbounded_String;
       Built : Boolean :=
         not Intent.Links (Item, Intent.Requirement, Requirement, Intent.Implementation).Is_Empty;
    begin
@@ -1707,9 +1768,11 @@ package body Model_Runner.Framework.Verification is
                      return Lacks (Evidence & " does not show a criterion's named check"
                                    & " passing");
                   end if;
-                  if Ran_Tests (Item, Value) then
-                     Tested := True;
-                  end if;
+                  case Showing (Item, Value) is
+                     when Tests_Ran  => Tested := True;
+                     when Found_None => Empty_Suite := Last_Empty_Log;
+                     when Not_Tests  => null;
+                  end case;
                   Append (Found, (if Found = Null_Unbounded_String then "" else ", ")
                                  & Evidence);
                end;
@@ -1743,18 +1806,26 @@ package body Model_Runner.Framework.Verification is
                return Lacks (Own & ", its own verification, did not pass or no longer"
                              & " applies");
             end if;
-            if Ran_Tests (Item, Value) then
-               Tested := True;
-            end if;
+            case Showing (Item, Value) is
+               when Tests_Ran  => Tested := True;
+               when Found_None => Empty_Suite := Last_Empty_Log;
+               when Not_Tests  => null;
+            end case;
             Append (Found, ", " & Own);
          end;
       end if;
       --  A build, or a suite that ran nothing, shows it is there, not
       --  that it does what it says.
-      if not Tested then
-         return Lacks ("no evidence for it ran tests -- a build, or a suite that found"
-                       & " none, does not show it does what it says; a profile with"
-                       & " profile_capability run_tests that runs a test of it does");
+      if not Tested and then Empty_Suite /= Null_Unbounded_String then
+         return Lacks ("its tests ran and found none to run (" & To_String (Empty_Suite)
+                       & "): a test that exercises it -- task new TITLE --set kind=test"
+                       & " --set requirements=" & Requirement & " -- then check "
+                       & Requirement & " verifies it");
+      elsif not Tested then
+         return Lacks ("no evidence for it ran tests: a build shows it is there, not that it"
+                       & " does what it says; check " & Requirement & " runs the tests of the"
+                       & " tasks serving it, where their kind's profile runs tests"
+                       & " (profile_capability run_tests)");
       end if;
       Why := Null_Unbounded_String;
       return To_String (Found);

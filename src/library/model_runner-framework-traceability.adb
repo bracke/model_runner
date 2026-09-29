@@ -143,6 +143,25 @@ package body Model_Runner.Framework.Traceability is
                      Link (Result, Node, Target_Node (Target), "implemented_by",
                            Repository.Explicit, Repository.Certain, Id);
                   end loop;
+
+                  --  What it rests on, and the component it is linked to.
+                  for Target of Intent.Links (Item, Intent.Requirement, Id, Intent.Dependency) loop
+                     declare
+                        Other : Intent.Entity;
+                        Read  : E.Error_Info;
+                     begin
+                        Intent.Read (Item, Intent.Requirement, Target, Other, Read);
+                        Link (Result, Node,
+                              (if E.Is_Ok (Read) then Target & "@" & Image (Other.Revision)
+                               else Target),
+                              "depends_on", Repository.Explicit, Repository.Certain, Id);
+                     end;
+                  end loop;
+                  for Target of Intent.Links (Item, Intent.Requirement, Id, Intent.Component) loop
+                     Component (Target);
+                     Link (Result, Node, "component:" & Target, "belongs_to",
+                           Repository.Explicit, Repository.Certain, Id);
+                  end loop;
                   --  A test the repository does not hold tests nothing:
                   --  linked, it is a mistake consistency names, not a test
                   --  a change is certainly covered by.
@@ -323,7 +342,11 @@ package body Model_Runner.Framework.Traceability is
       return (if Starts ("symbol:") or else Starts ("unit:") or else Starts ("component:")
                 or else ((Starts ("REQ-") or else Starts ("TASK-") or else Starts ("SPEC-")
                           or else Starts ("DEC-"))
-                         and then Identifiers.Is_Valid (Changed))
+                         and then Identifiers.Is_Valid
+                                    (if Ada.Strings.Fixed.Index (Changed, "@") > 0
+                                     then Changed (Changed'First
+                                                   .. Ada.Strings.Fixed.Index (Changed, "@") - 1)
+                                     else Changed))
               then Changed else "file:" & Changed);
    end Seed_Of;
 

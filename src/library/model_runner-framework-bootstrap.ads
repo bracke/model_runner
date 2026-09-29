@@ -66,6 +66,9 @@ package Model_Runner.Framework.Bootstrap is
       --  What it made, by identifier.
       Made     : Name_Lists.Vector;
 
+      --  What it revised to what a document now says, by identifier.
+      Revised  : Name_Lists.Vector;
+
       --  The issues it raised that were not raised before, each with the
       --  result it is kept as: what a document no longer says, a line
       --  that does not read, a disagreement.

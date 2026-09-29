@@ -154,8 +154,15 @@ package body Model_Runner.Framework.Invocations is
       for Line of Lines_Of (Answer) loop
          declare
             Colon : constant Natural := Ada.Strings.Fixed.Index (Line, ":");
-            Name  : constant String :=
+            Said  : constant String :=
               (if Colon = 0 then "" else Unquoted (Lower (Trim (Line (Line'First .. Colon - 1)))));
+
+            --  A field named in the singular -- issue: for issues: -- is that
+            --  field, not a line of the list before it.
+            Name  : constant String :=
+              (if Said /= "" and then not Rules.Fields.Contains (Said)
+                 and then Rules.Fields.Contains (Said & "s")
+               then Said & "s" else Said);
          begin
             if Name /= "" and then Rules.Fields.Contains (Name) then
                Current := To_Unbounded_String (Name);

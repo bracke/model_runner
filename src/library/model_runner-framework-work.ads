@@ -396,12 +396,15 @@ package Model_Runner.Framework.Work is
    --    conflict, or what the code joins when that is not accepted.
    --  @param Semantic_Accepted Whether the person takes it in whatever the
    --    code joins it to.
+   --  @param Text_Resolved Whether the person has settled the conflicts of
+   --    text in the workspace's files, which are taken over the project's.
    procedure Take_In
      (Item    : in out Stores.Store;
       Task_Id : String;
       Result  : out Report;
       Status  : out Model_Runner.Errors.Error_Info;
-      Semantic_Accepted : Boolean := False);
+      Semantic_Accepted : Boolean := False;
+      Text_Resolved     : Boolean := False);
 
    --  Cancel a task, and let go of what it holds whatever its state: its
    --  agent and every child of it still going are recorded cancelled, its

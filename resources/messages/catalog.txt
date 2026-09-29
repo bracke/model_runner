@@ -189,12 +189,18 @@ en.help.work.locale =   --locale NAME           locale for program messages
 en.help.work.color =   --color=MODE            colour output: {value}
 en.help.project.usage = Usage: model_runner req|state|bootstrap|config|reconfigure|check|decision|spec|result|sandbox|instruct|accept|reject [WORDS] [options]
 en.help.project.summary = Run a project command without a model, as a session's /COMMAND runs it: req new, show, accept, revise and link requirements; state reports the project; bootstrap reads documents in; config shows the settings and reconfigure changes them (NAME=VALUE, confirm=yes off a terminal; set.NAME+=VALUE adds to a set); check verifies; result shows a stored result. Work is the work command's.
-en.help.project.req = req [list] 
+en.help.project.req = req [list] ; req new TITLE text=... [criteria=...] ; req ID ; req accept, reject or obsolete ID ; req revise ID title=... text=... criteria=... ; req link ID KIND TARGET and req unlink ID KIND TARGET, KIND one of dependency, component, implementation, task, test, verification ; req supersede OLD NEW
 en.help.project.state = state: the project at a glance -- its requirements and tasks counted, the blocked and failed ones with why, the last verification
 en.help.project.bootstrap = bootstrap [FILE ...]: read the project's documents for its requirements (## REQ-ID Title headings, REQ-ID: lines, SHALL, MUST and SHOULD lines, Acceptance: and DEC-ID: lines)
 en.help.project.config = config [NAME]: the settings, or those whose name holds NAME
 en.help.project.reconfigure = reconfigure NAME=VALUE ... [confirm=yes]: change settings -- NAME with its kind or without (work.agent), set.NAME+=A,B adds to a set and -=A takes out, map.permission.X= grants and =off takes away; confirm=yes applies without being asked
-en.help.project.check = check [PROFILE 
+en.help.project.check = check [PROFILE, full, consistency or REQ-ID]: run the project's checks, or say what does not hold together, or verify a requirement
+en.help.project.decision = decision [list] ; decision new TITLE text=... ; decision ID ; decision accept, reject or obsolete ID ; decision revise ID text=... ; decision govern ID SETTING RULING
+en.help.project.spec = spec [list] ; spec new TITLE text=... ; spec ID ; spec accept or reject ID ; spec revise ID text=... ; spec revise ID from-document takes what its document says now
+en.help.project.accept = accept [ID]: accept the one candidate waiting, or the requirement, decision, specification or task named
+en.help.project.reject = reject [ID]: reject the one candidate waiting, or the one named
+en.help.project.sandbox = sandbox [CAPABILITY: roots=...; ... or off]: confine the session's agents below the project's permissions; from the shell, MODEL_RUNNER_SANDBOX does it for one command
+en.help.project.instruct = instruct TEXT: an instruction every agent of the project is given from now on
 en.help.project.result = result ID [full]: what a result, invocation, context, evidence or agent (RES-, INV-, CTX-, VER-, AG-) holds
 en.help.project.options = Options:
 en.help.project.directory =   --directory DIR         the project in DIR rather than the current directory
@@ -341,7 +347,7 @@ en.cli.interactive.help.reconfigure = /reconfigure NAME=VALUE ...  change settin
 en.cli.interactive.help.task = /task [ACTION]     list and manage tasks: new, accept, reject, move, edit, depend, split, reopen, reconsider, show, audit, derive, plan
 en.cli.interactive.help.accept = /accept           accept the one candidate waiting
 en.cli.interactive.help.reject = /reject           reject the one candidate waiting
-en.cli.interactive.help.work = /work [TASK]      run a ready task on this model, verify and complete it
+en.cli.interactive.help.work = /work [TASK]      run a ready task with the project's agent (work.agent) or else this model, verify and complete it
 en.cli.interactive.help.cancel = /cancel TASK      cancel a task
 en.cli.interactive.help.check = /check [PROFILE | consistency]  verify the project now, or check its state holds together
 en.cli.interactive.help.req = /req [ID | ACTION]  requirements: list, show, new TITLE "text=...", accept, reject, move ID STATE, verify ID, revise, link, obsolete
@@ -427,12 +433,19 @@ en.cli.task.none = there are no tasks
 en.cli.task.created = created {name}: {detail}
 en.cli.task.moved = {name} is {value}
 en.cli.task.depends = {name} waits for {value}
+en.cli.task.undepends = {name} no longer waits for {value}
+en.cli.task.left_waiting = {name} still waits for {value}; task depend {name} {value} remove lets it go on without
+en.cli.task.part_of = {value} is a part of {name}, which goes back to work without it once its other parts are done
 en.cli.task.revised = {name} is revised
 en.cli.intent.invalidated = {name}'s verification no longer applies
 en.cli.intent.linked = {name} is linked
+en.cli.result.elsewhere = {name} is shown by {value}
+en.cli.result.none = no issues are kept
+en.cli.intent.unlinked = {name}'s link is taken off
 en.cli.intent.unchanged = {name} already says that; nothing was revised
 en.cli.same_title = {name} has the same title as {other}
 en.cli.intent.link_unknown = {name} is not a file or a symbol the repository has; the link is kept, and consistency will name it until it is
+en.cli.intent.link_component = {name} is not one of the project's components ({value}); the link is kept, and consistency will name it until it is -- req unlink takes it off
 en.cli.intent.moved = {name} moved from {other} to {value}
 en.cli.intent.superseded = {name} is superseded
 en.cli.task.field = {name}: {value}
@@ -469,8 +482,10 @@ en.cli.project.agents_active = agents active
 en.cli.project.last_full = last full test
 en.cli.project.bootstrapped = {count} made, {total} already there, {extra} issues
 en.cli.project.bootstrap.made =   made {name}
+en.cli.project.bootstrap.revised =   revised {name} to what its document says now
 en.cli.project.bootstrap.stale =   {detail}
 en.cli.next.bootstrap = next: req accept ID keeps a requirement it made, and req lists them all
+en.cli.next.no_documents = no documents to read: bootstrap looks at *.md and docs/*.md (set bootstrap.sources names others); a requirement in one is a line with SHALL, MUST or SHOULD, or a heading ## REQ-001 Title with its statement under it
 en.cli.next.init = next: bootstrap FILE reads a document's requirements in, req new TITLE text=... says one, and task new TITLE --set kind=KIND makes a task
 en.cli.next.requirements = no requirements yet; req new TITLE text=... says one, bootstrap FILE reads a document's in
 en.cli.next.tasks = no tasks yet; task new TITLE --set kind=KIND makes one
@@ -489,7 +504,7 @@ en.cli.project.reconfigure.kept = the configuration was left as it was
 en.cli.project.reconfigure.nothing = nothing would change; name settings as NAME=VALUE
 en.cli.project.recovered = on opening: {detail}
 en.cli.project.read_only = another session holds the project -- a run in progress; this is the state as it is now, and nothing is changed
-en.cli.task.stop_asked = the run holding the project was asked to stop {name}: it sets the task aside within a second or two, and task cancel {name} then cancels it
+en.cli.task.stop_asked = the run holding the project was asked to cancel {name}: it stops its work and cancels it within a second or two
 en.cli.project.git.branch = on {name}
 en.cli.project.git.clean = nothing has changed since the last commit
 en.cli.project.git.none = the project is not in a Git repository git can read
@@ -503,7 +518,6 @@ en.cli.repo.file = {path}  {value}  {detail}
 en.cli.repo.symbol = {name}  {value}  {path}
 en.cli.repo.reference = {path}  {name}  ({detail})
 en.cli.repo.unit = {name}
-en.cli.repo.edge = {name} {value} {other} ({detail})
 en.cli.repo.reached = {value}  {name}  {detail}
 en.cli.repo.selection = test {value}: {detail}
 en.cli.repo.none = nothing in the repository is called {name}
@@ -518,6 +532,7 @@ en.cli.work.nothing = no work was started
 en.cli.work.agent = {name} works on {value}
 en.cli.work.runner = {value}: the agent is {name}
 en.cli.work.runner.session = the session's model
+en.cli.work.only_ready = {name} is the one task ready
 en.cli.work.time_allowed = it may work {count} seconds (agents.max_seconds, and execution.timeout for a command); Ctrl-C stops it sooner
 en.cli.work.context = context {name}, call {value}
 en.cli.work.changed = changed {name}
@@ -534,7 +549,11 @@ en.cli.work.ended_because = the task is {name}: {detail}
 en.cli.next.retry = next: task accept {name} to try it again, or task complete {name} once it is done by hand
 en.cli.next.parts = next: task accept each of its parts ({detail}); it goes back to work once they are done
 en.cli.next.integrate = next: task integrate {name} takes its work into the project
-en.cli.next.conflict = next: the work is in {path}, to compare with the project (diff -r {path} .); task move {name} failed abandons it, and task accept {name} then work {name} does it again on the project as it is now
+en.cli.next.gates = next: put right what the gates above say, then task complete {name} again
+en.cli.next.accept_task = next: task accept {name} accepts it, and work {name} then does it
+en.cli.next.work = next: work {name} does it
+en.cli.check.no_tests = {name} ran: it runs no tests; check full runs the project's tests as well
+en.cli.next.conflict = next: the work is in {path}; compare each file named above with the project's (diff {path}/FILE FILE) and settle it there, then task integrate {name} resolved takes the workspace's files; or task move {name} failed abandons it, and task accept {name} does it again
 en.cli.next.ready = ready to work on: {name}  {value}
 en.cli.next.accept = next: candidate tasks waiting to be accepted: {count}; task list shows them, task accept ID accepts one
 en.cli.next.create = next: task new TITLE --set kind=KIND makes a task, or req new TITLE text=... a requirement to derive tasks from
@@ -1024,12 +1043,18 @@ da.help.work.locale =   --locale NAVN           sprog for programmets beskeder
 da.help.work.color =   --color=TILSTAND        farvet output: {value}
 da.help.project.usage = Brug: model_runner req|state|bootstrap|config|reconfigure|check|decision|spec|result|sandbox|instruct|accept|reject [ORD] [tilvalg]
 da.help.project.summary = Kør et projektkommando uden en model, som en sessions /KOMMANDO kører det: req new, show, accept, revise og link krav; state viser projektet; bootstrap læser dokumenter ind; config viser indstillingerne og reconfigure ændrer dem (NAVN=VÆRDI, confirm=yes uden terminal; set.NAVN+=VÆRDI føjer til et sæt); check verificerer; result viser et gemt resultat. Arbejde er work-kommandoens.
-da.help.project.req =  req new TITLE text=... [criteria=...] | req ID | req accept|reject|obsolete ID | req revise ID title=... text=... criteria=... | req link ID dependency|component|implementation|task|test|verification TARGET | req supersede OLD NEW|req [list] | req new TITEL text=... [criteria=...] | req ID | req accept|reject|obsolete ID | req revise ID title=... text=... criteria=... | req link ID dependency|component|implementation|task|test|verification MÅL | req supersede GAMMEL NY
+da.help.project.req = req [list] ; req new TITEL text=... [criteria=...] ; req ID ; req accept, reject eller obsolete ID ; req revise ID title=... text=... criteria=... ; req link ID ART MÅL og req unlink ID ART MÅL, ART en af dependency, component, implementation, task, test, verification ; req supersede GAMMEL NY
 da.help.project.state = state: projektet i overblik -- dets krav og opgaver talt, de blokerede og fejlede med hvorfor, den seneste verifikation
 da.help.project.bootstrap = bootstrap [FIL ...]: læs projektets dokumenter for dets krav (## REQ-ID Titel-overskrifter, REQ-ID:-linjer, SHALL-, MUST- og SHOULD-linjer, Acceptance:- og DEC-ID:-linjer)
 da.help.project.config = config [NAVN]: indstillingerne, eller dem hvis navn indeholder NAVN
 da.help.project.reconfigure = reconfigure NAVN=VÆRDI ... [confirm=yes]: ændr indstillinger -- NAVN med eller uden sin art (work.agent), set.NAVN+=A,B føjer til et sæt og -=A tager ud, map.permission.X= giver og =off tager væk; confirm=yes anvender uden at spørge
-da.help.project.check =  full | consistency | REQ-ID]: run the project's checks, or say what does not hold together, or verify a requirement|check [PROFIL | full | consistency | REQ-ID]: kør projektets tjek, eller sig hvad der ikke hænger sammen, eller verificer et krav
+da.help.project.check = check [PROFIL, full, consistency eller REQ-ID]: kør projektets tjek, eller sig hvad der ikke hænger sammen, eller verificer et krav
+da.help.project.decision = decision [list] ; decision new TITEL text=... ; decision ID ; decision accept, reject eller obsolete ID ; decision revise ID text=... ; decision govern ID INDSTILLING AFGØRELSE
+da.help.project.spec = spec [list] ; spec new TITEL text=... ; spec ID ; spec accept eller reject ID ; spec revise ID text=... ; spec revise ID from-document tager det dokumentet siger nu
+da.help.project.accept = accept [ID]: accepter den ene kandidat der venter, eller det navngivne krav, den beslutning, specifikation eller opgave
+da.help.project.reject = reject [ID]: afvis den ene kandidat der venter, eller den navngivne
+da.help.project.sandbox = sandbox [EVNE: roots=...; ... eller off]: begræns sessionens agenter under projektets tilladelser; fra skallen gør MODEL_RUNNER_SANDBOX det for én kommando
+da.help.project.instruct = instruct TEKST: en instruktion hver agent i projektet får fra nu af
 da.help.project.result = result ID [full]: hvad et resultat, et kald, en kontekst, et bevis eller en agent (RES-, INV-, CTX-, VER-, AG-) rummer
 da.help.project.options = Tilvalg:
 da.help.project.directory =   --directory MAPPE       projektet i MAPPE i stedet for den aktuelle mappe
@@ -1335,7 +1360,7 @@ da.cli.interactive.help.reconfigure = /reconfigure NAVN=VÆRDI ...  ændr indsti
 da.cli.interactive.help.task = /task [HANDLING]   vis og styr opgaver: new, accept, reject, move, edit, depend, split, reopen, reconsider, show, audit, derive, plan
 da.cli.interactive.help.accept = /accept           accepter den ene ventende kandidat
 da.cli.interactive.help.reject = /reject           afvis den ene ventende kandidat
-da.cli.interactive.help.work = /work [OPGAVE]    kør en klar opgave på denne model, verificér og fuldfør den
+da.cli.interactive.help.work = /work [OPGAVE]    kør en klar opgave med projektets agent (work.agent) ellers denne model, verificér og fuldfør den
 da.cli.interactive.help.cancel = /cancel OPGAVE    annullér en opgave
 da.cli.interactive.help.check = /check [PROFIL | consistency]  verificér projektet nu, eller tjek at dets tilstand hænger sammen
 da.cli.interactive.help.req = /req [ID | HANDLING]  krav: list, vis, new TITEL, accept, reject, move ID TILSTAND, verify ID, revise, link, obsolete
@@ -1408,12 +1433,19 @@ da.cli.task.none = der er ingen opgaver
 da.cli.task.created = oprettede {name}: {detail}
 da.cli.task.moved = {name} er {value}
 da.cli.task.depends = {name} venter på {value}
+da.cli.task.undepends = {name} venter ikke længere på {value}
+da.cli.task.left_waiting = {name} venter stadig på {value}; task depend {name} {value} remove lader den fortsætte uden
+da.cli.task.part_of = {value} er en del af {name}, som går i gang igen uden den når dens andre dele er færdige
 da.cli.task.revised = {name} er revideret
 da.cli.intent.invalidated = {name}s verifikation gælder ikke længere
 da.cli.intent.linked = {name} er forbundet
+da.cli.result.elsewhere = {name} vises af {value}
+da.cli.result.none = ingen problemer er gemt
+da.cli.intent.unlinked = {name}s link er fjernet
 da.cli.intent.unchanged = {name} siger allerede det; intet blev revideret
 da.cli.same_title = {name} har samme titel som {other}
 da.cli.intent.link_unknown = {name} er ikke en fil eller et symbol i depotet; linket beholdes, og konsistenstjekket nævner det indtil det er
+da.cli.intent.link_component = {name} er ikke en af projektets komponenter ({value}); linket beholdes, og konsistenstjekket nævner det indtil det er -- req unlink fjerner det
 da.cli.intent.moved = {name} flyttet fra {other} til {value}
 da.cli.intent.superseded = {name} er afløst
 da.cli.task.field = {name}: {value}
@@ -1450,8 +1482,10 @@ da.cli.project.agents_active = aktive agenter
 da.cli.project.last_full = seneste fulde test
 da.cli.project.bootstrapped = {count} lavet, {total} fandtes allerede, {extra} problemer
 da.cli.project.bootstrap.made =   lavede {name}
+da.cli.project.bootstrap.revised =   reviderede {name} til det dens dokument siger nu
 da.cli.project.bootstrap.stale =   {detail}
 da.cli.next.bootstrap = næste: req accept ID beholder et krav den lavede, og req viser dem alle
+da.cli.next.no_documents = ingen dokumenter at læse: bootstrap ser på *.md og docs/*.md (set bootstrap.sources nævner andre); et krav i et er en linje med SHALL, MUST eller SHOULD, eller en overskrift ## REQ-001 Titel med sin ordlyd under
 da.cli.next.init = næste: bootstrap FIL læser et dokuments krav ind, req new TITEL text=... siger et, og task new TITEL --set kind=ART laver en opgave
 da.cli.next.requirements = ingen krav endnu; req new TITEL text=... siger et, bootstrap FIL læser et dokuments ind
 da.cli.next.tasks = ingen opgaver endnu; task new TITEL --set kind=ART laver en
@@ -1470,7 +1504,7 @@ da.cli.project.reconfigure.kept = konfigurationen blev ladt som den var
 da.cli.project.reconfigure.nothing = intet ville ændre sig; angiv indstillinger som NAVN=VÆRDI
 da.cli.project.recovered = ved åbning: {detail}
 da.cli.project.read_only = en anden session holder projektet -- en kørsel i gang; dette er tilstanden som den er nu, og intet ændres
-da.cli.task.stop_asked = kørslen der holder projektet blev bedt om at stoppe {name}: den lægger opgaven til side inden for et par sekunder, og task cancel {name} annullerer den så
+da.cli.task.stop_asked = kørslen der holder projektet blev bedt om at annullere {name}: den stopper arbejdet og annullerer den inden for et par sekunder
 da.cli.project.git.branch = på {name}
 da.cli.project.git.clean = intet er ændret siden sidste commit
 da.cli.project.git.none = projektet er ikke i et Git-repository som git kan læse
@@ -1484,7 +1518,6 @@ da.cli.repo.file = {path}  {value}  {detail}
 da.cli.repo.symbol = {name}  {value}  {path}
 da.cli.repo.reference = {path}  {name}  ({detail})
 da.cli.repo.unit = {name}
-da.cli.repo.edge = {name} {value} {other} ({detail})
 da.cli.repo.reached = {value}  {name}  {detail}
 da.cli.repo.selection = test {value}: {detail}
 da.cli.repo.none = intet i depotet hedder {name}
@@ -1499,6 +1532,7 @@ da.cli.work.nothing = intet arbejde blev startet
 da.cli.work.agent = {name} arbejder på {value}
 da.cli.work.runner = {value}: agenten er {name}
 da.cli.work.runner.session = sessionens model
+da.cli.work.only_ready = {name} er den eneste klare opgave
 da.cli.work.time_allowed = den må arbejde {count} sekunder (agents.max_seconds, og execution.timeout for en kommando); Ctrl-C stopper den før
 da.cli.work.context = kontekst {name}, kald {value}
 da.cli.work.changed = ændrede {name}
@@ -1515,7 +1549,11 @@ da.cli.work.ended_because = opgaven er {name}: {detail}
 da.cli.next.retry = næste: task accept {name} for at prøve igen, eller task complete {name} når den er gjort i hånden
 da.cli.next.parts = næste: task accept hver af dens dele ({detail}); den går i gang igen når de er færdige
 da.cli.next.integrate = næste: task integrate {name} tager dens arbejde ind i projektet
-da.cli.next.conflict = næste: arbejdet ligger i {path}, til at sammenligne med projektet (diff -r {path} .); task move {name} failed opgiver det, og task accept {name} og så work {name} gør det igen på projektet som det er nu
+da.cli.next.gates = næste: ret det portene ovenfor siger, og kør så task complete {name} igen
+da.cli.next.accept_task = næste: task accept {name} accepterer den, og work {name} udfører den så
+da.cli.next.work = næste: work {name} udfører den
+da.cli.check.no_tests = {name} kørte: den kører ingen tests; check full kører også projektets tests
+da.cli.next.conflict = næste: arbejdet ligger i {path}; sammenlign hver fil nævnt ovenfor med projektets (diff {path}/FIL FIL) og afgør det der, så tager task integrate {name} resolved arbejdsområdets filer; eller task move {name} failed opgiver det, og task accept {name} gør det igen
 da.cli.next.ready = klar til arbejde: {name}  {value}
 da.cli.next.accept = næste: kandidatopgaver der venter på at blive accepteret: {count}; task list viser dem, task accept ID accepterer en
 da.cli.next.create = næste: task new TITEL --set kind=ART laver en opgave, eller req new TITEL text=... et krav at udlede opgaver af
@@ -1940,12 +1978,18 @@ qps.help.work.locale = ⟦  --locale NAME           ĺóçáĺé fóŕ pŕógŕ�
 qps.help.work.color = ⟦  --color=MODE            çóĺóúŕ óúŧpúŧ: {value}⟧
 qps.help.project.usage = ⟦Úßágé: móðéĺ_ŕúññéŕ ŕéq|ßŧáŧé|bóóŧßŧŕáp|çóñfíg|ŕéçóñfígúŕé|çhéçk|ðéçíßíóñ|ßpéç|ŕéßúĺŧ|ßáñðbóx|íñßŧŕúçŧ|áççépŧ|ŕéjéçŧ [WORDS] [ópŧíóñß]⟧
 qps.help.project.summary = ⟦Rúñ á pŕójéçŧ çómmáñð wíŧhóúŧ á móðéĺ, áß á ßéßßíóñ'ß /ÇOMMAND ŕúñß íŧ: ŕéq ñéw, ßhów, áççépŧ, ŕévíßé áñð ĺíñk ŕéqúíŕéméñŧß; ßŧáŧé ŕépóŕŧß ŧhé pŕójéçŧ; bóóŧßŧŕáp ŕéáðß ðóçúméñŧß íñ; çóñfíg ßhówß ŧhé ßéŧŧíñgß áñð ŕéçóñfígúŕé çháñgéß ŧhém (NAME=VALÚE, çóñfíŕm=ýéß óff á ŧéŕmíñáĺ; ßéŧ.NAME+=VALÚE áððß ŧó á ßéŧ); çhéçk véŕífíéß; ŕéßúĺŧ ßhówß á ßŧóŕéð ŕéßúĺŧ. Wóŕk íß ŧhé wóŕk çómmáñð'ß.⟧
-qps.help.project.req = ⟦ŕéq [ĺíßŧ] ⟧
+qps.help.project.req = ⟦ŕéq [ĺíßŧ] ; ŕéq ñéw ŦIŦLE ŧéxŧ=... [çŕíŧéŕíá=...] ; ŕéq ID ; ŕéq áççépŧ, ŕéjéçŧ óŕ óbßóĺéŧé ID ; ŕéq ŕévíßé ID ŧíŧĺé=... ŧéxŧ=... çŕíŧéŕíá=... ; ŕéq ĺíñk ID KIND ŦARGEŦ áñð ŕéq úñĺíñk ID KIND ŦARGEŦ, KIND óñé óf ðépéñðéñçý, çómpóñéñŧ, ímpĺéméñŧáŧíóñ, ŧáßk, ŧéßŧ, véŕífíçáŧíóñ ; ŕéq ßúpéŕßéðé OLD NEW⟧
 qps.help.project.state = ⟦ßŧáŧé: ŧhé pŕójéçŧ áŧ á gĺáñçé -- íŧß ŕéqúíŕéméñŧß áñð ŧáßkß çóúñŧéð, ŧhé bĺóçkéð áñð fáíĺéð óñéß wíŧh whý, ŧhé ĺáßŧ véŕífíçáŧíóñ⟧
 qps.help.project.bootstrap = ⟦bóóŧßŧŕáp [FILE ...]: ŕéáð ŧhé pŕójéçŧ'ß ðóçúméñŧß fóŕ íŧß ŕéqúíŕéméñŧß (## REQ-ID Ŧíŧĺé héáðíñgß, REQ-ID: ĺíñéß, SHALL, MÚSŦ áñð SHOÚLD ĺíñéß, Aççépŧáñçé: áñð DEÇ-ID: ĺíñéß)⟧
 qps.help.project.config = ⟦çóñfíg [NAME]: ŧhé ßéŧŧíñgß, óŕ ŧhóßé whóßé ñámé hóĺðß NAME⟧
 qps.help.project.reconfigure = ⟦ŕéçóñfígúŕé NAME=VALÚE ... [çóñfíŕm=ýéß]: çháñgé ßéŧŧíñgß -- NAME wíŧh íŧß kíñð óŕ wíŧhóúŧ (wóŕk.ágéñŧ), ßéŧ.NAME+=A,B áððß ŧó á ßéŧ áñð -=A ŧákéß óúŧ, máp.péŕmíßßíóñ.X= gŕáñŧß áñð =óff ŧákéß áwáý; çóñfíŕm=ýéß áppĺíéß wíŧhóúŧ béíñg áßkéð⟧
-qps.help.project.check = ⟦çhéçk [PROFILE ⟧
+qps.help.project.check = ⟦çhéçk [PROFILE, fúĺĺ, çóñßíßŧéñçý óŕ REQ-ID]: ŕúñ ŧhé pŕójéçŧ'ß çhéçkß, óŕ ßáý wháŧ ðóéß ñóŧ hóĺð ŧógéŧhéŕ, óŕ véŕífý á ŕéqúíŕéméñŧ⟧
+qps.help.project.decision = ⟦ðéçíßíóñ [ĺíßŧ] ; ðéçíßíóñ ñéw ŦIŦLE ŧéxŧ=... ; ðéçíßíóñ ID ; ðéçíßíóñ áççépŧ, ŕéjéçŧ óŕ óbßóĺéŧé ID ; ðéçíßíóñ ŕévíßé ID ŧéxŧ=... ; ðéçíßíóñ góvéŕñ ID SEŦŦING RÚLING⟧
+qps.help.project.spec = ⟦ßpéç [ĺíßŧ] ; ßpéç ñéw ŦIŦLE ŧéxŧ=... ; ßpéç ID ; ßpéç áççépŧ óŕ ŕéjéçŧ ID ; ßpéç ŕévíßé ID ŧéxŧ=... ; ßpéç ŕévíßé ID fŕóm-ðóçúméñŧ ŧákéß wháŧ íŧß ðóçúméñŧ ßáýß ñów⟧
+qps.help.project.accept = ⟦áççépŧ [ID]: áççépŧ ŧhé óñé çáñðíðáŧé wáíŧíñg, óŕ ŧhé ŕéqúíŕéméñŧ, ðéçíßíóñ, ßpéçífíçáŧíóñ óŕ ŧáßk ñáméð⟧
+qps.help.project.reject = ⟦ŕéjéçŧ [ID]: ŕéjéçŧ ŧhé óñé çáñðíðáŧé wáíŧíñg, óŕ ŧhé óñé ñáméð⟧
+qps.help.project.sandbox = ⟦ßáñðbóx [ÇAPABILIŦY: ŕóóŧß=...; ... óŕ óff]: çóñfíñé ŧhé ßéßßíóñ'ß ágéñŧß béĺów ŧhé pŕójéçŧ'ß péŕmíßßíóñß; fŕóm ŧhé ßhéĺĺ, MODEL_RÚNNER_SANDBOX ðóéß íŧ fóŕ óñé çómmáñð⟧
+qps.help.project.instruct = ⟦íñßŧŕúçŧ ŦEXŦ: áñ íñßŧŕúçŧíóñ évéŕý ágéñŧ óf ŧhé pŕójéçŧ íß gívéñ fŕóm ñów óñ⟧
 qps.help.project.result = ⟦ŕéßúĺŧ ID [fúĺĺ]: wháŧ á ŕéßúĺŧ, íñvóçáŧíóñ, çóñŧéxŧ, évíðéñçé óŕ ágéñŧ (RES-, INV-, ÇŦX-, VER-, AG-) hóĺðß⟧
 qps.help.project.options = ⟦Opŧíóñß:⟧
 qps.help.project.directory = ⟦  --ðíŕéçŧóŕý DIR         ŧhé pŕójéçŧ íñ DIR ŕáŧhéŕ ŧháñ ŧhé çúŕŕéñŧ ðíŕéçŧóŕý⟧
@@ -2088,7 +2132,7 @@ qps.cli.interactive.help.reconfigure = ⟦/reconfigure NAME=VALUE ...  çháñg�
 qps.cli.interactive.help.task = ⟦/task [ACTION]     ĺíßŧ áñð máñágé ŧáßkß: ñéw, áççépŧ, ŕéjéçŧ, ɱóµé, éðíŧ, ðépéñð, ßþĺíŧ, ŕéópéñ, ŕéçóñßíðéŕ, ßhów, ðéŕívé, pĺáñ⟧
 qps.cli.interactive.help.accept = ⟦/accept           áççépŧ ŧhé óñé çáñðíðáŧé wáíŧíñg⟧
 qps.cli.interactive.help.reject = ⟦/reject           ŕéjéçŧ ŧhé óñé çáñðíðáŧé wáíŧíñg⟧
-qps.cli.interactive.help.work = ⟦/work [TASK]      ŕúñ á ŕéáðý ŧáßk óñ ŧhíß móðéĺ, véŕífý áñð çómpĺéŧé íŧ⟧
+qps.cli.interactive.help.work = ⟦/work [TASK]      ŕúñ á ŕéáðý ŧáßk wíŧh ŧhé pŕójéçŧ'ß ágéñŧ (wóŕk.ágéñŧ) óŕ éĺßé ŧhíß móðéĺ, véŕífý áñð çómpĺéŧé íŧ⟧
 qps.cli.interactive.help.cancel = ⟦/cancel TASK      çáñçéĺ á ŧáßk⟧
 qps.cli.interactive.help.check = ⟦/check [PROFILE | consistency]  véŕífý ŧhé pŕójéçŧ ñów, óŕ çhéçk íŧß ßŧáŧé hóĺðß ŧógéŧhéŕ⟧
 qps.cli.interactive.help.req = ⟦/req [ID | ACTION]  ŕéqúíŕéméñŧß: ĺíßŧ, ßhów, ñéw TITLE, áççépŧ, ŕéjéçŧ, ɱóµé ID STATE, µéŕífý ID, ŕévíßé, ĺíñk, óbßóĺéŧé⟧
@@ -2174,12 +2218,19 @@ qps.cli.task.none = ⟦ŧhéŕé áŕé ñó ŧáßkß⟧
 qps.cli.task.created = ⟦çŕéáŧéð {name}: {detail}⟧
 qps.cli.task.moved = ⟦{name} íß {value}⟧
 qps.cli.task.depends = ⟦{name} wáíŧß fóŕ {value}⟧
+qps.cli.task.undepends = ⟦{name} ñó ĺóñgéŕ wáíŧß fóŕ {value}⟧
+qps.cli.task.left_waiting = ⟦{name} ßŧíĺĺ wáíŧß fóŕ {value}; ŧáßk ðépéñð {name} {value} ŕémóvé ĺéŧß íŧ gó óñ wíŧhóúŧ⟧
+qps.cli.task.part_of = ⟦{value} íß á páŕŧ óf {name}, whíçh góéß báçk ŧó wóŕk wíŧhóúŧ íŧ óñçé íŧß óŧhéŕ páŕŧß áŕé ðóñé⟧
 qps.cli.task.revised = ⟦{name} íß ŕévíßéð⟧
 qps.cli.intent.invalidated = ⟦{name}'ß véŕífíçáŧíóñ ñó ĺóñgéŕ áþþĺíéß⟧
 qps.cli.intent.linked = ⟦{name} íß ĺíñkéð⟧
+qps.cli.result.elsewhere = ⟦{name} íß ßhówñ bý {value}⟧
+qps.cli.result.none = ⟦ñó íßßúéß áŕé képŧ⟧
+qps.cli.intent.unlinked = ⟦{name}'ß ĺíñk íß ŧákéñ óff⟧
 qps.cli.intent.unchanged = ⟦{name} áĺŕéáðý ßáýß ŧháŧ; ñóŧhíñg wáß ŕévíßéð⟧
 qps.cli.same_title = ⟦{name} háß ŧhé ßámé ŧíŧĺé áß {other}⟧
 qps.cli.intent.link_unknown = ⟦{name} íß ñóŧ á fíĺé óŕ á ßýmbóĺ ŧhé ŕépóßíŧóŕý háß; ŧhé ĺíñk íß képŧ, áñð çóñßíßŧéñçý wíĺĺ ñámé íŧ úñŧíĺ íŧ íß⟧
+qps.cli.intent.link_component = ⟦{name} íß ñóŧ óñé óf ŧhé pŕójéçŧ'ß çómpóñéñŧß ({value}); ŧhé ĺíñk íß képŧ, áñð çóñßíßŧéñçý wíĺĺ ñámé íŧ úñŧíĺ íŧ íß -- ŕéq úñĺíñk ŧákéß íŧ óff⟧
 qps.cli.intent.moved = ⟦{name} ḿóvéð fŕóḿ {other} ŧó {value}⟧
 qps.cli.intent.superseded = ⟦{name} íß ßúþéŕßéðéð⟧
 qps.cli.task.field = ⟦{name}: {value}⟧
@@ -2216,8 +2267,10 @@ qps.cli.project.agents_active = ⟦ágéñŧß áçŧívé⟧
 qps.cli.project.last_full = ⟦ĺáßŧ fúĺĺ ŧéßŧ⟧
 qps.cli.project.bootstrapped = ⟦{count} máðé, {total} áĺŕéáðý ŧhéŕé, {extra} íßßúéß⟧
 qps.cli.project.bootstrap.made = ⟦  máðé {name}⟧
+qps.cli.project.bootstrap.revised = ⟦  ŕévíßéð {name} ŧó wháŧ íŧß ðóçúméñŧ ßáýß ñów⟧
 qps.cli.project.bootstrap.stale = ⟦  {detail}⟧
 qps.cli.next.bootstrap = ⟦ñéxŧ: ŕéq áççépŧ ID kéépß á ŕéqúíŕéméñŧ íŧ máðé, áñð ŕéq ĺíßŧß ŧhém áĺĺ⟧
+qps.cli.next.no_documents = ⟦ñó ðóçúméñŧß ŧó ŕéáð: bóóŧßŧŕáp ĺóókß áŧ *.mð áñð ðóçß/*.mð (ßéŧ bóóŧßŧŕáp.ßóúŕçéß ñáméß óŧhéŕß); á ŕéqúíŕéméñŧ íñ óñé íß á ĺíñé wíŧh SHALL, MÚSŦ óŕ SHOÚLD, óŕ á héáðíñg ## REQ-001 Ŧíŧĺé wíŧh íŧß ßŧáŧéméñŧ úñðéŕ íŧ⟧
 qps.cli.next.init = ⟦ñéxŧ: bóóŧßŧŕáp FILE ŕéáðß á ðóçúméñŧ'ß ŕéqúíŕéméñŧß íñ, ŕéq ñéw ŦIŦLE ŧéxŧ=... ßáýß óñé, áñð ŧáßk ñéw ŦIŦLE --ßéŧ kíñð=KIND mákéß á ŧáßk⟧
 qps.cli.next.requirements = ⟦ñó ŕéqúíŕéméñŧß ýéŧ; ŕéq ñéw ŦIŦLE ŧéxŧ=... ßáýß óñé, bóóŧßŧŕáp FILE ŕéáðß á ðóçúméñŧ'ß íñ⟧
 qps.cli.next.tasks = ⟦ñó ŧáßkß ýéŧ; ŧáßk ñéw ŦIŦLE --ßéŧ kíñð=KIND mákéß óñé⟧
@@ -2236,7 +2289,7 @@ qps.cli.project.reconfigure.kept = ⟦ŧhé çóñfígúŕáŧíóñ wáß ĺéf
 qps.cli.project.reconfigure.nothing = ⟦ñóŧhíñg wóúĺð çháñgé; ñámé ßéŧŧíñgß áß NAME=VALUE⟧
 qps.cli.project.recovered = ⟦óñ óþéñíñg: {detail}⟧
 qps.cli.project.read_only = ⟦áñóŧhéŕ ßéßßíóñ hóĺðß ŧhé pŕójéçŧ -- á ŕúñ íñ pŕógŕéßß; ŧhíß íß ŧhé ßŧáŧé áß íŧ íß ñów, áñð ñóŧhíñg íß çháñgéð⟧
-qps.cli.task.stop_asked = ⟦ŧhé ŕúñ hóĺðíñg ŧhé pŕójéçŧ wáß áßkéð ŧó ßŧóp {name}: íŧ ßéŧß ŧhé ŧáßk áßíðé wíŧhíñ á ßéçóñð óŕ ŧwó, áñð ŧáßk çáñçéĺ {name} ŧhéñ çáñçéĺß íŧ⟧
+qps.cli.task.stop_asked = ⟦ŧhé ŕúñ hóĺðíñg ŧhé pŕójéçŧ wáß áßkéð ŧó çáñçéĺ {name}: íŧ ßŧópß íŧß wóŕk áñð çáñçéĺß íŧ wíŧhíñ á ßéçóñð óŕ ŧwó⟧
 qps.cli.project.git.branch = ⟦óñ {name}⟧
 qps.cli.project.git.clean = ⟦ñóŧhíñg háß çháñgéð ßíñçé ŧhé ĺáßŧ çómmíŧ⟧
 qps.cli.project.git.none = ⟦ŧhé þŕójéçŧ íß ñóŧ íñ á Gíŧ ŕéþóßíŧóŕý gíŧ çáñ ŕéáð⟧
@@ -2250,7 +2303,6 @@ qps.cli.repo.file = ⟦{path}  {value}  {detail}⟧
 qps.cli.repo.symbol = ⟦{name}  {value}  {path}⟧
 qps.cli.repo.reference = ⟦{path}  {name}  ({detail})⟧
 qps.cli.repo.unit = ⟦{name}⟧
-qps.cli.repo.edge = ⟦{name} {value} {other} ({detail})⟧
 qps.cli.repo.reached = ⟦{value}  {name}  {detail}⟧
 qps.cli.repo.selection = ⟦ŧéßŧ {value}: {detail}⟧
 qps.cli.repo.none = ⟦ñóŧhíñg íñ ŧhé ŕépóßíŧóŕý íß çáĺĺéð {name}⟧
@@ -2265,6 +2317,7 @@ qps.cli.work.nothing = ⟦ñó wóŕk wáß ßŧáŕŧéð⟧
 qps.cli.work.agent = ⟦{name} wóŕkß óñ {value}⟧
 qps.cli.work.runner = ⟦{value}: ŧhé ágéñŧ íß {name}⟧
 qps.cli.work.runner.session = ⟦ŧhé ßéßßíóñ'ß móðéĺ⟧
+qps.cli.work.only_ready = ⟦{name} íß ŧhé óñé ŧáßk ŕéáðý⟧
 qps.cli.work.time_allowed = ⟦íŧ máý wóŕk {count} ßéçóñðß (ágéñŧß.máx_ßéçóñðß, áñð éxéçúŧíóñ.ŧíméóúŧ fóŕ á çómmáñð); Çŧŕĺ-Ç ßŧópß íŧ ßóóñéŕ⟧
 qps.cli.work.context = ⟦çóñŧéxŧ {name}, çáĺĺ {value}⟧
 qps.cli.work.changed = ⟦çháñgéð {name}⟧
@@ -2281,7 +2334,11 @@ qps.cli.work.ended_because = ⟦ŧhé ŧáßk íß {name}: {detail}⟧
 qps.cli.next.retry = ⟦ñéxŧ: ŧáßk áççépŧ {name} ŧó ŧŕý íŧ ágáíñ, óŕ ŧáßk çómpĺéŧé {name} óñçé íŧ íß ðóñé bý háñð⟧
 qps.cli.next.parts = ⟦ñéxŧ: ŧáßk áççépŧ éáçh óf íŧß páŕŧß ({detail}); íŧ góéß báçk ŧó wóŕk óñçé ŧhéý áŕé ðóñé⟧
 qps.cli.next.integrate = ⟦ñéxŧ: ŧáßk íñŧégŕáŧé {name} ŧákéß íŧß wóŕk íñŧó ŧhé pŕójéçŧ⟧
-qps.cli.next.conflict = ⟦ñéxŧ: ŧhé wóŕk íß íñ {path}, ŧó çómpáŕé wíŧh ŧhé pŕójéçŧ (ðíff -ŕ {path} .); ŧáßk móvé {name} fáíĺéð ábáñðóñß íŧ, áñð ŧáßk áççépŧ {name} ŧhéñ wóŕk {name} ðóéß íŧ ágáíñ óñ ŧhé pŕójéçŧ áß íŧ íß ñów⟧
+qps.cli.next.gates = ⟦ñéxŧ: púŧ ŕíghŧ wháŧ ŧhé gáŧéß ábóvé ßáý, ŧhéñ ŧáßk çómpĺéŧé {name} ágáíñ⟧
+qps.cli.next.accept_task = ⟦ñéxŧ: ŧáßk áççépŧ {name} áççépŧß íŧ, áñð wóŕk {name} ŧhéñ ðóéß íŧ⟧
+qps.cli.next.work = ⟦ñéxŧ: wóŕk {name} ðóéß íŧ⟧
+qps.cli.check.no_tests = ⟦{name} ŕáñ: íŧ ŕúñß ñó ŧéßŧß; çhéçk fúĺĺ ŕúñß ŧhé pŕójéçŧ'ß ŧéßŧß áß wéĺĺ⟧
+qps.cli.next.conflict = ⟦ñéxŧ: ŧhé wóŕk íß íñ {path}; çómpáŕé éáçh fíĺé ñáméð ábóvé wíŧh ŧhé pŕójéçŧ'ß (ðíff {path}/FILE FILE) áñð ßéŧŧĺé íŧ ŧhéŕé, ŧhéñ ŧáßk íñŧégŕáŧé {name} ŕéßóĺvéð ŧákéß ŧhé wóŕkßpáçé'ß fíĺéß; óŕ ŧáßk móvé {name} fáíĺéð ábáñðóñß íŧ, áñð ŧáßk áççépŧ {name} ðóéß íŧ ágáíñ⟧
 qps.cli.next.ready = ⟦ŕéáðý ŧó wóŕk óñ: {name}  {value}⟧
 qps.cli.next.accept = ⟦ñéxŧ: çáñðíðáŧé ŧáßkß wáíŧíñg ŧó bé áççépŧéð: {count}; ŧáßk ĺíßŧ ßhówß ŧhém, ŧáßk áççépŧ ID áççépŧß óñé⟧
 qps.cli.next.create = ⟦ñéxŧ: ŧáßk ñéw ŦIŦLE --ßéŧ kíñð=KIND mákéß á ŧáßk, óŕ ŕéq ñéw ŦIŦLE ŧéxŧ=... á ŕéqúíŕéméñŧ ŧó ðéŕívé ŧáßkß fŕóm⟧
