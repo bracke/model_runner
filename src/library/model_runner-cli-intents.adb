@@ -333,6 +333,23 @@ package body Model_Runner.CLI.Intents is
                Result : Nt.Impact;
             begin
                Nt.Read (Store, Kind, Word (2), Held, Status);
+
+               --  Something to revise, and something that differs.
+               if E.Is_Ok (Status)
+                 and then Given ("title") = "" and then Given ("text") = ""
+                 and then Given ("criteria") = ""
+               then
+                  Status := E.Make (E.Framework_Input_Missing);
+                  E.Add_Text (Status, "name", "what to revise: title=..., text=... or criteria=...");
+               elsif E.Is_Ok (Status)
+                 and then (Given ("title") = "" or else Given ("title") = To_String (Held.Title))
+                 and then (Given ("text") = "" or else Given ("text") = To_String (Held.Text))
+                 and then (Given ("criteria") = ""
+                           or else Given ("criteria") = To_String (Held.Criteria))
+               then
+                  Pres.Put_Note (Screen, "cli.intent.unchanged", [Loc.Named ("name", Word (2))]);
+                  return;
+               end if;
                if E.Is_Ok (Status) then
                   Nt.Revise
                     (Store, Change, Kind, Word (2),
@@ -429,6 +446,14 @@ package body Model_Runner.CLI.Intents is
                Field ("scope", To_String (Held.Scope));
                Field ("text", To_String (Held.Text));
                Field ("criteria", To_String (Held.Criteria));
+
+               --  Not verified yet: what it still lacks, and what supplies it.
+               if Nt."=" (Kind, Nt.Requirement)
+                 and then To_String (Held.State) in "accepted" | "implemented"
+               then
+                  Field ("not verified", Model_Runner.Framework.Verification.Why_Not_Verified
+                                           (Store, Named));
+               end if;
                Field ("source", To_String (Held.Source));
                if Held.Supersedes /= Null_Unbounded_String then
                   Field ("supersedes", To_String (Held.Supersedes));

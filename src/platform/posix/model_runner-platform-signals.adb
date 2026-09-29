@@ -79,9 +79,17 @@ package body Model_Runner.Platform.Signals is
    begin
       Handler.Bind (Token);
 
+      --  An interrupt, and being told to end -- by a timeout, a closed
+      --  terminal, a service manager -- end the run the same clean way:
+      --  what it started is stopped, and nothing is left holding the
+      --  project.
       if not Attached then
          Ada.Interrupts.Attach_Handler
            (Handler.Interrupt'Access, Ada.Interrupts.Names.SIGINT);
+         Ada.Interrupts.Attach_Handler
+           (Handler.Interrupt'Access, Ada.Interrupts.Names.SIGTERM);
+         Ada.Interrupts.Attach_Handler
+           (Handler.Interrupt'Access, Ada.Interrupts.Names.SIGHUP);
          Attached := True;
       end if;
 
@@ -107,6 +115,8 @@ package body Model_Runner.Platform.Signals is
 
       if Attached then
          Ada.Interrupts.Detach_Handler (Ada.Interrupts.Names.SIGINT);
+         Ada.Interrupts.Detach_Handler (Ada.Interrupts.Names.SIGTERM);
+         Ada.Interrupts.Detach_Handler (Ada.Interrupts.Names.SIGHUP);
          Attached := False;
       end if;
    exception

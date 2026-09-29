@@ -284,7 +284,11 @@ package body Model_Runner.Framework.Orchestration is
             --  would have each other's changes taken for their own.
             elsif not Isolated and then (Running > 0 or else not Result.Start.Is_Empty) then
                Result.Held.Append
-                 (To_String (Next.Id) & ": another task is writing in the project");
+                 (To_String (Next.Id) & ": "
+                  & (if Result.Start.Is_Empty
+                     then Tasks.List (Item, "running").First_Element
+                     else Result.Start.First_Element)
+                  & " is writing in the project; one task writes in it at a time");
             elsif not Isolated and then Component /= "" and then Taken.Contains (Component)
             then
                Result.Held.Append

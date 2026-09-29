@@ -345,13 +345,48 @@ package body Model_Runner.Presentation is
    -- Put_Note --
    ----------------
 
+   --  A next step as a session types it: each command it names as its
+   --  slash command.
+   function As_Typed_In_Session (Text : String) return String is
+      Result : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  Whether a command's words start at a place in the text.
+      function Names_A_Command (At_Index : Positive) return Boolean is
+         function Here (Phrase : String) return Boolean
+         is (At_Index + Phrase'Length - 1 <= Text'Last
+             and then Text (At_Index .. At_Index + Phrase'Length - 1) = Phrase);
+      begin
+         return Here ("task accept") or else Here ("task complete") or else Here ("task integrate")
+           or else Here ("task new") or else Here ("task move") or else Here ("task verify")
+           or else Here ("task list") or else Here ("req accept") or else Here ("req new")
+           or else Here ("req reject") or else Here ("req obsolete") or else Here ("req lists")
+           or else Here ("bootstrap FILE") or else Here ("reconfigure ")
+           or else Here ("check consistency") or else Here ("work TASK-") or else Here ("result RES-");
+      end Names_A_Command;
+   begin
+      for Index in Text'Range loop
+         if (Index = Text'First or else Text (Index - 1) in ' ' | '(')
+           and then Names_A_Command (Index)
+         then
+            Ada.Strings.Unbounded.Append (Result, "/");
+         end if;
+         Ada.Strings.Unbounded.Append (Result, Text (Index));
+      end loop;
+      return Ada.Strings.Unbounded.To_String (Result);
+   end As_Typed_In_Session;
+
    procedure Put_Note
      (Item      : in out Console;
       Key       : String;
-      Arguments : Loc.Argument_List := Loc.Empty_Arguments) is
+      Arguments : Loc.Argument_List := Loc.Empty_Arguments)
+   is
+      Said : constant String :=
+        (if Item.Session and then Key'Length > 9 and then Key (Key'First .. Key'First + 8) = "cli.next."
+         then As_Typed_In_Session (Message (Item, Key, Arguments))
+         else Message (Item, Key, Arguments));
    begin
       if Item.Structured then
-         Put_Record (Item, "note", Key, Arguments, Message (Item, Key, Arguments));
+         Put_Record (Item, "note", Key, Arguments, Said);
          return;
       end if;
       if Item.Level = Opt.Quiet then
@@ -361,8 +396,17 @@ package body Model_Runner.Presentation is
         (Item,
          Message
            (Item, "diagnostic.note",
-            [Loc.Named ("detail", Message (Item, Key, Arguments))]));
+            [Loc.Named ("detail", Said)]));
    end Put_Note;
+
+   -----------------
+   -- Use_Session --
+   -----------------
+
+   procedure Use_Session (Item : in out Console; On : Boolean) is
+   begin
+      Item.Session := On;
+   end Use_Session;
 
    -------------------
    -- Put_Tool_Call --

@@ -64,6 +64,18 @@ package body Model_Runner.Framework.Traceability is
    is
       Result : Graph;
 
+      --  Whether the repository holds a file or declares a symbol by that
+      --  name.
+      function Held_By_Repository (Target : String) return Boolean is
+      begin
+         for Index in 1 .. Repository.File_Count (Files) loop
+            if To_String (Repository.File_At (Files, Index).Path) = Target then
+               return True;
+            end if;
+         end loop;
+         return not Repository.Find_Symbols (Files, Target).Is_Empty;
+      end Held_By_Repository;
+
       procedure Component (Name : String) is
       begin
          if Name /= "" and then Name /= "project"
@@ -131,10 +143,15 @@ package body Model_Runner.Framework.Traceability is
                      Link (Result, Node, Target_Node (Target), "implemented_by",
                            Repository.Explicit, Repository.Certain, Id);
                   end loop;
+                  --  A test the repository does not hold tests nothing:
+                  --  linked, it is a mistake consistency names, not a test
+                  --  a change is certainly covered by.
                   for Target of Intent.Links (Item, Intent.Requirement, Id, Intent.Test)
                   loop
-                     Link (Result, Node, Target_Node (Target), "tested_by",
-                           Repository.Explicit, Repository.Certain, Id);
+                     if Held_By_Repository (Target) then
+                        Link (Result, Node, Target_Node (Target), "tested_by",
+                              Repository.Explicit, Repository.Certain, Id);
+                     end if;
                   end loop;
                   Stores.Read (Item, Requirements_Area, Id, Value, Status);
                   for Evidence of Lines_Of

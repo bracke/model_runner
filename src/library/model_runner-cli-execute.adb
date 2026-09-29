@@ -1940,6 +1940,22 @@ package body Model_Runner.CLI.Execute is
                Screen.Put_Message ("help." & Word & ".usage");
                Screen.Put_Line ("");
                Screen.Put_Message ("help." & Word & ".summary");
+
+               --  One of the project commands asked about: its own syntax.
+               if Kind = Opt.Command_Project and then Topic /= "project"
+                 and then Topic in "req" | "state" | "bootstrap" | "config" | "reconfigure"
+                                 | "check" | "result"
+               then
+                  Screen.Put_Line ("");
+                  Screen.Put_Message
+                    ((if Topic = "req" then "help.project.req"
+                      elsif Topic = "state" then "help.project.state"
+                      elsif Topic = "bootstrap" then "help.project.bootstrap"
+                      elsif Topic = "config" then "help.project.config"
+                      elsif Topic = "reconfigure" then "help.project.reconfigure"
+                      elsif Topic = "check" then "help.project.check"
+                      else "help.project.result"));
+               end if;
                Screen.Put_Line ("");
                Screen.Put_Message ("help." & Word & ".options");
                Options_Of (Kind, Word);

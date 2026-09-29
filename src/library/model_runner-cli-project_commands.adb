@@ -3,6 +3,7 @@ with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 
 with Model_Runner.Agent;
 with Model_Runner.CLI.Choosers;
@@ -705,7 +706,7 @@ package body Model_Runner.CLI.Project_Commands is
    begin
       return Equal > Word'First
         and then (for all C of Word (Word'First .. Equal - 1) =>
-                    C in 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '.' | '+');
+                    C in 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '.' | '+' | '-');
    end Is_Setting;
 
    ---------
@@ -905,10 +906,25 @@ package body Model_Runner.CLI.Project_Commands is
          end if;
          for Index in 1 .. R.Field_Count (Config) loop
             declare
-               Name : constant String := R.Field_Name (Config, Index);
+               Name  : constant String := R.Field_Name (Config, Index);
+               Value : constant String := R.Get (Config, Name);
+
+               --  A set or a list an item a line, however it was written.
+               function Shown return String is
+               begin
+                  if not (Name'Length > 4 and then Name (Name'First .. Name'First + 3) in "set." | "list")
+                  then
+                     return Value;
+                  end if;
+                  return Ada.Strings.Fixed.Translate
+                    (Value, Ada.Strings.Maps.To_Mapping (",", [1 => ASCII.LF]));
+               end Shown;
             begin
-               if Name'Length < 5 or else Name (Name'First .. Name'First + 4) /= "file." then
-                  Field (Name, R.Get (Config, Name));
+               --  Those NAME names, when one is given.
+               if (Name'Length < 5 or else Name (Name'First .. Name'First + 4) /= "file.")
+                 and then (Argument (1) = "" or else Ada.Strings.Fixed.Index (Name, Argument (1)) > 0)
+               then
+                  Field (Name, Shown);
                end if;
             end;
          end loop;
@@ -940,8 +956,11 @@ package body Model_Runner.CLI.Project_Commands is
                declare
                   Named : constant String := R.Field_Name (Value, Index);
                begin
+                  --  Columns a tab apart shown as columns.
                   if Named not in "schema_id" | "schema_version" | "entity_id" | "revision" then
-                     Field (Named, R.Get (Value, Named));
+                     Field (Named, Ada.Strings.Fixed.Translate
+                                     (R.Get (Value, Named),
+                                      Ada.Strings.Maps.To_Mapping ([1 => ASCII.HT], " ")));
                   end if;
                end;
             end loop;
@@ -992,9 +1011,77 @@ package body Model_Runner.CLI.Project_Commands is
          Read     : E.Error_Info;
          Change   : S.Transaction;
       begin
+         --  A requirement: the tasks serving it verified again, the
+         --  requirement itself where the project has a profile for that,
+         --  and where it stands then -- with what it still lacks.
+         if Argument (1)'Length > 4
+           and then Argument (1) (Argument (1)'First .. Argument (1)'First + 3) = "REQ-"
+         then
+            declare
+               package Vf renames Model_Runner.Framework.Verification;
+               package Tk renames Model_Runner.Framework.Tasks;
+               Requirement : constant String := Argument (1);
+               Held        : Model_Runner.Framework.Intent.Entity;
+               Got         : E.Error_Info;
+               Evidence    : Unbounded_String;
+               Passed      : Boolean;
+               Changed     : Names.Vector;
+            begin
+               Model_Runner.Framework.Intent.Read
+                 (Store, Model_Runner.Framework.Intent.Requirement, Requirement, Held, Got);
+               if E.Is_Error (Got) then
+                  Pres.Report (Screen, Got);
+                  return;
+               end if;
+               for Id of Tk.List (Store) loop
+                  declare
+                     Defined : R.Item;
+                  begin
+                     Tk.Definition (Store, Id, Defined, Got);
+                     if E.Is_Ok (Got)
+                       and then Model_Runner.Framework.Lines_Of
+                                  (R.Get (Defined, "requirements")).Contains (Requirement)
+                       and then Tk.State_Of (Store, Id) = "complete"
+                       and then Vf.Profile_Of (Store, Id) /= ""
+                     then
+                        Vf.Run_Profile (Store, Change, Vf.Profile_Of (Store, Id), Id, Evidence,
+                                        Passed, Got);
+                        if E.Is_Ok (Got) then
+                           S.Commit (Store, Change, Got);
+                           Field (Id, To_String (Evidence) & (if Passed then " passed" else " failed"));
+                        end if;
+                     end if;
+                  end;
+               end loop;
+               Vf.Verify_Requirement (Store, Change, Requirement, Evidence, Passed, Got);
+               if E.Is_Ok (Got) then
+                  S.Commit (Store, Change, Got);
+                  Field (Requirement, To_String (Evidence) & (if Passed then " passed" else " failed"));
+               end if;
+               Change := S.No_Changes;
+               Vf.Reevaluate_Requirements (Store, Change, Changed, Got);
+               S.Commit (Store, Change, Got);
+               Model_Runner.Framework.Intent.Read
+                 (Store, Model_Runner.Framework.Intent.Requirement, Requirement, Held, Got);
+               Field ("state", To_String (Held.State));
+               if To_String (Held.State) /= "verified" then
+                  Field ("not verified", Vf.Why_Not_Verified (Store, Requirement));
+               end if;
+            end;
+            return;
+         end if;
+
          --  The state itself, not the project's files: what does not hold
          --  together, found without a model.
-         if Argument (1) = "consistency" then
+         if Argument (1) = "consistency" and then Argument (2) /= "" then
+            Outcome := E.Make (E.Framework_Input_Invalid);
+            E.Add_Text (Outcome, "name", "check consistency");
+            E.Add_Text (Outcome, "value", Argument (2));
+            E.Add_Text (Outcome, "detail", "it only lists what does not hold together; nothing"
+                        & " follows it");
+            Pres.Report (Screen, Outcome);
+            return;
+         elsif Argument (1) = "consistency" then
             declare
                package Cs renames Model_Runner.Framework.Consistency;
                Found : constant Cs.Finding_List := Cs.Check (Store);
@@ -1031,6 +1118,21 @@ package body Model_Runner.CLI.Project_Commands is
                   Pres.Report (Screen, Outcome);
                   return;
                end if;
+
+               --  New evidence: the requirements are judged again.
+               declare
+                  Changed : Names.Vector;
+               begin
+                  Vf.Reevaluate_Requirements (Store, Change, Changed, Outcome);
+                  if E.Is_Ok (Outcome) then
+                     S.Commit (Store, Change, Outcome);
+                  end if;
+                  for Requirement of Changed loop
+                     Pres.Put_Message
+                       (Screen, "cli.work.requirement", [Loc.Named ("name", Requirement)]);
+                  end loop;
+                  Outcome := E.Success;
+               end;
                declare
                   Said : constant Vf.Diagnostic_List :=
                     Vf.Diagnostics_Of (Store, To_String (Evidence));
@@ -1054,6 +1156,22 @@ package body Model_Runner.CLI.Project_Commands is
                                    (Vf.Parse_Profile (R.Get (Config, "profile." & Profile))))),
                       Loc.Named ("total", Image (Vf.Length (Said)))]);
                end;
+
+               --  Not passed: a failure, with what failed and how it ended.
+               if not Passed then
+                  declare
+                     Failed : E.Error_Info := E.Make (E.Framework_Verification_Failed);
+                     Why    : Unbounded_String;
+                  begin
+                     for Line of Vf.Why_Failed (Store, To_String (Evidence)) loop
+                        Append (Why, (if Why = Null_Unbounded_String then "" else ASCII.LF & "")
+                                & Line);
+                     end loop;
+                     E.Add_Text (Failed, "name", To_String (Evidence));
+                     E.Add_Text (Failed, "detail", To_String (Why));
+                     Pres.Report (Screen, Failed);
+                  end;
+               end if;
             end Run_One;
          begin
             if Argument (1) = "full" and then not R.Has (Config, "profile.full") then
@@ -1174,8 +1292,12 @@ package body Model_Runner.CLI.Project_Commands is
                begin
                   if Part = "confirm=yes" then
                      null;
+                  --  A setting starts: named with its kind, or -- as the
+                  --  first word -- named any way at all, to be found or
+                  --  refused by name rather than dropped.
                   elsif Is_Setting (Part)
-                    and then Ada.Strings.Fixed.Index (Part (Part'First .. Equal - 1), ".") > 0
+                    and then (Ada.Strings.Fixed.Index (Part (Part'First .. Equal - 1), ".") > 0
+                              or else Name = Null_Unbounded_String)
                   then
                      if Name /= Null_Unbounded_String then
                         Changes.Include (To_String (Name), To_String (Value));
@@ -1217,6 +1339,7 @@ package body Model_Runner.CLI.Project_Commands is
             begin
                E.Add_Text (Missing, "name", "confirm");
                Pres.Report (Screen, Missing);
+               Pres.Put_Note (Screen, "cli.next.confirm");
             end;
             return;
          else
@@ -1477,7 +1600,11 @@ package body Model_Runner.CLI.Project_Commands is
          declare
             Part : constant String := All_Words (Index);
          begin
-            if Is_Setting (Part) and then Command.Input_Count < Opt.Max_Guards then
+            --  --set before NAME=VALUE, as the shell spells it, is the
+            --  same as NAME=VALUE alone.
+            if Part = "--set" then
+               null;
+            elsif Is_Setting (Part) and then Command.Input_Count < Opt.Max_Guards then
                Command.Input_Count := Command.Input_Count + 1;
                Command.Inputs (Command.Input_Count) := T.To_Bounded (Part);
             else
@@ -1663,6 +1790,13 @@ package body Model_Runner.CLI.Project_Commands is
             Status := E.Exit_Status (Missing);
             return;
          end;
+      end if;
+      --  A sandbox is a session's: from the shell it is said how to give
+      --  one to a command, not set for nothing.
+      if Word = "sandbox" and then Rest /= "" then
+         Pres.Put_Note (Screen, "cli.project.sandbox.shell", [Loc.Named ("value", Rest)]);
+         Status := E.Exit_Success;
+         return;
       end if;
       Ada.Directories.Set_Directory (Directory);
       begin

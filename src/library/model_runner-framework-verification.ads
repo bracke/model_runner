@@ -215,6 +215,28 @@ package Model_Runner.Framework.Verification is
      (Item     : Stores.Store;
       Evidence : String) return Diagnostic_List;
 
+   --  Why a requirement is not verified now, and what would verify it:
+   --  a task serving it not complete, evidence missing, not passing, no
+   --  longer applying, or running no tests.
+   --
+   --  @param Item The store.
+   --  @param Requirement The requirement.
+   --  @return Why, or the empty string when the evidence verifies it.
+   function Why_Not_Verified (Item : Stores.Store; Requirement : String) return String;
+
+   --  Why a piece of evidence did not pass, a line each required check
+   --  that failed: what it ran, how it ended, the result its log is kept
+   --  in, and the last lines of that log -- what a person reads first.
+   --
+   --  @param Item The store.
+   --  @param Evidence The evidence.
+   --  @param Lines How many of the log's last lines to give.
+   --  @return The lines; none when it passed.
+   function Why_Failed
+     (Item     : Stores.Store;
+      Evidence : String;
+      Lines    : Positive := 6) return Name_Lists.Vector;
+
    --  Whether evidence still applies: the same files, configuration and
    --  requirement revisions as when it was gathered.
    --

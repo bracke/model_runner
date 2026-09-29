@@ -5,6 +5,8 @@ with Ada.Strings.Fixed;
 
 with Hostkit.Durability;
 with Hostkit.Fs;
+with Hostkit.Host;
+with Hostkit.Process;
 
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Identifiers;
@@ -1033,6 +1035,7 @@ package body Model_Runner.Framework.Stores is
       if Item.Read_Only then
          Status := E.Make (E.Framework_Locked);
          E.Add_Text (Status, "path", Root (Item), E.Param_Path);
+         E.Add_Text (Status, "detail", "it was opened to be read, while another session holds it");
          return;
       end if;
 
@@ -1063,6 +1066,36 @@ package body Model_Runner.Framework.Stores is
       return Made and then Make_Directory (Journal_Directory (Root));
    end Make_Areas;
 
+   --  Beside the lock, the process that holds it.
+   Holder_Suffix : constant String := ".holder";
+
+   --  Who holds the lock, as far as can be said: its process, and what to
+   --  do about it.
+   function Holder_Of (Lock_Path : String) return String is
+      use type Hostkit.Process.Presence;
+      Held   : Unbounded_String;
+      Read   : E.Error_Info;
+      Pid    : Integer := 0;
+   begin
+      if Dirs.Exists (Lock_Path & Holder_Suffix) then
+         Files.Read_Text (Lock_Path & Holder_Suffix, Held, Read);
+      end if;
+      declare
+         Text : constant String := Ada.Strings.Fixed.Trim (To_String (Held), Ada.Strings.Both);
+      begin
+         if Text'Length in 1 .. 9 and then (for all C of Text => C in '0' .. '9') then
+            Pid := Integer'Value (Text);
+         end if;
+      end;
+      if Pid = 0 then
+         return "a run in progress, or one that ended and left a program it started";
+      elsif Hostkit.Process.Presence_Of (Pid) = Hostkit.Process.Absent then
+         return "process" & Pid'Image & " took it and has ended; a program it started still"
+           & " holds it -- end that program";
+      end if;
+      return "process" & Pid'Image & "; stop it there, or wait for it to finish";
+   end Holder_Of;
+
    --  Take the state directory for this session.
    procedure Take
      (Item   : in out Store;
@@ -1089,11 +1122,22 @@ package body Model_Runner.Framework.Stores is
       if Outcome = Hostkit.Locks.Lock_Busy then
          Status := E.Make (E.Framework_Locked);
          E.Add_Text (Status, "path", Root, E.Param_Path);
+         E.Add_Text (Status, "detail", Holder_Of (Lock_Path));
       elsif Outcome = Hostkit.Locks.Lock_Error then
          Write_Failed (Lock_Path, Status);
       else
          Item.Root := To_Unbounded_String (Root);
          Item.Opened := True;
+
+         --  Who holds it, for the session that finds it held.
+         declare
+            Ignored : E.Error_Info;
+         begin
+            Files.Write_Whole
+              (Lock_Path & Holder_Suffix,
+               Ada.Strings.Fixed.Trim (Hostkit.Host.Own_Process_Id'Image, Ada.Strings.Both),
+               Ignored);
+         end;
       end if;
    end Take;
 
@@ -1411,7 +1455,10 @@ package body Model_Runner.Framework.Stores is
                   Gather (Root, Relative, Into);
                end if;
             elsif Ada.Directories.Kind (Found) = Ada.Directories.Ordinary_File
-              and then Relative not in "runtime/lock" | "runtime/written.log" | "runtime/harness.log"
+              and then Relative not in "runtime/lock" | "runtime/lock.holder" | "runtime/written.log"
+                                     | "runtime/harness.log"
+              and then not (Relative'Length > 13
+                            and then Relative (Relative'First .. Relative'First + 12) = "runtime/stop.")
             then
                declare
                   Text : Unbounded_String;

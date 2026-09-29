@@ -464,6 +464,10 @@ package body Model_Runner.Errors is
 
    function Recovery_Hint (Code : Error_Code) return String is
    begin
+      --  No project here: how to start one.
+      if Code = Framework_Not_Initialized then
+         return "diagnostic.hint.not_initialized";
+      end if;
       case Recovery (Code) is
          when Recovery_None | Recovery_Terminal =>
             return "";

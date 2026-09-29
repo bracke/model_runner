@@ -471,6 +471,13 @@ package body Model_Runner.Framework.Work is
       if Verification.Length (Found) > 3 then
          Append (Result, "; and" & Natural'Image (Verification.Length (Found) - 3) & " more");
       end if;
+
+      --  No diagnostic read from it: what failed and how it ended.
+      if Result = Null_Unbounded_String then
+         for Line of Verification.Why_Failed (Item, Evidence, Lines => 3) loop
+            Append (Result, (if Result = Null_Unbounded_String then ": " else "; ") & Line);
+         end loop;
+      end if;
       return To_String (Result);
    end First_Diagnostics;
 
@@ -735,7 +742,22 @@ package body Model_Runner.Framework.Work is
          end if;
       end;
 
-      --  8: what is still wrong, for someone to settle.
+      --  8: leases run out are let go of, once, and said.
+      declare
+         Change  : Stores.Transaction;
+         Cleared : Name_Lists.Vector;
+         Kept    : E.Error_Info;
+      begin
+         Leases.Clear_Stale (Item, Change, Cleared);
+         Stores.Commit (Item, Change, Kept);
+         if E.Is_Ok (Kept) then
+            for Resource of Cleared loop
+               Said.Append (Resource & ": its lease had run out, and is let go of");
+            end loop;
+         end if;
+      end;
+
+      --  9: what is still wrong, for someone to settle.
       declare
          Wrong : constant Consistency.Finding_List := Consistency.Check (Item);
       begin
@@ -745,7 +767,7 @@ package body Model_Runner.Framework.Work is
                & Natural'Image (Consistency.Length (Wrong)) & ", first "
                & To_String (Consistency.Element (Wrong, 1).Subject) & ": "
                & To_String (Consistency.Element (Wrong, 1).Detail)
-               & "; /check consistency lists it all");
+               & "; check consistency lists it all");
          end if;
       end;
    end Recover_On_Opening;
@@ -812,6 +834,27 @@ package body Model_Runner.Framework.Work is
    -----------
    -- Audit --
    -----------
+
+   --  The tasks an agent proposed working on a task, as they are now.
+   function Proposals_Of (Item : Stores.Store; Task_Id : String) return String is
+      Found : Unbounded_String;
+   begin
+      for Other of Tasks.List (Item) loop
+         declare
+            Defined : Records.Item;
+            Read    : E.Error_Info;
+         begin
+            Tasks.Definition (Item, Other, Defined, Read);
+            if E.Is_Ok (Read) and then Records.Get (Defined, "origin") = Task_Id
+              and then Ada.Strings.Fixed.Index (Records.Get (Defined, "created_by"), "agent ") = 1
+            then
+               Append (Found, (if Found = Null_Unbounded_String then "" else ", ")
+                       & Other & " " & Tasks.State_Of (Item, Other));
+            end if;
+         end;
+      end loop;
+      return To_String (Found);
+   end Proposals_Of;
 
    function Audit (Item : Stores.Store; Task_Id : String) return Name_Lists.Vector is
       Result  : Name_Lists.Vector;
@@ -898,6 +941,8 @@ package body Model_Runner.Framework.Work is
                      else Records.Get (Call, "model_profile"))
            & (if Invocation = "" then "" else ", in " & Invocation));
       Say ("answer", Records.Get (Call, "result"));
+      Say ("issues", Records.Get (State, "issues"));
+      Say ("proposed", Proposals_Of (Item, Task_Id));
       Say ("files changed", Records.Get (State, "changed_files"));
       Say ("workspace", Records.Get (State, "current_workspace"));
       Say ("verification", Records.Get (State, "current_verification")
@@ -1533,6 +1578,29 @@ package body Model_Runner.Framework.Work is
       --  The parts its answer split the task into, as candidate children.
       Split_Into  : Name_Lists.Vector;
 
+      --  What an earlier attempt left changed in the project, which this
+      --  one may say it changed though it did not touch it again.
+      function Changed_Before return Name_Lists.Vector is
+         Held : Records.Item;
+         Read : E.Error_Info;
+      begin
+         Stores.Read (Item, Tasks_Area, Task_Id & ".state", Held, Read);
+         return (if E.Is_Ok (Read) then Lines_Of (Records.Get (Held, "changed_files"))
+                 else Name_Lists.Empty_Vector);
+      end Changed_Before;
+
+      Earlier_Changed : constant Name_Lists.Vector := Changed_Before;
+
+      --  What the runner says it is.
+      function Runner_Said return String is
+         Named : Unbounded_String;
+      begin
+         Runner.Describe (Named);
+         return To_String (Named);
+      end Runner_Said;
+
+      Runner_Named : constant String := Runner_Said;
+
       --  Whether it went over its token budget.
       Over_Budget : Boolean := False;
 
@@ -1550,7 +1618,23 @@ package body Model_Runner.Framework.Work is
       Place    : Unbounded_String := To_Unbounded_String (Project);
 
       --  End the work with the task moved and the agent recorded.
-      procedure Conclude (Next, Reason, Agent_End : String) is
+      procedure Conclude (Next, Given_Reason, Agent_End : String) is
+         --  Not done, where it worked in the project itself: what it
+         --  changed is still there, and said so.
+         function Left_Behind return String is
+            Named : Unbounded_String;
+         begin
+            if Isolated or else Next not in "failed" | "blocked" or else Result.Changed_Files.Is_Empty
+            then
+               return "";
+            end if;
+            for Path of Result.Changed_Files loop
+               Append (Named, (if Named = Null_Unbounded_String then "" else ", ") & Path);
+            end loop;
+            return "; what it changed is still in the project: " & To_String (Named);
+         end Left_Behind;
+
+         Reason : constant String := Given_Reason & Left_Behind;
       begin
          if Next /= "" then
             Tasks.Move (Item, Change, Task_Id, Next, Reason, Status => Status);
@@ -1705,15 +1789,21 @@ package body Model_Runner.Framework.Work is
       Result.Manifest_Id := To_Unbounded_String (Context.Manifest_Id (Built));
       Context.Keep (Item, Change, Built, Status);
       if E.Is_Ok (Status) then
+         --  A command is its own agent: recorded as that, with the tools it
+         --  has its own, not those a model would be offered.
          Invocations.Start
            (Item, Change, To_String (Result.Agent_Id), Task_Id,
-            Generation_Of (Item, Task_Id), To_String (Model.Id),
+            Generation_Of (Item, Task_Id),
+            (if Ada.Strings.Fixed.Index (Runner_Named, "the command ") = 1 then Runner_Named
+             else To_String (Model.Id)),
             To_String (Result.Manifest_Id),
-            Tool_Policy
-              (Item, To_String (Result.Agent_Id),
-               Number_Of ((if Tasks.Kind_Policy (Item, Kind, "max_tool_calls") /= ""
-                           then Tasks.Kind_Policy (Item, Kind, "max_tool_calls")
-                           else Scalar (Item, "agents.max_tool_calls")), 0)),
+            (if Ada.Strings.Fixed.Index (Runner_Named, "the command ") = 1
+             then "tools: its own, as a command run under the execution policy"
+             else Tool_Policy
+                    (Item, To_String (Result.Agent_Id),
+                     Number_Of ((if Tasks.Kind_Policy (Item, Kind, "max_tool_calls") /= ""
+                                 then Tasks.Kind_Policy (Item, Kind, "max_tool_calls")
+                                 else Scalar (Item, "agents.max_tool_calls")), 0))),
             Invocations.Work_Claim,
             Result.Invocation_Id, Status, Resource_Class => To_String (Model.Resource_Class));
          if E.Is_Ok (Status) then
@@ -2009,7 +2099,8 @@ package body Model_Runner.Framework.Work is
             Named : Unbounded_String;
          begin
             for Path of Tampered loop
-               Append (Named, (if Named = Null_Unbounded_String then "" else ", ") & Path);
+               Append (Named, (if Named = Null_Unbounded_String then "" else ", ")
+                       & State_Directory & "/" & Path);
             end loop;
             Conclude ("failed", "it changed the project's state, which was put back: "
                       & To_String (Named), "failed");
@@ -2034,7 +2125,9 @@ package body Model_Runner.Framework.Work is
             if Isolated then
                Workspaces.Abandon (Item, Change, To_String (Result.Workspace_Id), Held);
             end if;
-            Conclude ("failed", "it changed files it may not write: " & To_String (Denied),
+            Conclude ("failed", "it changed files it may not write: " & To_String (Denied)
+                      & (if Permissions."=" (Permissions.Sandbox, Permissions.Unrestricted) then ""
+                         else " -- the session's sandbox confines it; /sandbox off lifts it"),
                       "failed");
             return;
          end if;
@@ -2065,6 +2158,7 @@ package body Model_Runner.Framework.Work is
                      then Named (Named'First + 2 .. Named'Last) else Named);
                begin
                   if Path not in "" | "-" | "none" and then not Result.Changed_Files.Contains (Path)
+                    and then not (not Isolated and then Earlier_Changed.Contains (Path))
                   then
                      Append (Missing, (if Missing = Null_Unbounded_String then "" else ", ") & Path);
                   end if;
@@ -2091,6 +2185,35 @@ package body Model_Runner.Framework.Work is
          Defined   : Records.Item;
          May_Propose : Boolean;
          Kept_Back : Unbounded_String;
+
+         --  What this answer has made so far, by title in lower case, and
+         --  as what.
+         Made_Titles : Name_Lists.Vector;
+         Made_Ids    : Name_Lists.Vector;
+
+         --  A task of that title there already: this one, or one not
+         --  ended. What is proposed twice is made once.
+         function Same_Title (Title : String) return String is
+            Lower : constant String := Ada.Characters.Handling.To_Lower (Title);
+         begin
+            for Other of Tasks.List (Item) loop
+               if Tasks.State_Of (Item, Other) not in "complete" | "cancelled" | "rejected" then
+                  declare
+                     Its  : Records.Item;
+                     Read : E.Error_Info;
+                  begin
+                     Tasks.Definition (Item, Other, Its, Read);
+                     if E.Is_Ok (Read)
+                       and then Ada.Characters.Handling.To_Lower (Records.Get (Its, "title")) = Lower
+                     then
+                        return Other;
+                     end if;
+                  end;
+               end if;
+            end loop;
+            return "";
+         end Same_Title;
+
       begin
          Agents.Read (Item, To_String (Result.Agent_Id), Held_Root, Held);
          May_Propose := E.Is_Ok (Held)
@@ -2098,29 +2221,6 @@ package body Model_Runner.Framework.Work is
          Tasks.Definition (Item, Task_Id, Defined, Held);
          for Line of Proposed loop
             declare
-               --  A task of that title there already: this one, or one not
-               --  ended. What is proposed twice is made once.
-               function Same_Title (Title : String) return String is
-                  Lower : constant String := Ada.Characters.Handling.To_Lower (Title);
-               begin
-                  for Other of Tasks.List (Item) loop
-                     if Tasks.State_Of (Item, Other) not in "complete" | "cancelled" | "rejected" then
-                        declare
-                           Its  : Records.Item;
-                           Read : E.Error_Info;
-                        begin
-                           Tasks.Definition (Item, Other, Its, Read);
-                           if E.Is_Ok (Read)
-                             and then Ada.Characters.Handling.To_Lower (Records.Get (Its, "title")) = Lower
-                           then
-                              return Other;
-                           end if;
-                        end;
-                     end if;
-                  end loop;
-                  return "";
-               end Same_Title;
-
                --  TITLE, then as it may say, ; kind=K ; component=C ;
                --  depends_on=TASK -- a candidate's own, not assumed from this
                --  task; it is proposal data until a person accepts it.
@@ -2167,6 +2267,8 @@ package body Model_Runner.Framework.Work is
                      Made, Held);
                   if E.Is_Ok (Held) then
                      Result.Proposed.Append (To_String (Made));
+                     Made_Titles.Append (Ada.Characters.Handling.To_Lower (Title));
+                     Made_Ids.Append (To_String (Made));
                   else
                      Append (Kept_Back, ASCII.LF & "proposed: " & Title);
                      Result.Kept_Back.Append (Title & ": " & Why_Of (Held));
@@ -2189,6 +2291,13 @@ package body Model_Runner.Framework.Work is
             begin
                if Title = "" or else Title = "-" then
                   null;
+
+               --  A part there already -- from an earlier split, or twice in
+               --  this answer -- is that part, not another.
+               elsif May_Propose and then Same_Title (Title) /= "" then
+                  if not Split_Into.Contains (Same_Title (Title)) then
+                     Split_Into.Append (Same_Title (Title));
+                  end if;
                elsif May_Propose then
                   Fields.Include ("title", Title);
                   Fields.Include ("kind", Records.Get (Defined, "kind"));
@@ -2202,6 +2311,8 @@ package body Model_Runner.Framework.Work is
                   if E.Is_Ok (Held) then
                      Result.Proposed.Append (To_String (Made));
                      Split_Into.Append (To_String (Made));
+                     Made_Titles.Append (Ada.Characters.Handling.To_Lower (Title));
+                     Made_Ids.Append (To_String (Made));
                   else
                      Append (Kept_Back, ASCII.LF & "part: " & Title);
                   end if;
@@ -2258,7 +2369,17 @@ package body Model_Runner.Framework.Work is
          end loop;
 
          declare
-            Found : constant String := Invocations.Claim (Said, "issues") & To_String (Kept_Back);
+            function Not_Proposed return String is
+               Why : Unbounded_String;
+            begin
+               for Line of Result.Kept_Back loop
+                  Append (Why, ASCII.LF & "not proposed: " & Line);
+               end loop;
+               return To_String (Why);
+            end Not_Proposed;
+
+            Found : constant String :=
+              Invocations.Claim (Said, "issues") & To_String (Kept_Back) & Not_Proposed;
             --  An issue, not a proposal: what it may not propose is
             --  returned to be seen, not kept as work to be accepted.
             Issue : Results.Result :=
@@ -2271,6 +2392,12 @@ package body Model_Runner.Framework.Work is
          begin
             if Trim (Found) /= "" then
                Results.Add (Item, Change, Issue, Status);
+               if E.Is_Ok (Status) then
+                  --  Found again by its identifier: in the report, and in
+                  --  the task's audit.
+                  Result.Issue_Id := Issue.Id;
+                  Annotate (Item, Change, Task_Id, "issues", To_String (Issue.Id));
+               end if;
             end if;
          end;
          if E.Is_Ok (Status) then

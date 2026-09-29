@@ -199,6 +199,16 @@ package body Model_Runner.CLI.Init is
    begin
       Status := E.Exit_Success;
 
+      --  A project that has its state already is changed, not started:
+      --  said before anything is asked or planned.
+      if S.Is_Initialized (Directory) then
+         Outcome := E.Make (E.Framework_Already_Initialized);
+         E.Add_Text (Outcome, "path", Directory, E.Param_Path);
+         Fail (Outcome);
+         Pres.Put_Note (Screen, "cli.next.initialized");
+         return;
+      end if;
+
       if Model_Runner.Platform.User_Templates_Directory /= "" then
          Places.Append (Model_Runner.Platform.User_Templates_Directory);
       end if;
@@ -275,6 +285,12 @@ package body Model_Runner.CLI.Init is
       Tp.Compose (Registry, To_String (Chosen), Composed, Outcome);
       if E.Is_Error (Outcome) then
          Fail (Outcome);
+
+         --  One not installed: those that are.
+         if E."=" (Outcome.Code, E.Framework_Template_Not_Found) then
+            Pres.Put_Message (Screen, "cli.init.header");
+            List;
+         end if;
          return;
       end if;
 
@@ -395,6 +411,7 @@ package body Model_Runner.CLI.Init is
             Outcome := E.Make (E.Framework_Input_Missing);
             E.Add_Text (Outcome, "name", "confirm");
             Fail (Outcome);
+            Pres.Put_Note (Screen, "cli.next.confirm_init");
             return;
          end if;
          declare

@@ -103,6 +103,14 @@ package Model_Runner.Framework.Execution is
    --  @return True when it has.
    function Work_Withdrawn return Boolean;
 
+   --  Ask the run working on a task in a project -- another process, which
+   --  holds the project -- to stop it: what it runs is stopped as a
+   --  cancellation stops it, and the task is set aside.
+   --
+   --  @param Project_Directory The project.
+   --  @param Task_Id The task.
+   procedure Ask_To_Stop (Project_Directory : String; Task_Id : String);
+
    --  Whether whoever runs the harness has asked it to stop -- Ctrl-C --
    --  through the token Watch was given: asked by a runner whose program
    --  ended before the harness stopped it, the interrupt having reached it

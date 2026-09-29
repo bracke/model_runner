@@ -393,6 +393,9 @@ package Model_Runner.Errors is
       Framework_Limit_Exceeded,
       Framework_Permission_Denied,
 
+      --  A project's checks that ran and did not pass.
+      Framework_Verification_Failed,
+
       --  Internal invariants.
       Internal_Invariant_Violated,
       Internal_Unexpected_Exception,

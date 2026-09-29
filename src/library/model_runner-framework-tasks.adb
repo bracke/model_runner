@@ -76,6 +76,25 @@ package body Model_Runner.Framework.Tasks is
       return Result;
    end Split;
 
+   --  The children a waiting reason names: those it waits for, not every
+   --  child it has -- a part an earlier split made and nobody took is not
+   --  one of them.
+   function Waited_For (Reason : String) return Name_Lists.Vector is
+      From  : constant Natural := Reason'First + Children_Reason'Length;
+      Stop  : Natural := Ada.Strings.Fixed.Index (Reason, " (");
+      Named : Name_Lists.Vector;
+   begin
+      if Stop = 0 then
+         Stop := Reason'Last + 1;
+      end if;
+      for Part of Split (Reason (From .. Stop - 1)) loop
+         if Trim (Part) /= "" then
+            Named.Append (Trim (Part));
+         end if;
+      end loop;
+      return Named;
+   end Waited_For;
+
    function Joined (Items : Name_Lists.Vector; Between : String) return String is
       Result : Unbounded_String;
    begin
@@ -420,6 +439,26 @@ package body Model_Runner.Framework.Tasks is
       Event    : Unbounded_String;
       Linked   : Name_Lists.Vector := Split (Given ("depends_on"));
    begin
+      --  A field the kind requires that can be only one thing is that
+      --  thing: a project with one component, for its component.
+      if Kind /= "" and then Known.Contains (Kind) and then Given ("component") = "" then
+         declare
+            Needed, Taken : Name_Lists.Vector;
+            Only          : constant Name_Lists.Vector := Components (Item);
+         begin
+            Kind_Fields (Item, Kind, Needed, Taken);
+            if Needed.Contains ("component") and then Natural (Only.Length) = 1 then
+               declare
+                  Filled : Field_Map := Fields;
+               begin
+                  Filled.Include ("component", Only.First_Element);
+                  Create (Item, Change, Filled, Created_By, Origin, Id, Status);
+                  return;
+               end;
+            end if;
+         end;
+      end if;
+
       Linked.Append (Split (Given ("parent")));
       Id := Null_Unbounded_String;
       Status := E.Success;
@@ -999,7 +1038,7 @@ package body Model_Runner.Framework.Tasks is
               and then Ada.Strings.Fixed.Index
                          (Records.Get (Value, "blocking_reasons"),
                           Children_Reason) = 1
-              and then (for all Child of Children (Item, Id) =>
+              and then (for all Child of Waited_For (Records.Get (Value, "blocking_reasons")) =>
                           not Holds_Parent (Item, Child, State_Of (Item, Child))
                           and then State_Of (Item, Child) /= "candidate")
             then

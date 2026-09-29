@@ -179,7 +179,11 @@ package body Model_Runner.Framework.Permissions is
             if not Found then
                Status := E.Make (E.Framework_Schema_Violation);
                E.Add_Text (Status, "name", "permissions");
-               E.Add_Text (Status, "detail", "no capability is called " & Trim (Name));
+               E.Add_Text (Status, "detail", "no capability is called " & Trim (Name)
+                           & "; they are read_source, write_source, read_specs, write_specs,"
+                           & " run_build, run_tests, run_static_analysis, create_children,"
+                           & " propose_tasks, request_integration, use_network and"
+                           & " execute_external_process");
                Result := Nothing;
                return;
             end if;
@@ -322,7 +326,8 @@ package body Model_Runner.Framework.Permissions is
       Kind    : String;
       Role    : String;
       Runtime : Permission_Set := Unrestricted;
-      Task_Level : String := "") return Permission_Set
+      Task_Level : String := "";
+      Within_Sandbox : Boolean := True) return Permission_Set
    is
       Present : Boolean;
       Project : Permission_Set := Level_Of (Item, "project", Present);
@@ -341,7 +346,10 @@ package body Model_Runner.Framework.Permissions is
            (Granted => True, Max_Depth => 1, Max_Children => 2, others => <>);
          Project (Propose_Tasks).Granted := True;
       end if;
-      Result := Intersect (Intersect (Project, Runtime), Sandbox);
+      Result := Intersect (Project, Runtime);
+      if Within_Sandbox then
+         Result := Intersect (Result, Sandbox);
+      end if;
 
       if Kind /= "" then
          declare

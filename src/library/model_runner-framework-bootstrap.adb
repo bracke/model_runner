@@ -95,9 +95,9 @@ package body Model_Runner.Framework.Bootstrap is
       Titled  : Boolean := False;
       Start   : Natural := Text'First;
 
-      --  A heading naming a requirement, until its first normative line.
-      Heading_Id    : Unbounded_String;
-      Heading_Title : Unbounded_String;
+      --  The requirement a heading names, whose section is its statement
+      --  until the next heading: the output it is, or zero.
+      Section : Natural := 0;
 
       --  The requirement an Acceptance: line is about: the last one found.
       Last_Requirement : Natural := 0;
@@ -134,7 +134,10 @@ package body Model_Runner.Framework.Bootstrap is
             then Trim (Line (Line'First + 2 .. Line'Last)) else Line);
          Colon : constant Natural := Ada.Strings.Fixed.Index (Item, ":");
       begin
+         --  A blank line ends a heading's statement: what follows is said
+         --  apart, though Acceptance: lines still go to the requirement.
          if Item = "" then
+            Section := 0;
             return;
          end if;
 
@@ -151,15 +154,20 @@ package body Model_Runner.Framework.Bootstrap is
                   Found (Specification_Candidate, Path, Heading, Text);
                end if;
 
-               --  ## REQ-SHELL-001 Quoting: the requirement's identifier and
-               --  title, its statement the next normative line.
-               Heading_Id := Null_Unbounded_String;
+               --  ## REQ-SHELL-001 Quoting: the requirement, at once, with
+               --  its identifier and title; what its section says is its
+               --  statement, and its Acceptance: lines its criteria.
+               Section := 0;
                if First'Length > 4 and then First (First'First .. First'First + 3) = "REQ-"
                  and then Identifiers.Is_Valid (First)
                then
-                  Heading_Id := To_Unbounded_String (First);
-                  Heading_Title := To_Unbounded_String
-                    (Trim (Heading (Space .. Heading'Last)));
+                  declare
+                     Title : constant String := Trim (Heading (Space .. Heading'Last));
+                  begin
+                     Found (Imported_Item, Path & "#" & First,
+                            (if Title = "" then First else Title), "", Given => First);
+                     Section := Length (Result);
+                  end;
                end if;
             end;
             return;
@@ -167,6 +175,9 @@ package body Model_Runner.Framework.Bootstrap is
 
          --  Acceptance: what the requirement just stated is judged by.
          if Starts_With (Item, "Acceptance:") or else Starts_With (Item, "Acceptance criteria:") then
+            if Section > 0 then
+               Last_Requirement := Section;
+            end if;
             if Last_Requirement > 0 then
                declare
                   Held : Output := Result.Outputs (Last_Requirement);
@@ -221,8 +232,7 @@ package body Model_Runner.Framework.Bootstrap is
                Id : constant String := Item (Item'First .. Colon - 1);
                Said : constant String := Trim (Item (Colon + 1 .. Item'Last));
             begin
-               Found (Imported_Item, Path & "#" & Id, Id & " " & Headline (Said),
-                      Said, Given => Id);
+               Found (Imported_Item, Path & "#" & Id, Headline (Said), Said, Given => Id);
             end;
             return;
          end if;
@@ -253,20 +263,27 @@ package body Model_Runner.Framework.Bootstrap is
             return;
          end if;
 
+         --  In a section a requirement's heading opens, what is said is
+         --  that requirement's statement.
+         if Section > 0 then
+            declare
+               Held : Output := Result.Outputs (Section);
+            begin
+               Held.Text :=
+                 (if Held.Text = Null_Unbounded_String then To_Unbounded_String (Item)
+                  else Held.Text & ASCII.LF & Item);
+               Result.Outputs (Section) := Held;
+            end;
+            return;
+         end if;
+
          if Has_Word (Item, "SHALL") or else Has_Word (Item, "MUST")
            or else Has_Word (Item, "SHOULD")
          then
             declare
                Print : constant String := Fingerprint (Item);
             begin
-               if Heading_Id /= Null_Unbounded_String then
-                  --  The statement of the requirement its heading names.
-                  Found (Imported_Item, Path & "#" & To_String (Heading_Id),
-                         (if Heading_Title = Null_Unbounded_String then Headline (Item)
-                          else To_String (Heading_Title)),
-                         Item, Given => To_String (Heading_Id));
-                  Heading_Id := Null_Unbounded_String;
-               elsif Seen.Contains (Print) then
+               if Seen.Contains (Print) then
                   Found (Issue, Path & "#twice-" & Print,
                          "stated twice: " & Headline (Item), Item);
                else
@@ -283,6 +300,18 @@ package body Model_Runner.Framework.Bootstrap is
             Line_Of (Text (Start .. Index - 1));
             Start := Index + 1;
          end if;
+      end loop;
+
+      --  A heading with nothing under it says what it is by its title.
+      for Index in 1 .. Length (Result) loop
+         declare
+            Held : Output := Result.Outputs (Index);
+         begin
+            if Held.Kind = Imported_Item and then Held.Text = Null_Unbounded_String then
+               Held.Text := Held.Title;
+               Result.Outputs (Index) := Held;
+            end if;
+         end;
       end loop;
       return Result;
    end Scan;
@@ -373,6 +402,44 @@ package body Model_Runner.Framework.Bootstrap is
       return Result;
    end Documents;
 
+   --  How alike two texts are, by their words: those they share, of all
+   --  either has.
+   function Likeness (Left, Right : String) return Float is
+      function Words (Text : String) return Name_Lists.Vector is
+         Result : Name_Lists.Vector;
+         Start  : Natural := Text'First;
+      begin
+         for Index in Text'First .. Text'Last + 1 loop
+            if Index > Text'Last or else Text (Index) not in 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' then
+               if Index > Start then
+                  declare
+                     Word : constant String :=
+                       Ada.Characters.Handling.To_Lower (Text (Start .. Index - 1));
+                  begin
+                     if not Result.Contains (Word) then
+                        Result.Append (Word);
+                     end if;
+                  end;
+               end if;
+               Start := Index + 1;
+            end if;
+         end loop;
+         return Result;
+      end Words;
+
+      A      : constant Name_Lists.Vector := Words (Left);
+      B      : constant Name_Lists.Vector := Words (Right);
+      Shared : Natural := 0;
+   begin
+      for Word of A loop
+         if B.Contains (Word) then
+            Shared := Shared + 1;
+         end if;
+      end loop;
+      return (if Natural (A.Length) + Natural (B.Length) - Shared = 0 then 0.0
+              else Float (Shared) / Float (Natural (A.Length) + Natural (B.Length) - Shared));
+   end Likeness;
+
    procedure Apply
      (Item   : Stores.Store;
       Change : in out Stores.Transaction;
@@ -400,6 +467,21 @@ package body Model_Runner.Framework.Bootstrap is
                         when Decision_Candidate      => "decisions",
                         when Specification_Candidate => "specifications",
                         when Issue                   => "issues"));
+      --  The texts of what it made, as Result.Made has them.
+      Made_Texts : Name_Lists.Vector;
+
+      --  An issue, kept as a diagnostic result -- the same issue found
+      --  again being the same result -- and said once, when it is new.
+      procedure Raise_Issue (Said : in out Results.Result) is
+         Id  : constant String := Results.Identifier_Of (Said);
+         New_One : constant Boolean := not Stores.Exists (Item, Results_Area, Id);
+      begin
+         Results.Add (Item, Change, Said, Status);
+         Result.Issues := Result.Issues + 1;
+         if E.Is_Ok (Status) and then New_One then
+            Result.Stale.Append (Id & ": " & To_String (Said.Summary));
+         end if;
+      end Raise_Issue;
    begin
       Result := (others => <>);
       Status := E.Success;
@@ -428,6 +510,7 @@ package body Model_Runner.Framework.Bootstrap is
                Stores.Pending (Change, Area_Of (Kind), Named, Value, Staged);
                if Staged then
                   Records.Set (Value, "imported_text", To_String (Next.Text));
+                  Records.Set (Value, "imported_criteria", To_String (Next.Criteria));
                   Stores.Put (Change, Area_Of (Kind), Named, Value);
                end if;
             end Mark_Imported;
@@ -452,8 +535,13 @@ package body Model_Runner.Framework.Bootstrap is
                   Imported : constant String :=
                     (if Records.Get (Kept, "imported_text") /= ""
                      then Records.Get (Kept, "imported_text") else To_String (Held.Text));
+                  --  What it was judged by when it was imported: kept since,
+                  --  or, from before that was kept, what it holds now.
+                  Judged_By : constant String :=
+                    (if Records.Has (Kept, "imported_criteria")
+                     then Records.Get (Kept, "imported_criteria") else To_String (Held.Criteria));
                begin
-                  if To_String (Next.Text) = Imported
+                  if (To_String (Next.Text) = Imported and then To_String (Next.Criteria) = Judged_By)
                     or else To_String (Held.State) in "obsolete" | "superseded"
                   then
                      Result.Existing := Result.Existing + 1;
@@ -470,13 +558,16 @@ package body Model_Runner.Framework.Bootstrap is
                            Provenance => Next.Provenance,
                            others     => <>);
                      begin
-                        Results.Add (Item, Change, Said, Status);
-                        Result.Issues := Result.Issues + 1;
+                        Raise_Issue (Said);
                      end;
                   else
+                     --  The document's criteria where it changed them, the
+                     --  ones held otherwise.
                      Intent.Revise
                        (Item, Change, Kind, Known, Field (Next.Title), Field (Next.Text),
-                        To_String (Held.Criteria), Effect, Status);
+                        (if To_String (Next.Criteria) /= Judged_By then Field (Next.Criteria)
+                         else To_String (Held.Criteria)),
+                        Effect, Status);
                      if E.Is_Ok (Status) then
                         Mark_Imported (Kind, Known);
                         Result.Created := Result.Created + 1;
@@ -500,6 +591,7 @@ package body Model_Runner.Framework.Bootstrap is
                   Mark_Imported (Kind, To_String (Id));
                   Result.Created := Result.Created + 1;
                   Result.Made.Append (To_String (Id));
+                  Made_Texts.Append (Field (Next.Text));
                end if;
             end Propose;
          begin
@@ -532,8 +624,7 @@ package body Model_Runner.Framework.Bootstrap is
                               others     => <>);
                         begin
                            Status := E.Success;
-                           Results.Add (Item, Change, Said, Status);
-                           Result.Issues := Result.Issues + 1;
+                           Raise_Issue (Said);
                         end;
                      else
                         Facts.Record_Fact
@@ -595,6 +686,7 @@ package body Model_Runner.Framework.Bootstrap is
                         if E.Is_Ok (Status) then
                            Result.Created := Result.Created + 1;
                            Result.Made.Append (To_String (Id));
+                           Made_Texts.Append (Field (Next.Text));
                         end if;
                         if Moved then
                            declare
@@ -610,8 +702,7 @@ package body Model_Runner.Framework.Bootstrap is
                                  Provenance => Next.Provenance,
                                  others     => <>);
                            begin
-                              Results.Add (Item, Change, Said, Status);
-                              Result.Issues := Result.Issues + 1;
+                              Raise_Issue (Said);
                            end;
                         end if;
                      end;
@@ -638,8 +729,7 @@ package body Model_Runner.Framework.Bootstrap is
                         Provenance => Next.Provenance,
                         others     => <>);
                   begin
-                     Results.Add (Item, Change, Said, Status);
-                     Result.Issues := Result.Issues + 1;
+                     Raise_Issue (Said);
                   end;
             end case;
 
@@ -682,28 +772,50 @@ package body Model_Runner.Framework.Bootstrap is
                         Why     : constant String :=
                           Known & ": " & To_String (Held.Source) & " no longer says it";
                      begin
-                        for Made of Result.Made loop
-                           Append (Instead, (if Instead = Null_Unbounded_String then "" else ", ")
-                                   & Made);
-                        end loop;
+                        --  The one made now whose words are most like its own,
+                        --  where more than half of them are: its new wording,
+                        --  most likely.
+                        declare
+                           Best  : Natural := 0;
+                           Score : Float := 0.5;
+                        begin
+                           for Index in 1 .. Natural (Result.Made.Length) loop
+                              if Likeness (To_String (Held.Text), Made_Texts (Index)) > Score then
+                                 Score := Likeness (To_String (Held.Text), Made_Texts (Index));
+                                 Best := Index;
+                              end if;
+                           end loop;
+                           if Best > 0 then
+                              Instead := To_Unbounded_String
+                                (Result.Made (Best) & ", most like it -- req supersede " & Known
+                                 & " " & Result.Made (Best) & " keeps it as that one's history");
+                           else
+                              for Made of Result.Made loop
+                                 Append (Instead, (if Instead = Null_Unbounded_String then "" else ", ")
+                                         & Made);
+                              end loop;
+                           end if;
+                        end;
                         Said :=
                           (Kind       => Results.Diagnostic,
                            Producer   => To_Unbounded_String ("bootstrap"),
                            Summary    => To_Unbounded_String
-                                           (Why & "; req move " & Known
-                                            & " obsolete retires it, or keep it"
+                                           (Why & "; "
+                                            & (if Intent."=" (Kind, Intent.Decision) then "decision "
+                                               else "req ")
+                                            & (if To_String (Held.State) = Intent.First_State (Kind)
+                                               then "reject " else "obsolete ")
+                                            & Known & " retires it, or keep it"
                                             & (if Instead = Null_Unbounded_String then ""
                                                else "; made from the document now: "
                                                     & To_String (Instead))),
                            Payload    => Held.Text,
                            Provenance => Held.Provenance,
                            others     => <>);
-                        Results.Add (Item, Change, Said, Status);
+                        Raise_Issue (Said);
                         if E.Is_Error (Status) then
                            return;
                         end if;
-                        Result.Issues := Result.Issues + 1;
-                        Result.Stale.Append (To_String (Said.Summary));
                      end;
                   end if;
                end;

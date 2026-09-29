@@ -823,6 +823,9 @@ package body Model_Runner.CLI.Interactive is
 
       Pres.Put_Note (Screen, "cli.interactive.banner");
 
+      --  Next steps are said as they are typed here.
+      Pres.Use_Session (Screen, True);
+
       Read_Loop :
       while not Leaving loop
          --  The prompt marker goes to standard error so that a redirected
@@ -870,6 +873,16 @@ package body Model_Runner.CLI.Interactive is
                declare
                   Line : constant String := Room (1 .. Stop);
                begin
+                  --  Ctrl-C while a prompt was being typed drops it: the
+                  --  line after starts afresh.
+                  if Model_Runner.Cancellation."/=" (Cancel, null)
+                    and then Model_Runner.Cancellation.Is_Cancelled (Cancel)
+                    and then Pending (Typing) /= ""
+                  then
+                     Taken (Typing);
+                     Pres.Put_Note (Screen, "cli.interactive.dropped");
+                  end if;
+
                   --  An interrupt stops what the line starts, not one typed
                   --  before it.
                   if Model_Runner.Cancellation."/=" (Cancel, null) then

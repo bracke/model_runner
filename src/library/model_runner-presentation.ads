@@ -193,6 +193,13 @@ package Model_Runner.Presentation is
       Value : String;
       Where : Destination);
 
+   --  Have the console speak for a session: what a next step names -- a
+   --  task, req or work command -- is said as its slash command.
+   --
+   --  @param Item Console to change.
+   --  @param On Whether it is a session's.
+   procedure Use_Session (Item : in out Console; On : Boolean);
+
    --  The exit status of the first error reported since the console was
    --  opened or this was last asked with Reset: what a command that reports
    --  its own failures ended with.
@@ -461,6 +468,7 @@ private
       Structured    : Boolean := False;
       Failure       : Natural := 0;
       Error_Count   : Natural := 0;
+      Session       : Boolean := False;
    end record;
 
    type Standard_Output_Sink is limited new Model_Runner.Output.Sink with record

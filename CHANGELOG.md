@@ -1551,6 +1551,10 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- A process's standard output and standard error captured to one file
+  (checks, builds) no longer write over each other, losing output.
+- Choosers leave no stray blank line behind.
+
 - `generic` projects no longer report their own component as unknown: the
   consistency check takes the components as tasks do.
 - An access-to-subprogram type (`access function return Boolean`) no
@@ -1777,6 +1781,70 @@ Keep a Changelog and the project uses semantic versioning.
   group form.
 
 ### Changed
+
+- **A killed or timed-out `work` no longer leaves the project locked:** the
+  lock is not handed to the agent, the lock names the process holding it,
+  SIGTERM and SIGHUP end a run as Ctrl-C does, a command agent is bounded by
+  its task's time and `execution.timeout` (said at its start), and a lease
+  run out is let go of when the project is opened.
+- **`task cancel` on a task another session is working** asks that run to
+  stop it, instead of being refused.
+- **Verification that means something:** a requirement is verified only by
+  evidence that ran tests (a profile with `profile_capability ... =
+  run_tests` whose runner did not report finding none); `req show` says what
+  a requirement not verified lacks; `task verify`, `check` and `check REQ-ID`
+  judge the requirements again; `task complete` verifies a task done by hand
+  when its evidence is missing or stale.
+- **`check` and `task verify` fail when checks fail** (status 6,
+  `MR-FRAMEWORK-0033`), naming each check, how it ended, its log and the
+  log's last lines; a failed task's reason says the same.
+- **Bootstrap:** a `## REQ-ID Title` heading's requirement is made at once,
+  its section's text is its statement and its `Acceptance:` lines its
+  criteria; criteria a document changes are taken on the next bootstrap;
+  `REQ-ID: text` titles no longer repeat the identifier; issues are listed
+  with their result once, when new; an edited line is paired with the
+  requirement most like it (`req supersede`), and a candidate is retired
+  with `req reject`, a decision with `decision reject`.
+- **Splits:** a repeated split reuses the parts already made; parts twice in
+  one answer, or proposals twice, are made once; a parent waits only for the
+  parts it names; after a split the next step names its parts; accepting a
+  split parent says it waits for them; cancelling one names what it leaves.
+- **Answers:** a `changed_files:` list written as a list (`- path`) is read;
+  a file an earlier attempt left changed may be claimed again; what failed
+  work left in the project is said.
+- **`reconfigure`:** a name that is no setting is refused with the one
+  meant; `set.NAME-=A` takes out; `+=` adds nothing twice; a permission is
+  granted by `map.permission.X=` and taken by `=off`; a missing confirm says
+  to add `confirm=yes`.
+- **Next steps in a session** are said as slash commands; `/task new ...
+  --set kind=...` takes `--set`; `/work` with nothing ready says what is
+  waiting.
+- **Integration conflicts** name the workspace and the ways on; `task show`
+  names a task's workspace.
+- **Consistency** names links to files or symbols the repository does not
+  hold, components the project has not, and open tasks serving a retired
+  requirement; `check consistency` refuses words it does not take.
+- **Repository queries:** `impact` of a unit reaches what its files reach;
+  `deps` and `users` take a file; a test link to a file that is not there is
+  no test.
+- **Sandbox and permissions:** `sandbox` from the shell says to use
+  `MODEL_RUNNER_SANDBOX`; an unknown capability lists the capabilities; a
+  refused write names the session's sandbox; the sandbox is not reported as
+  the configuration widening a kind, and a widening names the setting that
+  grants it.
+- **The invocation record of a command agent** names the command, not a
+  model and tools it did not have.
+- **First steps:** "no project state" says to run `init`; `init` over a
+  project refuses before asking anything; `init NAME` for a template not
+  installed lists those that are; `help req`, `help reconfigure` and the
+  other project commands give their syntax; `config NAME` shows only those
+  settings, and sets an item a line.
+- **Smaller:** Ctrl-C at the continuation prompt drops what was typed; a
+  choice with one option is taken and said; a chooser is headed with what it
+  chooses; `work` announces an agent only for a task that can start;
+  `task list` refuses a filter it has not; `task plan` names the task
+  writing; `result` shows tab-separated columns as columns; an empty or
+  unchanged `req revise` changes nothing.
 
 - **Only kinds of project are offered by `init`:** a template that is only
   a part others include (`standalone = false`: ada, alire, aunit,
@@ -18679,7 +18747,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 219 diagnostic
+- Localization through `messages`, with a catalog entry for all 220 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

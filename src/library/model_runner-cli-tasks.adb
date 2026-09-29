@@ -8,9 +8,11 @@ with Model_Runner.Errors;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Context;
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Orchestration;
 with Model_Runner.Framework.Verification;
+with Model_Runner.Framework.Workspaces;
 with Model_Runner.Framework.Work;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
@@ -176,6 +178,25 @@ package body Model_Runner.CLI.Tasks is
             return "";
          end Wanted;
       begin
+         --  A filter it has not is said, not ignored.
+         for Index in 1 .. Item.Input_Count loop
+            declare
+               Pair : constant String := T.To_String (Item.Inputs (Index));
+               Cut  : constant Natural := Ada.Strings.Fixed.Index (Pair, "=");
+               Name : constant String := (if Cut = 0 then Pair else Pair (Pair'First .. Cut - 1));
+            begin
+               if Name not in "state" | "kind" | "component" | "origin" | "parent" | "requirement"
+               then
+                  Outcome := E.Make (E.Framework_Input_Invalid);
+                  E.Add_Text (Outcome, "name", "a filter of task list");
+                  E.Add_Text (Outcome, "value", Name);
+                  E.Add_Text (Outcome, "detail", "the filters are state, kind, component, origin,"
+                              & " parent and requirement");
+                  Fail (Outcome);
+                  return;
+               end if;
+            end;
+         end loop;
          for Id of Listed loop
             declare
                Defined : R.Item;
@@ -455,9 +476,35 @@ package body Model_Runner.CLI.Tasks is
             Fail (Outcome);
             return;
          end if;
+         --  Where it went -- which a move's consequences may have taken
+         --  further: accepted with its parts open, it waits for them.
          Pres.Put_Message
            (Screen, "cli.task.moved",
-            [Loc.Named ("name", Argument), Loc.Named ("value", Next)]);
+            [Loc.Named ("name", Argument), Loc.Named ("value", Tk.State_Of (Store, Argument))]);
+         --  Cancelled with parts still waiting: they are left as they are,
+         --  and said so.
+         if Next = "cancelled" then
+            for Child of Tk.Children (Store, Argument) loop
+               if Tk.State_Of (Store, Child) in "candidate" | "accepted" | "blocked" then
+                  Pres.Put_Message
+                    (Screen, "cli.task.field",
+                     [Loc.Named ("name", "left"),
+                      Loc.Named ("value", Child & " " & Tk.State_Of (Store, Child)
+                                 & "; task " & (if Tk.State_Of (Store, Child) = "candidate"
+                                                then "reject " else "cancel ")
+                                 & Child & " lets it go")]);
+               end if;
+            end loop;
+         end if;
+         if Tk.State_Of (Store, Argument) /= Next then
+            Pres.Put_Message
+              (Screen, "cli.task.field",
+               [Loc.Named ("name", "reason"),
+                Loc.Named ("value", (declare
+                                        Now : constant Tk.Readiness := Tk.Ready (Store, Argument);
+                                     begin
+                                        (if Now.Reasons.Is_Empty then "" else Now.Reasons.First_Element)))]);
+         end if;
       end Move;
 
       --  The first word of the argument, and what follows it.
@@ -611,6 +658,22 @@ package body Model_Runner.CLI.Tasks is
                [Loc.Named ("name", R.Field_Name (View, Index)),
                 Loc.Named ("value", R.Get (View, R.Field_Name (View, Index)))]);
          end loop;
+
+         --  Work waiting in a workspace: which, and where.
+         if Model_Runner.Framework.Workspaces.Active_For (Store, Argument) /= "" then
+            declare
+               Place : Model_Runner.Framework.Workspaces.Workspace;
+               Read  : E.Error_Info;
+            begin
+               Model_Runner.Framework.Workspaces.Read
+                 (Store, Model_Runner.Framework.Workspaces.Active_For (Store, Argument), Place, Read);
+               Pres.Put_Message
+                 (Screen, "cli.task.field",
+                  [Loc.Named ("name", "workspace"),
+                   Loc.Named ("value", Model_Runner.Framework.Workspaces.Active_For (Store, Argument)
+                                       & " " & To_String (Place.Path))]);
+            end;
+         end if;
       end Show;
 
       --  The context a model would be given for the task, kept so that
@@ -686,6 +749,30 @@ package body Model_Runner.CLI.Tasks is
             return;
          end if;
 
+         --  New evidence: the requirements it bears on are judged again.
+         declare
+            Changed : Model_Runner.Framework.Name_Lists.Vector;
+         begin
+            Model_Runner.Framework.Verification.Reevaluate_Requirements
+              (Store, Change, Changed, Outcome);
+            if E.Is_Ok (Outcome) then
+               Commit;
+            end if;
+            for Requirement of Changed loop
+               declare
+                  Held : Model_Runner.Framework.Intent.Entity;
+                  Read : E.Error_Info;
+               begin
+                  Model_Runner.Framework.Intent.Read
+                    (Store, Model_Runner.Framework.Intent.Requirement, Requirement, Held, Read);
+                  Pres.Put_Message
+                    (Screen, "cli.task.requirement",
+                     [Loc.Named ("name", Requirement), Loc.Named ("value", To_String (Held.State))]);
+               end;
+            end loop;
+            Outcome := E.Success;
+         end;
+
          declare
             Said : constant Model_Runner.Framework.Verification.Diagnostic_List :=
               Model_Runner.Framework.Verification.Diagnostics_Of
@@ -718,20 +805,63 @@ package body Model_Runner.CLI.Tasks is
                              (Model_Runner.Framework.Verification.Length (Said))))]);
          end;
          if not Passed then
-            Status := E.Exit_Input_Output;
+            declare
+               Failed : E.Error_Info := E.Make (E.Framework_Verification_Failed);
+               Why    : Unbounded_String;
+            begin
+               for Line of Model_Runner.Framework.Verification.Why_Failed
+                             (Store, To_String (Evidence))
+               loop
+                  Append (Why, (if Why = Null_Unbounded_String then "" else ASCII.LF & "") & Line);
+               end loop;
+               E.Add_Text (Failed, "name", To_String (Evidence));
+               E.Add_Text (Failed, "detail", To_String (Why));
+               Fail (Failed);
+            end;
          end if;
       end Verify;
 
       --  Complete a task through its gates, then work out which
       --  requirements that verified.
+      procedure Complete_Judged;
+
       procedure Complete is
-         Changed : Model_Runner.Framework.Name_Lists.Vector;
-         Judged  : constant Model_Runner.Framework.Verification.Gate_List :=
-           Model_Runner.Framework.Verification.Gates (Store, Argument);
+         package Vf renames Model_Runner.Framework.Verification;
+
+         --  Whether its verification gate passes on the evidence there is.
+         function Verified return Boolean is
+            Now : constant Vf.Gate_List := Vf.Gates (Store, Argument);
+         begin
+            for Index in 1 .. Vf.Length (Now) loop
+               if To_String (Vf.Element (Now, Index).Name) = "verification"
+                 and then not Vf.Element (Now, Index).Passed
+               then
+                  return False;
+               end if;
+            end loop;
+            return True;
+         end Verified;
       begin
          if not Needs_Task then
             return;
          end if;
+
+         --  Its evidence missing or stale, it is verified now: a task done
+         --  by hand is checked as the harness would check it.
+         if not Verified then
+            Verify;
+            if Status /= E.Exit_Success then
+               return;
+            end if;
+         end if;
+         Complete_Judged;
+      end Complete;
+
+      procedure Complete_Judged is
+         Changed : Model_Runner.Framework.Name_Lists.Vector;
+         Judged  : constant Model_Runner.Framework.Verification.Gate_List :=
+           Model_Runner.Framework.Verification.Gates (Store, Argument);
+      begin
          for Index in 1 .. Model_Runner.Framework.Verification.Length (Judged) loop
             declare
                One : constant Model_Runner.Framework.Verification.Gate :=
@@ -781,7 +911,7 @@ package body Model_Runner.CLI.Tasks is
                    Loc.Named ("value", To_String (Held.State))]);
             end;
          end loop;
-      end Complete;
+      end Complete_Judged;
 
       --  Take a task's workspace in, and verify and complete it.
       procedure Integrate is
@@ -795,6 +925,24 @@ package body Model_Runner.CLI.Tasks is
            (Store, First_Word, Done, Outcome, Semantic_Accepted => After_First = "anyway");
          if E.Is_Error (Outcome) then
             Fail (Outcome);
+
+            --  A conflict is not the end: where the work is, and the ways on.
+            if E."=" (Outcome.Code, E.Framework_Integration_Conflict) then
+               declare
+                  Place : Model_Runner.Framework.Workspaces.Workspace;
+                  Read  : E.Error_Info;
+               begin
+                  Model_Runner.Framework.Workspaces.Read
+                    (Store, Model_Runner.Framework.Workspaces.Active_For (Store, First_Word),
+                     Place, Read);
+                  if E.Is_Ok (Read) then
+                     Pres.Put_Note
+                       (Screen, "cli.next.conflict",
+                        [Loc.Named ("name", First_Word),
+                         Loc.Named ("path", To_String (Place.Path))]);
+                  end if;
+               end;
+            end if;
             return;
          end if;
          Pres.Put_Message
@@ -872,6 +1020,21 @@ package body Model_Runner.CLI.Tasks is
       Status := E.Exit_Success;
 
       S.Open (Store, Directory, Report, Outcome);
+
+      --  Held by a run working on the task to cancel: that run is asked to
+      --  stop it, which is all another process can do.
+      if E."=" (Outcome.Code, E.Framework_Locked) and then Action = "cancel" and then Argument /= ""
+      then
+         S.Open_To_Read (Store, Directory, Outcome);
+         if E.Is_Ok (Outcome) and then Tk.State_Of (Store, Argument) = "running" then
+            Model_Runner.Framework.Execution.Ask_To_Stop (Directory, Argument);
+            Pres.Put_Note (Screen, "cli.task.stop_asked", [Loc.Named ("name", Argument)]);
+            S.Close (Store);
+            return;
+         end if;
+         S.Close (Store);
+         S.Open (Store, Directory, Report, Outcome);
+      end if;
 
       --  Held by a run in progress, it can still be looked at.
       if E."=" (Outcome.Code, E.Framework_Locked)

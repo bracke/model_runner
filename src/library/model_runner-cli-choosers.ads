@@ -151,12 +151,15 @@ package Model_Runner.CLI.Choosers is
    --  @param Screen Where the words come from.
    --  @param Title What is being chosen, as a catalog key.
    --  @param Items The choices.
+   --  @param Heading Words that say what is chosen, in place of the
+   --    title's, where the caller has them.
    --  @return The chosen choice's position, or zero when the reader gave
    --    up or there is no terminal to ask at.
    function Choose
-     (Screen : Model_Runner.Presentation.Console;
-      Title  : String;
-      Items  : Choice_List) return Natural;
+     (Screen  : Model_Runner.Presentation.Console;
+      Title   : String;
+      Items   : Choice_List;
+      Heading : String := "") return Natural;
 
    --  Ask for one value on the terminal: from the choices by the selector
    --  when there are any, typed on a line when there are none.

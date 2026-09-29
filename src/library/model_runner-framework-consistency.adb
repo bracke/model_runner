@@ -373,27 +373,75 @@ package body Model_Runner.Framework.Consistency is
 
       --  Traceability to symbols the repository does not have, as far as
       --  a kept graph says.
+      --  What a requirement is linked to is there: a symbol the repository
+      --  declares, a file it holds, a component the project has.
       declare
-         Graph : Repository.Graph;
-         Read  : E.Error_Info;
-      begin
-         Repository.Load (Item, Graph, Read);
-         if E.Is_Ok (Read) then
-            for Id of Intent.List (Item, Intent.Requirement) loop
-               for Target of Intent.Links (Item, Intent.Requirement, Id,
-                                           Intent.Implementation)
-               loop
-                  if Ada.Strings.Fixed.Index (Target, "/") = 0
-                    and then Repository.Find_Symbols (Graph, Target).Is_Empty
-                  then
-                     Found (Missing_Symbol, Id,
-                            "it is implemented by " & Target
-                            & ", which the repository does not declare");
-                  end if;
-               end loop;
+         Graph : constant Repository.Graph := Repository.Now (Item);
+
+         function Holds_File (Path : String) return Boolean is
+         begin
+            for Index in 1 .. Repository.File_Count (Graph) loop
+               if Ada.Strings.Unbounded.To_String (Repository.File_At (Graph, Index).Path) = Path then
+                  return True;
+               end if;
             end loop;
-         end if;
+            return False;
+         end Holds_File;
+      begin
+         for Id of Intent.List (Item, Intent.Requirement) loop
+            for Relation in Intent.Implementation .. Intent.Test loop
+               if Intent."/=" (Relation, Intent.Task_Link) then
+                  for Target of Intent.Links (Item, Intent.Requirement, Id, Relation) loop
+                     if (if Ada.Strings.Fixed.Index (Target, "/") > 0 then not Holds_File (Target)
+                         else Repository.Find_Symbols (Graph, Target).Is_Empty
+                              and then not Holds_File (Target))
+                     then
+                        Found (Missing_Symbol, Id,
+                               (if Intent."=" (Relation, Intent.Test) then "it is tested by "
+                                else "it is implemented by ")
+                               & Target & ", which the repository does not hold");
+                     end if;
+                  end loop;
+               end if;
+            end loop;
+            for Target of Intent.Links (Item, Intent.Requirement, Id, Intent.Component) loop
+               if not Tasks.Components (Item).Contains (Target) then
+                  Found (Missing_Component, Id,
+                         "it belongs to the component " & Target
+                         & ", which is not one of the project's");
+               end if;
+            end loop;
+         end loop;
       end;
+
+      --  Work still open for what is no longer wanted.
+      for Id of Tasks.List (Item) loop
+         if Tasks.State_Of (Item, Id) not in "complete" | "cancelled" | "rejected" then
+            declare
+               Defined : Records.Item;
+               Read    : E.Error_Info;
+            begin
+               Tasks.Definition (Item, Id, Defined, Read);
+               for Requirement of Lines_Of (Records.Get (Defined, "requirements")) loop
+                  declare
+                     Held : Intent.Entity;
+                     Got  : E.Error_Info;
+                  begin
+                     Intent.Read (Item, Intent.Requirement, Requirement, Held, Got);
+                     if E.Is_Ok (Got)
+                       and then Ada.Strings.Unbounded.To_String (Held.State)
+                                in "obsolete" | "superseded" | "rejected"
+                     then
+                        Found (Undefined_Requirement, Id,
+                               "it serves " & Requirement & ", which is "
+                               & Ada.Strings.Unbounded.To_String (Held.State)
+                               & "; task cancel " & Id & " lets it go");
+                     end if;
+                  end;
+               end loop;
+            end;
+         end if;
+      end loop;
 
       --  Verification that no longer applies, still counted.
       for Id of Intent.List (Item, Intent.Requirement, "verified") loop
@@ -546,7 +594,7 @@ package body Model_Runner.Framework.Consistency is
       declare
          Present : Boolean;
          Project : constant Permissions.Permission_Set :=
-           Permissions.Effective (Item, "", "");
+           Permissions.Effective (Item, "", "", Within_Sandbox => False);
       begin
          for Kind of Tasks.Kinds (Item) loop
             declare
@@ -556,7 +604,8 @@ package body Model_Runner.Framework.Consistency is
             begin
                if Present and then Wider /= "" then
                   Found (Permission_Widening, "kind." & Kind,
-                         "it grants " & Wider & " beyond the project's maximum");
+                         "it grants " & Wider & " beyond the project's maximum; map.permission.project."
+                         & Wider & " grants it to the project");
                end if;
             end;
          end loop;

@@ -57,4 +57,15 @@ package Model_Runner.Framework.Leases is
    --  @return Their names, sorted.
    function Stale (Item : Stores.Store) return Name_Lists.Vector;
 
+   --  Let go of every lease that has run out: what it held is no one's
+   --  now, and a record of it only says so over and over.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction the removals are staged in.
+   --  @param Cleared The resources let go of.
+   procedure Clear_Stale
+     (Item    : Stores.Store;
+      Change  : in out Stores.Transaction;
+      Cleared : out Name_Lists.Vector);
+
 end Model_Runner.Framework.Leases;

@@ -852,7 +852,7 @@ package body Model_Runner.Framework.Configurations is
    --  The settings the harness reads, by their whole names: where a name
    --  is given without its kind and the configuration holds none of it
    --  yet, the one of these it is.
-   Known_Settings : constant array (1 .. 47) of access constant String :=
+   Known_Settings : constant array (1 .. 48) of access constant String :=
      [new String'("list.automation.rules"),
       new String'("list.verification.full"),
       new String'("scalar.agents.max_active"),
@@ -860,6 +860,7 @@ package body Model_Runner.Framework.Configurations is
       new String'("scalar.agents.max_depth"),
       new String'("scalar.agents.max_invocations"),
       new String'("scalar.agents.max_steps"),
+      new String'("scalar.agents.max_seconds"),
       new String'("scalar.agents.on_child_failure"),
       new String'("scalar.agents.token_budget"),
       new String'("scalar.bootstrap.import"),
@@ -1260,11 +1261,15 @@ package body Model_Runner.Framework.Configurations is
          declare
             Written : constant String := Value_Maps.Key (Position);
 
-            --  NAME+=VALUE adds to a set or a list what it holds already.
+            --  NAME+=VALUE adds to a set or a list what it holds already;
+            --  NAME-=VALUE takes out of it.
             Adding  : constant Boolean :=
               Written'Length > 1 and then Written (Written'Last) = '+';
+            Taking  : constant Boolean :=
+              Written'Length > 1 and then Written (Written'Last) = '-';
             Short   : constant String :=
-              (if Adding then Written (Written'First .. Written'Last - 1) else Written);
+              (if Adding or else Taking then Written (Written'First .. Written'Last - 1)
+               else Written);
 
             --  A name without its kind is the setting of that name there
             --  is: work.agent is scalar.work.agent when that is the one.
@@ -1300,20 +1305,69 @@ package body Model_Runner.Framework.Configurations is
             Name  : constant String := Full_Name;
             Given : constant String := Value_Maps.Element (Position);
             Old   : constant String := Records.Get (Result.Before, Name);
+            --  The items of a set or list after the change: each once.
+            function Items_After return String is
+               Held   : Name_Lists.Vector := Lines_Of (Old);
+               Result : Unbounded_String;
+            begin
+               if not (Adding or else Taking) then
+                  Held.Clear;
+               end if;
+               for Item of Lines_Of (Lines_From (Given)) loop
+                  if Taking then
+                     if Held.Contains (Item) then
+                        Held.Delete (Held.Find_Index (Item));
+                     end if;
+                  elsif not Held.Contains (Item) then
+                     Held.Append (Item);
+                  end if;
+               end loop;
+               for Item of Held loop
+                  Append (Result, (if Result = Null_Unbounded_String then "" else ASCII.LF & "") & Item);
+               end loop;
+               return To_String (Result);
+            end Items_After;
+
             Value : constant String :=
-              (if Starts (Name, "set.") or else Starts (Name, "list.")
-               then (if Adding and then Old /= "" then Old & ASCII.LF & Lines_From (Given)
-                     else Lines_From (Given))
+              (if Starts (Name, "set.") or else Starts (Name, "list.") then Items_After
                else Given);
+
+            --  The settings a name that is none may have meant: those whose
+            --  name holds it.
+            function Near return String is
+               Found : Unbounded_String;
+               Count : Natural := 0;
+            begin
+               --  Those it is the last part of first; else, at most three
+               --  that hold it.
+               for Known of Known_Settings loop
+                  if Known'Length > Short'Length
+                    and then Known (Known'Last - Short'Length .. Known'Last) = "." & Short
+                  then
+                     Append (Found, (if Found = Null_Unbounded_String then "" else ", ") & Known.all);
+                     Count := Count + 1;
+                  end if;
+               end loop;
+               if Count = 0 then
+                  for Known of Known_Settings loop
+                     if Count < 3 and then Ada.Strings.Fixed.Index (Known.all, Short) > 0 then
+                        Append (Found, (if Found = Null_Unbounded_String then "" else ", ") & Known.all);
+                        Count := Count + 1;
+                     end if;
+                  end loop;
+               end if;
+               return (if Found = Null_Unbounded_String then "" else "; did you mean " & To_String (Found));
+            end Near;
          begin
             if not (for some Prefix of Changeable => Starts (Name, Prefix.all)) then
-               Status := Refused (Name, "a setting is named with its kind: scalar." & Name
-                                  & " for one value, set." & Name & " for several; the kinds"
-                                  & " are scalar., set., list., map., profile., fact., adapter.,"
-                                  & " task_kind., schema. and baseline.");
+               Status := Refused (Name, "no setting is called so" & Near
+                                  & "; a new one is named with its kind: scalar." & Name
+                                  & " for one value, set." & Name & " for several");
                return;
-            elsif Adding and then not (Starts (Name, "set.") or else Starts (Name, "list.")) then
-               Status := Refused (Name, "+= adds to a set. or a list.; this is one value");
+            elsif (Adding or else Taking)
+              and then not (Starts (Name, "set.") or else Starts (Name, "list."))
+            then
+               Status := Refused (Name, "+= and -= change a set. or a list.; this is one value");
                return;
             elsif not Records.Is_Field_Name (Name)
               or else (Starts (Name, "fact.") and then not Facts.Is_Key (Name (Name'First + 5 .. Name'Last)))
@@ -1326,7 +1380,30 @@ package body Model_Runner.Framework.Configurations is
                return;
             end if;
 
-            if Value /= Old then
+            --  A permission is granted by being there, constraints or none:
+            --  NAME= grants it with none, NAME=off takes it away.
+            if Starts (Name, "map.permission.") then
+               declare
+                  Was : constant Boolean := Records.Has (Result.Before, Name);
+                  Now : constant Boolean := Given /= "off";
+               begin
+                  if Was /= Now or else (Now and then Given /= Old) then
+                     if Now then
+                        Records.Set (Result.After, Name, Given);
+                     else
+                        Records.Remove (Result.After, Name);
+                     end if;
+                     Result.Changed.Append
+                       (Name & ": " & (if not Was then "(not granted)" elsif Old = "" then "granted"
+                                       else Old)
+                        & " -> " & (if not Now then "(not granted)" elsif Given = "" then "granted"
+                                    else Given));
+                     if not Result.Impact.Contains (Reach (Name)) then
+                        Result.Impact.Append (Reach (Name));
+                     end if;
+                  end if;
+               end;
+            elsif Value /= Old then
                if Value = "" then
                   Records.Remove (Result.After, Name);
                else

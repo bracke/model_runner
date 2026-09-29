@@ -406,15 +406,17 @@ package body Model_Runner.CLI.Choosers is
    ------------
 
    function Choose
-     (Screen : Model_Runner.Presentation.Console;
-      Title  : String;
-      Items  : Choice_List) return Natural
+     (Screen  : Model_Runner.Presentation.Console;
+      Title   : String;
+      Items   : Choice_List;
+      Heading : String := "") return Natural
    is
       Guard : Raw_Guard;
       State : Selector := Start (Items);
       Drawn : Natural := 0;
       Words : constant Wording :=
-        (Title   => To_Unbounded_String (Pres.Message_Value (Screen, Title)),
+        (Title   => To_Unbounded_String
+                      (if Heading /= "" then Heading else Pres.Message_Value (Screen, Title)),
          Keys    => To_Unbounded_String
                       (Pres.Message_Value (Screen, "cli.choose.keys")),
          Filter  => To_Unbounded_String
@@ -664,6 +666,16 @@ package body Model_Runner.CLI.Choosers is
              others => <>));
       end loop;
 
+      --  One choice only: taken, and said, not asked.
+      if Length (Options) = 1 then
+         Answer := Options.Items (1).Label;
+         Given := True;
+         Pres.Put_Note
+           (Screen, "cli.choose.only",
+            [Loc.Named ("name", Label), Loc.Named ("value", To_String (Answer))]);
+         return;
+      end if;
+
       --  The question, with what it is for and what Enter takes where
       --  there are such: no empty brackets.
       declare
@@ -682,7 +694,8 @@ package body Model_Runner.CLI.Choosers is
       if Length (Options) > 0 then
          declare
             Picked : constant Natural :=
-              Choose (Screen, "cli.choose.one_of", Options);
+              Choose (Screen, "cli.choose.one_of", Options,
+                      Heading => Label & (if Detail = "" then "" else " (" & Detail & ")") & ":");
          begin
             if Picked > 0 then
                Answer := Options.Items (Picked).Label;

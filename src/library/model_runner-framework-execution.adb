@@ -117,9 +117,42 @@ package body Model_Runner.Framework.Execution is
          Last_Asked := Ada.Calendar.Clock;
          Withdrawn := Leases.Holder (Watched_Store.all, To_String (Watched_Lease))
                         /= To_String (Watched_Owner);
+
+         --  Or asked to stop by another process, which cannot change the
+         --  state while this one holds it.
+         declare
+            Lease   : constant String := To_String (Watched_Lease);
+            Request : constant String :=
+              Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Watched_Store.all), "runtime"),
+                               "stop." & (if Lease'Length > 5
+                                            and then Lease (Lease'First .. Lease'First + 4) = "task."
+                                          then Lease (Lease'First + 5 .. Lease'Last) else Lease));
+         begin
+            if Ada.Directories.Exists (Request) then
+               Ada.Directories.Delete_File (Request);
+               Withdrawn := True;
+            end if;
+         exception
+            when others =>
+               null;
+         end;
       end if;
       return Withdrawn;
    end Work_Withdrawn;
+
+   -----------------
+   -- Ask_To_Stop --
+   -----------------
+
+   procedure Ask_To_Stop (Project_Directory : String; Task_Id : String) is
+      Ignored : E.Error_Info;
+   begin
+      Files.Write_Text
+        (Hostkit.Fs.Join (Hostkit.Fs.Join (Hostkit.Fs.Join (Project_Directory, State_Directory),
+                                           "runtime"),
+                          "stop." & Task_Id),
+         Task_Id, Ignored);
+   end Ask_To_Stop;
 
    function Cancel_Requested return Boolean
    is (Model_Runner.Cancellation."/=" (Watched, null)

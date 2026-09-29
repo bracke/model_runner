@@ -3885,6 +3885,7 @@ package body Tests.Framework_Cases is
          "set execution.allowed = echo" & LF
          & "profile passing = say: echo all good" & LF
          & "profile acceptance = accept: echo checking {requirement} with {tests}" & LF
+         & "scalar profile_capability.acceptance = run_tests" & LF
          & "scalar verification.default = passing" & LF
          & "scalar verification.requirements = acceptance" & LF);
       Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.", "",
@@ -4817,6 +4818,7 @@ package body Tests.Framework_Cases is
         (Store, "completion-gates",
          "set execution.allowed = echo" & LF
          & "profile passing = say: echo all good" & LF
+         & "scalar profile_capability.passing = run_tests" & LF
          & "scalar verification.default = passing" & LF);
       Change := S.No_Changes;
       Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.", "",
@@ -7170,6 +7172,7 @@ package body Tests.Framework_Cases is
         (Store, "scoped",
          "set execution.allowed = test" & LF
          & "profile checks = exists: test -f src/hello.adb" & LF
+         & "scalar profile_capability.checks = run_tests" & LF
          & "scalar verification.default = checks" & LF);
       Work ("Whole");
       Assert (To_String (Done.Final_State) = "complete"
@@ -8292,6 +8295,111 @@ package body Tests.Framework_Cases is
       end;
       S.Close (Store);
    end Configuration_Changes_Explicitly;
+
+   --  What another process can do to a run, and what a run says of itself:
+   --  a stop asked from outside is seen; leases run out are let go of; a
+   --  session's next steps are said as it types them; and checks that did
+   --  not pass, and a requirement not verified, say why.
+   procedure Runs_Answer_From_Outside
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Task_A : Unbounded_String;
+      Req    : Unbounded_String;
+   begin
+      Task_Project
+        (Store, "outside",
+         "set execution.allowed = false" & LF
+         & "profile failing = check: false" & LF
+         & "scalar verification.default = failing" & LF);
+      Tk.Create (Store, Change, Fields ("Stopped", "analysis"), "user", "", Task_A, Status);
+      S.Commit (Store, Change, Status);
+
+      --  Asked to stop from outside, the run watching the task sees it.
+      Model_Runner.Framework.Leases.Acquire
+        (Store, Change, "task." & To_String (Task_A), "AG-1", 60, Status);
+      S.Commit (Store, Change, Status);
+      Model_Runner.Framework.Execution.Watch_Lease
+        (Store'Unchecked_Access, "task." & To_String (Task_A), "AG-1");
+      Assert (not Model_Runner.Framework.Execution.Work_Withdrawn, "a run was stopped unasked");
+      Model_Runner.Framework.Execution.Ask_To_Stop
+        (Dirs.Containing_Directory (S.Root (Store)), To_String (Task_A));
+      delay 1.1;
+      Assert (Model_Runner.Framework.Execution.Work_Withdrawn, "a stop asked from outside was not seen");
+      Model_Runner.Framework.Execution.Watch_Lease (null);
+
+      --  A lease run out is let go of, once.
+      declare
+         Cleared : Model_Runner.Framework.Name_Lists.Vector;
+      begin
+         Model_Runner.Framework.Leases.Acquire (Store, Change, "project.write", "AG-2", 1, Status);
+         S.Commit (Store, Change, Status);
+         delay 1.2;
+         Model_Runner.Framework.Leases.Clear_Stale (Store, Change, Cleared);
+         S.Commit (Store, Change, Status);
+         Assert (Cleared.Contains ("project.write")
+                 and then Model_Runner.Framework.Leases.Stale (Store).Is_Empty,
+                 "a lease run out was not let go of");
+      end;
+
+      --  Checks that did not pass say which, and how they ended.
+      declare
+         Evidence : Unbounded_String;
+         Passed   : Boolean;
+      begin
+         Vf.Run_Profile (Store, Change, "failing", To_String (Task_A), Evidence, Passed, Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Exit_Status (E.Make (E.Framework_Verification_Failed)) = E.Exit_Input_Output,
+                 "checks that did not pass are not a failure of what was read");
+         Assert (not Passed and then not Vf.Why_Failed (Store, To_String (Evidence)).Is_Empty
+                 and then Ada.Strings.Fixed.Index
+                            (Vf.Why_Failed (Store, To_String (Evidence)).First_Element,
+                             "(false) failed") > 0,
+                 "checks that did not pass did not say why");
+      end;
+
+      --  A requirement not verified says what it lacks.
+      Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.", "",
+                  "user", "", "project", Req, Status);
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted", Tr.Ordinary_Only, Status);
+      S.Commit (Store, Change, Status);
+      Assert (Ada.Strings.Fixed.Index (Vf.Why_Not_Verified (Store, To_String (Req)), "no task serves it")
+              > 0,
+              "a requirement nothing serves did not say so: " & Vf.Why_Not_Verified (Store, To_String (Req)));
+      S.Close (Store);
+
+      --  In a session, a next step is the command typed there.
+      declare
+         use Ada.Text_IO;
+         Catalog : aliased Model_Runner.Localization.Catalog;
+         Screen  : Model_Runner.Presentation.Console;
+         Said    : File_Type;
+      begin
+         Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+         Model_Runner.Presentation.Open
+           (Screen, Catalog'Unchecked_Access, Model_Runner.CLI.Options.Color_Never,
+            (Output_Is_Terminal => False, Error_Is_Terminal => False,
+             Input_Is_Terminal  => False, Colour_Suppressed => True),
+            Model_Runner.CLI.Options.Normal);
+         Model_Runner.Presentation.Use_Session (Screen, True);
+         Create (Said, Out_File, "obj/session-next.txt");
+         Set_Error (Said);
+         Model_Runner.Presentation.Put_Note
+           (Screen, "cli.next.retry", [Model_Runner.Localization.Named ("name", "TASK-7")]);
+         Set_Error (Standard_Error);
+         Close (Said);
+         Assert (Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"), "/task accept TASK-7") > 0,
+                 "a next step in a session was not its slash command: "
+                 & Read_Whole ("obj/session-next.txt"));
+      exception
+         when others =>
+            Set_Error (Standard_Error);
+            raise;
+      end;
+   end Runs_Answer_From_Outside;
 
    --  Opening a project puts right what an interruption left: a task left
    --  running with no one running it, an agent and a call no one is
@@ -9531,6 +9639,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Opening_Recovers'Access,
          "opening a project puts right what an interruption left");
+      Register_Routine
+        (T, Runs_Answer_From_Outside'Access,
+         "a run answers what is asked from outside it, and says why checks did not pass");
       Register_Routine
         (T, Permissions_And_Proposals_Reach_The_Work'Access,
          "a task narrows its agent, and proposed work becomes candidates where permitted");

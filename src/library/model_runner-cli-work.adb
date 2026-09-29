@@ -296,6 +296,10 @@ package body Model_Runner.CLI.Work is
    --  policy like any other.
    type Command_Agent (Store : not null access S.Store) is new W.Agent_Runner with record
       Command : Unbounded_String;
+
+      --  How long it may work, as its task allows: past it, it is stopped
+      --  and the task set aside.
+      Timeout : Natural := 0;
    end record;
 
    overriding procedure Run
@@ -387,6 +391,9 @@ package body Model_Runner.CLI.Work is
          Rules : Model_Runner.Framework.Execution.Policy :=
            Model_Runner.Framework.Execution.Policy_Of (Self.Store.all);
       begin
+         if Self.Timeout > 0 then
+            Rules.Timeout := Self.Timeout;
+         end if;
          Rules.No_Network := Rules.No_Network
            or else not Model_Runner.Framework.Permissions.Allows
                          (Model_Runner.Framework.Permissions.Value
@@ -672,6 +679,9 @@ package body Model_Runner.CLI.Work is
             begin
                if Picked = 0 then
                   Pres.Put_Note (Screen, "cli.work.nothing");
+                  if Listed.Is_Empty then
+                     Say_What_Is_Ready;
+                  end if;
                   Status := E.Exit_Cancelled;
                   S.Close (Store);
                   return;
@@ -692,16 +702,31 @@ package body Model_Runner.CLI.Work is
                else Model_Runner.Framework.Context.Profile (Store, Setting ("profile", "")));
             Command : constant String := R.Get (Config, "scalar.work.agent");
             Path    : constant String := Setting ("model", "");
+
+            --  How long a command agent may run: its task's time, and no
+            --  longer than any command the policy runs.
+            Agent_Seconds : constant Natural :=
+              (if Command = "" then W.Time_Allowed (Store, To_String (Chosen))
+               else Natural'Min (W.Time_Allowed (Store, To_String (Chosen)),
+                                 Model_Runner.Framework.Execution.Policy_Of (Store).Timeout));
          begin
             --  Which agent does the work, said before it starts: the one the
             --  project configures, wherever the work is started from.
-            if Command /= "" then
-               Say ("cli.work.runner", Command, To_String (Chosen));
-            elsif Given_Runner /= null then
-               Say ("cli.work.runner", Pres.Message_Value (Screen, "cli.work.runner.session"),
-                    To_String (Chosen));
-            elsif Path /= "" then
-               Say ("cli.work.runner", Path, To_String (Chosen));
+            --  Said only for a task that can start: one that cannot is
+            --  refused with why, and nothing is announced for it.
+            if Tk.Ready (Store, To_String (Chosen)).Ready then
+               --  And how long it has, which is how a hung one ends.
+               Pres.Put_Note
+                 (Screen, "cli.work.time_allowed",
+                  [Loc.Named ("count", T.Image (Long_Long_Integer (Agent_Seconds)))]);
+               if Command /= "" then
+                  Say ("cli.work.runner", Command, To_String (Chosen));
+               elsif Given_Runner /= null then
+                  Say ("cli.work.runner", Pres.Message_Value (Screen, "cli.work.runner.session"),
+                       To_String (Chosen));
+               elsif Path /= "" then
+                  Say ("cli.work.runner", Path, To_String (Chosen));
+               end if;
             end if;
             if Given_Runner /= null and then Command = "" then
                W.Execute
@@ -709,7 +734,9 @@ package body Model_Runner.CLI.Work is
             elsif Command /= "" then
                W.Execute
                  (Store, To_String (Chosen),
-                  Command_Agent'(Store => Store'Access, Command => To_Unbounded_String (Command)),
+                  Command_Agent'(Store   => Store'Access,
+                                 Command => To_Unbounded_String (Command),
+                                 Timeout => Agent_Seconds),
                   Model, Done, Outcome);
             elsif Path /= "" then
                W.Execute
@@ -748,7 +775,9 @@ package body Model_Runner.CLI.Work is
             Say ("cli.work.proposed", Candidate, "");
          end loop;
          for Line of Done.Kept_Back loop
-            Pres.Put_Message (Screen, "cli.work.kept_back", [Loc.Named ("detail", Line)]);
+            Pres.Put_Message
+              (Screen, "cli.work.kept_back",
+               [Loc.Named ("detail", Line), Loc.Named ("name", To_String (Done.Issue_Id))]);
          end loop;
          for Other of Done.Waits_For loop
             Say ("cli.work.waits_for", Other, To_String (Done.Task_Id));
@@ -768,16 +797,31 @@ package body Model_Runner.CLI.Work is
          --  Why, where it did not complete: blocked or failed, the reason
          --  is what a person acts on.
          if Done.Reason = Null_Unbounded_String then
-            Say ("cli.work.ended", To_String (Done.Final_State), "");
+            Say ("cli.work.ended",
+                 (if To_String (Done.Final_State) = "verification" then "in verification"
+                  else To_String (Done.Final_State)), "");
          else
             Pres.Put_Message
               (Screen, "cli.work.ended_because",
-               [Loc.Named ("name", To_String (Done.Final_State)),
+               [Loc.Named ("name", (if To_String (Done.Final_State) = "verification"
+                                    then "in verification" else To_String (Done.Final_State))),
                 Loc.Named ("detail", To_String (Done.Reason))]);
          end if;
 
          --  And what a person does next, where it did not complete.
-         if To_String (Done.Final_State) in "failed" | "blocked" then
+         if To_String (Done.Final_State) = "blocked"
+           and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "waiting for its children: ") = 1
+         then
+            declare
+               Reason : constant String := To_String (Done.Reason);
+               From   : constant Positive := Reason'First + 26;
+               Stop   : constant Natural := Ada.Strings.Fixed.Index (Reason, " (");
+            begin
+               Pres.Put_Note
+                 (Screen, "cli.next.parts",
+                  [Loc.Named ("detail", Reason (From .. (if Stop = 0 then Reason'Last else Stop - 1)))]);
+            end;
+         elsif To_String (Done.Final_State) in "failed" | "blocked" then
             Pres.Put_Note (Screen, "cli.next.retry", [Loc.Named ("name", To_String (Done.Task_Id))]);
          elsif To_String (Done.Final_State) = "verification"
            and then Done.Workspace_Id /= Null_Unbounded_String

@@ -125,13 +125,16 @@ package Model_Runner.Framework.Permissions is
    --  @param Task_Level The task's own restriction, as its permissions field
    --    writes it; empty for none. One that does not read restricts to
    --    nothing.
+   --  @param Within_Sandbox Whether the session's sandbox narrows it too:
+   --    False for what the configuration itself allows.
    --  @return The effective permissions.
    function Effective
      (Item    : Stores.Store;
       Kind    : String;
       Role    : String;
       Runtime : Permission_Set := Unrestricted;
-      Task_Level : String := "") return Permission_Set;
+      Task_Level : String := "";
+      Within_Sandbox : Boolean := True) return Permission_Set;
 
    --  A task's own restriction, as its permissions field writes it.
    --

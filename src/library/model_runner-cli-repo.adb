@@ -90,6 +90,46 @@ package body Model_Runner.CLI.Repo is
          Status := E.Exit_Status (E.Make (E.Framework_Not_Found));
       end Not_Found;
 
+      --  The units a file holds, and the files a unit is in: a file and
+      --  its units are asked of as one another.
+      function Units_In (Path : String) return Model_Runner.Framework.Name_Lists.Vector is
+         use type Rp.Relation_Kind;
+         Result : Model_Runner.Framework.Name_Lists.Vector;
+      begin
+         for Index in 1 .. Rp.Relation_Count (Found) loop
+            declare
+               One : constant Rp.Relation := Rp.Relation_At (Found, Index);
+            begin
+               if One.Kind = Rp.Contains and then To_String (One.From) = Path
+                 and then not Result.Contains (To_String (One.To))
+               then
+                  Result.Append (To_String (One.To));
+               end if;
+            end;
+         end loop;
+         return Result;
+      end Units_In;
+
+      function Files_Of (Unit : String) return Model_Runner.Framework.Name_Lists.Vector is
+         use type Rp.Relation_Kind;
+         Result : Model_Runner.Framework.Name_Lists.Vector;
+      begin
+         for Index in 1 .. Rp.Relation_Count (Found) loop
+            declare
+               One : constant Rp.Relation := Rp.Relation_At (Found, Index);
+            begin
+               if One.Kind = Rp.Contains
+                 and then Ada.Characters.Handling.To_Lower (To_String (One.To))
+                          = Ada.Characters.Handling.To_Lower (Unit)
+                 and then not Result.Contains (To_String (One.From))
+               then
+                  Result.Append (To_String (One.From));
+               end if;
+            end;
+         end loop;
+         return Result;
+      end Files_Of;
+
       Verbose : constant Boolean :=
         Model_Runner.CLI.Options."=" (Item.Level, Model_Runner.CLI.Options.Verbose);
 
@@ -327,6 +367,11 @@ package body Model_Runner.CLI.Repo is
                            for Name of Rp.Find_Symbols (Found, Argument) loop
                               Changed.Append ("symbol:" & Name);
                            end loop;
+
+                           --  A unit is its files: what changing it reaches.
+                           for Path of Files_Of (Argument) loop
+                              Changed.Append (Path);
+                           end loop;
                         end if;
                         if Changed.Is_Empty then
                            --  A file or a symbol that is not there reaches
@@ -448,9 +493,31 @@ package body Model_Runner.CLI.Repo is
 
       else
          declare
-            Units : constant Model_Runner.Framework.Name_Lists.Vector :=
-              (if Action = "deps" then Rp.Dependencies_Of (Found, Argument)
-               else Rp.Dependents_Of (Found, Argument));
+            --  A unit by its name, or the units a file holds.
+            function Of_Units return Model_Runner.Framework.Name_Lists.Vector is
+               Asked  : Model_Runner.Framework.Name_Lists.Vector := Units_In (Argument);
+               Result : Model_Runner.Framework.Name_Lists.Vector;
+            begin
+               if Asked.Is_Empty then
+                  Asked.Append (Argument);
+               end if;
+               for Unit of Asked loop
+                  declare
+                     Linked : constant Model_Runner.Framework.Name_Lists.Vector :=
+                       (if Action = "deps" then Rp.Dependencies_Of (Found, Unit)
+                        else Rp.Dependents_Of (Found, Unit));
+                  begin
+                     for Other of Linked loop
+                        if not Result.Contains (Other) then
+                           Result.Append (Other);
+                        end if;
+                     end loop;
+                  end;
+               end loop;
+               return Result;
+            end Of_Units;
+
+            Units : constant Model_Runner.Framework.Name_Lists.Vector := Of_Units;
          begin
             for Unit of Units loop
                Pres.Put_Message
@@ -458,6 +525,7 @@ package body Model_Runner.CLI.Repo is
             end loop;
             if Units.Is_Empty then
                if Rp.Find_Symbols (Found, Argument).Is_Empty
+                 and then Units_In (Argument).Is_Empty
                  and then Rp.Dependencies_Of (Found, Argument).Is_Empty
                  and then Rp.Dependents_Of (Found, Argument).Is_Empty
                then

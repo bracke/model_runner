@@ -2093,6 +2093,77 @@ package body Tests.CLI_Cases is
          S.Close (Holder);
       end;
 
+      --  11. A second round of what a person meets.
+      --  A project already there is not started again.
+      Run ("init|generic");
+      Assert (Code /= 0 and then Shows ("already holds") and then Shows ("next: reconfigure"),
+              "init over a project did not refuse first: " & To_String (Said));
+      --  A setting that is none is refused with what was meant; -= takes
+      --  out, and += adds nothing twice.
+      Run ("reconfigure|agent=x|confirm=yes");
+      Assert (Code /= 0 and then Shows ("did you mean scalar.work.agent"),
+              "a setting that is none was not refused with the one meant: " & To_String (Said));
+      Run ("reconfigure|execution.allowed+=done.sh|confirm=yes");
+      Assert (Shows ("nothing would change"), "+= added what the set holds");
+      Run ("reconfigure|execution.allowed-=bad.sh|confirm=yes");
+      Assert (Code = 0 and then Shows ("-> true, done.sh, split.sh"), "-= did not take out: " & To_String (Said));
+      Run ("reconfigure|work.lease=120");
+      Assert (Shows ("add confirm=yes"), "a missing confirm did not say how: " & To_String (Said));
+      Run ("task|list|--set|bogus=1");
+      Assert (Code /= 0 and then Shows ("the filters are"), "an unknown filter was ignored");
+      Run ("config|lease");
+      Assert (Shows ("scalar.work.lease") and then not Shows ("execution.allowed"),
+              "config did not keep to the name given: " & To_String (Said));
+      --  A check that fails says so, why, and with its status.
+      Run ("reconfigure|profile.checks=check: false|execution.allowed+=false|confirm=yes");
+      Run ("check");
+      Assert (Code /= 0 and then Shows ("did not pass: check (false) failed"),
+              "a failing check exited well or said nothing: " & To_String (Said));
+      Run ("reconfigure|profile.checks=check: true|confirm=yes");
+      --  A requirement not verified says what it lacks.
+      Run ("req|new|Shouts|text=It SHALL shout.");
+      Run ("req|accept|REQ-001");
+      Run ("req|show|REQ-001");
+      Assert (Shows ("not verified: "), "a requirement not verified did not say why: " & To_String (Said));
+      --  An answer's list written as a list is read as one.
+      Write (Root & "/g/src/listed.txt", "before" & LF);
+      Write (Root & "/listed.sh",
+             "#!/bin/sh" & LF & "echo after > src/listed.txt" & LF
+             & "printf 'status: done\nsummary: wrote it\nchanged_files:\n  - src/listed.txt\n'" & LF,
+             Executable => True);
+      Run ("reconfigure|work.agent=" & Root & "/listed.sh $PROMPT|execution.allowed+=listed.sh"
+           & "|confirm=yes");
+      Run ("task|new|Listed|--set|kind=implementation");
+      Run ("task|list");
+      declare
+         Text : constant String := To_String (Said);
+         At_Id : constant Natural := Ada.Strings.Fixed.Index (Text, "  [candidate]  Listed");
+         Start : constant Natural :=
+           (if At_Id = 0 then Text'First
+            else Ada.Strings.Fixed.Index (Text (Text'First .. At_Id), [1 => LF], Ada.Strings.Backward) + 1);
+         Id    : constant String := (if At_Id > Start then Text (Start .. At_Id - 1) else "TASK-000");
+      begin
+         Run ("task|accept|" & Id);
+         Run ("work|" & Id);
+         Assert (Shows ("the task is complete"),
+                 "a changed_files list written as a list was not read: " & To_String (Said));
+      end;
+      --  A heading's requirement takes its section and its criteria.
+      Write (Root & "/g/docs/spec.md",
+             "# Shell" & LF & LF & "## REQ-FS-001 Case" & LF & "Paths differing in case are one." & LF
+             & "Acceptance: a and A are equal" & LF & LF & "It SHOULD log each step." & LF);
+      Run ("bootstrap");
+      Run ("req|show|REQ-FS-001");
+      Assert (Shows ("text: Paths differing in case are one.")
+              and then Shows ("criteria: a and A are equal"),
+              "a heading's requirement did not take its section: " & To_String (Said));
+      Write (Root & "/g/docs/spec.md",
+             "# Shell" & LF & LF & "## REQ-FS-001 Case" & LF & "Paths differing in case are one." & LF
+             & "Acceptance: a and A are equal" & LF & LF & "It SHOULD log every step." & LF);
+      Run ("bootstrap");
+      Assert (Shows ("most like it") and then Shows ("req reject"),
+              "an edited line was not paired with what it became: " & To_String (Said));
+
       --  10. What the steps above rest on, asked directly.
       Assert (Model_Runner.CLI.Options.Is_Project_Word ("req")
               and then not Model_Runner.CLI.Options.Is_Project_Word ("run"),

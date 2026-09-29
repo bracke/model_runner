@@ -7,6 +7,7 @@ with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
+with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Schemas;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Traceability;
@@ -946,6 +947,83 @@ package body Model_Runner.Framework.Verification is
    end Outside_Scope;
 
    ----------------
+   -- Why_Failed --
+   ----------------
+
+   function Why_Failed
+     (Item     : Stores.Store;
+      Evidence : String;
+      Lines    : Positive := 6) return Name_Lists.Vector
+   is
+      Held   : Records.Item;
+      Read   : E.Error_Info;
+      Result : Name_Lists.Vector;
+
+      function Split_On (Text : String; Separator : Character) return Name_Lists.Vector is
+         Found : Name_Lists.Vector;
+         Start : Natural := Text'First;
+      begin
+         for Index in Text'First .. Text'Last + 1 loop
+            if Index > Text'Last or else Text (Index) = Separator then
+               Found.Append (Text (Start .. Index - 1));
+               Start := Index + 1;
+            end if;
+         end loop;
+         return Found;
+      end Split_On;
+
+      function Last_Lines (Text : String) return String is
+         Seen : Natural := 0;
+      begin
+         for Index in reverse Text'Range loop
+            if Text (Index) = ASCII.LF and then Index < Text'Last then
+               Seen := Seen + 1;
+               if Seen = Lines then
+                  return Text (Index + 1 .. Text'Last);
+               end if;
+            end if;
+         end loop;
+         return Text;
+      end Last_Lines;
+   begin
+      Stores.Read (Item, Verification_Area, Evidence, Held, Read);
+      if E.Is_Error (Read) then
+         return Result;
+      end if;
+      for Index in 1 .. Records.Field_Count (Held) loop
+         declare
+            Field : constant String := Records.Field_Name (Held, Index);
+            Parts : constant Name_Lists.Vector :=
+              Split_On (Records.Get (Held, Field), ASCII.HT);
+         begin
+            if Field'Length > 6 and then Field (Field'First .. Field'First + 5) = "check."
+              and then Natural (Parts.Length) >= 7
+              and then Parts (5) /= "passed" and then Parts (6) = "required"
+            then
+               declare
+                  Log  : Results.Result;
+                  Got  : E.Error_Info;
+                  Text : Unbounded_String :=
+                    To_Unbounded_String
+                      (Parts (1) & " (" & Parts (2) & ") " & Parts (5)
+                       & (if Parts (5) = "failed" then ", ending with" & Parts (3) else "")
+                       & "; its log is " & Parts (7));
+               begin
+                  Results.Read (Item, Parts (7), Log, Got);
+                  if E.Is_Ok (Got) and then Length (Log.Payload) > 0 then
+                     Append (Text, ":" & ASCII.LF
+                             & Ada.Strings.Fixed.Trim (Last_Lines (To_String (Log.Payload)),
+                                                       Ada.Strings.Right));
+                  end if;
+                  Result.Append (To_String (Text));
+               end;
+            end if;
+         end;
+      end loop;
+      return Result;
+   end Why_Failed;
+
+   ----------------
    -- Is_Current --
    ----------------
 
@@ -1459,19 +1537,78 @@ package body Model_Runner.Framework.Verification is
    -- Reevaluate_Requirements --
    -----------------------------
 
-   procedure Reevaluate_Requirements
-     (Item    : Stores.Store;
-      Change  : in out Stores.Transaction;
-      Changed : out Name_Lists.Vector;
-      Status  : out Model_Runner.Errors.Error_Info;
-      Configuration : String := "")
+   --  Whether a piece of evidence ran tests: taken by a profile whose
+   --  capability is to run them, and with no check's log saying none ran.
+   function Ran_Tests (Item : Stores.Store; Value : Records.Item) return Boolean is
+      Profile : constant String := Records.Get (Value, "profile");
+      Capable : constant String :=
+        Records.Get (Config (Item), "scalar.profile_capability." & Profile);
+   begin
+      if Capable /= "run_tests" then
+         return False;
+      end if;
+      for Index in 1 .. Records.Field_Count (Value) loop
+         declare
+            Field : constant String := Records.Field_Name (Value, Index);
+            Line  : constant String := Records.Get (Value, Field);
+            Last  : constant Natural := Ada.Strings.Fixed.Index (Line, "RES-", Ada.Strings.Backward);
+         begin
+            if Starts (Field, "check.") and then Last > 0 then
+               declare
+                  Stop : Natural := Last;
+                  Log  : Results.Result;
+                  Got  : E.Error_Info;
+               begin
+                  while Stop < Line'Last and then Line (Stop + 1) /= Tab loop
+                     Stop := Stop + 1;
+                  end loop;
+                  Results.Read (Item, Line (Last .. Stop), Log, Got);
+                  if E.Is_Ok (Got) then
+                     declare
+                        Said : constant String :=
+                          Ada.Characters.Handling.To_Lower (To_String (Log.Payload));
+                     begin
+                        --  What the common runners say when there was
+                        --  nothing to run.
+                        if Ada.Strings.Fixed.Index (Said, "total tests run:   0") > 0
+                          or else Ada.Strings.Fixed.Index (Said, "total tests run: 0") > 0
+                          or else Ada.Strings.Fixed.Index (Said, "collected 0 items") > 0
+                          or else Ada.Strings.Fixed.Index (Said, "no tests ran") > 0
+                          or else Ada.Strings.Fixed.Index (Said, "no tests were found") > 0
+                        then
+                           return False;
+                        end if;
+                     end;
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+      return True;
+   end Ran_Tests;
+
+   -------------
+   -- Support --
+   -------------
+
+   function Support
+     (Item          : Stores.Store;
+      Requirement   : String;
+      Configuration : String;
+      Why           : out Unbounded_String) return String
    is
       Everything : constant Name_Lists.Vector := Tasks.List (Item);
 
-      --  The evidence that shows a requirement verified now, or nothing
-      --  when something is missing.
+      --  The profile the project verifies requirements themselves by.
       Policy_Profile : constant String :=
         Records.Get (Config (Item), "scalar.verification.requirements");
+
+      --  Nothing, with why.
+      function Lacks (Text : String) return String is
+      begin
+         Why := To_Unbounded_String (Text);
+         return "";
+      end Lacks;
 
       --  Whether evidence shows each acceptance criterion that says how it
       --  is shown -- a criterion ending [check: LABEL] names the check whose
@@ -1514,87 +1651,140 @@ package body Model_Runner.Framework.Verification is
          return True;
       end Criteria_Shown;
 
-      function Supporting (Requirement : String) return String is
-         Found : Unbounded_String;
-         Any   : Boolean := False;
-         Built : Boolean :=
-           not Intent.Links (Item, Intent.Requirement, Requirement, Intent.Implementation).Is_Empty;
-      begin
-         for Id of Everything loop
-            declare
-               Defined : Records.Item;
-               Read    : E.Error_Info;
-               State   : constant String := Tasks.State_Of (Item, Id);
-            begin
-               Tasks.Definition (Item, Id, Defined, Read);
-               if E.Is_Ok (Read)
-                 and then Lines_Of (Records.Get (Defined, "requirements")).Contains (Requirement)
-                 and then State not in "cancelled" | "rejected"
-               then
-                  Any := True;
-                  if State /= "complete" then
-                     return "";
+      Found : Unbounded_String;
+      Any   : Boolean := False;
+      Tested : Boolean := False;
+      Built : Boolean :=
+        not Intent.Links (Item, Intent.Requirement, Requirement, Intent.Implementation).Is_Empty;
+   begin
+      for Id of Everything loop
+         declare
+            Defined : Records.Item;
+            Read    : E.Error_Info;
+            State   : constant String := Tasks.State_Of (Item, Id);
+         begin
+            Tasks.Definition (Item, Id, Defined, Read);
+            if E.Is_Ok (Read)
+              and then Lines_Of (Records.Get (Defined, "requirements")).Contains (Requirement)
+              and then State not in "cancelled" | "rejected"
+            then
+               Any := True;
+               if State /= "complete" then
+                  return Lacks (Id & " serves it and is " & State
+                                & "; it is verified once that is complete");
+               end if;
+
+               --  Something implements it: a linked implementation, or
+               --  files a task serving it changed.
+               declare
+                  Runtime_Value : Records.Item;
+                  Got           : E.Error_Info;
+               begin
+                  Stores.Read (Item, Tasks_Area, Id & ".state", Runtime_Value, Got);
+                  Built := Built
+                    or else (E.Is_Ok (Got)
+                             and then Records.Get (Runtime_Value, "changed_files") /= "");
+               end;
+               declare
+                  Evidence : constant String :=
+                    Latest (Item, Id, Profile_Of (Item, Id));
+                  Value    : Records.Item;
+                  Reasons  : Name_Lists.Vector;
+               begin
+                  if Evidence = "" then
+                     return Lacks (Id & " has no evidence; task verify " & Id & " takes it");
                   end if;
+                  Stores.Read (Item, Verification_Area, Evidence, Value, Read);
+                  if Records.Get (Value, "passed") /= "true" then
+                     return Lacks (Evidence & ", " & Id & "'s latest, did not pass;"
+                                   & " task verify " & Id & " takes it again");
+                  elsif not Is_Current (Item, Evidence, Reasons, Configuration) then
+                     return Lacks (Evidence & ", " & Id & "'s latest, no longer applies"
+                                   & (if Reasons.Is_Empty then ""
+                                      else ": " & Reasons.First_Element)
+                                   & "; task verify " & Id & " takes it again");
+                  elsif not Criteria_Shown (Requirement, Value) then
+                     return Lacks (Evidence & " does not show a criterion's named check"
+                                   & " passing");
+                  end if;
+                  if Ran_Tests (Item, Value) then
+                     Tested := True;
+                  end if;
+                  Append (Found, (if Found = Null_Unbounded_String then "" else ", ")
+                                 & Evidence);
+               end;
+            end if;
+         end;
+      end loop;
+      if not Any then
+         return Lacks ("no task serves it");
+      elsif not Built then
+         return Lacks ("nothing implements it: no task serving it changed a file, and no"
+                       & " implementation is linked");
+      end if;
 
-                  --  Something implements it: a linked implementation, or
-                  --  files a task serving it changed.
-                  declare
-                     Runtime_Value : Records.Item;
-                     Got           : E.Error_Info;
-                  begin
-                     Stores.Read (Item, Tasks_Area, Id & ".state", Runtime_Value, Got);
-                     Built := Built
-                       or else (E.Is_Ok (Got)
-                                and then Records.Get (Runtime_Value, "changed_files") /= "");
-                  end;
-                  declare
-                     Evidence : constant String :=
-                       Latest (Item, Id, Profile_Of (Item, Id));
-                     Value    : Records.Item;
-                     Reasons  : Name_Lists.Vector;
-                  begin
-                     if Evidence = "" then
-                        return "";
-                     end if;
-                     Stores.Read (Item, Verification_Area, Evidence, Value, Read);
-                     if Records.Get (Value, "passed") /= "true"
-                       or else not Is_Current (Item, Evidence, Reasons, Configuration)
-                       or else not Criteria_Shown (Requirement, Value)
-                     then
-                        return "";
-                     end if;
-                     Append (Found, (if Found = Null_Unbounded_String then "" else ", ")
-                                    & Evidence);
-                  end;
-               end if;
-            end;
-         end loop;
-         if not Any or else not Built then
-            return "";
-         end if;
+      --  Where the project verifies requirements themselves, by its
+      --  profile: that evidence, current and passing, as well.
+      if Policy_Profile /= "" then
+         declare
+            Own     : constant String := Latest (Item, Requirement, Policy_Profile);
+            Value   : Records.Item;
+            Read    : E.Error_Info;
+            Reasons : Name_Lists.Vector;
+         begin
+            if Own = "" then
+               return Lacks ("the project verifies requirements by " & Policy_Profile
+                             & ", which has not been run for it");
+            end if;
+            Stores.Read (Item, Verification_Area, Own, Value, Read);
+            if Records.Get (Value, "passed") /= "true"
+              or else not Is_Current (Item, Own, Reasons, Configuration)
+            then
+               return Lacks (Own & ", its own verification, did not pass or no longer"
+                             & " applies");
+            end if;
+            if Ran_Tests (Item, Value) then
+               Tested := True;
+            end if;
+            Append (Found, ", " & Own);
+         end;
+      end if;
+      --  A build, or a suite that ran nothing, shows it is there, not
+      --  that it does what it says.
+      if not Tested then
+         return Lacks ("no evidence for it ran tests -- a build, or a suite that found"
+                       & " none, does not show it does what it says; a profile with"
+                       & " profile_capability run_tests that runs a test of it does");
+      end if;
+      Why := Null_Unbounded_String;
+      return To_String (Found);
+   end Support;
 
-         --  Where the project verifies requirements themselves, by its
-         --  profile: that evidence, current and passing, as well.
-         if Policy_Profile /= "" then
-            declare
-               Own     : constant String := Latest (Item, Requirement, Policy_Profile);
-               Value   : Records.Item;
-               Read    : E.Error_Info;
-               Reasons : Name_Lists.Vector;
-            begin
-               if Own = "" then
-                  return "";
-               end if;
-               Stores.Read (Item, Verification_Area, Own, Value, Read);
-               if Records.Get (Value, "passed") /= "true"
-                 or else not Is_Current (Item, Own, Reasons, Configuration)
-               then
-                  return "";
-               end if;
-               Append (Found, ", " & Own);
-            end;
-         end if;
-         return To_String (Found);
+   ----------------------
+   -- Why_Not_Verified --
+   ----------------------
+
+   function Why_Not_Verified (Item : Stores.Store; Requirement : String) return String is
+      Why     : Unbounded_String;
+      Ignored : constant String := Support (Item, Requirement, "", Why);
+      pragma Unreferenced (Ignored);
+   begin
+      return To_String (Why);
+   end Why_Not_Verified;
+
+   procedure Reevaluate_Requirements
+     (Item    : Stores.Store;
+      Change  : in out Stores.Transaction;
+      Changed : out Name_Lists.Vector;
+      Status  : out Model_Runner.Errors.Error_Info;
+      Configuration : String := "")
+   is
+      Everything : constant Name_Lists.Vector := Tasks.List (Item);
+
+      function Supporting (Requirement : String) return String is
+         Why : Unbounded_String;
+      begin
+         return Support (Item, Requirement, Configuration, Why);
       end Supporting;
 
       Event : Unbounded_String;

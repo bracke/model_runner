@@ -111,6 +111,28 @@ package body Model_Runner.Framework.Invocations is
    -- Hold --
    ----------
 
+   --  A line of an answer as an item: a list's mark taken off -- "- a",
+   --  "* a", "1. a" -- and quotes, as a model writes a list.
+   function Item_Of (Line : String) return String is
+      Text : constant String := Trim (Line);
+   begin
+      if Text'Length >= 2 and then Text (Text'First) in '-' | '*' | '+'
+        and then Text (Text'First + 1) = ' '
+      then
+         return Unquoted (Trim (Text (Text'First + 2 .. Text'Last)));
+      end if;
+      declare
+         Dot : constant Natural := Ada.Strings.Fixed.Index (Text, ". ");
+      begin
+         if Dot > Text'First and then Dot - Text'First <= 3
+           and then (for all C of Text (Text'First .. Dot - 1) => C in '0' .. '9')
+         then
+            return Unquoted (Trim (Text (Dot + 2 .. Text'Last)));
+         end if;
+      end;
+      return Unquoted (Text);
+   end Item_Of;
+
    procedure Hold
      (Rules  : Contract;
       Answer : String;
@@ -137,14 +159,14 @@ package body Model_Runner.Framework.Invocations is
          begin
             if Name /= "" and then Rules.Fields.Contains (Name) then
                Current := To_Unbounded_String (Name);
-               Result.Values.Include (Name, Unquoted (Trim (Line (Colon + 1 .. Line'Last))));
-            elsif Current /= Null_Unbounded_String then
+               Result.Values.Include (Name, Item_Of (Line (Colon + 1 .. Line'Last)));
+            elsif Current /= Null_Unbounded_String and then Item_Of (Line) /= "" then
                declare
                   Held : constant String := Result.Values (To_String (Current));
                begin
                   Result.Values.Include
                     (To_String (Current),
-                     (if Held = "" then Trim (Line) else Held & ASCII.LF & Trim (Line)));
+                     (if Held = "" then Item_Of (Line) else Held & ASCII.LF & Item_Of (Line)));
                end;
             end if;
          end;

@@ -294,6 +294,10 @@ package Model_Runner.Framework.Work is
       --  an issue for a person instead.
       Kept_Back     : Name_Lists.Vector;
 
+      --  The result the answer's issues -- and what was kept back -- are
+      --  kept as, where there were any.
+      Issue_Id      : Ada.Strings.Unbounded.Unbounded_String;
+
       --  What the agent claimed, and what the files show it changed.
       Claimed       : Ada.Strings.Unbounded.Unbounded_String;
       Summary       : Ada.Strings.Unbounded.Unbounded_String;

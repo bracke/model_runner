@@ -187,4 +187,19 @@ package body Model_Runner.Framework.Leases is
       return Result;
    end Stale;
 
+   -----------------
+   -- Clear_Stale --
+   -----------------
+
+   procedure Clear_Stale
+     (Item    : Stores.Store;
+      Change  : in out Stores.Transaction;
+      Cleared : out Name_Lists.Vector) is
+   begin
+      Cleared := Stale (Item);
+      for Resource of Cleared loop
+         Stores.Remove (Change, Runtime_Area, Prefix & Resource);
+      end loop;
+   end Clear_Stale;
+
 end Model_Runner.Framework.Leases;
