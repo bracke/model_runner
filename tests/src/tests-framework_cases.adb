@@ -5758,6 +5758,14 @@ package body Tests.Framework_Cases is
                       Pm.Unrestricted, 10, Third, Status);
       Assert (Status.Code = E.Framework_Limit_Exceeded,
               "a child past the depth limit was made");
+      declare
+         At_Limit : Ag.Agent;
+         Read     : E.Error_Info;
+      begin
+         Ag.Read (Store, To_String (Grand), At_Limit, Read);
+         Assert (E.Is_Ok (Read) and then not At_Limit.Allowed (Pm.Create_Children).Granted,
+                 "an agent at the depth limit was said to be able to make children");
+      end;
 
       Ag.Charge (Store, Change, To_String (Grand), 60, Status);
       Assert (Status.Code = E.Framework_Limit_Exceeded,

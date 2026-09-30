@@ -415,6 +415,7 @@ package body Model_Runner.Framework.Work is
                --  what it had changed there named.
                function Given_Up return String is
                   Named : Unbounded_String;
+                  Lines : Unbounded_String;
                   Held  : E.Error_Info;
                begin
                   if Space = "" then
@@ -422,7 +423,12 @@ package body Model_Runner.Framework.Work is
                   end if;
                   for Path of Workspaces.Changes (Item, Space) loop
                      Append (Named, (if Named = Null_Unbounded_String then "" else ", ") & Path);
+                     Append (Lines, Path & ASCII.LF);
                   end loop;
+                  --  Kept on the task as a run's are, so its audit says them.
+                  if Lines /= Null_Unbounded_String then
+                     Annotate (Item, Change, Id, "changed_files", To_String (Lines));
+                  end if;
                   Workspaces.Abandon (Item, Change, Space, Held);
                   return (if E.Is_Error (Held) then ""
                           else "; its workspace " & Space & " is given up"

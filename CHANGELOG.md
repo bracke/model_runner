@@ -1829,6 +1829,14 @@ Keep a Changelog and the project uses semantic versioning.
   - SIGTERM at the prompt ends the line and says so; a session told to end
     mid-work gives the shell's next steps; exit status 7 is documented as
     cancelled or interrupted; Ctrl-C at the prompt is said as it is pressed.
+  - A helper at its depth limit is not given create_children it cannot
+    use; a child asked of it is still refused as past the limit.
+  - A test task must change something in projects made before the template
+    said so too.
+  - SIGTERM at the prompt discards what was half typed, rather than leaving
+    it for the shell (hostkit's new Terminal_Control.Discard_Input).
+  - A task recovered after its run was killed keeps what its workspace
+    changed in its audit.
   - Smaller: rehome says which component, keeps its notes under --quiet,
     and has no plural slips; hints in session findings carry their `/`;
     session errors point to `/help`; `/help` lists `/check full|REQ` and

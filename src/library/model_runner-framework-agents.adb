@@ -353,6 +353,10 @@ package body Model_Runner.Framework.Agents is
             Over (Parent, "a child would be" & Natural'Image (Depth)
                   & " deep, past the limit", Status);
             return;
+         elsif not Grant.Granted and then Records.Get (Value, "children_past_depth") = "yes" then
+            Over (Parent, "a child would be" & Natural'Image (Depth)
+                  & " deep, past the limit", Status);
+            return;
          elsif not Grant.Granted then
             Status := E.Make (E.Framework_Permission_Denied);
             E.Add_Text (Status, "name", Parent);
@@ -381,12 +385,22 @@ package body Model_Runner.Framework.Agents is
          declare
             Role_Level : Permissions.Permission_Set;
             Present    : Boolean;
+            Spent      : Boolean;
             Allowed    : Permissions.Permission_Set :=
               Permissions.Intersect (Owner.Allowed, Asked);
          begin
             Role_Level := Permissions.Level_Of (Item, "role." & Role, Present);
             if Present then
                Allowed := Permissions.Intersect (Allowed, Role_Level);
+            end if;
+            --  At the depth its limit allows it can make none: not said to
+            --  have what it cannot use, and one asked of it is refused as
+            --  past the limit, which is why.
+            Spent := Allowed (Permissions.Create_Children).Granted
+              and then Depth >= Natural'Min (Allowed (Permissions.Create_Children).Max_Depth,
+                                             Bounds.Max_Depth);
+            if Spent then
+               Allowed (Permissions.Create_Children).Granted := False;
             end if;
             Make (Item, Change,
                   (Role    => To_Unbounded_String (Role),
@@ -399,6 +413,17 @@ package body Model_Runner.Framework.Agents is
                    Retry_Of => To_Unbounded_String (Retry_Of),
                    others  => <>),
                   Id, Status);
+            if Spent and then E.Is_Ok (Status) then
+               declare
+                  Made : Records.Item;
+               begin
+                  Current (Item, Change, To_String (Id), Made, Status);
+                  if E.Is_Ok (Status) then
+                     Records.Set (Made, "children_past_depth", "yes");
+                     Stores.Put (Change, Runtime_Area, Prefix & To_String (Id), Made);
+                  end if;
+               end;
+            end if;
          end;
       end;
    end Spawn_Child;

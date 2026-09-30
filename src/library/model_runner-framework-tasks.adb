@@ -1883,6 +1883,14 @@ package body Model_Runner.Framework.Tasks is
          Result.Append ("no_blocking_issue");
          Result.Append ("integration");
       end if;
+      --  Tests are work that changes files, as code is: a test task that
+      --  changed nothing did not do it, in a project made before its kind
+      --  said so too.
+      if Kind = "test" and then Records.Get (Settings, "set.task.gates.test") = ""
+        and then not Result.Contains ("implementation_present")
+      then
+         Result.Append ("implementation_present");
+      end if;
       return Result;
    end Gate_Names;
 

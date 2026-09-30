@@ -2,6 +2,9 @@ with Ada.Exceptions;
 with Ada.Interrupts;
 with Ada.Interrupts.Names;
 
+with Hostkit.Descriptors;
+with Hostkit.Terminal_Control;
+
 with Model_Runner.Text;
 
 --  Interrupt handling on Linux and on macOS, which this directory is
@@ -104,6 +107,10 @@ package body Model_Runner.Platform.Signals is
          if Waiting then
             declare
                Ignored : constant Integer := Write_Error (2, Stopped_Line, Stopped_Line'Length);
+               --  What was half typed goes with it, not to the shell.
+               Dropped : constant Boolean :=
+                 Hostkit.Terminal_Control.Discard_Input (Hostkit.Descriptors.Standard_Input);
+               pragma Unreferenced (Ignored, Dropped);
             begin
                null;
             end;

@@ -7729,6 +7729,16 @@ package body Checks is
                               Args.Append
                                 (Ada.Strings.Unbounded.To_Unbounded_String
                                    (Full & "/" & Each.Under.all));
+                              --  hostkit's specifications, which a host's
+                              --  body may use as the library does: the
+                              --  pinned crate beside this one.
+                              if Ada.Directories.Exists (Full & "/../hostkit/src") then
+                                 Args.Append
+                                   (Ada.Strings.Unbounded.To_Unbounded_String ("-I"));
+                                 Args.Append
+                                   (Ada.Strings.Unbounded.To_Unbounded_String
+                                      (Full & "/../hostkit/src"));
+                              end if;
                               Args.Append
                                 (Ada.Strings.Unbounded.To_Unbounded_String
                                    ("-gnat2022"));
