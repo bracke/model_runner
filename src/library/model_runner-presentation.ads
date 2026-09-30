@@ -233,6 +233,12 @@ package Model_Runner.Presentation is
    --  @param On Whether it is a session's.
    procedure Use_Session (Item : in out Console; On : Boolean);
 
+   --  Whether next steps are said as a session types them.
+   --
+   --  @param Item Console to ask.
+   --  @return True in a session.
+   function In_Session (Item : Console) return Boolean;
+
    --  The exit status of the first error reported since the console was
    --  opened or this was last asked with Reset: what a command that reports
    --  its own failures ended with.

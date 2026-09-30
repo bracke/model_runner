@@ -759,6 +759,32 @@ package body Model_Runner.CLI.Intents is
             Nt.Govern (Store, Change, Kind, Word (2), Word (3), From (4), Given ("overrides"),
                        Status);
             Settle (Store, Change, Status, Screen, "cli.task.revised", Word (2));
+
+            --  What it says it holds over, where that is nothing there is.
+            if E.Is_Ok (Status) then
+               declare
+                  Said  : constant String := Given ("overrides");
+                  Start : Natural := Said'First;
+               begin
+                  for Index in Said'First .. Said'Last + 1 loop
+                     if Index > Said'Last or else Said (Index) in ',' | ' ' then
+                        declare
+                           Other : constant String := Said (Start .. Index - 1);
+                        begin
+                           if Other /= "" and then Other /= "CONFIG"
+                             and then Nt.State_Of (Store, Nt.Decision, Other) = ""
+                             and then Nt.State_Of (Store, Nt.Specification, Other) = ""
+                             and then Nt.State_Of (Store, Nt.Requirement, Other) = ""
+                           then
+                              Pres.Put_Note (Screen, "cli.intent.overrides_unknown",
+                                             [Loc.Named ("name", Other)]);
+                           end if;
+                        end;
+                        Start := Index + 1;
+                     end if;
+                  end loop;
+               end;
+            end if;
          end if;
 
       else

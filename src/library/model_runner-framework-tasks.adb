@@ -939,7 +939,16 @@ package body Model_Runner.Framework.Tasks is
               (if State = "verification"
                  and then Records.Get (Runtime_Value, "current_workspace") /= ""
                then "its work waits in " & Records.Get (Runtime_Value, "current_workspace")
-                    & " to be taken in: task integrate " & Id
+                    & " to be taken in: "
+                    & (if Workspaces.Conflict_Files
+                            (Item, Records.Get (Runtime_Value, "current_workspace")).Is_Empty
+                       then "task integrate " & Id
+                       else "it conflicts with the project in "
+                            & Joined (Workspaces.Conflict_Files
+                                        (Item, Records.Get (Runtime_Value, "current_workspace")),
+                                      ", ")
+                            & "; settle them in the workspace, then task integrate " & Id
+                            & " resolved")
                elsif State = "verification" then "it is being verified"
                elsif State = "complete" then "it is done"
                else "it is " & State

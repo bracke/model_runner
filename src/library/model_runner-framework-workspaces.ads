@@ -105,6 +105,19 @@ package Model_Runner.Framework.Workspaces is
    --  @return Each as the workspace's file, the project's and why.
    function Semantic_Conflicts (Item : Stores.Store; Id : String) return Name_Lists.Vector;
 
+   --  The files a workspace was last found in conflict over, as the last
+   --  integration that was refused for it found them.
+   --
+   --  @param Item The store.
+   --  @param Id The workspace.
+   --  @param Unsettled_Only Only those whose workspace copy has not
+   --    changed since: not settled yet.
+   --  @return Their paths.
+   function Conflict_Files
+     (Item           : Stores.Store;
+      Id             : String;
+      Unsettled_Only : Boolean := False) return Name_Lists.Vector;
+
    --  Remove an integrated workspace's tree, once its integration is
    --  kept: until then the work is still there to take in again.
    --

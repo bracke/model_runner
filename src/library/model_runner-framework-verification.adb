@@ -1831,9 +1831,13 @@ package body Model_Runner.Framework.Verification is
             begin
                if Latest = Null_Unbounded_String or else Id > To_String (Latest) then
                   Stores.Read (Item, Verification_Area, Id, Value, Read);
+                  --  A run of the whole suite: for no task, or chosen so,
+                  --  or run with no tests picked out -- task verify and a
+                  --  requirement's check among them.
                   if E.Is_Ok (Read)
                     and then (Records.Get (Value, "task") = ""
-                              or else Records.Get (Value, "given.scope") = "full_suite")
+                              or else Records.Get (Value, "given.scope") = "full_suite"
+                              or else Records.Get (Value, "given.tests") = "")
                     and then Records.Get (Value, "workspace") = ""
                     and then Records.Get (Config (Item), "scalar.profile_capability."
                                                          & Records.Get (Value, "profile"))
@@ -1919,8 +1923,11 @@ package body Model_Runner.Framework.Verification is
                      return Lacks (Id & " has no evidence; task verify " & Id & " takes it");
                   end if;
                   Stores.Read (Item, Verification_Area, Evidence, Value, Read);
+                  --  Stale or failed, and a later whole run passed over the
+                  --  files as they are: that stands for it.
                   if Standing /= Null_Unbounded_String and then To_String (Standing) > Evidence
-                    and then not Is_Current (Item, Evidence, Reasons, Configuration)
+                    and then (not Is_Current (Item, Evidence, Reasons, Configuration)
+                              or else Records.Get (Value, "passed") /= "true")
                   then
                      --  Stale, and stood for by later evidence over it.
                      Stood_For := True;
@@ -2008,6 +2015,37 @@ package body Model_Runner.Framework.Verification is
       Why := Null_Unbounded_String;
       return To_String (Found);
    end Support;
+
+   ------------------
+   -- Passed_After --
+   ------------------
+
+   function Passed_After (Item : Stores.Store; Evidence : String) return Boolean is
+   begin
+      for Name of Stores.Names (Item, Verification_Area) loop
+         declare
+            Id    : constant String :=
+              (if Name'Length > 4 and then Name (Name'Last - 3 .. Name'Last) = ".rec"
+               then Name (Name'First .. Name'Last - 4) else Name);
+            Value : Records.Item;
+            Read  : E.Error_Info;
+         begin
+            if Id > Evidence then
+               Stores.Read (Item, Verification_Area, Id, Value, Read);
+               if E.Is_Ok (Read) and then Records.Get (Value, "passed") = "true"
+                 and then Records.Get (Value, "workspace") = ""
+                 and then (Records.Get (Value, "task") = ""
+                           or else Records.Get (Value, "given.scope") = "full_suite"
+                           or else Records.Get (Value, "given.tests") = "")
+                 and then Showing (Item, Value) = Tests_Ran
+               then
+                  return True;
+               end if;
+            end if;
+         end;
+      end loop;
+      return False;
+   end Passed_After;
 
    ----------------------
    -- Why_Not_Verified --

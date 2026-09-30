@@ -1782,6 +1782,47 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Seventh usability round:**
+  - The audit gives each attempt as the state it left the task in, and
+    `result` counts spec and decision issues as acted on, and an issue a
+    later one about the same entry overtakes.
+  - Permission warnings name what is actually granted, once a level; the
+    project's old values read "the default".
+  - A session refuses `--directory` on its commands, and `/init` says to
+    start a session there; `overrides=` makes the later of two equal
+    decisions govern, and a settling hint keeps what it overrides already.
+  - A blank line ends a list in an answer, so a log after it is not read as
+    files; a false claim names ten files at most.
+  - Work waiting in a workspace is not given up by `task cancel` or
+    `task move … failed` without `anyway`.
+  - `roots=docs/ src/` keeps both roots; an agent that may not make
+    children has its parts made as proposals of their own, with no parent.
+  - A passing whole-suite run -- `check full`, `task verify` or a check with
+    no tests picked out -- stands for older failed or stale task evidence;
+    `state`, `req` and `check consistency` judge verification alike, and say
+    the same reason.
+  - Next steps: `task reopen` for a cancelled task, a split parent goes on,
+    `task complete` after `task verify` passes, a waiting task says what it
+    waits for; a conflict found is recorded, `show` names it, and
+    `resolved` says when a file was never settled; a given-up workspace
+    names what was lost with it.
+  - `work TITLE` finds a task in any state and says why it cannot be worked;
+    it says when it took the only accepted one of several.
+  - `task plan` lists failed tasks and work waiting to be taken in, and a
+    task moved to blocked by hand; files changed and not reported are said.
+  - Proposals from a finished task are offered as `task new` lines; the
+    sandbox is named where it refused parts or a file; `task show` names the
+    sandbox, and one that does not read; a kind asking more than the project
+    is clamped, not reported as broken; a helper stopped by a cancel says so.
+  - `task edit` with nothing to change makes no revision; `task rehome`
+    leaves tasks whose requirement belongs elsewhere.
+  - A document is a source in impact; a document still defining a retired
+    requirement raises an issue.
+  - A project named after a language unit or an Ada reserved word is
+    refused at `init`; quotes inside `text=` and `criteria=` are kept.
+  - Esc or Ctrl-C drops only what was typed before it, and the note names
+    the key; `reconfigure` value errors name the setting; unknown IDs in
+    `overrides=` are said.
 - **Sixth usability round:**
   - An answer given as a JSON object, bare or in a fence, one line or many,
     is read as the contract's lines, lists and objects in lists included.

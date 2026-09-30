@@ -237,6 +237,14 @@ package Model_Runner.Framework.Verification is
       Evidence : String;
       Lines    : Positive := 6) return Name_Lists.Vector;
 
+   --  Whether a run of the whole suite that passed was taken after
+   --  evidence: what a later check says of the files stands for it.
+   --
+   --  @param Item The store.
+   --  @param Evidence The evidence.
+   --  @return True when one was.
+   function Passed_After (Item : Stores.Store; Evidence : String) return Boolean;
+
    --  Whether evidence still applies: the same files, configuration and
    --  requirement revisions as when it was gathered.
    --

@@ -1,4 +1,6 @@
 with Ada.Command_Line;
+with Ada.Strings.Fixed;
+with Ada.Strings.Unbounded;
 with Ada.Unchecked_Deallocation;
 
 package body Model_Runner.CLI.Options is
@@ -2756,9 +2758,24 @@ package body Model_Runner.CLI.Options is
                      end if;
                      Result.Action := T.To_Bounded (Argument);
                   else
-                     Result.Action_Argument := T.To_Bounded
-                       (T.To_String (Result.Action_Argument)
-                        & (if T.Is_Empty (Result.Action_Argument) then "" else " ") & Argument);
+                     --  Each word as the shell gave it: its quotes kept as
+                     --  quotes, and one with spaces kept whole.
+                     declare
+                        Escaped : Ada.Strings.Unbounded.Unbounded_String;
+                     begin
+                        for C of Argument loop
+                           if C in '"' | '\' then
+                              Ada.Strings.Unbounded.Append (Escaped, '\');
+                           end if;
+                           Ada.Strings.Unbounded.Append (Escaped, C);
+                        end loop;
+                        Result.Action_Argument := T.To_Bounded
+                          (T.To_String (Result.Action_Argument)
+                           & (if T.Is_Empty (Result.Action_Argument) then "" else " ")
+                           & (if Ada.Strings.Fixed.Index (Argument, " ") > 0
+                              then '"' & Ada.Strings.Unbounded.To_String (Escaped) & '"'
+                              else Ada.Strings.Unbounded.To_String (Escaped)));
+                     end;
                   end if;
 
                elsif Operands = 2 and then Result.Kind = Command_Work then
@@ -2783,7 +2800,7 @@ package body Model_Runner.CLI.Options is
 
                elsif Operands > 3 and then Result.Kind = Command_Task
                  and then T.To_String (Result.Action) in "depend" | "split" | "move" | "integrate"
-                                                        | "rehome"
+                                                        | "rehome" | "cancel"
                then
                   --  What the task waits for, its parts' titles, the state it
                   --  moves to, or anyway: the rest of the words, as they were

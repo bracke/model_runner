@@ -383,6 +383,12 @@ package body Model_Runner.Presentation is
       return Ada.Strings.Unbounded.To_String (Result);
    end As_Typed_In_Session;
 
+   ----------------
+   -- In_Session --
+   ----------------
+
+   function In_Session (Item : Console) return Boolean is (Item.Session);
+
    ------------------
    -- Session_Form --
    ------------------

@@ -572,9 +572,11 @@ package body Model_Runner.CLI.Project_Commands is
       then
          Put ("error: " & Pm.Path_Refusal (".", Path, Writing => Named = "write_file"));
       elsif Named in "read_file" | "list_directory" and then not May (Reading => True) then
-         Put ("error: you may not read " & Path);
+         Put ("error: you may not read " & Path
+              & (if Pm.Sandbox_Refuses (Path, False) then " (the sandbox confines it)" else ""));
       elsif Named = "write_file" and then not May (Reading => False) then
-         Put ("error: you may not write " & Path);
+         Put ("error: you may not write " & Path
+              & (if Pm.Sandbox_Refuses (Path, True) then " (the sandbox confines it)" else ""));
       else
          Model_Runner.Tools.Builtin.Run
            (Model_Runner.Tools.Builtin.Instance (Self), Named, Arguments, Result, Last,
@@ -745,9 +747,20 @@ package body Model_Runner.CLI.Project_Commands is
       Current : Unbounded_String;
       Quoted  : Boolean := False;
       Started : Boolean := False;
+      Escape  : Boolean := False;
    begin
       for Char of Line loop
-         if Char = '"' then
+         --  A quote or a backslash after a backslash is itself.
+         if Escape then
+            if Char not in '"' | '\' then
+               Append (Current, '\');
+            end if;
+            Append (Current, Char);
+            Started := True;
+            Escape := False;
+         elsif Char = '\' then
+            Escape := True;
+         elsif Char = '"' then
             Quoted := not Quoted;
             Started := True;
          elsif Char in ' ' | ASCII.HT and then not Quoted then
@@ -761,6 +774,10 @@ package body Model_Runner.CLI.Project_Commands is
             Started := True;
          end if;
       end loop;
+      if Escape then
+         Append (Current, '\');
+         Started := True;
+      end if;
       if Started then
          Result.Append (To_String (Current));
       end if;
@@ -902,7 +919,12 @@ package body Model_Runner.CLI.Project_Commands is
                   Image (Natural (Nt.List (Store, Nt.Requirement, "verified").Length)));
          --  Done and not verified: each, and how it is.
          for Id of Nt.List (Store, Nt.Requirement, "implemented") loop
-            Pres.Put_Note (Screen, "cli.project.not_verified", [Loc.Named ("name", Id)]);
+            Pres.Put_Note (Screen, "cli.project.not_verified",
+                           [Loc.Named ("name", Id),
+                            Loc.Named ("detail",
+                                       (if Vf.Why_Not_Verified (Store, Id) = ""
+                                        then "its evidence holds; check " & Id & " records it verified"
+                                        else Vf.Why_Not_Verified (Store, Id)))]);
          end loop;
          --  Recorded verified, and its evidence no longer holds: said, not
          --  counted on until it is judged again.
@@ -1170,11 +1192,11 @@ package body Model_Runner.CLI.Project_Commands is
                   Named : constant String :=
                     (if Colon > Summary'First then Summary (Summary'First .. Colon - 1) else "");
                   Kind  : constant Nt.Intent_Kind :=
-                    (if Ada.Strings.Fixed.Index (Named, "DEC-") = 1 then Nt.Decision
-                     elsif Ada.Strings.Fixed.Index (Named, "SPEC-") = 1 then Nt.Specification
+                    (if Ada.Strings.Fixed.Index (Named, "DEC-") = Named'First then Nt.Decision
+                     elsif Ada.Strings.Fixed.Index (Named, "SPEC-") = Named'First then Nt.Specification
                      else Nt.Requirement);
                begin
-                  if Ada.Strings.Fixed.Index (Summary, "output of ") = 1 then
+                  if Ada.Strings.Fixed.Index (Summary, "output of ") = Summary'First then
                      return True;
                   end if;
                   --  A document's words a register did not hold, which it
@@ -1189,16 +1211,51 @@ package body Model_Runner.CLI.Project_Commands is
                            Entry_Id : constant String :=
                              (if Space = 0 then Rest else Rest (Rest'First .. Space - 1));
                            Of_Kind : constant Nt.Intent_Kind :=
-                             (if Ada.Strings.Fixed.Index (Entry_Id, "DEC-") = 1 then Nt.Decision
-                              elsif Ada.Strings.Fixed.Index (Entry_Id, "SPEC-") = 1
+                             (if Ada.Strings.Fixed.Index (Entry_Id, "DEC-") = Entry_Id'First then Nt.Decision
+                              elsif Ada.Strings.Fixed.Index (Entry_Id, "SPEC-") = Entry_Id'First
                               then Nt.Specification
                               else Nt.Requirement);
                            Held   : Nt.Entity;
                            Got    : E.Error_Info;
                            Issue  : Rs.Result;
+
+                           --  A later issue says what the document says now:
+                           --  this one is behind it.
+                           function Overtaken return Boolean is
+                           begin
+                              for Other_Name of S.Names (Store, Model_Runner.Framework.Results_Area)
+                              loop
+                                 declare
+                                    Other_Id : constant String :=
+                                      (if Other_Name'Length > 4
+                                         and then Other_Name (Other_Name'Last - 3 .. Other_Name'Last)
+                                                  = ".rec"
+                                       then Other_Name (Other_Name'First .. Other_Name'Last - 4)
+                                       else Other_Name);
+                                    Other : Rs.Result;
+                                    Read  : E.Error_Info;
+                                 begin
+                                    if Other_Id /= Issue_Id then
+                                       Rs.Read (Store, Other_Id, Other, Read, With_Payload => False);
+                                       if E.Is_Ok (Read)
+                                         and then Ada.Strings.Fixed.Index
+                                                    (To_String (Other.Summary),
+                                                     " now says what " & Entry_Id & " ") > 0
+                                         and then Other.Created_At > Issue.Created_At
+                                       then
+                                          return True;
+                                       end if;
+                                    end if;
+                                 end;
+                              end loop;
+                              return False;
+                           end Overtaken;
                         begin
                            Nt.Read (Store, Of_Kind, Entry_Id, Held, Got);
                            Rs.Read (Store, Issue_Id, Issue, Got);
+                           if E.Is_Ok (Got) and then Overtaken then
+                              return True;
+                           end if;
                            return E.Is_Ok (Got)
                              and then (To_String (Held.State) in "obsolete" | "superseded" | "rejected"
                                        or else Names."="
@@ -1679,8 +1736,11 @@ package body Model_Runner.CLI.Project_Commands is
                      --  A name with no value: a value is what a change is.
                      Read := E.Make (E.CLI_Invalid_Option_Value);
                      E.Add_Text (Read, "option", Part);
-                     E.Add_Text (Read, "value", "a setting is changed as " & Part & "=VALUE"
-                                 & "; config " & Part & " shows what it is");
+                     E.Add_Text (Read, "value",
+                                 (if Part (Part'First) = '='
+                                  then "a setting is named before its =, as NAME=VALUE"
+                                  else "a setting is changed as " & Part & "=VALUE; config "
+                                       & Part & " shows what it is"));
                      Pres.Report (Screen, Read);
                      return;
                   end if;
@@ -1846,51 +1906,56 @@ package body Model_Runner.CLI.Project_Commands is
 
          --  A kind or a role granted more than the project allows gets
          --  only what the project allows: said, with what it gets.
-         for Name of Planned.Changed loop
-            declare
-               package Pm renames Model_Runner.Framework.Permissions;
-               Prefix : constant String := "map.permission.";
-               Rest   : constant String :=
-                 (if Ada.Strings.Fixed.Index (Name, Prefix) = 1
-                  then Name (Name'First + Prefix'Length .. Name'Last) else "");
-               Colon  : constant Natural := Ada.Strings.Fixed.Index (Rest, ":");
-               Key    : constant String := (if Colon = 0 then Rest else Rest (Rest'First .. Colon - 1));
-               Dot    : constant Natural := Ada.Strings.Fixed.Index (Key, ".", Ada.Strings.Backward);
-               Level  : constant String := (if Dot = 0 then "" else Key (Key'First .. Dot - 1));
-            begin
-               if Level'Length > 5 and then Level (Level'First .. Level'First + 4) in "kind." | "role."
-               then
-                  declare
-                     Present : Boolean;
-                     Given   : constant Pm.Permission_Set := Pm.Level_Of (Store, Level, Present);
-                     Project : constant Pm.Permission_Set :=
-                       Pm.Effective (Store, "", "", Within_Sandbox => False);
-                     Wider   : constant String := Pm.Widening (Given, Project);
+         declare
+            Warned : Names.Vector;
+         begin
+            for Name of Planned.Changed loop
+               declare
+                  package Pm renames Model_Runner.Framework.Permissions;
+                  Prefix : constant String := "map.permission.";
+                  Rest   : constant String :=
+                    (if Ada.Strings.Fixed.Index (Name, Prefix) = 1
+                     then Name (Name'First + Prefix'Length .. Name'Last) else "");
+                  Colon  : constant Natural := Ada.Strings.Fixed.Index (Rest, ":");
+                  Key    : constant String := (if Colon = 0 then Rest else Rest (Rest'First .. Colon - 1));
+                  Dot    : constant Natural := Ada.Strings.Fixed.Index (Key, ".", Ada.Strings.Backward);
+                  Level  : constant String := (if Dot = 0 then "" else Key (Key'First .. Dot - 1));
+               begin
+                  if Level'Length > 5 and then Level (Level'First .. Level'First + 4) in "kind." | "role."
+                  then
+                     declare
+                        Present : Boolean;
+                        Given   : constant Pm.Permission_Set := Pm.Level_Of (Store, Level, Present);
+                        Project : constant Pm.Permission_Set :=
+                          Pm.Effective (Store, "", "", Within_Sandbox => False);
+                        Wider   : constant String := Pm.Widening (Given, Project);
 
-                     --  What it gets of that capability: the line of it the
-                     --  project allows, or nothing.
-                     function Gets return String is
+                        --  What it gets of that capability: the line of it the
+                        --  project allows, or nothing.
+                        function Gets return String is
+                        begin
+                           for Line of Model_Runner.Framework.Lines_Of
+                             (Pm.Image (Pm.Intersect (Given, Project)))
+                           loop
+                              if Ada.Strings.Fixed.Index (Line, Wider) = Line'First then
+                                 return Line;
+                              end if;
+                           end loop;
+                           return "no " & Wider & " at all";
+                        end Gets;
                      begin
-                        for Line of Model_Runner.Framework.Lines_Of
-                          (Pm.Image (Pm.Intersect (Given, Project)))
-                        loop
-                           if Ada.Strings.Fixed.Index (Line, Wider) = 1 then
-                              return Line;
-                           end if;
-                        end loop;
-                        return "no " & Wider & " at all";
-                     end Gets;
-                  begin
-                     if Present and then Wider /= "" then
-                        Pres.Put_Note
-                          (Screen, "cli.project.clipped",
-                           [Loc.Named ("name", Level), Loc.Named ("value", Wider),
-                            Loc.Named ("detail", Gets)]);
-                     end if;
-                  end;
-               end if;
-            end;
-         end loop;
+                        if Present and then Wider /= "" and then not Warned.Contains (Level) then
+                           Warned.Append (Level);
+                           Pres.Put_Note
+                             (Screen, "cli.project.clipped",
+                              [Loc.Named ("name", Level), Loc.Named ("value", Wider),
+                               Loc.Named ("detail", Gets)]);
+                        end if;
+                     end;
+                  end if;
+               end;
+            end loop;
+         end;
          declare
             Written : Boolean;
          begin
@@ -2116,6 +2181,17 @@ package body Model_Runner.CLI.Project_Commands is
             end if;
          end;
       end loop;
+
+      --  A session works in the directory it was started in: another is
+      --  refused by name, not worked in unasked or taken for text.
+      if Word /= "/init" and then All_Words.Contains ("--directory") then
+         Outcome := E.Make (E.CLI_Option_Not_For_Command);
+         E.Add_Text (Outcome, "value", Word);
+         E.Add_Text (Outcome, "option", "--directory");
+         Pres.Report (Screen, Outcome);
+         Pres.Put_Note (Screen, "cli.next.session_directory");
+         return;
+      end if;
 
       if Word = "/init" then
          Command.Kind := Opt.Command_Init;

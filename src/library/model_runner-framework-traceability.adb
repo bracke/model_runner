@@ -137,6 +137,12 @@ package body Model_Runner.Framework.Traceability is
                      Link (Result, Node, "component:" & To_String (Held.Scope), "scope",
                            Repository.Explicit, Repository.Certain, Id);
                   end if;
+                  --  The document it was read from says it: a change there
+                  --  reaches it.
+                  if To_String (Held.Source) /= "" then
+                     Link (Result, "file:" & To_String (Held.Source), Node, "sources",
+                           Repository.Explicit, Repository.Certain, Id);
+                  end if;
                   for Target of Intent.Links (Item, Intent.Requirement, Id,
                                               Intent.Implementation)
                   loop
@@ -248,6 +254,10 @@ package body Model_Runner.Framework.Traceability is
                         (if To_String (Held.Scope) = "project" then "project"
                          else "component:" & To_String (Held.Scope)),
                         "applies_to", Repository.Explicit, Repository.Certain, Id);
+                  if To_String (Held.Source) /= "" then
+                     Link (Result, "file:" & To_String (Held.Source), Id & "@" & Image (Held.Revision),
+                           "sources", Repository.Explicit, Repository.Certain, Id);
+                  end if;
                end;
             end loop;
          end if;
@@ -393,7 +403,7 @@ package body Model_Runner.Framework.Traceability is
       --  reach it; and forward from a requirement to the tests it names,
       --  which are its explicitly and before any a dependency finds.
       function Forward (Kind : String) return Boolean
-      is (Kind in "contains" | "implements" | "declares" | "tested_by" | "served_by");
+      is (Kind in "contains" | "implements" | "declares" | "tested_by" | "served_by" | "sources");
 
       --  A file and its units reach each other either way: a changed spec
       --  reaches its body, and a dependent unit reaches its files, tests

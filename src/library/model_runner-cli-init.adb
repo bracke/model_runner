@@ -514,7 +514,11 @@ package body Model_Runner.CLI.Init is
       Pres.Put_Note (Screen, "cli.next.init");
       --  Started elsewhere: each of those in the directory it names.
       if not T.Is_Empty (Item.Project_Directory) then
-         Pres.Put_Note (Screen, "cli.next.in_directory", [Loc.Named ("path", Directory)]);
+         Pres.Put_Note
+           (Screen,
+            (if Pres.In_Session (Screen) then "cli.next.in_directory_session"
+             else "cli.next.in_directory"),
+            [Loc.Named ("path", Directory)]);
       end if;
 
       S.Close (Store);

@@ -904,17 +904,24 @@ package body Model_Runner.CLI.Interactive is
                   end Cleaned;
                   Typed : constant String := Cleaned (Room (1 .. Stop));
 
-                  --  Esc on a line drops what is being typed, as does Ctrl-C
-                  --  where the terminal passes it on as a character.
-                  Escaped : constant Boolean :=
-                    Ada.Strings.Fixed.Index (Typed, [1 => ASCII.ESC]) > 0
-                    or else Ada.Strings.Fixed.Index (Typed, [1 => ASCII.ETX]) > 0;
-                  Line    : constant String := (if Escaped then "" else Typed);
+                  --  Esc on a line drops what was typed before it, as does
+                  --  Ctrl-C where the terminal passes it on as a character;
+                  --  what follows the last of them is the line.
+                  Last_Key : constant Natural :=
+                    Natural'Max
+                      (Ada.Strings.Fixed.Index (Typed, [1 => ASCII.ESC], Ada.Strings.Backward),
+                       Ada.Strings.Fixed.Index (Typed, [1 => ASCII.ETX], Ada.Strings.Backward));
+                  Line     : constant String :=
+                    (if Last_Key = 0 then Typed else Typed (Last_Key + 1 .. Typed'Last));
                begin
-                  if Escaped then
+                  if Last_Key > 0 then
                      Taken (Typing);
-                     Pres.Put_Note (Screen, "cli.interactive.dropped");
-                     goto Next_Line;
+                     Pres.Put_Note
+                       (Screen, "cli.interactive.dropped_key",
+                        [Loc.Named ("name", (if Typed (Last_Key) = ASCII.ESC then "Esc" else "Ctrl-C"))]);
+                     if Line = "" then
+                        goto Next_Line;
+                     end if;
                   end if;
                   --  Ctrl-C while a prompt was being typed drops it: the
                   --  line after starts afresh.

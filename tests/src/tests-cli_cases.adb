@@ -1643,7 +1643,7 @@ package body Tests.CLI_Cases is
       --  its text.
       Assert (Command ("work|no such thing", Json => True) /= 0
               and then Shows ("""kind"": ""error""") and then Shows ("MR-FRAMEWORK")
-              and then Shows ("""name"": ""an accepted task matching no such thing"""),
+              and then Shows ("""name"": ""a task matching no such thing"""),
               "work given text naming nothing did not say so, with what it names, as JSON: "
               & Last_Output);
 
@@ -2010,7 +2010,8 @@ package body Tests.CLI_Cases is
       --     once they are done.
       Agent ("split.sh", "status: blocked\nsummary: too large\nparts:\nFirst part\nSecond part\n");
       Run ("reconfigure|work.agent=" & Root & "/split.sh $PROMPT|confirm=yes");
-      Run ("task|new|Big|--set|kind=analysis");
+      --  Of a kind whose agent may make children: its parts are children.
+      Run ("task|new|Big|--set|kind=implementation");
       Run ("task|accept|TASK-003");
       Run ("work|TASK-003");
       Assert (Code = 0 and then Shows ("waiting for its children"),

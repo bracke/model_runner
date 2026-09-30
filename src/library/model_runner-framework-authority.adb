@@ -320,6 +320,14 @@ package body Model_Runner.Framework.Authority is
                Result.Governing.Append (Next);
             elsif Next.Standing < Result.Governing (Held).Standing then
                Result.Governing (Held) := Next;
+
+            --  Of equals, one that says it holds over the other does, which
+            --  ever was given first.
+            elsif Next.Standing = Result.Governing (Held).Standing
+              and then Overrides (Next, Result.Governing (Held))
+              and then not Overrides (Result.Governing (Held), Next)
+            then
+               Result.Governing (Held) := Next;
             end if;
          end;
       end loop;

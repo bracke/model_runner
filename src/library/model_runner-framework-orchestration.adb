@@ -287,8 +287,10 @@ package body Model_Runner.Framework.Orchestration is
                  (To_String (Next.Id) & ": "
                   & (if Result.Start.Is_Empty
                      then Tasks.List (Item, "running").First_Element
-                     else Result.Start.First_Element)
-                  & " is writing in the project; one task writes in it at a time");
+                          & " is writing in the project"
+                     else "would wait for " & Result.Start.First_Element
+                          & ", planned before it, to write in the project first")
+                  & "; one task writes in it at a time");
             elsif not Isolated and then Component /= "" and then Taken.Contains (Component)
             then
                Result.Held.Append
@@ -320,7 +322,37 @@ package body Model_Runner.Framework.Orchestration is
             Status : E.Error_Info;
          begin
             Stores.Read (Item, Tasks_Area, Id & ".state", Value, Status);
-            Result.Append (Id & ": blocked, " & Records.Get (Value, "blocking_reasons"));
+            Result.Append (Id & ": blocked, "
+                           & (if Records.Get (Value, "blocking_reasons") = ""
+                              then "moved there by hand; task accept " & Id & " takes it up again"
+                              else Records.Get (Value, "blocking_reasons")));
+         end;
+      end loop;
+      --  Failed: tried again, or done by hand.
+      for Id of Tasks.List (Item, "failed") loop
+         declare
+            Value  : Records.Item;
+            Status : E.Error_Info;
+         begin
+            Stores.Read (Item, Tasks_Area, Id & ".state", Value, Status);
+            Result.Append (Id & ": failed"
+                           & (if Records.Get (Value, "current_failure") = "" then ""
+                              else ", " & Records.Get (Value, "current_failure"))
+                           & "; task accept " & Id & " tries again, task complete " & Id
+                           & " once it is done by hand");
+         end;
+      end loop;
+      --  Waiting in a workspace to be taken in.
+      for Id of Tasks.List (Item, "verification") loop
+         declare
+            Value  : Records.Item;
+            Status : E.Error_Info;
+         begin
+            Stores.Read (Item, Tasks_Area, Id & ".state", Value, Status);
+            if Records.Get (Value, "current_workspace") /= "" then
+               Result.Append (Id & ": its work waits in " & Records.Get (Value, "current_workspace")
+                              & " to be taken in; task integrate " & Id);
+            end if;
          end;
       end loop;
       --  Within the project, and within each component.

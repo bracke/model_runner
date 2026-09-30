@@ -78,6 +78,10 @@ package body Model_Runner.Framework.Permissions is
    --  profiles=P|Q, max_depth=N, max_children=N, separated by commas.
    function Constrained (Text : String) return Grant is
       Result : Grant := (Granted => True, others => <>);
+
+      --  A word with no = after roots=, deny= or profiles= is one more of
+      --  them: roots=docs/ src/ as roots=docs/|src/.
+      Last_Key : Unbounded_String;
    begin
       --  A comma or a space apart: max_depth=1 max_children=2 as well.
       for Pair of Parts (Ada.Strings.Fixed.Translate
@@ -93,6 +97,17 @@ package body Model_Runner.Framework.Permissions is
                  and then (for all C of Value => C in '0' .. '9')
                then Natural'Value (Value) else Natural'Last);
          begin
+            if Equal = 0 and then To_String (Last_Key) in "roots" | "deny" | "profiles" then
+               if To_String (Last_Key) = "roots" then
+                  Result.Roots.Append (Pair);
+               elsif To_String (Last_Key) = "deny" then
+                  Result.Deny.Append (Pair);
+               else
+                  Result.Profiles.Append (Pair);
+               end if;
+               goto Next_Pair;
+            end if;
+            Last_Key := To_Unbounded_String (Key);
             if Key = "roots" then
                Result.Roots := Parts (Value, '|');
             elsif Key = "deny" then
@@ -105,6 +120,7 @@ package body Model_Runner.Framework.Permissions is
                Result.Max_Children := Count;
             end if;
          end;
+         <<Next_Pair>>
       end loop;
       return Result;
    end Constrained;
@@ -695,13 +711,13 @@ package body Model_Runner.Framework.Permissions is
         and then not Allows (Allowed, Write_Specs, Path)
       then
          return "you may not write " & Path
-           & (if Sandbox_Refuses (Path, True) then " (the session's sandbox confines it)" else "");
+           & (if Sandbox_Refuses (Path, True) then " (the sandbox confines it)" else "");
       elsif not Writing
         and then not Allows (Allowed, Read_Source, Path)
         and then not Allows (Allowed, Read_Specs, Path)
       then
          return "you may not read " & Path
-           & (if Sandbox_Refuses (Path, False) then " (the session's sandbox confines it)" else "");
+           & (if Sandbox_Refuses (Path, False) then " (the sandbox confines it)" else "");
       end if;
       return "";
    end Path_Refusal;

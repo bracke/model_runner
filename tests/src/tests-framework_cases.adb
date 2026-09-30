@@ -3866,9 +3866,11 @@ package body Tests.Framework_Cases is
       Cf.Initialize (Store, Project, Planned, Done, Status);
       --  What the configuration says and is not granted is said, and the
       --  project stands: its state came out whole.
+      --  A kind asking more than the project allows is given what the
+      --  project allows: clamped, and nothing that does not hold together.
       Assert (E.Is_Ok (Status)
-              and then not Done.Findings.Is_Empty
-              and then Ada.Strings.Fixed.Index (Done.Findings.First_Element, "permission_widening") > 0
+              and then not (for some Line of Done.Findings =>
+                              Ada.Strings.Fixed.Index (Line, "permission_widening") > 0)
               and then S.Is_Initialized (Project)
               and then Dirs.Exists (Project & "/NOTES.txt"),
               "what the check of a sound initialization found was not said, or it was undone: "
@@ -5644,7 +5646,7 @@ package body Tests.Framework_Cases is
             Widening := Widening
               or else Cn.Element (Findings, Index).Kind = Cn.Permission_Widening;
          end loop;
-         Assert (Widening, "configuration that tries to widen was not found");
+         Assert (not Widening, "configuration clamped to the project's was taken for broken");
       end;
 
       --  The run's own sandbox is the lowest level: set, it narrows every
@@ -8163,8 +8165,8 @@ package body Tests.Framework_Cases is
                  "a task complete with no evidence its gates want went unseen");
          Assert (Has (Cs.Invalid_Task_Field, To_String (First)),
                  "a field value its schema does not take went unseen");
-         Assert (Has (Cs.Permission_Widening, "role.helper"),
-                 "a role granting beyond the project went unseen");
+         Assert (not Has (Cs.Permission_Widening, "role.helper"),
+                 "a role clamped to the project's was taken for broken");
       end;
       S.Close (Store);
    end Consistency_Sees_Components_And_Readiness;
@@ -8497,6 +8499,9 @@ package body Tests.Framework_Cases is
       Assert (Ada.Strings.Fixed.Index (Vf.Why_Not_Verified (Store, To_String (Req)), "no task serves it")
               > 0,
               "a requirement nothing serves did not say so: " & Vf.Why_Not_Verified (Store, To_String (Req)));
+      Assert (not Vf.Passed_After (Store, "VER-999999")
+              and then Model_Runner.Framework.Workspaces.Conflict_Files (Store, "WS-999999").Is_Empty,
+              "a later passing run, or a conflict, was found where there is none");
       S.Close (Store);
 
       --  In a session, a next step is the command typed there.
@@ -8513,6 +8518,7 @@ package body Tests.Framework_Cases is
              Input_Is_Terminal  => False, Colour_Suppressed => True),
             Model_Runner.CLI.Options.Normal);
          Model_Runner.Presentation.Use_Session (Screen, True);
+         Assert (Model_Runner.Presentation.In_Session (Screen), "a session was not said to be one");
          Create (Said, Out_File, "obj/session-next.txt");
          Set_Error (Said);
          Model_Runner.Presentation.Put_Note

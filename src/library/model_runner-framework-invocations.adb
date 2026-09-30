@@ -359,7 +359,13 @@ package body Model_Runner.Framework.Invocations is
               or else (Bare'Length >= 2 and then Bare (Bare'First) = '{'
                        and then Bare (Bare'Last) = '}' and then Name = "");
          begin
-            if Frame then
+            --  A blank line ends a list: what follows it -- a log, the
+            --  rest of a report -- is none of its items.
+            if Bare = "" and then To_String (Current) in "changed_files" | "proposed_tasks" | "parts"
+                                                     | "waits_for" | "decisions" | "specifications"
+            then
+               Current := Null_Unbounded_String;
+            elsif Frame then
                Current := Null_Unbounded_String;
             elsif Name /= "" and then Rules.Fields.Contains (Name) then
                Current := To_Unbounded_String (Name);

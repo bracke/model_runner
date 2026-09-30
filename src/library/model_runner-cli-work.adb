@@ -38,6 +38,7 @@ package body Model_Runner.CLI.Work is
 
    package E renames Model_Runner.Errors;
    package Loc renames Model_Runner.Localization;
+   package Pm renames Model_Runner.Framework.Permissions;
    package Pres renames Model_Runner.Presentation;
    package R renames Model_Runner.Framework.Records;
    package S renames Model_Runner.Framework.Stores;
@@ -658,7 +659,25 @@ package body Model_Runner.CLI.Work is
             Wanted : constant String :=
               Ada.Characters.Handling.To_Lower (To_String (Chosen));
             Found  : Unbounded_String;
+
+            --  Every task it matches, whatever its state: one that is not
+            --  accepted is said as it is, not missed.
+            Any_State : Model_Runner.Framework.Name_Lists.Vector;
          begin
+            for Id of Tk.List (Store) loop
+               declare
+                  Defined : R.Item;
+                  Read    : E.Error_Info;
+               begin
+                  Tk.Definition (Store, Id, Defined, Read);
+                  if Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Id), Wanted) > 0
+                    or else Ada.Strings.Fixed.Index
+                              (Ada.Characters.Handling.To_Lower (R.Get (Defined, "title")), Wanted) > 0
+                  then
+                     Any_State.Append (Id);
+                  end if;
+               end;
+            end loop;
             for Id of Tk.List (Store, "accepted") loop
                declare
                   Defined : R.Item;
@@ -675,14 +694,26 @@ package body Model_Runner.CLI.Work is
                   end if;
                end;
             end loop;
-            if Matching.Is_Empty then
+            if Matching.Is_Empty and then Natural (Any_State.Length) = 1 then
+               --  The one task it names, not accepted: taken, to be said
+               --  why it cannot be worked and what makes it workable.
+               Chosen := To_Unbounded_String (Any_State.First_Element);
+            elsif Matching.Is_Empty then
                Outcome := E.Make (E.Framework_Not_Found);
-               E.Add_Text (Outcome, "name", "an accepted task matching " & To_String (Chosen));
+               E.Add_Text (Outcome, "name", "a task matching " & To_String (Chosen)
+                           & (if Any_State.Is_Empty then ""
+                              else " that is accepted (of those it matches, none is)"));
                Fail (Outcome);
                S.Close (Store);
                return;
             elsif Natural (Matching.Length) = 1 then
                Chosen := To_Unbounded_String (Matching.First_Element);
+               if Natural (Any_State.Length) > 1 then
+                  Pres.Put_Note
+                    (Screen, "cli.work.one_accepted",
+                     [Loc.Named ("name", To_String (Chosen)),
+                      Loc.Named ("count", T.Image (Long_Long_Integer (Natural (Any_State.Length))))]);
+               end if;
             elsif not Model_Runner.CLI.Choosers.Is_Available (Screen) then
                --  Which it could be, as a value of its own for a program.
                Outcome := E.Make (E.Framework_Input_Invalid);
@@ -1089,6 +1120,17 @@ package body Model_Runner.CLI.Work is
                   Append (Listed, (if Listed = Null_Unbounded_String then "" else "; ") & Title);
                end loop;
                Tk.Definition (Store, To_String (Done.Task_Id), Defined, Read);
+               --  Its work done, what it would have added are tasks of their
+               --  own: each made by hand as a new one, not a split of it.
+               if To_String (Done.Final_State) in "complete" | "verification" then
+                  for Title of Titles loop
+                     Pres.Put_Note
+                       (Screen, "cli.next.task_new_for",
+                        [Loc.Named ("detail", Title), Loc.Named ("value", R.Get (Defined, "kind")),
+                         Loc.Named ("name", To_String (Done.Issue_Id))]);
+                  end loop;
+                  goto Refused_Said;
+               end if;
                declare
                   Kind  : constant String := R.Get (Defined, "kind");
                   Level : constant String :=
@@ -1101,7 +1143,15 @@ package body Model_Runner.CLI.Work is
                       Loc.Named ("value", To_String (Done.Issue_Id)),
                       Loc.Named ("detail", '"' & To_String (Listed) & '"'),
                       Loc.Named ("other",
-                                 (if R.Get (Defined, "permissions") /= ""
+                                 (if Pm."/=" (Pm.Sandbox, Pm.Unrestricted)
+                                    and then (not Pm.Allows (Pm.Sandbox, Pm.Propose_Tasks)
+                                              or else not Pm.Allows
+                                                    (Pm.Sandbox,
+                                                     Pm.Create_Children))
+                                  then "the sandbox withholds propose_tasks or create_children:"
+                                       & " /sandbox off lifts a session's, unsetting"
+                                       & " MODEL_RUNNER_SANDBOX the shell's"
+                                  elsif R.Get (Defined, "permissions") /= ""
                                   then "its own permissions limit it: task edit "
                                        & To_String (Done.Task_Id) & " --set permissions=... widens them"
                                   elsif Ada.Strings.Fixed.Index (To_String (Why), "max_depth") > 0
@@ -1112,6 +1162,7 @@ package body Model_Runner.CLI.Work is
                                   else "reconfigure map.permission.kind." & Kind
                                        & ".propose_tasks= lets its agent propose them"))]);
                end;
+               <<Refused_Said>>
             end;
          end if;
 

@@ -1,4 +1,5 @@
 with Ada.Characters.Handling;
+with Ada.Environment_Variables;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
 with Ada.Strings.Unbounded;
@@ -480,7 +481,7 @@ package body Model_Runner.CLI.Tasks is
                               for Line of Model_Runner.Framework.Lines_Of
                                 (Pm.Image (Pm.Intersect (Asked, Allowed)))
                               loop
-                                 if Ada.Strings.Fixed.Index (Line, Wider) = 1 then
+                                 if Ada.Strings.Fixed.Index (Line, Wider) = Line'First then
                                     return Line;
                                  end if;
                               end loop;
@@ -701,6 +702,31 @@ package body Model_Runner.CLI.Tasks is
                end if;
             end;
          end loop;
+         --  Nothing it would change: said, and no revision made.
+         declare
+            Defined : R.Item;
+            Read    : E.Error_Info;
+            Same    : Boolean := True;
+         begin
+            Tk.Definition (Store, Argument, Defined, Read);
+            for Position in Fields.Iterate loop
+               declare
+                  Name  : constant String :=
+                    Model_Runner.Framework.Configurations.Value_Maps.Key (Position);
+                  Given : constant String :=
+                    Model_Runner.Framework.Configurations.Value_Maps.Element (Position);
+                  Held  : constant String :=
+                    (if R.Has (Defined, Name) then R.Get (Defined, Name)
+                     else R.Get (Defined, "field." & Name));
+               begin
+                  Same := Same and then Ada.Strings.Fixed.Trim (Given, Ada.Strings.Both) = Held;
+               end;
+            end loop;
+            if E.Is_Ok (Read) and then Same then
+               Pres.Put_Note (Screen, "cli.task.unchanged", [Loc.Named ("name", Argument)]);
+               return;
+            end if;
+         end;
          Tk.Revise (Store, Change, Argument, Fields, Outcome);
          if E.Is_Ok (Outcome) then
             Commit;
@@ -732,7 +758,7 @@ package body Model_Runner.CLI.Tasks is
                      for Line of Model_Runner.Framework.Lines_Of
                        (Pm.Image (Pm.Intersect (Asked, Allowed)))
                      loop
-                        if Wider /= "" and then Ada.Strings.Fixed.Index (Line, Wider) = 1 then
+                        if Wider /= "" and then Ada.Strings.Fixed.Index (Line, Wider) = Line'First then
                            Gets := To_Unbounded_String (Line);
                         end if;
                      end loop;
@@ -854,6 +880,7 @@ package body Model_Runner.CLI.Tasks is
          Space   : constant Natural := Ada.Strings.Fixed.Index (After_First, " ");
          Moved   : Model_Runner.Framework.Name_Lists.Vector;
          Left    : Model_Runner.Framework.Name_Lists.Vector;
+         Kept_Home : Model_Runner.Framework.Name_Lists.Vector;
 
          procedure Refuse (Name, Value, Detail : String) is
          begin
@@ -885,13 +912,30 @@ package body Model_Runner.CLI.Tasks is
                if E.Is_Ok (Read) and then R.Get (Defined, "component") = First_Word then
                   if Tk.State_Of (Store, Id) in "complete" | "cancelled" | "rejected" then
                      Left.Append (Id);
+
+                  --  Serving a requirement that belongs to another component:
+                  --  its place is that one, not the one named here.
+                  elsif (for some Requirement of Model_Runner.Framework.Lines_Of
+                                                   (R.Get (Defined, "requirements")) =>
+                           (for some Linked of Model_Runner.Framework.Intent.Links
+                                                 (Store, Model_Runner.Framework.Intent.Requirement,
+                                                  Requirement,
+                                                  Model_Runner.Framework.Intent.Component) =>
+                              Linked /= After_First))
+                  then
+                     Kept_Home.Append (Id);
                   else
                      Moved.Append (Id);
                   end if;
                end if;
             end;
          end loop;
-         if Moved.Is_Empty then
+         if Moved.Is_Empty and then not Kept_Home.Is_Empty then
+            Refuse ("the component its tasks are in", First_Word,
+                    "its open tasks (" & Joined (Kept_Home) & ") serve requirements that belong"
+                    & " to another component; task edit ID --set component=NAME places one");
+            return;
+         elsif Moved.Is_Empty then
             Refuse ("the component its tasks are in", First_Word,
                     (if Left.Is_Empty then "no task is in it"
                      else "only ended tasks are in it (" & Joined (Left)
@@ -934,6 +978,10 @@ package body Model_Runner.CLI.Tasks is
          if not Left.Is_Empty then
             Pres.Put_Note (Screen, "cli.task.rehome_left",
                            [Loc.Named ("name", First_Word), Loc.Named ("detail", Joined (Left))]);
+         end if;
+         if not Kept_Home.Is_Empty then
+            Pres.Put_Note (Screen, "cli.task.rehome_kept",
+                           [Loc.Named ("name", First_Word), Loc.Named ("detail", Joined (Kept_Home))]);
          end if;
       end Rehome;
 
@@ -985,6 +1033,23 @@ package body Model_Runner.CLI.Tasks is
                end if;
             end loop;
          end;
+
+         --  A sandbox the environment sets confines its agent further: said,
+         --  and said when it does not read.
+         if Model_Runner.Framework.Permissions.Sandbox_Problem /= "" then
+            Pres.Put_Note
+              (Screen, "cli.task.sandbox_bad",
+               [Loc.Named ("detail", Model_Runner.Framework.Permissions.Sandbox_Problem)]);
+         elsif Ada.Environment_Variables.Exists (Model_Runner.Framework.Permissions.Sandbox_Variable)
+           and then Ada.Environment_Variables.Value
+                      (Model_Runner.Framework.Permissions.Sandbox_Variable) /= ""
+         then
+            Pres.Put_Message
+              (Screen, "cli.task.field",
+               [Loc.Named ("name", "sandbox"),
+                Loc.Named ("value", Ada.Environment_Variables.Value
+                                      (Model_Runner.Framework.Permissions.Sandbox_Variable))]);
+         end if;
 
          --  Its parts, each with how it stands, whatever the parent's state.
          declare
@@ -1160,6 +1225,11 @@ package body Model_Runner.CLI.Tasks is
                E.Add_Text (Failed, "detail", To_String (Why));
                Fail (Failed);
             end;
+         elsif Action = "verify"
+           and then Tk.State_Of (Store, Argument) in "failed" | "blocked" | "accepted"
+         then
+            --  Passing now, and not done yet: what finishes it.
+            Pres.Put_Note (Screen, "cli.next.complete", [Loc.Named ("name", Argument)]);
          end if;
       end Verify;
 
@@ -1501,9 +1571,9 @@ package body Model_Runner.CLI.Tasks is
       if E."=" (Outcome.Code, E.Framework_Locked) and then Action = "cancel" and then Argument /= ""
       then
          S.Open_To_Read (Store, Directory, Outcome);
-         if E.Is_Ok (Outcome) and then Tk.State_Of (Store, Argument) = "running" then
-            Model_Runner.Framework.Execution.Ask_To_Stop (Directory, Argument);
-            Pres.Put_Note (Screen, "cli.task.stop_asked", [Loc.Named ("name", Argument)]);
+         if E.Is_Ok (Outcome) and then Tk.State_Of (Store, First_Word) = "running" then
+            Model_Runner.Framework.Execution.Ask_To_Stop (Directory, First_Word);
+            Pres.Put_Note (Screen, "cli.task.stop_asked", [Loc.Named ("name", First_Word)]);
             S.Close (Store);
             return;
          end if;
@@ -1550,14 +1620,20 @@ package body Model_Runner.CLI.Tasks is
          S.Close (Store);
          return;
       elsif Action = "move" and then First_Word /= ""
-        and then Ada.Strings.Fixed.Index (After_First & " ", "ready ") = 1
+        and then (After_First = "ready" or else Ada.Strings.Fixed.Head (After_First, 6) = "ready ")
       then
          Outcome := E.Make (E.Framework_Input_Invalid);
          E.Add_Text (Outcome, "name", "the state to move " & First_Word & " to");
          E.Add_Text (Outcome, "value", "ready");
          E.Add_Text (Outcome, "detail", "ready is no state of its own: a task is ready when it"
-                     & " is accepted and waits for nothing; task accept " & First_Word
-                     & " accepts it");
+                     & " is accepted and waits for nothing; "
+                     & (if Tk.State_Of (Store, First_Word) = "accepted"
+                          and then not Tk.Ready (Store, First_Word).Reasons.Is_Empty
+                        then First_Word & " is accepted, and "
+                             & Tk.Ready (Store, First_Word).Reasons.First_Element
+                        elsif Tk.State_Of (Store, First_Word) = "accepted"
+                        then First_Word & " is ready already"
+                        else "task accept " & First_Word & " accepts it"));
          Fail (Outcome);
          S.Close (Store);
          return;
@@ -1584,19 +1660,50 @@ package body Model_Runner.CLI.Tasks is
          Move ("rejected");
       elsif Action = "cancel" then
          --  Whatever its state, what it holds goes with it: its agent,
-         --  children, leases and workspace.
-         if Needs_Task then
-            Model_Runner.Framework.Work.Cancel
-              (Store, Argument, Outcome, Actor => Model_Runner.Framework.Transitions.User);
-            if E.Is_Error (Outcome) then
-               Fail (Outcome);
-            else
-               Pres.Put_Message
-                 (Screen, "cli.task.moved",
-                  [Loc.Named ("name", Argument), Loc.Named ("value", "cancelled")]);
-               Say_Parts_Left (Argument);
-               Say_Left_Waiting (Argument);
-            end if;
+         --  children, leases and workspace -- work waiting to be taken in
+         --  only when that is said: task cancel ID anyway.
+         if First_Word = "" then
+            Outcome := E.Make (E.Framework_Input_Missing);
+            E.Add_Text (Outcome, "name", "task");
+            Fail (Outcome);
+         elsif After_First not in "" | "anyway" then
+            Outcome := E.Make (E.CLI_Unexpected_Operand);
+            E.Add_Text (Outcome, "value", After_First);
+            Fail (Outcome);
+         elsif After_First /= "anyway" and then Tk.State_Of (Store, First_Word) = "verification"
+           and then Model_Runner.Framework.Workspaces.Active_For (Store, First_Word) /= ""
+         then
+            Outcome := E.Make (E.Framework_Transition_Invalid);
+            E.Add_Text (Outcome, "name", First_Word);
+            E.Add_Text (Outcome, "value", "verification");
+            E.Add_Text (Outcome, "expected", "cancelled");
+            E.Add_Text (Outcome, "detail", "its work waits in "
+                        & Model_Runner.Framework.Workspaces.Active_For (Store, First_Word)
+                        & " to be taken in, and cancelling gives it up; task integrate "
+                        & First_Word & " takes it in, task cancel " & First_Word
+                        & " anyway gives it up");
+            Fail (Outcome);
+         else
+            declare
+               Space : constant String :=
+                 Model_Runner.Framework.Workspaces.Active_For (Store, First_Word);
+            begin
+               Model_Runner.Framework.Work.Cancel
+                 (Store, First_Word, Outcome, Actor => Model_Runner.Framework.Transitions.User);
+               if E.Is_Error (Outcome) then
+                  Fail (Outcome);
+               else
+                  Pres.Put_Message
+                    (Screen, "cli.task.moved",
+                     [Loc.Named ("name", First_Word), Loc.Named ("value", "cancelled")]);
+                  if Space /= "" then
+                     Pres.Put_Note (Screen, "cli.task.workspace_given_up",
+                                    [Loc.Named ("name", Space)]);
+                  end if;
+                  Say_Parts_Left (First_Word);
+                  Say_Left_Waiting (First_Word);
+               end if;
+            end;
          end if;
       elsif Action = "audit" then
          if Needs_Task then
@@ -1644,6 +1751,23 @@ package body Model_Runner.CLI.Tasks is
                  (if Space = 0 then ""
                   else Ada.Strings.Fixed.Trim (Rest (Space + 1 .. Rest'Last), Ada.Strings.Both));
             begin
+               --  Work waiting in a workspace is not given up unsaid.
+               if Next = "failed" and then Why /= "anyway"
+                 and then Tk.State_Of (Store, First_Word) = "verification"
+                 and then Model_Runner.Framework.Workspaces.Active_For (Store, First_Word) /= ""
+               then
+                  Outcome := E.Make (E.Framework_Transition_Invalid);
+                  E.Add_Text (Outcome, "name", First_Word);
+                  E.Add_Text (Outcome, "value", "verification");
+                  E.Add_Text (Outcome, "expected", "failed");
+                  E.Add_Text (Outcome, "detail", "its work waits in "
+                              & Model_Runner.Framework.Workspaces.Active_For (Store, First_Word)
+                              & " to be taken in; task integrate " & First_Word
+                              & " takes it in, task move " & First_Word & " failed anyway gives it up");
+                  Fail (Outcome);
+                  S.Close (Store);
+                  return;
+               end if;
                Tk.Move (Store, Change, First_Word, Next, Why, Status => Outcome,
                         Actor => Model_Runner.Framework.Transitions.User);
                if E.Is_Ok (Outcome) then

@@ -277,6 +277,25 @@ package body Model_Runner.Framework.Configurations is
                Refuse ("a crate's name is lower-case letters, digits and _, a letter first");
             elsif Value (Value'Last) = '_' or else Ada.Strings.Fixed.Index (Value, "__") > 0 then
                Refuse ("a crate's name has no _ last and no two together");
+
+            --  Its name is its main program's and its project's: not one
+            --  the language keeps for itself.
+            elsif Value in "ada" | "system" | "interfaces" | "gnat" | "standard" then
+               Refuse ("it is the name of a unit the language defines, which a program of its own"
+                       & " cannot take");
+            elsif Value in "abort" | "abs" | "abstract" | "accept" | "access" | "aliased" | "all"
+                         | "and" | "array" | "at" | "begin" | "body" | "case" | "constant"
+                         | "declare" | "delay" | "delta" | "digits" | "do" | "else" | "elsif"
+                         | "end" | "entry" | "exception" | "exit" | "for" | "function" | "generic"
+                         | "goto" | "if" | "in" | "interface" | "is" | "limited" | "loop" | "mod"
+                         | "new" | "not" | "null" | "of" | "or" | "others" | "out" | "overriding"
+                         | "package" | "parallel" | "pragma" | "private" | "procedure"
+                         | "protected" | "raise" | "range" | "record" | "rem" | "renames"
+                         | "requeue" | "return" | "reverse" | "select" | "separate" | "some"
+                         | "subtype" | "synchronized" | "tagged" | "task" | "terminate" | "then"
+                         | "type" | "until" | "use" | "when" | "while" | "with" | "xor"
+            then
+               Refuse ("it is an Ada reserved word, which no program can be called");
             end if;
 
          when Templates.Natural_Input =>
@@ -1562,11 +1581,13 @@ package body Model_Runner.Framework.Configurations is
                   Which   : Permissions.Capability := Permissions.Capability'First;
 
                   function Inherited return String is
+                     Whence : constant String :=
+                       (if Level = "project" then "the default" else "the level above");
                   begin
                      if not Capable or else not Above (Which).Granted then
-                        return "(not granted by the level above)";
+                        return "(not granted by " & Whence & ")";
                      end if;
-                     return "(from the level above: "
+                     return "(" & Whence & ": "
                        & (if Permissions.Grant_Text (Above (Which)) = "" then "granted"
                           else Permissions.Grant_Text (Above (Which))) & ")";
                   end Inherited;
@@ -1649,7 +1670,18 @@ package body Model_Runner.Framework.Configurations is
 
       --  The whole of it, as it would be.
       if not Result.Changed.Is_Empty and then Whole_Problem (Result.After) /= "" then
-         Status := Refused ("reconfigure", Whole_Problem (Result.After));
+         --  Said of the setting it is about, where it names one first.
+         declare
+            Whole : constant String := Whole_Problem (Result.After);
+            Space : constant Natural := Ada.Strings.Fixed.Index (Whole, " ");
+            Named : constant String := (if Space = 0 then "" else Whole (Whole'First .. Space - 1));
+         begin
+            if Named /= "" and then Ada.Strings.Fixed.Index (Named, ".") > 0 then
+               Status := Refused (Named, "it" & Whole (Space .. Whole'Last));
+            else
+               Status := Refused ("reconfigure", Whole);
+            end if;
+         end;
          return;
       end if;
 

@@ -1,13 +1,11 @@
 with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
-with Ada.Strings.Maps;
 
 with Model_Runner.Errors;
 with Model_Runner.Framework.Authority;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Leases;
-with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Verification;
@@ -192,6 +190,10 @@ package body Model_Runner.Framework.Consistency is
                            Mine    : constant String := To_String (Standing.Governing.Source);
                            Theirs  : constant String := To_String (Standing.Other.Source);
                            Ruling  : constant String := To_String (Standing.Governing.Value);
+                           --  What it overrides already, kept beside the new.
+                           Before  : constant String := To_String (Standing.Governing.Overrides);
+                           Over    : constant String :=
+                             (if Before = "" then Theirs else Before & "," & Theirs);
                         begin
                            Found (Conflicting_Authority, Subject,
                                   Line & "; to settle it, "
@@ -201,7 +203,7 @@ package body Model_Runner.Framework.Consistency is
                                      else "")
                                   & (if Ada.Strings.Fixed.Index (Mine, "DEC-") = 1
                                      then "decision govern " & Mine & " " & Subject & " " & Ruling
-                                          & " overrides=" & Theirs & " says " & Mine & " holds over "
+                                          & " overrides=" & Over & " says " & Mine & " holds over "
                                           & Theirs
                                      else "decision supersede, or a ruling that says which holds"));
                         end;
@@ -525,22 +527,15 @@ package body Model_Runner.Framework.Consistency is
             Read  : E.Error_Info;
          begin
             Stores.Read (Item, Requirements_Area, Id, Value, Read);
-            for Evidence of Lines_Of
-              (Ada.Strings.Fixed.Translate
-                 (Records.Get (Value, "verified_by"),
-                  Ada.Strings.Maps.To_Mapping (",", [1 => ASCII.LF])))
-            loop
-               declare
-                  Reasons : Name_Lists.Vector;
-                  Named   : constant String :=
-                    Ada.Strings.Fixed.Trim (Evidence, Ada.Strings.Both);
-               begin
-                  if not Verification.Is_Current (Item, Named, Reasons) then
-                     Found (Stale_Verification, Id,
-                            Named & " no longer applies: " & Reasons.First_Element);
-                  end if;
-               end;
-            end loop;
+            --  Judged as state and req judge it: by what supports it now,
+            --  a later whole run standing for evidence it made stale.
+            declare
+               Why : constant String := Verification.Why_Not_Verified (Item, Id);
+            begin
+               if Why /= "" then
+                  Found (Stale_Verification, Id, "its evidence no longer holds: " & Why);
+               end if;
+            end;
          end;
       end loop;
 
@@ -566,7 +561,11 @@ package body Model_Runner.Framework.Consistency is
             begin
                if Evidence /= "" then
                   Stores.Read (Item, Verification_Area, Evidence, Value, Read);
-                  if Records.Get (Value, "passed") /= "true" then
+                  --  Failed since, and nothing that passed after it: a later
+                  --  passing whole run answers for it.
+                  if Records.Get (Value, "passed") /= "true"
+                    and then not Verification.Passed_After (Item, Evidence)
+                  then
                      Found (Completed_Without_Gate, Id,
                             "it is complete and " & Evidence & " did not pass");
                   end if;
@@ -676,68 +675,8 @@ package body Model_Runner.Framework.Consistency is
       end;
 
       --  A kind or role that says it may do more than the project allows
-      --  is not given it; it is still configuration that says so.
-      declare
-         Present : Boolean;
-         Project : constant Permissions.Permission_Set :=
-           Permissions.Effective (Item, "", "", Within_Sandbox => False);
-      begin
-         for Kind of Tasks.Kinds (Item) loop
-            declare
-               Level : constant Permissions.Permission_Set :=
-                 Permissions.Level_Of (Item, "kind." & Kind, Present);
-               Wider : constant String := Permissions.Widening (Level, Project);
-            begin
-               if Present and then Wider /= "" then
-                  Found (Permission_Widening, "kind." & Kind,
-                         "it grants " & Wider & " beyond the project's maximum; map.permission.project."
-                         & Wider & " grants it to the project");
-               end if;
-            end;
-         end loop;
-
-         --  And the roles, which the configuration names as it grants them.
-         declare
-            Config : Records.Item;
-            Read   : E.Error_Info;
-            Roles  : Name_Lists.Vector;
-            Prefix : constant String := "map.permission.role.";
-         begin
-            Configurations.Read (Item, Config, Read);
-            for Index in 1 .. Records.Field_Count (Config) loop
-               declare
-                  Name : constant String := Records.Field_Name (Config, Index);
-               begin
-                  if Name'Length > Prefix'Length
-                    and then Name (Name'First .. Name'First + Prefix'Length - 1) = Prefix
-                  then
-                     declare
-                        Rest : constant String := Name (Name'First + Prefix'Length .. Name'Last);
-                        Dot  : constant Natural := Ada.Strings.Fixed.Index (Rest, ".");
-                        Role : constant String :=
-                          (if Dot = 0 then Rest else Rest (Rest'First .. Dot - 1));
-                     begin
-                        if not Roles.Contains (Role) then
-                           Roles.Append (Role);
-                        end if;
-                     end;
-                  end if;
-               end;
-            end loop;
-            for Role of Roles loop
-               declare
-                  Level : constant Permissions.Permission_Set :=
-                    Permissions.Level_Of (Item, "role." & Role, Present);
-                  Wider : constant String := Permissions.Widening (Level, Project);
-               begin
-                  if Present and then Wider /= "" then
-                     Found (Permission_Widening, "role." & Role,
-                            "it grants " & Wider & " beyond the project's maximum");
-                  end if;
-               end;
-            end loop;
-         end;
-      end;
+      --  is given what the project allows: clamped, as reconfigure says, and
+      --  nothing that does not hold together.
 
       return Result;
    end Check;

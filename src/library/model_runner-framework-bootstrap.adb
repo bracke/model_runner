@@ -584,6 +584,28 @@ package body Model_Runner.Framework.Bootstrap is
                begin
                   if To_String (Held.State) in "obsolete" | "superseded" | "rejected" then
                      Result.Existing := Result.Existing + 1;
+                     --  Retired, and the document still says it: the one or
+                     --  the other is out of date, which a person decides.
+                     if To_String (Held.State) in "obsolete" | "superseded" then
+                        declare
+                           Said : Results.Result :=
+                             (Kind       => Results.Diagnostic,
+                              Producer   => To_Unbounded_String ("bootstrap"),
+                              Summary    => To_Unbounded_String
+                                              (Field (Next.Source) & " still says " & Known
+                                               & ", which is " & To_String (Held.State)
+                                               & (if Held.Superseded_By = Null_Unbounded_String
+                                                  then ""
+                                                  else " by " & To_String (Held.Superseded_By))
+                                               & "; take it out of the document, or reconsider "
+                                               & Known),
+                              Payload    => Next.Text,
+                              Provenance => Next.Provenance,
+                              others     => <>);
+                        begin
+                           Raise_Issue (Said);
+                        end;
+                     end if;
 
                   --  Its words unchanged, or already what it holds -- a person
                   --  took them in by hand -- and at most its title renamed.
@@ -903,7 +925,8 @@ package body Model_Runner.Framework.Bootstrap is
                                                else "req ")
                                             & (if To_String (Held.State) = Intent.First_State (Kind)
                                                then "reject " else "obsolete ")
-                                            & Known & " retires it, or keep it"
+                                            & Known & " retires it, or keep it as it is -- nothing"
+                                            & " needs doing then, and this is not raised again"
                                             & (if Instead = Null_Unbounded_String then ""
                                                else "; made from the document now: "
                                                     & To_String (Instead))),

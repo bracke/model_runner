@@ -56,6 +56,10 @@ package body Model_Runner.Framework.Workspaces is
    end Snapshot;
 
    --  The fingerprint of one file, or the empty string when it is not there.
+   --  Where the files a workspace was found in conflict over are kept.
+   function Conflict_Record (Item : Stores.Store; Id : String) return String
+   is (Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "runtime"), "conflict." & Id));
+
    function Print_Of (Path : String) return String is
       Text   : Unbounded_String;
       Status : E.Error_Info;
@@ -451,6 +455,42 @@ package body Model_Runner.Framework.Workspaces is
       return Sorted (Result);
    end Changes;
 
+   --------------------
+   -- Conflict_Files --
+   --------------------
+
+   function Conflict_Files
+     (Item           : Stores.Store;
+      Id             : String;
+      Unsettled_Only : Boolean := False) return Name_Lists.Vector
+   is
+      Result : Name_Lists.Vector;
+      Text   : Unbounded_String;
+      Status : E.Error_Info;
+      Held   : Workspace;
+   begin
+      if not Dirs.Exists (Conflict_Record (Item, Id)) then
+         return Result;
+      end if;
+      Files.Read_Text (Conflict_Record (Item, Id), Text, Status);
+      Read (Item, Id, Held, Status);
+      for Line of Lines_Of (To_String (Text)) loop
+         declare
+            Tab  : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
+            Path : constant String := (if Tab = 0 then Line else Line (Line'First .. Tab - 1));
+            Then_Print : constant String := (if Tab = 0 then "" else Line (Tab + 1 .. Line'Last));
+         begin
+            if not Unsettled_Only
+              or else (E.Is_Ok (Status)
+                       and then Print_Of (Hostkit.Fs.Join (To_String (Held.Path), Path)) = Then_Print)
+            then
+               Result.Append (Path);
+            end if;
+         end;
+      end loop;
+      return Result;
+   end Conflict_Files;
+
    ---------------
    -- Conflicts --
    ---------------
@@ -667,6 +707,18 @@ package body Model_Runner.Framework.Workspaces is
          Listed  : Unbounded_String;
       begin
          if not Clashes.Is_Empty and then not Text_Resolved then
+            --  Kept, with each workspace copy as it is now, so that what is
+            --  settled since can be told from what is not.
+            declare
+               Kept    : Unbounded_String;
+               Ignored : E.Error_Info;
+            begin
+               for Path of Clashes loop
+                  Append (Kept, Path & ASCII.HT
+                          & Print_Of (Hostkit.Fs.Join (To_String (Held.Path), Path)) & ASCII.LF);
+               end loop;
+               Files.Write_Text (Conflict_Record (Item, Id), To_String (Kept), Ignored);
+            end;
             for Path of Clashes loop
                Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ") & Path);
             end loop;
@@ -767,6 +819,7 @@ package body Model_Runner.Framework.Workspaces is
 
       Set_Status (Item, Change, Id, "integrated",
                   Image (Natural (Taken.Length)) & " files taken in");
+      Files.Discard (Conflict_Record (Item, Id));
       Events.Emit (Item, Change, Events.Workspace_Integrated, Id,
                    To_String (Held.Task_Id), Event, Status);
       --  Its tree stays until the integration is kept: Release removes it.
@@ -804,6 +857,7 @@ package body Model_Runner.Framework.Workspaces is
       end if;
       Remove_Tree (Item, Held);
       Set_Status (Item, Change, Id, "abandoned", "");
+      Files.Discard (Conflict_Record (Item, Id));
    end Abandon;
 
 end Model_Runner.Framework.Workspaces;

@@ -1679,7 +1679,9 @@ package body Model_Runner.Framework.Work is
          Agents.Read (Host.Item.all, Id, Child, Status);
          Agents.Charge (Host.Item.all, Change, Id, Tokens, Charged);
 
-         if E.Is_Error (Ran) then
+         if Interrupted (Ran) then
+            Why := To_Unbounded_String ("it was stopped: the work was cancelled");
+         elsif E.Is_Error (Ran) then
             Why := To_Unbounded_String ("it could not be run: " & Why_Of (Ran));
          else
             Invocations.Hold (Child_Claim, Answer, Said, Held);
@@ -1875,8 +1877,8 @@ package body Model_Runner.Framework.Work is
       begin
          for Path of Split_On (Paths, ',') loop
             if Permissions.Sandbox_Refuses (Trim (Path), Writing => True) then
-               return " -- the session's sandbox refused them, not the project's permissions;"
-                 & " /sandbox off lifts it";
+               return " -- the sandbox refused them, not the project's permissions: /sandbox off"
+                 & " lifts a session's, and unsetting MODEL_RUNNER_SANDBOX the shell's";
             end if;
          end loop;
          return "";
@@ -2011,6 +2013,10 @@ package body Model_Runner.Framework.Work is
             Workspaces.Abandon (Item, Change, To_String (Result.Workspace_Id), Held);
             return (if E.Is_Ok (Held)
                     then "; its workspace " & To_String (Result.Workspace_Id) & " is given up"
+                         & (if Result.Changed_Files.Is_Empty then ""
+                            else ", and what it changed there with it: "
+                                 & Comma_Separated (Result.Changed_Files)
+                                 & " (task accept " & Task_Id & " does it again)")
                     else "");
          end Given_Up;
 
@@ -2046,7 +2052,9 @@ package body Model_Runner.Framework.Work is
          begin
             Stores.Pending (Change, Runtime_Area, "agent." & To_String (Result.Agent_Id), Held, Staged);
             if Staged then
-               Records.Set (Held, "outcome", Tasks.State_Of (Item, Task_Id));
+               --  The state it moves to here, not yet committed.
+               Records.Set (Held, "outcome",
+                            (if Next /= "" then Next else Tasks.State_Of (Item, Task_Id)));
                Stores.Put (Change, Runtime_Area, "agent." & To_String (Result.Agent_Id), Held);
             end if;
          end;
@@ -2623,7 +2631,8 @@ package body Model_Runner.Framework.Work is
       --  whatever else it did, its answer cannot be taken.
       if To_String (Result.Claimed) = "done" then
          declare
-            Missing : Unbounded_String;
+            Missing       : Unbounded_String;
+            Missing_Count : Natural := 0;
          begin
             for Line of Lines_Of (Replaced (Invocations.Claim (Said, "changed_files"))) loop
                declare
@@ -2638,10 +2647,16 @@ package body Model_Runner.Framework.Work is
                     and then not (not Isolated and then Earlier_Changed.Contains (Path))
                     and then not Ada.Directories.Exists (Hostkit.Fs.Join (To_String (Place), Path))
                   then
-                     Append (Missing, (if Missing = Null_Unbounded_String then "" else ", ") & Path);
+                     Missing_Count := Missing_Count + 1;
+                     if Missing_Count <= 10 then
+                        Append (Missing, (if Missing = Null_Unbounded_String then "" else ", ") & Path);
+                     end if;
                   end if;
                end;
             end loop;
+            if Missing_Count > 10 then
+               Append (Missing, " and" & Natural'Image (Missing_Count - 10) & " more");
+            end if;
             if Missing /= Null_Unbounded_String then
                Keep_Proposals_Aside;
                Conclude ("failed", "it says it changed " & To_String (Missing)
@@ -2664,6 +2679,10 @@ package body Model_Runner.Framework.Work is
          Defined   : Records.Item;
          May_Propose : Boolean;
          Kept_Back : Unbounded_String;
+
+         --  Whether the parts it asks for are children: only where its agent
+         --  may create them; otherwise they are proposals of their own.
+         Parts_Are_Children : Boolean := True;
 
          --  What this answer has made so far, by title in lower case, and
          --  as what.
@@ -2835,6 +2854,7 @@ package body Model_Runner.Framework.Work is
                   Depth := Depth + 1;
                end;
             end loop;
+            Parts_Are_Children := Own.Granted;
             Split_Room := (if not Limit.Granted then 0
                            elsif Depth + 1 > Limit.Max_Depth then 0
                            else Limit.Max_Children);
@@ -2854,6 +2874,34 @@ package body Model_Runner.Framework.Work is
             begin
                if Title = "" or else Title = "-" then
                   null;
+
+               --  Its agent may not make children: the part is a proposal
+               --  of its own, with no parent to wait for it.
+               elsif May_Propose and then not Parts_Are_Children then
+                  if Made_Titles.Contains (Ada.Characters.Handling.To_Lower (Title)) then
+                     null;
+                  elsif Same_Title (Title) /= "" then
+                     Result.Kept_Back.Append (Title & ": it is " & Same_Title (Title) & " already");
+                  else
+                     Fields.Include ("title", Title);
+                     Fields.Include ("kind", Records.Get (Defined, "kind"));
+                     if Records.Get (Defined, "component") /= "" then
+                        Fields.Include ("component", Records.Get (Defined, "component"));
+                     end if;
+                     Fields.Include ("notes", "proposed as a part of " & Task_Id
+                                     & ", whose agent may not make children");
+                     Tasks.Create
+                       (Item, Change, Fields, "agent " & To_String (Result.Agent_Id), Task_Id,
+                        Made, Held);
+                     if E.Is_Ok (Held) then
+                        Result.Proposed.Append (To_String (Made));
+                        Made_Titles.Append (Ada.Characters.Handling.To_Lower (Title));
+                        Made_Ids.Append (To_String (Made));
+                     else
+                        Append (Kept_Back, ASCII.LF & "part: " & Title);
+                        Result.Kept_Back.Append (Title & ": " & Why_Of (Held));
+                     end if;
+                  end if;
                elsif May_Propose and then Same_Title (Title, Part => True) = ""
                  and then Natural (Split_Into.Length) >= Split_Room
                then
@@ -3311,7 +3359,25 @@ package body Model_Runner.Framework.Work is
             Verification.Reevaluate_Requirements (Item, Change, Result.Requirements, Status);
          end if;
          if E.Is_Ok (Status) then
-            Conclude ("", "", "completed");
+            --  Done, and with files changed it did not say it changed: said,
+            --  as what a person looks at before trusting its report.
+            declare
+               Said_Changed : constant Name_Lists.Vector :=
+                 Lines_Of (Replaced (Invocations.Claim (Said, "changed_files")));
+               Unreported   : Name_Lists.Vector;
+            begin
+               for Path of Result.Changed_Files loop
+                  if not (for some Line of Said_Changed =>
+                            Trim (Line) = Path or else Trim (Line) = "./" & Path)
+                  then
+                     Unreported.Append (Path);
+                  end if;
+               end loop;
+               Conclude ("", (if Unreported.Is_Empty or else Said_Changed.Is_Empty then ""
+                              else "it also changed files it did not report: "
+                                   & Comma_Separated (Unreported)),
+                         "completed");
+            end;
          end if;
       end;
    end Execute_Work;
@@ -3414,6 +3480,13 @@ package body Model_Runner.Framework.Work is
                      & " to take in"
                 elsif Tasks.State_Of (Item, Task_Id) = "complete"
                 then To_String (Had) & " was taken in already"
+                elsif Tasks.State_Of (Item, Task_Id) = "cancelled"
+                then To_String (Had) & " was given up when it was cancelled; task reopen " & Task_Id
+                     & " makes it ready again"
+                elsif Tasks.State_Of (Item, Task_Id) = "blocked"
+                  and then not Tasks.Children (Item, Task_Id).Is_Empty
+                then To_String (Had) & " was given up when it split into parts; it goes on once they"
+                     & " are done"
                 else To_String (Had) & " was given up when it " & Tasks.State_Of (Item, Task_Id)
                      & "; task accept " & Task_Id & " does its work again"));
          end;
@@ -3462,6 +3535,19 @@ package body Model_Runner.Framework.Work is
          Change := Stores.No_Changes;
       end if;
 
+      --  Settled, it says: what is as it was when the conflict was found is
+      --  the workspace's copy taken over the project's change, and said.
+      declare
+         Unsettled : constant Name_Lists.Vector :=
+           (if Text_Resolved then Workspaces.Conflict_Files (Item, Id, Unsettled_Only => True)
+            else Name_Lists.Empty_Vector);
+      begin
+         if not Unsettled.Is_Empty then
+            Result.Reason := To_Unbounded_String
+              ("not changed since the conflict was found, so the workspace's copy replaced the"
+               & " project's change: " & Comma_Separated (Unsettled));
+         end if;
+      end;
       Workspaces.Integrate (Item, Change, Id, True, Taken, Status, Semantic_Accepted,
                             Text_Resolved);
 
