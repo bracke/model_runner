@@ -417,8 +417,12 @@ package body Model_Runner.Framework.Execution is
       Status    : out Model_Runner.Errors.Error_Info;
       Base      : String := "")
    is
+      --  Both as full names: a store opened by a relative directory holds
+      --  its workspaces at full paths.
       Workspaces_Root : constant String :=
-        Hostkit.Fs.Join (Stores.Root (Item), "workspaces");
+        Ada.Directories.Full_Name (Hostkit.Fs.Join (Stores.Root (Item), "workspaces"));
+      Base_Full : constant String :=
+        (if Base = "" then "" else Ada.Directories.Full_Name (Base));
       Project : constant String :=
         (if Base = "" then Ada.Directories.Containing_Directory (Stores.Root (Item))
          else Base);
@@ -441,8 +445,8 @@ package body Model_Runner.Framework.Execution is
          Refuse (Refusal (Rules, Command));
          return;
       elsif Base /= ""
-        and then (Base'Length <= Workspaces_Root'Length
-                  or else Base (Base'First .. Base'First + Workspaces_Root'Length - 1)
+        and then (Base_Full'Length <= Workspaces_Root'Length
+                  or else Base_Full (Base_Full'First .. Base_Full'First + Workspaces_Root'Length - 1)
                           /= Workspaces_Root)
       then
          Refuse (Base & " is not one of the project's workspaces");

@@ -955,6 +955,7 @@ package body Model_Runner.Framework.Tasks is
             Result.Reasons.Append
               ("it waits for " & Other & ", which is "
                & (if State_In (Item, Change, Other) = "" then "not there"
+                  elsif State_In (Item, Change, Other) = "accepted" then "accepted and not yet done"
                   else State_In (Item, Change, Other)));
          end if;
       end loop;
@@ -1514,7 +1515,22 @@ package body Model_Runner.Framework.Tasks is
                            Fields.Include ("title", Requirement & ": " & To_String (Held.Title));
                            Fields.Include ("kind", Kind);
                            Fields.Include ("requirements", Requirement);
-                           if To_String (Held.Scope) /= "project" then
+                           --  The component it is linked to, where it is linked
+                           --  to one of the project's; else its scope's.
+                           if (for some Linked of Intent.Links (Item, Intent.Requirement,
+                                                                 Requirement, Intent.Component)
+                                 => Components (Item).Contains (Linked))
+                           then
+                              for Linked of Intent.Links (Item, Intent.Requirement, Requirement,
+                                                          Intent.Component)
+                              loop
+                                 if Components (Item).Contains (Linked)
+                                   and then not Fields.Contains ("component")
+                                 then
+                                    Fields.Include ("component", Linked);
+                                 end if;
+                              end loop;
+                           elsif To_String (Held.Scope) /= "project" then
                               Fields.Include ("component", To_String (Held.Scope));
                            elsif Project_Component /= ""
                              and then Required_Fields (Item, Kind).Contains ("component")
@@ -1872,8 +1888,12 @@ package body Model_Runner.Framework.Tasks is
          Status := E.Make (E.Framework_Transition_Invalid);
          E.Add_Text (Status, "name", Id);
          E.Add_Text (Status, "value", Now);
-         E.Add_Text (Status, "expected", "a state it is not worked in");
-         E.Add_Text (Status, "detail", "a task is revised only while it is not being worked");
+         E.Add_Text (Status, "expected", "being revised");
+         E.Add_Text (Status, "detail",
+                     (if Now in "complete" | "cancelled" | "rejected"
+                      then "a " & Now & " task is not revised; task reopen " & Id & " first"
+                      else "a task is revised only while it is not being worked; wait for its"
+                           & " work to end, or task cancel " & Id));
          return;
       end if;
 
@@ -1900,8 +1920,9 @@ package body Model_Runner.Framework.Tasks is
                Field : constant String := (if Is_Core (Name) then Name else "field." & Name);
             begin
                if Name in "kind" | "parent" | "depends_on" then
-                  Status := E.Make (E.Framework_Schema_Violation);
+                  Status := E.Make (E.Framework_Input_Invalid);
                   E.Add_Text (Status, "name", Name);
+                  E.Add_Text (Status, "value", Given);
                   E.Add_Text (Status, "detail", "it is not revised; "
                               & (if Name = "kind" then "make a task of the other kind"
                                  elsif Name = "parent" then "split the parent instead"
@@ -1911,18 +1932,21 @@ package body Model_Runner.Framework.Tasks is
                   No_Such_Field (Status, Name, Kind, Allowed);
                   return;
                elsif Given = "" and then (Name = "title" or else Required_Here.Contains (Name)) then
-                  Status := E.Make (E.Framework_Schema_Violation);
+                  Status := E.Make (E.Framework_Input_Invalid);
                   E.Add_Text (Status, "name", Name);
+                  E.Add_Text (Status, "value", Given);
                   E.Add_Text (Status, "detail", "a " & Kind & " task must have it");
                   return;
                elsif Field_Problem (Item, Name, Given) /= "" then
-                  Status := E.Make (E.Framework_Schema_Violation);
+                  Status := E.Make (E.Framework_Input_Invalid);
                   E.Add_Text (Status, "name", Name);
+                  E.Add_Text (Status, "value", Given);
                   E.Add_Text (Status, "detail", Field_Problem (Item, Name, Given));
                   return;
                elsif Name = "title" and then Given = "" then
-                  Status := E.Make (E.Framework_Schema_Violation);
+                  Status := E.Make (E.Framework_Input_Invalid);
                   E.Add_Text (Status, "name", Name);
+                  E.Add_Text (Status, "value", Given);
                   E.Add_Text (Status, "detail", "a task keeps a title");
                   return;
                elsif Name = "permissions" and then Given /= "" then
@@ -1935,8 +1959,9 @@ package body Model_Runner.Framework.Tasks is
                      end if;
                   end;
                elsif Name = "component" and then Component_Problem (Item, Given) /= "" then
-                  Status := E.Make (E.Framework_Schema_Violation);
+                  Status := E.Make (E.Framework_Input_Invalid);
                   E.Add_Text (Status, "name", "component");
+                  E.Add_Text (Status, "value", Given);
                   E.Add_Text (Status, "detail", Component_Problem (Item, Given));
                   return;
                elsif Name = "requirements" then
@@ -1944,8 +1969,9 @@ package body Model_Runner.Framework.Tasks is
                      if not Identifiers.Is_Valid (Requirement)
                        or else not Stores.Exists (Item, Requirements_Area, Requirement)
                      then
-                        Status := E.Make (E.Framework_Schema_Violation);
+                        Status := E.Make (E.Framework_Input_Invalid);
                         E.Add_Text (Status, "name", "requirements");
+                        E.Add_Text (Status, "value", Requirement);
                         E.Add_Text (Status, "detail",
                                     Requirement & " is not one of the project's requirements");
                         return;
@@ -1965,6 +1991,20 @@ package body Model_Runner.Framework.Tasks is
          end loop;
       end;
 
+      --  Every value as its field holds it, said before anything is
+      --  written.
+      declare
+         Checked : E.Error_Info;
+      begin
+         Schemas.Validate (Value, "tasks/" & Id, Checked);
+         if E.Is_Error (Checked) then
+            Status := E.Make (E.Framework_Input_Invalid);
+            E.Add_Text (Status, "name", "a field of " & Id);
+            E.Add_Text (Status, "value", "what --set gave");
+            E.Add_Text (Status, "detail", E.Text_Of (Checked, "detail"));
+            return;
+         end if;
+      end;
       Stores.Put (Change, Tasks_Area, Id, Value);
       Events.Emit (Item, Change, Events.Task_Revised, Id,
                    "revision" & Natural'Image (Records.Revision (Value)), Event, Status);

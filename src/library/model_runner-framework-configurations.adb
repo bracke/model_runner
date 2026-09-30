@@ -116,7 +116,8 @@ package body Model_Runner.Framework.Configurations is
         ["scalar.work.", "input.work_", "scalar.agents.", "map.permission.", "set.bootstrap.",
          "scalar.bootstrap.", "list.automation.", "map.task_field.", "scalar.task.",
          "set.task.", "task_kind.", "baseline.", "set.execution.allowed", "file.",
-         "decision."];
+         "decision.", "scalar.execution.timeout", "scalar.init.", "scalar.consistency.",
+         "scalar.orchestration.", "list.verification.full"];
       Names   : Name_Lists.Vector;
    begin
       for Index in 1 .. Records.Field_Count (Value) loop
@@ -1309,10 +1310,54 @@ package body Model_Runner.Framework.Configurations is
       Result  : out Change_Plan;
       Status  : out Model_Runner.Errors.Error_Info)
    is
-      function Refused (Name, Detail : String) return E.Error_Info is
-         Made : E.Error_Info := E.Make (E.Framework_Schema_Violation);
+      --  Whether the level a permission belongs to grants anything: a level
+      --  that says something grants only what it says.
+      function Level_Said (Name : String) return Boolean is
+         Dot    : constant Natural := Ada.Strings.Fixed.Index (Name, ".", Ada.Strings.Backward);
+         Prefix : constant String := (if Dot = 0 then Name else Name (Name'First .. Dot));
       begin
-         E.Add_Text (Made, "name", Name);
+         for Index in 1 .. Records.Field_Count (Result.Before) loop
+            if Starts (Records.Field_Name (Result.Before, Index), Prefix) then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Level_Said;
+
+      --  The first root a component's placing names that is not there.
+      function Missing_Root (Value : String) return String is
+         Mark  : constant Natural := Ada.Strings.Fixed.Index (Value, "roots=");
+         Start : Natural;
+         Project : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
+      begin
+         if Mark = 0 then
+            return "";
+         end if;
+         Start := Mark + 6;
+         for Index in Mark + 6 .. Value'Last + 1 loop
+            if Index > Value'Last or else Value (Index) in '|' | ',' | ' ' then
+               if Index > Start then
+                  declare
+                     Root : constant String := Value (Start .. Index - 1);
+                  begin
+                     if not Ada.Directories.Exists (Hostkit.Fs.Join (Project, Root)) then
+                        return Root;
+                     end if;
+                  end;
+               end if;
+               Start := Index + 1;
+               exit when Index <= Value'Last and then Value (Index) in ',' | ' ';
+            end if;
+         end loop;
+         return "";
+      end Missing_Root;
+
+      --  A change asked for that cannot be made: the caller's to put right.
+      function Refused (Name, Detail : String) return E.Error_Info is
+         Made : E.Error_Info := E.Make (E.Framework_Input_Invalid);
+      begin
+         E.Add_Text (Made, "name", "a setting");
+         E.Add_Text (Made, "value", Name);
          E.Add_Text (Made, "detail", Detail);
          return Made;
       end Refused;
@@ -1494,6 +1539,11 @@ package body Model_Runner.Framework.Configurations is
             elsif Problem (Name, Value) /= "" then
                Status := Refused (Name, Problem (Name, Value));
                return;
+            elsif Starts (Name, "map.component.") and then Missing_Root (Value) /= "" then
+               Status := Refused
+                 (Name, "its root " & Missing_Root (Value) & " is no file or directory in the"
+                  & " project; a root is a directory, as src/terminal, or a file");
+               return;
             end if;
 
             --  A permission is granted by being there, constraints or none:
@@ -1510,7 +1560,9 @@ package body Model_Runner.Framework.Configurations is
                         Records.Remove (Result.After, Name);
                      end if;
                      Result.Changed.Append
-                       (Name & ": " & (if not Was then "(not set here: the level above holds)"
+                       (Name & ": " & (if not Was and then Level_Said (Name)
+                                       then "(not granted at this level)"
+                                       elsif not Was then "(not set here: the level above holds)"
                                        elsif Old = "" then "granted" else Old)
                         & " -> " & (if not Now then "(not granted)" elsif Given = "" then "granted"
                                     else Given));
@@ -1541,9 +1593,12 @@ package body Model_Runner.Framework.Configurations is
          return;
       end if;
 
-      --  Evidence is taken against a configuration: any change leaves what
-      --  was verified before to be verified again.
-      if not Result.Changed.Is_Empty then
+      --  Evidence is taken against what of a configuration bears on its
+      --  checks: a change to that leaves what was verified before to be
+      --  verified again; one to who works and how leaves it as it is.
+      if not Result.Changed.Is_Empty
+        and then Verification_Fingerprint (Result.Before) /= Verification_Fingerprint (Result.After)
+      then
          Result.Impact.Append
            ("evidence: what was verified under revision"
             & Natural'Image (Records.Revision (Result.Before))

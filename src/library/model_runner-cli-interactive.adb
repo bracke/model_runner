@@ -3,6 +3,8 @@ with Ada.Strings.Fixed;
 with Ada.Text_IO;
 with Ada.Unchecked_Deallocation;
 
+with Hostkit.Process;
+
 with Model_Runner.CLI.Checkpoint;
 with Model_Runner.CLI.Project_Commands;
 with Model_Runner.Clocks;
@@ -844,6 +846,32 @@ package body Model_Runner.CLI.Interactive is
              then "cli.interactive.prompt"
              else "cli.interactive.continuation"));
 
+         --  Waiting at a terminal for a line, Ctrl-C drops what was being
+         --  typed at once, without a line to end it: the terminal has
+         --  thrown the line away already, and the prompt starts afresh.
+         if Ada.Text_IO."=" (Ada.Text_IO.Current_Input, Ada.Text_IO.Standard_Input)
+           and then Model_Runner.Cancellation."/=" (Cancel, null)
+         then
+            loop
+               declare
+                  use type Hostkit.Process.Wait_Outcome;
+                  Came : constant Hostkit.Process.Wait_Outcome :=
+                    Hostkit.Process.Wait_FD (0, For_Write => False, Timeout_MS => 100);
+               begin
+                  exit when Came /= Hostkit.Process.Wait_Timed_Out;
+                  if Model_Runner.Cancellation.Is_Cancelled (Cancel) then
+                     Cancel.Reset;
+                     Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Error);
+                     if Pending (Typing) /= "" then
+                        Taken (Typing);
+                     end if;
+                     Pres.Put_Note (Screen, "cli.interactive.dropped");
+                     Pres.Put_Prompt (Screen, "cli.interactive.prompt");
+                  end if;
+               end;
+            end loop;
+         end if;
+
          exit Read_Loop when Ada.Text_IO.End_Of_File (Ada.Text_IO.Current_Input);
 
          declare
@@ -879,8 +907,32 @@ package body Model_Runner.CLI.Interactive is
                Pres.Report (Screen, E.Make (E.Conversation_Too_Long));
             else
                declare
-                  Line : constant String := Room (1 .. Stop);
+                  --  Control characters a cooked terminal passes on as they
+                  --  are -- Ctrl-L -- are no part of what was typed.
+                  function Cleaned (Text : String) return String is
+                  begin
+                     for Index in Text'Range loop
+                        if Text (Index) = ASCII.FF then
+                           return Text (Text'First .. Index - 1)
+                             & Cleaned (Text (Index + 1 .. Text'Last));
+                        end if;
+                     end loop;
+                     return Text;
+                  end Cleaned;
+                  Typed : constant String := Cleaned (Room (1 .. Stop));
+
+                  --  Esc on a line drops what is being typed, as does Ctrl-C
+                  --  where the terminal passes it on as a character.
+                  Escaped : constant Boolean :=
+                    Ada.Strings.Fixed.Index (Typed, [1 => ASCII.ESC]) > 0
+                    or else Ada.Strings.Fixed.Index (Typed, [1 => ASCII.ETX]) > 0;
+                  Line    : constant String := (if Escaped then "" else Typed);
                begin
+                  if Escaped then
+                     Taken (Typing);
+                     Pres.Put_Note (Screen, "cli.interactive.dropped");
+                     goto Next_Line;
+                  end if;
                   --  Ctrl-C while a prompt was being typed drops it: the
                   --  line after starts afresh.
                   if Model_Runner.Cancellation."/=" (Cancel, null)
@@ -919,6 +971,7 @@ package body Model_Runner.CLI.Interactive is
                end;
             end if;
          end;
+         <<Next_Line>>
       end loop Read_Loop;
 
       --  At end of file a pending prompt is submitted, then the session ends.

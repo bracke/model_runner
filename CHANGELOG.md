@@ -1782,6 +1782,58 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Fifth usability round:**
+  - A workspace's own checks run where it is, whatever directory the project
+    was opened by: `task integrate ID resolved` takes in nothing that fails
+    there, and work that fails in its workspace fails its task instead of
+    being offered for integration.
+  - Finishing a task's last part with `work` says its parent goes on; a task
+    waiting for another, or a parent waiting for its parts, is told what to
+    do first, from `work`, the chooser and `task complete` (which no longer
+    runs the checks before saying so).
+  - A helper's answer framed as JSON or in a code fence leaves no stray
+    braces or fences behind; proposals survive an answer that breaks the
+    contract or writes where it may not.
+  - A current run of the project's tests (`check full`) stands for the
+    task evidence later work made stale, and a failing one takes
+    verification away; `execution.timeout` and similar settings no longer
+    do. `reconfigure` names evidence only when a change reaches it.
+  - Parts are bounded by `create_children`, the project's where a kind has
+    none; refused parts are named with a next step that fits why.
+  - A heading's new title is taken in by `bootstrap`; a document that says
+    what an entry already holds raises no issue; an issue is raised once;
+    the fix it names is `from-document`; the summary counts revised items
+    and new issues.
+  - Cancelling reaches a helper agent that is running, which is recorded as
+    cancelled.
+  - In a session, Ctrl-C or Esc on a line drops what was typed, and Ctrl-L
+    is no part of a line.
+  - A file claimed as changed and written as it was does not fail a task.
+  - A refused field value, setting or rehome exits 2 and says what is
+    taken; nothing half-written is left behind; `task rehome` checks both
+    components.
+  - `work --set` refuses names it does not take, and a
+    `MODEL_RUNNER_SANDBOX` that does not read is refused.
+  - The audit gives each attempt's agent, call and how it ended.
+  - Impact keeps a node's surest reach, follows a requirement's tasks and
+    their components, and keeps an explicit component link certain; `refs`
+    finds uses in the declaring file and leaves out declarations, ends and
+    local names spelled as a package.
+  - A derived task takes its requirement's linked component.
+  - `decision govern` checks the ruling's value; a conflict of authority
+    names how to settle it; a proposed decision can be superseded; a
+    stale-document issue suggests only entries of its own register.
+  - A component root that is not there, and a dependency on a requirement
+    that is not there, are said; retiring a requirement names the tasks
+    still serving it; accepting what is accepted says so.
+  - `state` names accepted requirements no task serves; `req` never shows an
+    empty reason; "checked by" replaces "verified by".
+  - A permission wider than the level above says what it gets instead, at
+    `reconfigure` and at `task new`.
+  - An interrupted run says it was interrupted; `result ID full` prints the
+    whole payload; moving to `ready`, editing an ended task and integrating
+    a task with no workspace say what to do.
+
 - **Fourth usability round:**
   - A task cancelled from another terminal ends cancelled, with status 7.
   - `spec revise` and `req revise ID from-document` read a document in a

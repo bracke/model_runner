@@ -16,6 +16,7 @@ with Model_Runner.Framework.Workspaces;
 with Model_Runner.Framework.Work;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
+with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Transitions;
 with Model_Runner.Localization;
@@ -405,6 +406,11 @@ package body Model_Runner.CLI.Tasks is
 
          if E.Is_Error (Outcome) then
             Fail (Outcome);
+            --  A value its field does not take is the caller's to put
+            --  right, not a state that failed.
+            if Outcome.Code = E.Framework_Schema_Violation then
+               Status := E.Exit_Usage;
+            end if;
 
             --  Off a terminal, everything still to give, each as it is
             --  given: the kind with what each kind requires, else the
@@ -448,6 +454,38 @@ package body Model_Runner.CLI.Tasks is
              Loc.Named ("detail", Fields ("title"))]);
          if Tk.State_Of (Store, To_String (Id)) = "candidate" then
             Pres.Put_Note (Screen, "cli.next.accept_task", [Loc.Named ("name", To_String (Id))]);
+         end if;
+
+         --  Its own permissions asking for more than its kind allows: it
+         --  gets what its kind allows, and is told so.
+         if Fields.Contains ("permissions") and then Fields.Contains ("kind") then
+            declare
+               package Pm renames Model_Runner.Framework.Permissions;
+               Asked : Pm.Permission_Set;
+               Read  : E.Error_Info;
+            begin
+               Pm.Restriction (Fields ("permissions"), Asked, Read);
+               if E.Is_Ok (Read) then
+                  declare
+                     Allowed : constant Pm.Permission_Set :=
+                       Pm.Effective (Store, Fields ("kind"), "", Within_Sandbox => False);
+                     Wider   : constant String := Pm.Widening (Asked, Allowed);
+                  begin
+                     if Wider /= "" then
+                        Pres.Put_Note
+                          (Screen, "cli.project.clipped",
+                           [Loc.Named ("name", To_String (Id)), Loc.Named ("value", Wider),
+                            Loc.Named ("detail", Ada.Strings.Fixed.Trim
+                                                   (Ada.Strings.Fixed.Translate
+                                                      (Pm.Image (Pm.Intersect (Asked, Allowed)),
+                                                       Ada.Strings.Maps.To_Mapping
+                                                         ([1 => ASCII.LF], ";")),
+                                                    Ada.Strings.Maps.Null_Set,
+                                                    Ada.Strings.Maps.To_Set (";")))]);
+                     end if;
+                  end;
+               end if;
+            end;
          end if;
 
          --  Said where another task not ended has the same title.
@@ -734,6 +772,40 @@ package body Model_Runner.CLI.Tasks is
             Status := E.Exit_Usage;
             return;
          end if;
+         --  Into one of the project's components, from one a task is in.
+         if not Tk.Components (Store).Contains (After_First) then
+            Outcome := E.Make (E.Framework_Input_Invalid);
+            E.Add_Text (Outcome, "name", "the component to place them in");
+            E.Add_Text (Outcome, "value", After_First);
+            E.Add_Text (Outcome, "detail", "the project's components are "
+                        & Joined (Tk.Components (Store))
+                        & "; reconfigure set.components+=" & After_First & " adds it");
+            Fail (Outcome);
+            return;
+         end if;
+         declare
+            Held : Boolean := False;
+         begin
+            for Id of Tk.List (Store) loop
+               declare
+                  Defined : R.Item;
+                  Read    : E.Error_Info;
+               begin
+                  Tk.Definition (Store, Id, Defined, Read);
+                  Held := Held or else (E.Is_Ok (Read) and then R.Get (Defined, "component") = First_Word
+                                        and then Tk.State_Of (Store, Id)
+                                                   not in "complete" | "cancelled" | "rejected");
+               end;
+            end loop;
+            if not Held then
+               Outcome := E.Make (E.Framework_Input_Invalid);
+               E.Add_Text (Outcome, "name", "the component its tasks are in");
+               E.Add_Text (Outcome, "value", First_Word);
+               E.Add_Text (Outcome, "detail", "no open task is in it");
+               Fail (Outcome);
+               return;
+            end if;
+         end;
          for Id of Tk.List (Store) loop
             declare
                Defined : R.Item;
@@ -1027,6 +1099,38 @@ package body Model_Runner.CLI.Tasks is
             return;
          end if;
 
+         --  Waiting for another, it is not complete whatever its checks say:
+         --  said first, with what to do, and nothing is run.
+         declare
+            Defined : R.Item;
+            Read    : E.Error_Info;
+         begin
+            Tk.Definition (Store, Argument, Defined, Read);
+            for Other of Model_Runner.Framework.Lines_Of
+              (Ada.Strings.Fixed.Translate (R.Get (Defined, "depends_on"),
+                                            Ada.Strings.Maps.To_Mapping (",", [1 => ASCII.LF])))
+            loop
+               declare
+                  Named : constant String := Ada.Strings.Fixed.Trim (Other, Ada.Strings.Both);
+               begin
+                  if Named /= "" and then Tk.State_Of (Store, Named) /= "complete" then
+                     Outcome := E.Make (E.Framework_Task_Not_Ready);
+                     E.Add_Text (Outcome, "name", Argument);
+                     E.Add_Text (Outcome, "detail", "it waits for " & Named & ", which is "
+                                 & Tk.State_Of (Store, Named));
+                     Fail (Outcome);
+                     Pres.Put_Note
+                       (Screen, "cli.next.waits_first",
+                        [Loc.Named ("name", Argument), Loc.Named ("value", Named),
+                         Loc.Named ("detail",
+                                    (if Tk.State_Of (Store, Named) = "candidate"
+                                     then "task accept " & Named else "work " & Named))]);
+                     return;
+                  end if;
+               end;
+            end loop;
+         end;
+
          --  Its evidence missing or stale, it is verified now: a task done
          --  by hand is checked as the harness would check it.
          if not Verified then
@@ -1288,6 +1392,31 @@ package body Model_Runner.CLI.Tasks is
             end loop;
             Outcome := E.Success;
          end;
+      end if;
+
+      --  Already where it is asked to go: said, and nothing done.
+      if Action in "accept" | "reject" | "cancel" and then Argument /= ""
+        and then Tk.State_Of (Store, Argument)
+                   = (if Action = "accept" then "accepted"
+                      elsif Action = "reject" then "rejected" else "cancelled")
+      then
+         Pres.Put_Note (Screen, "cli.intent.already",
+                        [Loc.Named ("name", Argument),
+                         Loc.Named ("value", Tk.State_Of (Store, Argument))]);
+         S.Close (Store);
+         return;
+      elsif Action = "move" and then First_Word /= ""
+        and then Ada.Strings.Fixed.Index (After_First & " ", "ready ") = 1
+      then
+         Outcome := E.Make (E.Framework_Input_Invalid);
+         E.Add_Text (Outcome, "name", "the state to move " & First_Word & " to");
+         E.Add_Text (Outcome, "value", "ready");
+         E.Add_Text (Outcome, "detail", "ready is no state of its own: a task is ready when it"
+                     & " is accepted and waits for nothing; task accept " & First_Word
+                     & " accepts it");
+         Fail (Outcome);
+         S.Close (Store);
+         return;
       end if;
 
       if Action = "list" then

@@ -539,7 +539,12 @@ package body Model_Runner.Framework.Schemas is
                      Named := True;
                      if not Holds (Item, Records.Get (Value, Field)) then
                         Refuse ("its " & Field & " is not what the field"
-                                & " holds");
+                                & " holds: it takes "
+                                & (case Item.Kind is
+                                     when Number_Field     => "a whole number",
+                                     when Identifier_Field => "an identifier such as TASK-001",
+                                     when Choice_Field     => "one of " & Item.Choices.all,
+                                     when Text_Field       => "text"));
                         return;
                      end if;
                   end if;

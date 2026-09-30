@@ -299,6 +299,12 @@ package body Model_Runner.CLI.Intents is
                if Action = "reconsider" then
                   Granted (Tr.Reconsideration) := True;
                end if;
+               --  Already there: said so, and nothing to do.
+               if Nt.State_Of (Store, Kind, Word (2)) = Next then
+                  Pres.Put_Note (Screen, "cli.intent.already", [Loc.Named ("name", Word (2)),
+                                                                Loc.Named ("value", Next)]);
+                  return;
+               end if;
                Nt.Move (Store, Change, Kind, Word (2), Next, Granted, Status, Actor => Tr.User);
                if E.Is_Ok (Status) then
                   S.Commit (Store, Change, Status);
@@ -310,6 +316,31 @@ package body Model_Runner.CLI.Intents is
                Pres.Put_Message
                  (Screen, "cli.task.moved", [Loc.Named ("name", Word (2)), Loc.Named ("value", Next)]);
                Move_Along (Store, Screen);
+
+               --  Retired, with work still open for it: how to let that go.
+               if Nt."=" (Kind, Nt.Requirement) and then Next in "rejected" | "obsolete" then
+                  for Id of Model_Runner.Framework.Tasks.List (Store) loop
+                     declare
+                        Defined : Model_Runner.Framework.Records.Item;
+                        Read    : E.Error_Info;
+                        State   : constant String := Model_Runner.Framework.Tasks.State_Of (Store, Id);
+                     begin
+                        Model_Runner.Framework.Tasks.Definition (Store, Id, Defined, Read);
+                        if E.Is_Ok (Read)
+                          and then State not in "complete" | "cancelled" | "rejected"
+                          and then Model_Runner.Framework.Lines_Of
+                                     (Model_Runner.Framework.Records.Get (Defined, "requirements"))
+                                     .Contains (Word (2))
+                        then
+                           Pres.Put_Note
+                             (Screen, "cli.next.task_left",
+                              [Loc.Named ("name", Id),
+                               Loc.Named ("value", (if State = "candidate" then "reject" else "cancel")),
+                               Loc.Named ("other", Word (2))]);
+                        end if;
+                     end;
+                  end loop;
+               end if;
             end;
          end if;
 
@@ -555,6 +586,14 @@ package body Model_Runner.CLI.Intents is
                      [Loc.Named ("name", From (4)),
                       Loc.Named ("value", Joined_Components (Store))]);
                end if;
+               --  What it depends on is a requirement there is.
+               if E.Is_Ok (Status) and then Nt."=" (Relation, Nt.Dependency)
+                 and then Nt.State_Of (Store, Nt.Requirement, From (4)) = ""
+               then
+                  Pres.Put_Note
+                    (Screen, "cli.intent.link_missing",
+                     [Loc.Named ("name", From (4)), Loc.Named ("value", Word (2))]);
+               end if;
                if E.Is_Ok (Status) and then Relation in Nt.Implementation | Nt.Test then
                   declare
                      package Rp renames Model_Runner.Framework.Repository;
@@ -628,10 +667,30 @@ package body Model_Runner.CLI.Intents is
                   Status := E.Make (E.Framework_Input_Invalid);
                   E.Add_Text (Status, "name", "the setting a decision governs");
                   E.Add_Text (Status, "value", Setting);
-                  E.Add_Text (Status, "detail",
-                              "no setting is called so; a decision governs one config shows"
-                              & (if Near = Null_Unbounded_String then ""
-                                 else ", as " & To_String (Near)));
+                  E.Add_Text (Status, "detail", "no setting is called so; a decision governs one config"
+                              & " shows" & (if Near = Null_Unbounded_String then ""
+                                            else ", as " & To_String (Near)));
+               elsif Model_Runner.Framework.Records.Has (Config, Setting)
+                 or else Model_Runner.Framework.Configurations.Known_Names.Contains (Setting)
+               then
+                  --  A ruling is a value the setting takes: held to what a
+                  --  change to it would be held to, and nothing is changed.
+                  declare
+                     One     : Model_Runner.Framework.Configurations.Value_Maps.Map;
+                     Planned : Model_Runner.Framework.Configurations.Change_Plan;
+                     Checked : E.Error_Info;
+                  begin
+                     One.Include (Setting, From (4));
+                     Model_Runner.Framework.Configurations.Plan_Change (Store, One, Planned, Checked);
+                     if E.Is_Error (Checked) and then E.Text_Of (Checked, "detail") /= ""
+                       and then E."/=" (Checked.Code, E.Framework_Revision_Conflict)
+                     then
+                        Status := E.Make (E.Framework_Input_Invalid);
+                        E.Add_Text (Status, "name", "a ruling on " & Setting);
+                        E.Add_Text (Status, "value", From (4));
+                        E.Add_Text (Status, "detail", E.Text_Of (Checked, "detail"));
+                     end if;
+                  end;
                end if;
             end;
          end if;
@@ -668,8 +727,14 @@ package body Model_Runner.CLI.Intents is
                if Nt."=" (Kind, Nt.Requirement)
                  and then To_String (Held.State) in "accepted" | "implemented"
                then
-                  Field ("not verified", Model_Runner.Framework.Verification.Why_Not_Verified
-                                           (Store, Named));
+                  declare
+                     Why : constant String :=
+                       Model_Runner.Framework.Verification.Why_Not_Verified (Store, Named);
+                  begin
+                     Field ("not verified",
+                            (if Why /= "" then Why
+                             else "its evidence holds; check " & Named & " records it verified"));
+                  end;
                end if;
                Field ("source", To_String (Held.Source));
                if Held.Supersedes /= Null_Unbounded_String then

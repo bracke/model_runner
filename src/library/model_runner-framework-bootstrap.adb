@@ -481,8 +481,29 @@ package body Model_Runner.Framework.Bootstrap is
          Id  : constant String := Results.Identifier_Of (Said);
          New_One : constant Boolean := not Stores.Exists (Item, Results_Area, Id);
       begin
+         --  One saying the same is there already: nothing more is raised.
+         if New_One then
+            for Name of Stores.Names (Item, Results_Area) loop
+               declare
+                  Held : Results.Result;
+                  Read : E.Error_Info;
+                  Kept : constant String :=
+                    (if Name'Length > 4 and then Name (Name'Last - 3 .. Name'Last) = ".rec"
+                     then Name (Name'First .. Name'Last - 4) else Name);
+               begin
+                  Results.Read (Item, Kept, Held, Read, With_Payload => False);
+                  if E.Is_Ok (Read) and then Held.Summary = Said.Summary
+                    and then To_String (Held.Producer) = "bootstrap"
+                  then
+                     return;
+                  end if;
+               end;
+            end loop;
+         end if;
          Results.Add (Item, Change, Said, Status);
-         Result.Issues := Result.Issues + 1;
+         if New_One then
+            Result.Issues := Result.Issues + 1;
+         end if;
          if E.Is_Ok (Status) and then New_One then
             Result.Stale.Append (Id & ": " & To_String (Said.Summary));
          end if;
@@ -516,6 +537,7 @@ package body Model_Runner.Framework.Bootstrap is
                if Staged then
                   Records.Set (Value, "imported_text", To_String (Next.Text));
                   Records.Set (Value, "imported_criteria", To_String (Next.Criteria));
+                  Records.Set (Value, "imported_title", To_String (Next.Title));
                   Stores.Put (Change, Area_Of (Kind), Named, Value);
                end if;
             end Mark_Imported;
@@ -545,11 +567,38 @@ package body Model_Runner.Framework.Bootstrap is
                   Judged_By : constant String :=
                     (if Records.Has (Kept, "imported_criteria")
                      then Records.Get (Kept, "imported_criteria") else To_String (Held.Criteria));
+
+                  --  The title it was imported with, or holds when that was
+                  --  not kept.
+                  Titled : constant String :=
+                    (if Records.Has (Kept, "imported_title") then Records.Get (Kept, "imported_title")
+                     else To_String (Held.Title));
                begin
-                  if (To_String (Next.Text) = Imported and then To_String (Next.Criteria) = Judged_By)
-                    or else To_String (Held.State) in "obsolete" | "superseded"
-                  then
+                  if To_String (Held.State) in "obsolete" | "superseded" then
                      Result.Existing := Result.Existing + 1;
+
+                  --  Its words unchanged, or already what it holds -- a person
+                  --  took them in by hand -- and at most its title renamed.
+                  elsif (To_String (Next.Text) = Imported and then To_String (Next.Criteria) = Judged_By)
+                    or else (To_String (Next.Text) = To_String (Held.Text)
+                             and then (To_String (Next.Criteria) = To_String (Held.Criteria)
+                                       or else To_String (Next.Criteria) = ""))
+                  then
+                     --  A heading renamed, where nobody renamed what it made:
+                     --  the new title, a revision of no meaning.
+                     if To_String (Next.Title) /= Titled and then To_String (Held.Title) = Titled
+                       and then To_String (Next.Title) /= ""
+                     then
+                        Intent.Revise
+                          (Item, Change, Kind, Known, Field (Next.Title), To_String (Held.Text),
+                           To_String (Held.Criteria), Effect, Status);
+                        if E.Is_Ok (Status) then
+                           Mark_Imported (Kind, Known);
+                           Result.Revised.Append (Known);
+                        end if;
+                     else
+                        Result.Existing := Result.Existing + 1;
+                     end if;
                   elsif (To_String (Held.State) /= Intent.First_State (Kind) and then not Settled)
                     or else (Records.Get (Kept, "imported_text") /= ""
                              and then To_String (Held.Text) /= Imported)
@@ -573,9 +622,7 @@ package body Model_Runner.Framework.Bootstrap is
                                                     & " kept"
                                                else "")
                                             & "; " & Word & " revise " & Known
-                                            & (if Intent."=" (Kind, Intent.Specification)
-                                               then " from-document" else " text=...")
-                                            & " takes the document's words"),
+                                            & " from-document takes the document's words"),
                            Payload    => Next.Text,
                            Provenance => Next.Provenance,
                            others     => <>);
@@ -795,7 +842,15 @@ package body Model_Runner.Framework.Bootstrap is
                         Said    : Results.Result;
                         Why     : constant String :=
                           Known & ": " & To_String (Held.Source) & " no longer says it";
+
+                        --  Of its own register: a decision is not replaced by
+                        --  a requirement.
+                        function Same_Kind (Made : String) return Boolean
+                        is (Made'Length > 4 and then Known'Length > 4
+                            and then Made (Made'First .. Made'First + 3)
+                                     = Known (Known'First .. Known'First + 3));
                      begin
+
                         --  The one made now whose words are most like its own,
                         --  where more than half of them are: its new wording,
                         --  most likely.
@@ -805,6 +860,7 @@ package body Model_Runner.Framework.Bootstrap is
                         begin
                            for Index in 1 .. Natural (Result.Made.Length) loop
                               if Made_Sources (Index) = To_String (Held.Source)
+                                and then Same_Kind (Result.Made (Index))
                                 and then Likeness (To_String (Held.Text), Made_Texts (Index)) > Score
                               then
                                  Score := Likeness (To_String (Held.Text), Made_Texts (Index));
@@ -813,11 +869,15 @@ package body Model_Runner.Framework.Bootstrap is
                            end loop;
                            if Best > 0 then
                               Instead := To_Unbounded_String
-                                (Result.Made (Best) & ", most like it -- req supersede " & Known
+                                (Result.Made (Best) & ", most like it -- "
+                                 & (if Intent."=" (Kind, Intent.Decision) then "decision" else "req")
+                                 & " supersede " & Known
                                  & " " & Result.Made (Best) & " keeps it as that one's history");
                            else
                               for Index in 1 .. Natural (Result.Made.Length) loop
-                                 if Made_Sources (Index) = To_String (Held.Source) then
+                                 if Made_Sources (Index) = To_String (Held.Source)
+                                   and then Same_Kind (Result.Made (Index))
+                                 then
                                     Append (Instead, (if Instead = Null_Unbounded_String then ""
                                                       else ", ") & Result.Made (Index));
                                  end if;
@@ -864,8 +924,10 @@ package body Model_Runner.Framework.Bootstrap is
            (Kind       => Results.Bootstrap_Report,
             Producer   => To_Unbounded_String ("bootstrap"),
             Summary    => To_Unbounded_String
-                            (Image (Result.Created) & " made, " & Image (Result.Existing)
-                             & " there already, " & Image (Result.Issues) & " issues"),
+                            (Image (Result.Created) & " made, "
+                             & Image (Natural (Result.Revised.Length)) & " revised, "
+                             & Image (Result.Existing) & " there already, "
+                             & Image (Result.Issues) & " new issues"),
             Payload    => Listed,
             others     => <>);
          Results.Add (Item, Change, Kept, Status);

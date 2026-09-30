@@ -1,7 +1,9 @@
 with Ada.Characters.Handling;
 with Ada.Directories;
+with Ada.Environment_Variables;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
@@ -507,6 +509,60 @@ package body Model_Runner.CLI.Work is
             Pres.Put_Note (Screen, "cli.next.create");
          end if;
       end Say_What_Is_Ready;
+
+      --  What makes a task that cannot be worked on workable, as a next
+      --  step: accepting a candidate, doing or dropping what it waits for,
+      --  its parts first, or trying again.
+      function Way_On (Id : String) return String is
+         Defined : R.Item;
+         Read    : E.Error_Info;
+         State   : constant String := Tk.State_Of (Store, Id);
+         Waiting : Unbounded_String;
+         First   : Unbounded_String;
+      begin
+         Tk.Definition (Store, Id, Defined, Read);
+         if State = "candidate" then
+            return Pres.Next_Step_Value (Screen, "cli.next.accept_task", [Loc.Named ("name", Id)]);
+         end if;
+         --  Parts not done: they come first.
+         for Child of Tk.Children (Store, Id) loop
+            if Tk.State_Of (Store, Child) not in "complete" | "cancelled" | "rejected" then
+               Append (Waiting, (if Waiting = Null_Unbounded_String then "" else ", ")
+                                & Child & " " & Tk.State_Of (Store, Child));
+            end if;
+         end loop;
+         if Waiting /= Null_Unbounded_String then
+            return Pres.Next_Step_Value
+              (Screen, "cli.next.parts_first", [Loc.Named ("name", Id),
+                                                  Loc.Named ("detail", To_String (Waiting))]);
+         end if;
+         --  What it waits for: done first, or no longer waited for.
+         for Other of Model_Runner.Framework.Lines_Of
+           (Ada.Strings.Fixed.Translate (R.Get (Defined, "depends_on"),
+                                         Ada.Strings.Maps.To_Mapping (",", [1 => ASCII.LF])))
+         loop
+            declare
+               Named : constant String := Ada.Strings.Fixed.Trim (Other, Ada.Strings.Both);
+            begin
+               if Named /= "" and then Tk.State_Of (Store, Named) /= "complete" then
+                  First := To_Unbounded_String (Named);
+                  exit;
+               end if;
+            end;
+         end loop;
+         if First /= Null_Unbounded_String then
+            return Pres.Next_Step_Value
+              (Screen, "cli.next.waits_first",
+               [Loc.Named ("name", Id), Loc.Named ("value", To_String (First)),
+                Loc.Named ("detail",
+                           (if Tk.State_Of (Store, To_String (First)) = "candidate"
+                            then "task accept " & To_String (First)
+                            else "work " & To_String (First)))]);
+         elsif State in "blocked" | "failed" then
+            return Pres.Next_Step_Value (Screen, "cli.next.retry", [Loc.Named ("name", Id)]);
+         end if;
+         return "";
+      end Way_On;
    begin
       Status := E.Exit_Success;
 
@@ -520,6 +576,32 @@ package body Model_Runner.CLI.Work is
             end if;
          end;
       end loop;
+
+      --  What --set may name, and a sandbox that reads: said before
+      --  anything is opened, not found out by an agent confined to nothing.
+      for Position in Given.Iterate loop
+         declare
+            Name : constant String := Model_Runner.Framework.Configurations.Value_Maps.Key (Position);
+         begin
+            if Name not in "model" | "steps" | "profile" | "all" then
+               Outcome := E.Make (E.Framework_Input_Invalid);
+               E.Add_Text (Outcome, "name", "what work --set takes");
+               E.Add_Text (Outcome, "value", Name);
+               E.Add_Text (Outcome, "detail", "work takes --set model=PATH, steps=N, profile=NAME"
+                           & " and all=yes; the agent is the setting work.agent");
+               Fail (Outcome);
+               return;
+            end if;
+         end;
+      end loop;
+      if Model_Runner.Framework.Permissions.Sandbox_Problem /= "" then
+         Outcome := E.Make (E.Framework_Input_Invalid);
+         E.Add_Text (Outcome, "name", "MODEL_RUNNER_SANDBOX");
+         E.Add_Text (Outcome, "value", Ada.Environment_Variables.Value ("MODEL_RUNNER_SANDBOX"));
+         E.Add_Text (Outcome, "detail", Model_Runner.Framework.Permissions.Sandbox_Problem);
+         Fail (Outcome);
+         return;
+      end if;
 
       S.Open (Store, Directory, Report, Outcome);
       if E.Is_Error (Outcome) then
@@ -685,14 +767,8 @@ package body Model_Runner.CLI.Work is
                         for Reason of Now.Reasons loop
                            Append (Why, Reason & ASCII.LF);
                         end loop;
-                        if Tk.State_Of (Store, Id) = "candidate" then
-                           Append (Why, Pres.Next_Step_Value
-                                          (Screen, "cli.next.accept_task", [Loc.Named ("name", Id)])
-                                   & ASCII.LF);
-                        elsif Tk.State_Of (Store, Id) in "blocked" | "failed" then
-                           Append (Why, Pres.Next_Step_Value
-                                          (Screen, "cli.next.retry", [Loc.Named ("name", Id)])
-                                   & ASCII.LF);
+                        if not Now.Ready and then Way_On (Id) /= "" then
+                           Append (Why, Way_On (Id) & ASCII.LF);
                         end if;
                         Model_Runner.CLI.Choosers.Append
                           (Offer,
@@ -802,10 +878,8 @@ package body Model_Runner.CLI.Work is
                Pres.Put_Note (Screen, "cli.next.model");
 
             --  A task that cannot be worked on: what makes it workable.
-            elsif Tk.State_Of (Store, To_String (Chosen)) = "candidate" then
-               Pres.Put_Note (Screen, "cli.next.accept_task", [Loc.Named ("name", To_String (Chosen))]);
-            elsif Tk.State_Of (Store, To_String (Chosen)) in "blocked" | "failed" then
-               Pres.Put_Note (Screen, "cli.next.retry", [Loc.Named ("name", To_String (Chosen))]);
+            elsif Way_On (To_String (Chosen)) /= "" then
+               Pres.Put_Note (Screen, "cli.next.way_on", [Loc.Named ("detail", Way_On (To_String (Chosen)))]);
             end if;
             S.Close (Store);
             return;
@@ -835,7 +909,12 @@ package body Model_Runner.CLI.Work is
                                    & Candidate);
                end if;
             end loop;
-            if Waiting /= Null_Unbounded_String then
+            --  A split's parts are said by the step after it, once.
+            if Waiting /= Null_Unbounded_String
+              and then not (To_String (Done.Final_State) = "blocked"
+                            and then Ada.Strings.Fixed.Index
+                                       (To_String (Done.Reason), "waiting for its children: ") = 1)
+            then
                Pres.Put_Note
                  (Screen, "cli.next.proposed", [Loc.Named ("detail", To_String (Waiting))]);
             end if;
@@ -847,7 +926,12 @@ package body Model_Runner.CLI.Work is
             Say ("cli.work.claimed", To_String (Done.Claimed), To_String (Done.Summary));
          end if;
          if Done.Scope /= Null_Unbounded_String then
-            Say ("cli.work.scope", To_String (Done.Scope), To_String (Done.Scope_Reason));
+            Say ("cli.work.scope",
+                 (if To_String (Done.Scope) = "full_suite" then "the whole suite"
+                  elsif To_String (Done.Scope) = "certain_tests" then "the tests it certainly reaches"
+                  elsif To_String (Done.Scope) = "component_tests" then "its component's tests"
+                  else To_String (Done.Scope)),
+                 To_String (Done.Scope_Reason));
          end if;
          if Done.Evidence_Id /= Null_Unbounded_String then
             Say ("cli.work.evidence", To_String (Done.Evidence_Id), "");
@@ -884,7 +968,20 @@ package body Model_Runner.CLI.Work is
                   end if;
                end loop;
 
-               --  The last of its parent's parts done: the parent goes on.
+               --  The last of its parent's parts done: the parent goes on,
+               --  its readiness worked out now rather than on the next open.
+               if R.Get (Defined, "parent") /= "" then
+                  declare
+                     Change : S.Transaction;
+                     Became : Model_Runner.Framework.Name_Lists.Vector;
+                     Moved  : E.Error_Info;
+                  begin
+                     Tk.Recompute_Readiness (Store, Change, Became, Moved);
+                     if E.Is_Ok (Moved) then
+                        S.Commit (Store, Change, Moved);
+                     end if;
+                  end;
+               end if;
                if R.Get (Defined, "parent") /= ""
                  and then Tk.State_Of (Store, R.Get (Defined, "parent")) = "accepted"
                  and then Tk.Ready (Store, R.Get (Defined, "parent")).Ready
@@ -922,15 +1019,57 @@ package body Model_Runner.CLI.Work is
                   [Loc.Named ("detail", Reason (From .. (if Stop = 0 then Reason'Last else Stop - 1)))]);
             end;
          elsif To_String (Done.Final_State) = "blocked"
-           and then not Done.Kept_Back.Is_Empty and then Done.Proposed.Is_Empty
            and then Done.Issue_Id /= Null_Unbounded_String
+           and then (for some Line of Done.Kept_Back =>
+                       Ada.Strings.Fixed.Index (Line, "children") > 0
+                       or else Ada.Strings.Fixed.Index (Line, "may not propose") > 0)
          then
             --  Its parts or proposals refused: trying again gives the same;
-            --  a person makes them, or lets its agent.
-            Pres.Put_Note
-              (Screen, "cli.next.refused_parts",
-               [Loc.Named ("name", To_String (Done.Task_Id)),
-                Loc.Named ("value", To_String (Done.Issue_Id))]);
+            --  a person makes them by hand, or lets its agent -- as what
+            --  refused them says.
+            declare
+               Titles  : Unbounded_String;
+               Why     : Unbounded_String;
+               Defined : R.Item;
+               Read    : E.Error_Info;
+            begin
+               for Line of Done.Kept_Back loop
+                  declare
+                     Colon : constant Natural := Ada.Strings.Fixed.Index (Line, ": ");
+                  begin
+                     --  Those refused for want of leave to make them.
+                     if Colon > Line'First
+                       and then (Ada.Strings.Fixed.Index (Line, "children") > Colon
+                                 or else Ada.Strings.Fixed.Index (Line, "may not propose") > Colon)
+                     then
+                        Append (Titles, (if Titles = Null_Unbounded_String then "" else "; ")
+                                        & Line (Line'First .. Colon - 1));
+                        if Why = Null_Unbounded_String then
+                           Why := To_Unbounded_String (Line (Colon + 2 .. Line'Last));
+                        end if;
+                     end if;
+                  end;
+               end loop;
+               Tk.Definition (Store, To_String (Done.Task_Id), Defined, Read);
+               Pres.Put_Note
+                 (Screen, "cli.next.refused_parts",
+                  [Loc.Named ("name", To_String (Done.Task_Id)),
+                   Loc.Named ("value", To_String (Done.Issue_Id)),
+                   Loc.Named ("detail", To_String (Titles)),
+                   Loc.Named ("other",
+                              (if R.Get (Defined, "permissions") /= ""
+                               then "its own permissions limit it: task edit "
+                                    & To_String (Done.Task_Id) & " --set permissions=... widens them"
+                               elsif Ada.Strings.Fixed.Index (To_String (Why), "max_depth") > 0
+                               then "reconfigure map.permission.kind." & R.Get (Defined, "kind")
+                                    & ".create_children=max_depth=N lets its agent go deeper"
+                               elsif Ada.Strings.Fixed.Index (To_String (Why), "max_children") > 0
+                               then "reconfigure map.permission.kind." & R.Get (Defined, "kind")
+                                    & ".create_children=max_children=N lets its agent make more"
+                               else "reconfigure map.permission.kind." & R.Get (Defined, "kind")
+                                    & ".create_children= and .propose_tasks= let its agent make"
+                                    & " them"))]);
+            end;
          elsif To_String (Done.Final_State) in "failed" | "blocked" then
             Pres.Put_Note (Screen, "cli.next.retry", [Loc.Named ("name", To_String (Done.Task_Id))]);
          elsif To_String (Done.Final_State) = "verification"

@@ -310,6 +310,24 @@ package body Model_Runner.Framework.Permissions is
    end Sandbox;
 
    ---------------------
+   -- Sandbox_Problem --
+   ---------------------
+
+   function Sandbox_Problem return String is
+      Text   : constant String :=
+        (if Ada.Environment_Variables.Exists (Sandbox_Variable)
+         then Ada.Environment_Variables.Value (Sandbox_Variable) else "");
+      Result : Permission_Set;
+      Status : E.Error_Info;
+   begin
+      if Trim (Text) = "" then
+         return "";
+      end if;
+      Restriction (Text, Result, Status);
+      return (if E.Is_Ok (Status) then "" else E.Text_Of (Status, "detail"));
+   end Sandbox_Problem;
+
+   ---------------------
    -- Sandbox_Refuses --
    ---------------------
 

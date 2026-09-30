@@ -383,7 +383,7 @@ package body Model_Runner.CLI.Init is
                              and then To_String (Tp.Setting_At (Composed, Index).Value)
                                         in "yes" | "true" | "required")
                then
-                  Pres.Put_Note (Screen, "cli.next.confirm_init");
+                  Pres.Put_Note (Screen, "cli.next.confirm_init_also");
                end if;
             end if;
             return;

@@ -1799,7 +1799,59 @@ package body Model_Runner.Framework.Verification is
          return To_String (Best);
       end Standing_Evidence;
 
-      Standing : constant String := Standing_Evidence;
+      --  The latest current run of the project's tests taken for no task
+      --  -- check full -- whether it passed or not: a passing one stands
+      --  for stale task evidence as a serving task's does; a failing one
+      --  says the tests do not pass on the files as they are.
+      Project_Passed : Unbounded_String;
+      Project_Failed : Unbounded_String;
+
+      procedure Find_Project_Runs is
+         Latest  : Unbounded_String;
+         Good    : Boolean := False;
+         Reasons : Name_Lists.Vector;
+      begin
+         --  The newest only: what an older one was run on is older still.
+         for Name of Stores.Names (Item, Verification_Area) loop
+            declare
+               Value   : Records.Item;
+               Read    : E.Error_Info;
+               Id      : constant String :=
+                 (if Name'Length > 4 and then Name (Name'Last - 3 .. Name'Last) = ".rec"
+                  then Name (Name'First .. Name'Last - 4) else Name);
+            begin
+               if Latest = Null_Unbounded_String or else Id > To_String (Latest) then
+                  Stores.Read (Item, Verification_Area, Id, Value, Read);
+                  if E.Is_Ok (Read) and then Records.Get (Value, "task") = ""
+                    and then Records.Get (Value, "workspace") = ""
+                    and then Records.Get (Config (Item), "scalar.profile_capability."
+                                                         & Records.Get (Value, "profile"))
+                             = "run_tests"
+                  then
+                     Latest := To_Unbounded_String (Id);
+                     Good := Records.Get (Value, "passed") = "true"
+                       and then Showing (Item, Value) = Tests_Ran;
+                  end if;
+               end if;
+            end;
+         end loop;
+         if Latest /= Null_Unbounded_String
+           and then not Is_Current (Item, To_String (Latest), Reasons, Configuration)
+         then
+            Latest := Null_Unbounded_String;
+         end if;
+         if Latest /= Null_Unbounded_String then
+            if Good then
+               Project_Passed := Latest;
+            else
+               Project_Failed := Latest;
+            end if;
+         end if;
+      end Find_Project_Runs;
+
+      Standing_Of_Tasks : constant String := Standing_Evidence;
+      Standing : Unbounded_String := To_Unbounded_String (Standing_Of_Tasks);
+      Stood_For : Boolean := False;
 
       Found : Unbounded_String;
       Any   : Boolean := False;
@@ -1808,6 +1860,16 @@ package body Model_Runner.Framework.Verification is
       Built : Boolean :=
         not Intent.Links (Item, Intent.Requirement, Requirement, Intent.Implementation).Is_Empty;
    begin
+      Find_Project_Runs;
+      if Project_Failed /= Null_Unbounded_String then
+         return Lacks (To_String (Project_Failed) & ", the latest run of the project's tests on the"
+                       & " files as they are, did not pass");
+      end if;
+      if Project_Passed /= Null_Unbounded_String
+        and then (Standing = Null_Unbounded_String or else Project_Passed > Standing)
+      then
+         Standing := Project_Passed;
+      end if;
       for Id of Everything loop
          declare
             Defined : Records.Item;
@@ -1846,10 +1908,11 @@ package body Model_Runner.Framework.Verification is
                      return Lacks (Id & " has no evidence; task verify " & Id & " takes it");
                   end if;
                   Stores.Read (Item, Verification_Area, Evidence, Value, Read);
-                  if Standing /= "" and then Standing > Evidence
+                  if Standing /= Null_Unbounded_String and then To_String (Standing) > Evidence
                     and then not Is_Current (Item, Evidence, Reasons, Configuration)
                   then
                      --  Stale, and stood for by later evidence over it.
+                     Stood_For := True;
                      goto Next_Task;
                   end if;
                   if Records.Get (Value, "passed") /= "true" then
@@ -1876,6 +1939,13 @@ package body Model_Runner.Framework.Verification is
          end;
          <<Next_Task>>
       end loop;
+      if Stood_For then
+         Tested := True;
+         if Ada.Strings.Fixed.Index (To_String (Found), To_String (Standing)) = 0 then
+            Append (Found, (if Found = Null_Unbounded_String then "" else ", ")
+                           & To_String (Standing));
+         end if;
+      end if;
       if not Any then
          return Lacks ("no task serves it");
       elsif not Built then

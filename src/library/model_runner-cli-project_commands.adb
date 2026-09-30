@@ -434,6 +434,10 @@ package body Model_Runner.CLI.Project_Commands is
          return "error: no helper can be made here; do the work with the other tools";
       end if;
 
+      --  Nothing more is started for work already cancelled.
+      if Model_Runner.Framework.Execution.Work_Withdrawn then
+         return "error: the work was cancelled; no helper is made";
+      end if;
       loop
          declare
             Id      : Unbounded_String;
@@ -457,6 +461,14 @@ package body Model_Runner.CLI.Project_Commands is
             Run_Loop (Self.Agent.all, To_String (Context), Self.Host, Budget,
                       Root => False, Answer => Answer, Tokens => Tokens, Status => Ran,
                       Prompt_Tokens => Prompt);
+
+            --  The work cancelled while the helper ran: it is cancelled
+            --  with it, however it came to stop.
+            if Model_Runner.Framework.Execution.Work_Withdrawn
+              or else Model_Runner.Framework.Execution.Cancel_Requested
+            then
+               Ran := E.Make (E.Generation_Cancelled);
+            end if;
             Self.Host.Close_Child (To_String (Answer), Tokens, Ran, Now, Retry,
                                    Prompt_Tokens => Prompt);
             Told := (if Told = Null_Unbounded_String then Now else Told & ASCII.LF & Now);
@@ -859,6 +871,30 @@ package body Model_Runner.CLI.Project_Commands is
          for Id of Nt.List (Store, Nt.Requirement, "implemented") loop
             Pres.Put_Note (Screen, "cli.project.not_verified", [Loc.Named ("name", Id)]);
          end loop;
+         --  Accepted, and nothing open or done serves it: no work will
+         --  carry it out unless some is made.
+         for Id of Nt.List (Store, Nt.Requirement, "accepted") loop
+            declare
+               Served : Boolean := False;
+            begin
+               for Task_Id of Tk.List (Store) loop
+                  declare
+                     Defined : R.Item;
+                     Got     : E.Error_Info;
+                  begin
+                     Tk.Definition (Store, Task_Id, Defined, Got);
+                     Served := Served
+                       or else (E.Is_Ok (Got)
+                                and then Tk.State_Of (Store, Task_Id) not in "cancelled" | "rejected"
+                                and then Model_Runner.Framework.Lines_Of (R.Get (Defined, "requirements"))
+                                           .Contains (Id));
+                  end;
+               end loop;
+               if not Served then
+                  Pres.Put_Note (Screen, "cli.project.unserved", [Loc.Named ("name", Id)]);
+               end if;
+            end;
+         end loop;
          for Id of Tk.List (Store, "accepted") loop
             if Tk.Ready (Store, Id).Ready then
                Ready := Ready + 1;
@@ -1084,7 +1120,7 @@ package body Model_Runner.CLI.Project_Commands is
             declare
                Shown : Natural := 0;
 
-               function Acted_On (Summary : String) return Boolean is
+               function Acted_On (Issue_Id, Summary : String) return Boolean is
                   Colon : constant Natural := Ada.Strings.Fixed.Index (Summary, ": ");
                   Named : constant String :=
                     (if Colon > Summary'First then Summary (Summary'First .. Colon - 1) else "");
@@ -1096,6 +1132,34 @@ package body Model_Runner.CLI.Project_Commands is
                   if Ada.Strings.Fixed.Index (Summary, "output of ") = 1 then
                      return True;
                   end if;
+                  --  A document's words a register did not hold, which it
+                  --  now does.
+                  declare
+                     Mark : constant Natural := Ada.Strings.Fixed.Index (Summary, " now says what ");
+                  begin
+                     if Mark > 0 then
+                        declare
+                           Rest  : constant String := Summary (Mark + 15 .. Summary'Last);
+                           Space : constant Natural := Ada.Strings.Fixed.Index (Rest, " ");
+                           Entry_Id : constant String :=
+                             (if Space = 0 then Rest else Rest (Rest'First .. Space - 1));
+                           Of_Kind : constant Nt.Intent_Kind :=
+                             (if Ada.Strings.Fixed.Index (Entry_Id, "DEC-") = 1 then Nt.Decision
+                              elsif Ada.Strings.Fixed.Index (Entry_Id, "SPEC-") = 1
+                              then Nt.Specification
+                              else Nt.Requirement);
+                           Held   : Nt.Entity;
+                           Got    : E.Error_Info;
+                           Issue  : Rs.Result;
+                        begin
+                           Nt.Read (Store, Of_Kind, Entry_Id, Held, Got);
+                           Rs.Read (Store, Issue_Id, Issue, Got);
+                           return E.Is_Ok (Got)
+                             and then (To_String (Held.State) in "obsolete" | "superseded" | "rejected"
+                                       or else To_String (Held.Text) = To_String (Issue.Payload));
+                        end;
+                     end if;
+                  end;
                   return Named /= "" and then Ada.Strings.Fixed.Index (Named, " ") = 0
                     and then Nt.State_Of (Store, Kind, Named)
                                in "rejected" | "obsolete" | "superseded";
@@ -1111,7 +1175,7 @@ package body Model_Runner.CLI.Project_Commands is
                   begin
                      Rs.Read (Store, Result_Id, One, Got, With_Payload => False);
                      if E.Is_Ok (Got) and then Rs."=" (One.Kind, Rs.Diagnostic)
-                       and then not Acted_On (To_String (One.Summary))
+                       and then not Acted_On (Result_Id, To_String (One.Summary))
                      then
                         Field (Result_Id, To_String (One.Summary));
                         Shown := Shown + 1;
@@ -1159,9 +1223,18 @@ package body Model_Runner.CLI.Project_Commands is
          for Other of Model_Runner.Framework.Lines_Of (To_String (Held.References)) loop
             Field ("references", Other);
          end loop;
-         Field ("payload",
-                (if Whole then To_String (Held.Payload)
-                 else "(" & Image (Size) & " bytes; /result " & Argument (1) & " full shows them)"));
+         --  Whole, as it is: a line at a time, not cut to fit a message.
+         if Whole and then Pres.Is_Structured (Screen) then
+            Field ("payload", To_String (Held.Payload));
+         elsif Whole then
+            Field ("payload", "");
+            for Line of Model_Runner.Framework.Lines_Of (To_String (Held.Payload)) loop
+               Pres.Put_Line (Screen, "    " & Line);
+            end loop;
+         else
+            Field ("payload", "(" & Image (Size) & " bytes; /result " & Argument (1)
+                   & " full shows them)");
+         end if;
       end Show_Result;
 
       --  The project's verification, now, for no task in particular.
@@ -1486,6 +1559,7 @@ package body Model_Runner.CLI.Project_Commands is
          Pres.Put_Message
            (Screen, "cli.project.bootstrapped",
             [Loc.Named ("count", Image (Report.Created)),
+             Loc.Named ("value", Image (Natural (Report.Revised.Length))),
              Loc.Named ("total", Image (Report.Existing)),
              Loc.Named ("extra", Image (Report.Issues))]);
          for Id of Report.Made loop
@@ -1644,6 +1718,53 @@ package body Model_Runner.CLI.Project_Commands is
                    Loc.Named ("value", Nt.State_Of (Store, Nt.Requirement, Requirement))]);
             end loop;
          end;
+         --  A kind or a role granted more than the project allows gets
+         --  only what the project allows: said, with what it gets.
+         for Name of Planned.Changed loop
+            declare
+               package Pm renames Model_Runner.Framework.Permissions;
+               Prefix : constant String := "map.permission.";
+               Rest   : constant String :=
+                 (if Ada.Strings.Fixed.Index (Name, Prefix) = 1
+                  then Name (Name'First + Prefix'Length .. Name'Last) else "");
+               Colon  : constant Natural := Ada.Strings.Fixed.Index (Rest, ":");
+               Key    : constant String := (if Colon = 0 then Rest else Rest (Rest'First .. Colon - 1));
+               Dot    : constant Natural := Ada.Strings.Fixed.Index (Key, ".", Ada.Strings.Backward);
+               Level  : constant String := (if Dot = 0 then "" else Key (Key'First .. Dot - 1));
+            begin
+               if Level'Length > 5 and then Level (Level'First .. Level'First + 4) in "kind." | "role."
+               then
+                  declare
+                     Present : Boolean;
+                     Given   : constant Pm.Permission_Set := Pm.Level_Of (Store, Level, Present);
+                     Project : constant Pm.Permission_Set :=
+                       Pm.Effective (Store, "", "", Within_Sandbox => False);
+                     Wider   : constant String := Pm.Widening (Given, Project);
+
+                     --  What it gets of that capability: the line of it the
+                     --  project allows, or nothing.
+                     function Gets return String is
+                     begin
+                        for Line of Model_Runner.Framework.Lines_Of
+                          (Pm.Image (Pm.Intersect (Given, Project)))
+                        loop
+                           if Ada.Strings.Fixed.Index (Line, Wider) = 1 then
+                              return Line;
+                           end if;
+                        end loop;
+                        return "no " & Wider & " at all";
+                     end Gets;
+                  begin
+                     if Present and then Wider /= "" then
+                        Pres.Put_Note
+                          (Screen, "cli.project.clipped",
+                           [Loc.Named ("name", Level), Loc.Named ("value", Wider),
+                            Loc.Named ("detail", Gets)]);
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
          declare
             Written : Boolean;
          begin

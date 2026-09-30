@@ -1104,22 +1104,6 @@ package body Model_Runner.Framework.Work is
          Attempts : Unbounded_String;
          Workers  : Unbounded_String;
       begin
-         for Name of Stores.Names (Item, Invocations_Area) loop
-            if Name'Length > 4 and then Name (Name'First .. Name'First + 3) = "INV-" then
-               declare
-                  Value : Records.Item;
-                  Read  : E.Error_Info;
-               begin
-                  Stores.Read (Item, Invocations_Area, Name, Value, Read);
-                  if E.Is_Ok (Read) and then Records.Get (Value, "task") = Task_Id
-                    and then Records.Get (Value, "result_contract") = "work_claim"
-                  then
-                     Append (Attempts, (if Attempts = Null_Unbounded_String then "" else ", ")
-                             & Name & " " & Records.Get (Value, "state"));
-                  end if;
-               end;
-            end if;
-         end loop;
          for Name of Stores.Names (Item, Runtime_Area) loop
             declare
                Value : Records.Item;
@@ -1135,6 +1119,24 @@ package body Model_Runner.Framework.Work is
                           & Name (Name'First + 6 .. Name'Last) & " " & Records.Get (Value, "state")
                           & (if Records.Get (Value, "parent") = "" then ""
                              else " (a child of " & Records.Get (Value, "parent") & ")"));
+
+                  --  An attempt is its root agent's run: how that ended,
+                  --  and why, not only that its call returned.
+                  if Records.Get (Value, "parent") = "" then
+                     declare
+                        Why : constant String := Records.Get (Value, "summary");
+                     begin
+                        Append (Attempts, (if Attempts = Null_Unbounded_String then "" else "; ")
+                                & Name (Name'First + 6 .. Name'Last)
+                                & (if Records.Get (Value, "invocation") = "" then ""
+                                   else " in " & Records.Get (Value, "invocation"))
+                                & " " & Records.Get (Value, "state")
+                                & (if Why = "" then ""
+                                   elsif Why'Length > 100 then ": " & Why (Why'First .. Why'First + 96)
+                                                              & "..."
+                                   else ": " & Why));
+                     end;
+                  end if;
                end if;
             end;
          end loop;
@@ -1932,6 +1934,46 @@ package body Model_Runner.Framework.Work is
       Place    : Unbounded_String := To_Unbounded_String (Project);
 
       --  End the work with the task moved and the agent recorded.
+      --  What an answer that is not taken proposed is not lost with it:
+      --  kept as an issue, to be seen and made by hand.
+      procedure Keep_Proposals_Aside is
+         Lost : Unbounded_String;
+         Held : E.Error_Info;
+      begin
+         for Line of Lines_Of (Invocations.Claim (Said, "proposed_tasks")) loop
+            if Trim (Line) not in "" | "-" then
+               Append (Lost, ASCII.LF & "not proposed: " & Trim (Line));
+               Result.Kept_Back.Append (Trim (Line) & ": its answer was not taken");
+            end if;
+         end loop;
+         for Line of Lines_Of (Invocations.Claim (Said, "parts")) loop
+            if Trim (Line) not in "" | "-" then
+               Append (Lost, ASCII.LF & "part not made: " & Trim (Line));
+               Result.Kept_Back.Append (Trim (Line) & ": its answer was not taken");
+            end if;
+         end loop;
+         if Lost /= Null_Unbounded_String
+           or else Trim (Invocations.Claim (Said, "issues")) /= ""
+         then
+            declare
+               Issue : Results.Result :=
+                 (Kind       => Results.Diagnostic,
+                  Producer   => Result.Agent_Id,
+                  Summary    => To_Unbounded_String ("issues found working on " & Task_Id),
+                  Payload    => To_Unbounded_String
+                                  (Invocations.Claim (Said, "issues") & To_String (Lost)),
+                  Provenance => Result.Invocation_Id,
+                  others     => <>);
+            begin
+               Results.Add (Item, Change, Issue, Held);
+               if E.Is_Ok (Held) then
+                  Result.Issue_Id := Issue.Id;
+                  Annotate (Item, Change, Task_Id, "issues", To_String (Issue.Id));
+               end if;
+            end;
+         end if;
+      end Keep_Proposals_Aside;
+
       procedure Conclude (Next, Given_Reason, Agent_End : String) is
          --  Not done, where it worked in the project itself: what it
          --  changed is still there, and said so.
@@ -2441,7 +2483,7 @@ package body Model_Runner.Framework.Work is
          return;
       elsif Interrupted (Ran) then
          Stop_Children (Item, Change, To_String (Result.Agent_Id));
-         Conclude ("blocked", "its work was cancelled", "cancelled");
+         Conclude ("blocked", "its work was interrupted before it finished", "cancelled");
          return;
       elsif Out_Of_Time (Ran) then
          --  Out of time is not wrong work: the task is set aside, not
@@ -2465,8 +2507,11 @@ package body Model_Runner.Framework.Work is
       --  it wrote outside its permissions is named with that, every one.
       if not Tampered.Is_Empty then
          declare
-            Named : Unbounded_String;
+            Named    : Unbounded_String;
+            Read_Out : E.Error_Info;
          begin
+            Invocations.Hold (Invocations.Work_Claim, To_String (Answer), Said, Read_Out);
+            Keep_Proposals_Aside;
             for Path of Tampered loop
                Append (Named, (if Named = Null_Unbounded_String then "" else ", ")
                        & State_Directory & "/" & Path);
@@ -2500,6 +2545,12 @@ package body Model_Runner.Framework.Work is
             end if;
          end loop;
          if Denied /= Null_Unbounded_String or else not Put_Back_Files.Is_Empty then
+            declare
+               Read_Out : E.Error_Info;
+            begin
+               Invocations.Hold (Invocations.Work_Claim, To_String (Answer), Said, Read_Out);
+               Keep_Proposals_Aside;
+            end;
             if Isolated then
                Workspaces.Abandon (Item, Change, To_String (Result.Workspace_Id), Held);
             end if;
@@ -2522,6 +2573,7 @@ package body Model_Runner.Framework.Work is
 
       Invocations.Hold (Invocations.Work_Claim, To_String (Answer), Said, Held);
       if E.Is_Error (Held) then
+         Keep_Proposals_Aside;
          Conclude ("failed", "its answer did not keep to the work contract: "
                    & E.Text_Of (Held, "name") & ": " & E.Text_Of (Held, "detail")
                    & "; the answer is kept as "
@@ -2544,55 +2596,20 @@ package body Model_Runner.Framework.Work is
                     (if Named'Length > 2 and then Named (Named'First .. Named'First + 1) = "./"
                      then Named (Named'First + 2 .. Named'Last) else Named);
                begin
+                  --  A file there, written as it was, is no false claim:
+                  --  only one that is not there at all is.
                   if Path not in "" | "-" | "none" and then not Result.Changed_Files.Contains (Path)
                     and then not (not Isolated and then Earlier_Changed.Contains (Path))
+                    and then not Ada.Directories.Exists (Hostkit.Fs.Join (To_String (Place), Path))
                   then
                      Append (Missing, (if Missing = Null_Unbounded_String then "" else ", ") & Path);
                   end if;
                end;
             end loop;
             if Missing /= Null_Unbounded_String then
-               --  What it proposed is not lost with its answer: kept as an
-               --  issue, to be seen and made by hand.
-               declare
-                  Lost : Unbounded_String;
-               begin
-                  for Line of Lines_Of (Invocations.Claim (Said, "proposed_tasks")) loop
-                     if Trim (Line) not in "" | "-" then
-                        Append (Lost, ASCII.LF & "not proposed: " & Trim (Line));
-                        Result.Kept_Back.Append (Trim (Line) & ": its answer was not taken");
-                     end if;
-                  end loop;
-                  for Line of Lines_Of (Invocations.Claim (Said, "parts")) loop
-                     if Trim (Line) not in "" | "-" then
-                        Append (Lost, ASCII.LF & "part not made: " & Trim (Line));
-                        Result.Kept_Back.Append (Trim (Line) & ": its answer was not taken");
-                     end if;
-                  end loop;
-                  if Lost /= Null_Unbounded_String
-                    or else Trim (Invocations.Claim (Said, "issues")) /= ""
-                  then
-                     declare
-                        Issue : Results.Result :=
-                          (Kind       => Results.Diagnostic,
-                           Producer   => Result.Agent_Id,
-                           Summary    => To_Unbounded_String
-                                           ("issues found working on " & Task_Id),
-                           Payload    => To_Unbounded_String
-                                           (Invocations.Claim (Said, "issues") & To_String (Lost)),
-                           Provenance => Result.Invocation_Id,
-                           others     => <>);
-                     begin
-                        Results.Add (Item, Change, Issue, Held);
-                        if E.Is_Ok (Held) then
-                           Result.Issue_Id := Issue.Id;
-                           Annotate (Item, Change, Task_Id, "issues", To_String (Issue.Id));
-                        end if;
-                     end;
-                  end if;
-               end;
+               Keep_Proposals_Aside;
                Conclude ("failed", "it says it changed " & To_String (Missing)
-                         & ", which did not change", "failed");
+                         & ", which is not there", "failed");
                return;
             end if;
          end;
@@ -2711,13 +2728,17 @@ package body Model_Runner.Framework.Work is
                   declare
                      Other : constant String := Same_Title (Title);
                      State : constant String := Tasks.State_Of (Item, Other);
+                     Said  : constant String :=
+                       Title & ": "
+                       & (if Other = Task_Id then "it is this task"
+                          elsif State in "rejected" | "cancelled"
+                          then "it is " & Other & ", which was " & State
+                          else "it is " & Other & " already");
                   begin
-                     Result.Kept_Back.Append
-                       (Title & ": "
-                        & (if Other = Task_Id then "it is this task"
-                           elsif State in "rejected" | "cancelled"
-                           then "it is " & Other & ", which was " & State
-                           else "it is " & Other & " already"));
+                     --  Said once, however often the answer says it.
+                     if not Result.Kept_Back.Contains (Said) then
+                        Result.Kept_Back.Append (Said);
+                     end if;
                   end;
                elsif May_Propose then
                   Fields.Include ("title", Title);
@@ -2755,7 +2776,14 @@ package body Model_Runner.Framework.Work is
          --  A split is held to the limits children are: no more parts than
          --  create_children's max_children, and none below its max_depth.
          declare
-            Limit : constant Permissions.Grant := Held_Root.Allowed (Permissions.Create_Children);
+            --  Parts are proposals, which propose_tasks allows; how many,
+            --  and how deep, create_children bounds -- the agent's, or where
+            --  it has none, the project's.
+            Own   : constant Permissions.Grant := Held_Root.Allowed (Permissions.Create_Children);
+            Limit : constant Permissions.Grant :=
+              (if Own.Granted then Own
+               else Permissions.Effective (Item, "", "", Within_Sandbox => False)
+                      (Permissions.Create_Children));
             Depth : Natural := 0;
             Up    : Unbounded_String := To_Unbounded_String (Task_Id);
          begin
@@ -2771,14 +2799,13 @@ package body Model_Runner.Framework.Work is
                   Depth := Depth + 1;
                end;
             end loop;
-            --  Where the agent may create children, their limits bound its
-            --  parts too; a split is otherwise proposal, which propose_tasks
-            --  governs.
-            Split_Room := (if not Limit.Granted then Natural'Last
+            Split_Room := (if not Limit.Granted then 0
                            elsif Depth + 1 > Limit.Max_Depth then 0
                            else Limit.Max_Children);
             Split_Why := To_Unbounded_String
-              (if Depth + 1 > Limit.Max_Depth
+              (if not Limit.Granted
+               then "the project grants no create_children, which bounds parts"
+               elsif Depth + 1 > Limit.Max_Depth
                then "a part here would be" & Natural'Image (Depth + 1) & " below the task it came"
                     & " from, past create_children's max_depth" & Natural'Image (Limit.Max_Depth)
                else "past create_children's max_children" & Natural'Image (Limit.Max_Children));
@@ -3115,7 +3142,20 @@ package body Model_Runner.Framework.Work is
                   & (if Result.Evidence_Id = Null_Unbounded_String then ""
                      else " (" & To_String (Result.Evidence_Id) & ")"));
             end if;
-            if Work_Setting (Item, "integrate") /= "automatic" then
+            --  Work that does not pass where it was written is not offered
+            --  to the project: the task fails, with what failed, and the
+            --  workspace is given up.
+            if not Passed and then Result.Evidence_Id /= Null_Unbounded_String then
+               declare
+                  Evidence : constant String := To_String (Result.Evidence_Id);
+               begin
+                  Workspaces.Abandon (Item, Change, To_String (Result.Workspace_Id), Held);
+                  Conclude ("failed", Evidence & " did not pass in " & To_String (Result.Workspace_Id)
+                            & ", so nothing was taken in"
+                            & First_Diagnostics (Item, Evidence), "completed");
+               end;
+               return;
+            elsif Work_Setting (Item, "integrate") /= "automatic" then
                Conclude ("", To_String (Result.Workspace_Id) & " waits to be taken in"
                          & To_String (Said), "completed");
                return;
@@ -3322,8 +3362,11 @@ package body Model_Runner.Framework.Work is
          Status := E.Make (E.Framework_Transition_Invalid);
          E.Add_Text (Status, "name", Task_Id);
          E.Add_Text (Status, "value", Tasks.State_Of (Item, Task_Id));
-         E.Add_Text (Status, "expected", "verification");
-         E.Add_Text (Status, "detail", "only work that waits to be taken in is taken in");
+         E.Add_Text (Status, "expected", "being taken in");
+         E.Add_Text (Status, "detail",
+                     (if Id = "" then "it has no workspace -- it wrote in the project itself --"
+                                      & " so there is nothing to take in"
+                      else "only work that waits to be taken in is taken in"));
          return;
       end if;
       if Id = "" then

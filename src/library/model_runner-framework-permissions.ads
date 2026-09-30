@@ -108,6 +108,12 @@ package Model_Runner.Framework.Permissions is
      (Text   : String;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  What is wrong with the sandbox the environment sets, if anything:
+   --  one that does not read confines an agent to nothing.
+   --
+   --  @return Why it does not read, or the empty string.
+   function Sandbox_Problem return String;
+
    --  Whether the session's sandbox, rather than the project, keeps a
    --  path from being written or read.
    --

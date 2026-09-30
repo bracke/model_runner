@@ -860,6 +860,26 @@ package body Model_Runner.Framework.Repository is
       Tokens : constant Token_Vectors.Vector := Tokens_Of (Text);
       Unit   : constant String := Unit_Of (Tokens);
       Seen   : Name_Lists.Vector;
+
+      --  Whether the name at a place -- its whole dotted name -- is being
+      --  declared or ended there, not used.
+      function Declaring (At_Index : Positive) return Boolean is
+         First : Positive := At_Index;
+      begin
+         while First > 2 and then Is_Mark (Tokens (First - 1), '.')
+           and then Tokens (First - 2).Kind = Word
+         loop
+            First := First - 2;
+         end loop;
+         return First > 1
+           and then (Is_Word (Tokens (First - 1), "end")
+                     or else Is_Word (Tokens (First - 1), "procedure")
+                     or else Is_Word (Tokens (First - 1), "function")
+                     or else Is_Word (Tokens (First - 1), "package")
+                     or else Is_Word (Tokens (First - 1), "type")
+                     or else Is_Word (Tokens (First - 1), "subtype")
+                     or else Is_Word (Tokens (First - 1), "body"));
+      end Declaring;
    begin
       if Unit = "" then
          return;
@@ -918,19 +938,32 @@ package body Model_Runner.Framework.Repository is
             Last  : constant String :=
               Lower (if Dot = 0 then Full else Full (Dot + 1 .. Full'Last));
          begin
-            if Seen.Contains (Owner) and then To_String (Item.Path) /= Path then
+            if Seen.Contains (Owner) then
                for At_Index in 1 .. Natural (Tokens.Length) loop
                   declare
                      Here : constant Token := Tokens (At_Index);
+                     Own  : constant Boolean := To_String (Item.Path) = Path;
+
+                     --  A package is used by what it qualifies or by its
+                     --  full name: a word alone that spells it is some local
+                     --  name of the same spelling.
+                     Qualified : constant Boolean :=
+                       (At_Index < Natural (Tokens.Length)
+                        and then Is_Mark (Tokens (At_Index + 1), '.'))
+                       or else (At_Index > 1 and then Is_Mark (Tokens (At_Index - 1), '.'));
                   begin
                      --  A name another unit's name qualifies, as Other.Parse,
                      --  is not this unit's: a qualifier must be its owner's.
+                     --  Nor is its declaration, or the end of it, a use.
                      if Here.Kind = Word and then Lower (To_String (Here.Text)) = Last
                        and then not
                          (At_Index > 2 and then Is_Mark (Tokens (At_Index - 1), '.')
                           and then Tokens (At_Index - 2).Kind = Word
                           and then Lower (To_String (Tokens (At_Index - 2).Text))
                                      /= Lower (Last_Part (Owner)))
+                       and then not (Own and then Here.Line = Item.Line)
+                       and then not Declaring (At_Index)
+                       and then (To_String (Item.Kind) /= "package" or else Qualified)
                      then
                         Add_Relation
                           (Into,

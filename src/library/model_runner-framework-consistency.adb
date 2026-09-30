@@ -153,7 +153,8 @@ package body Model_Runner.Framework.Consistency is
          loop
             if not Stores.Exists (Item, Requirements_Area, Target) then
                Found (Undefined_Requirement, Id,
-                      "it depends on " & Target & ", which is not there");
+                      "it depends on " & Target & ", which is not there; req unlink " & Id
+                      & " dependency " & Target & " takes the link off");
             end if;
          end loop;
       end loop;
@@ -187,7 +188,11 @@ package body Model_Runner.Framework.Consistency is
                      then
                         Said.Append (Line);
                         Found (Conflicting_Authority, To_String (Standing.Governing.Subject),
-                               Line);
+                               Line & "; to settle it, make them agree -- reconfigure "
+                               & To_String (Standing.Governing.Subject) & "="
+                               & To_String (Standing.Governing.Value)
+                               & ", or decision govern ID " & To_String (Standing.Governing.Subject)
+                               & " VALUE -- or say which holds with overrides=");
                      end if;
                   end;
                end loop;

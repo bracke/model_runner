@@ -746,9 +746,11 @@ package body Model_Runner.Framework.Intent is
       --  one replaced is retired as the state it is in allows: rejected as
       --  a candidate, obsolete once accepted; the links say what replaced it.
       Current (Item, Change, Kind, Old_Id, Held, Read);
+      --  One never agreed on is rejected, in any register: nothing it
+      --  governed is taken over.
       Move (Item, Change, Kind, Old_Id,
-            (if Transitions.Is_State (Lifecycle_Of (Item, Kind), "superseded") then "superseded"
-             elsif Records.Get (Held, "state") = First_State (Kind) then "rejected"
+            (if Records.Get (Held, "state") = First_State (Kind) then "rejected"
+             elsif Transitions.Is_State (Lifecycle_Of (Item, Kind), "superseded") then "superseded"
              else "obsolete"),
             Transitions.Ordinary_Only, Status);
       if E.Is_Error (Status) then

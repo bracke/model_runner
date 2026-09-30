@@ -163,8 +163,18 @@ package body Model_Runner.Framework.Invocations is
               (if Said /= "" and then not Rules.Fields.Contains (Said)
                  and then Rules.Fields.Contains (Said & "s")
                then Said & "s" else Said);
+            --  What only frames an answer -- a brace, a bracket, a code
+            --  fence -- ends the field before it and is no part of one.
+            Bare  : constant String := Trim (Line);
+            Frame : constant Boolean :=
+              Bare in "{" | "}" | "[" | "]" | "}," | "],"
+              or else (Bare'Length >= 3 and then Bare (Bare'First .. Bare'First + 2) = "```")
+              or else (Bare'Length >= 2 and then Bare (Bare'First) = '{'
+                       and then Bare (Bare'Last) = '}' and then Name = "");
          begin
-            if Name /= "" and then Rules.Fields.Contains (Name) then
+            if Frame then
+               Current := Null_Unbounded_String;
+            elsif Name /= "" and then Rules.Fields.Contains (Name) then
                Current := To_Unbounded_String (Name);
                Result.Values.Include (Name, Item_Of (Line (Colon + 1 .. Line'Last)));
             elsif Current /= Null_Unbounded_String and then Item_Of (Line) /= "" then

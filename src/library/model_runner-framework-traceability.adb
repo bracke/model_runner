@@ -401,8 +401,9 @@ package body Model_Runner.Framework.Traceability is
       function Both_Ways (Kind : String) return Boolean
       is (Kind in "contains" | "implements");
 
-      Queue : Name_Lists.Vector;
-      Seeds : Name_Lists.Vector;
+      Queue  : Name_Lists.Vector;
+      Seeds  : Name_Lists.Vector;
+      Served : Name_Lists.Vector;
    begin
       for Path of Changed loop
          Seeds.Append (Seed_Of (Path));
@@ -434,12 +435,18 @@ package body Model_Runner.Framework.Traceability is
                      end if;
 
                   --  A requirement changed reaches what it is carried out
-                  --  in: its implementation, and its component.
-                  elsif Seeds.Contains (Node)
-                    and then Kind in "implemented_by" | "scope" | "belongs_to"
+                  --  in: its implementation, the tasks serving it, and its
+                  --  component -- as surely as its links say -- and the
+                  --  components those tasks are in.
+                  elsif ((Seeds.Contains (Node)
+                          and then Kind in "implemented_by" | "scope" | "belongs_to" | "served_by")
+                         or else (Served.Contains (Node) and then Kind = "part_of"))
                     and then To_String (Next.From) = Node
                   then
-                     if Reach (To_String (Next.To), Along) then
+                     if Kind = "served_by" then
+                        Served.Append (To_String (Next.To));
+                     end if;
+                     if Reach (To_String (Next.To), Weaker (Sure, Next.Sure)) then
                         Queue.Append (To_String (Next.To));
                      end if;
                   elsif (not Forward (Kind) or else Both_Ways (Kind))

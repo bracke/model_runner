@@ -1041,6 +1041,13 @@ package body Model_Runner.Framework.Stores is
       end if;
 
       Stage (Item, Change, Status);
+      --  Refused while staged -- a record that does not keep to its schema
+      --  -- nothing of it is left to be found as an interrupted change.
+      if E.Is_Error (Status) and then Clear_Journal (Root (Item)) then
+         return;
+      elsif E.Is_Error (Status) then
+         return;
+      end if;
       if E.Is_Ok (Status) then
          Mark (Item, Status);
       end if;

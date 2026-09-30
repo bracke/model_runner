@@ -2281,8 +2281,9 @@ package body Tests.CLI_Cases is
                  "work on a candidate gave no next step: " & To_String (Said));
       end;
       Run ("task|rehome|nowhere|elsewhere");
-      Assert (Code = 0 and then Shows ("0 tasks placed in elsewhere from nowhere"),
-              "rehome did not say what it placed: " & To_String (Said));
+      Assert (Code = 2 and then Shows ("the project's components are"),
+              "rehome into no component was not refused with the components there are: "
+              & To_String (Said));
       Run ("config|map.permission.project");
       Assert (Shows ("map.permission.project") and then Shows ("(the default)"),
               "the permissions a project is given unasked were not shown: " & To_String (Said));

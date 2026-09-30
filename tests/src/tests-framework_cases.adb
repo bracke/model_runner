@@ -5409,8 +5409,10 @@ package body Tests.Framework_Cases is
          S.Commit (Store, Change, Status);
          Tk.Move (Store, Change, To_String (Third), "accepted", "", Status => Status);
          S.Commit (Store, Change, Status);
+         --  Its work passes its checks where it was written -- the file
+         --  they want is written back -- so it waits to be taken in.
          Wk.Execute (Store, To_String (Third),
-                     Scripted_Agent'(File => To_Unbounded_String ("src/third.adb"),
+                     Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
                                      Answer => To_Unbounded_String (Good), Broken => False),
                      Cx.Profile (Store, ""), Done, Status);
          Place := Done.Workspace_Id;
@@ -6838,7 +6840,7 @@ package body Tests.Framework_Cases is
       S.Commit (Store, Change, Status);
       Revised.Include ("component", "nowhere");
       Tk.Revise (Store, Change, To_String (Id), Revised, Status);
-      Assert (Status.Code = E.Framework_Schema_Violation,
+      Assert (Status.Code = E.Framework_Input_Invalid,
               "a task was revised to an unlisted component");
       Change := S.No_Changes;
 
@@ -6998,7 +7000,7 @@ package body Tests.Framework_Cases is
       Revise_Fields.Clear;
       Revise_Fields.Include ("kind", "implementation");
       Tk.Revise (Store, Change, To_String (A), Revise_Fields, Status);
-      Assert (Status.Code = E.Framework_Schema_Violation, "a task's kind was revised");
+      Assert (Status.Code = E.Framework_Input_Invalid, "a task's kind was revised");
       Change := S.No_Changes;
 
       --  Split: the parent waits on its parts.
@@ -7717,7 +7719,7 @@ package body Tests.Framework_Cases is
                  & R.Get (View, "verification_profile"));
          Revised.Include ("title", "");
          Tk.Revise (Store, Change, To_String (First), Revised, Status);
-         Assert (Status.Code = E.Framework_Schema_Violation, "a task's title was revised away");
+         Assert (Status.Code = E.Framework_Input_Invalid, "a task's title was revised away");
          Change := S.No_Changes;
          Tk.Move (Store, Change, To_String (Second), "blocked", "waiting on the design",
                   Status => Status);
@@ -8244,10 +8246,11 @@ package body Tests.Framework_Cases is
       Cf.Plan_Change (Store, Changes, Planned, Status);
       Assert (E.Is_Ok (Status) and then Natural (Planned.Changed.Length) = 2,
               "the change was not worked out: " & Code_Of (Status));
+      --  Who works and what it may run: work is reached, evidence is not.
       Assert ((for some Line of Planned.Impact => Ada.Strings.Fixed.Index (Line, "work:") = 1)
-              and then (for some Line of Planned.Impact =>
-                          Ada.Strings.Fixed.Index (Line, "evidence:") = 1),
-              "what the change reaches was not said");
+              and then not (for some Line of Planned.Impact =>
+                              Ada.Strings.Fixed.Index (Line, "evidence:") = 1),
+              "what the change reaches was not said, or evidence was said to be reached");
       Cf.Plan_Change (Store, Changes, Stale, Status);
 
       Cf.Reconfigure (Store, Planned, Revision, Status);
@@ -8370,8 +8373,14 @@ package body Tests.Framework_Cases is
                  and then not Model_Runner.Framework.Permissions.Sandbox_Refuses ("docs/x.md", True),
                  "a sandbox written as it is shown was not taken, or not said to refuse");
          Model_Runner.Framework.Permissions.Set_Sandbox ("", Set);
-         Assert (not Model_Runner.Framework.Permissions.Sandbox_Refuses ("src/x.adb", True),
-                 "no sandbox refused a path");
+         Assert (not Model_Runner.Framework.Permissions.Sandbox_Refuses ("src/x.adb", True)
+                 and then Model_Runner.Framework.Permissions.Sandbox_Problem = "",
+                 "no sandbox refused a path, or was said to be wrong");
+         Ada.Environment_Variables.Set ("MODEL_RUNNER_SANDBOX", "bogus_cap roots=x");
+         Assert (Ada.Strings.Fixed.Index
+                   (Model_Runner.Framework.Permissions.Sandbox_Problem, "bogus_cap") > 0,
+                 "a sandbox naming no capability was not said to be wrong");
+         Ada.Environment_Variables.Clear ("MODEL_RUNNER_SANDBOX");
       end;
 
       --  What makes a task that cannot wait so say why.
@@ -8942,7 +8951,7 @@ package body Tests.Framework_Cases is
          Changes.Clear;
          Changes.Include ("scalar.repository.state_policy", "sometimes");
          Cf.Plan_Change (Store, Changes, Planned, Status);
-         Assert (Status.Code = E.Framework_Schema_Violation, "a policy that is none was taken");
+         Assert (Status.Code = E.Framework_Input_Invalid, "a policy that is none was taken");
       end;
 
       --  Git, asked.
@@ -9366,7 +9375,7 @@ package body Tests.Framework_Cases is
 
       Work (Interrupted);
       Assert (To_String (Done.Final_State) = "blocked"
-              and then Contains (To_String (Done.Reason), "cancelled")
+              and then Contains (To_String (Done.Reason), "interrupted")
               and then Iv.State_Of (Store, To_String (Done.Invocation_Id)) = "cancelled"
               and then Contains (Done.Children.First_Element, "cancelled"),
               "an interrupted run was not recorded as cancelled: "
