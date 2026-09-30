@@ -79,7 +79,7 @@ error, and `--` ends option processing.
 
 ### Spec-driven development
 
-`init`, `task`, `repo` and `work` keep a project's development state in
+A session's project commands keep a project's development state in
 `.model_runner/` beside its code, as specified in
 `docs/spec_driven_development_framework_v3_revised.md`: what the project is
 meant to be (specifications, requirements and decisions, each revised
@@ -91,17 +91,44 @@ transaction that an interrupted session finishes or undoes on the next
 open; nothing is kept in a conversation.
 
 The commands are typed in the conversation, between turns, in the project
-directory: `model_runner MODEL`, then
+directory. One pass through the workflow, with illustrative identifiers:
 
+```text
+$ cd ~/src/hello
+$ model_runner qwen2.5-coder-0.5b-instruct-q8_0.gguf      # a session opens; no --interactive needed
+
+> /init ada-cli project_name=hello                        # start the project's state from a template
+Check command (the command that builds and tests the repository):
+alr build && bin/tests
+  ▸ Initialize                                            # confirm the plan
+initialized hello in ./.model_runner
+next: /bootstrap FILE reads a document's requirements in, /req new TITLE text=... says one,
+      and /task new TITLE kind=KIND makes a task
+
+> /bootstrap docs/requirements.md                         # REQ-… lines are imported, SHALL lines proposed
+> /req new "Greets by name" text="The program SHALL print Hello, NAME."
+> /accept                                                 # the one candidate waiting; several → it lists each
+> /task derive                                            # tasks that the accepted requirements imply
+> /task list                                              # ready tasks shown first
+TASK-HELLO-001  ready  implementation  Greets by name
+
+> /work TASK-HELLO-001                                    # this session's model does it:
+                                                          # context → call → changed files → verify
+> /check                                                  # the project's checks, recorded as a verification
+> /task integrate TASK-HELLO-001                          # take the workspace's changes into the project
+> /state                                                  # where the project stands
+> /tree   /sym Greet   /refs Greet   /impact src/hello.adb   # ask about the code; no model involved
+> /exit
 ```
-/init ada-cli project_name=hello        start from a template
-/task new "Read input" kind=implementation component=io
-/accept                                  the one candidate waiting
-/work TASK-IO-001                        this model does the task: context,
-                                         call, verify, complete
-/state                                   where the project stands
-/task plan   /check   /req   /impact src/io.adb   /trace TASK-IO-001
-```
+
+1. **Existing code:** `/init` in its directory, `/bootstrap` its documents,
+   then `/req accept` the candidates worth keeping.
+2. **A task done by hand:** `/task complete ID` runs its checks and closes
+   it.
+3. **A script instead of the model:** `/reconfigure
+   work.agent="sh ./agent.sh ${prompt}" set.execution.allowed+=sh`.
+4. **Stuck:** `/help project` lists every project command, and most
+   commands end with a `next:` line naming the likely step.
 
 `/work` gives the session's own model the task in a conversation of its
 own, built from the project state, with the file tools and nothing else;
