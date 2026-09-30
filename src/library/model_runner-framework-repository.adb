@@ -534,6 +534,33 @@ package body Model_Runner.Framework.Repository is
      (Key_Type => String, Element_Type => Place_Vectors.Vector,
       Hash => Ada.Strings.Hash, Equivalent_Keys => "=",
       "=" => Place_Vectors."=");
+   package Name_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => Name_Lists.Vector,
+      Hash => Ada.Strings.Hash, Equivalent_Keys => "=",
+      "=" => Name_Lists."=");
+
+   --  Add a place under a key.
+   procedure Add_Place (Into : in out Word_Places.Map; Key : String; Place : Positive) is
+      Position : constant Word_Places.Cursor := Into.Find (Key);
+   begin
+      if Word_Places.Has_Element (Position) then
+         Into.Reference (Position).Append (Place);
+      else
+         Into.Insert (Key, Place_Vectors.To_Vector (Place, 1));
+      end if;
+   end Add_Place;
+
+   --  Add a name under a key.
+   procedure Add_Name (Into : in out Name_Maps.Map; Key : String; Name : String) is
+      Position : constant Name_Maps.Cursor := Into.Find (Key);
+   begin
+      if Name_Maps.Has_Element (Position) then
+         Into.Reference (Position).Append (Name);
+      else
+         Into.Insert (Key, Name_Lists.To_Vector (Name, 1));
+      end if;
+   end Add_Name;
+
    package Name_Sets is new Ada.Containers.Indefinite_Hashed_Sets
      (Element_Type => String, Hash => Ada.Strings.Hash, Equivalent_Elements => "=");
 
@@ -1049,16 +1076,7 @@ package body Model_Runner.Framework.Repository is
       end loop;
       for At_Index in 1 .. Natural (Tokens.Length) loop
          if Tokens (At_Index).Kind = Word then
-            declare
-               Spelled  : constant String := Lower (To_String (Tokens (At_Index).Text));
-               Position : constant Word_Places.Cursor := Places.Find (Spelled);
-            begin
-               if Word_Places.Has_Element (Position) then
-                  Places.Reference (Position).Append (At_Index);
-               else
-                  Places.Insert (Spelled, Place_Vectors.To_Vector (At_Index, 1));
-               end if;
-            end;
+            Add_Place (Places, Lower (To_String (Tokens (At_Index).Text)), At_Index);
          end if;
       end loop;
 
@@ -1167,9 +1185,9 @@ package body Model_Runner.Framework.Repository is
    -- Scan --
    ----------
 
-   function Scan
+   function Scan_All
      (Project_Directory : String;
-      Within            : Roots := Default_Roots) return Graph
+      Within            : Roots) return Graph
    is
       Result   : Graph;
       Texts    : Name_Lists.Vector;
@@ -1253,7 +1271,7 @@ package body Model_Runner.Framework.Repository is
       end loop;
       Result.Reading := Null_Unbounded_String;
       return Result;
-   end Scan;
+   end Scan_All;
 
    -------------
    -- Refresh --
@@ -1365,6 +1383,11 @@ package body Model_Runner.Framework.Repository is
           else Was /= Role_Of (Path, Within));
 
       Gone : Name_Lists.Vector;
+
+      Symbols_Of   : Word_Places.Map;
+      Relations_Of : Word_Places.Map;
+      Units_In     : Name_Maps.Map;
+      Depends      : Name_Maps.Map;
    begin
       Read_Again := 0;
       Walk (Project_Directory, "");
@@ -1392,6 +1415,15 @@ package body Model_Runner.Framework.Repository is
          return Kept;
       end if;
 
+      --  The kept symbols and relations by the file they came from, so a
+      --  file taken as it was is found without walking them all.
+      for Index in 1 .. Natural (Kept.Symbols.Length) loop
+         Add_Place (Symbols_Of, To_String (Kept.Symbols (Index).Path), Index);
+      end loop;
+      for Index in 1 .. Natural (Kept.Relations.Length) loop
+         Add_Place (Relations_Of, To_String (Kept.Relations (Index).Origin), Index);
+      end loop;
+
       --  Each file in order: as it was, or read again.
       for Index in 1 .. Natural (Now_Paths.Length) loop
          declare
@@ -1415,16 +1447,18 @@ package body Model_Runner.Framework.Repository is
                end;
             else
                Add_File (Result, Kept.Files (Kept_Index (Path)));
-               for Named of Kept.Symbols loop
-                  if To_String (Named.Path) = Path then
-                     Result.Symbols.Append (Named);
-                  end if;
-               end loop;
-               for Link of Kept.Relations loop
-                  if To_String (Link.Origin) = Path and then not Is_Reference (Link.Kind) then
-                     Result.Relations.Append (Link);
-                  end if;
-               end loop;
+               if Symbols_Of.Contains (Path) then
+                  for Place of Symbols_Of.Constant_Reference (Path) loop
+                     Result.Symbols.Append (Kept.Symbols (Place));
+                  end loop;
+               end if;
+               if Relations_Of.Contains (Path) then
+                  for Place of Relations_Of.Constant_Reference (Path) loop
+                     if not Is_Reference (Kept.Relations (Place).Kind) then
+                        Result.Relations.Append (Kept.Relations (Place));
+                     end if;
+                  end loop;
+               end if;
             end if;
          end;
       end loop;
@@ -1441,19 +1475,38 @@ package body Model_Runner.Framework.Repository is
                Moved.Append (Unit);
             end if;
          end loop;
+
+         --  Each file's units, and what each unit depends on, in one walk.
+         for Link of Result.Relations loop
+            if Link.Kind = Contains then
+               if not Units_In.Contains (To_String (Link.From))
+                 or else not Units_In.Constant_Reference (To_String (Link.From)).Contains
+                               (To_String (Link.To))
+               then
+                  Add_Name (Units_In, To_String (Link.From), To_String (Link.To));
+               end if;
+            elsif Link.Kind = Depends_On then
+               Add_Name (Depends, To_String (Link.From), To_String (Link.To));
+            end if;
+         end loop;
+
          for Path of Now_Paths loop
             if Reads_References (Path) then
                declare
                   Own    : constant Name_Lists.Vector :=
-                    Units_Of (Result, Name_Lists.To_Vector (Path, 1));
+                    (if Units_In.Contains (Path) then Units_In.Element (Path)
+                     else Name_Lists.Empty_Vector);
                   Sees   : Boolean := Changed.Contains (Path);
                begin
-                  for Link of Result.Relations loop
-                     if not Sees and then Own.Contains (To_String (Link.From))
-                       and then Link.Kind = Depends_On
-                       and then Moved.Contains (To_String (Link.To))
-                     then
-                        Sees := True;
+                  for Unit of Own loop
+                     exit when Sees;
+                     if Depends.Contains (Unit) then
+                        for Target of Depends.Constant_Reference (Unit) loop
+                           if Moved.Contains (Target) then
+                              Sees := True;
+                              exit;
+                           end if;
+                        end loop;
                      end if;
                   end loop;
                   Sees := Sees or else (for some Unit of Own => Moved.Contains (Unit));
@@ -1464,10 +1517,10 @@ package body Model_Runner.Framework.Repository is
                      end if;
                      Languages.Adapter_For (Language_Of (Path)).Read_References
                        (Path, Text_Of (Path), Result);
-                  else
-                     for Link of Kept.Relations loop
-                        if To_String (Link.Origin) = Path and then Is_Reference (Link.Kind) then
-                           Result.Relations.Append (Link);
+                  elsif Relations_Of.Contains (Path) then
+                     for Place of Relations_Of.Constant_Reference (Path) loop
+                        if Is_Reference (Kept.Relations (Place).Kind) then
+                           Result.Relations.Append (Kept.Relations (Place));
                         end if;
                      end loop;
                   end if;
@@ -1520,6 +1573,107 @@ package body Model_Runner.Framework.Repository is
          end if;
       end if;
    end Current;
+
+   ----------
+   -- Scan --
+   ----------
+
+   --  The graphs this process made last, by project and roots: a session
+   --  asks of the same tree again and again, and a graph brought up to
+   --  date reads only what changed. A few, for the workspaces beside it.
+   Remembered_Count : constant := 4;
+
+   type Remembered is record
+      Key   : Unbounded_String;
+      Found : Graph;
+   end record;
+
+   Memory : array (1 .. Remembered_Count) of Remembered;
+
+   --  Held while Memory is read or written, should two tasks scan at once.
+   protected Memory_Lock is
+      entry Seize;
+      procedure Release;
+   private
+      Held : Boolean := False;
+   end Memory_Lock;
+
+   protected body Memory_Lock is
+      entry Seize when not Held is
+      begin
+         Held := True;
+      end Seize;
+
+      procedure Release is
+      begin
+         Held := False;
+      end Release;
+   end Memory_Lock;
+
+   --  What Memory holds for a key, and whether it holds anything.
+   procedure Recall (Key : String; Found : out Graph; Held : out Boolean) is
+   begin
+      Held := False;
+      Memory_Lock.Seize;
+      for Index in Memory'Range loop
+         if Memory (Index).Key = Key then
+            Found := Memory (Index).Found;
+            Held := True;
+            exit;
+         end if;
+      end loop;
+      Memory_Lock.Release;
+   end Recall;
+
+   --  Remember a graph for a key, most recent first.
+   procedure Remember (Key : String; Found : Graph) is
+      Last : Positive := Memory'Last;
+   begin
+      Memory_Lock.Seize;
+      for Index in Memory'Range loop
+         if Memory (Index).Key = Key then
+            Last := Index;
+            exit;
+         end if;
+      end loop;
+      Memory (2 .. Last) := Memory (1 .. Last - 1);
+      Memory (1) := (To_Unbounded_String (Key), Found);
+      Memory_Lock.Release;
+   end Remember;
+
+   function Scan
+     (Project_Directory : String;
+      Within            : Roots := Default_Roots) return Graph
+   is
+      function Joined (Names : Name_Lists.Vector) return String is
+         Text : Unbounded_String;
+      begin
+         for Name of Names loop
+            Append (Text, Name & ASCII.LF);
+         end loop;
+         return To_String (Text);
+      end Joined;
+
+      Key : constant String :=
+        (declare
+           Whole : constant String :=
+             (if Dirs.Exists (Project_Directory) then Dirs.Full_Name (Project_Directory)
+              else Project_Directory);
+         begin
+           Whole & ASCII.NUL & Joined (Within.Skip) & ASCII.NUL & Joined (Within.Tests)
+           & ASCII.NUL & Joined (Within.Documentation) & ASCII.NUL & Joined (Within.Generated));
+      Kept       : Graph;
+      Held       : Boolean;
+      Read_Again : Natural;
+   begin
+      Recall (Key, Kept, Held);
+      return Result : constant Graph :=
+        (if Held then Refresh (Project_Directory, Kept, Read_Again, Within)
+         else Scan_All (Project_Directory, Within))
+      do
+         Remember (Key, Result);
+      end return;
+   end Scan;
 
    ---------------------------------------------------------------------------
    --  Keeping.

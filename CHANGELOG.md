@@ -1786,7 +1786,11 @@ Keep a Changelog and the project uses semantic versioning.
   looking each visible symbol's name up in an index of the file's words,
   not by walking every token for every symbol. `/scan`, `/tree`, `/sym`,
   `/refs` and the rest over this repository's 290 source files: 49 s to
-  1.1 s, with the same graph.
+  1.1 s, with the same graph. And a scan remembers the graphs it made in
+  the process and brings the last one up to date -- reading only the files
+  whose stamps changed, and finding the kept symbols and relations by file
+  rather than walking them all per file: the same tree asked of again in a
+  session takes 0.07 s, and after an edit 0.18 s.
 - **A session is the default:** `model_runner` alone at a terminal opens
   one, offering the models on hand to choose from, and `model_runner MODEL
   [options]` -- a model named first, with no command word -- is `run MODEL`,
