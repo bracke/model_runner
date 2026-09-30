@@ -1782,6 +1782,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The project's commands are a session's alone.** `init`, `task`, `work`,
+  `repo` and the project words (`req`, `state`, `bootstrap`, `config`,
+  `reconfigure`, `check`, `decision`, `spec`, `result`, `sandbox`,
+  `instruct`, `accept`, `reject`) are no longer command-line commands, and
+  `--set`, `--directory` and `--format` go with them: they are typed in
+  `model_runner run MODEL --interactive` as `/init`, `/task`, `/work`,
+  `/req` and the rest, where `/help project` lists them, and the command
+  line says so when one is typed there. `/scan` joins the session's
+  repository commands. The suite drives them through
+  `Project_Commands.Run_Without_Model`, and `tests session-command` runs
+  one at a real terminal.
 - **Eleventh usability round:**
   - `check REQ` and `task verify` judge a failed run by the files it
     failed in, as `check full` does: another requirement's failing test no

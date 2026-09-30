@@ -29,6 +29,11 @@ package body Library_Surface is
       --  the suite asks.
       new String'("Block_On_Children"),
 
+      --  A session's project command with no model and no session: what
+      --  the suite drives the project commands through, the command line
+      --  having none of them.
+      new String'("Run_Without_Model"),
+
       --  How a schema's records are carried to its next version. Every
       --  schema is still at its first, so nothing registers a step yet;
       --  the first that changes does, and the suite registers one to show

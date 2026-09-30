@@ -18,17 +18,14 @@ en.cli.general.command.run =   run MODEL       generate text from a model file
 en.cli.general.command.embed =   embed MODEL     reduce a text to one vector
 en.cli.general.command.inspect =   inspect MODEL   report what a model file contains
 en.cli.general.command.models =   models [remove NAME]  list the models on hand, or remove one
-en.cli.general.command.init =   init [TEMPLATE]  start a project's state from an installed template
-en.cli.general.command.task =   task [ACTION]    list and manage the project's tasks
-en.cli.general.command.repo =   repo [ACTION]    the repository's files, symbols and dependencies
-en.cli.general.command.work =   work [TASK]      run a ready task from context to completion
-en.cli.general.command.project =   req|state|bootstrap|config|reconfigure|check|...  a session's project command, from the shell
 en.cli.general.command.help =   help [COMMAND]  show help for a command
 en.cli.general.command.version =   version         show version information
 en.cli.general.more = Run 'model_runner help COMMAND' for the options of a command.
+en.cli.general.session_commands = The project's commands -- init, task, work, req, check and the rest -- are typed in a session: model_runner run MODEL --interactive, then /help project.
 en.cli.general.exit_statuses = Exit statuses: 0 success, 2 usage error, 3 model format error, 4 unsupported model feature, 5 resource failure, 6 input or output failure, 7 cancelled or interrupted, 8 internal failure.
 
 en.help.run.usage = Usage: model_runner run MODEL [options]
+en.help.session_command = {value} is a command of a session: model_runner run MODEL --interactive opens one, and /help project there lists the project's commands
 en.help.run.summary = Generate text from a local GGUF model file. A name with no path is read from the current directory, then from the models directory (MODEL_RUNNER_MODELS, or ~/.local/share/model_runner/models).
 en.help.run.options = Options:
 en.help.run.prompt =   --prompt TEXT           prompt text; repeatable, one sequence each
@@ -148,68 +145,6 @@ en.help.models.quiet =   --quiet                 suppress progress, notes and wa
 en.help.models.verbose =   --verbose               report progress and detail on standard error
 en.help.models.locale =   --locale NAME           locale for program messages
 en.help.models.color =   --color=MODE            colour output: {value}
-en.help.init.usage = Usage: model_runner init [TEMPLATE] [options]
-en.help.init.summary = Start the project state of spec-driven development in a directory, from an installed project template. Without a template named, a terminal is offered the templates to choose from, and anything else is shown them and told to name one. Inputs the template asks for are taken from --set, found in the project, or defaulted; a terminal is asked for the rest. Templates are read from templates beside the settings file and from the templates installed with the program.
-en.help.init.options = Options:
-en.help.init.set =   --set NAME=VALUE        give the template's input NAME its value; repeatable
-en.help.init.directory =   --directory DIR         initialize DIR rather than the current directory
-en.help.init.format =   --format plain|json     json: one object a line, each message's key and values, for a program
-en.help.init.quiet =   --quiet                 suppress progress, notes and warnings
-en.help.init.verbose =   --verbose               report progress and detail on standard error
-en.help.init.locale =   --locale NAME           locale for program messages
-en.help.init.color =   --color=MODE            colour output: {value}
-en.help.task.usage = Usage: model_runner task [list|new TITLE|accept ID|reject ID|cancel ID|reopen ID|reconsider ID|move ID STATE|audit ID|edit ID|rehome OLD NEW|depend ID ON [remove]|split ID TITLE; TITLE|show ID|context ID|verify ID|complete ID|integrate ID [anyway|resolved]|derive|step|plan] [options]
-en.help.task.summary = Manage the project's persistent tasks. list shows each with its state, ready shown as one; new creates a candidate from --set fields, asking a terminal for what its kind requires; accept, reject and cancel move one; show prints the effective task; derive makes the tasks accepted requirements imply. Tasks that became ready are named after each change.
-en.help.task.options = Options:
-en.help.task.set =   --set NAME=VALUE        give the new task's field NAME its value; repeatable
-en.help.task.directory =   --directory DIR         the project in DIR rather than the current directory
-en.help.task.format =   --format plain|json     json: one object a line, each message's key and values, for a program
-en.help.task.quiet =   --quiet                 suppress progress, notes and warnings
-en.help.task.verbose =   --verbose               report progress and detail on standard error
-en.help.task.locale =   --locale NAME           locale for program messages
-en.help.task.color =   --color=MODE            colour output: {value}
-en.help.repo.usage = Usage: model_runner repo [scan|tree|sym NAME|refs NAME|deps UNIT|users UNIT|impact FILE|trace NODE] [options]
-en.help.repo.summary = Scan the project's files without a model and answer from what was found: scan says how much, tree lists the files with their language and role, sym finds a declared symbol, refs lists where it is used, deps and users follow the with clauses. In a project with state, the graph is kept in its indexes.
-en.help.repo.options = Options:
-en.help.repo.directory =   --directory DIR         the project in DIR rather than the current directory
-en.help.repo.format =   --format plain|json     json: one object a line, each message's key and values, for a program
-en.help.repo.quiet =   --quiet                 suppress progress, notes and warnings
-en.help.repo.verbose =   --verbose               report progress and detail on standard error
-en.help.repo.locale =   --locale NAME           locale for program messages
-en.help.repo.color =   --color=MODE            colour output: {value}
-en.help.work.usage = Usage: model_runner work [TASK] [options]
-en.help.work.summary = Run one ready task: an agent holds it in a new generation, its context is built and kept, the model call recorded, and what the agent answers is held to the work contract. The files show what changed; the task's verification runs, and it completes through its gates or ends blocked or failed with why. The agent is --set model=PATH, run as this program's agent with no shell, network or delegation, or the configuration's scalar work.agent command, with $PROMPT for its context's file (a command naming no $PROMPT is given none of it). Without a task named, a terminal chooses one; off a terminal, the one ready task is taken, and with several, they are listed. It exits 0 when the task is complete, waits to be taken in or waits for its parts; 6 when it ends failed or blocked, with why; 7 when it is cancelled, or interrupted -- Ctrl-C, SIGTERM -- which leaves it blocked.
-en.help.work.options = Options:
-en.help.work.set =   --set NAME=VALUE        model=PATH, steps=N or profile=ID or all=yes; repeatable
-en.help.work.directory =   --directory DIR         the project in DIR rather than the current directory
-en.help.work.format =   --format plain|json     json: one object a line, each message's key and values, for a program
-en.help.work.quiet =   --quiet                 suppress progress, notes and warnings
-en.help.work.verbose =   --verbose               report progress and detail on standard error
-en.help.work.locale =   --locale NAME           locale for program messages
-en.help.work.color =   --color=MODE            colour output: {value}
-en.help.project.usage = Usage: model_runner req|state|bootstrap|config|reconfigure|check|decision|spec|result|sandbox|instruct|accept|reject [WORDS] [options]
-en.help.project.summary = Run a project command without a model, as a session's /COMMAND runs it: req new, show, accept, revise and link requirements; state reports the project; bootstrap reads documents in; config shows the settings and reconfigure changes them (NAME=VALUE, confirm=yes off a terminal; set.NAME+=VALUE adds to a set); check verifies; result shows a stored result. Work is the work command's.
-en.help.project.req = req [list] ; req new TITLE text=... [criteria=...] ; req ID ; req accept, reject or obsolete ID ; req revise ID title=... text=... criteria=... ; req link ID KIND TARGET and req unlink ID KIND TARGET, KIND one of dependency, component, implementation, task, test, verification ; req supersede OLD NEW
-en.help.project.state = state: the project at a glance -- its requirements and tasks counted, the blocked and failed ones with why, the last verification
-en.help.project.bootstrap = bootstrap [FILE ...]: read the project's documents for its requirements (## REQ-ID Title headings, REQ-ID: lines, SHALL, MUST and SHOULD lines, Acceptance: and DEC-ID: lines)
-en.help.project.config = config [NAME]: the settings, or those whose name holds NAME
-en.help.project.reconfigure = reconfigure NAME=VALUE ... [confirm=yes]: change settings -- NAME with its kind or without (work.agent), set.NAME+=A,B adds to a set and -=A takes out, map.permission.X= grants and =off takes away; confirm=yes applies without being asked
-en.help.project.check = check [PROFILE, full, consistency or REQ-ID]: run the project's checks, or say what does not hold together, or verify a requirement
-en.help.project.decision = decision [list] ; decision new TITLE text=... ; decision ID ; decision accept, reject or obsolete ID ; decision revise ID text=... ; decision supersede OLD NEW ; decision govern ID SETTING RULING
-en.help.project.spec = spec [list] ; spec new TITLE text=... ; spec ID ; spec accept or reject ID ; spec revise ID text=... ; spec revise ID from-document takes what its document says now
-en.help.project.accept = accept [ID]: accept the one candidate waiting, or the requirement, decision, specification or task named
-en.help.project.reject = reject [ID]: reject the one candidate waiting, or the one named
-en.help.project.sandbox = sandbox [CAPABILITY: roots=...; ... or off]: confine the session's agents below the project's permissions; from the shell, MODEL_RUNNER_SANDBOX does it for one command
-en.help.project.instruct = instruct TEXT: an instruction every agent of the project is given from now on
-en.help.project.result = result [ID [full] | dismiss ID]: the open issues; what a result, invocation, context, evidence or agent (RES-, INV-, CTX-, VER-, AG-) holds; or an issue taken off the list
-en.help.project.options = Options:
-en.help.project.directory =   --directory DIR         the project in DIR rather than the current directory
-en.help.project.set =   --set NAME=VALUE        a field or a setting, as NAME=VALUE after the command says it; repeatable
-en.help.project.format =   --format plain|json     json: one object a line, each message's key and values, for a program
-en.help.project.quiet =   --quiet                 suppress progress, notes and warnings
-en.help.project.verbose =   --verbose               report progress and detail on standard error
-en.help.project.locale =   --locale NAME           locale for program messages
-en.help.project.color =   --color=MODE            colour output: {value}
 en.help.inspect.options = Options:
 en.help.inspect.metadata =   --metadata              list metadata keys, types and values
 en.help.inspect.tensors =   --tensors               list tensor names, shapes and formats
@@ -358,6 +293,7 @@ en.cli.interactive.help.decision = /decision [ID | ACTION]  decisions: the same,
 en.cli.interactive.help.spec = /spec [ID | ACTION]  specifications: the same as decisions
 en.cli.interactive.help.result = /result [ID | dismiss ID]  list the open issues, show a stored result, or take an issue off the list
 en.cli.interactive.help.tree = /tree             the repository's files
+en.cli.interactive.help.scan = /scan              read the repository again and say what it holds
 en.cli.interactive.help.sym = /sym NAME         where a symbol is declared
 en.cli.interactive.help.refs = /refs NAME        where a symbol is used
 en.cli.interactive.help.deps = /deps UNIT         the units a unit depends on
@@ -574,7 +510,6 @@ en.cli.project.git.branch = on {name}
 en.cli.project.git.clean = nothing has changed since the last commit
 en.cli.project.git.none = the project is not in a Git repository git can read
 en.cli.project.sandbox.none = agents are confined only by the project's permissions
-en.cli.project.sandbox.shell = a sandbox lasts for a session; from the shell, put MODEL_RUNNER_SANDBOX="PERMISSIONS" before the command it is to confine, as MODEL_RUNNER_SANDBOX="read_source; write_source roots=src/" model_runner work {value}
 en.cli.project.sandbox.set = agents are confined to {value} (by {name})
 en.cli.project.sandbox.effective = with this project's permissions, its agents may do: {value}
 en.cli.project.instruct.none = no instruction of yours stands
@@ -766,7 +701,7 @@ en.diagnostic.hint.usage = run 'model_runner help' for usage
 en.diagnostic.hint.usage_session = /help lists the session's commands
 en.diagnostic.hint.resource = raise the limit, or ask for less: a smaller --context-size or --batch-size
 en.diagnostic.hint.unsupported = run 'model_runner version' for the formats and architectures this build has
-en.diagnostic.hint.not_initialized = model_runner init starts a project's state here; init alone lists the templates to start from
+en.diagnostic.hint.not_initialized = /init starts a project's state here; /init alone lists the templates to start from
 
 en.error.cli.missing_command = no command given: run MODEL --interactive opens a session, init starts a project, and help lists the rest
 en.error.cli.unknown_command = unknown command: {value}
@@ -1020,16 +955,13 @@ da.cli.general.command.run = run MODEL       generér tekst ud fra en modelfil
 da.cli.general.command.embed =   embed MODEL     reducér en tekst til én vektor
 da.cli.general.command.inspect = inspect MODEL   vis hvad en modelfil indeholder
 da.cli.general.command.models =   models [remove NAME]  vis modellerne ved hånden, eller fjern en
-da.cli.general.command.init =   init [SKABELON]  start et projekts tilstand fra en installeret skabelon
-da.cli.general.command.task =   task [HANDLING]  vis og styr projektets opgaver
-da.cli.general.command.repo =   repo [HANDLING]  depotets filer, symboler og afhængigheder
-da.cli.general.command.work =   work [OPGAVE]    kør en klar opgave fra kontekst til fuldførelse
-da.cli.general.command.project =   req|state|bootstrap|config|reconfigure|check|...  en sessions projektkommando, fra skallen
 da.cli.general.command.help = help [KOMMANDO] vis hjælp til en kommando
 da.cli.general.command.version = version         vis versionsoplysninger
 da.cli.general.more = Kør 'model_runner help KOMMANDO' for at se en kommandos tilvalg.
+da.cli.general.session_commands = Projektets kommandoer -- init, task, work, req, check og resten -- skrives i en session: model_runner run MODEL --interactive, så /help project.
 da.cli.general.exit_statuses = Slutstatus: 0 klaret, 2 fejl i kommandolinjen, 3 fejl i modelformatet, 4 modelfunktion understøttes ikke, 5 ressourcefejl, 6 ind- eller uddatafejl, 7 annulleret eller afbrudt, 8 intern fejl.
 da.help.run.usage = Brug: model_runner run MODEL [tilvalg]
+da.help.session_command = {value} er en kommando i en session: model_runner run MODEL --interactive åbner en, og /help project der viser projektets kommandoer
 da.help.run.summary = Generér tekst ud fra en lokal GGUF-modelfil. Et navn uden sti læses fra den aktuelle mappe, derefter fra modelmappen (MODEL_RUNNER_MODELS eller ~/.local/share/model_runner/models).
 da.help.run.options = Tilvalg:
 da.help.run.prompt = --prompt TEKST          promptteksten
@@ -1097,68 +1029,6 @@ da.help.models.quiet = --quiet                 undertryk status, noter og advars
 da.help.models.verbose = --verbose               vis status og detaljer på standardfejl
 da.help.models.locale = --locale NAVN           sprog for programmets beskeder
 da.help.models.color = --color=TILSTAND        farvet output: {value}
-da.help.init.usage = Brug: model_runner init [SKABELON] [tilvalg]
-da.help.init.summary = Start projekttilstanden for specifikationsdrevet udvikling i en mappe, fra en installeret projektskabelon. Uden en navngivet skabelon får en terminal skabelonerne at vælge imellem, og alt andet får dem vist og besked om at navngive en. Input som skabelonen beder om tages fra --set, findes i projektet eller får deres standardværdi; en terminal bliver spurgt om resten. Skabeloner læses fra templates ved siden af indstillingsfilen og fra dem der er installeret med programmet.
-da.help.init.options = Tilvalg:
-da.help.init.set =   --set NAVN=VÆRDI        giv skabelonens input NAVN sin værdi; kan gentages
-da.help.init.directory =   --directory MAPPE       initialiser MAPPE i stedet for den aktuelle mappe
-da.help.init.format =   --format plain|json     json: ét objekt pr. linje, hver meddelelses nøgle og værdier, til et program
-da.help.init.quiet =   --quiet                 undertryk status, noter og advarsler
-da.help.init.verbose =   --verbose               vis status og detaljer på standardfejl
-da.help.init.locale =   --locale NAVN           sprog for programmets beskeder
-da.help.init.color =   --color=TILSTAND        farvet output: {value}
-da.help.task.usage = Brug: model_runner task [list|new TITEL|accept ID|reject ID|cancel ID|reopen ID|reconsider ID|move ID TILSTAND|audit ID|edit ID|rehome GAMMEL NY|depend ID PÅ [remove]|split ID TITEL; TITEL|show ID|context ID|verify ID|complete ID|integrate ID [anyway|resolved]|derive|step|plan] [tilvalg]
-da.help.task.summary = Styr projektets vedvarende opgaver. list viser hver med dens tilstand, klar vist som en; new opretter en kandidat fra --set-felter og spørger en terminal om det dens slags kræver; accept, reject og cancel flytter en; show viser den effektive opgave; derive laver de opgaver accepterede krav medfører. Opgaver der blev klar nævnes efter hver ændring.
-da.help.task.options = Tilvalg:
-da.help.task.set =   --set NAVN=VÆRDI        giv den nye opgaves felt NAVN sin værdi; kan gentages
-da.help.task.directory =   --directory MAPPE       projektet i MAPPE i stedet for den aktuelle mappe
-da.help.task.format =   --format plain|json     json: ét objekt pr. linje, hver meddelelses nøgle og værdier, til et program
-da.help.task.quiet =   --quiet                 undertryk status, noter og advarsler
-da.help.task.verbose =   --verbose               vis status og detaljer på standardfejl
-da.help.task.locale =   --locale NAVN           sprog for programmets beskeder
-da.help.task.color =   --color=TILSTAND        farvet output: {value}
-da.help.repo.usage = Brug: model_runner repo [scan|tree|sym NAVN|refs NAVN|deps ENHED|users ENHED|impact FIL|trace KNUDE] [tilvalg]
-da.help.repo.summary = Skan projektets filer uden en model og svar ud fra det fundne: scan siger hvor meget, tree viser filerne med sprog og rolle, sym finder et erklæret symbol, refs viser hvor det bruges, deps og users følger with-klausulerne. I et projekt med tilstand gemmes grafen i dets indeks.
-da.help.repo.options = Tilvalg:
-da.help.repo.directory =   --directory MAPPE       projektet i MAPPE i stedet for den aktuelle mappe
-da.help.repo.format =   --format plain|json     json: ét objekt pr. linje, hver meddelelses nøgle og værdier, til et program
-da.help.repo.quiet =   --quiet                 undertryk status, noter og advarsler
-da.help.repo.verbose =   --verbose               vis status og detaljer på standardfejl
-da.help.repo.locale =   --locale NAVN           sprog for programmets beskeder
-da.help.repo.color =   --color=TILSTAND        farvet output: {value}
-da.help.work.usage = Brug: model_runner work [OPGAVE] [tilvalg]
-da.help.work.summary = Kør en klar opgave: en agent holder den i en ny generation, dens kontekst bygges og gemmes, modelkaldet registreres, og agentens svar holdes op mod arbejdskontrakten. Filerne viser hvad der ændredes; opgavens verifikation kører, og den fuldføres gennem sine porte eller ender blokeret eller fejlet med hvorfor. Agenten er --set model=STI, kørt som dette programs agent uden skal, netværk eller uddelegering, eller konfigurationens scalar work.agent-kommando med $PROMPT for kontekstens fil (en kommando, der ikke nævner $PROMPT, får intet af den). Uden en navngivet opgave vælger en terminal en; uden terminal tages den ene klare opgave, og med flere vises de. Den afslutter med 0 når opgaven er fuldført, venter på at blive taget ind eller venter på sine dele; 6 når den ender fejlet eller blokeret, med hvorfor; 7 når den annulleres, eller afbrydes -- Ctrl-C, SIGTERM -- hvilket efterlader den blokeret.
-da.help.work.options = Tilvalg:
-da.help.work.set =   --set NAVN=VÆRDI        model=STI, steps=N eller profile=ID or all=yes; kan gentages
-da.help.work.directory =   --directory MAPPE       projektet i MAPPE i stedet for den aktuelle mappe
-da.help.work.format =   --format plain|json     json: ét objekt pr. linje, hver meddelelses nøgle og værdier, til et program
-da.help.work.quiet =   --quiet                 undertryk status, noter og advarsler
-da.help.work.verbose =   --verbose               vis status og detaljer på standardfejl
-da.help.work.locale =   --locale NAVN           sprog for programmets beskeder
-da.help.work.color =   --color=TILSTAND        farvet output: {value}
-da.help.project.usage = Brug: model_runner req|state|bootstrap|config|reconfigure|check|decision|spec|result|sandbox|instruct|accept|reject [ORD] [tilvalg]
-da.help.project.summary = Kør et projektkommando uden en model, som en sessions /KOMMANDO kører det: req new, show, accept, revise og link krav; state viser projektet; bootstrap læser dokumenter ind; config viser indstillingerne og reconfigure ændrer dem (NAVN=VÆRDI, confirm=yes uden terminal; set.NAVN+=VÆRDI føjer til et sæt); check verificerer; result viser et gemt resultat. Arbejde er work-kommandoens.
-da.help.project.req = req [list] ; req new TITEL text=... [criteria=...] ; req ID ; req accept, reject eller obsolete ID ; req revise ID title=... text=... criteria=... ; req link ID ART MÅL og req unlink ID ART MÅL, ART en af dependency, component, implementation, task, test, verification ; req supersede GAMMEL NY
-da.help.project.state = state: projektet i overblik -- dets krav og opgaver talt, de blokerede og fejlede med hvorfor, den seneste verifikation
-da.help.project.bootstrap = bootstrap [FIL ...]: læs projektets dokumenter for dets krav (## REQ-ID Titel-overskrifter, REQ-ID:-linjer, SHALL-, MUST- og SHOULD-linjer, Acceptance:- og DEC-ID:-linjer)
-da.help.project.config = config [NAVN]: indstillingerne, eller dem hvis navn indeholder NAVN
-da.help.project.reconfigure = reconfigure NAVN=VÆRDI ... [confirm=yes]: ændr indstillinger -- NAVN med eller uden sin art (work.agent), set.NAVN+=A,B føjer til et sæt og -=A tager ud, map.permission.X= giver og =off tager væk; confirm=yes anvender uden at spørge
-da.help.project.check = check [PROFIL, full, consistency eller REQ-ID]: kør projektets tjek, eller sig hvad der ikke hænger sammen, eller verificer et krav
-da.help.project.decision = decision [list] ; decision new TITEL text=... ; decision ID ; decision accept, reject eller obsolete ID ; decision revise ID text=... ; decision supersede GAMMEL NY ; decision govern ID INDSTILLING AFGØRELSE
-da.help.project.spec = spec [list] ; spec new TITEL text=... ; spec ID ; spec accept eller reject ID ; spec revise ID text=... ; spec revise ID from-document tager det dokumentet siger nu
-da.help.project.accept = accept [ID]: accepter den ene kandidat der venter, eller det navngivne krav, den beslutning, specifikation eller opgave
-da.help.project.reject = reject [ID]: afvis den ene kandidat der venter, eller den navngivne
-da.help.project.sandbox = sandbox [EVNE: roots=...; ... eller off]: begræns sessionens agenter under projektets tilladelser; fra skallen gør MODEL_RUNNER_SANDBOX det for én kommando
-da.help.project.instruct = instruct TEKST: en instruktion hver agent i projektet får fra nu af
-da.help.project.result = result [ID [full] | dismiss ID]: de åbne problemer; hvad et resultat, et kald, en kontekst, et bevis eller en agent (RES-, INV-, CTX-, VER-, AG-) rummer; eller et problem taget af listen
-da.help.project.options = Tilvalg:
-da.help.project.directory =   --directory MAPPE       projektet i MAPPE i stedet for den aktuelle mappe
-da.help.project.set =   --set NAVN=VÆRDI        et felt eller en indstilling, som NAVN=VÆRDI efter kommandoen siger det; kan gentages
-da.help.project.format =   --format plain|json     json: ét objekt pr. linje, hver meddelelses nøgle og værdier, til et program
-da.help.project.quiet =   --quiet                 undertryk status, noter og advarsler
-da.help.project.verbose =   --verbose               vis status og detaljer på standardfejl
-da.help.project.locale =   --locale NAVN           sprog for programmets beskeder
-da.help.project.color =   --color=TILSTAND        farvet output: {value}
 da.help.inspect.options = Tilvalg:
 da.help.inspect.metadata = --metadata              vis metadatanogler, typer og vaerdier
 da.help.inspect.tensors = --tensors               vis tensorernes navne, former og formater
@@ -1323,7 +1193,7 @@ da.diagnostic.hint.usage = kør 'model_runner help' for at se brugen
 da.diagnostic.hint.usage_session = /help viser sessionens kommandoer
 da.diagnostic.hint.resource = hæv grænsen, eller bed om mindre: en mindre --context-size eller --batch-size
 da.diagnostic.hint.unsupported = kør 'model_runner version' for de formater og arkitekturer denne udgave har
-da.diagnostic.hint.not_initialized = model_runner init starter et projekts tilstand her; init alene viser de skabeloner der kan startes fra
+da.diagnostic.hint.not_initialized = /init starter et projekts tilstand her; /init alene viser skabelonerne at starte fra
 da.error.cli.missing_command = ingen kommando givet: run MODEL --interactive åbner en session, init starter et projekt, og help viser resten
 da.error.cli.unknown_command = ukendt kommando: {value}
 da.error.cli.unknown_option = ukendt tilvalg: {option}
@@ -1466,6 +1336,7 @@ da.cli.interactive.help.decision = /decision [ID | HANDLING]  beslutninger: det 
 da.cli.interactive.help.spec = /spec [ID | HANDLING]  specifikationer: det samme som beslutninger
 da.cli.interactive.help.result = /result [ID | dismiss ID]  vis de åbne problemer, et gemt resultat, eller tag et problem af listen
 da.cli.interactive.help.tree = /tree             depotets filer
+da.cli.interactive.help.scan = /scan              læs repositoriet igen og sig hvad det rummer
 da.cli.interactive.help.sym = /sym NAVN         hvor et symbol er erklæret
 da.cli.interactive.help.refs = /refs NAVN        hvor et symbol bruges
 da.cli.interactive.help.deps = /deps ENHED        de enheder en enhed afhænger af
@@ -1670,7 +1541,6 @@ da.cli.project.git.branch = på {name}
 da.cli.project.git.clean = intet er ændret siden sidste commit
 da.cli.project.git.none = projektet er ikke i et Git-repository som git kan læse
 da.cli.project.sandbox.none = agenter begrænses kun af projektets tilladelser
-da.cli.project.sandbox.shell = en sandkasse varer en session; fra skallen sættes MODEL_RUNNER_SANDBOX="TILLADELSER" foran kommandoen, den skal begrænse, som MODEL_RUNNER_SANDBOX="read_source; write_source roots=src/" model_runner work {value}
 da.cli.project.sandbox.set = agenter er begrænset til {value} (af {name})
 da.cli.project.sandbox.effective = med dette projekts tilladelser må dets agenter: {value}
 da.cli.project.instruct.none = ingen instruks fra dig står ved magt
@@ -1999,16 +1869,13 @@ qps.cli.general.command.run = ⟦  ŕúñ MÓÐÉĹ       géñéŕáŧé ŧéx�
 qps.cli.general.command.embed = ⟦  embed MODEL     réðúçé á ŧéxŧ ŧó óñé véçŧór⟧
 qps.cli.general.command.inspect = ⟦  íñßpéçŧ MÓÐÉĹ   ŕépóŕŧ wháŧ á móðéĺ fíĺé çóñŧáíñß⟧
 qps.cli.general.command.models = ⟦  móðéĺß [ŕémóvé NAME]  ĺíßŧ ŧhé móðéĺß óñ háñð, óŕ ŕémóvé óñé⟧
-qps.cli.general.command.init = ⟦  íñíŧ [TEMPLATE]  ßŧáŕŧ á pŕójéçŧ'ß ßŧáŧé fŕóm áñ íñßŧáĺĺéð ŧémpĺáŧé⟧
-qps.cli.general.command.task = ⟦  ŧáßk [ACTION]    ĺíßŧ áñð máñágé ŧhé pŕójéçŧ'ß ŧáßkß⟧
-qps.cli.general.command.repo = ⟦  ŕépó [ACTION]    ŧhé ŕépóßíŧóŕý'ß fíĺéß, ßýmbóĺß áñð ðépéñðéñçíéß⟧
-qps.cli.general.command.work = ⟦  wóŕk [TASK]      ŕúñ á ŕéáðý ŧáßk fŕóm çóñŧéxŧ ŧó çómpĺéŧíóñ⟧
-qps.cli.general.command.project = ⟦  ŕéq|ßŧáŧé|bóóŧßŧŕáp|çóñfíg|ŕéçóñfígúŕé|çhéçk|...  á ßéßßíóñ'ß pŕójéçŧ çómmáñð, fŕóm ŧhé ßhéĺĺ⟧
 qps.cli.general.command.help = ⟦  héĺp [ÇÓMMÁÑÐ]  ßhów héĺp fóŕ á çómmáñð⟧
 qps.cli.general.command.version = ⟦  véŕßíóñ         ßhów véŕßíóñ íñfóŕmáŧíóñ⟧
 qps.cli.general.more = ⟦Ŕúñ 'model_runner héĺp ÇÓMMÁÑÐ' fóŕ ŧhé ópŧíóñß óf á çómmáñð.⟧
+qps.cli.general.session_commands = ⟦Ŧhé pŕójéçŧ'ß çómmáñðß -- íñíŧ, ŧáßk, wóŕk, ŕéq, çhéçk áñð ŧhé ŕéßŧ -- áŕé ŧýpéð íñ á ßéßßíóñ: móðéĺ_ŕúññéŕ ŕúñ MODEL --íñŧéŕáçŧívé, ŧhéñ /héĺp pŕójéçŧ.⟧
 qps.cli.general.exit_statuses = ⟦Éxíŧ ßŧáŧúßéß: 0 ßúççéßß, 2 úßágé éŕŕóŕ, 3 móðéĺ fóŕmáŧ éŕŕóŕ, 4 úñßúppóŕŧéð móðéĺ féáŧúŕé, 5 ŕéßóúŕçé fáíĺúŕé, 6 íñpúŧ óŕ óúŧpúŧ fáíĺúŕé, 7 çáñçéĺĺéð óŕ íñŧéŕŕúpŧéð, 8 íñŧéŕñáĺ fáíĺúŕé.⟧
 qps.help.run.usage = ⟦Úßágé: model_runner ŕúñ MÓÐÉĹ [ópŧíóñß]⟧
+qps.help.session_command = ⟦{value} íß á çómmáñð óf á ßéßßíóñ: móðéĺ_ŕúññéŕ ŕúñ MODEL --íñŧéŕáçŧívé ópéñß óñé, áñð /héĺp pŕójéçŧ ŧhéŕé ĺíßŧß ŧhé pŕójéçŧ'ß çómmáñðß⟧
 qps.help.run.summary = ⟦Géñéŕáŧé ŧéxŧ fŕóm á ĺóçáĺ GGUF móðéĺ fíĺé. A ñámé wíŧh ñó páŧh íß ŕéáð fŕóm ŧhé çúŕŕéñŧ ðíŕéçŧóŕý, ŧhéñ fŕóm ŧhé móðéĺß ðíŕéçŧóŕý (MODEL_RUNNER_MODELS, óŕ ~/.ĺóçáĺ/ßháŕé/móðéĺ_ŕúññéŕ/móðéĺß).⟧
 qps.help.run.options = ⟦Ópŧíóñß:⟧
 qps.help.run.prompt = ⟦  --prompt ŦÉXŦ           pŕómpŧ ŧéxŧ; ŕépéáŧáƀĺé, óñé ßéqúéñçé éáçh⟧
@@ -2127,68 +1994,6 @@ qps.help.models.quiet = ⟦  --quiet                 ßúppŕéßß pŕógŕéß
 qps.help.models.verbose = ⟦  --verbose               ŕépóŕŧ pŕógŕéßß áñð ðéŧáíĺ óñ ßŧáñðáŕð éŕŕóŕ⟧
 qps.help.models.locale = ⟦  --locale ÑÁMÉ           ĺóçáĺé fóŕ pŕógŕám méßßágéß⟧
 qps.help.models.color = ⟦  --color=MODE            çóĺóúŕ óúŧpúŧ: {value}⟧
-qps.help.init.usage = ⟦Úßágé: móðéĺ_ŕúññéŕ íñíŧ [TEMPLATE] [ópŧíóñß]⟧
-qps.help.init.summary = ⟦Sŧáŕŧ ŧhé pŕójéçŧ ßŧáŧé óf ßpéç-ðŕívéñ ðévéĺópméñŧ íñ á ðíŕéçŧóŕý, fŕóm áñ íñßŧáĺĺéð pŕójéçŧ ŧémpĺáŧé. Wíŧhóúŧ á ŧémpĺáŧé ñáméð, á ŧéŕmíñáĺ íß ófféŕéð ŧhé ŧémpĺáŧéß ŧó çhóóßé fŕóm, áñð áñýŧhíñg éĺßé íß ßhówñ ŧhém áñð ŧóĺð ŧó ñámé óñé. Íñpúŧß ŧhé ŧémpĺáŧé áßkß fóŕ áŕé ŧákéñ fŕóm --set, fóúñð íñ ŧhé pŕójéçŧ, óŕ ðéfáúĺŧéð; á ŧéŕmíñáĺ íß áßkéð fóŕ ŧhé ŕéßŧ. Ŧémpĺáŧéß áŕé ŕéáð fŕóm ŧémpĺáŧéß béßíðé ŧhé ßéŧŧíñgß fíĺé áñð fŕóm ŧhé ŧémpĺáŧéß íñßŧáĺĺéð wíŧh ŧhé pŕógŕám.⟧
-qps.help.init.options = ⟦Ópŧíóñß:⟧
-qps.help.init.set = ⟦  --set NAME=VALUE        gívé ŧhé ŧémpĺáŧé'ß íñpúŧ NAME íŧß váĺúé; ŕépéáŧábĺé⟧
-qps.help.init.directory = ⟦  --directory DIR         íñíŧíáĺízé DIR ŕáŧhéŕ ŧháñ ŧhé çúŕŕéñŧ ðíŕéçŧóŕý⟧
-qps.help.init.format = ⟦  --format plain|json     jßóñ: óñé óbjéçŧ á ĺíñé, éáçh méßßágé'ß kéý áñð váĺúéß, fóŕ á þŕógŕám⟧
-qps.help.init.quiet = ⟦  --quiet                 ßúppŕéßß pŕógŕéßß, ñóŧéß áñð wáŕñíñgß⟧
-qps.help.init.verbose = ⟦  --verbose               ŕépóŕŧ pŕógŕéßß áñð ðéŧáíĺ óñ ßŧáñðáŕð éŕŕóŕ⟧
-qps.help.init.locale = ⟦  --locale NAME           ĺóçáĺé fóŕ pŕógŕám méßßágéß⟧
-qps.help.init.color = ⟦  --color=MODE            çóĺóúŕ óúŧpúŧ: {value}⟧
-qps.help.task.usage = ⟦Úßágé: móðéĺ_ŕúññéŕ ŧáßk [ĺíßŧ|ñéw TITLE|áççépŧ ID|ŕéjéçŧ ID|çáñçéĺ ID|ŕéópéñ ID|ŕéçóñßíðéŕ ID|ɱóµé ID STATE|áúðíŧ ID|éðíŧ ID|ŕéhómé OLD NEW|ðépéñð ID ON [ŕémóvé]|ßþĺíŧ ID TITLE; TITLE|ßhów ID|ðéŕívé] [ópŧíóñß]⟧
-qps.help.task.summary = ⟦Máñágé ŧhé pŕójéçŧ'ß péŕßíßŧéñŧ ŧáßkß. ĺíßŧ ßhówß éáçh wíŧh íŧß ßŧáŧé, ŕéáðý ßhówñ áß óñé; ñéw çŕéáŧéß á çáñðíðáŧé fŕóm --set fíéĺðß, áßkíñg á ŧéŕmíñáĺ fóŕ wháŧ íŧß kíñð ŕéqúíŕéß; áççépŧ, ŕéjéçŧ áñð çáñçéĺ móvé óñé; ßhów pŕíñŧß ŧhé éfféçŧívé ŧáßk; ðéŕívé mákéß ŧhé ŧáßkß áççépŧéð ŕéqúíŕéméñŧß ímpĺý. Ŧáßkß ŧháŧ béçámé ŕéáðý áŕé ñáméð áfŧéŕ éáçh çháñgé.⟧
-qps.help.task.options = ⟦Ópŧíóñß:⟧
-qps.help.task.set = ⟦  --set NAME=VALUE        gívé ŧhé ñéw ŧáßk'ß fíéĺð NAME íŧß váĺúé; ŕépéáŧábĺé⟧
-qps.help.task.directory = ⟦  --directory DIR         ŧhé pŕójéçŧ íñ DIR ŕáŧhéŕ ŧháñ ŧhé çúŕŕéñŧ ðíŕéçŧóŕý⟧
-qps.help.task.format = ⟦  --format plain|json     jßóñ: óñé óbjéçŧ á ĺíñé, éáçh méßßágé'ß kéý áñð váĺúéß, fóŕ á þŕógŕám⟧
-qps.help.task.quiet = ⟦  --quiet                 ßúppŕéßß pŕógŕéßß, ñóŧéß áñð wáŕñíñgß⟧
-qps.help.task.verbose = ⟦  --verbose               ŕépóŕŧ pŕógŕéßß áñð ðéŧáíĺ óñ ßŧáñðáŕð éŕŕóŕ⟧
-qps.help.task.locale = ⟦  --locale NAME           ĺóçáĺé fóŕ pŕógŕám méßßágéß⟧
-qps.help.task.color = ⟦  --color=MODE            çóĺóúŕ óúŧpúŧ: {value}⟧
-qps.help.repo.usage = ⟦Úßágé: móðéĺ_ŕúññéŕ ŕépó [ßçáñ|ŧŕéé|ßým NAME|ŕéfß NAME|ðépß UNIT|úßéŕß UNIT] [ópŧíóñß]⟧
-qps.help.repo.summary = ⟦Sçáñ ŧhé pŕójéçŧ'ß fíĺéß wíŧhóúŧ á móðéĺ áñð áñßwéŕ fŕóm wháŧ wáß fóúñð: ßçáñ ßáýß hów múçh, ŧŕéé ĺíßŧß ŧhé fíĺéß wíŧh ŧhéíŕ ĺáñgúágé áñð ŕóĺé, ßým fíñðß á ðéçĺáŕéð ßýmbóĺ, ŕéfß ĺíßŧß whéŕé íŧ íß úßéð, ðépß áñð úßéŕß fóĺĺów ŧhé wíŧh çĺáúßéß. Íñ á pŕójéçŧ wíŧh ßŧáŧé, ŧhé gŕáph íß képŧ íñ íŧß íñðéxéß.⟧
-qps.help.repo.options = ⟦Ópŧíóñß:⟧
-qps.help.repo.directory = ⟦  --directory DIR         ŧhé pŕójéçŧ íñ DIR ŕáŧhéŕ ŧháñ ŧhé çúŕŕéñŧ ðíŕéçŧóŕý⟧
-qps.help.repo.format = ⟦  --format plain|json     jßóñ: óñé óbjéçŧ á ĺíñé, éáçh méßßágé'ß kéý áñð váĺúéß, fóŕ á þŕógŕám⟧
-qps.help.repo.quiet = ⟦  --quiet                 ßúppŕéßß pŕógŕéßß, ñóŧéß áñð wáŕñíñgß⟧
-qps.help.repo.verbose = ⟦  --verbose               ŕépóŕŧ pŕógŕéßß áñð ðéŧáíĺ óñ ßŧáñðáŕð éŕŕóŕ⟧
-qps.help.repo.locale = ⟦  --locale NAME           ĺóçáĺé fóŕ pŕógŕám méßßágéß⟧
-qps.help.repo.color = ⟦  --color=MODE            çóĺóúŕ óúŧpúŧ: {value}⟧
-qps.help.work.usage = ⟦Úßágé: móðéĺ_ŕúññéŕ wóŕk [TASK] [ópŧíóñß]⟧
-qps.help.work.summary = ⟦Rúñ óñé ŕéáðý ŧáßk: áñ ágéñŧ hóĺðß íŧ íñ á ñéw géñéŕáŧíóñ, íŧß çóñŧéxŧ íß búíĺŧ áñð képŧ, ŧhé móðéĺ çáĺĺ ŕéçóŕðéð, áñð wháŧ ŧhé ágéñŧ áñßwéŕß íß héĺð ŧó ŧhé wóŕk çóñŧŕáçŧ. Ŧhé fíĺéß ßhów wháŧ çháñgéð; ŧhé ŧáßk'ß véŕífíçáŧíóñ ŕúñß, áñð íŧ çómpĺéŧéß ŧhŕóúgh íŧß gáŧéß óŕ éñðß bĺóçkéð óŕ fáíĺéð wíŧh whý. Ŧhé ágéñŧ íß --ßéŧ móðéĺ=PAŦH, ŕúñ áß ŧhíß pŕógŕám'ß ágéñŧ wíŧh ñó ßhéĺĺ, ñéŧwóŕk óŕ ðéĺégáŧíóñ, óŕ ŧhé çóñfígúŕáŧíóñ'ß ßçáĺáŕ wóŕk.ágéñŧ çómmáñð, wíŧh $PROMPŦ fóŕ íŧß çóñŧéxŧ'ß fíĺé (á çómmáñð ñámíñg ñó $PROMPŦ íß gívéñ ñóñé óf íŧ). Wíŧhóúŧ á ŧáßk ñáméð, á ŧéŕmíñáĺ çhóóßéß óñé; óff á ŧéŕmíñáĺ, ŧhé óñé ŕéáðý ŧáßk íß ŧákéñ, áñð wíŧh ßévéŕáĺ, ŧhéý áŕé ĺíßŧéð. Iŧ éxíŧß 0 whéñ ŧhé ŧáßk íß çómpĺéŧé, wáíŧß ŧó bé ŧákéñ íñ óŕ wáíŧß fóŕ íŧß páŕŧß; 6 whéñ íŧ éñðß fáíĺéð óŕ bĺóçkéð, wíŧh whý; 7 whéñ íŧ íß çáñçéĺĺéð, óŕ íñŧéŕŕúpŧéð -- Çŧŕĺ-Ç, SIGŦERM -- whíçh ĺéávéß íŧ bĺóçkéð.⟧
-qps.help.work.options = ⟦Ópŧíóñß:⟧
-qps.help.work.set = ⟦  --set NAME=VALUE        móðéĺ=PATH, ßŧépß=Ñ óŕ pŕófíĺé=ID; ŕépéáŧábĺé⟧
-qps.help.work.directory = ⟦  --directory DIR         ŧhé pŕójéçŧ íñ DIR ŕáŧhéŕ ŧháñ ŧhé çúŕŕéñŧ ðíŕéçŧóŕý⟧
-qps.help.work.format = ⟦  --format plain|json     jßóñ: óñé óbjéçŧ á ĺíñé, éáçh méßßágé'ß kéý áñð váĺúéß, fóŕ á þŕógŕám⟧
-qps.help.work.quiet = ⟦  --quiet                 ßúppŕéßß pŕógŕéßß, ñóŧéß áñð wáŕñíñgß⟧
-qps.help.work.verbose = ⟦  --verbose               ŕépóŕŧ pŕógŕéßß áñð ðéŧáíĺ óñ ßŧáñðáŕð éŕŕóŕ⟧
-qps.help.work.locale = ⟦  --locale NAME           ĺóçáĺé fóŕ pŕógŕám méßßágéß⟧
-qps.help.work.color = ⟦  --color=MODE            çóĺóúŕ óúŧpúŧ: {value}⟧
-qps.help.project.usage = ⟦Úßágé: móðéĺ_ŕúññéŕ ŕéq|ßŧáŧé|bóóŧßŧŕáp|çóñfíg|ŕéçóñfígúŕé|çhéçk|ðéçíßíóñ|ßpéç|ŕéßúĺŧ|ßáñðbóx|íñßŧŕúçŧ|áççépŧ|ŕéjéçŧ [WORDS] [ópŧíóñß]⟧
-qps.help.project.summary = ⟦Rúñ á pŕójéçŧ çómmáñð wíŧhóúŧ á móðéĺ, áß á ßéßßíóñ'ß /ÇOMMAND ŕúñß íŧ: ŕéq ñéw, ßhów, áççépŧ, ŕévíßé áñð ĺíñk ŕéqúíŕéméñŧß; ßŧáŧé ŕépóŕŧß ŧhé pŕójéçŧ; bóóŧßŧŕáp ŕéáðß ðóçúméñŧß íñ; çóñfíg ßhówß ŧhé ßéŧŧíñgß áñð ŕéçóñfígúŕé çháñgéß ŧhém (NAME=VALÚE, çóñfíŕm=ýéß óff á ŧéŕmíñáĺ; ßéŧ.NAME+=VALÚE áððß ŧó á ßéŧ); çhéçk véŕífíéß; ŕéßúĺŧ ßhówß á ßŧóŕéð ŕéßúĺŧ. Wóŕk íß ŧhé wóŕk çómmáñð'ß.⟧
-qps.help.project.req = ⟦ŕéq [ĺíßŧ] ; ŕéq ñéw ŦIŦLE ŧéxŧ=... [çŕíŧéŕíá=...] ; ŕéq ID ; ŕéq áççépŧ, ŕéjéçŧ óŕ óbßóĺéŧé ID ; ŕéq ŕévíßé ID ŧíŧĺé=... ŧéxŧ=... çŕíŧéŕíá=... ; ŕéq ĺíñk ID KIND ŦARGEŦ áñð ŕéq úñĺíñk ID KIND ŦARGEŦ, KIND óñé óf ðépéñðéñçý, çómpóñéñŧ, ímpĺéméñŧáŧíóñ, ŧáßk, ŧéßŧ, véŕífíçáŧíóñ ; ŕéq ßúpéŕßéðé OLD NEW⟧
-qps.help.project.state = ⟦ßŧáŧé: ŧhé pŕójéçŧ áŧ á gĺáñçé -- íŧß ŕéqúíŕéméñŧß áñð ŧáßkß çóúñŧéð, ŧhé bĺóçkéð áñð fáíĺéð óñéß wíŧh whý, ŧhé ĺáßŧ véŕífíçáŧíóñ⟧
-qps.help.project.bootstrap = ⟦bóóŧßŧŕáp [FILE ...]: ŕéáð ŧhé pŕójéçŧ'ß ðóçúméñŧß fóŕ íŧß ŕéqúíŕéméñŧß (## REQ-ID Ŧíŧĺé héáðíñgß, REQ-ID: ĺíñéß, SHALL, MÚSŦ áñð SHOÚLD ĺíñéß, Aççépŧáñçé: áñð DEÇ-ID: ĺíñéß)⟧
-qps.help.project.config = ⟦çóñfíg [NAME]: ŧhé ßéŧŧíñgß, óŕ ŧhóßé whóßé ñámé hóĺðß NAME⟧
-qps.help.project.reconfigure = ⟦ŕéçóñfígúŕé NAME=VALÚE ... [çóñfíŕm=ýéß]: çháñgé ßéŧŧíñgß -- NAME wíŧh íŧß kíñð óŕ wíŧhóúŧ (wóŕk.ágéñŧ), ßéŧ.NAME+=A,B áððß ŧó á ßéŧ áñð -=A ŧákéß óúŧ, máp.péŕmíßßíóñ.X= gŕáñŧß áñð =óff ŧákéß áwáý; çóñfíŕm=ýéß áppĺíéß wíŧhóúŧ béíñg áßkéð⟧
-qps.help.project.check = ⟦çhéçk [PROFILE, fúĺĺ, çóñßíßŧéñçý óŕ REQ-ID]: ŕúñ ŧhé pŕójéçŧ'ß çhéçkß, óŕ ßáý wháŧ ðóéß ñóŧ hóĺð ŧógéŧhéŕ, óŕ véŕífý á ŕéqúíŕéméñŧ⟧
-qps.help.project.decision = ⟦ðéçíßíóñ [ĺíßŧ] ; ðéçíßíóñ ñéw ŦIŦLE ŧéxŧ=... ; ðéçíßíóñ ID ; ðéçíßíóñ áççépŧ, ŕéjéçŧ óŕ óbßóĺéŧé ID ; ðéçíßíóñ ŕévíßé ID ŧéxŧ=... ; ðéçíßíóñ ßúpéŕßéðé OLD NEW ; ðéçíßíóñ góvéŕñ ID SEŦŦING RÚLING⟧
-qps.help.project.spec = ⟦ßpéç [ĺíßŧ] ; ßpéç ñéw ŦIŦLE ŧéxŧ=... ; ßpéç ID ; ßpéç áççépŧ óŕ ŕéjéçŧ ID ; ßpéç ŕévíßé ID ŧéxŧ=... ; ßpéç ŕévíßé ID fŕóm-ðóçúméñŧ ŧákéß wháŧ íŧß ðóçúméñŧ ßáýß ñów⟧
-qps.help.project.accept = ⟦áççépŧ [ID]: áççépŧ ŧhé óñé çáñðíðáŧé wáíŧíñg, óŕ ŧhé ŕéqúíŕéméñŧ, ðéçíßíóñ, ßpéçífíçáŧíóñ óŕ ŧáßk ñáméð⟧
-qps.help.project.reject = ⟦ŕéjéçŧ [ID]: ŕéjéçŧ ŧhé óñé çáñðíðáŧé wáíŧíñg, óŕ ŧhé óñé ñáméð⟧
-qps.help.project.sandbox = ⟦ßáñðbóx [ÇAPABILIŦY: ŕóóŧß=...; ... óŕ óff]: çóñfíñé ŧhé ßéßßíóñ'ß ágéñŧß béĺów ŧhé pŕójéçŧ'ß péŕmíßßíóñß; fŕóm ŧhé ßhéĺĺ, MODEL_RÚNNER_SANDBOX ðóéß íŧ fóŕ óñé çómmáñð⟧
-qps.help.project.instruct = ⟦íñßŧŕúçŧ ŦEXŦ: áñ íñßŧŕúçŧíóñ évéŕý ágéñŧ óf ŧhé pŕójéçŧ íß gívéñ fŕóm ñów óñ⟧
-qps.help.project.result = ⟦ŕéßúĺŧ [ID [fúĺĺ] | ðíßmíßß ID]: ŧhé ópéñ íßßúéß; wháŧ á ŕéßúĺŧ, íñvóçáŧíóñ, çóñŧéxŧ, évíðéñçé óŕ ágéñŧ (RES-, INV-, ÇŦX-, VER-, AG-) hóĺðß; óŕ áñ íßßúé ŧákéñ óff ŧhé ĺíßŧ⟧
-qps.help.project.options = ⟦Opŧíóñß:⟧
-qps.help.project.directory = ⟦  --ðíŕéçŧóŕý DIR         ŧhé pŕójéçŧ íñ DIR ŕáŧhéŕ ŧháñ ŧhé çúŕŕéñŧ ðíŕéçŧóŕý⟧
-qps.help.project.set = ⟦  --ßéŧ NAME=VALÚE        á fíéĺð óŕ á ßéŧŧíñg, áß NAME=VALÚE áfŧéŕ ŧhé çómmáñð ßáýß íŧ; ŕépéáŧábĺé⟧
-qps.help.project.format = ⟦  --fóŕmáŧ pĺáíñ|jßóñ     jßóñ: óñé óbjéçŧ á ĺíñé, éáçh méßßágé'ß kéý áñð váĺúéß, fóŕ á pŕógŕám⟧
-qps.help.project.quiet = ⟦  --qúíéŧ                 ßúppŕéßß pŕógŕéßß, ñóŧéß áñð wáŕñíñgß⟧
-qps.help.project.verbose = ⟦  --véŕbóßé               ŕépóŕŧ pŕógŕéßß áñð ðéŧáíĺ óñ ßŧáñðáŕð éŕŕóŕ⟧
-qps.help.project.locale = ⟦  --ĺóçáĺé NAME           ĺóçáĺé fóŕ pŕógŕám méßßágéß⟧
-qps.help.project.color = ⟦  --çóĺóŕ=MODE            çóĺóúŕ óúŧpúŧ: {value}⟧
 qps.help.inspect.options = ⟦Ópŧíóñß:⟧
 qps.help.inspect.metadata = ⟦  --metadata              ĺíßŧ méŧáðáŧá kéýß, ŧýpéß áñð váĺúéß⟧
 qps.help.inspect.tensors = ⟦  --tensors               ĺíßŧ ŧéñßóŕ ñáméß, ßhápéß áñð fóŕmáŧß⟧
@@ -2333,6 +2138,7 @@ qps.cli.interactive.help.decision = ⟦/decision [ID | ACTION]  ðéçíßíóñ
 qps.cli.interactive.help.spec = ⟦/spec [ID | ACTION]  ßþéçífíçáŧíóñß: ŧhé ßámé áß ðéçíßíóñß⟧
 qps.cli.interactive.help.result = ⟦/ŕéßúĺŧ [ID | ðíßmíßß ID]  ĺíßŧ ŧhé ópéñ íßßúéß, ßhów á ßŧóŕéð ŕéßúĺŧ, óŕ ŧáké áñ íßßúé óff ŧhé ĺíßŧ⟧
 qps.cli.interactive.help.tree = ⟦/tree             ŧhé ŕépóßíŧóŕý'ß fíĺéß⟧
+qps.cli.interactive.help.scan = ⟦/ßçáñ              ŕéáð ŧhé ŕépóßíŧóŕý ágáíñ áñð ßáý wháŧ íŧ hóĺðß⟧
 qps.cli.interactive.help.sym = ⟦/sym NAME         whéŕé á ßýmbóĺ íß ðéçĺáŕéð⟧
 qps.cli.interactive.help.refs = ⟦/refs NAME        whéŕé á ßýmbóĺ íß úßéð⟧
 qps.cli.interactive.help.deps = ⟦/ðépß ÚNIŦ         ŧhé úñíŧß á úñíŧ ðépéñðß óñ⟧
@@ -2549,7 +2355,6 @@ qps.cli.project.git.branch = ⟦óñ {name}⟧
 qps.cli.project.git.clean = ⟦ñóŧhíñg háß çháñgéð ßíñçé ŧhé ĺáßŧ çómmíŧ⟧
 qps.cli.project.git.none = ⟦ŧhé þŕójéçŧ íß ñóŧ íñ á Gíŧ ŕéþóßíŧóŕý gíŧ çáñ ŕéáð⟧
 qps.cli.project.sandbox.none = ⟦ágéñŧß áŕé çóñfíñéð óñĺý ƀý ŧhé þŕóĵéçŧ'ß þéŕɱíßßíóñß⟧
-qps.cli.project.sandbox.shell = ⟦á ßáñðbóx ĺáßŧß fóŕ á ßéßßíóñ; fŕóm ŧhé ßhéĺĺ, púŧ MODEL_RÚNNER_SANDBOX="PERMISSIONS" béfóŕé ŧhé çómmáñð íŧ íß ŧó çóñfíñé, áß MODEL_RÚNNER_SANDBOX="ŕéáð_ßóúŕçé; wŕíŧé_ßóúŕçé ŕóóŧß=ßŕç/" móðéĺ_ŕúññéŕ wóŕk {value}⟧
 qps.cli.project.sandbox.set = ⟦ágéñŧß áŕé çóñfíñéð ŧó {value} (bý {name})⟧
 qps.cli.project.sandbox.effective = ⟦wíŧh ŧhíß pŕójéçŧ'ß péŕmíßßíóñß, íŧß ágéñŧß máý ðó: {value}⟧
 qps.cli.project.instruct.none = ⟦ñó íñßŧŕúçŧíóñ óf ýóúŕß ßŧáñðß⟧
@@ -2735,7 +2540,7 @@ qps.diagnostic.hint.usage = ⟦ŕúñ 'model_runner héĺp' fóŕ úßágé⟧
 qps.diagnostic.hint.usage_session = ⟦/héĺp ĺíßŧß ŧhé ßéßßíóñ'ß çómmáñðß⟧
 qps.diagnostic.hint.resource = ⟦ŕáíßé ŧhé ĺímíŧ, óŕ áßk fóŕ ĺéßß: á ßmáĺĺéŕ --context-size óŕ --batch-size⟧
 qps.diagnostic.hint.unsupported = ⟦ŕúñ 'model_runner version' fóŕ ŧhé fóŕmáŧß áñð áŕçhíŧéçŧúŕéß ŧhíß búíĺð háß⟧
-qps.diagnostic.hint.not_initialized = ⟦móðéĺ_ŕúññéŕ íñíŧ ßŧáŕŧß á pŕójéçŧ'ß ßŧáŧé héŕé; íñíŧ áĺóñé ĺíßŧß ŧhé ŧémpĺáŧéß ŧó ßŧáŕŧ fŕóm⟧
+qps.diagnostic.hint.not_initialized = ⟦/íñíŧ ßŧáŕŧß á pŕójéçŧ'ß ßŧáŧé héŕé; /íñíŧ áĺóñé ĺíßŧß ŧhé ŧémpĺáŧéß ŧó ßŧáŕŧ fŕóm⟧
 qps.error.cli.missing_command = ⟦ñó çómmáñð gívéñ: ŕúñ MODEL --íñŧéŕáçŧívé ópéñß á ßéßßíóñ, íñíŧ ßŧáŕŧß á pŕójéçŧ, áñð héĺp ĺíßŧß ŧhé ŕéßŧ⟧
 qps.error.cli.unknown_command = ⟦úñkñówñ çómmáñð: {value}⟧
 qps.error.cli.unknown_option = ⟦úñkñówñ ópŧíóñ: {option}⟧

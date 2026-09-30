@@ -23,6 +23,7 @@ package body Tool_Commands is
    Name_Package        : aliased constant String := "package";
    Name_Pristine       : aliased constant String := "pristine";
    Name_Schema         : aliased constant String := "schema";
+   Name_Session        : aliased constant String := "session-command";
    Name_Likeness       : aliased constant String := "fixture-likeness";
    Name_Slow           : aliased constant String := "slow";
    Name_Device_Bench   : aliased constant String := "device-bench";
@@ -107,6 +108,7 @@ package body Tool_Commands is
    Takes_Package   : aliased constant String := "[ROOT] [INTO]";
    Takes_Pristine  : aliased constant String := "[ROOT]";
    Takes_Schema    : aliased constant String := "SCHEMA";
+   Takes_Session   : aliased constant String := "/COMMAND [WORDS]";
    Takes_Likeness  : aliased constant String := "--model PATH [--names]";
    Takes_Slow      : aliased constant String := "[NAME]";
    Takes_Bench     : aliased constant String := "";
@@ -160,6 +162,8 @@ package body Tool_Commands is
      "assemble the distributable archive from what is already built";
    Says_Schema : aliased constant String :=
      "write the grammar a JSON schema becomes";
+   Says_Session : aliased constant String :=
+     "run one of a session's project commands, no model loaded, at this terminal";
    Says_Pristine : aliased constant String :=
      "clone what git carries, build it, and run the suite and checks there";
    Says_Perplexity : aliased constant String :=
@@ -225,7 +229,7 @@ package body Tool_Commands is
    Opts_See  : aliased constant String :=
      " --mmproj --image --frames --fps --threads --device --dump --expect ";
 
-   Held : constant array (1 .. 28) of Command :=
+   Held : constant array (1 .. 29) of Command :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,
        Opts_Test'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -272,6 +276,8 @@ package body Tool_Commands is
       (Name_Pristine'Access, Takes_Pristine'Access, Says_Pristine'Access,
        Opts_None'Access),
       (Name_Schema'Access, Takes_Schema'Access, Says_Schema'Access,
+       Opts_None'Access),
+      (Name_Session'Access, Takes_Session'Access, Says_Session'Access,
        Opts_None'Access),
       (Name_Likeness'Access, Takes_Likeness'Access, Says_Likeness'Access,
        Opts_Likeness'Access),

@@ -358,6 +358,110 @@ package body Tests.CLI_Cases is
    Said      : String (1 .. 64 * 1024);
    Said_Used : Natural := 0;
 
+   --  The project's commands are a session's: given as the command line
+   --  once gave them, they are run as the session runs its slash form --
+   --  in the directory --directory names, as a program's JSON where
+   --  --format json says so, --set NAME=VALUE as NAME=VALUE.
+   function Is_Session_Word (Word : String) return Boolean
+   is (Word in "init" | "task" | "work" | "repo" | "project" | "req" | "state" | "bootstrap"
+              | "config" | "reconfigure" | "check" | "decision" | "spec" | "result" | "sandbox"
+              | "instruct" | "accept" | "reject");
+
+   procedure Ran_In_Session (Source : Opt.Arguments'Class; Status : out Natural) is
+      Catalog   : aliased Model_Runner.Localization.Catalog;
+      Screen    : Model_Runner.Presentation.Console;
+      Line      : Ada.Strings.Unbounded.Unbounded_String;
+      Directory : Ada.Strings.Unbounded.Unbounded_String :=
+        Ada.Strings.Unbounded.To_Unbounded_String (".");
+      Json      : Boolean := False;
+      Level     : Opt.Verbosity := Opt.Normal;
+      First     : Positive := 1;
+      Index     : Positive;
+      Here      : constant String := Ada.Directories.Current_Directory;
+
+      procedure Word (Text : String) is
+         Escaped : Ada.Strings.Unbounded.Unbounded_String;
+      begin
+         for C of Text loop
+            if C in '"' | '\' then
+               Ada.Strings.Unbounded.Append (Escaped, '\');
+            end if;
+            Ada.Strings.Unbounded.Append (Escaped, C);
+         end loop;
+         Ada.Strings.Unbounded.Append
+           (Line, " " & (if Text = "" or else Ada.Strings.Fixed.Index (Text, " ") > 0
+                           or else Ada.Strings.Fixed.Index (Text, "'") > 0
+                         then '"' & Ada.Strings.Unbounded.To_String (Escaped) & '"'
+                         else Ada.Strings.Unbounded.To_String (Escaped)));
+      end Word;
+   begin
+      --  The word, and for project and repo the one after it.
+      if Source.Value (1) in "project" | "repo" and then Source.Count >= 2 then
+         Line := Ada.Strings.Unbounded.To_Unbounded_String ("/" & Source.Value (2));
+         First := 3;
+      else
+         Line := Ada.Strings.Unbounded.To_Unbounded_String ("/" & Source.Value (1));
+         First := 2;
+      end if;
+      Index := First;
+      while Index <= Source.Count loop
+         declare
+            Arg : constant String := Source.Value (Index);
+         begin
+            if Arg = "--directory" and then Index < Source.Count then
+               Directory := Ada.Strings.Unbounded.To_Unbounded_String (Source.Value (Index + 1));
+               Index := Index + 1;
+            elsif Arg'Length > 12 and then Arg (Arg'First .. Arg'First + 11) = "--directory=" then
+               Directory := Ada.Strings.Unbounded.To_Unbounded_String (Arg (Arg'First + 12 .. Arg'Last));
+            elsif Arg = "--format" and then Index < Source.Count then
+               Json := Source.Value (Index + 1) = "json";
+               Index := Index + 1;
+            elsif Arg = "--format=json" then
+               Json := True;
+            elsif Arg = "--set" and then Index < Source.Count then
+               Word (Source.Value (Index + 1));
+               Index := Index + 1;
+            elsif Arg'Length > 6 and then Arg (Arg'First .. Arg'First + 5) = "--set=" then
+               Word (Arg (Arg'First + 6 .. Arg'Last));
+            elsif Arg = "--quiet" then
+               Level := Opt.Quiet;
+            elsif Arg = "--verbose" and then Source.Value (1) /= "repo" then
+               Level := Opt.Verbose;
+            else
+               Word (Arg);
+            end if;
+         end;
+         Index := Index + 1;
+      end loop;
+      --  init makes its directory: named to it, not gone into.
+      if Source.Value (1) = "init" and then Ada.Strings.Unbounded.To_String (Directory) /= "." then
+         Word ("--directory");
+         Word (Ada.Strings.Unbounded.To_String (Directory));
+         Directory := Ada.Strings.Unbounded.To_Unbounded_String (".");
+      end if;
+      Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+      Model_Runner.Presentation.Open
+        (Screen, Catalog'Unchecked_Access, Opt.Color_Never,
+         (Output_Is_Terminal => False, Error_Is_Terminal => False,
+          Input_Is_Terminal  => False, Colour_Suppressed => True),
+         Level);
+      Model_Runner.Presentation.Use_Structured (Screen, Json);
+      if not Ada.Directories.Exists (Ada.Strings.Unbounded.To_String (Directory)) then
+         Status := 6;
+         return;
+      end if;
+      Ada.Directories.Set_Directory (Ada.Strings.Unbounded.To_String (Directory));
+      begin
+         Model_Runner.CLI.Project_Commands.Run_Without_Model
+           (Ada.Strings.Unbounded.To_String (Line), Screen, Status);
+      exception
+         when others =>
+            Ada.Directories.Set_Directory (Here);
+            raise;
+      end;
+      Ada.Directories.Set_Directory (Here);
+   end Ran_In_Session;
+
    procedure Ran (Source : Opt.Arguments'Class; Status : out Natural) is
    begin
       Said_Used := 0;
@@ -365,7 +469,11 @@ package body Tests.CLI_Cases is
       Captured_Output.Open ("obj/command-output.txt");
 
       begin
-         Model_Runner.CLI.Driver.Run (Source, Status);
+         if Source.Count >= 1 and then Is_Session_Word (Source.Value (1)) then
+            Ran_In_Session (Source, Status);
+         else
+            Model_Runner.CLI.Driver.Run (Source, Status);
+         end if;
       exception
          when others =>
             declare
@@ -2335,7 +2443,6 @@ package body Tests.CLI_Cases is
       declare
          Catalog : aliased Model_Runner.Localization.Catalog;
          Screen  : Model_Runner.Presentation.Console;
-         Command : Opt.Command;
          Status  : Natural;
          Before  : Natural;
       begin
@@ -2346,11 +2453,13 @@ package body Tests.CLI_Cases is
              Input_Is_Terminal  => False, Colour_Suppressed => True),
             Opt.Quiet);
          Before := Model_Runner.Presentation.Errors_Reported (Screen);
-         Command.Kind := Opt.Command_Project;
-         Command.Action := Model_Runner.Text.To_Bounded ("req");
-         Command.Action_Argument := Model_Runner.Text.To_Bounded ("show REQ-404");
-         Command.Project_Directory := Model_Runner.Text.To_Bounded (Root & "/g");
-         Model_Runner.CLI.Project_Commands.Run_From_Shell (Command, Screen, Status);
+         declare
+            Here : constant String := Ada.Directories.Current_Directory;
+         begin
+            Ada.Directories.Set_Directory (Root & "/g");
+            Model_Runner.CLI.Project_Commands.Run_Without_Model ("/req show REQ-404", Screen, Status);
+            Ada.Directories.Set_Directory (Here);
+         end;
          Assert (Status /= 0 and then Model_Runner.Presentation.Errors_Reported (Screen) = Before + 1
                  and then Model_Runner.Presentation.First_Failure (Screen) = 0,
                  "a project command's failure was not its status, or was said twice");

@@ -1192,7 +1192,7 @@ package body Checks is
          for Index in 1 .. Opt.Option_Count loop
             if Opt.Option_Help (Index) /= "" then
                for Kind in Opt.Command_Kind loop
-                  if Kind /= Opt.Command_None
+                  if Opt.Is_Shell_Command (Kind)
                     and then Opt.Option_Commands (Index) (Kind)
                   then
                      Reached ("help." & Opt.Command_Word (Kind) & "."
@@ -1219,7 +1219,7 @@ package body Checks is
          --  A fifth: the general help's line for each command, and each
          --  topic's usage and summary, built from the command word.
          for Kind in Opt.Command_Kind loop
-            if Kind /= Opt.Command_None then
+            if Opt.Is_Shell_Command (Kind) then
                Reached ("cli.general.command." & Opt.Command_Word (Kind));
                Reached ("help." & Opt.Command_Word (Kind) & ".usage");
                Reached ("help." & Opt.Command_Word (Kind) & ".summary");
@@ -1250,8 +1250,8 @@ package body Checks is
          for Index in 1 .. Opt.Option_Count loop
             if Opt.Option_Help (Index) /= "" then
                for Kind in Opt.Command_Kind loop
-                  if Kind not in Opt.Command_None | Opt.Command_Help
-                                 | Opt.Command_Version
+                  if Opt.Is_Shell_Command (Kind)
+                    and then Kind not in Opt.Command_Help | Opt.Command_Version
                     and then Opt.Option_Commands (Index) (Kind)
                   then
                      declare
@@ -1272,7 +1272,7 @@ package body Checks is
          end loop;
 
          for Kind in Opt.Command_Kind loop
-            if Kind /= Opt.Command_None then
+            if Opt.Is_Shell_Command (Kind) then
                declare
                   Word : constant String := Opt.Command_Word (Kind);
 
@@ -1577,7 +1577,7 @@ package body Checks is
          is (Holds (Catalog, Character'Val (10) & "en." & Key & " ="));
       begin
          for Kind in Opt.Command_Kind loop
-            if Kind /= Opt.Command_None then
+            if Opt.Is_Shell_Command (Kind) then
                declare
                   Word : constant String := Opt.Command_Word (Kind);
                begin

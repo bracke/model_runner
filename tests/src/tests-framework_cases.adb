@@ -3366,9 +3366,10 @@ package body Tests.Framework_Cases is
       Assert (Hostkit.Pty.Attach (Pair, Options), "the pseudo-terminal was not attached");
       Assert (Hostkit.Terminal_Control.Save_Mode (Pair.To_Child, Before),
               "the terminal's mode was not read");
-      Words.Append (To_Unbounded_String ("task"));
+      Words.Append (To_Unbounded_String ("session-command"));
+      Words.Append (To_Unbounded_String ("/task"));
       Words.Append (To_Unbounded_String ("new"));
-      Assert (Hostkit.Spawn.Start (Dirs.Full_Name ("../bin/model_runner"), Words, Options, Child)
+      Assert (Hostkit.Spawn.Start (Dirs.Full_Name ("bin/tests"), Words, Options, Child)
               = Hostkit.Spawn.Spawn_Ok, "model_runner did not start");
       Hostkit.Pty.Close_Device (Pair);
 
@@ -3477,8 +3478,30 @@ package body Tests.Framework_Cases is
          Assert (Hostkit.Pty.Set_Size (Pair, (Rows => 24, Columns => 80))
                  and then Hostkit.Pty.Attach (Pair, Options),
                  "the pseudo-terminal was not made ready");
-         Assert (Hostkit.Spawn.Start (Dirs.Full_Name ("../bin/model_runner"), Words, Options, Child)
-                 = Hostkit.Spawn.Spawn_Ok, "model_runner did not start");
+         --  The words as a session takes them, run by the tests' own
+         --  program at this terminal: the command line has none of these.
+         declare
+            Line : Hostkit.String_Vectors.Vector;
+         begin
+            Line.Append (To_Unbounded_String ("session-command"));
+            for Index in Words.First_Index .. Words.Last_Index loop
+               declare
+                  One : constant String := To_String (Words (Index));
+               begin
+                  if Index = Words.First_Index then
+                     Line.Append (To_Unbounded_String ("/" & One));
+                  elsif One = "--set" then
+                     null;
+                  elsif Ada.Strings.Fixed.Index (One, " ") > 0 then
+                     Line.Append (To_Unbounded_String ('"' & One & '"'));
+                  else
+                     Line.Append (To_Unbounded_String (One));
+                  end if;
+               end;
+            end loop;
+            Assert (Hostkit.Spawn.Start (Dirs.Full_Name ("bin/tests"), Line, Options, Child)
+                    = Hostkit.Spawn.Spawn_Ok, "the session's command did not start");
+         end;
          Hostkit.Pty.Close_Device (Pair);
          Gather;
          Act (Pair, To_String (Said));

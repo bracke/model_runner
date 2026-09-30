@@ -53,11 +53,6 @@ with Model_Runner.Tools.Runner;
 with GNAT.OS_Lib;
 with Model_Runner.CLI.Interactive;
 with Model_Runner.CLI.Checkpoint;
-with Model_Runner.CLI.Init;
-with Model_Runner.CLI.Project_Commands;
-with Model_Runner.CLI.Repo;
-with Model_Runner.CLI.Work;
-with Model_Runner.CLI.Tasks;
 
 package body Model_Runner.CLI.Execute is
 
@@ -1930,9 +1925,12 @@ package body Model_Runner.CLI.Execute is
       --  already named exactly those four, so a fifth command would have
       --  compiled, dispatched, taken options -- and had no help.
       case Opt.Command_Of (Topic) is
-         when Opt.Command_Run | Opt.Command_Embed | Opt.Command_Inspect
-            | Opt.Command_Init | Opt.Command_Task | Opt.Command_Repo
+         --  The project's commands are a session's, and so is their help.
+         when Opt.Command_Init | Opt.Command_Task | Opt.Command_Repo
             | Opt.Command_Work | Opt.Command_Project =>
+            Screen.Put_Message ("help.session_command", [Loc.Named ("value", Topic)]);
+
+         when Opt.Command_Run | Opt.Command_Embed | Opt.Command_Inspect =>
             declare
                Kind : constant Opt.Command_Kind := Opt.Command_Of (Topic);
                Word : constant String := Opt.Command_Word (Kind);
@@ -1941,26 +1939,6 @@ package body Model_Runner.CLI.Execute is
                Screen.Put_Line ("");
                Screen.Put_Message ("help." & Word & ".summary");
 
-               --  One of the project commands asked about: its own syntax.
-               if Kind = Opt.Command_Project and then Topic /= "project"
-                 and then Model_Runner.CLI.Options.Is_Project_Word (Topic)
-               then
-                  Screen.Put_Line ("");
-                  Screen.Put_Message
-                    ((if Topic = "req" then "help.project.req"
-                      elsif Topic = "state" then "help.project.state"
-                      elsif Topic = "bootstrap" then "help.project.bootstrap"
-                      elsif Topic = "config" then "help.project.config"
-                      elsif Topic = "reconfigure" then "help.project.reconfigure"
-                      elsif Topic = "check" then "help.project.check"
-                      elsif Topic = "decision" then "help.project.decision"
-                      elsif Topic = "spec" then "help.project.spec"
-                      elsif Topic = "accept" then "help.project.accept"
-                      elsif Topic = "reject" then "help.project.reject"
-                      elsif Topic = "sandbox" then "help.project.sandbox"
-                      elsif Topic = "instruct" then "help.project.instruct"
-                      else "help.project.result"));
-               end if;
                Screen.Put_Line ("");
                Screen.Put_Message ("help." & Word & ".options");
                Options_Of (Kind, Word);
@@ -2000,12 +1978,15 @@ package body Model_Runner.CLI.Execute is
             Screen.Put_Message ("cli.general.commands");
 
             for Kind in Opt.Command_Kind loop
-               if Kind /= Opt.Command_None then
+               if Opt.Is_Shell_Command (Kind) then
                   Screen.Put_Option
                     ("cli.general.command." & Opt.Command_Word (Kind),
                      [Loc.Named ("value", "")]);
                end if;
             end loop;
+            --  The project's commands, where they are.
+            Screen.Put_Line ("");
+            Screen.Put_Message ("cli.general.session_commands");
 
             Screen.Put_Line ("");
             Screen.Put_Message ("cli.general.more");
@@ -5674,20 +5655,11 @@ package body Model_Runner.CLI.Execute is
          when Opt.Command_Models =>
             Do_Models (Item, Screen, Status);
 
-         when Opt.Command_Init =>
-            Model_Runner.CLI.Init.Run (Item, Screen, Status);
-
-         when Opt.Command_Task =>
-            Model_Runner.CLI.Tasks.Run (Item, Screen, Status);
-
-         when Opt.Command_Repo =>
-            Model_Runner.CLI.Repo.Run (Item, Screen, Status);
-
-         when Opt.Command_Work =>
-            Model_Runner.CLI.Work.Run (Item, Screen, Status);
-
-         when Opt.Command_Project =>
-            Model_Runner.CLI.Project_Commands.Run_From_Shell (Item, Screen, Status);
+         --  The project's commands are a session's: never parsed from the
+         --  command line, so never here.
+         when Opt.Command_Init | Opt.Command_Task | Opt.Command_Repo | Opt.Command_Work
+            | Opt.Command_Project =>
+            Status := E.Exit_Usage;
 
          when Opt.Command_Run =>
             if T.Is_Empty (Item.Model_Path) then

@@ -150,6 +150,16 @@ package Model_Runner.CLI.Options is
    --  @return The word, or an empty string for no command.
    function Command_Word (Kind : Command_Kind) return String;
 
+   --  Whether a command is typed at the shell. The project's commands --
+   --  init, task, work, repo and the rest -- are a session's, typed there
+   --  with a slash, and the command line has none of them.
+   --
+   --  @param Kind Command to ask of.
+   --  @return True for the command line's own.
+   function Is_Shell_Command (Kind : Command_Kind) return Boolean
+   is (Kind not in Command_None | Command_Init | Command_Task | Command_Repo | Command_Work
+                 | Command_Project);
+
    --  The command a word names.
    --
    --  @param Word Word as typed.

@@ -1,3 +1,8 @@
+with Ada.Strings.Unbounded;
+with Model_Runner.CLI.Options;
+with Model_Runner.Presentation;
+with Model_Runner.Localization;
+with Model_Runner.CLI.Project_Commands;
 with Ada.Calendar;
 --  SIGINT is reserved by the GNAT runtime unless a partition says otherwise.
 --  model_runner attaches its own handler so that an interrupt requests a clean
@@ -2430,6 +2435,46 @@ begin
                "could not write the error-code reference");
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;
+      end;
+
+   elsif Command = "session-command" then
+      --  One of a session's project commands, run as a session runs it and
+      --  at this process's own terminal: what the tests that need a real
+      --  terminal -- a chooser in raw mode, a resize -- start, now that the
+      --  command line has none of these commands.
+      declare
+         Catalog : aliased Model_Runner.Localization.Catalog;
+         Screen  : Model_Runner.Presentation.Console;
+         Line    : Ada.Strings.Unbounded.Unbounded_String;
+         Status  : Natural;
+      begin
+         for Index in 2 .. Ada.Command_Line.Argument_Count loop
+            Ada.Strings.Unbounded.Append
+              (Line, (if Index = 2 then "" else " ") & Ada.Command_Line.Argument (Index));
+         end loop;
+         --  The repository's catalog, found from this program's place
+         --  (tests/bin), wherever it was started.
+         declare
+            Program : constant String :=
+              Ada.Directories.Full_Name (Model_Runner.Platform.Executable_Directory);
+            Beside  : constant String :=
+              Ada.Directories.Containing_Directory (Ada.Directories.Containing_Directory (Program))
+              & "/resources/messages/catalog.txt";
+         begin
+            Model_Runner.Localization.Open
+              (Catalog, (if Ada.Directories.Exists (Beside) then Beside
+                         else Model_Runner.Platform.Catalog_Path), "en");
+         end;
+         Model_Runner.Presentation.Open
+           (Screen, Catalog'Unchecked_Access, Model_Runner.CLI.Options.Color_Auto,
+            (Input_Is_Terminal  => Model_Runner.Platform.Is_Terminal (0),
+             Output_Is_Terminal => Model_Runner.Platform.Is_Terminal (1),
+             Error_Is_Terminal  => Model_Runner.Platform.Is_Terminal (2),
+             Colour_Suppressed  => Model_Runner.Platform.No_Color_Requested),
+            Model_Runner.CLI.Options.Normal);
+         Model_Runner.CLI.Project_Commands.Run_Without_Model
+           (Ada.Strings.Unbounded.To_String (Line), Screen, Status);
+         Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Exit_Status (Status));
       end;
 
    elsif Command = "schema" then

@@ -74,7 +74,7 @@ package body Model_Runner.CLI.Project_Commands is
       new String'("/config"), new String'("/task"), new String'("/accept"),
       new String'("/reject"), new String'("/work"), new String'("/cancel"),
       new String'("/check"), new String'("/req"), new String'("/result"),
-      new String'("/tree"), new String'("/sym"), new String'("/refs"),
+      new String'("/scan"), new String'("/tree"), new String'("/sym"), new String'("/refs"),
       new String'("/deps"), new String'("/users"),
       new String'("/impact"), new String'("/trace"), new String'("/reconfigure"),
       new String'("/decision"), new String'("/spec"), new String'("/git"),
@@ -945,6 +945,7 @@ package body Model_Runner.CLI.Project_Commands is
       Pres.Put_Aside (Screen, "cli.interactive.help.decision");
       Pres.Put_Aside (Screen, "cli.interactive.help.spec");
       Pres.Put_Aside (Screen, "cli.interactive.help.result");
+      Pres.Put_Aside (Screen, "cli.interactive.help.scan");
       Pres.Put_Aside (Screen, "cli.interactive.help.tree");
       Pres.Put_Aside (Screen, "cli.interactive.help.sym");
       Pres.Put_Aside (Screen, "cli.interactive.help.refs");
@@ -1038,6 +1039,10 @@ package body Model_Runner.CLI.Project_Commands is
    -- Run --
    ---------
 
+   --  The exit status the last command's own part set, beside what the
+   --  console counted of the errors it reported.
+   Last_Status : Natural := 0;
+
    procedure Run
      (Line   : String;
       Screen : in out Model_Runner.Presentation.Console;
@@ -1048,7 +1053,7 @@ package body Model_Runner.CLI.Project_Commands is
       Word       : constant String := All_Words.First_Element;
       Positional : Names.Vector;
       Command    : Opt.Command;
-      Status     : Natural;
+      Status     : Natural := 0;
       Outcome    : E.Error_Info;
 
       function Argument (Index : Positive) return String
@@ -2890,16 +2895,22 @@ package body Model_Runner.CLI.Project_Commands is
                   Command.Project_Directory := T.To_Bounded
                     (Ada.Strings.Fixed.Delete (Positional (Index), 1, 12));
                   Index := Index + 1;
-               else
-                  if Template = Null_Unbounded_String then
-                     Template := To_Unbounded_String (Positional (Index));
-                  end if;
+               elsif Template = Null_Unbounded_String then
+                  Template := To_Unbounded_String (Positional (Index));
                   Index := Index + 1;
+               else
+                  --  One template; an input is NAME=VALUE.
+                  Outcome := E.Make (E.CLI_Unexpected_Operand);
+                  E.Add_Text (Outcome, "value", Positional (Index) & "; /init takes one template, and"
+                              & " each input as NAME=VALUE");
+                  Pres.Report (Screen, Outcome);
+                  return;
                end if;
             end loop;
             Command.Template_Name := T.To_Bounded (To_String (Template));
          end;
          Model_Runner.CLI.Init.Run (Command, Screen, Status);
+         Last_Status := Status;
 
       elsif Word = "/task" then
          Command.Kind := Opt.Command_Task;
@@ -2912,11 +2923,13 @@ package body Model_Runner.CLI.Project_Commands is
             Command.Action_Argument := T.To_Bounded (Rest (2));
          end if;
          Model_Runner.CLI.Tasks.Run (Command, Screen, Status);
+         Last_Status := Status;
 
       elsif Word in "/accept" | "/reject" then
          With_Store (Decide'Access);
          if Command.Kind = Opt.Command_Task then
             Model_Runner.CLI.Tasks.Run (Command, Screen, Status);
+            Last_Status := Status;
          end if;
 
       elsif Word = "/cancel" then
@@ -2927,14 +2940,16 @@ package body Model_Runner.CLI.Project_Commands is
             Command.Action := T.To_Bounded ("cancel");
             Command.Action_Argument := T.To_Bounded (Argument (1));
             Model_Runner.CLI.Tasks.Run (Command, Screen, Status);
+            Last_Status := Status;
          end if;
 
       elsif Word = "/work" then
          Command.Kind := Opt.Command_Work;
          Command.Action_Argument := T.To_Bounded (Rest (1));
          Model_Runner.CLI.Work.Run_With (Command, Screen, Agent, Status);
+         Last_Status := Status;
 
-      elsif Word in "/tree" | "/sym" | "/refs" | "/deps" | "/users" | "/impact" | "/trace" then
+      elsif Word in "/scan" | "/tree" | "/sym" | "/refs" | "/deps" | "/users" | "/impact" | "/trace" then
          Command.Kind := Opt.Command_Repo;
          Command.Action := T.To_Bounded (Word (Word'First + 1 .. Word'Last));
          --  --verbose among the words: all of it, as the shell's option.
@@ -2944,6 +2959,7 @@ package body Model_Runner.CLI.Project_Commands is
             Command.Level := Opt.Verbose;
          end if;
          Model_Runner.CLI.Repo.Run (Command, Screen, Status);
+         Last_Status := Status;
 
       elsif Word = "/state" then
          With_Store (State'Access);
@@ -3112,90 +3128,21 @@ package body Model_Runner.CLI.Project_Commands is
       E.Add_Text (Status, "name", "model");
    end Check_Start;
 
-   --------------------
-   -- Run_From_Shell --
-   --------------------
+   -----------------------
+   -- Run_Without_Model --
+   -----------------------
 
-   procedure Run_From_Shell
-     (Item   : Model_Runner.CLI.Options.Command;
+   procedure Run_Without_Model
+     (Line   : String;
       Screen : in out Model_Runner.Presentation.Console;
       Status : out Natural)
    is
-      Before    : constant String := Ada.Directories.Current_Directory;
-      Directory : constant String :=
-        (if T.Is_Empty (Item.Project_Directory) then "."
-         else T.To_String (Item.Project_Directory));
-      Word      : constant String := T.To_String (Item.Action);
-      Rest      : constant String := T.To_String (Item.Action_Argument);
-      Ignored   : constant Natural := Pres.First_Failure (Screen);
+      Ignored : constant Natural := Pres.First_Failure (Screen);
       pragma Unreferenced (Ignored);
-
-      --  --set NAME=VALUE, each as a session's NAME=VALUE, quoted as the
-      --  command's other words are.
-      function Set_Words return String is
-         Result : Unbounded_String;
-      begin
-         for Index in 1 .. Item.Input_Count loop
-            declare
-               Given   : constant String := T.To_String (Item.Inputs (Index));
-               Escaped : Unbounded_String;
-            begin
-               for C of Given loop
-                  if C in '"' | '\' | ''' then
-                     Append (Escaped, '\');
-                  end if;
-                  Append (Escaped, C);
-               end loop;
-               Append (Result, " " & (if Ada.Strings.Fixed.Index (Given, " ") > 0
-                                      then '"' & To_String (Escaped) & '"'
-                                      else To_String (Escaped)));
-            end;
-         end loop;
-         return To_String (Result);
-      end Set_Words;
    begin
-      if Word = "" then
-         declare
-            Missing : E.Error_Info := E.Make (E.Framework_Input_Missing);
-         begin
-            E.Add_Text (Missing, "name", "the project command: req, state, bootstrap, config,"
-                        & " reconfigure, check, decision, spec, result, sandbox, instruct,"
-                        & " accept or reject");
-            Pres.Report (Screen, Missing);
-            Status := E.Exit_Status (Missing);
-            return;
-         end;
-      end if;
-      if not Ada.Directories.Exists (Directory) then
-         declare
-            Missing : E.Error_Info := E.Make (E.Framework_Not_Initialized);
-         begin
-            E.Add_Text (Missing, "path", Directory, E.Param_Path);
-            Pres.Report (Screen, Missing);
-            Status := E.Exit_Status (Missing);
-            return;
-         end;
-      end if;
-      --  A sandbox is a session's: from the shell it is said how to give
-      --  one to a command, not set for nothing.
-      if Word = "sandbox" and then Rest /= "" then
-         Pres.Put_Note (Screen, "cli.project.sandbox.shell",
-                        [Loc.Named ("value", (if Ada.Strings.Fixed.Index (Rest, "TASK-") = Rest'First
-                                              then Rest else "TASK-ID"))]);
-         Status := E.Exit_Success;
-         return;
-      end if;
-      Ada.Directories.Set_Directory (Directory);
-      begin
-         Run ("/" & Word & (if Rest = "" then "" else " " & Rest) & Set_Words, Screen,
-              No_Agent'(null record));
-      exception
-         when others =>
-            Ada.Directories.Set_Directory (Before);
-            raise;
-      end;
-      Ada.Directories.Set_Directory (Before);
-      Status := Pres.First_Failure (Screen);
-   end Run_From_Shell;
+      Last_Status := 0;
+      Run (Line, Screen, No_Agent'(null record));
+      Status := Natural'Max (Pres.First_Failure (Screen), Last_Status);
+   end Run_Without_Model;
 
 end Model_Runner.CLI.Project_Commands;

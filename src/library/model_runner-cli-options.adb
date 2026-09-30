@@ -1,6 +1,4 @@
 with Ada.Command_Line;
-with Ada.Strings.Fixed;
-with Ada.Strings.Unbounded;
 with Ada.Unchecked_Deallocation;
 
 package body Model_Runner.CLI.Options is
@@ -28,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 116) of Registry_Row :=
+   Registry : constant array (1 .. 113) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -226,17 +224,6 @@ package body Model_Runner.CLI.Options is
       (Text ("--metadata"), [Command_Inspect => True, others => False], Text ("metadata")),
       (Text ("--tensors"), [Command_Inspect => True, others => False], Text ("tensors")),
       (Text ("--validate"), [Command_Inspect => True, others => False], Text ("validate")),
-      (Text ("--set"),
-       [Command_Init | Command_Task | Command_Work | Command_Project => True, others => False],
-       Text ("set")),
-      (Text ("--directory"),
-       [Command_Init | Command_Task | Command_Repo | Command_Work | Command_Project => True,
-        others => False],
-       Text ("directory")),
-      (Text ("--format"),
-       [Command_Init | Command_Task | Command_Repo | Command_Work | Command_Project => True,
-        others => False],
-       Text ("format")),
       (Text ("--quiet"), [others => True], Text ("quiet")),
       (Text ("--verbose"), [others => True], Text ("verbose")),
       (Text ("--locale"), [others => True], Text ("locale")),
@@ -933,7 +920,7 @@ package body Model_Runner.CLI.Options is
          Flag_Tools, Flag_Tools_File, Flag_Tool_Command,
          Flag_Max_Retries, Flag_Max_Total_Tokens, Flag_Max_Parallel,
          Flag_Context_Shift, Flag_Context_Keep,
-         Flag_Threads, Flag_Backend, Flag_Directory, Flag_Format);
+         Flag_Threads, Flag_Backend);
       Seen : array (Option_Flag) of Boolean := [others => False];
 
       procedure Fail (Code : E.Error_Code; Name : String; Detail : String := "")
@@ -1511,57 +1498,6 @@ package body Model_Runner.CLI.Options is
                      Result.Deny_Tools (Result.Deny_Tool_Count) :=
                        T.To_Bounded (Held.all);
                      Free_Text (Held);
-
-                  elsif Name = "--set" then
-                     --  Repeatable: each gives one of the template's inputs
-                     --  as NAME=VALUE.
-                     if Result.Input_Count = Max_Guards then
-                        Fail (E.CLI_Option_Out_Of_Range, Name);
-                        return;
-                     end if;
-                     Take_Value (Name, Value_Present, Value_First, Argument,
-                                 Held, Good);
-                     if not Good then
-                        return;
-                     end if;
-                     if Held'Length = 0 or else Held (Held'First) = '='
-                       or else (for all Char of Held.all => Char /= '=')
-                     then
-                        Fail (E.CLI_Invalid_Option_Value, Name, Held.all);
-                        Free_Text (Held);
-                        return;
-                     end if;
-                     Result.Input_Count := Result.Input_Count + 1;
-                     Result.Inputs (Result.Input_Count) :=
-                       T.To_Bounded (Held.all);
-                     Free_Text (Held);
-
-                  elsif Name = "--format" then
-                     --  How the project commands say what they did: lines for
-                     --  a person, or one JSON object a line for a program.
-                     Mark (Flag_Format, Name, Good);
-                     if not Good then
-                        return;
-                     end if;
-                     Take_Value (Name, Value_Present, Value_First, Argument, Held, Good);
-                     if not Good then
-                        return;
-                     end if;
-                     if Held.all = "json" then
-                        Result.Structured := True;
-                     elsif Held.all /= "plain" then
-                        Fail (E.CLI_Invalid_Option_Value, Name, Held.all);
-                        Free_Text (Held);
-                        return;
-                     end if;
-                     Free_Text (Held);
-
-                  elsif Name = "--directory" then
-                     Bounded_Value
-                       (Flag_Directory, Result.Project_Directory, Good);
-                     if not Good then
-                        return;
-                     end if;
 
                   elsif Name = "--deny-arg" then
                      --  Repeatable: a call whose arguments contain one of
@@ -2710,121 +2646,25 @@ package body Model_Runner.CLI.Options is
                      Result.Kind := Command_Inspect;
                   elsif Argument = "models" then
                      Result.Kind := Command_Models;
-                  elsif Argument = "init" then
-                     Result.Kind := Command_Init;
-                  elsif Argument = "task" then
-                     Result.Kind := Command_Task;
-                  elsif Argument = "repo" then
-                     Result.Kind := Command_Repo;
-                  elsif Argument = "work" then
-                     Result.Kind := Command_Work;
-                  elsif Argument = "project" or else Is_Project_Word (Argument) then
-                     Result.Kind := Command_Project;
-                     if Argument /= "project" then
-                        Result.Action := T.To_Bounded (Argument);
-                     end if;
                   elsif Argument = "help" then
                      Result.Kind := Command_Help;
                   elsif Argument = "version" then
                      Result.Kind := Command_Version;
-                  elsif Argument in "trace" | "refs" | "impact" | "tree" | "sym" | "deps" | "users" then
-                     --  A session's /trace is the shell's repo trace.
-                     Fail (E.CLI_Unknown_Command, "", Argument & "; repo " & Argument & " is the one");
-                     return;
-                  elsif Argument in "cancel" | "complete" | "split" | "verify" | "integrate" | "reopen"
+                  elsif Argument in "init" | "task" | "work" | "repo" | "project"
+                                  | "trace" | "refs" | "impact" | "tree" | "sym" | "deps" | "users"
+                                  | "cancel" | "complete" | "split" | "verify" | "integrate" | "reopen"
                                   | "audit" | "derive" | "rehome" | "depend" | "edit"
+                    or else Is_Project_Word (Argument)
                   then
-                     --  A task's command without task before it.
-                     Fail (E.CLI_Unknown_Command, "", Argument & "; task " & Argument & " is the one");
+                     --  The project's commands are a session's, typed there.
+                     Fail (E.CLI_Unknown_Command, "",
+                           Argument & "; the project's commands are typed in a session: model_runner run"
+                           & " MODEL --interactive, then /help project");
                      return;
                   else
                      Fail (E.CLI_Unknown_Command, "", Argument);
                      return;
                   end if;
-
-               elsif Operands = 2 and then Result.Kind = Command_Init then
-                  --  init TEMPLATE: the template to start from.
-                  Result.Template_Name := T.To_Bounded (Argument);
-
-               elsif Operands = 2 and then Result.Kind = Command_Task then
-                  --  task ACTION: one of the things the command does.
-                  if Argument not in "list" | "new" | "accept" | "reject"
-                                   | "cancel" | "show" | "context" | "verify"
-                                   | "complete" | "integrate" | "derive" | "step"
-                                   | "plan" | "reopen" | "reconsider" | "edit"
-                                   | "depend" | "split" | "audit" | "move" | "rehome" | "help"
-                  then
-                     Fail (E.CLI_Unexpected_Operand, "",
-                           Argument & "; task takes list, new, accept, reject, cancel, show, context,"
-                           & " verify, complete, integrate, derive, step, plan, reopen, reconsider,"
-                           & " edit, depend, split, audit, move and rehome");
-                     return;
-                  end if;
-                  Result.Action := T.To_Bounded (Argument);
-
-               elsif Operands >= 2 and then Result.Kind = Command_Project then
-                  --  project WORD ...: the word, then the rest as given.
-                  if T.Is_Empty (Result.Action) then
-                     if not Is_Project_Word (Argument) then
-                        Fail (E.CLI_Unexpected_Operand, "", Argument);
-                        return;
-                     end if;
-                     Result.Action := T.To_Bounded (Argument);
-                  else
-                     --  Each word as the shell gave it: its quotes kept as
-                     --  quotes, and one with spaces kept whole.
-                     declare
-                        Escaped : Ada.Strings.Unbounded.Unbounded_String;
-                     begin
-                        for C of Argument loop
-                           if C in '"' | '\' | ''' then
-                              Ada.Strings.Unbounded.Append (Escaped, '\');
-                           end if;
-                           Ada.Strings.Unbounded.Append (Escaped, C);
-                        end loop;
-                        Result.Action_Argument := T.To_Bounded
-                          (T.To_String (Result.Action_Argument)
-                           & (if T.Is_Empty (Result.Action_Argument) then "" else " ")
-                           & (if Ada.Strings.Fixed.Index (Argument, " ") > 0
-                              then '"' & Ada.Strings.Unbounded.To_String (Escaped) & '"'
-                              else Ada.Strings.Unbounded.To_String (Escaped)));
-                     end;
-                  end if;
-
-               elsif Operands = 2 and then Result.Kind = Command_Work then
-                  --  work TASK: the task to run; an empty one names none, and
-                  --  is not taken for no task named.
-                  if Argument = "" then
-                     Fail (E.CLI_Unexpected_Operand, "", "an empty task name");
-                     return;
-                  end if;
-                  Result.Action_Argument := T.To_Bounded (Argument);
-
-               elsif Operands = 2 and then Result.Kind = Command_Repo then
-                  --  repo ACTION: what to ask of the repository.
-                  if Argument not in "scan" | "tree" | "sym" | "refs" | "deps"
-                                   | "users" | "impact" | "trace"
-                  then
-                     Fail (E.CLI_Unexpected_Operand, "", Argument);
-                     return;
-                  end if;
-                  Result.Action := T.To_Bounded (Argument);
-
-               elsif Operands = 3
-                 and then Result.Kind in Command_Task | Command_Repo
-               then
-                  --  The task, or a new one's title.
-                  Result.Action_Argument := T.To_Bounded (Argument);
-
-               elsif Operands > 3 and then Result.Kind = Command_Task
-                 and then T.To_String (Result.Action) in "depend" | "split" | "move" | "integrate"
-                                                        | "rehome" | "cancel" | "accept" | "reject"
-               then
-                  --  What the task waits for, its parts' titles, the state it
-                  --  moves to, or anyway: the rest of the words, as they were
-                  --  given.
-                  Result.Action_Argument := T.To_Bounded
-                    (T.To_String (Result.Action_Argument) & " " & Argument);
 
                elsif Operands = 2 and then Result.Kind = Command_Models then
                   if Argument = "remove" or else Argument = "rm" then

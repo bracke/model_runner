@@ -419,7 +419,7 @@ package body Model_Runner.CLI.Interactive is
                  " projects exit reset help settings stats context system tools tool save load"
                  & " image video init bootstrap state config git sandbox instruct reconfigure task"
                  & " accept reject work cancel check req decision spec result tree sym refs deps"
-                 & " users impact trace ";
+                 & " users impact trace scan ";
             begin
                if Named /= "" and then Ada.Strings.Fixed.Index (Known, " " & Named & " ") > 0 then
                   Pres.Put_Aside (Screen, "cli.interactive.help." & Named);

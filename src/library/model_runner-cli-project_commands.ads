@@ -132,15 +132,17 @@ package Model_Runner.CLI.Project_Commands is
       Screen : in out Model_Runner.Presentation.Console;
       Agent  : Model_Runner.Framework.Work.Agent_Runner'Class);
 
-   --  Carry out a project command given on the command line -- req,
-   --  state, bootstrap and the rest -- in the project --directory names,
-   --  as the session carries out its slash form.
+   --  Carry out one session command -- /task list, /req accept REQ-001 --
+   --  with no model loaded and no session around it: what a program that
+   --  keeps project state for itself, a test among them, drives. The
+   --  commands are the session's; nothing of this reaches the command line.
    --
-   --  @param Item The parsed command, its word in Action.
+   --  @param Line The command as a session takes it, its slash first.
    --  @param Screen Where to write.
-   --  @param Status The exit status: that of the first error reported.
-   procedure Run_From_Shell
-     (Item   : Model_Runner.CLI.Options.Command;
+   --  @param Status The exit status: that of the first error reported, or
+   --    what the command's own part set.
+   procedure Run_Without_Model
+     (Line   : String;
       Screen : in out Model_Runner.Presentation.Console;
       Status : out Natural);
 
