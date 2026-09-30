@@ -5028,7 +5028,7 @@ package body Tests.Framework_Cases is
               and then Length (Done.Evidence_Id) > 0 and then Length (Done.Manifest_Id) > 0
               and then Iv.State_Of (Store, To_String (Done.Invocation_Id)) = "completed",
               "what the work did was not all recorded");
-      Assert (Tk.Ready (Store, To_String (Ids (1))).Reasons.First_Element = "it is done",
+      Assert (Tk.Ready (Store, To_String (Ids (1))).Reasons.First_Element = "it is complete already",
               "the task's lease was not let go");
 
       --  Its agent worked in the generation its move to running began, and
@@ -8417,6 +8417,19 @@ package body Tests.Framework_Cases is
                  and then not Model_Runner.Platform.Signals.Interrupt_Noted,
                  "an ending or an interrupt's note was said with none sent");
 
+         --  A path as the project names it, whatever way it was typed.
+         Assert (Model_Runner.Framework.Repository.Relative_Path ("/p/proj", "./docs/x.md") = "docs/x.md"
+                 and then Model_Runner.Framework.Repository.Relative_Path ("/p/proj", "/p/proj/src/a.adb")
+                          = "src/a.adb"
+                 and then Model_Runner.Framework.Repository.Relative_Path ("/p/proj", "src/../docs/")
+                          = "docs/"
+                 and then Model_Runner.Framework.Repository.Relative_Path ("/p/proj", ".") = ""
+                 and then Model_Runner.Framework.Repository.Relative_Path ("/p/proj", "../x") = "../x",
+                 "a path was not made the one the project names");
+         Assert (Model_Runner.Framework.State_Said ("candidate") = "a candidate"
+                 and then Model_Runner.Framework.State_Said ("accepted") = "accepted",
+                 "a state was not said as a sentence says it");
+
          --  A level's grants from a configuration not yet kept: what a
          --  reconfigure's preview judges.
          declare
@@ -9124,8 +9137,8 @@ package body Tests.Framework_Cases is
             Model_Runner.Presentation.Use_Structured (Screen, True);
             Model_Runner.CLI.Project_Commands.Run ("/work zebra", Screen, Agent);
             Model_Runner.Presentation.Use_Structured (Screen, False);
-            Model_Runner.CLI.Project_Commands.Run ("/req new Stars counted", Screen, Agent);
-            Model_Runner.CLI.Project_Commands.Run ("/req new Other thing", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/req new Stars counted text=the stars are counted", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/req new Other thing text=another thing is done", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/accept", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/trace REQ-001", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/check", Screen, Agent);
@@ -9205,7 +9218,7 @@ package body Tests.Framework_Cases is
                        and then Ada.Strings.Fixed.Index (Text, "a proposal REQ-404") > 0
                        and then Ada.Strings.Fixed.Index (Text, "nowhere.md is not a value for a document"
                                                            & " to read: there is no such file") > 0
-                       and then Ada.Strings.Fixed.Index (Text, "a value for confirm") > 0,
+                       and then Ada.Strings.Fixed.Index (Text, "not given: confirm") > 0,
                        "/task ID, an unknown /task action or /req show said nothing: " & Text);
             end;
          exception

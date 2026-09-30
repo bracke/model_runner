@@ -73,6 +73,10 @@ package Model_Runner.Framework.Bootstrap is
       --  result it is kept as: what a document no longer says, a line
       --  that does not read, a disagreement.
       Stale    : Name_Lists.Vector;
+
+      --  Entries made by hand that a document now names by their
+      --  identifier: read from it from then on, each as ID from PATH.
+      Adopted  : Name_Lists.Vector;
    end record;
 
    --  Add an output.

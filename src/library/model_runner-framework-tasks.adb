@@ -754,10 +754,13 @@ package body Model_Runner.Framework.Tasks is
          E.Add_Text (Status, "value", Records.Get (Value, "state"));
          E.Add_Text (Status, "expected", Next);
          E.Add_Text (Status, "detail",
-                     (if Next in "running" | "verification" | "complete"
-                      then "the harness makes this move: /work starts a task, and its checks"
+                     (if Next = "complete"
+                      then "the harness makes this move: work " & Id & " does it, or task complete "
+                           & Id & " once it is done by hand"
+                      elsif Next in "running" | "verification"
+                      then "the harness makes this move: work " & Id & " starts it, and its checks"
                            & " take it to verification and completion"
-                      else "a task at work is stopped by cancelling it"));
+                      else "a task at work is stopped by cancelling it: task cancel " & Id));
          return;
       end if;
 
@@ -950,8 +953,14 @@ package body Model_Runner.Framework.Tasks is
                             & "; settle them in the workspace, then task integrate " & Id
                             & " resolved")
                elsif State = "verification" then "it is being verified"
-               elsif State = "complete" then "it is done"
-               else "it is " & State
+               elsif State = "complete" then "it is complete already"
+               elsif State = "cancelled" then "it is cancelled: task reopen " & Id
+                                              & " makes it workable again"
+               elsif State = "rejected" then "it is rejected: task reconsider " & Id
+                                             & " makes it a candidate again"
+               elsif State = "candidate" then "it is a candidate: task accept " & Id
+                                              & " accepts it first"
+               else "it is " & State_Said (State)
                     & (if Why = Null_Unbounded_String then "" else ": " & To_String (Why)));
          end;
       end if;
@@ -962,14 +971,14 @@ package body Model_Runner.Framework.Tasks is
               ("it waits for " & Other & ", which is "
                & (if State_In (Item, Change, Other) = "" then "not there"
                   elsif State_In (Item, Change, Other) = "accepted" then "accepted and not yet done"
-                  else State_In (Item, Change, Other)));
+                  else State_Said (State_In (Item, Change, Other))));
          end if;
       end loop;
 
       for Child of Children (Item, Id) loop
          if Holds_Parent (Item, Child, State_In (Item, Change, Child)) then
             Result.Reasons.Append
-              ("its child " & Child & " is " & State_In (Item, Change, Child));
+              ("its child " & Child & " is " & State_Said (State_In (Item, Change, Child)));
          end if;
       end loop;
 
@@ -1428,6 +1437,22 @@ package body Model_Runner.Framework.Tasks is
       --  The keys of the derivations already made.
       Done : Name_Lists.Vector;
 
+      --  What a task serves, as this change leaves it.
+      function Staged_Requirements (Id : String) return String is
+         Value  : Records.Item;
+         Staged : Boolean;
+         Read   : E.Error_Info;
+      begin
+         Stores.Pending (Change, Tasks_Area, Id, Value, Staged);
+         if not Staged then
+            Definition (Item, Id, Value, Read);
+            if E.Is_Error (Read) then
+               return "";
+            end if;
+         end if;
+         return Records.Get (Value, "requirements");
+      end Staged_Requirements;
+
       use type Events.Event_Kind;
    begin
       Made.Clear;
@@ -1511,6 +1536,17 @@ package body Model_Runner.Framework.Tasks is
                                  end if;
                               end;
                            end loop;
+                        end if;
+                        --  Served already by work not ended -- made by hand,
+                        --  or taken over from what it replaced: that is its
+                        --  task, and no other is derived beside it.
+                        if not Done.Contains (Key) and then Earlier = Null_Unbounded_String
+                          and then (for some Other of List (Item) =>
+                                      State_In (Item, Change, Other)
+                                        not in "cancelled" | "rejected" | "complete"
+                                      and then Split (Staged_Requirements (Other)).Contains (Requirement))
+                        then
+                           Done.Append (Key);
                         end if;
                         if not Done.Contains (Key) and then Earlier /= Null_Unbounded_String then
                            Stores.Pending (Change, Tasks_Area, To_String (Earlier), Value, Staged);
@@ -1923,8 +1959,13 @@ package body Model_Runner.Framework.Tasks is
          E.Add_Text (Status, "value", Now);
          E.Add_Text (Status, "expected", "being revised");
          E.Add_Text (Status, "detail",
-                     (if Now in "complete" | "cancelled" | "rejected"
+                     (if Now = "rejected"
+                      then "a rejected task is not revised; task reconsider " & Id & " first"
+                      elsif Now in "complete" | "cancelled"
                       then "a " & Now & " task is not revised; task reopen " & Id & " first"
+                      elsif Now = "verification"
+                      then "its work waits to be taken in or checked; task integrate " & Id
+                           & " takes it in, or task cancel " & Id & " anyway gives it up"
                       else "a task is revised only while it is not being worked; wait for its"
                            & " work to end, or task cancel " & Id));
          return;
@@ -1968,7 +2009,7 @@ package body Model_Runner.Framework.Tasks is
                   Status := E.Make (E.Framework_Input_Invalid);
                   E.Add_Text (Status, "name", Name);
                   E.Add_Text (Status, "value", Given);
-                  E.Add_Text (Status, "detail", "a " & Kind & " task must have it");
+                  E.Add_Text (Status, "detail", "a task of kind " & Kind & " must have it");
                   return;
                elsif Field_Problem (Item, Name, Given) /= "" then
                   Status := E.Make (E.Framework_Input_Invalid);

@@ -89,6 +89,15 @@ package body Model_Runner.Platform.Signals is
             begin
                Said := True;
             end;
+         elsif not Waiting and then not Told and then Seen = 1 then
+            --  The terminal echoed ^C where the line was: what is said of
+            --  the stop starts on a line of its own.
+            declare
+               Ignored : constant Integer := Write_Error (2, [1 => ASCII.LF], 1);
+               pragma Unreferenced (Ignored);
+            begin
+               null;
+            end;
          end if;
       end Interrupt;
 
@@ -119,7 +128,7 @@ package body Model_Runner.Platform.Signals is
       end Ending;
 
       procedure Set_Waiting (Value : Boolean; Note : String) is
-         Line : constant String := ASCII.LF & Note & ASCII.LF;
+         Line : constant String := ASCII.LF & Note;
       begin
          Waiting := Value;
          if Value then

@@ -29,7 +29,7 @@ package body Model_Runner.Framework.Context is
      & " the project's records -- tasks, requirements, verification -- and"
      & " decides from your answer and its own checks what happens next, so"
      & " say plainly what you did. If you find more work than the task"
-     & " holds, report it as an issue rather than doing it.";
+     & " holds, say so as the instructions below ask, rather than doing it.";
 
    function Lower (Text : String) return String
    renames Ada.Characters.Handling.To_Lower;

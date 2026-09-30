@@ -75,6 +75,61 @@ package body Model_Runner.Framework.Permissions is
 
    --  A grant as its constraints are written: roots=A|B, deny=C|D,
    --  profiles=P|Q, max_depth=N, max_children=N, separated by commas.
+   --  What of a grant's constraints this does not read: a key it has no
+   --  constraint called, a word with nothing it belongs to, a count that
+   --  is no number. Read as it stood, it would grant more than meant.
+   function Constraint_Problem (Text : String) return String is
+      Last_Key : Unbounded_String;
+   begin
+      for Pair of Parts (Ada.Strings.Fixed.Translate
+                           (Text, Ada.Strings.Maps.To_Mapping (" ", ",")), ',')
+      loop
+         declare
+            Equal : constant Natural := Ada.Strings.Fixed.Index (Pair, "=");
+            Key   : constant String :=
+              (if Equal = 0 then Trim (Pair) else Trim (Pair (Pair'First .. Equal - 1)));
+            Value : constant String :=
+              (if Equal = 0 then "" else Trim (Pair (Equal + 1 .. Pair'Last)));
+         begin
+            if Key = "" then
+               null;
+            elsif Equal = 0 and then To_String (Last_Key) in "roots" | "deny" | "profiles" then
+               null;
+            elsif Equal = 0 then
+               return Key & " is no constraint: they are roots=, deny=, profiles=, max_depth= and"
+                 & " max_children=";
+            elsif Key not in "roots" | "deny" | "profiles" | "max_depth" | "max_children" then
+               return "no constraint is called " & Key & "; they are roots, deny, profiles,"
+                 & " max_depth and max_children";
+            elsif Key in "max_depth" | "max_children"
+              and then (Value'Length not in 1 .. 9
+                        or else (for some C of Value => C not in '0' .. '9'))
+            then
+               return Key & "=" & Value & " is no count";
+            elsif Key in "roots" | "deny" | "profiles" and then Value = "" then
+               return Key & "= names nothing";
+            end if;
+            --  A root is a place in the project, named from it.
+            if Key in "roots" | "deny" or else (Equal = 0 and then To_String (Last_Key) in "roots" | "deny")
+            then
+               for Root of Parts ((if Equal = 0 then Key else Value), '|') loop
+                  if Root'Length > 0
+                    and then (Root (Root'First) = '/'
+                              or else Root = ".." or else Ada.Strings.Fixed.Index (Root, "../") > 0)
+                  then
+                     return Root & " is outside the project: a root is a path within it, relative to"
+                       & " it, as src/ or docs/";
+                  end if;
+               end loop;
+            end if;
+            if Equal > 0 then
+               Last_Key := To_Unbounded_String (Key);
+            end if;
+         end;
+      end loop;
+      return "";
+   end Constraint_Problem;
+
    function Constrained (Text : String) return Grant is
       Result : Grant := (Granted => True, others => <>);
 
@@ -227,6 +282,13 @@ package body Model_Runner.Framework.Permissions is
                Result := Nothing;
                return;
             end if;
+            if Constraint_Problem (Rest) /= "" then
+               Status := E.Make (E.Framework_Schema_Violation);
+               E.Add_Text (Status, "name", "permissions");
+               E.Add_Text (Status, "detail", Trim (Name) & ": " & Constraint_Problem (Rest));
+               Result := Nothing;
+               return;
+            end if;
             Result (Which) := Constrained (Rest);
          end;
       end loop;
@@ -338,8 +400,10 @@ package body Model_Runner.Framework.Permissions is
       return (if E.Is_Ok (Status) then Result else Nothing);
    end Confinement;
 
+   --  What the shell set, where off -- as /sandbox off -- is no confinement.
    function Shell_Text return String
    is (if Ada.Environment_Variables.Exists (Sandbox_Variable)
+         and then Trim (Ada.Environment_Variables.Value (Sandbox_Variable)) not in "off" | "none"
        then Ada.Environment_Variables.Value (Sandbox_Variable) else "");
 
    function Sandbox return Permission_Set is
@@ -373,9 +437,7 @@ package body Model_Runner.Framework.Permissions is
    ---------------------
 
    function Sandbox_Problem return String is
-      Text   : constant String :=
-        (if Ada.Environment_Variables.Exists (Sandbox_Variable)
-         then Ada.Environment_Variables.Value (Sandbox_Variable) else "");
+      Text   : constant String := Shell_Text;
       Result : Permission_Set;
       Status : E.Error_Info;
    begin
@@ -512,6 +574,14 @@ package body Model_Runner.Framework.Permissions is
             return False;
          end if;
       end loop;
+      --  Specifications with no roots named are where specifications are
+      --  kept -- docs/, doc/, specs/, spec/, or a Markdown file -- not every
+      --  file: write_specs unscoped is no write_source unscoped.
+      if G.Roots.Is_Empty and then Item = Write_Specs then
+         return Within (Path, "docs/") or else Within (Path, "doc/")
+           or else Within (Path, "specs/") or else Within (Path, "spec/")
+           or else (Path'Length > 3 and then Path (Path'Last - 2 .. Path'Last) = ".md");
+      end if;
       return G.Roots.Is_Empty or else (for some Root of G.Roots => Within (Path, Root));
    end Allows;
 
@@ -741,7 +811,15 @@ package body Model_Runner.Framework.Permissions is
       function Last_Part return String is
          Slash : constant Natural :=
            Ada.Strings.Fixed.Index (Path, "/", Ada.Strings.Backward);
+         Base  : constant String :=
+           (if Root'Length > 0 and then Root (Root'Last) = '/' then Root else Root & "/");
       begin
+         --  A whole path into the project is the part after it.
+         if Path'Length > Base'Length
+           and then Path (Path'First .. Path'First + Base'Length - 1) = Base
+         then
+            return Path (Path'First + Base'Length .. Path'Last);
+         end if;
          return (if Slash = 0 or else Slash = Path'Last then "" else Path (Slash + 1 .. Path'Last));
       end Last_Part;
 

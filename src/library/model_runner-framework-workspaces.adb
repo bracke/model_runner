@@ -1,6 +1,8 @@
 with Ada.Characters.Handling;
+with Ada.Containers.Vectors;
 with Ada.Directories;
 with Ada.Strings.Fixed;
+with Ada.Unchecked_Deallocation;
 
 with Hostkit;
 with Hostkit.Fs;
@@ -309,6 +311,17 @@ package body Model_Runner.Framework.Workspaces is
             Result.Kind := File_Copy;
          end if;
 
+         --  The project's files as they are now, kept beside the tree: what
+         --  a change made to both sides since is joined against.
+         --  Without it, changes to both sides are settled by a person.
+         declare
+            Kept : constant Boolean :=
+              Copy_Tree (Project, Hostkit.Fs.Join (Home, "base"), Repository.Roots_Of (Item));
+            pragma Unreferenced (Kept);
+         begin
+            null;
+         end;
+
          declare
             Baseline : constant Maps.Map := Snapshot (Tree, Repository.Roots_Of (Item));
             Value    : Records.Item := Records.Create (Schemas.Workspace_Schema, 1, Id, 1);
@@ -495,6 +508,223 @@ package body Model_Runner.Framework.Workspaces is
    -- Conflicts --
    ---------------
 
+   ---------------------------------------------------------------------------
+   --  Joining two changes to one file, line by line.
+   ---------------------------------------------------------------------------
+
+   --  A file's lines, empty ones kept, and whether it ended with a line feed.
+   function Lines_Kept (Text : String; Ends_Line : out Boolean) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+      Start  : Positive := Text'First;
+   begin
+      Ends_Line := Text'Length > 0 and then Text (Text'Last) = ASCII.LF;
+      for Index in Text'Range loop
+         if Text (Index) = ASCII.LF then
+            Result.Append (Text (Start .. Index - 1));
+            Start := Index + 1;
+         end if;
+      end loop;
+      if Start <= Text'Last then
+         Result.Append (Text (Start .. Text'Last));
+      end if;
+      return Result;
+   end Lines_Kept;
+
+   --  One change from the base: its lines First .. Last - 1 replaced by
+   --  With (an insertion where First = Last).
+   type Hunk is record
+      First, Last : Natural := 0;
+      With_Lines  : Name_Lists.Vector;
+   end record;
+
+   package Hunk_Lists is new Ada.Containers.Vectors (Positive, Hunk);
+
+   --  The hunks that make Other of Base, by their longest common run of
+   --  lines; Fits is False where the two are too long to compare.
+   procedure Differ
+     (Base, Other : Name_Lists.Vector;
+      Result      : out Hunk_Lists.Vector;
+      Fits        : out Boolean)
+   is
+      N : constant Natural := Natural (Base.Length);
+      M : constant Natural := Natural (Other.Length);
+   begin
+      Result.Clear;
+      Fits := Long_Long_Integer (N + 1) * Long_Long_Integer (M + 1) <= 4_000_000;
+      if not Fits then
+         return;
+      end if;
+      declare
+         type Table is array (Natural range <>, Natural range <>) of Natural;
+         type Table_Access is access Table;
+         procedure Free is new Ada.Unchecked_Deallocation (Table, Table_Access);
+         L : Table_Access := new Table (0 .. N, 0 .. M);
+         I : Natural := 0;
+         J : Natural := 0;
+         Open : Boolean := False;
+         Now  : Hunk;
+      begin
+         --  L (I, J): the longest common run of Base (I + 1 ..) and Other (J + 1 ..).
+         for A in reverse 0 .. N loop
+            for B in reverse 0 .. M loop
+               if A = N or else B = M then
+                  L (A, B) := 0;
+               elsif Base (A + 1) = Other (B + 1) then
+                  L (A, B) := L (A + 1, B + 1) + 1;
+               else
+                  L (A, B) := Natural'Max (L (A + 1, B), L (A, B + 1));
+               end if;
+            end loop;
+         end loop;
+         while I < N or else J < M loop
+            if I < N and then J < M and then Base (I + 1) = Other (J + 1) then
+               if Open then
+                  Now.Last := I;
+                  Result.Append (Now);
+                  Open := False;
+               end if;
+               I := I + 1;
+               J := J + 1;
+            else
+               if not Open then
+                  Now := (First => I, Last => I, With_Lines => Name_Lists.Empty_Vector);
+                  Open := True;
+               end if;
+               if J < M and then (I = N or else L (I, J + 1) >= L (I + 1, J)) then
+                  Now.With_Lines.Append (Other (J + 1));
+                  J := J + 1;
+               else
+                  I := I + 1;
+               end if;
+            end if;
+         end loop;
+         if Open then
+            Now.Last := I;
+            Result.Append (Now);
+         end if;
+         Free (L);
+      end;
+   end Differ;
+
+   --  Base changed two ways joined, where no line is changed both ways
+   --  differently; Clean says whether it was.
+   procedure Join_Changes
+     (Base, Ours, Theirs : String;
+      Joined             : out Unbounded_String;
+      Clean              : out Boolean)
+   is
+      Base_End, Ours_End, Theirs_End : Boolean;
+      B  : constant Name_Lists.Vector := Lines_Kept (Base, Base_End);
+      O  : constant Name_Lists.Vector := Lines_Kept (Ours, Ours_End);
+      T  : constant Name_Lists.Vector := Lines_Kept (Theirs, Theirs_End);
+      HO, HT : Hunk_Lists.Vector;
+      Fits_O, Fits_T : Boolean;
+      Lines  : Name_Lists.Vector;
+      P      : Natural := 0;
+      IO, IT : Positive := 1;
+
+      function Touch (A, C : Hunk) return Boolean
+      is ((A.First < C.Last and then C.First < A.Last)
+          or else A.First = C.First
+          or else (A.First = A.Last and then C.First < A.First and then A.First < C.Last)
+          or else (C.First = C.Last and then A.First < C.First and then C.First < A.Last));
+
+      procedure Take (One : Hunk) is
+      begin
+         for Index in P + 1 .. One.First loop
+            Lines.Append (B (Index));
+         end loop;
+         for Line of One.With_Lines loop
+            Lines.Append (Line);
+         end loop;
+         P := One.Last;
+      end Take;
+   begin
+      Joined := Null_Unbounded_String;
+      Clean := False;
+      Differ (B, O, HO, Fits_O);
+      Differ (B, T, HT, Fits_T);
+      if not (Fits_O and then Fits_T) then
+         return;
+      end if;
+      while IO <= Natural (HO.Length) or else IT <= Natural (HT.Length) loop
+         if IO <= Natural (HO.Length) and then IT <= Natural (HT.Length)
+           and then Touch (HO (IO), HT (IT))
+         then
+            --  Both change the same lines: joined only when they change
+            --  them alike.
+            if HO (IO).First = HT (IT).First and then HO (IO).Last = HT (IT).Last
+              and then Name_Lists."=" (HO (IO).With_Lines, HT (IT).With_Lines)
+            then
+               Take (HO (IO));
+               IO := IO + 1;
+               IT := IT + 1;
+            else
+               return;
+            end if;
+         elsif IT > Natural (HT.Length)
+           or else (IO <= Natural (HO.Length) and then HO (IO).First <= HT (IT).First)
+         then
+            Take (HO (IO));
+            IO := IO + 1;
+         else
+            Take (HT (IT));
+            IT := IT + 1;
+         end if;
+      end loop;
+      for Index in P + 1 .. Natural (B.Length) loop
+         Lines.Append (B (Index));
+      end loop;
+      for Index in 1 .. Natural (Lines.Length) loop
+         Append (Joined, Lines (Index));
+         if Index < Natural (Lines.Length) or else (Ours_End and then Theirs_End)
+           or else (Ours_End /= Base_End and then Ours_End)
+           or else (Theirs_End /= Base_End and then Theirs_End)
+         then
+            Append (Joined, ASCII.LF);
+         end if;
+      end loop;
+      Clean := True;
+   end Join_Changes;
+
+   --  Where a workspace keeps the project's files as they were when it was
+   --  made, to join changes against.
+   function Base_Tree (Held : Workspace) return String
+   is (Hostkit.Fs.Join (Dirs.Containing_Directory (To_String (Held.Path)), "base"));
+
+   --  A file changed in the workspace and in the project since, joined, when
+   --  the two change different lines.
+   procedure Joined_File
+     (Item   : Stores.Store;
+      Held   : Workspace;
+      Path   : String;
+      Joined : out Unbounded_String;
+      Clean  : out Boolean)
+   is
+      Base_Path   : constant String := Hostkit.Fs.Join (Base_Tree (Held), Path);
+      Ours_Path   : constant String := Hostkit.Fs.Join (Project_Of (Item), Path);
+      Theirs_Path : constant String := Hostkit.Fs.Join (To_String (Held.Path), Path);
+      Base, Ours, Theirs : Unbounded_String;
+      R1, R2, R3 : E.Error_Info;
+   begin
+      Joined := Null_Unbounded_String;
+      Clean := False;
+      if not (Dirs.Exists (Base_Path) and then Dirs.Exists (Ours_Path) and then Dirs.Exists (Theirs_Path))
+      then
+         return;
+      end if;
+      Files.Read_Text (Base_Path, Base, R1);
+      Files.Read_Text (Ours_Path, Ours, R2);
+      Files.Read_Text (Theirs_Path, Theirs, R3);
+      if E.Is_Error (R1) or else E.Is_Error (R2) or else E.Is_Error (R3) then
+         return;
+      end if;
+      Join_Changes (To_String (Base), To_String (Ours), To_String (Theirs), Joined, Clean);
+   exception
+      when others =>
+         Clean := False;
+   end Joined_File;
+
    function Conflicts (Item : Stores.Store; Id : String) return Name_Lists.Vector is
       Baseline : constant Maps.Map := Baseline_Of (Item, Id);
       Project  : constant String := Project_Of (Item);
@@ -515,7 +745,19 @@ package body Model_Runner.Framework.Workspaces is
               and then (E.Is_Error (Read_It)
                         or else Now /= Print_Of (Hostkit.Fs.Join (To_String (Held.Path), Path)))
             then
-               Result.Append (Path);
+               --  Changed on both sides, on lines apart: joined when it is
+               --  taken in, no conflict.
+               declare
+                  Joined : Unbounded_String;
+                  Clean  : Boolean := False;
+               begin
+                  if E.Is_Ok (Read_It) then
+                     Joined_File (Item, Held, Path, Joined, Clean);
+                  end if;
+                  if not Clean then
+                     Result.Append (Path);
+                  end if;
+               end;
             end if;
          end;
       end loop;
@@ -802,7 +1044,30 @@ package body Model_Runner.Framework.Workspaces is
                      Put_Back;
                      return;
                   end if;
-                  Dirs.Copy_File (From, Target);
+                  --  Changed in the project since, on other lines: the two
+                  --  joined; otherwise the workspace's copy, as settled.
+                  declare
+                     Base   : constant Maps.Map := Baseline_Of (Item, Id);
+                     Joined : Unbounded_String;
+                     Clean  : Boolean := False;
+                     Wrote  : E.Error_Info;
+                  begin
+                     if not Text_Resolved and then Dirs.Exists (Target)
+                       and then Base.Contains (Path) and then Print_Of (Target) /= Base (Path)
+                     then
+                        Joined_File (Item, Held, Path, Joined, Clean);
+                     end if;
+                     if Clean then
+                        Files.Write_Text (Target, To_String (Joined), Wrote);
+                        if E.Is_Error (Wrote) then
+                           Status := Wrote;
+                           Put_Back;
+                           return;
+                        end if;
+                     else
+                        Dirs.Copy_File (From, Target);
+                     end if;
+                  end;
                elsif not Files.Delete_If_Present (Target) then
                   Files.Write_Failed (Target, Status);
                   Put_Back;

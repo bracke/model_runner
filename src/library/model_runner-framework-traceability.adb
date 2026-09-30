@@ -285,6 +285,12 @@ package body Model_Runner.Framework.Traceability is
          end if;
       end loop;
 
+      --  Every component the project has, linked or not: its files are its
+      --  own whatever else names it.
+      for Name of Tasks.Components (Item) loop
+         Component (Name);
+      end loop;
+
       --  Files named after a component belong to it, probably.
       for Index in 1 .. Repository.File_Count (Files) loop
          declare

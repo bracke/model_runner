@@ -82,6 +82,35 @@ package body Model_Runner.CLI.Intents is
               (Screen, "cli.task.derived",
                [Loc.Named ("name", Id),
                 Loc.Named ("value", Model_Runner.Framework.Tasks.Component_Of_Task (Store, Id))]);
+         --  Of several components, placed in the first for want of one of
+         --  its own: said, with how to place it.
+         if Natural (Model_Runner.Framework.Tasks.Components (Store).Length) > 1 then
+            declare
+               Defined : Model_Runner.Framework.Records.Item;
+               Read    : E.Error_Info;
+               Scoped  : Boolean := False;
+            begin
+               Model_Runner.Framework.Tasks.Definition (Store, Id, Defined, Read);
+               for Requirement of Model_Runner.Framework.Lines_Of
+                                    (Model_Runner.Framework.Records.Get (Defined, "requirements"))
+               loop
+                  declare
+                     Held : Nt.Entity;
+                  begin
+                     Nt.Read (Store, Nt.Requirement, Requirement, Held, Read);
+                     Scoped := Scoped
+                       or else (E.Is_Ok (Read) and then To_String (Held.Scope) not in "" | "project")
+                       or else not Nt.Links (Store, Nt.Requirement, Requirement, Nt.Component).Is_Empty;
+                  end;
+               end loop;
+               if not Scoped then
+                  Pres.Put_Note
+                    (Screen, "cli.task.derived_placed",
+                     [Loc.Named ("name", Id),
+                      Loc.Named ("value", Model_Runner.Framework.Tasks.Component_Of_Task (Store, Id))]);
+               end if;
+            end;
+         end if;
          --  A candidate until someone takes it up.
          if Model_Runner.Framework.Tasks.State_Of (Store, Id) = "candidate" then
             Pres.Put_Note (Screen, "cli.next.accept_task", [Loc.Named ("name", Id)]);
@@ -166,6 +195,13 @@ package body Model_Runner.CLI.Intents is
         & Governed (Equal + 3 .. (if Over = 0 then Governed'Last else Over - 1))
         & (if Kept = Null_Unbounded_String then "" else " overrides=" & To_String (Kept));
    end Carried_On;
+
+   --  The command a register is worked with.
+   function Word_Of_Command (Kind : Nt.Intent_Kind) return String
+   is (case Kind is
+          when Nt.Requirement   => "req",
+          when Nt.Specification => "spec",
+          when Nt.Decision      => "decision");
 
    --  Work still open for a requirement retired: how to let that go.
    procedure Work_Left
@@ -260,6 +296,9 @@ package body Model_Runner.CLI.Intents is
 
       --  Where a moved one was, for saying where it went from.
       From_State : Unbounded_String;
+
+      --  The setting a decision is to govern, by its whole name.
+      Governed_Setting : Unbounded_String;
    begin
       for Part of Words loop
          declare
@@ -327,6 +366,13 @@ package body Model_Runner.CLI.Intents is
 
       elsif Action = "new" then
          Needs (2, "a title");
+         --  What it says is its text: a title alone says nothing to be
+         --  held to.
+         if E.Is_Ok (Status) and then Given ("text") = "" then
+            Status := E.Make (E.Framework_Input_Missing);
+            E.Add_Text (Status, "name", "its text, as text=...: " & Word_Of_Command (Kind) & " new "
+                        & """" & From (2) & """ text=what it says");
+         end if;
          if E.Is_Ok (Status) then
             declare
                Scope : constant String :=
@@ -335,6 +381,20 @@ package body Model_Runner.CLI.Intents is
                  Ada.Characters.Handling.To_Upper (if Scope = "project" then "" else Scope);
                Id    : Unbounded_String;
             begin
+               --  A scope is the project or one of its components: another
+               --  would be accepted and then derive nothing.
+               if Scope /= "project"
+                 and then not Model_Runner.Framework.Tasks.Components (Store).Contains (Scope)
+               then
+                  Status := E.Make (E.Framework_Input_Invalid);
+                  E.Add_Text (Status, "name", "scope");
+                  E.Add_Text (Status, "value", Scope);
+                  E.Add_Text (Status, "detail", "a scope is project or one of the project's components ("
+                              & Joined_Components (Store) & "); reconfigure map.component." & Scope
+                              & "=roots=DIR makes it one");
+                  Pres.Report (Screen, Status);
+                  return;
+               end if;
                for C of Key loop
                   if C not in 'A' .. 'Z' | '0' .. '9' then
                      C := '_';
@@ -370,6 +430,7 @@ package body Model_Runner.CLI.Intents is
                   if Nt.State_Of (Store, Kind, To_String (Id)) = Nt.First_State (Kind) then
                      Pres.Put_Note
                        (Screen, (if Nt."=" (Kind, Nt.Requirement) then "cli.next.accept_requirement"
+                                 elsif Nt."=" (Kind, Nt.Decision) then "cli.next.accept_decision"
                                  else "cli.next.accept_intent"),
                         [Loc.Named ("name", To_String (Id)),
                          Loc.Named ("value", (case Kind is
@@ -426,6 +487,20 @@ package body Model_Runner.CLI.Intents is
                      Read    : E.Error_Info;
                   begin
                      Model_Runner.Framework.Configurations.Read (Store, Config, Read);
+                     --  Another decision governing it still: that one says.
+                     for Other of Nt.List (Store, Nt.Decision, "accepted") loop
+                        if Other /= Word (2)
+                          and then Ada.Strings.Fixed.Index
+                                     (Nt.Governs (Store, Nt.Decision, Other), Setting & " = ") = 1
+                        then
+                           Pres.Put_Note
+                             (Screen, "cli.intent.ruling_passed",
+                              [Loc.Named ("name", Word (2)), Loc.Named ("value", Governed),
+                               Loc.Named ("other", Other),
+                               Loc.Named ("detail", Nt.Governs (Store, Nt.Decision, Other))]);
+                           goto Ruling_Said;
+                        end if;
+                     end loop;
                      Pres.Put_Note
                        (Screen, "cli.intent.ruling_gone",
                         [Loc.Named ("name", Word (2)), Loc.Named ("value", Governed),
@@ -434,6 +509,7 @@ package body Model_Runner.CLI.Intents is
                                     & (if Model_Runner.Framework.Records.Get (Config, Setting) = ""
                                        then "(its default)"
                                        else Model_Runner.Framework.Records.Get (Config, Setting)))]);
+                     <<Ruling_Said>>
                   end;
                end if;
 
@@ -519,6 +595,18 @@ package body Model_Runner.CLI.Intents is
             begin
                Nt.Read (Store, Kind, Word (2), Held, Status);
 
+               --  Retired: not revised however asked, and said so first.
+               if E.Is_Ok (Status) and then Lower (Word (3)) = "from-document"
+                 and then To_String (Held.State) in "obsolete" | "superseded" | "rejected"
+               then
+                  Status := E.Make (E.Framework_Transition_Invalid);
+                  E.Add_Text (Status, "name", Word (2));
+                  E.Add_Text (Status, "value", To_String (Held.State));
+                  E.Add_Text (Status, "expected", "a new revision");
+                  E.Add_Text (Status, "detail", "it is retired, and what is retired is not revised; "
+                              & Word_Of_Command (Kind) & " new """ & To_String (Held.Title)
+                              & """ text=... makes it anew");
+               end if;
                --  from-document: its text as its document says it now.
                if E.Is_Ok (Status) and then Lower (Word (3)) = "from-document" then
                   declare
@@ -720,7 +808,10 @@ package body Model_Runner.CLI.Intents is
                   Pres.Put_Note
                     (Screen, "cli.intent.link_component",
                      [Loc.Named ("name", From (4)),
-                      Loc.Named ("value", Joined_Components (Store))]);
+                      Loc.Named ("value", Joined_Components (Store)),
+                      Loc.Named ("other", (if Nt."=" (Kind, Nt.Requirement) then "req"
+                                           elsif Nt."=" (Kind, Nt.Decision) then "decision"
+                                           else "spec") & " unlink " & Word (2))]);
                end if;
                --  Linked to a component: the work serving it that is
                --  elsewhere is named, with how to place it there.
@@ -776,6 +867,58 @@ package body Model_Runner.CLI.Intents is
                   end;
                end if;
 
+               --  A dependency on one retired, or one that leads back to
+               --  it; evidence that is not there: kept, and said.
+               if E.Is_Ok (Status) and then Nt."=" (Relation, Nt.Dependency)
+                 and then Nt.State_Of (Store, Nt.Requirement, From (4)) in "obsolete" | "rejected" | "superseded"
+               then
+                  Pres.Put_Note
+                    (Screen, "cli.intent.link_doubtful",
+                     [Loc.Named ("name", Word (2)), Loc.Named ("value", From (4)),
+                      Loc.Named ("detail", From (4) & " is " & Nt.State_Of (Store, Nt.Requirement, From (4))
+                                           & "; req unlink " & Word (2) & " dependency " & From (4)
+                                           & " takes it off")]);
+               elsif E.Is_Ok (Status) and then Nt."=" (Relation, Nt.Dependency) then
+                  declare
+                     Seen : Names.Vector;
+                     function Reaches (From_Id : String) return Boolean is
+                     begin
+                        if From_Id = Word (2) then
+                           return True;
+                        elsif Seen.Contains (From_Id) then
+                           return False;
+                        end if;
+                        Seen.Append (From_Id);
+                        for Next of Nt.Links (Store, Nt.Requirement, From_Id, Nt.Dependency) loop
+                           if Reaches (Next) then
+                              return True;
+                           end if;
+                        end loop;
+                        return False;
+                     end Reaches;
+                  begin
+                     if Reaches (From (4)) then
+                        Pres.Put_Note
+                          (Screen, "cli.intent.link_doubtful",
+                           [Loc.Named ("name", Word (2)), Loc.Named ("value", From (4)),
+                            Loc.Named ("detail", From (4) & " depends on " & Word (2)
+                                                 & " already, so each waits for the other; req unlink "
+                                                 & Word (2) & " dependency " & From (4)
+                                                 & " takes it off")]);
+                     end if;
+                  end;
+               end if;
+               if E.Is_Ok (Status) and then Nt."=" (Relation, Nt.Verification)
+                 and then not S.Exists (Store, Model_Runner.Framework.Verification_Area, From (4))
+               then
+                  Pres.Put_Note
+                    (Screen, "cli.intent.link_doubtful",
+                     [Loc.Named ("name", Word (2)), Loc.Named ("value", From (4)),
+                      Loc.Named ("detail", "no evidence is called " & From (4) & "; result lists what is"
+                                           & " kept, and req unlink " & Word (2) & " verification "
+                                           & From (4) & " takes it off")]);
+               end if;
+
                --  What it depends on is a requirement there is.
                if E.Is_Ok (Status) and then Nt."=" (Relation, Nt.Dependency)
                  and then Nt.State_Of (Store, Nt.Requirement, From (4)) = ""
@@ -798,9 +941,9 @@ package body Model_Runner.CLI.Intents is
                         Pres.Put_Note
                           (Screen, "cli.intent.link_unknown",
                            [Loc.Named ("name", Target),
-                            Loc.Named ("other", (if Nt."=" (Kind, Nt.Requirement) then "req "
-                                                 elsif Nt."=" (Kind, Nt.Decision) then "decision "
-                                                 else "spec ") & Word (2)),
+                            Loc.Named ("other", (if Nt."=" (Kind, Nt.Requirement) then "req"
+                                                 elsif Nt."=" (Kind, Nt.Decision) then "decision"
+                                                 else "spec") & " unlink " & Word (2)),
                             Loc.Named ("value", Lower (Word (3)))]);
                      end if;
                   end;
@@ -814,38 +957,99 @@ package body Model_Runner.CLI.Intents is
             declare
                Was      : constant String := Nt.State_Of (Store, Kind, Word (3));
                Governed : constant String := Nt.Governs (Store, Kind, Word (2));
+               Taken    : Names.Vector;
             begin
                Nt.Supersede (Store, Change, Kind, Word (2), Word (3), Status);
-               --  What the one replaced governed, and the one replacing it
-               --  does not: said, with how to carry it on.
-               if E.Is_Ok (Status) and then Governed /= ""
-                 and then Nt.Governs (Store, Kind, Word (3)) = ""
-               then
-                  Pres.Put_Note (Screen, "cli.intent.ruling_dropped",
-                                 [Loc.Named ("name", Word (2)), Loc.Named ("other", Word (3)),
-                                  Loc.Named ("value", Governed),
-                                  Loc.Named ("detail", Carried_On (Store, Governed, Word (3)))]);
+
+               --  The work open for the one replaced is the replacement's
+               --  now: moved to it, not left for a task derived beside it.
+               if E.Is_Ok (Status) and then Nt."=" (Kind, Nt.Requirement) then
+                  for Id of Model_Runner.Framework.Tasks.List (Store) loop
+                     declare
+                        Defined : Model_Runner.Framework.Records.Item;
+                        Read    : E.Error_Info;
+                        Serves  : Names.Vector;
+                        Fields  : Model_Runner.Framework.Tasks.Field_Map;
+                        Now     : Unbounded_String;
+                     begin
+                        Model_Runner.Framework.Tasks.Definition (Store, Id, Defined, Read);
+                        Serves := Model_Runner.Framework.Lines_Of
+                          (Model_Runner.Framework.Records.Get (Defined, "requirements"));
+                        if E.Is_Ok (Read) and then Serves.Contains (Word (2))
+                          and then Model_Runner.Framework.Tasks.State_Of (Store, Id)
+                                     in "candidate" | "accepted" | "blocked" | "failed"
+                        then
+                           for One of Serves loop
+                              declare
+                                 Named : constant String := (if One = Word (2) then Word (3) else One);
+                              begin
+                                 if Ada.Strings.Fixed.Index (To_String (Now), Named) = 0 then
+                                    Append (Now, (if Now = Null_Unbounded_String then "" else ",")
+                                                 & Named);
+                                 end if;
+                              end;
+                           end loop;
+                           Fields.Include ("requirements", To_String (Now));
+                           --  Titled after the one replaced, as a derived task
+                           --  is: titled after the replacement now.
+                           declare
+                              Title : constant String :=
+                                Model_Runner.Framework.Records.Get (Defined, "title");
+                              Held  : Nt.Entity;
+                              Got   : E.Error_Info;
+                           begin
+                              if Ada.Strings.Fixed.Index (Title, Word (2) & ": ") = Title'First then
+                                 Nt.Read (Store, Nt.Requirement, Word (3), Held, Got);
+                                 if E.Is_Ok (Got) then
+                                    Fields.Include ("title", Word (3) & ": " & To_String (Held.Title));
+                                 end if;
+                              end if;
+                           end;
+                           Model_Runner.Framework.Tasks.Revise (Store, Change, Id, Fields, Read);
+                           if E.Is_Ok (Read) then
+                              Taken.Append (Id);
+                           end if;
+                        end if;
+                     end;
+                  end loop;
                end if;
-               Settle (Store, Change, Status, Screen, "", Word (2));
                if E.Is_Ok (Status) then
-                  Pres.Put_Message
-                    (Screen, "cli.intent.superseded",
-                     [Loc.Named ("name", Word (2)),
-                      Loc.Named ("value", Nt.State_Of (Store, Kind, Word (2))),
-                      Loc.Named ("other", Word (3))]);
-                  if Nt."=" (Kind, Nt.Requirement) then
-                     Work_Left (Store, Screen, Word (2));
-                  end if;
+                  S.Commit (Store, Change, Status);
+               end if;
+               if E.Is_Error (Status) then
+                  Pres.Report (Screen, Status);
+                  return;
                end if;
 
-               --  What replaces it stands in its place: a candidate is
-               --  accepted by being made its replacement, and said so.
-               if E.Is_Ok (Status) and then Was = Nt.First_State (Kind) then
+               --  Said in the order it happened: replaced, what replaces it
+               --  accepted, the work moved; then what follows from that.
+               Pres.Put_Message
+                 (Screen, "cli.intent.superseded",
+                  [Loc.Named ("name", Word (2)),
+                   Loc.Named ("value", Nt.State_Of (Store, Kind, Word (2))),
+                   Loc.Named ("other", Word (3))]);
+               if Was = Nt.First_State (Kind) then
                   Pres.Put_Message
                     (Screen, "cli.intent.moved",
                      [Loc.Named ("name", Word (3)), Loc.Named ("other", Was),
                       Loc.Named ("value", Nt.State_Of (Store, Kind, Word (3)))]);
                end if;
+               for Id of Taken loop
+                  Pres.Put_Message
+                    (Screen, "cli.intent.work_moved",
+                     [Loc.Named ("name", Id), Loc.Named ("value", Word (3)),
+                      Loc.Named ("other", Word (2))]);
+               end loop;
+               if Governed /= "" and then Nt.Governs (Store, Kind, Word (3)) = "" then
+                  Pres.Put_Note (Screen, "cli.intent.ruling_dropped",
+                                 [Loc.Named ("name", Word (2)), Loc.Named ("other", Word (3)),
+                                  Loc.Named ("value", Governed),
+                                  Loc.Named ("detail", Carried_On (Store, Governed, Word (3)))]);
+               end if;
+               if Nt."=" (Kind, Nt.Requirement) then
+                  Work_Left (Store, Screen, Word (2));
+               end if;
+               Move_Along (Store, Screen);
             end;
          end if;
 
@@ -856,65 +1060,92 @@ package body Model_Runner.CLI.Intents is
          --  nearest there are.
          if E.Is_Ok (Status) then
             declare
-               Setting : constant String := Word (3);
                Config  : Model_Runner.Framework.Records.Item;
                Read    : E.Error_Info;
                Near    : Unbounded_String;
+
+               --  A name without its kind, as reconfigure takes it: the one
+               --  setting of that name there is, whole.
+               function Whole_Name return String is
+                  Found : Unbounded_String;
+                  Count : Natural := 0;
+               begin
+                  if Model_Runner.Framework.Records.Has (Config, Word (3))
+                    or else Model_Runner.Framework.Configurations.Known_Names.Contains (Word (3))
+                  then
+                     return Word (3);
+                  end if;
+                  for Prefix of Names.Vector'(["scalar.", "set.", "list.", "map."]) loop
+                     if Model_Runner.Framework.Records.Has (Config, Prefix & Word (3))
+                       or else Model_Runner.Framework.Configurations.Known_Names.Contains
+                                 (Prefix & Word (3))
+                     then
+                        Found := To_Unbounded_String (Prefix & Word (3));
+                        Count := Count + 1;
+                     end if;
+                  end loop;
+                  return (if Count = 1 then To_String (Found) else Word (3));
+               end Whole_Name;
             begin
                Model_Runner.Framework.Configurations.Read (Store, Config, Read);
-               if not Model_Runner.Framework.Records.Has (Config, Setting)
-                 and then not Model_Runner.Framework.Configurations.Known_Names.Contains (Setting)
-                 and then Ada.Strings.Fixed.Index (Setting, "baseline.") /= 1
-               then
-                  for Index in 1 .. Model_Runner.Framework.Records.Field_Count (Config) loop
+               declare
+                  Setting : constant String := Whole_Name;
+               begin
+                  if not Model_Runner.Framework.Records.Has (Config, Setting)
+                    and then not Model_Runner.Framework.Configurations.Known_Names.Contains (Setting)
+                    and then Ada.Strings.Fixed.Index (Setting, "baseline.") /= 1
+                  then
+                     for Index in 1 .. Model_Runner.Framework.Records.Field_Count (Config) loop
+                        declare
+                           Name : constant String := Model_Runner.Framework.Records.Field_Name (Config, Index);
+                        begin
+                           if Setting'Length >= 4
+                             and then (Ada.Strings.Fixed.Index (Name, Setting) > 0
+                                       or else Ada.Strings.Fixed.Index
+                                                 (Name, Setting (Setting'First .. Setting'First + 3))
+                                               > 0)
+                             and then Length (Near) < 200
+                           then
+                              Append (Near, (if Near = Null_Unbounded_String then "" else ", ") & Name);
+                           end if;
+                        end;
+                     end loop;
+                     Status := E.Make (E.Framework_Input_Invalid);
+                     E.Add_Text (Status, "name", "the setting a decision governs");
+                     E.Add_Text (Status, "value", Setting);
+                     E.Add_Text (Status, "detail", "no setting is called so; a decision governs one config"
+                                 & " shows" & (if Near = Null_Unbounded_String then ""
+                                               else ", as " & To_String (Near)));
+                  elsif Model_Runner.Framework.Records.Has (Config, Setting)
+                    or else Model_Runner.Framework.Configurations.Known_Names.Contains (Setting)
+                  then
+                     --  A ruling is a value the setting takes: held to what a
+                     --  change to it would be held to, and nothing is changed.
                      declare
-                        Name : constant String := Model_Runner.Framework.Records.Field_Name (Config, Index);
+                        One     : Model_Runner.Framework.Configurations.Value_Maps.Map;
+                        Planned : Model_Runner.Framework.Configurations.Change_Plan;
+                        Checked : E.Error_Info;
                      begin
-                        if Setting'Length >= 4
-                          and then (Ada.Strings.Fixed.Index (Name, Setting) > 0
-                                    or else Ada.Strings.Fixed.Index
-                                              (Name, Setting (Setting'First .. Setting'First + 3))
-                                            > 0)
-                          and then Length (Near) < 200
+                        One.Include (Setting, From (4));
+                        Model_Runner.Framework.Configurations.Plan_Change (Store, One, Planned, Checked);
+                        if E.Is_Error (Checked) and then E.Text_Of (Checked, "detail") /= ""
+                          and then E."/=" (Checked.Code, E.Framework_Revision_Conflict)
                         then
-                           Append (Near, (if Near = Null_Unbounded_String then "" else ", ") & Name);
+                           Status := E.Make (E.Framework_Input_Invalid);
+                           E.Add_Text (Status, "name", "a ruling on " & Setting);
+                           E.Add_Text (Status, "value", From (4));
+                           E.Add_Text (Status, "detail", E.Text_Of (Checked, "detail"));
                         end if;
                      end;
-                  end loop;
-                  Status := E.Make (E.Framework_Input_Invalid);
-                  E.Add_Text (Status, "name", "the setting a decision governs");
-                  E.Add_Text (Status, "value", Setting);
-                  E.Add_Text (Status, "detail", "no setting is called so; a decision governs one config"
-                              & " shows" & (if Near = Null_Unbounded_String then ""
-                                            else ", as " & To_String (Near)));
-               elsif Model_Runner.Framework.Records.Has (Config, Setting)
-                 or else Model_Runner.Framework.Configurations.Known_Names.Contains (Setting)
-               then
-                  --  A ruling is a value the setting takes: held to what a
-                  --  change to it would be held to, and nothing is changed.
-                  declare
-                     One     : Model_Runner.Framework.Configurations.Value_Maps.Map;
-                     Planned : Model_Runner.Framework.Configurations.Change_Plan;
-                     Checked : E.Error_Info;
-                  begin
-                     One.Include (Setting, From (4));
-                     Model_Runner.Framework.Configurations.Plan_Change (Store, One, Planned, Checked);
-                     if E.Is_Error (Checked) and then E.Text_Of (Checked, "detail") /= ""
-                       and then E."/=" (Checked.Code, E.Framework_Revision_Conflict)
-                     then
-                        Status := E.Make (E.Framework_Input_Invalid);
-                        E.Add_Text (Status, "name", "a ruling on " & Setting);
-                        E.Add_Text (Status, "value", From (4));
-                        E.Add_Text (Status, "detail", E.Text_Of (Checked, "detail"));
-                     end if;
-                  end;
-               end if;
+                  end if;
+                  Governed_Setting := To_Unbounded_String (Setting);
+               end;
             end;
          end if;
          --  Governing so already: said, and not revised again.
          if E.Is_Ok (Status)
            and then Nt.Governs (Store, Kind, Word (2))
-                      = Word (3) & " = " & From (4)
+                      = To_String (Governed_Setting) & " = " & From (4)
                         & (if Given ("overrides") = "" then "" else " (over " & Given ("overrides") & ")")
          then
             Pres.Put_Note (Screen, "cli.intent.already_governs",
@@ -923,9 +1154,14 @@ package body Model_Runner.CLI.Intents is
             return;
          end if;
          if E.Is_Ok (Status) then
-            Nt.Govern (Store, Change, Kind, Word (2), Word (3), From (4), Given ("overrides"),
+            Nt.Govern (Store, Change, Kind, Word (2), To_String (Governed_Setting), From (4), Given ("overrides"),
                        Status);
-            Settle (Store, Change, Status, Screen, "cli.task.revised", Word (2));
+            Settle (Store, Change, Status, Screen, "", Word (2));
+            if E.Is_Ok (Status) then
+               Pres.Put_Message (Screen, "cli.intent.governs",
+                                 [Loc.Named ("name", Word (2)),
+                                  Loc.Named ("value", Nt.Governs (Store, Kind, Word (2)))]);
+            end if;
 
             --  What it now stands against -- the configuration, another
             --  decision -- said at once, with how to settle it.
@@ -935,10 +1171,10 @@ package body Model_Runner.CLI.Intents is
                   Found : constant Cs.Finding_List := Cs.Check (Store);
                begin
                   for Index in 1 .. Cs.Length (Found) loop
-                     if To_String (Cs.Element (Found, Index).Subject) = Word (3) then
+                     if To_String (Cs.Element (Found, Index).Subject) = To_String (Governed_Setting) then
                         Pres.Put_Message
                           (Screen, "cli.task.item",
-                           [Loc.Named ("name", Word (3)),
+                           [Loc.Named ("name", To_String (Governed_Setting)),
                             Loc.Named ("value", Cs.Kind_Word (Cs.Element (Found, Index).Kind)),
                             Loc.Named ("detail", To_String (Cs.Element (Found, Index).Detail))]);
                      end if;
@@ -977,6 +1213,17 @@ package body Model_Runner.CLI.Intents is
          --  An identifier -- or show and one: what it is.
          if Action = "show" then
             Needs (2, "the " & Word_Of (Kind));
+         end if;
+         --  What follows the identifier is nothing it does: refused, not
+         --  ignored, as a command after it -- req ID unlink -- would be.
+         if E.Is_Ok (Status)
+           and then Natural (Plain.Length) > (if Action = "show" then 2 else 1)
+         then
+            Status := E.Make (E.CLI_Unexpected_Operand);
+            E.Add_Text (Status, "value", Word ((if Action = "show" then 3 else 2))
+                        & "; the command comes first, as " & Word_Of_Command (Kind) & " "
+                        & Word ((if Action = "show" then 3 else 2)) & " "
+                        & Word ((if Action = "show" then 2 else 1)) & " ...");
          end if;
          declare
             Held  : Nt.Entity;

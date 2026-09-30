@@ -53,6 +53,13 @@ package Model_Runner.Framework is
    package Name_Lists is new Ada.Containers.Indefinite_Vectors
      (Index_Type => Positive, Element_Type => String);
 
+   --  A state as a sentence says it: a candidate, but accepted.
+   --
+   --  @param State The state.
+   --  @return It with the article a noun takes.
+   function State_Said (State : String) return String
+   is (if State = "candidate" then "a candidate" else State);
+
    --  The lines of a text, empty ones left out: how a field holding a
    --  list keeps it.
    --

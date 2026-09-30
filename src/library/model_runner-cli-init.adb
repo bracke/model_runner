@@ -1,3 +1,4 @@
+with Ada.Directories;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 
@@ -6,6 +7,7 @@ with Model_Runner.CLI.Choosers;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Execution;
+with Model_Runner.Framework.Verification;
 with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
@@ -208,7 +210,7 @@ package body Model_Runner.CLI.Init is
       --  said before anything is asked or planned.
       if S.Is_Initialized (Directory) then
          Outcome := E.Make (E.Framework_Already_Initialized);
-         E.Add_Text (Outcome, "path", Directory, E.Param_Path);
+         E.Add_Text (Outcome, "path", Ada.Directories.Full_Name (Directory), E.Param_Path);
          Fail (Outcome);
          Pres.Put_Note (Screen, "cli.next.initialized");
          if not T.Is_Empty (Item.Project_Directory) then
@@ -510,23 +512,30 @@ package body Model_Runner.CLI.Init is
                Name : constant String := R.Field_Name (Planned.Configuration, Index);
             begin
                if Ada.Strings.Fixed.Index (Name, "profile.") = Name'First then
-                  for Line of Model_Runner.Framework.Lines_Of (R.Get (Planned.Configuration, Name)) loop
-                     declare
-                        Colon   : constant Natural := Ada.Strings.Fixed.Index (Line, ": ");
-                        Command : constant String :=
-                          (if Colon = 0 then "" else Line (Colon + 2 .. Line'Last));
-                        Why     : constant String :=
-                          (if Command = "" then ""
-                           else Model_Runner.Framework.Execution.Refusal (Rules, Command));
-                     begin
-                        if Why /= "" then
-                           Pres.Put_Note
-                             (Screen, "cli.init.check_refused",
-                              [Loc.Named ("name", Line (Line'First .. Colon - 1)),
-                               Loc.Named ("value", Command), Loc.Named ("detail", Why)]);
-                        end if;
-                     end;
-                  end loop;
+                  --  Each check as verification reads it, not the text
+                  --  it is written in.
+                  declare
+                     package Vf renames Model_Runner.Framework.Verification;
+                     Checks : constant Vf.Check_List :=
+                       Vf.Parse_Profile (R.Get (Planned.Configuration, Name));
+                  begin
+                     for Index in 1 .. Vf.Length (Checks) loop
+                        declare
+                           One     : constant Vf.Check := Vf.Element (Checks, Index);
+                           Command : constant String := To_String (One.Command);
+                           Why     : constant String :=
+                             (if Command = "" then ""
+                              else Model_Runner.Framework.Execution.Refusal (Rules, Command));
+                        begin
+                           if Why /= "" then
+                              Pres.Put_Note
+                                (Screen, "cli.init.check_refused",
+                                 [Loc.Named ("name", To_String (One.Label)),
+                                  Loc.Named ("value", Command), Loc.Named ("detail", Why)]);
+                           end if;
+                        end;
+                     end loop;
+                  end;
                end if;
             end;
          end loop;

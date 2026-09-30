@@ -250,16 +250,39 @@ package body Model_Runner.Framework.Agents is
                & " agents are all running", Status);
          return;
       end if;
-      Make (Item, Change,
-            (Role    => To_Unbounded_String (Role),
-             Task_Id => To_Unbounded_String (Task_Id),
-             Depth   => 0,
-             Need    => Required,
-             Budget  => (if Budget > 0 then Budget else Bounds.Token_Budget),
-             Allowed => Permissions.Effective
-                          (Item, Kind, Role, Task_Level => Restriction),
-             others  => <>),
-            Id, Status);
+      declare
+         Allowed : Permissions.Permission_Set :=
+           Permissions.Effective (Item, Kind, Role, Task_Level => Restriction);
+         --  At a depth limit of none it makes no helpers: said as a child
+         --  at its limit is, not granted what it cannot use.
+         Spent   : constant Boolean :=
+           Allowed (Permissions.Create_Children).Granted
+           and then Natural'Min (Allowed (Permissions.Create_Children).Max_Depth, Bounds.Max_Depth) = 0;
+      begin
+         if Spent then
+            Allowed (Permissions.Create_Children).Granted := False;
+         end if;
+         Make (Item, Change,
+               (Role    => To_Unbounded_String (Role),
+                Task_Id => To_Unbounded_String (Task_Id),
+                Depth   => 0,
+                Need    => Required,
+                Budget  => (if Budget > 0 then Budget else Bounds.Token_Budget),
+                Allowed => Allowed,
+                others  => <>),
+               Id, Status);
+         if Spent and then E.Is_Ok (Status) then
+            declare
+               Made : Records.Item;
+            begin
+               Current (Item, Change, To_String (Id), Made, Status);
+               if E.Is_Ok (Status) then
+                  Records.Set (Made, "children_past_depth", "yes");
+                  Stores.Put (Change, Runtime_Area, Prefix & To_String (Id), Made);
+               end if;
+            end;
+         end if;
+      end;
    end Start_Root;
 
    --------------

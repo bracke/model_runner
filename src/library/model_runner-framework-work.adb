@@ -1,7 +1,6 @@
 with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Strings.Fixed;
-with Ada.Strings.Maps;
 
 with Hostkit.Fs;
 
@@ -344,10 +343,13 @@ package body Model_Runner.Framework.Work is
       if State /= "running" then
          Records.Set (Held, "ended_at", Timestamp);
       end if;
+      --  Said once: as its summary where it has none, else as a note
+      --  beside it.
       if Note /= "" then
-         Records.Set (Held, "note", Note);
          if Records.Get (Held, "summary") = "" then
             Records.Set (Held, "summary", Note);
+         elsif Records.Get (Held, "summary") /= Note then
+            Records.Set (Held, "note", Note);
          end if;
       end if;
       --  What its attempt left the task as, where that is known here.
@@ -374,6 +376,31 @@ package body Model_Runner.Framework.Work is
       Stores.Read (Item, Tasks_Area, Task_Id & ".state", Held, Status);
       return (if E.Is_Ok (Status) then Records.Get (Held, "generation") else "");
    end Generation_Of;
+
+   --  Every file's fingerprint, by path.
+   function Snapshot
+     (Project : String;
+      Within  : Repository.Roots) return Configurations.Value_Maps.Map;
+
+   --  Where a run working in the project itself keeps what the files were
+   --  when it started, for an opening after it was killed to say what it
+   --  left: runtime/before-TASK, a path and its fingerprint a line.
+   function Before_File (Item : Stores.Store; Task_Id : String) return String
+   is (Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "runtime"), "before-" & Task_Id));
+
+   --  What an answer says in its own words: the instructions' own example
+   --  line copied back -- one line on what you did -- is no summary.
+   function Own_Words (Summary : String) return String
+   is (if Ada.Strings.Fixed.Index (Summary, "one line on what you") > 0 then "" else Summary);
+
+   --  A task's kind, as its definition says.
+   function Kind_Of_Task (Item : Stores.Store; Task_Id : String) return String is
+      Defined : Records.Item;
+      Read    : E.Error_Info;
+   begin
+      Tasks.Definition (Item, Task_Id, Defined, Read);
+      return (if E.Is_Ok (Read) then Records.Get (Defined, "kind") else "");
+   end Kind_Of_Task;
 
    --  Every child of an agent still going is cancelled with it: a child
    --  outlives nothing it was made for.
@@ -413,13 +440,75 @@ package body Model_Runner.Framework.Work is
                --  Where it worked apart, the workspace is given up as an
                --  interrupt gives it up -- a retry starts afresh -- with
                --  what it had changed there named.
+               --  Where it worked in the project itself: the files that
+               --  differ from what they were when it started, left there.
+               function Left_In_Project return String is
+                  Mark   : constant String := Before_File (Item, Id);
+                  Was    : Unbounded_String;
+                  Read   : E.Error_Info;
+                  Then_Map : Configurations.Value_Maps.Map;
+                  Named  : Unbounded_String;
+                  Lines  : Unbounded_String;
+               begin
+                  if not Ada.Directories.Exists (Mark) then
+                     return "";
+                  end if;
+                  Files.Read_Text (Mark, Was, Read);
+                  Files.Discard (Mark);
+                  if E.Is_Error (Read) then
+                     return "";
+                  end if;
+                  for Line of Lines_Of (To_String (Was)) loop
+                     declare
+                        Tab : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
+                     begin
+                        if Tab > Line'First then
+                           Then_Map.Include (Line (Line'First .. Tab - 1), Line (Tab + 1 .. Line'Last));
+                        end if;
+                     end;
+                  end loop;
+                  declare
+                     Now : constant Configurations.Value_Maps.Map :=
+                       Snapshot (Ada.Directories.Containing_Directory (Stores.Root (Item)),
+                                 Repository.Roots_Of (Item));
+                  begin
+                     for Position in Now.Iterate loop
+                        declare
+                           Path : constant String := Configurations.Value_Maps.Key (Position);
+                        begin
+                           if not Then_Map.Contains (Path)
+                             or else Then_Map (Path) /= Configurations.Value_Maps.Element (Position)
+                           then
+                              Append (Named, (if Named = Null_Unbounded_String then "" else ", ")
+                                      & Path);
+                              Append (Lines, Path & ASCII.LF);
+                           end if;
+                        end;
+                     end loop;
+                     for Position in Then_Map.Iterate loop
+                        if not Now.Contains (Configurations.Value_Maps.Key (Position)) then
+                           Append (Named, (if Named = Null_Unbounded_String then "" else ", ")
+                                   & Configurations.Value_Maps.Key (Position) & " (removed)");
+                           Append (Lines, Configurations.Value_Maps.Key (Position) & ASCII.LF);
+                        end if;
+                     end loop;
+                  end;
+                  if Named = Null_Unbounded_String then
+                     return "";
+                  end if;
+                  Annotate (Item, Change, Id, "changed_files", To_String (Lines));
+                  return "; what it changed is still in the project: " & To_String (Named)
+                    & " -- put it back with the project's version control, or task complete "
+                    & Id & " once it is done by hand";
+               end Left_In_Project;
+
                function Given_Up return String is
                   Named : Unbounded_String;
                   Lines : Unbounded_String;
                   Held  : E.Error_Info;
                begin
                   if Space = "" then
-                     return "";
+                     return Left_In_Project;
                   end if;
                   for Path of Workspaces.Changes (Item, Space) loop
                      Append (Named, (if Named = Null_Unbounded_String then "" else ", ") & Path);
@@ -662,6 +751,9 @@ package body Model_Runner.Framework.Work is
                          & Tasks.State_Of (Item, Id) & " now"
                          & (if Index (Reason, "; its workspace") > 0
                             then Slice (Reason, Index (Reason, "; its workspace"), Length (Reason))
+                            elsif Index (Reason, "; what it changed is still") > 0
+                            then Slice (Reason, Index (Reason, "; what it changed is still"),
+                                        Length (Reason))
                             else ""));
          end;
       end loop;
@@ -766,7 +858,11 @@ package body Model_Runner.Framework.Work is
       declare
          Became : Name_Lists.Vector;
          Moved  : Name_Lists.Vector;
+         Was    : Configurations.Value_Maps.Map;
       begin
+         for Id of Intent.List (Item, Intent.Requirement) loop
+            Was.Include (Id, Intent.State_Of (Item, Intent.Requirement, Id));
+         end loop;
          Tasks.Recompute_Readiness (Item, Change, Became, Status);
          if E.Is_Ok (Status) then
             Verification.Reevaluate_Requirements (Item, Change, Moved, Status);
@@ -774,8 +870,14 @@ package body Model_Runner.Framework.Work is
          if E.Is_Ok (Status) then
             Stores.Commit (Item, Change, Status);
          end if;
+         --  Only a state that changed is said, with from and to.
          for Id of Moved loop
-            Said.Append (Id & " changed its verification");
+            if not Was.Contains (Id) or else Was (Id) /= Intent.State_Of (Item, Intent.Requirement, Id)
+            then
+               Said.Append (Id & " is " & Intent.State_Of (Item, Intent.Requirement, Id) & " now"
+                            & (if Was.Contains (Id) then ", not " & Configurations.Value_Maps.Element (Was, Id) else "")
+                            & ": what verified it was judged again");
+            end if;
          end loop;
       end;
 
@@ -1146,7 +1248,12 @@ package body Model_Runner.Framework.Work is
                       Proof, Status);
       end if;
 
-      Say ("requirement revisions", Fields_With (Plan, "applies.REQ", Kept => 3));
+      --  The revisions its context read, or, never worked, the one it was
+      --  made from.
+      Say ("requirement revisions",
+           (if Invocation = "" and then Records.Get (Defined, "origin") /= ""
+            then Records.Get (Defined, "origin") & " (made from; never worked)"
+            else Fields_With (Plan, "applies.REQ", Kept => 3)));
       Say ("task definition revision", Trim (Natural'Image (Records.Revision (Defined))));
       Say ("why it could start", Records.Get (State, "admission"));
       Say ("decisions", Fields_With (Plan, "applies.DEC", Kept => 3));
@@ -1256,15 +1363,17 @@ package body Model_Runner.Framework.Work is
                     else ", checked by " & Records.Get (State, "current_verification"))
                  & (if Records.Get (State, "set_aside") = "" then ""
                     else "; set aside: "
-                         & Ada.Strings.Fixed.Translate
-                             (Records.Get (State, "set_aside"),
-                              Ada.Strings.Maps.To_Mapping ([1 => ASCII.LF], " ")))
+                         & Comma_Separated (Lines_Of (Records.Get (State, "set_aside"))))
             elsif Records.Get (State, "current_verification") = ""
             then "its gates passed, with no evidence"
             else "its gates passed on " & Records.Get (State, "current_verification")));
+      if Records.Get (State, "replaced_by") /= "" then
+         Say ("replaced", Records.Get (State, "replaced_by"));
+      end if;
       Say ("integration",
            (if Records.Get (State, "current_workspace") = ""
             then (if Tasks.State_Of (Item, Task_Id) in "candidate" | "accepted" then "none yet"
+                  elsif Invocation = "" then "none: it was never worked"
                   else "none: it wrote in the project itself")
             elsif Tasks.State_Of (Item, Task_Id) = "complete"
               and then Workspace_Status (Records.Get (State, "current_workspace")) = "integrated"
@@ -1659,12 +1768,37 @@ package body Model_Runner.Framework.Work is
       declare
          Made   : Framework.Context.Built;
          Called : Unbounded_String;
+
+         --  What it may do, told it as the root agent is told: where it
+         --  may write, whether it may make helpers or propose work.
+         function Child_Allowed return String is
+            Held : Agents.Agent;
+            Got  : E.Error_Info;
+            Said : Unbounded_String;
+         begin
+            Agents.Read (Host.Item.all, To_String (Child_Id), Held, Got);
+            if E.Is_Error (Got) then
+               return "";
+            end if;
+            for Line of Lines_Of (Permissions.Image (Held.Allowed)) loop
+               if Trim (Line) /= "" then
+                  Append (Said, (if Said = Null_Unbounded_String then "" else "; ") & Trim (Line));
+               end if;
+            end loop;
+            return ASCII.LF & "## What you may do" & ASCII.LF
+              & "Your permissions: " & (if Said = Null_Unbounded_String then "none" else To_String (Said))
+              & "." & ASCII.LF
+              & "Change only files write_source or write_specs lets you write."
+              & (if Permissions.Allows (Held.Allowed, Permissions.Create_Children) then ""
+                 else " You may not make helpers of your own.")
+              & ASCII.LF;
+         end Child_Allowed;
       begin
          Framework.Context.Build_Brief
            (Host.Item.all, To_String (Host.Task_Id), Host.Model,
             "You are helping an agent with one part of its task, as its " & Named
             & ". You cannot see its conversation, and it will see only your report.",
-            Brief, Made, Read, Instructions => Child_Instructions);
+            Brief, Made, Read, Instructions => Child_Instructions & Child_Allowed);
          if E.Is_Ok (Read) then
             Framework.Context.Keep (Host.Item.all, Change, Made, Read);
          end if;
@@ -1765,7 +1899,9 @@ package body Model_Runner.Framework.Work is
          Agents.Charge (Host.Item.all, Change, Id, Tokens, Charged);
 
          if Interrupted (Ran) then
-            Why := To_Unbounded_String ("it was stopped: the work was cancelled");
+            Why := To_Unbounded_String
+              ("it was stopped: the work was "
+               & (if Execution.Cancel_Asked_From_Outside then "cancelled" else "interrupted"));
          elsif E.Is_Error (Ran) then
             Why := To_Unbounded_String ("it could not be run: " & Why_Of (Ran));
          else
@@ -1776,7 +1912,7 @@ package body Model_Runner.Framework.Work is
                Why := To_Unbounded_String ("it went over its budget");
             else
                Good := Invocations.Claim (Said, "status") = "done";
-               Why := To_Unbounded_String (Invocations.Claim (Said, "summary"));
+               Why := To_Unbounded_String (Own_Words (Invocations.Claim (Said, "summary")));
 
                --  Done, it says -- but a required child of its own that
                --  failed holds it as it holds the root.
@@ -1960,6 +2096,30 @@ package body Model_Runner.Framework.Work is
          end loop;
          return To_String (Named);
       end Beyond_Permissions;
+
+      type Permission_Pair is array (1 .. 2) of Permissions.Capability;
+
+      --  What it was allowed to write, which the files were not within.
+      function Rule_Said return String is
+         Held_Agent : Agents.Agent;
+         Read       : E.Error_Info;
+         Said       : Unbounded_String;
+      begin
+         Agents.Read (Item, To_String (Result.Agent_Id), Held_Agent, Read);
+         if E.Is_Error (Read) then
+            return "";
+         end if;
+         for One of Permission_Pair'(Permissions.Write_Source, Permissions.Write_Specs) loop
+            Append (Said, (if Said = Null_Unbounded_String then "" else "; ")
+                    & Permissions.Word (One) & " "
+                    & (if not Held_Agent.Allowed (One).Granted then "not granted"
+                       elsif Permissions.Grant_Text (Held_Agent.Allowed (One)) = ""
+                       then (if Permissions."=" (One, Permissions.Write_Specs)
+                             then "where specifications are kept" else "anywhere")
+                       else Permissions.Grant_Text (Held_Agent.Allowed (One))));
+         end loop;
+         return " (its agent may write: " & To_String (Said) & ")";
+      end Rule_Said;
 
       --  Said after the files refused: whether the session's sandbox,
       --  not the project, refused them.
@@ -2147,8 +2307,7 @@ package body Model_Runner.Framework.Work is
                     then "; its workspace " & To_String (Result.Workspace_Id) & " is given up"
                          & (if Result.Changed_Files.Is_Empty then ""
                             else ", and what it changed there with it: "
-                                 & Comma_Separated (Result.Changed_Files)
-                                 & " (task accept " & Task_Id & " does it again)")
+                                 & Comma_Separated (Result.Changed_Files))
                     else "");
          end Given_Up;
 
@@ -2168,9 +2327,15 @@ package body Model_Runner.Framework.Work is
             Ended : E.Error_Info := E.Make (E.Framework_Transition_Invalid);
          begin
             if Agent_End in "completed" | "failed" then
+               --  Its summary its own words, where it gave them; the
+               --  reason the task stands where it does otherwise.
                Agents.Finish
                  (Item, Change, To_String (Result.Agent_Id), Agent_End = "completed",
-                  To_String (Last_Result), Reason, Ended);
+                  To_String (Last_Result),
+                  (if Reason = "" then To_String (Result.Summary)
+                   elsif Result.Summary = Null_Unbounded_String then Reason
+                   else To_String (Result.Summary) & " -- " & Reason),
+                  Ended);
             end if;
             if E.Is_Error (Ended) then
                Agent_State (Item, Change, To_String (Result.Agent_Id), Agent_End, Reason);
@@ -2419,6 +2584,20 @@ package body Model_Runner.Framework.Work is
          Before  : constant Configurations.Value_Maps.Map := Snapshot (To_String (Place), Repository.Roots_Of (Item));
          By_Checks : Name_Lists.Vector;
       begin
+         --  Written in the project itself: what the files were, kept for an
+         --  opening after a kill to compare with.
+         if not Isolated then
+            declare
+               Lines : Unbounded_String;
+               Kept  : E.Error_Info;
+            begin
+               for Position in Before.Iterate loop
+                  Append (Lines, Configurations.Value_Maps.Key (Position) & ASCII.HT
+                          & Configurations.Value_Maps.Element (Position) & ASCII.LF);
+               end loop;
+               Files.Write_Text (Before_File (Item, Task_Id), To_String (Lines), Kept);
+            end;
+         end if;
          if Files.Make_Directory (Scratch) then
             Files.Write_Text
               (Prompt, Context.Rendered (Built), Status);
@@ -2746,7 +2925,8 @@ package body Model_Runner.Framework.Work is
                                       & " task complete"))
                       & Sandbox_Said (Comma_Separated (Put_Back_Files)
                                       & (if Denied = Null_Unbounded_String then ""
-                                         else "," & To_String (Denied))),
+                                         else "," & To_String (Denied)))
+                      & Rule_Said,
                       "failed");
             return;
          end if;
@@ -2757,12 +2937,19 @@ package body Model_Runner.Framework.Work is
          Keep_Proposals_Aside;
          Conclude ("failed", "its answer did not keep to the work contract: "
                    & E.Text_Of (Held, "name") & ": " & E.Text_Of (Held, "detail")
+                   --  A call written out as text is no call: said, since the
+                   --  model meant one and nothing ran.
+                   & (if Index (Answer, """name""") > 0 and then Index (Answer, """arguments""") > 0
+                      then "; the answer looks like a tool call written as text, which runs"
+                           & " nothing -- a model that writes its calls so needs the model's own"
+                           & " call format, or a larger model"
+                      else "")
                    & "; the answer is kept as "
                    & To_String (Last_Result), "failed");
          return;
       end if;
       Result.Claimed := To_Unbounded_String (Invocations.Claim (Said, "status"));
-      Result.Summary := To_Unbounded_String (Invocations.Claim (Said, "summary"));
+      Result.Summary := To_Unbounded_String (Own_Words (Invocations.Claim (Said, "summary")));
 
       --  A change it says it made and did not is a claim the files refute:
       --  whatever else it did, its answer cannot be taken.
@@ -3009,16 +3196,29 @@ package body Model_Runner.Framework.Work is
                end;
             end loop;
             Parts_Are_Children := Own.Granted;
-            Split_Room := (if not Limit.Granted then 0
-                           elsif Depth + 1 > Limit.Max_Depth then 0
-                           else Limit.Max_Children);
-            Split_Why := To_Unbounded_String
-              (if not Limit.Granted
-               then "the project grants no create_children, which bounds parts"
-               elsif Depth + 1 > Limit.Max_Depth
-               then "a part here would be" & Natural'Image (Depth + 1) & " below the task it came"
-                    & " from, past create_children's max_depth" & Natural'Image (Limit.Max_Depth)
-               else "past create_children's max_children" & Natural'Image (Limit.Max_Children));
+            --  Bounded as helpers are too: the project's agents.max_depth
+            --  and agents.max_children hold for parts as for children.
+            declare
+               Bounds   : constant Agents.Limits := Agents.Limits_Of (Item);
+               Deepest  : constant Natural := Natural'Min (Limit.Max_Depth, Bounds.Max_Depth);
+               Most     : constant Natural := Natural'Min (Limit.Max_Children, Bounds.Max_Children);
+            begin
+               Split_Room := (if not Limit.Granted then 0
+                              elsif Depth + 1 > Deepest then 0
+                              else Most);
+               Split_Why := To_Unbounded_String
+                 (if not Limit.Granted
+                  then "the project grants no create_children, which bounds parts"
+                  elsif Depth + 1 > Deepest
+                  then "a part here would be" & Natural'Image (Depth + 1) & " below the task it came"
+                       & " from, past "
+                       & (if Bounds.Max_Depth < Limit.Max_Depth then "agents.max_depth"
+                          else "create_children's max_depth")
+                       & Natural'Image (Deepest)
+                  else "past " & (if Bounds.Max_Children < Limit.Max_Children then "agents.max_children"
+                                  else "create_children's max_children")
+                       & Natural'Image (Most));
+            end;
          end;
          for Line of Parts loop
             declare
@@ -3363,6 +3563,22 @@ package body Model_Runner.Framework.Work is
       --  harness when the configuration says so, otherwise left waiting for
       --  whoever has the right.
       if Isolated then
+         --  Nothing changed where its kind must change something: there is
+         --  nothing to take in, and it is blocked now, as it is where work
+         --  is written in the project itself -- not after an integration.
+         if Result.Changed_Files.Is_Empty
+           and then Tasks.Gate_Names (Item, Kind_Of_Task (Item, Task_Id))
+                      .Contains ("implementation_present")
+         then
+            declare
+               Given_Up : E.Error_Info;
+            begin
+               Workspaces.Abandon (Item, Change, To_String (Result.Workspace_Id), Given_Up);
+               Conclude ("blocked", "its work changed no file, so there is nothing in "
+                         & To_String (Result.Workspace_Id) & " to take in", "completed");
+            end;
+            return;
+         end if;
          --  Checked where it was written, before anyone takes it in: the
          --  evidence says how it stands, and only work that passed is taken
          --  in on its own.
@@ -3404,6 +3620,11 @@ package body Model_Runner.Framework.Work is
                end;
                return;
             elsif Work_Setting (Item, "integrate") /= "automatic" then
+               --  What it did not report is kept, for the taking in to say.
+               if Unreported_Note /= "" then
+                  Annotate (Item, Change, Task_Id, "unreported_files",
+                            Unreported_Note (Unreported_Note'First + 41 .. Unreported_Note'Last));
+               end if;
                Conclude ("", To_String (Result.Workspace_Id) & " waits to be taken in"
                          & To_String (Said)
                          & (if Unreported_Note = "" then "" else "; " & Unreported_Note),
@@ -3694,9 +3915,39 @@ package body Model_Runner.Framework.Work is
       begin
          if not Unsettled.Is_Empty then
             declare
-               --  The tasks whose change to those files the copy replaced.
-               Whose : Name_Lists.Vector;
+               --  The tasks whose change to those files the copy replaced:
+               --  those completed after this workspace was made, not those
+               --  whose change it was made from.
+               Whose   : Name_Lists.Vector;
+               History : constant Events.Event_List := Events.Since (Item, 0);
+               Made_At : Natural := 0;
+
+               function Done_Since (Other : String) return Boolean is
+               begin
+                  for Index in 1 .. Events.Length (History) loop
+                     declare
+                        One : constant Events.Event := Events.Element (History, Index);
+                     begin
+                        if One.Sequence > Made_At
+                          and then ((Events."=" (One.Kind, Events.Task_Completed)
+                                     and then To_String (One.Subject) = Other)
+                                    or else (Events."=" (One.Kind, Events.Workspace_Integrated)
+                                             and then To_String (One.Detail) = Other))
+                        then
+                           return True;
+                        end if;
+                     end;
+                  end loop;
+                  return False;
+               end Done_Since;
             begin
+               for Index in 1 .. Events.Length (History) loop
+                  if Events."=" (Events.Element (History, Index).Kind, Events.Workspace_Created)
+                    and then To_String (Events.Element (History, Index).Subject) = Id
+                  then
+                     Made_At := Events.Element (History, Index).Sequence;
+                  end if;
+               end loop;
                for Other of Tasks.List (Item, "complete") loop
                   declare
                      State : Records.Item;
@@ -3706,6 +3957,7 @@ package body Model_Runner.Framework.Work is
                      if Other /= Task_Id and then E.Is_Ok (Read)
                        and then (for some Path of Unsettled =>
                                    Lines_Of (Records.Get (State, "changed_files")).Contains (Path))
+                       and then Done_Since (Other)
                      then
                         Whose.Append (Other);
                      end if;
@@ -3717,6 +3969,18 @@ package body Model_Runner.Framework.Work is
                   & (if Whose.Is_Empty then "" else " (" & Comma_Separated (Whose) & "'s)")
                   & ": " & Comma_Separated (Unsettled));
                Annotate (Item, Change, Task_Id, "integration_note", To_String (Result.Reason));
+               --  Each task whose change went says so in its own history, with
+               --  how to have it again.
+               for Other of Whose loop
+                  Annotate (Item, Change, Other, "replaced_by",
+                            Task_Id & "'s taking in replaced its change to "
+                            & Comma_Separated (Unsettled) & "; task reopen " & Other
+                            & " does it again");
+               end loop;
+               if not Whose.Is_Empty then
+                  Append (Result.Reason, "; task reopen " & Comma_Separated (Whose)
+                          & " does that work again");
+               end if;
             end;
          end if;
       end;

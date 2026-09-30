@@ -75,7 +75,16 @@ package body Model_Runner.CLI.Repo is
       Action    : constant String :=
         (if T.Is_Empty (Item.Action) then "scan"
          else T.To_String (Item.Action));
-      Argument  : constant String := T.To_String (Item.Action_Argument);
+      Typed     : constant String := T.To_String (Item.Action_Argument);
+      --  A path as the project names it: ./src/x.adb and a whole path into
+      --  the project are src/x.adb, and . is the project itself.
+      Argument  : constant String :=
+        (if Typed = "." or else Ada.Strings.Fixed.Index (Typed, "/") > 0
+         then Rp.Relative_Path
+                (Ada.Directories.Full_Name
+                   (if T.Is_Empty (Item.Project_Directory) then "."
+                    else T.To_String (Item.Project_Directory)), Typed)
+         else Typed);
       Recovered : Model_Runner.Framework.Name_Lists.Vector;
       Found     : constant Rp.Graph := Rp.Scan (Directory, Roots_In (Directory, Recovered));
       Outcome   : E.Error_Info;
@@ -220,8 +229,20 @@ package body Model_Runner.CLI.Repo is
          end if;
       end loop;
 
+      --  A path out of the project is none of its files.
+      if Action in "impact" | "trace" | "deps" | "users" | "refs"
+        and then Argument'Length > 0
+        and then (Argument (Argument'First) = '/' or else Ada.Strings.Fixed.Index (Argument, "..") = Argument'First)
+      then
+         Outcome := E.Make (E.Framework_Input_Invalid);
+         E.Add_Text (Outcome, "name", "a file of the project");
+         E.Add_Text (Outcome, "value", Typed);
+         E.Add_Text (Outcome, "detail", "it is outside the project; paths are relative to it");
+         Fail (Outcome);
+         return;
+      end if;
       if Action in "sym" | "refs" | "deps" | "users" | "impact" | "trace"
-        and then Argument = ""
+        and then Argument = "" and then not (Action = "impact" and then Typed /= "")
       then
          Outcome := E.Make (E.Framework_Input_Missing);
          E.Add_Text (Outcome, "name", (if Action in "deps" | "users" then "unit"
@@ -476,7 +497,13 @@ package body Model_Runner.CLI.Repo is
                               Bare : constant String :=
                                 (if Argument'Length > 1 and then Argument (Argument'Last) = '/'
                                  then Argument (Argument'First .. Argument'Last - 1) else Argument);
-                              Whole : constant String := Hostkit.Fs.Join (Directory, Bare);
+                              Whole : constant String :=
+                                (if Bare = "" then Directory else Hostkit.Fs.Join (Directory, Bare));
+                              --  Within it: every file, for the project itself.
+                              function Under (Path : String) return Boolean
+                              is (Bare = "" or else Ada.Strings.Fixed.Index (Path, Bare & "/") = Path'First);
+                              function Named (Simple : String) return String
+                              is (if Bare = "" then Simple else Bare & "/" & Simple);
                            begin
                               if Ada.Directories.Exists (Whole)
                                 and then Ada.Directories."=" (Ada.Directories.Kind (Whole),
@@ -486,7 +513,7 @@ package body Model_Runner.CLI.Repo is
                                     declare
                                        Path : constant String := To_String (Rp.File_At (Found, Index).Path);
                                     begin
-                                       if Ada.Strings.Fixed.Index (Path, Bare & "/") = Path'First then
+                                       if Under (Path) then
                                           Changed.Append (Path);
                                        end if;
                                     end;
@@ -501,9 +528,9 @@ package body Model_Runner.CLI.Repo is
                                     while Ada.Directories.More_Entries (Search) loop
                                        Ada.Directories.Get_Next_Entry (Search, One);
                                        if not Changed.Contains
-                                                (Bare & "/" & Ada.Directories.Simple_Name (One))
+                                                (Named (Ada.Directories.Simple_Name (One)))
                                        then
-                                          Changed.Append (Bare & "/" & Ada.Directories.Simple_Name (One));
+                                          Changed.Append (Named (Ada.Directories.Simple_Name (One)));
                                        end if;
                                     end loop;
                                     Ada.Directories.End_Search (Search);
@@ -626,7 +653,7 @@ package body Model_Runner.CLI.Repo is
                               end if;
                               if Of_Kind > 0 then
                                  Append (Counts, (if Counts = Null_Unbounded_String then "" else ", ")
-                                         & Image (Of_Kind) & " " & Kind);
+                                         & Kind & ": " & Image (Of_Kind));
                               end if;
                            end;
                         end loop;

@@ -225,6 +225,60 @@ package body Model_Runner.Framework.Repository is
    -- Roots_Of --
    --------------
 
+   -------------------
+   -- Relative_Path --
+   -------------------
+
+   function Relative_Path (Project, Path : String) return String is
+      Base : constant String :=
+        (if Project'Length > 1 and then Project (Project'Last) = '/'
+         then Project (Project'First .. Project'Last - 1) else Project);
+      Rest : constant String :=
+        (if Path = Base then ""
+         elsif Path'Length > Base'Length and then Path (Path'First .. Path'First + Base'Length) = Base & "/"
+         then Path (Path'First + Base'Length + 1 .. Path'Last)
+         else Path);
+      Kept  : Name_Lists.Vector;
+      Start : Positive := Rest'First;
+      Out_Of : Boolean := False;
+   begin
+      if Rest'Length > 0 and then Rest (Rest'First) = '/' then
+         return Path;
+      end if;
+      for Index in Rest'First .. Rest'Last + 1 loop
+         if Index > Rest'Last or else Rest (Index) = '/' then
+            declare
+               Part : constant String := Rest (Start .. Index - 1);
+            begin
+               if Part = "" or else Part = "." then
+                  null;
+               elsif Part = ".." then
+                  if Kept.Is_Empty then
+                     Out_Of := True;
+                  else
+                     Kept.Delete_Last;
+                  end if;
+               else
+                  Kept.Append (Part);
+               end if;
+            end;
+            Start := Index + 1;
+         end if;
+      end loop;
+      if Out_Of then
+         return Path;
+      end if;
+      declare
+         Joined : Unbounded_String;
+      begin
+         for Part of Kept loop
+            Append (Joined, (if Joined = Null_Unbounded_String then "" else "/") & Part);
+         end loop;
+         return To_String (Joined)
+           & (if Kept.Is_Empty or else Rest'Length = 0 or else Rest (Rest'Last) /= '/' then "" else "/");
+      end;
+   end Relative_Path;
+
    ---------------------
    -- Component_Roots --
    ---------------------
@@ -293,20 +347,52 @@ package body Model_Runner.Framework.Repository is
                  then Result (Result'First + 2 .. Last) else Result (Result'First .. Last));
       end Clean;
       File : constant String := Clean (Path);
+
+      --  How closely a component's roots hold the file: the length of the
+      --  longest root it is under, or none.
+      function Closeness (Named : String) return Integer is
+         Best : Integer := -1;
+      begin
+         for Root of Component_Roots (Item, Named) loop
+            declare
+               R : constant String := Clean (Root);
+            begin
+               if File = R or else (File'Length > R'Length
+                                    and then File (File'First .. File'First + R'Length - 1) = R
+                                    and then File (File'First + R'Length) = '/')
+               then
+                  Best := Integer'Max (Best, R'Length);
+               end if;
+            end;
+         end loop;
+         return Best;
+      end Closeness;
+
+      Mine   : constant Integer := Closeness (Component);
+      Config : Records.Item;
+      Read   : E.Error_Info;
    begin
-      for Root of Component_Roots (Item, Component) loop
-         declare
-            R : constant String := Clean (Root);
-         begin
-            if File = R or else (File'Length > R'Length
-                                 and then File (File'First .. File'First + R'Length - 1) = R
-                                 and then File (File'First + R'Length) = '/')
-            then
-               return True;
-            end if;
-         end;
-      end loop;
-      return False;
+      if Mine < 0 then
+         return False;
+      end if;
+      --  Where roots overlap, the file is the component's whose root holds
+      --  it most closely: src/proc is proc's, not src's.
+      Configurations.Read (Item, Config, Read);
+      if E.Is_Ok (Read) then
+         for Index in 1 .. Records.Field_Count (Config) loop
+            declare
+               Field : constant String := Records.Field_Name (Config, Index);
+            begin
+               if Field'Length > 14 and then Field (Field'First .. Field'First + 13) = "map.component."
+                 and then Field (Field'First + 14 .. Field'Last) /= Component
+                 and then Closeness (Field (Field'First + 14 .. Field'Last)) > Mine
+               then
+                  return False;
+               end if;
+            end;
+         end loop;
+      end if;
+      return True;
    end In_Component;
 
    function Roots_Of (Item : Stores.Store) return Roots is

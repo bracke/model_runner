@@ -609,10 +609,10 @@ package body Model_Runner.Framework.Bootstrap is
                                                   else ", replaced by "
                                                        & To_String (Held.Superseded_By))
                                                & (if Held.Superseded_By /= Null_Unbounded_String
-                                                  then "; the document says "
+                                                  then "; change it to "
                                                        & To_String (Held.Superseded_By)
-                                                       & " in its place once changed, or it is"
-                                                       & " taken out"
+                                                       & ", which is read from there then, or take"
+                                                       & " the section out"
                                                   else "; take it out of the document, or, to have"
                                                        & " it again, "
                                                        & (if Intent."=" (Kind, Intent.Decision)
@@ -698,11 +698,61 @@ package body Model_Runner.Framework.Bootstrap is
                end;
             end Again;
 
+            --  An entry made by hand that the document names by its
+            --  identifier: the document is where it is read from from now
+            --  on -- its words, where they differ, a revision as any -- not
+            --  a second entry under another identifier.
+            function Adopted (Kind : Intent.Intent_Kind; Given : String) return Boolean is
+               Held   : Intent.Entity;
+               Read   : E.Error_Info;
+               Value  : Records.Item;
+               Staged : Boolean;
+            begin
+               if Given = "" or else not Stores.Is_Name (Given) then
+                  return False;
+               end if;
+               Intent.Read (Item, Kind, Given, Held, Read);
+               --  Only one that is the document's in all but where it came
+               --  from: made to replace what the document named before, or
+               --  saying much the same. Another under that identifier is a
+               --  clash, and raised as one.
+               if E.Is_Error (Read) or else To_String (Held.Source) not in "" | "user"
+                 or else To_String (Held.State) in "obsolete" | "superseded" | "rejected"
+                 or else (Held.Supersedes = Null_Unbounded_String
+                          and then Likeness (To_String (Held.Text), To_String (Next.Text)) <= 0.5)
+               then
+                  return False;
+               end if;
+               Again (Kind, Given, Settled => Accept_Imports);
+               if E.Is_Error (Status) then
+                  return True;
+               end if;
+               Stores.Pending (Change, Area_Of (Kind), Given, Value, Staged);
+               if not Staged then
+                  Stores.Read (Item, Area_Of (Kind), Given, Value, Read);
+                  Records.Set_Revision (Value, Records.Revision (Value) + 1);
+               end if;
+               Records.Set (Value, "source", Field (Next.Source));
+               Records.Set (Value, "provenance", Provenance);
+               Records.Set (Value, "imported_text", To_String (Next.Text));
+               Records.Set (Value, "imported_criteria", To_String (Next.Criteria));
+               Records.Set (Value, "imported_title", To_String (Next.Title));
+               Stores.Put (Change, Area_Of (Kind), Given, Value);
+               Result.Adopted.Append (Given & " from " & Field (Next.Source));
+               return True;
+            end Adopted;
+
             procedure Propose (Kind : Intent.Intent_Kind) is
                Known : constant String := Intent.Find_By_Provenance (Item, Kind, Provenance);
+               Given : constant String := Field (Next.Given_Id);
+               Taken : constant Boolean :=
+                 Given /= "" and then Stores.Is_Name (Given)
+                 and then Stores.Exists (Item, Area_Of (Kind), Given);
             begin
                if Known /= "" then
                   Again (Kind, Known, Settled => False);
+                  return;
+               elsif Adopted (Kind, Given) then
                   return;
                end if;
                Intent.Propose
@@ -715,6 +765,25 @@ package body Model_Runner.Framework.Bootstrap is
                   Result.Made.Append (To_String (Id));
                   Made_Texts.Append (Field (Next.Text));
                   Made_Sources.Append (Field (Next.Source));
+               end if;
+               --  Its identifier held by another: made under its own, and
+               --  said, as a requirement's is.
+               if E.Is_Ok (Status) and then Taken and then To_String (Id) /= Given then
+                  declare
+                     Said : Results.Result :=
+                       (Kind       => Results.Diagnostic,
+                        Producer   => To_Unbounded_String ("bootstrap"),
+                        Summary    => To_Unbounded_String
+                                        (Field (Next.Source) & " gives " & Given
+                                         & ", which the project already has; it was made as "
+                                         & To_String (Id) & ", "
+                                         & Intent.State_Of (Item, Kind, To_String (Id))),
+                        Payload    => Next.Text,
+                        Provenance => Next.Provenance,
+                        others     => <>);
+                  begin
+                     Raise_Issue (Said);
+                  end;
                end if;
             end Propose;
          begin
@@ -787,6 +856,9 @@ package body Model_Runner.Framework.Bootstrap is
                         Staged : Boolean;
                         Moved  : Boolean;
                      begin
+                        if Adopted (Intent.Requirement, Given) then
+                           goto Next_Output;
+                        end if;
                         Moved := False;
                         if Stores.Is_Name (Given) then
                            Stores.Pending (Change, Requirements_Area, Given, Held, Staged);

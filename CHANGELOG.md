@@ -1782,6 +1782,58 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Tenth usability round:**
+  - A whole-suite run that failed only in other requirements' files no
+    longer takes a requirement's verification away; the init check warning
+    reads each check, not the profile's text; work on a cancelled, rejected,
+    candidate or complete task says the way on.
+  - A decision retired while another governs its setting says which; unlink
+    hints are commands that run, and `req ID` with more words is refused;
+    session text puts `/` on commands, not nouns; unknown session commands
+    are errors that point to `/help`, however quiet.
+  - Permissions: a constraint that does not read (`root=`, stray words,
+    roots outside the project) is refused, not dropped into a wider grant;
+    write_specs with no roots writes where specifications are kept; levels
+    nothing reads are refused; `=inherit` gives a capability or a whole
+    level back to the level above; hints name the level that withheld it;
+    a task's own permissions say what they take away; the sandbox is said
+    at work's start, `off` is read in MODEL_RUNNER_SANDBOX, and `sandbox`
+    refuses what work refuses.
+  - A requirement whose scope is no component is refused at `req new`, and
+    an accepted requirement nothing serves is a consistency finding; paths
+    are read as the project names them (`./x`, whole paths, `.`), outside
+    ones refused; a document naming a replacement made by hand is read into
+    it, not made anew; a decision named in a document that the project has
+    is raised as a clash.
+  - Workspaces keep their base: changes to different lines of one file are
+    joined when taken in, and only the same lines conflict; a workspace
+    that changed nothing blocks at once; `state`, `work` and the list show
+    work waiting to be taken in; the task whose change `resolved anyway`
+    replaced says so; files its agent did not report are named when taken
+    in; a kill -9 in the project itself names what it left there.
+  - Parts split by hand are accepted; `task accept` and `reject` take
+    several tasks; `task derive` says why nothing is derived; `work --set
+    model=` is what runs; `work.agent=off` unsets it.
+  - Agents: parts obey agents.max_children and max_depth too; a root agent
+    at a depth limit of none is not given create_children; an unoffered
+    tool call names the tools offered; helpers are told what they may do;
+    the instructions' example line is no summary; a refused write names
+    what its agent may write; a call written as text is said to be one.
+  - `req supersede` says what happened in order and moves the replaced
+    requirement's open work to the replacement instead of deriving beside
+    it; `task rehome TASK-ID`, the link checks (cycles, retired, missing
+    evidence), `decision govern` with a short setting name, retired-entry
+    advice, and a session's changed environment are said plainly; failed
+    calls on work since done and the same report twice leave `result`;
+    `check REQ` not verified fails.
+  - Smaller: the reconfigure prompt answered no, `--quiet` answers, Ctrl-C
+    at the prompt redraws it, `config` with no match, `result dismiss` with
+    no ID, an unclosed quote, `req new` without text, help lines, `cancel`
+    and `task help` at the shell, plurals, "a candidate", `task move` hints,
+    edits of tasks in verification, "already" for reopen, reconsider and
+    depend, agent records, audit wording, a cancel elsewhere naming what
+    waits, the lock message, retargeted titles, `ag-1`, config sets on one
+    line, and an empty `blocked_by`.
 - **Ninth usability round:**
   - A proposal refused for want of propose_tasks keeps its own kind and
     component, and the `task new` line offered builds it as it was meant;

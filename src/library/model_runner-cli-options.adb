@@ -2731,6 +2731,12 @@ package body Model_Runner.CLI.Options is
                      --  A session's /trace is the shell's repo trace.
                      Fail (E.CLI_Unknown_Command, "", Argument & "; repo " & Argument & " is the one");
                      return;
+                  elsif Argument in "cancel" | "complete" | "split" | "verify" | "integrate" | "reopen"
+                                  | "audit" | "derive" | "rehome" | "depend" | "edit"
+                  then
+                     --  A task's command without task before it.
+                     Fail (E.CLI_Unknown_Command, "", Argument & "; task " & Argument & " is the one");
+                     return;
                   else
                      Fail (E.CLI_Unknown_Command, "", Argument);
                      return;
@@ -2746,9 +2752,12 @@ package body Model_Runner.CLI.Options is
                                    | "cancel" | "show" | "context" | "verify"
                                    | "complete" | "integrate" | "derive" | "step"
                                    | "plan" | "reopen" | "reconsider" | "edit"
-                                   | "depend" | "split" | "audit" | "move" | "rehome"
+                                   | "depend" | "split" | "audit" | "move" | "rehome" | "help"
                   then
-                     Fail (E.CLI_Unexpected_Operand, "", Argument);
+                     Fail (E.CLI_Unexpected_Operand, "",
+                           Argument & "; task takes list, new, accept, reject, cancel, show, context,"
+                           & " verify, complete, integrate, derive, step, plan, reopen, reconsider,"
+                           & " edit, depend, split, audit, move and rehome");
                      return;
                   end if;
                   Result.Action := T.To_Bounded (Argument);
@@ -2809,7 +2818,7 @@ package body Model_Runner.CLI.Options is
 
                elsif Operands > 3 and then Result.Kind = Command_Task
                  and then T.To_String (Result.Action) in "depend" | "split" | "move" | "integrate"
-                                                        | "rehome" | "cancel"
+                                                        | "rehome" | "cancel" | "accept" | "reject"
                then
                   --  What the task waits for, its parts' titles, the state it
                   --  moves to, or anyway: the rest of the words, as they were

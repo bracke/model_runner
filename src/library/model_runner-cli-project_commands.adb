@@ -1,6 +1,7 @@
 with Ada.Text_IO;
 with Ada.Characters.Handling;
 with Ada.Directories;
+with Ada.Environment_Variables;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
@@ -34,6 +35,7 @@ with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Transitions;
 with Model_Runner.Framework.Verification;
+with Model_Runner.Framework.Workspaces;
 with Model_Runner.Generation;
 with Model_Runner.Localization;
 with Model_Runner.Templates;
@@ -754,6 +756,26 @@ package body Model_Runner.CLI.Project_Commands is
       if Ada.Strings.Fixed.Index (Summary, "output of ") = Summary'First then
          return True;
       end if;
+      --  A call's failure, or what an agent reported, on work since done:
+      --  the work that followed dealt with it.
+      declare
+         Space : constant Natural := Ada.Strings.Fixed.Index (Summary, " ");
+         Call  : constant String :=
+           (if Space > Summary'First then Summary (Summary'First .. Space - 1) else "");
+         Held  : R.Item;
+         Got   : E.Error_Info;
+      begin
+         if Ada.Strings.Fixed.Index (Call, "INV-") = Call'First
+           and then Ada.Strings.Fixed.Index (Summary, " failed: ") = Space
+         then
+            S.Read (Store, Model_Runner.Framework.Invocations_Area, Call, Held, Got);
+            if E.Is_Ok (Got) and then R.Get (Held, "task") /= ""
+              and then Tk.State_Of (Store, R.Get (Held, "task")) = "complete"
+            then
+               return True;
+            end if;
+         end if;
+      end;
       if Document_Dropped then
          return True;
       end if;
@@ -924,6 +946,9 @@ package body Model_Runner.CLI.Project_Commands is
       Pres.Put_Aside (Screen, "cli.interactive.help.trace");
    end Help;
 
+   --  Whether a line leaves a quote open: the rest of it taken as quoted.
+   Left_Open : Boolean := False;
+
    --  The words of a line, with a quoted stretch kept whole.
    function Split (Line : String) return Names.Vector is
       Result  : Names.Vector;
@@ -988,6 +1013,7 @@ package body Model_Runner.CLI.Project_Commands is
       if Started then
          Result.Append (To_String (Current));
       end if;
+      Left_Open := Quoted or else Single;
       return Result;
    end Split;
 
@@ -1010,6 +1036,7 @@ package body Model_Runner.CLI.Project_Commands is
       Agent  : Model_Runner.Framework.Work.Agent_Runner'Class)
    is
       All_Words  : constant Names.Vector := Split (Line);
+      Open_Quote : constant Boolean := Left_Open;
       Word       : constant String := All_Words.First_Element;
       Positional : Names.Vector;
       Command    : Opt.Command;
@@ -1195,6 +1222,25 @@ package body Model_Runner.CLI.Project_Commands is
                end;
             end loop;
          end if;
+         --  Work a person takes in: each, with how.
+         declare
+            Waiting : Names.Vector;
+         begin
+            for Id of Tk.List (Store, "verification") loop
+               if Model_Runner.Framework.Workspaces.Active_For (Store, Id) /= "" then
+                  Waiting.Append (Id);
+               end if;
+            end loop;
+            if not Waiting.Is_Empty then
+               Line_Of ("cli.project.to_integrate", Image (Natural (Waiting.Length)));
+               for Id of Waiting loop
+                  Pres.Put_Message
+                    (Screen, "cli.project.which",
+                     [Loc.Named ("name", Id),
+                      Loc.Named ("value", Tk.Ready (Store, Id).Reasons.First_Element)]);
+               end loop;
+            end if;
+         end;
          Line_Of ("cli.project.blocked", Count ("blocked"));
          Which ("blocked");
          Line_Of ("cli.project.running", Count ("running"));
@@ -1221,6 +1267,7 @@ package body Model_Runner.CLI.Project_Commands is
          declare
             Dismissed : constant Names.Vector := Dismissed_List (Store);
             Open      : Natural := 0;
+            Counted   : Names.Vector;
          begin
             for Name of S.Names (Store, Model_Runner.Framework.Results_Area) loop
                declare
@@ -1230,11 +1277,14 @@ package body Model_Runner.CLI.Project_Commands is
                   One       : Rs.Result;
                   Got       : E.Error_Info;
                begin
-                  Rs.Read (Store, Result_Id, One, Got, With_Payload => False);
+                  Rs.Read (Store, Result_Id, One, Got);
                   if E.Is_Ok (Got) and then Rs."=" (One.Kind, Rs.Diagnostic)
                     and then not Dismissed.Contains (Result_Id)
                     and then not Acted_On (Store, Result_Id, To_String (One.Summary))
+                    and then not Counted.Contains
+                                   (To_String (One.Summary) & ASCII.LF & To_String (One.Payload))
                   then
+                     Counted.Append (To_String (One.Summary) & ASCII.LF & To_String (One.Payload));
                      Open := Open + 1;
                   end if;
                end;
@@ -1296,7 +1346,9 @@ package body Model_Runner.CLI.Project_Commands is
                Name  : constant String := R.Field_Name (Config, Index);
                Value : constant String := R.Get (Config, Name);
 
-               --  A set or a list an item a line, however it was written.
+               --  A set's items on one line a comma apart, as the other lines
+               --  name several things; a list's -- commands, in order -- a line
+               --  each.
                function Shown return String is
                begin
                   if not (Name'Length > 4 and then Name (Name'First .. Name'First + 3) in "set." | "list")
@@ -1315,7 +1367,9 @@ package body Model_Runner.CLI.Project_Commands is
                            begin
                               if Item /= "" then
                                  Append (Result, (if Result = Null_Unbounded_String then ""
-                                                  else [1 => ASCII.LF]) & Item);
+                                                  elsif Name (Name'First .. Name'First + 3) = "set."
+                                                  then ", "
+                                                  else [1 => ASCII.LF] & "") & Item);
                               end if;
                            end;
                            Start := Index + 1;
@@ -1344,6 +1398,29 @@ package body Model_Runner.CLI.Project_Commands is
                   Append (Named, (if Named = Null_Unbounded_String then "" else ", ") & One);
                end loop;
                Field ("components (listed or placed)", To_String (Named));
+               --  Open tasks that name a component the project no longer has.
+               declare
+                  Stray : Unbounded_String;
+               begin
+                  for Id of Tk.List (Store) loop
+                     declare
+                        Defined : R.Item;
+                        Got     : E.Error_Info;
+                     begin
+                        Tk.Definition (Store, Id, Defined, Got);
+                        if E.Is_Ok (Got) and then R.Get (Defined, "component") /= ""
+                          and then not Tk.Components (Store).Contains (R.Get (Defined, "component"))
+                          and then Tk.State_Of (Store, Id) not in "complete" | "cancelled" | "rejected"
+                        then
+                           Append (Stray, (if Stray = Null_Unbounded_String then "" else ", ")
+                                   & Id & " in " & R.Get (Defined, "component"));
+                        end if;
+                     end;
+                  end loop;
+                  if Stray /= Null_Unbounded_String then
+                     Field ("tasks in no component of the project", To_String (Stray));
+                  end if;
+               end;
             end;
          end if;
 
@@ -1377,6 +1454,16 @@ package body Model_Runner.CLI.Project_Commands is
                   Field (Known, "(not set)");
                end if;
             end loop;
+            --  A name nothing holds: said, not answered with nothing.
+            if not (for some Index in 1 .. R.Field_Count (Config) =>
+                      Ada.Strings.Fixed.Index (R.Field_Name (Config, Index), Argument (1)) > 0)
+              and then not (for some Known of Model_Runner.Framework.Configurations.Known_Names =>
+                              Ada.Strings.Fixed.Index (Known, Argument (1)) > 0)
+              and then Ada.Strings.Fixed.Index ("components", Argument (1)) = 0
+              and then Ada.Strings.Fixed.Index ("map.permission.project", Argument (1)) = 0
+            then
+               Pres.Put_Message (Screen, "cli.project.config_none", [Loc.Named ("value", Argument (1))]);
+            end if;
          end if;
       end Show_Config;
 
@@ -1387,7 +1474,28 @@ package body Model_Runner.CLI.Project_Commands is
          Size  : constant Natural := Rs.Payload_Size (Store, Argument (1));
          --  A large payload is read only when asked for: /result ID full.
          Whole : constant Boolean := Size <= Rs.Inline_Limit or else Argument (2) = "full";
-         Id    : constant String := Argument (1);
+         --  As the harness writes it: ag-000001 is AG-000001, and AG-1 is
+         --  AG-000001 where its kind is numbered so.
+         function Normalized (Given : String) return String is
+            Upper : constant String := Ada.Characters.Handling.To_Upper (Given);
+            Dash  : constant Natural := Ada.Strings.Fixed.Index (Upper, "-");
+         begin
+            if Dash = 0 or else Upper (Upper'First .. Dash - 1) not in "AG" | "INV" | "VER" | "RES" | "CTX"
+            then
+               return Given;
+            end if;
+            declare
+               Rest : constant String := Upper (Dash + 1 .. Upper'Last);
+            begin
+               if Upper (Upper'First .. Dash - 1) in "AG" | "INV" | "VER"
+                 and then Rest'Length in 1 .. 5 and then (for all C of Rest => C in '0' .. '9')
+               then
+                  return Upper (Upper'First .. Dash) & (1 .. 6 - Rest'Length => '0') & Rest;
+               end if;
+               return Upper;
+            end;
+         end Normalized;
+         Id    : constant String := Normalized (Argument (1));
 
          --  Any identifier the harness prints: an invocation, a context's
          --  manifest, evidence or an agent is shown as it is recorded.
@@ -1482,6 +1590,12 @@ package body Model_Runner.CLI.Project_Commands is
                   end if;
                end;
             end loop;
+            --  An agent's two ends told apart where they differ.
+            if R.Has (Value, "outcome") and then R.Has (Value, "state")
+              and then R.Get (Value, "outcome") /= R.Get (Value, "state")
+            then
+               Field ("read as", "state is how its own run ended; outcome is where that left the task");
+            end if;
          end Show_Record;
       begin
          --  result dismiss ID: an issue a person has taken as read leaves the
@@ -1494,7 +1608,13 @@ package body Model_Runner.CLI.Project_Commands is
                Got     : Rs.Result;
             begin
                Rs.Read (Store, Named, Got, Read, With_Payload => False);
-               if Named /= "" and then Dismissed_List (Store).Contains (Named) then
+               if Named = "" then
+                  Outcome := E.Make (E.Framework_Input_Missing);
+                  E.Add_Text (Outcome, "name", "the issue to dismiss: result dismiss RES-ID, as result"
+                              & " lists them");
+                  Pres.Report (Screen, Outcome);
+                  return;
+               elsif Dismissed_List (Store).Contains (Named) then
                   Pres.Put_Note (Screen, "cli.result.dismissed_already", [Loc.Named ("name", Named)]);
                   return;
                elsif Named /= ""
@@ -1538,6 +1658,7 @@ package body Model_Runner.CLI.Project_Commands is
             --  one about an entry since retired or replaced: acted on.
             declare
                Shown : Natural := 0;
+               Said_Before : Names.Vector;
 
                Dismissed : constant Names.Vector := Dismissed_List (Store);
             begin
@@ -1549,18 +1670,23 @@ package body Model_Runner.CLI.Project_Commands is
                      One       : Rs.Result;
                      Got       : E.Error_Info;
                   begin
-                     Rs.Read (Store, Result_Id, One, Got, With_Payload => False);
+                     Rs.Read (Store, Result_Id, One, Got);
                      if E.Is_Ok (Got) and then Rs."=" (One.Kind, Rs.Diagnostic)
                        and then not Dismissed.Contains (Result_Id)
                        and then not Acted_On (Store, Result_Id, To_String (One.Summary))
+                       --  Said the same, in the same words, once: two attempts
+                       --  that report one thing are one issue here.
+                       and then not Said_Before.Contains
+                                      (To_String (One.Summary) & ASCII.LF & To_String (One.Payload))
                      then
+                        Said_Before.Append (To_String (One.Summary) & ASCII.LF & To_String (One.Payload));
                         Field (Result_Id, With_Id (Result_Id, To_String (One.Summary)));
                         Shown := Shown + 1;
                      end if;
                   end;
                end loop;
                if Shown = 0 then
-                  Pres.Put_Note (Screen, "cli.result.none");
+                  Pres.Put_Message (Screen, "cli.result.none");
                end if;
             end;
             return;
@@ -1695,15 +1821,27 @@ package body Model_Runner.CLI.Project_Commands is
                if To_String (Held.State) /= "verified" then
                   Field ("not verified", Vf.Why_Not_Verified (Store, Requirement));
                end if;
-               --  The others the checks moved, each named.
+               --  The others the checks moved, each named as what it is: a
+               --  side effect of the same evidence, not what was asked.
                for Other of Changed loop
                   if Other /= Requirement then
-                     Pres.Put_Message
-                       (Screen, "cli.work.requirement",
+                     Pres.Put_Note
+                       (Screen, "cli.work.requirement_also",
                         [Loc.Named ("name", Other),
                          Loc.Named ("value", Nt.State_Of (Store, Nt.Requirement, Other))]);
                   end if;
                end loop;
+               --  Not verified is what was asked not holding: a failure, as a
+               --  check that did not pass is.
+               if To_String (Held.State) /= "verified" and then Failing.Is_Empty then
+                  declare
+                     Failed : E.Error_Info := E.Make (E.Framework_Verification_Failed);
+                  begin
+                     E.Add_Text (Failed, "name", Requirement);
+                     E.Add_Text (Failed, "detail", "it is " & To_String (Held.State) & ", not verified");
+                     Pres.Report (Screen, Failed);
+                  end;
+               end if;
 
                --  Checks that did not pass: a failure, with why.
                for Evidence_Id of Failing loop
@@ -1756,8 +1894,8 @@ package body Model_Runner.CLI.Project_Commands is
                      Failed : E.Error_Info := E.Make (E.Framework_Verification_Failed);
                   begin
                      E.Add_Text (Failed, "name", "consistency");
-                     E.Add_Text (Failed, "detail", Image (Cs.Length (Found))
-                                 & " things in the state do not hold together, listed above");
+                     E.Add_Text (Failed, "detail", "what does not hold together in the state, listed"
+                                 & " above: " & Image (Cs.Length (Found)));
                      Pres.Report (Screen, Failed);
                   end;
                end if;
@@ -1939,14 +2077,27 @@ package body Model_Runner.CLI.Project_Commands is
          Change : S.Transaction;
          Found  : Model_Runner.Framework.Bootstrap.Output_List;
          Report : Model_Runner.Framework.Bootstrap.Report;
+         --  Each named as the project names it: ./docs/x.md and a whole
+         --  path into the project are docs/x.md.
+         function Named_Here return Names.Vector is
+            Result : Names.Vector;
+         begin
+            for Path of Positional loop
+               Result.Append (Model_Runner.Framework.Repository.Relative_Path
+                                (Ada.Directories.Current_Directory, Path));
+            end loop;
+            return Result;
+         end Named_Here;
+         Named : constant Names.Vector := Named_Here;
+
          --  The documents named, or those the bootstrap policy reads.
          Files  : constant Names.Vector :=
            (if Positional.Is_Empty then Model_Runner.Framework.Bootstrap.Documents (Store)
-            else Positional);
+            else Named);
       begin
          --  A document named is one within the project, outside its state,
          --  and there to be read: nothing is taken from one that is not.
-         for Path of Positional loop
+         for Path of Named loop
             if Path = "" or else Path (Path'First) in '/' | '\'
               or else Ada.Strings.Fixed.Index (Path, "..") > 0
               or else Ada.Strings.Fixed.Index (Path, ".model_runner") > 0
@@ -2004,6 +2155,9 @@ package body Model_Runner.CLI.Project_Commands is
                  (Screen, "cli.project.bootstrap.made",
                   [Loc.Named ("name", Id), Loc.Named ("value", Nt.State_Of (Store, Kind, Id))]);
             end;
+         end loop;
+         for Line of Report.Adopted loop
+            Pres.Put_Message (Screen, "cli.project.bootstrap.adopted", [Loc.Named ("detail", Line)]);
          end loop;
          for Id of Report.Revised loop
             Pres.Put_Message (Screen, "cli.project.bootstrap.revised", [Loc.Named ("name", Id)]);
@@ -2205,12 +2359,12 @@ package body Model_Runner.CLI.Project_Commands is
                    (Ada.Strings.Fixed.Trim (Ada.Text_IO.Get_Line, Ada.Strings.Both));
             begin
                if Answer not in "y" | "yes" | "j" | "ja" then
-                  Pres.Put_Note (Screen, "cli.project.reconfigure.kept");
+                  Pres.Put_Message (Screen, "cli.project.reconfigure.kept");
                   return;
                end if;
             exception
                when Ada.Text_IO.End_Error =>
-                  Pres.Put_Note (Screen, "cli.project.reconfigure.kept");
+                  Pres.Put_Message (Screen, "cli.project.reconfigure.kept");
                   return;
             end;
          end if;
@@ -2313,6 +2467,32 @@ package body Model_Runner.CLI.Project_Commands is
                         [Loc.Named ("count", Image (Count)), Loc.Named ("name", Old),
                          Loc.Named ("value", Joined (Known))]);
                   end;
+               end loop;
+               --  Roots within another's: said, with whose the files are.
+               for Name of Known loop
+                  for Other of Known loop
+                     if Other /= Name then
+                        for Inner of Model_Runner.Framework.Repository.Component_Roots (Store, Name) loop
+                           for Outer of Model_Runner.Framework.Repository.Component_Roots (Store, Other)
+                           loop
+                              declare
+                                 O : constant String :=
+                                   (if Outer'Length > 1 and then Outer (Outer'Last) = '/'
+                                    then Outer (Outer'First .. Outer'Last - 1) else Outer);
+                              begin
+                                 if Inner'Length > O'Length
+                                   and then Inner (Inner'First .. Inner'First + O'Length) = O & "/"
+                                 then
+                                    Pres.Put_Note
+                                      (Screen, "cli.project.component_overlap",
+                                       [Loc.Named ("name", Name), Loc.Named ("value", Inner),
+                                        Loc.Named ("other", Other), Loc.Named ("detail", Outer)]);
+                                 end if;
+                              end;
+                           end loop;
+                        end loop;
+                     end if;
+                  end loop;
                end loop;
                for Name of Known loop
                   if Model_Runner.Framework.Repository.Component_Roots (Store, Name).Is_Empty
@@ -2499,13 +2679,21 @@ package body Model_Runner.CLI.Project_Commands is
                   Kind  : constant String := Which (Which'First .. Colon - 1);
                begin
                   Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ")
-                          & (if Kind = "requirement" then "/req"
-                             elsif Kind = "decision" then "/decision" else "/spec")
+                          & (if Pres.In_Session (Screen) then "/" else "")
+                          & (if Kind = "requirement" then "req"
+                             elsif Kind = "decision" then "decision" else "spec")
                           & (if Word = "/accept" then " accept " else " reject ")
                           & Which (Colon + 1 .. Which'Last));
                end;
             end loop;
-            Pres.Put_Note
+            --  Not decided: an error, said however quiet, with the ways on.
+            declare
+               Which_One : E.Error_Info := E.Make (E.Framework_Input_Missing);
+            begin
+               E.Add_Text (Which_One, "name", "the one to decide");
+               Pres.Report (Screen, Which_One);
+            end;
+            Pres.Put_Message
               (Screen, "cli.project.pending_many", [Loc.Named ("detail", To_String (Listed))]);
          elsif Intent_Waiting.Is_Empty then
             Command.Action := T.To_Bounded (if Word = "/accept" then "accept" else "reject");
@@ -2534,6 +2722,9 @@ package body Model_Runner.CLI.Project_Commands is
             After, Screen);
       end Intent_Command;
    begin
+      if Open_Quote then
+         Pres.Put_Note (Screen, "cli.project.quote_open");
+      end if;
       for Index in 2 .. Natural (All_Words.Length) loop
          declare
             Part : constant String := All_Words (Index);
@@ -2671,6 +2862,17 @@ package body Model_Runner.CLI.Project_Commands is
                return;
             end if;
          end if;
+         --  A variable that does not read is refused here as work refuses
+         --  it, not shown as confining to nothing.
+         if Model_Runner.Framework.Permissions.Sandbox_Problem /= "" then
+            Outcome := E.Make (E.Framework_Input_Invalid);
+            E.Add_Text (Outcome, "name", Model_Runner.Framework.Permissions.Sandbox_Variable);
+            E.Add_Text (Outcome, "value", Ada.Environment_Variables.Value
+                                            (Model_Runner.Framework.Permissions.Sandbox_Variable));
+            E.Add_Text (Outcome, "detail", Model_Runner.Framework.Permissions.Sandbox_Problem);
+            Pres.Report (Screen, Outcome);
+            return;
+         end if;
          declare
             use type Model_Runner.Framework.Permissions.Permission_Set;
             Now : constant Model_Runner.Framework.Permissions.Permission_Set :=
@@ -2693,6 +2895,33 @@ package body Model_Runner.CLI.Project_Commands is
                      [Loc.Named ("value", (if Shown = Null_Unbounded_String then "nothing"
                                            else To_String (Shown))),
                       Loc.Named ("name", Model_Runner.Framework.Permissions.Sandbox_Source)]);
+                  --  What that leaves agents here, the project's own
+                  --  permissions being below it: a sandbox grants nothing
+                  --  the project does not.
+                  if S.Is_Initialized (".") then
+                     declare
+                        package Pm renames Model_Runner.Framework.Permissions;
+                        Store : S.Store;
+                        Read  : E.Error_Info;
+                        Left  : Unbounded_String;
+                     begin
+                        S.Open_To_Read (Store, ".", Read);
+                        if E.Is_Ok (Read) then
+                           for Line of Model_Runner.Framework.Lines_Of
+                             (Pm.Image (Pm.Effective (Store, "", "", Within_Sandbox => True)))
+                           loop
+                              Append (Left, (if Left = Null_Unbounded_String then "" else "; ") & Line);
+                           end loop;
+                           S.Close (Store);
+                           if To_String (Left) /= To_String (Shown) then
+                              Pres.Put_Note
+                                (Screen, "cli.project.sandbox.effective",
+                                 [Loc.Named ("value", (if Left = Null_Unbounded_String then "nothing"
+                                                       else To_String (Left)))]);
+                           end if;
+                        end if;
+                     end;
+                  end if;
                end;
             end if;
          end;

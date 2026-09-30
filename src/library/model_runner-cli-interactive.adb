@@ -566,9 +566,14 @@ package body Model_Runner.CLI.Interactive is
             end if;
 
          else
-            Pres.Put_Note
-              (Screen, "cli.interactive.unknown_command",
-               [Loc.Named ("value", T.Escape_Controls (Line))]);
+            --  An answer, however quiet: said as the error it is, with
+            --  where the commands are listed.
+            declare
+               Unknown : E.Error_Info := E.Make (E.CLI_Unknown_Command);
+            begin
+               E.Add_Text (Unknown, "value", T.Escape_Controls (Line));
+               Pres.Report (Screen, Unknown);
+            end;
          end if;
 
          return True;
@@ -884,7 +889,10 @@ package body Model_Runner.CLI.Interactive is
                   Cancel.Reset;
                end if;
                Model_Runner.Platform.Signals.Set_Waiting_For_Input
-                 (True, Note => Pres.Message_Value (Screen, "cli.interactive.dropped"));
+                 (True, Note => Pres.Message_Value (Screen, "cli.interactive.dropped") & ASCII.LF
+                                & Pres.Message_Value
+                                    (Screen, (if Pending (Typing) = "" then "cli.interactive.prompt"
+                                              else "cli.interactive.continuation")) & " ");
                Ada.Text_IO.Get_Line (Ada.Text_IO.Current_Input, Room, Stop);
                Model_Runner.Platform.Signals.Set_Waiting_For_Input (False);
             exception

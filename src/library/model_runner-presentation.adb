@@ -384,10 +384,29 @@ package body Model_Runner.Presentation is
            or else Here ("req reconsider") or else Here ("req verify") or else Here ("decision link")
            or else Here ("task verify") or else Here ("task resolve") or else Here ("result lists");
       end Names_A_Command;
+
+      --  Whether the word before a place is one a noun follows -- a
+      --  decision governs, one config shows -- not a command.
+      function After_Article (At_Index : Positive) return Boolean is
+         Stop  : Natural := At_Index - 1;
+         Start : Natural;
+      begin
+         while Stop >= Text'First and then Text (Stop) = ' ' loop
+            Stop := Stop - 1;
+         end loop;
+         Start := Stop;
+         while Start > Text'First and then Text (Start - 1) not in ' ' | '(' loop
+            Start := Start - 1;
+         end loop;
+         return Stop >= Text'First
+           and then Text (Start .. Stop) in "a" | "an" | "the" | "one" | "its" | "which" | "that"
+                                          | "A" | "The" | "One" | "each" | "every";
+      end After_Article;
    begin
       for Index in Text'Range loop
          if (Index = Text'First or else Text (Index - 1) in ' ' | '(')
            and then Names_A_Command (Index)
+           and then (Index = Text'First or else not After_Article (Index))
          then
             Ada.Strings.Unbounded.Append (Result, "/");
          end if;

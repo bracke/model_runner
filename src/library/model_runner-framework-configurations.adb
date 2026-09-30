@@ -989,11 +989,19 @@ package body Model_Runner.Framework.Configurations is
         or else Starts (Name, "list.verification.")
       then
          return "verification: how tasks are checked from now on";
+      elsif Starts (Name, "map.permission.") and then Ada.Strings.Fixed.Index (Name, "create_children") > 0
+      then
+         return "permissions: how many helpers an agent at that level makes and parts its task"
+           & " splits into, and how deep, within agents.max_children and agents.max_depth";
       elsif Starts (Name, "map.permission.") then
          return "permissions: what agents started from now on may do";
       elsif Starts (Name, "task_kind.") then
          return "tasks of kind " & Name (Name'First + 10 .. Name'Last)
            & ": the fields new ones may have";
+      elsif Name in "scalar.agents.max_children" | "scalar.agents.max_depth" then
+         return "agents: the most helpers any agent makes, and parts any task splits into, and how"
+           & " deep -- the project's bound, below which a level's create_children max_children"
+           & " and max_depth hold";
       elsif Starts (Name, "scalar.work.") or else Starts (Name, "scalar.agents.") then
          return "work: how agents run tasks from now on";
       elsif Starts (Name, "list.automation.") then
@@ -1038,7 +1046,7 @@ package body Model_Runner.Framework.Configurations is
                end if;
             end loop;
          end;
-      elsif Starts (Name, "map.permission.") then
+      elsif Starts (Name, "map.permission.") and then Value not in "off" | "inherit" then
          declare
             Last_Dot : constant Natural :=
               Ada.Strings.Fixed.Index (Name, ".", Ada.Strings.Backward);
@@ -1060,7 +1068,7 @@ package body Model_Runner.Framework.Configurations is
                return "a level is not set whole: set each capability as " & Name
                  & ".CAPABILITY=...";
             elsif E.Is_Error (Read) then
-               return "no capability is called " & Name (Last_Dot + 1 .. Name'Last);
+               return E.Text_Of (Read, "detail");
             end if;
          end;
       end if;
@@ -1370,6 +1378,56 @@ package body Model_Runner.Framework.Configurations is
          return False;
       end Setting_At;
 
+      function Is_Capability (Word : String) return Boolean is
+      begin
+         return (for some One in Permissions.Capability => Permissions.Word (One) = Word);
+      end Is_Capability;
+
+      --  What is wrong with the level a permission is set at: only the
+      --  project, a kind of task the project has, and a role are read; a
+      --  task's own are its permissions field.
+      function Level_Problem (Name : String) return String is
+         Rest  : constant String := Name (Name'First + 15 .. Name'Last);
+         Dot   : constant Natural := Ada.Strings.Fixed.Index (Rest, ".", Ada.Strings.Backward);
+         Whole : constant Boolean := Dot = 0 or else not Is_Capability (Rest (Dot + 1 .. Rest'Last));
+         Level : constant String :=
+           (if Whole then Rest else Rest (Rest'First .. Dot - 1));
+      begin
+         if Level = "project" or else (Dot = 0 and then not Whole) then
+            return "";
+         elsif Starts (Level, "kind.") then
+            if Records.Has (Result.Before, "task_kind." & Level (Level'First + 5 .. Level'Last)) then
+               return "";
+            end if;
+            declare
+               Known : Unbounded_String;
+            begin
+               for Index in 1 .. Records.Field_Count (Result.Before) loop
+                  if Starts (Records.Field_Name (Result.Before, Index), "task_kind.") then
+                     declare
+                        Field : constant String := Records.Field_Name (Result.Before, Index);
+                     begin
+                        Append (Known, (if Known = Null_Unbounded_String then "" else ", ")
+                                & Field (Field'First + 10 .. Field'Last));
+                     end;
+                  end if;
+               end loop;
+               return Level (Level'First + 5 .. Level'Last) & " is no kind of task the project has;"
+                 & " they are " & To_String (Known);
+            end;
+         elsif Starts (Level, "role.")
+           and then Ada.Strings.Fixed.Index (Level (Level'First + 5 .. Level'Last), ".") = 0
+         then
+            return "";
+         elsif Starts (Level, "task.") then
+            return "a task's permissions are its own field: task edit "
+              & Level (Level'First + 5 .. Level'Last) & " --set permissions=... sets them";
+         else
+            return Level & " is no level permissions are read at: they are project, kind.KIND and"
+              & " role.ROLE";
+         end if;
+      end Level_Problem;
+
       --  The first root a component's placing names that is not there.
       function Missing_Root (Value : String) return String is
          Mark  : constant Natural := Ada.Strings.Fixed.Index (Value, "roots=");
@@ -1386,7 +1444,9 @@ package body Model_Runner.Framework.Configurations is
                   declare
                      Root : constant String := Value (Start .. Index - 1);
                   begin
-                     if not Ada.Directories.Exists (Hostkit.Fs.Join (Project, Root)) then
+                     if not Ada.Directories.Exists (Hostkit.Fs.Join (Project, Root))
+                       or else Root (Root'First) = '/' or else Ada.Strings.Fixed.Index (Root, "..") > 0
+                     then
                         return Root;
                      end if;
                   end;
@@ -1602,6 +1662,27 @@ package body Model_Runner.Framework.Configurations is
             elsif Problem (Name, Value) /= "" then
                Status := Refused (Name, Problem (Name, Value));
                return;
+            elsif Starts (Name, "map.permission.") and then Level_Problem (Name) /= "" then
+               Status := Refused (Name, Level_Problem (Name));
+               return;
+            elsif Starts (Name, "map.component.") and then Missing_Root (Value) /= ""
+              and then (Missing_Root (Value) (Missing_Root (Value)'First) = '/'
+                        or else Ada.Strings.Fixed.Index (Missing_Root (Value), "..") > 0)
+            then
+               declare
+                  Root    : constant String := Missing_Root (Value);
+                  Project : constant String :=
+                    Ada.Directories.Containing_Directory (Stores.Root (Item));
+                  Here    : constant String := Repository.Relative_Path (Project, Root);
+               begin
+                  Status := Refused
+                    (Name, "its root " & Root & " is "
+                     & (if Here /= Root and then Here /= ""
+                        then "named from outside the project: name it from the project, as " & Here
+                        else "outside the project; a root is a directory or a file within it, as"
+                             & " src/terminal"));
+                  return;
+               end;
             elsif Starts (Name, "map.component.") and then Missing_Root (Value) /= "" then
                Status := Refused
                  (Name, "its root " & Missing_Root (Value) & " is no file or directory in the"
@@ -1609,9 +1690,58 @@ package body Model_Runner.Framework.Configurations is
                return;
             end if;
 
-            --  A permission is granted by being there, constraints or none:
-            --  NAME= grants it with none, NAME=off takes it away.
-            if Starts (Name, "map.permission.") then
+            --  NAME=inherit: a level, or one capability of it, goes back to
+            --  what the level above gives -- the level's own entries taken
+            --  out, or the one written as the level above has it.
+            if Starts (Name, "map.permission.") and then Given = "inherit" then
+               declare
+                  Rest  : constant String := Name (Name'First + 15 .. Name'Last);
+                  Dot   : constant Natural := Ada.Strings.Fixed.Index (Rest, ".", Ada.Strings.Backward);
+                  Whole : constant Boolean :=
+                    Dot = 0 or else not Is_Capability (Rest (Dot + 1 .. Rest'Last));
+                  Gone  : Name_Lists.Vector;
+               begin
+                  if Whole then
+                     for Index in 1 .. Records.Field_Count (Result.After) loop
+                        if Starts (Records.Field_Name (Result.After, Index), Name & ".") then
+                           Gone.Append (Records.Field_Name (Result.After, Index));
+                        end if;
+                     end loop;
+                     for Field of Gone loop
+                        Records.Remove (Result.After, Field);
+                     end loop;
+                     if not Gone.Is_Empty then
+                        Result.Changed.Append (Name & ": its own grants -> those of the level above");
+                     end if;
+                  elsif Records.Has (Result.After, Name) then
+                     declare
+                        Above : constant Permissions.Permission_Set :=
+                          Permissions.Effective (Item, "", "", Within_Sandbox => False);
+                        Which : Permissions.Capability := Permissions.Capability'First;
+                     begin
+                        for One in Permissions.Capability loop
+                           if Permissions.Word (One) = Rest (Dot + 1 .. Rest'Last) then
+                              Which := One;
+                           end if;
+                        end loop;
+                        if Above (Which).Granted and then Rest (Rest'First .. Dot - 1) /= "project" then
+                           Records.Set (Result.After, Name, Permissions.Grant_Text (Above (Which)));
+                        else
+                           Records.Remove (Result.After, Name);
+                        end if;
+                        Result.Changed.Append
+                          (Name & ": " & (if Old = "" then "granted" else Old) & " -> as the level above"
+                           & (if Above (Which).Granted
+                              then " (" & (if Permissions.Grant_Text (Above (Which)) = "" then "granted"
+                                           else Permissions.Grant_Text (Above (Which))) & ")"
+                              else " (not granted)"));
+                     end;
+                  end if;
+                  if not Result.Impact.Contains (Reach (Name)) then
+                     Result.Impact.Append (Reach (Name));
+                  end if;
+               end;
+            elsif Starts (Name, "map.permission.") then
                if Given = "off" then
                   Taken_Away.Append (Name);
                end if;
@@ -1700,11 +1830,20 @@ package body Model_Runner.Framework.Configurations is
                      end if;
                   end if;
                end;
-            --  A component placed is unplaced by NAME=off: its entry goes.
-            elsif Starts (Name, "map.component.") and then Given = "off" then
+            --  A component placed is unplaced by NAME=off, and a scalar or
+            --  a set the harness has a default for goes back to it: its entry
+            --  goes.
+            elsif (Starts (Name, "map.component.")
+                   or else (Given = "off" and then Name in "scalar.work.agent" | "scalar.model.default"
+                                                         | "scalar.work.model"))
+              and then Given = "off"
+            then
                if Old /= "" then
                   Records.Remove (Result.After, Name);
-                  Result.Changed.Append (Name & ": " & On_One_Line (Old) & " -> (none)");
+                  Result.Changed.Append
+                    (Name & ": " & On_One_Line (Old) & " -> "
+                     & (if (for some Known of Known_Settings => Known.all = Name)
+                        then "(not set: the harness's default)" else "(none)"));
                   if not Result.Impact.Contains (Reach (Name)) then
                      Result.Impact.Append (Reach (Name));
                   end if;
@@ -1720,7 +1859,9 @@ package body Model_Runner.Framework.Configurations is
                   & (if Old = "" and then (for some Known of Known_Settings => Known.all = Name)
                      then "(not set: the harness's default)"
                      elsif Old = "" then "(none)" else On_One_Line (Old)) & " -> "
-                  & (if Value = "" then "(none)" else On_One_Line (Value)));
+                  & (if Value = "" and then (for some Known of Known_Settings => Known.all = Name)
+                     then "(not set: the harness's default)"
+                     elsif Value = "" then "(none)" else On_One_Line (Value)));
                if not Result.Impact.Contains (Reach (Name)) then
                   Result.Impact.Append (Reach (Name));
                end if;

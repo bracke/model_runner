@@ -519,8 +519,12 @@ package body Model_Runner.Framework.Intent is
             E.Add_Text (Status, "name", Id);
             E.Add_Text (Status, "value", State);
             E.Add_Text (Status, "expected", "a new revision");
-            E.Add_Text (Status, "detail", "it is retired, and what is retired is not revised; new with"
-                        & " its words makes it anew");
+            E.Add_Text (Status, "detail", "it is retired, and what is retired is not revised; "
+                        & (case Kind is
+                              when Requirement   => "req",
+                              when Specification => "spec",
+                              when Decision      => "decision")
+                        & " new """ & Records.Get (Value, "title") & """ text=... makes it anew");
             return;
          end if;
 

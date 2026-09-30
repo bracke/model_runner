@@ -32,7 +32,8 @@ package Model_Runner.Framework.Consistency is
       Workspace_Assignment,
       Permission_Widening,
       Missing_Component,
-      Ready_With_Open_Dependency);
+      Ready_With_Open_Dependency,
+      Unserved_Requirement);
 
    --  One thing found wrong.
    type Finding is record

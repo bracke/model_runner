@@ -556,6 +556,18 @@ package body Model_Runner.Framework.Verification is
            (Value, "environment_fingerprint",
             Fingerprint (Model_Runner.Platform.Passed_Environment
                            (To_String (Rules.Environment))));
+         --  Each variable's own, so that a change is said by name.
+         for Line of Lines_Of (Model_Runner.Platform.Passed_Environment (To_String (Rules.Environment)))
+         loop
+            declare
+               Equal : constant Natural := Ada.Strings.Fixed.Index (Line, "=");
+            begin
+               if Equal > Line'First then
+                  Records.Set (Value, "environment." & Line (Line'First .. Equal - 1),
+                               Fingerprint (Line (Equal + 1 .. Line'Last)));
+               end if;
+            end;
+         end loop;
          Records.Set (Value, "network", (if Rules.Network then "allowed" else "not allowed"));
 
          --  Evidence taken for a requirement itself names its revision.
@@ -1127,7 +1139,31 @@ package body Model_Runner.Framework.Verification is
                       /= Fingerprint (Model_Runner.Platform.Passed_Environment
                                         (To_String (Rules.Environment)))
          then
-            Reasons.Append ("the environment has changed since " & Evidence);
+            --  Which of it, where the evidence says each.
+            declare
+               Differ : Unbounded_String;
+               Now    : constant String :=
+                 Model_Runner.Platform.Passed_Environment (To_String (Rules.Environment));
+            begin
+               for Line of Lines_Of (Now) loop
+                  declare
+                     Equal : constant Natural := Ada.Strings.Fixed.Index (Line, "=");
+                  begin
+                     if Equal > Line'First
+                       and then Records.Has (Value, "environment." & Line (Line'First .. Equal - 1))
+                       and then Records.Get (Value, "environment." & Line (Line'First .. Equal - 1))
+                                  /= Fingerprint (Line (Equal + 1 .. Line'Last))
+                     then
+                        Append (Differ, (if Differ = Null_Unbounded_String then "" else ", ")
+                                        & Line (Line'First .. Equal - 1));
+                     end if;
+                  end;
+               end loop;
+               Reasons.Append ("the environment its checks are given has changed since " & Evidence
+                               & (if Differ = Null_Unbounded_String then ""
+                                  else ": " & To_String (Differ) & " differs -- a session started"
+                                       & " from another shell has its own"));
+            end;
          end if;
 
          --  The tools, where the policy holds evidence to the toolchain it
@@ -1541,12 +1577,27 @@ package body Model_Runner.Framework.Verification is
          Evidence  : constant String :=
            (if Profile = "" then "" else Latest (Item, Task_Id, Profile));
       begin
-         for Next of Judged.Items loop
-            if not Next.Passed then
-               Append (Set_Aside, (if Set_Aside = Null_Unbounded_String then "" else ASCII.LF & "")
-                                  & To_String (Next.Name));
-            end if;
-         end loop;
+         --  Work given up with its workspace is none of what completes it:
+         --  what it changed and took in is set aside with the rest.
+         declare
+            State_Now : Records.Item;
+            Read      : E.Error_Info;
+            Given_Up  : Boolean := False;
+         begin
+            Stores.Read (Item, Tasks_Area, Task_Id & ".state", State_Now, Read);
+            Given_Up := By_Hand and then E.Is_Ok (Read)
+              and then Records.Get (State_Now, "current_workspace") /= ""
+              and then Workspaces.Active_For (Item, Task_Id) = "";
+            for Next of Judged.Items loop
+               if not Next.Passed
+                 or else (Given_Up
+                          and then To_String (Next.Name) in "implementation_present" | "integration")
+               then
+                  Append (Set_Aside, (if Set_Aside = Null_Unbounded_String then "" else ASCII.LF & "")
+                                     & To_String (Next.Name));
+               end if;
+            end loop;
+         end;
          Stores.Pending (Change, Tasks_Area, Task_Id & ".state", Held, Staged);
          if Staged then
             if Evidence /= "" then
@@ -1883,6 +1934,7 @@ package body Model_Runner.Framework.Verification is
             For_Task : Unbounded_String;
             Serves : Unbounded_String;
             Served : Name_Lists.Vector;
+            Elsewhere : Boolean := False;
          begin
             Stores.Read (Item, Verification_Area, To_String (Project_Failed), Value, Read);
             if E.Is_Ok (Read) then
@@ -1901,12 +1953,64 @@ package body Model_Runner.Framework.Verification is
                   end if;
                end;
             end if;
-            --  Run for another task's work, which this requirement is not
-            --  served by, while its own evidence still holds: what failed
-            --  is that work's, not this one's.
-            if For_Task /= Null_Unbounded_String and then Standing_Of_Tasks /= ""
-              and then not Served.Contains (Requirement)
-            then
+            --  What failed, where the run says where: when none of it is a
+            --  file of this requirement's -- implemented, tested, or changed
+            --  by the work serving it -- the run stands for it as a passing
+            --  one would, its own tests having passed in it.
+            declare
+               Own     : Name_Lists.Vector;
+               Failing : Name_Lists.Vector;
+               Found   : constant Diagnostic_List :=
+                 Diagnostics_Of (Item, To_String (Project_Failed));
+            begin
+               for Kind in Intent.Implementation .. Intent.Test loop
+                  if Kind in Intent.Implementation | Intent.Test then
+                     for Target of Intent.Links (Item, Intent.Requirement, Requirement, Kind) loop
+                        Own.Append (Target);
+                     end loop;
+                  end if;
+               end loop;
+               for Id of Everything loop
+                  declare
+                     Defined : Records.Item;
+                     State   : Records.Item;
+                     Got     : E.Error_Info;
+                  begin
+                     Tasks.Definition (Item, Id, Defined, Got);
+                     if E.Is_Ok (Got)
+                       and then Lines_Of (Records.Get (Defined, "requirements")).Contains (Requirement)
+                     then
+                        Stores.Read (Item, Tasks_Area, Id & ".state", State, Got);
+                        if E.Is_Ok (Got) then
+                           for Path of Lines_Of (Records.Get (State, "changed_files")) loop
+                              Own.Append (Path);
+                           end loop;
+                        end if;
+                     end if;
+                  end;
+               end loop;
+               for Index in 1 .. Length (Found) loop
+                  if Length (Element (Found, Index).File) > 0 then
+                     Failing.Append (To_String (Element (Found, Index).File));
+                  end if;
+               end loop;
+               if not Own.Is_Empty and then not Failing.Is_Empty
+                 and then Natural (Failing.Length) = Length (Found)
+                 and then (for all Path of Failing =>
+                             not (for some Mine of Own =>
+                                    Path = Mine
+                                    or else (Path'Length > Mine'Length
+                                             and then Path (Path'Last - Mine'Length + 1 .. Path'Last)
+                                                      = Mine)
+                                    or else (Mine'Length > Path'Length
+                                             and then Mine (Mine'Last - Path'Length + 1 .. Mine'Last)
+                                                      = Path)))
+               then
+                  Elsewhere := True;
+                  Standing := Project_Failed;
+               end if;
+            end;
+            if Elsewhere then
                null;
             else
                return Lacks (To_String (Project_Failed) & ", the latest run of the project's whole"

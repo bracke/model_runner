@@ -427,6 +427,88 @@ package body Model_Runner.Framework.Consistency is
          end loop;
       end;
 
+      --  What requirements are linked to that does not hold: a dependency
+      --  on one retired, dependencies that lead back to where they began,
+      --  evidence that is not kept.
+      for Id of Intent.List (Item, Intent.Requirement) loop
+         if Intent.State_Of (Item, Intent.Requirement, Id) not in "obsolete" | "rejected" | "superseded" then
+            for Target of Intent.Links (Item, Intent.Requirement, Id, Intent.Dependency) loop
+               if Intent.State_Of (Item, Intent.Requirement, Target) in "obsolete" | "rejected" | "superseded"
+               then
+                  Found (Undefined_Requirement, Id,
+                         "it depends on " & Target & ", which is "
+                         & Intent.State_Of (Item, Intent.Requirement, Target) & "; req unlink " & Id
+                         & " dependency " & Target & " takes it off");
+               end if;
+            end loop;
+            declare
+               Seen : Name_Lists.Vector;
+               function Back (From : String) return Boolean is
+               begin
+                  for Next of Intent.Links (Item, Intent.Requirement, From, Intent.Dependency) loop
+                     if Next = Id then
+                        return True;
+                     elsif not Seen.Contains (Next) then
+                        Seen.Append (Next);
+                        if Back (Next) then
+                           return True;
+                        end if;
+                     end if;
+                  end loop;
+                  return False;
+               end Back;
+            begin
+               if Back (Id) then
+                  Found (Cyclic_Dependency, Id,
+                         "its dependencies lead back to it, so it waits for itself; req unlink " & Id
+                         & " dependency ID takes one off");
+               end if;
+            end;
+            for Target of Intent.Links (Item, Intent.Requirement, Id, Intent.Verification) loop
+               if not Stores.Exists (Item, Verification_Area, Target) then
+                  Found (Missing_Symbol, Id,
+                         "it is linked to evidence " & Target & ", which is not kept; req unlink " & Id
+                         & " verification " & Target & " takes it off");
+               end if;
+            end loop;
+         end if;
+      end loop;
+
+      --  An accepted requirement no task serves: nothing will carry it out.
+      --  Where its scope names no component, that is why, and said so.
+      for Id of Intent.List (Item, Intent.Requirement, "accepted") loop
+         declare
+            Served : Boolean := False;
+            Held   : Intent.Entity;
+            Read   : E.Error_Info;
+         begin
+            for Other of Tasks.List (Item) loop
+               declare
+                  Defined : Records.Item;
+               begin
+                  Tasks.Definition (Item, Other, Defined, Read);
+                  Served := Served
+                    or else (E.Is_Ok (Read)
+                             and then Tasks.State_Of (Item, Other) not in "cancelled" | "rejected"
+                             and then Lines_Of (Records.Get (Defined, "requirements")).Contains (Id));
+               end;
+            end loop;
+            Served := Served
+              or else not Intent.Links (Item, Intent.Requirement, Id, Intent.Task_Link).Is_Empty;
+            if not Served then
+               Intent.Read (Item, Intent.Requirement, Id, Held, Read);
+               Found (Unserved_Requirement, Id,
+                      (if E.Is_Ok (Read) and then To_String (Held.Scope) not in "" | "project"
+                         and then not Tasks.Components (Item).Contains (To_String (Held.Scope))
+                       then "it is accepted and no task serves it, as its scope "
+                            & To_String (Held.Scope) & " is none of the project's components; req link "
+                            & Id & " component NAME places it, and a task is derived for it"
+                       else "it is accepted and no task serves it: task derive makes one, or task"
+                            & " new TITLE --set kind=KIND --set requirements=" & Id));
+            end if;
+         end;
+      end loop;
+
       --  What the readiness index says is ready, with a dependency that is
       --  not complete.
       declare
@@ -487,7 +569,10 @@ package body Model_Runner.Framework.Consistency is
                         Found (Missing_Symbol, Id,
                                (if Intent."=" (Relation, Intent.Test) then "it is tested by "
                                 else "it is implemented by ")
-                               & Target & ", which the repository does not hold");
+                               & Target & ", which the repository does not hold; req unlink "
+                               & Id & " " & (if Intent."=" (Relation, Intent.Test) then "test"
+                                             else "implementation")
+                               & " " & Target & " takes it off");
                      end if;
                   end loop;
                end if;

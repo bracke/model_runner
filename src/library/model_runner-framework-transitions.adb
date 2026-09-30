@@ -97,21 +97,37 @@ package body Model_Runner.Framework.Transitions is
       if not Is_State (From, Current) then
          Refuse (Current & " is not a state");
       elsif not Is_State (From, Next) then
-         Refuse (Next & " is not a state");
+         declare
+            Known : Unbounded_String;
+         begin
+            for One of From.States loop
+               Append (Known, (if Known = Null_Unbounded_String then "" else ", ") & One);
+            end loop;
+            Refuse (Next & " is not a state; the states are " & To_String (Known));
+         end;
       elsif Held = 0 then
          --  Where it can go instead, which is what a person wants next.
          declare
-            Open : Unbounded_String;
+            Open    : Unbounded_String;
+            Harness : Boolean := False;
          begin
+            --  The moves a person makes: those work and its checks make --
+            --  to running, verification and complete -- are said apart.
             for One of From.Moves loop
                if To_String (One.From) = Current and then Granted (One.Requires) then
-                  Append (Open, (if Open = Null_Unbounded_String then "" else ", ")
-                          & To_String (One.To));
+                  if To_String (One.To) in "running" | "verification" | "complete"
+                  then
+                     Harness := True;
+                  else
+                     Append (Open, (if Open = Null_Unbounded_String then "" else ", ")
+                             & To_String (One.To));
+                  end if;
                end if;
             end loop;
             Refuse ("no such move is allowed"
                     & (if Open = Null_Unbounded_String then ""
-                       else "; from " & Current & " it may go to " & To_String (Open)));
+                       else "; from " & Current & " it may go to " & To_String (Open))
+                    & (if Harness then "; work and its checks make the rest" else ""));
          end;
       elsif not Granted (From.Moves (Held).Requires) then
          Refuse

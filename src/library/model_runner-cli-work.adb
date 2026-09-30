@@ -485,6 +485,15 @@ package body Model_Runner.CLI.Work is
       --  What there is to do instead, where nothing was named or ready:
       --  the tasks ready now, else the candidates waiting, else how to
       --  make one.
+      --  A task's title.
+      function Title_Of (Id : String) return String is
+         Defined : R.Item;
+         Read    : E.Error_Info;
+      begin
+         Tk.Definition (Store, Id, Defined, Read);
+         return (if E.Is_Ok (Read) then R.Get (Defined, "title") else "");
+      end Title_Of;
+
       procedure Say_What_Is_Ready is
          Ready     : Natural := 0;
          Candidate : constant Natural := Natural (Tk.List (Store, "candidate").Length);
@@ -503,6 +512,21 @@ package body Model_Runner.CLI.Work is
                end;
             end if;
          end loop;
+         --  Work done and waiting on a person to take it in: said too.
+         for Id of Tk.List (Store, "verification") loop
+            if Model_Runner.Framework.Workspaces.Active_For (Store, Id) /= "" then
+               Pres.Put_Note
+                 (Screen, "cli.next.waits_integration",
+                  [Loc.Named ("name", Id), Loc.Named ("value", Title_Of (Id)),
+                   Loc.Named ("detail",
+                              (if Model_Runner.Framework.Workspaces.Conflict_Files
+                                    (Store, Model_Runner.Framework.Workspaces.Active_For (Store, Id))
+                                    .Is_Empty
+                               then "task integrate " & Id
+                               else "it conflicts with the project; task integrate " & Id
+                                    & " resolved once settled"))]);
+            end if;
+         end loop;
          if Ready = 0 and then Candidate > 0 then
             Pres.Put_Note
               (Screen, "cli.next.accept",
@@ -515,14 +539,6 @@ package body Model_Runner.CLI.Work is
       --  What makes a task that cannot be worked on workable, as a next
       --  step: accepting a candidate, doing or dropping what it waits for,
       --  its parts first, or trying again.
-      --  A task's title.
-      function Title_Of (Id : String) return String is
-         Defined : R.Item;
-         Read    : E.Error_Info;
-      begin
-         Tk.Definition (Store, Id, Defined, Read);
-         return (if E.Is_Ok (Read) then R.Get (Defined, "title") else "");
-      end Title_Of;
 
       --  A field of several lines, as one: a comma apart.
       function On_One_Line (Text : String) return String is
@@ -801,10 +817,14 @@ package body Model_Runner.CLI.Work is
             --  Blocked, failed and candidate ones are shown too, with why
             --  and what makes them workable, and not taken: where a person
             --  looks for them.
-            for State of Model_Runner.Framework.Name_Lists.Vector'(["blocked", "failed", "candidate"])
+            for State of Model_Runner.Framework.Name_Lists.Vector'
+                           (["blocked", "failed", "candidate", "verification"])
             loop
                for Id of Tk.List (Store, State) loop
-                  if Matching.Is_Empty or else Matching.Contains (Id) then
+                  if (Matching.Is_Empty or else Matching.Contains (Id))
+                    and then (State /= "verification"
+                              or else Model_Runner.Framework.Workspaces.Active_For (Store, Id) /= "")
+                  then
                      Waiting.Append (Id);
                   end if;
                end loop;
@@ -850,6 +870,8 @@ package body Model_Runner.CLI.Work is
                                             (if Now.Ready then "[ready]"
                                              elsif Tk.State_Of (Store, Id) = "accepted"
                                              then "[waiting]"
+                                             elsif Tk.State_Of (Store, Id) = "verification"
+                                             then "[to integrate]"
                                              else "[" & Tk.State_Of (Store, Id) & "]"),
                             Details    => Why,
                             Selectable => Now.Ready));
@@ -889,7 +911,11 @@ package body Model_Runner.CLI.Work is
                  and then Setting ("profile", "") = ""
                then W.Parenting_Runner'Class (Given_Runner.all).Profile
                else Model_Runner.Framework.Context.Profile (Store, Setting ("profile", "")));
-            Command : constant String := R.Get (Config, "scalar.work.agent");
+            --  The configured agent, unless a model is named for this run:
+            --  what is asked for now is what runs.
+            Command : constant String :=
+              (if Given.Contains ("model") or else R.Get (Config, "scalar.work.agent") = "off" then ""
+               else R.Get (Config, "scalar.work.agent"));
             Path    : constant String := Setting ("model", "");
 
             --  How long a command agent may run: its task's time, and no
@@ -908,6 +934,22 @@ package body Model_Runner.CLI.Work is
                Pres.Put_Note
                  (Screen, "cli.work.time_allowed",
                   [Loc.Named ("count", T.Image (Long_Long_Integer (Agent_Seconds)))]);
+               --  Confined below the project's permissions: said before it
+               --  starts, not first at what it refuses.
+               if Pm."/=" (Pm.Sandbox, Pm.Unrestricted) then
+                  declare
+                     Shown : Unbounded_String;
+                  begin
+                     for Line of Model_Runner.Framework.Lines_Of (Pm.Image (Pm.Sandbox)) loop
+                        Append (Shown, (if Shown = Null_Unbounded_String then "" else "; ") & Line);
+                     end loop;
+                     Pres.Put_Note
+                       (Screen, "cli.work.sandboxed",
+                        [Loc.Named ("value", (if Shown = Null_Unbounded_String then "nothing"
+                                              else To_String (Shown))),
+                         Loc.Named ("name", Pm.Sandbox_Source)]);
+                  end;
+               end if;
                if Command /= "" then
                   Say ("cli.work.runner", Command, To_String (Chosen));
                elsif Given_Runner /= null then
@@ -1131,6 +1173,28 @@ package body Model_Runner.CLI.Work is
             Pres.Put_Note (Screen, "cli.next.retry", [Loc.Named ("name", To_String (Done.Task_Id))]);
          elsif To_String (Done.Final_State) = "cancelled" then
             Pres.Put_Note (Screen, "cli.next.reopen", [Loc.Named ("name", To_String (Done.Task_Id))]);
+            --  What waits for it waits still, as a cancel here says.
+            for Other of Tk.List (Store) loop
+               if Tk.State_Of (Store, Other) not in "complete" | "cancelled" | "rejected" then
+                  declare
+                     Defined : R.Item;
+                     Read    : E.Error_Info;
+                  begin
+                     Tk.Definition (Store, Other, Defined, Read);
+                     if E.Is_Ok (Read)
+                       and then Model_Runner.Framework.Lines_Of
+                                  (Ada.Strings.Fixed.Translate
+                                     (R.Get (Defined, "depends_on"),
+                                      Ada.Strings.Maps.To_Mapping (",", [1 => ASCII.LF])))
+                                  .Contains (To_String (Done.Task_Id))
+                     then
+                        Pres.Put_Note
+                          (Screen, "cli.task.left_waiting",
+                           [Loc.Named ("name", Other), Loc.Named ("value", To_String (Done.Task_Id))]);
+                     end if;
+                  end;
+               end if;
+            end loop;
          elsif To_String (Done.Final_State) = "verification"
            and then Done.Workspace_Id /= Null_Unbounded_String
          then
@@ -1247,9 +1311,23 @@ package body Model_Runner.CLI.Work is
                end if;
                declare
                   Kind  : constant String := R.Get (Defined, "kind");
+                  --  The level that withheld it, which is the one to raise:
+                  --  the project's where it holds less than the kind asks.
+                  Project : constant Pm.Permission_Set :=
+                    Pm.Effective (Store, "", "", Within_Sandbox => False);
+                  Said_Kind : Boolean;
+                  Of_Kind   : constant Pm.Permission_Set := Pm.Level_Of (Store, "kind." & Kind, Said_Kind);
+                  Kind_Limits : constant Boolean :=
+                    Said_Kind and then Of_Kind (Pm.Create_Children).Granted
+                    and then (Of_Kind (Pm.Create_Children).Max_Children
+                                < Project (Pm.Create_Children).Max_Children
+                              or else Of_Kind (Pm.Create_Children).Max_Depth
+                                        < Project (Pm.Create_Children).Max_Depth);
                   Level : constant String :=
-                    (if R.Has (Config, "map.permission.kind." & Kind & ".create_children")
-                     then "kind." & Kind else "project");
+                    (if not Project (Pm.Create_Children).Granted or else not Kind_Limits
+                     then "project" else "kind." & Kind);
+                  Propose_Level : constant String :=
+                    (if not Project (Pm.Propose_Tasks).Granted then "project" else "kind." & Kind);
                begin
                   Pres.Put_Note
                     (Screen, "cli.next.refused_parts",
@@ -1272,8 +1350,13 @@ package body Model_Runner.CLI.Work is
                                   then "reconfigure map.permission." & Level
                                        & ".create_children=""max_depth=N max_children=N"" raises the"
                                        & " limit that stopped them"
-                                  else "reconfigure map.permission.kind." & Kind
-                                       & ".propose_tasks= lets its agent propose them"))]);
+                                  else "reconfigure map.permission." & Propose_Level
+                                       & ".propose_tasks= lets its agent propose them"
+                                       & (if Propose_Level = "project" and then Said_Kind
+                                            and then not Of_Kind (Pm.Propose_Tasks).Granted
+                                          then ", with map.permission.kind." & Kind
+                                               & ".propose_tasks= for its kind too"
+                                          else "")))]);
                end;
                <<Refused_Said>>
             end;

@@ -415,8 +415,17 @@ package body Model_Runner.Agent is
                            --  The grammar should have made this impossible;
                            --  if it happens anyway, the model hears the truth
                            --  and may correct itself.
-                           Items (Call).Text := U.To_Unbounded_String
-                             ("error: no tool named """ & Named & """");
+                           declare
+                              Listed : U.Unbounded_String;
+                           begin
+                              for Index in 1 .. Model_Runner.Tools.Count (Offered) loop
+                                 U.Append (Listed, (if Index = 1 then "" else ", ")
+                                           & Model_Runner.Tools.Tool_Name (Offered, Index));
+                              end loop;
+                              Items (Call).Text := U.To_Unbounded_String
+                                ("error: no tool named """ & Named & """ is offered here; the tools"
+                                 & " offered are " & U.To_String (Listed));
+                           end;
                         else
                            case (if Approve = null then Allow
                                  else Approve.Consider (Named, Args))

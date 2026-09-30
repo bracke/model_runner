@@ -1970,7 +1970,8 @@ package body Tests.CLI_Cases is
       Run ("reconfigure|execution.allowed+=done.sh,bad.sh,split.sh|confirm=yes");
       Assert (Shows ("true, done.sh, bad.sh, split.sh"), "+= did not add to the set: " & To_String (Said));
       Run ("config");
-      Assert (Shows (LF & "    done.sh"), "a set was not shown a line an item: " & To_String (Said));
+      Assert (Shows ("true, done.sh, bad.sh, split.sh"),
+              "a set was not shown its items a comma apart: " & To_String (Said));
       Run ("work|TASK-001");
       Assert (Code = 0 and then Shows ("the agent is") and then Shows ("the task is complete"),
               "work with an allowed agent did not complete: " & To_String (Said));

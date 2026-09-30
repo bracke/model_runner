@@ -218,6 +218,17 @@ package Model_Runner.Framework.Repository is
    --  @return The roots.
    function Roots_Of (Item : Stores.Store) return Roots;
 
+   --  A path as the project names it: relative to its directory, with
+   --  ./ and a/../ taken out and a whole path into the project made
+   --  relative; the project itself is the empty path. One that leads out
+   --  of the project is given back with its .. or its leading /, for the
+   --  caller to refuse.
+   --
+   --  @param Project The project's directory, whole.
+   --  @param Path The path as it was typed.
+   --  @return It as the project names it.
+   function Relative_Path (Project, Path : String) return String;
+
    --  Where a component's files are, as the configuration declares them:
    --  map component.NAME = roots=src/parser/|tests/parser/.
    --
