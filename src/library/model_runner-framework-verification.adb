@@ -1925,6 +1925,56 @@ package body Model_Runner.Framework.Verification is
       Empty_Suite : Unbounded_String;
       Built : Boolean :=
         not Intent.Links (Item, Intent.Requirement, Requirement, Intent.Implementation).Is_Empty;
+      --  Whether what a run failed on lies wholly outside this
+      --  requirement's files -- those linked to it as implementing or
+      --  testing it, and those the work serving it changed -- as the run
+      --  names them: then the failure is another's, not this one's.
+      function Failed_Elsewhere (Evidence : String) return Boolean is
+         Own     : Name_Lists.Vector;
+         Failing : Name_Lists.Vector;
+         Found   : constant Diagnostic_List := Diagnostics_Of (Item, Evidence);
+      begin
+         for Kind in Intent.Implementation .. Intent.Test loop
+            if Kind in Intent.Implementation | Intent.Test then
+               for Target of Intent.Links (Item, Intent.Requirement, Requirement, Kind) loop
+                  Own.Append (Target);
+               end loop;
+            end if;
+         end loop;
+         for Id of Everything loop
+            declare
+               Defined : Records.Item;
+               State   : Records.Item;
+               Got     : E.Error_Info;
+            begin
+               Tasks.Definition (Item, Id, Defined, Got);
+               if E.Is_Ok (Got)
+                 and then Lines_Of (Records.Get (Defined, "requirements")).Contains (Requirement)
+               then
+                  Stores.Read (Item, Tasks_Area, Id & ".state", State, Got);
+                  if E.Is_Ok (Got) then
+                     for Path of Lines_Of (Records.Get (State, "changed_files")) loop
+                        Own.Append (Path);
+                     end loop;
+                  end if;
+               end if;
+            end;
+         end loop;
+         for Index in 1 .. Length (Found) loop
+            if Length (Element (Found, Index).File) > 0 then
+               Failing.Append (To_String (Element (Found, Index).File));
+            end if;
+         end loop;
+         return not Own.Is_Empty and then not Failing.Is_Empty
+           and then Natural (Failing.Length) = Length (Found)
+           and then (for all Path of Failing =>
+                       not (for some Mine of Own =>
+                              Path = Mine
+                              or else (Path'Length > Mine'Length
+                                       and then Path (Path'Last - Mine'Length + 1 .. Path'Last) = Mine)
+                              or else (Mine'Length > Path'Length
+                                       and then Mine (Mine'Last - Path'Length + 1 .. Mine'Last) = Path)));
+      end Failed_Elsewhere;
    begin
       Find_Project_Runs;
       if Project_Failed /= Null_Unbounded_String then
@@ -1954,62 +2004,12 @@ package body Model_Runner.Framework.Verification is
                end;
             end if;
             --  What failed, where the run says where: when none of it is a
-            --  file of this requirement's -- implemented, tested, or changed
-            --  by the work serving it -- the run stands for it as a passing
+            --  file of this requirement's, the run stands for it as a passing
             --  one would, its own tests having passed in it.
-            declare
-               Own     : Name_Lists.Vector;
-               Failing : Name_Lists.Vector;
-               Found   : constant Diagnostic_List :=
-                 Diagnostics_Of (Item, To_String (Project_Failed));
-            begin
-               for Kind in Intent.Implementation .. Intent.Test loop
-                  if Kind in Intent.Implementation | Intent.Test then
-                     for Target of Intent.Links (Item, Intent.Requirement, Requirement, Kind) loop
-                        Own.Append (Target);
-                     end loop;
-                  end if;
-               end loop;
-               for Id of Everything loop
-                  declare
-                     Defined : Records.Item;
-                     State   : Records.Item;
-                     Got     : E.Error_Info;
-                  begin
-                     Tasks.Definition (Item, Id, Defined, Got);
-                     if E.Is_Ok (Got)
-                       and then Lines_Of (Records.Get (Defined, "requirements")).Contains (Requirement)
-                     then
-                        Stores.Read (Item, Tasks_Area, Id & ".state", State, Got);
-                        if E.Is_Ok (Got) then
-                           for Path of Lines_Of (Records.Get (State, "changed_files")) loop
-                              Own.Append (Path);
-                           end loop;
-                        end if;
-                     end if;
-                  end;
-               end loop;
-               for Index in 1 .. Length (Found) loop
-                  if Length (Element (Found, Index).File) > 0 then
-                     Failing.Append (To_String (Element (Found, Index).File));
-                  end if;
-               end loop;
-               if not Own.Is_Empty and then not Failing.Is_Empty
-                 and then Natural (Failing.Length) = Length (Found)
-                 and then (for all Path of Failing =>
-                             not (for some Mine of Own =>
-                                    Path = Mine
-                                    or else (Path'Length > Mine'Length
-                                             and then Path (Path'Last - Mine'Length + 1 .. Path'Last)
-                                                      = Mine)
-                                    or else (Mine'Length > Path'Length
-                                             and then Mine (Mine'Last - Path'Length + 1 .. Mine'Last)
-                                                      = Path)))
-               then
-                  Elsewhere := True;
-                  Standing := Project_Failed;
-               end if;
-            end;
+            if Failed_Elsewhere (To_String (Project_Failed)) then
+               Elsewhere := True;
+               Standing := Project_Failed;
+            end if;
             if Elsewhere then
                null;
             else
@@ -2076,7 +2076,15 @@ package body Model_Runner.Framework.Verification is
                      Stood_For := True;
                      goto Next_Task;
                   end if;
-                  if Records.Get (Value, "passed") /= "true" then
+                  if Records.Get (Value, "passed") /= "true"
+                    and then Failed_Elsewhere (Evidence)
+                    and then Is_Current (Item, Evidence, Reasons, Configuration)
+                  then
+                     --  Failed only on another's files: its own tests passed.
+                     Tested := True;
+                     Append (Found, (if Found = Null_Unbounded_String then "" else ", ") & Evidence);
+                     goto Next_Task;
+                  elsif Records.Get (Value, "passed") /= "true" then
                      return Lacks (Evidence & ", " & Id & "'s latest, did not pass;"
                                    & " task verify " & Id & " takes it again");
                   elsif not Is_Current (Item, Evidence, Reasons, Configuration) then

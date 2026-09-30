@@ -1150,7 +1150,8 @@ package body Model_Runner.Framework.Stores is
          E.Add_Text (Status, "path", Root, E.Param_Path);
          E.Add_Text (Status, "detail", Holder_Of (Lock_Path)
                      & "; one command changes a project at a time, work in workspaces too, so"
-                     & " this one waits for that to end -- task list and state read it meanwhile");
+                     & " this one stops: run it again once that ends -- task list and state read"
+                     & " the project meanwhile");
       elsif Outcome = Hostkit.Locks.Lock_Error then
          Write_Failed (Lock_Path, Status);
       else

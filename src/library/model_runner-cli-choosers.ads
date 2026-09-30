@@ -214,6 +214,7 @@ private
       Filter    : Ada.Strings.Unbounded.Unbounded_String;
       Filtering : Boolean := False;
       Details   : Boolean := False;
+      Told      : Boolean := False;
       Done      : Boolean := False;
       Result    : Natural := 0;
    end record;

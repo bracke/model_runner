@@ -406,6 +406,29 @@ package body Model_Runner.CLI.Interactive is
             --  The project's commands, each with what it does.
             Model_Runner.CLI.Project_Commands.Help (Screen);
 
+         elsif Asked.Kind = Help and then Asked.First in Line'Range
+           and then Asked.Last >= Asked.First
+         then
+            --  One command's line: /help result, /help /work.
+            declare
+               Named : constant String :=
+                 (if Line (Asked.First) = '/' then Line (Asked.First + 1 .. Asked.Last)
+                  else Line (Asked.First .. Asked.Last));
+               --  The commands a line of help is kept for.
+               Known : constant String :=
+                 " projects exit reset help settings stats context system tools tool save load"
+                 & " image video init bootstrap state config git sandbox instruct reconfigure task"
+                 & " accept reject work cancel check req decision spec result tree sym refs deps"
+                 & " users impact trace ";
+            begin
+               if Named /= "" and then Ada.Strings.Fixed.Index (Known, " " & Named & " ") > 0 then
+                  Pres.Put_Aside (Screen, "cli.interactive.help." & Named);
+               else
+                  Pres.Put_Message (Screen, "cli.interactive.help_unknown",
+                                    [Loc.Named ("value", T.Escape_Controls (Named))]);
+               end if;
+            end;
+
          elsif Asked.Kind = Help then
             --  One line per command the enumeration carries, so a command
             --  added without a line fails the checklist rather than going
@@ -571,7 +594,7 @@ package body Model_Runner.CLI.Interactive is
             declare
                Unknown : E.Error_Info := E.Make (E.CLI_Unknown_Command);
             begin
-               E.Add_Text (Unknown, "value", T.Escape_Controls (Line));
+               E.Add_Text (Unknown, "value", T.Escape_Controls (Line) & " (/help lists the commands)");
                Pres.Report (Screen, Unknown);
             end;
          end if;

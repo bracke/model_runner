@@ -197,6 +197,15 @@ package Model_Runner.Framework.Intent is
    --  @return SETTING = RULING, or the empty string when it governs none.
    function Governs (Item : Stores.Store; Kind : Intent_Kind; Id : String) return String;
 
+   --  What else an entity governs, besides the setting Governs gives: a
+   --  decision may rule on several, each kept.
+   --
+   --  @param Item The store.
+   --  @param Kind Which register.
+   --  @param Id Its identifier.
+   --  @return Each as SETTING = RULING, with (over ...) where it says so.
+   function Also_Governs (Item : Stores.Store; Kind : Intent_Kind; Id : String) return Name_Lists.Vector;
+
    --  Move an entity through its lifecycle, with the event that says so.
    --
    --  @param Item The store.

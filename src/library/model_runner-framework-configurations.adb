@@ -1428,6 +1428,59 @@ package body Model_Runner.Framework.Configurations is
          end if;
       end Level_Problem;
 
+      --  A root the value names that another component has already, the
+      --  same place however written (src and src/): two cannot both own it.
+      function Shared_Root (Name, Value : String) return String is
+         function Bare (Root : String) return String is
+            Last : Natural := Root'Last;
+         begin
+            while Last > Root'First and then Root (Last) = '/' loop
+               Last := Last - 1;
+            end loop;
+            return (if Root'Length > 2 and then Root (Root'First .. Root'First + 1) = "./"
+                    then Root (Root'First + 2 .. Last) else Root (Root'First .. Last));
+         end Bare;
+
+         function Roots (Text : String) return Name_Lists.Vector is
+            Result : Name_Lists.Vector;
+            Mark   : constant Natural := Ada.Strings.Fixed.Index (Text, "roots=");
+            Start  : Natural;
+         begin
+            if Mark = 0 then
+               return Result;
+            end if;
+            Start := Mark + 6;
+            for Index in Mark + 6 .. Text'Last + 1 loop
+               if Index > Text'Last or else Text (Index) in '|' | ',' | ' ' then
+                  if Index > Start then
+                     Result.Append (Bare (Text (Start .. Index - 1)));
+                  end if;
+                  Start := Index + 1;
+               end if;
+            end loop;
+            return Result;
+         end Roots;
+
+         Mine : constant Name_Lists.Vector := Roots (Value);
+      begin
+         for Index in 1 .. Records.Field_Count (Result.After) loop
+            declare
+               Field : constant String := Records.Field_Name (Result.After, Index);
+            begin
+               if Starts (Field, "map.component.") and then Field /= Name then
+                  for Theirs of Roots (Records.Get (Result.After, Field)) loop
+                     if Mine.Contains (Theirs) then
+                        return Theirs & " is " & Field (Field'First + 14 .. Field'Last)
+                          & "'s root already, and two components cannot both own its files; name a"
+                          & " narrower root, or change " & Field (Field'First + 14 .. Field'Last) & "'s";
+                     end if;
+                  end loop;
+               end if;
+            end;
+         end loop;
+         return "";
+      end Shared_Root;
+
       --  The first root a component's placing names that is not there.
       function Missing_Root (Value : String) return String is
          Mark  : constant Natural := Ada.Strings.Fixed.Index (Value, "roots=");
@@ -1665,6 +1718,17 @@ package body Model_Runner.Framework.Configurations is
             elsif Starts (Name, "map.permission.") and then Level_Problem (Name) /= "" then
                Status := Refused (Name, Level_Problem (Name));
                return;
+            elsif Starts (Name, "map.permission.") and then Given = "off"
+              and then (Ada.Strings.Fixed.Index (Name (Name'First + 15 .. Name'Last), ".") = 0
+                        or else not Is_Capability
+                                      (Name (Ada.Strings.Fixed.Index (Name, ".", Ada.Strings.Backward) + 1
+                                             .. Name'Last)))
+            then
+               --  A level is not taken away whole: each capability is.
+               Status := Refused (Name, "a level is not taken away whole: set each capability "
+                                  & Name & ".CAPABILITY=off, or " & Name & "=inherit to follow the"
+                                  & " level above");
+               return;
             elsif Starts (Name, "map.component.") and then Missing_Root (Value) /= ""
               and then (Missing_Root (Value) (Missing_Root (Value)'First) = '/'
                         or else Ada.Strings.Fixed.Index (Missing_Root (Value), "..") > 0)
@@ -1683,6 +1747,9 @@ package body Model_Runner.Framework.Configurations is
                              & " src/terminal"));
                   return;
                end;
+            elsif Starts (Name, "map.component.") and then Shared_Root (Name, Value) /= "" then
+               Status := Refused (Name, Shared_Root (Name, Value));
+               return;
             elsif Starts (Name, "map.component.") and then Missing_Root (Value) /= "" then
                Status := Refused
                  (Name, "its root " & Missing_Root (Value) & " is no file or directory in the"
@@ -1713,29 +1780,15 @@ package body Model_Runner.Framework.Configurations is
                      if not Gone.Is_Empty then
                         Result.Changed.Append (Name & ": its own grants -> those of the level above");
                      end if;
-                  elsif Records.Has (Result.After, Name) then
-                     declare
-                        Above : constant Permissions.Permission_Set :=
-                          Permissions.Effective (Item, "", "", Within_Sandbox => False);
-                        Which : Permissions.Capability := Permissions.Capability'First;
-                     begin
-                        for One in Permissions.Capability loop
-                           if Permissions.Word (One) = Rest (Dot + 1 .. Rest'Last) then
-                              Which := One;
-                           end if;
-                        end loop;
-                        if Above (Which).Granted and then Rest (Rest'First .. Dot - 1) /= "project" then
-                           Records.Set (Result.After, Name, Permissions.Grant_Text (Above (Which)));
-                        else
-                           Records.Remove (Result.After, Name);
-                        end if;
-                        Result.Changed.Append
-                          (Name & ": " & (if Old = "" then "granted" else Old) & " -> as the level above"
-                           & (if Above (Which).Granted
-                              then " (" & (if Permissions.Grant_Text (Above (Which)) = "" then "granted"
-                                           else Permissions.Grant_Text (Above (Which))) & ")"
-                              else " (not granted)"));
-                     end;
+                  elsif Records.Get (Result.After, Name) /= "inherit" then
+                     --  Written as inherit: what the level above gives,
+                     --  whenever it is asked; the project's default for the
+                     --  project, which has none above it.
+                     Records.Set (Result.After, Name, "inherit");
+                     Result.Changed.Append
+                       (Name & ": " & (if Old = "" then "(not granted here)" else Old) & " -> inherit, "
+                        & (if Rest (Rest'First .. Dot - 1) = "project" then "the project's default"
+                           else "as the level above gives it"));
                   end if;
                   if not Result.Impact.Contains (Reach (Name)) then
                      Result.Impact.Append (Reach (Name));
@@ -1780,37 +1833,34 @@ package body Model_Runner.Framework.Configurations is
                   --  A level that says nothing yet has what the one above
                   --  gives it; saying one thing there would take the rest
                   --  away, so what it had is written there first.
-                  if not Level_Said (Name) and then Level /= "project" then
-                     for One in Permissions.Capability loop
-                        declare
-                           Field : constant String :=
-                             "map.permission." & Level & "." & Permissions.Word (One);
-                        begin
-                           if Field /= Name and then Above (One).Granted
-                             and then not Records.Has (Result.After, Field)
-                           then
-                              Records.Set (Result.After, Field, Permissions.Grant_Text (Above (One)));
-                              Result.Changed.Append
-                                (Field & ": (from the level above) -> kept at " & Level);
-                           end if;
-                        end;
-                     end loop;
-                  elsif not Level_Said (Name) then
-                     --  The project's own, where it says none: what it gave
-                     --  by default, kept beside the one changed.
-                     for One in Permissions.Capability loop
-                        declare
-                           Field : constant String := "map.permission.project." & Permissions.Word (One);
-                        begin
-                           if Field /= Name and then Above (One).Granted
-                             and then not Records.Has (Result.After, Field)
-                           then
-                              Records.Set (Result.After, Field, Permissions.Grant_Text (Above (One)));
-                              Result.Changed.Append
-                                (Field & ": (the default) -> kept as the project's");
-                           end if;
-                        end;
-                     end loop;
+                  --  A level that says nothing yet has what the one above
+                  --  gives it -- the project, its defaults. Saying one thing
+                  --  there would take the rest away, so the rest is written
+                  --  as inherit: read from above whenever it is asked, and
+                  --  so following it when it changes, not frozen as it is.
+                  if not Level_Said (Name) then
+                     declare
+                        Any : Boolean := False;
+                     begin
+                        for One in Permissions.Capability loop
+                           declare
+                              Field : constant String :=
+                                "map.permission." & Level & "." & Permissions.Word (One);
+                           begin
+                              if Field /= Name and then not Records.Has (Result.After, Field)
+                                and then (Level /= "project" or else Permissions.Project_Default (One).Granted)
+                              then
+                                 Records.Set (Result.After, Field, "inherit");
+                                 Any := True;
+                              end if;
+                           end;
+                        end loop;
+                        if Any then
+                           Result.Changed.Append
+                             ("map.permission." & Level & ": its other capabilities -> inherit, "
+                              & (if Level = "project" then "the defaults" else "following the level above"));
+                        end if;
+                     end;
                   end if;
                   if Was /= Now or else (Now and then Given /= Old) then
                      if Now then
@@ -1833,10 +1883,10 @@ package body Model_Runner.Framework.Configurations is
             --  A component placed is unplaced by NAME=off, and a scalar or
             --  a set the harness has a default for goes back to it: its entry
             --  goes.
-            elsif (Starts (Name, "map.component.")
-                   or else (Given = "off" and then Name in "scalar.work.agent" | "scalar.model.default"
-                                                         | "scalar.work.model"))
-              and then Given = "off"
+            elsif (Starts (Name, "map.component.") or else Starts (Name, "set.")
+                   or else Starts (Name, "list.")
+                   or else Name in "scalar.work.agent" | "scalar.model.default" | "scalar.work.model")
+              and then Given = "off" and then not (Adding or else Taking)
             then
                if Old /= "" then
                   Records.Remove (Result.After, Name);
@@ -1881,7 +1931,8 @@ package body Model_Runner.Framework.Configurations is
          begin
             for Line of Result.Changed loop
                if not (Starts (Line, Name & ": (")
-                       and then Ada.Strings.Fixed.Index (Line, "-> kept") > 0)
+                       and then (Ada.Strings.Fixed.Index (Line, "-> kept") > 0
+                                 or else Ada.Strings.Fixed.Index (Line, "-> inherit") > 0))
                then
                   Kept.Append (Line);
                end if;

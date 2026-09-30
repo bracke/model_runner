@@ -1,3 +1,4 @@
+with Ada.Strings.Fixed;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Records;
@@ -169,6 +170,26 @@ package body Model_Runner.Framework.Authority is
                                      (Records.Get (Held, "ruling")),
                       Overrides => To_Unbounded_String
                                      (Records.Get (Held, "overrides"))));
+                  --  And each other setting it rules on, as its own.
+                  for Line of Lines_Of (Records.Get (Held, "also_governs")) loop
+                     declare
+                        First  : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
+                        Second : constant Natural :=
+                          (if First = 0 then 0
+                           else Ada.Strings.Fixed.Index (Line (First + 1 .. Line'Last), [1 => ASCII.HT]));
+                     begin
+                        if First > Line'First and then Second > First then
+                           Append
+                             (Result,
+                              (Standing  =>
+                                 (if Records.Get (Held, "scope") = "project" then Project else Scoped),
+                               Source    => To_Unbounded_String (Name),
+                               Subject   => To_Unbounded_String (Line (Line'First .. First - 1)),
+                               Value     => To_Unbounded_String (Line (First + 1 .. Second - 1)),
+                               Overrides => To_Unbounded_String (Line (Second + 1 .. Line'Last))));
+                        end if;
+                     end;
+                  end loop;
                end if;
             end;
          end loop;

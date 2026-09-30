@@ -43,14 +43,15 @@ package body Model_Runner.Framework.Work is
    -- Instructions --
    ------------------
 
-   function Instructions_For (May_Propose : Boolean) return String
+   function Instructions_For (May_Propose : Boolean; May_Split : Boolean := True) return String
    is ("## What to do" & ASCII.LF
        & "Do the task now, with the tools: read_file reads a file, write_file"
        & " writes the whole new content of a file, list_directory lists a"
        & " directory. Paths are relative to the project. Make each change by"
        & " calling write_file; describing a change does not make it. Where"
        & " you have delegate, a part better done apart -- a review, an"
-       & " investigation -- can be handed to a helper, who reports back."
+       & " investigation -- can be handed to a helper, who reports back; where"
+       & " you have run_checks, it runs the project's checks on what you wrote."
        & ASCII.LF & ASCII.LF
        & "When the files are written, finish with a short report in these lines:"
        & ASCII.LF & ASCII.LF
@@ -64,9 +65,12 @@ package body Model_Runner.Framework.Work is
        & (if May_Propose
           then " Further work you found goes in proposed_tasks:, one a"
                & " line, each as TITLE; kind=K; component=C where it is another's."
-               & " If the task is too large to do as one, say blocked and name the"
-               & " parts it should be split into under parts:, one a line. A decision"
-               & " or specification you would propose goes under decisions: or"
+               & (if May_Split
+                  then " If the task is too large to do as one, say blocked and name the"
+                       & " parts it should be split into under parts:, one a line."
+                  else " It is split as far as it may be: if it is still too large, say"
+                       & " blocked and say so in the summary.")
+               & " A decision or specification you would propose goes under decisions: or"
                & " specifications:, a"
           else " Further work you found goes under issues:, one a line; if the task"
                & " is too large to do as one, say blocked and say so in the summary. A")
@@ -80,7 +84,7 @@ package body Model_Runner.Framework.Work is
    --  The same, for an agent that is a command: it works on the files
    --  itself, in the directory it is started in, and answers on its
    --  standard output; it has no tools to call.
-   function Command_Instructions (May_Propose : Boolean) return String
+   function Command_Instructions (May_Propose : Boolean; May_Split : Boolean := True) return String
    is ("## What to do" & ASCII.LF
        & "Do the task now, working on the files yourself: you are started in"
        & " the project's directory, and paths are relative to it. Change the"
@@ -96,9 +100,12 @@ package body Model_Runner.Framework.Work is
        & " a decision only a person can make."
        & (if May_Propose
           then " Further work you found goes in"
-               & " proposed_tasks:, one a line, as TITLE; kind=K; component=C. If the"
-               & " task is too large to do as one, say blocked and name its parts under"
-               & " parts:, one a line."
+               & " proposed_tasks:, one a line, as TITLE; kind=K; component=C."
+               & (if May_Split
+                  then " If the task is too large to do as one, say blocked and name its"
+                       & " parts under parts:, one a line."
+                  else " It is split as far as it may be: if it is still too large, say"
+                       & " blocked and say so in the summary.")
           else " Further work you found goes under issues:, one a line; if the task is"
                & " too large to do as one, say blocked and say so in the summary.")
        & ASCII.LF);
@@ -393,6 +400,13 @@ package body Model_Runner.Framework.Work is
    function Own_Words (Summary : String) return String
    is (if Ada.Strings.Fixed.Index (Summary, "one line on what you") > 0 then "" else Summary);
 
+   --  What a run stopped part way left in the project, and the ways on,
+   --  said alike however it stopped.
+   function Left_Words (Files_Named, Task_Id : String) return String
+   is ("; what it changed is still in the project: " & Files_Named
+       & " -- undo it with the project's version control, removing files it made,"
+       & " or task complete " & Task_Id & " once it is done by hand");
+
    --  A task's kind, as its definition says.
    function Kind_Of_Task (Item : Stores.Store; Task_Id : String) return String is
       Defined : Records.Item;
@@ -497,9 +511,7 @@ package body Model_Runner.Framework.Work is
                      return "";
                   end if;
                   Annotate (Item, Change, Id, "changed_files", To_String (Lines));
-                  return "; what it changed is still in the project: " & To_String (Named)
-                    & " -- put it back with the project's version control, or task complete "
-                    & Id & " once it is done by hand";
+                  return Left_Words (To_String (Named), Id);
                end Left_In_Project;
 
                function Given_Up return String is
@@ -1250,10 +1262,15 @@ package body Model_Runner.Framework.Work is
 
       --  The revisions its context read, or, never worked, the one it was
       --  made from.
-      Say ("requirement revisions",
-           (if Invocation = "" and then Records.Get (Defined, "origin") /= ""
-            then Records.Get (Defined, "origin") & " (made from; never worked)"
-            else Fields_With (Plan, "applies.REQ", Kept => 3)));
+      if Invocation = "" then
+         --  Never worked: where it came from, and that, on lines of their own.
+         if Records.Get (Defined, "origin") /= "" then
+            Say ("made from", Records.Get (Defined, "origin"));
+         end if;
+         Say ("worked", "never");
+      else
+         Say ("requirement revisions", Fields_With (Plan, "applies.REQ", Kept => 3));
+      end if;
       Say ("task definition revision", Trim (Natural'Image (Records.Revision (Defined))));
       Say ("why it could start", Records.Get (State, "admission"));
       Say ("decisions", Fields_With (Plan, "applies.DEC", Kept => 3));
@@ -1791,6 +1808,8 @@ package body Model_Runner.Framework.Work is
               & "Change only files write_source or write_specs lets you write."
               & (if Permissions.Allows (Held.Allowed, Permissions.Create_Children) then ""
                  else " You may not make helpers of your own.")
+              & " Work you find beyond your part goes in your findings, for the agent that"
+              & " asked to propose."
               & ASCII.LF;
          end Child_Allowed;
       begin
@@ -2113,10 +2132,10 @@ package body Model_Runner.Framework.Work is
             Append (Said, (if Said = Null_Unbounded_String then "" else "; ")
                     & Permissions.Word (One) & " "
                     & (if not Held_Agent.Allowed (One).Granted then "not granted"
-                       elsif Permissions.Grant_Text (Held_Agent.Allowed (One)) = ""
+                       elsif Held_Agent.Allowed (One).Roots.Is_Empty
                        then (if Permissions."=" (One, Permissions.Write_Specs)
-                             then "where specifications are kept" else "anywhere")
-                       else Permissions.Grant_Text (Held_Agent.Allowed (One))));
+                             then "in docs/, doc/, specs/, spec/ and Markdown files" else "anywhere")
+                       else "in " & Comma_Separated (Held_Agent.Allowed (One).Roots)));
          end loop;
          return " (its agent may write: " & To_String (Said) & ")";
       end Rule_Said;
@@ -2144,6 +2163,43 @@ package body Model_Runner.Framework.Work is
          return E.Is_Error (Read)
            or else Permissions.Allows (Held_Agent.Allowed, Permissions.Propose_Tasks);
       end May_Propose_Here;
+
+      --  Whether its task may be split one level more: parts are bounded
+      --  by create_children's max_depth, and agents.max_depth, as helpers
+      --  are.
+      function May_Split_Here return Boolean is
+         Held_Agent : Agents.Agent;
+         Read       : E.Error_Info;
+         Depth      : Natural := 0;
+         Up         : Unbounded_String := To_Unbounded_String (Task_Id);
+      begin
+         Agents.Read (Item, To_String (Result.Agent_Id), Held_Agent, Read);
+         declare
+            Own   : constant Permissions.Grant :=
+              (if E.Is_Ok (Read) then Held_Agent.Allowed (Permissions.Create_Children)
+               else Permissions.Nothing (Permissions.Create_Children));
+            Limit : constant Permissions.Grant :=
+              (if Own.Granted then Own
+               else Permissions.Effective (Item, "", "", Within_Sandbox => False)
+                      (Permissions.Create_Children));
+            Bounds : constant Agents.Limits := Agents.Limits_Of (Item);
+         begin
+            loop
+               declare
+                  Defined_Up : Records.Item;
+                  Read_Up    : E.Error_Info;
+               begin
+                  Tasks.Definition (Item, To_String (Up), Defined_Up, Read_Up);
+                  exit when E.Is_Error (Read_Up) or else Records.Get (Defined_Up, "parent") = ""
+                    or else Depth > 64;
+                  Up := To_Unbounded_String (Records.Get (Defined_Up, "parent"));
+                  Depth := Depth + 1;
+               end;
+            end loop;
+            return Limit.Granted
+              and then Depth + 1 <= Natural'Min (Limit.Max_Depth, Bounds.Max_Depth);
+         end;
+      end May_Split_Here;
 
       --  A permissions image, its lines a semicolon apart.
       function On_One_Line (Text : String) return String is
@@ -2235,6 +2291,28 @@ package body Model_Runner.Framework.Work is
                  else "it also changed files it did not report: " & Comma_Separated (Unreported));
       end Unreported_Note;
 
+      --  What it said it changed and did not: rewritten as it was, or not
+      --  touched at all.
+      function Overclaimed_Note return String is
+         Said_Changed : constant Name_Lists.Vector :=
+           Lines_Of (Replaced (Invocations.Claim (Said, "changed_files")));
+         Not_Changed  : Name_Lists.Vector;
+      begin
+         for Line of Said_Changed loop
+            declare
+               Path : constant String :=
+                 (if Trim (Line)'Length > 2 and then Trim (Line) (Trim (Line)'First .. Trim (Line)'First + 1) = "./"
+                  then Trim (Line) (Trim (Line)'First + 2 .. Trim (Line)'Last) else Trim (Line));
+            begin
+               if Path not in "" | "-" and then not Result.Changed_Files.Contains (Path) then
+                  Not_Changed.Append (Path);
+               end if;
+            end;
+         end loop;
+         return (if Not_Changed.Is_Empty then ""
+                 else "it reported files it did not change: " & Comma_Separated (Not_Changed));
+      end Overclaimed_Note;
+
       --  What an answer that is not taken proposed is not lost with it:
       --  kept as an issue, to be seen and made by hand.
       procedure Keep_Proposals_Aside is
@@ -2288,7 +2366,7 @@ package body Model_Runner.Framework.Work is
             for Path of Result.Changed_Files loop
                Append (Named, (if Named = Null_Unbounded_String then "" else ", ") & Path);
             end loop;
-            return "; what it changed is still in the project: " & To_String (Named);
+            return Left_Words (To_String (Named), Task_Id);
          end Left_Behind;
 
          --  Not done, where it worked apart: its workspace is given up --
@@ -2484,8 +2562,8 @@ package body Model_Runner.Framework.Work is
       Context.Build
         (Item, Task_Id, Model, Built, Held,
          Instructions => (if Ada.Strings.Fixed.Index (Runner_Named, "the command ") = 1
-                          then Command_Instructions (May_Propose_Here)
-                          else Instructions_For (May_Propose_Here))
+                          then Command_Instructions (May_Propose_Here, May_Split_Here)
+                          else Instructions_For (May_Propose_Here, May_Split_Here))
                          & Allowed_Here & Its_Parts);
       if E.Is_Error (Held) then
          Conclude ("blocked", "its context cannot be built: "
@@ -3746,9 +3824,12 @@ package body Model_Runner.Framework.Work is
             Verification.Reevaluate_Requirements (Item, Change, Result.Requirements, Status);
          end if;
          if E.Is_Ok (Status) then
-            --  Done, and with files changed it did not say it changed: said,
-            --  as what a person looks at before trusting its report.
-            Conclude ("", Unreported_Note, "completed");
+            --  Done, and with files changed it did not say it changed, or
+            --  files it said it changed and did not: said, as what a person
+            --  looks at before trusting its report.
+            Conclude ("", Unreported_Note
+                      & (if Unreported_Note /= "" and then Overclaimed_Note /= "" then "; " else "")
+                      & Overclaimed_Note, "completed");
          end if;
       end;
    end Execute_Work;

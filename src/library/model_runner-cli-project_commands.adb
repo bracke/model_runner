@@ -698,6 +698,7 @@ package body Model_Runner.CLI.Project_Commands is
          if E.Is_Error (Got) or else To_String (Issue.Producer) /= "bootstrap"
            or else Ada.Strings.Unbounded.Index (Issue.Provenance, "#") = 0
            or else (Ada.Strings.Fixed.Index (Summary, " still says ") = 0
+                    and then Ada.Strings.Fixed.Index (Summary, ", which the project already has") = 0
                     and then Summary /= "acceptance criteria before any requirement")
          then
             return False;
@@ -714,8 +715,12 @@ package body Model_Runner.CLI.Project_Commands is
                else Ada.Strings.Fixed.Trim (Words.First_Element, Ada.Strings.Both));
             Needle : constant String :=
               (if Ada.Strings.Fixed.Index (Summary, " still says ") > 0
+                  or else Ada.Strings.Fixed.Index (Summary, ", which the project already has") > 0
                then Slice (Issue.Provenance, Mark + 1, Length (Issue.Provenance))
                else Said);
+            By_Id  : constant Boolean :=
+              (for some Prefix of Names.Vector'(["REQ-", "DEC-", "SPEC-"]) =>
+                 Ada.Strings.Fixed.Index (Needle, Prefix) = Needle'First);
             Whole  : constant String :=
               Hostkit.Fs.Join (Ada.Directories.Containing_Directory (S.Root (Store)), Path);
             File   : Ada.Text_IO.File_Type;
@@ -723,7 +728,7 @@ package body Model_Runner.CLI.Project_Commands is
             --  Criteria after a requirement are its own now.
             Stated : Boolean := False;
             Before : constant Boolean :=
-              Ada.Strings.Fixed.Index (Summary, " still says ") = 0;
+              Summary = "acceptance criteria before any requirement";
          begin
             if Needle = "" then
                return False;
@@ -735,8 +740,11 @@ package body Model_Runner.CLI.Project_Commands is
                declare
                   Line : constant String := Ada.Text_IO.Get_Line (File);
                begin
+                  --  An entry the document names by its identifier is said
+                  --  while the identifier is; one it gives by a line alone,
+                  --  while that line is.
                   Found := (Ada.Strings.Fixed.Index (Line, Needle) > 0
-                            or else (not Before and then Said /= ""
+                            or else (not Before and then Said /= "" and then not By_Id
                                      and then Ada.Strings.Fixed.Index (Line, Said) > 0))
                     and then not (Before and then Stated);
                   Stated := Stated or else Ada.Strings.Fixed.Index (Line, "REQ-") > 0;
@@ -1351,7 +1359,11 @@ package body Model_Runner.CLI.Project_Commands is
                --  each.
                function Shown return String is
                begin
-                  if not (Name'Length > 4 and then Name (Name'First .. Name'First + 3) in "set." | "list")
+                  --  A permission granted with nothing more: said so, not a
+                  --  bare colon.
+                  if Ada.Strings.Fixed.Index (Name, "map.permission.") = Name'First and then Value = "" then
+                     return "(granted, no limits)";
+                  elsif not (Name'Length > 4 and then Name (Name'First .. Name'First + 3) in "set." | "list")
                   then
                      return Value;
                   end if;
@@ -1451,7 +1463,20 @@ package body Model_Runner.CLI.Project_Commands is
             for Known of Model_Runner.Framework.Configurations.Known_Names loop
                if Ada.Strings.Fixed.Index (Known, Argument (1)) > 0 and then not R.Has (Config, Known)
                then
-                  Field (Known, "(not set)");
+                  --  Not set, and what that means where the harness says.
+                  declare
+                     Defaults : constant Model_Runner.Framework.Agents.Limits :=
+                       (others => <>);
+                     Default  : constant String :=
+                       (if Known = "scalar.agents.max_depth" then Image (Defaults.Max_Depth)
+                        elsif Known = "scalar.agents.max_children" then Image (Defaults.Max_Children)
+                        elsif Known = "scalar.agents.max_active" then Image (Defaults.Max_Active)
+                        elsif Known = "scalar.agents.token_budget" then Image (Defaults.Token_Budget)
+                        else "");
+                  begin
+                     Field (Known, (if Default = "" then "(not set: the harness's default)"
+                                    else "(not set: " & Default & " by default)"));
+                  end;
                end if;
             end loop;
             --  A name nothing holds: said, not answered with nothing.
@@ -1549,6 +1574,9 @@ package body Model_Runner.CLI.Project_Commands is
                                & ")" & (if Cell (7) = "" then "" else "; log " & Cell (7))
                                & (if Cell (2) = "" then "" else "; ran " & Cell (2)));
                      end;
+                  elsif Named = "summary" and then R.Has (Value, "depth") and then R.Get (Value, Named) = ""
+                  then
+                     Field (Named, "(it gave none)");
                   elsif Named = "permissions" and then R.Has (Value, "depth") then
                      --  An agent's: a line each, and create_children said
                      --  spent where its depth leaves it none.
@@ -1778,6 +1806,19 @@ package body Model_Runner.CLI.Project_Commands is
                Model_Runner.Framework.Intent.Read
                  (Store, Model_Runner.Framework.Intent.Requirement, Requirement, Held, Got);
                if E.Is_Error (Got) then
+                  Pres.Report (Screen, Got);
+                  return;
+               end if;
+               --  Retired: nothing to verify, and its replacement named.
+               if To_String (Held.State) in "obsolete" | "rejected" | "superseded" then
+                  Got := E.Make (E.Framework_Input_Invalid);
+                  E.Add_Text (Got, "name", "the requirement to check");
+                  E.Add_Text (Got, "value", Requirement);
+                  E.Add_Text (Got, "detail", Requirement & " is " & To_String (Held.State)
+                              & (if Held.Superseded_By /= Null_Unbounded_String
+                                 then ", replaced by " & To_String (Held.Superseded_By) & ": check "
+                                      & To_String (Held.Superseded_By) & " verifies that one"
+                                 else ", and what is retired is not verified"));
                   Pres.Report (Screen, Got);
                   return;
                end if;
@@ -2079,12 +2120,43 @@ package body Model_Runner.CLI.Project_Commands is
          Report : Model_Runner.Framework.Bootstrap.Report;
          --  Each named as the project names it: ./docs/x.md and a whole
          --  path into the project are docs/x.md.
+         --  A directory named is its Markdown files; one named twice is
+         --  read once.
          function Named_Here return Names.Vector is
             Result : Names.Vector;
+            procedure Add (One : String) is
+            begin
+               if not Result.Contains (One) then
+                  Result.Append (One);
+               end if;
+            end Add;
          begin
             for Path of Positional loop
-               Result.Append (Model_Runner.Framework.Repository.Relative_Path
-                                (Ada.Directories.Current_Directory, Path));
+               declare
+                  Here : constant String := Model_Runner.Framework.Repository.Relative_Path
+                                              (Ada.Directories.Current_Directory, Path);
+               begin
+                  if Here /= "" and then Ada.Directories.Exists (Here)
+                    and then Ada.Directories."=" (Ada.Directories.Kind (Here), Ada.Directories.Directory)
+                  then
+                     declare
+                        Search : Ada.Directories.Search_Type;
+                        One    : Ada.Directories.Directory_Entry_Type;
+                        Base   : constant String :=
+                          (if Here (Here'Last) = '/' then Here (Here'First .. Here'Last - 1) else Here);
+                     begin
+                        Ada.Directories.Start_Search
+                          (Search, Here, "*.md", [Ada.Directories.Ordinary_File => True, others => False]);
+                        while Ada.Directories.More_Entries (Search) loop
+                           Ada.Directories.Get_Next_Entry (Search, One);
+                           Add (Base & "/" & Ada.Directories.Simple_Name (One));
+                        end loop;
+                        Ada.Directories.End_Search (Search);
+                     end;
+                  else
+                     Add (Here);
+                  end if;
+               end;
             end loop;
             return Result;
          end Named_Here;
@@ -2201,6 +2273,22 @@ package body Model_Runner.CLI.Project_Commands is
          --  What it imported as accepted is followed as any accepted
          --  requirement is: its tasks derived, readiness worked out.
          Model_Runner.CLI.Intents.Move_Along (Store, Screen);
+         --  Nothing read from what was named: said, with how a document
+         --  says a requirement.
+         if Report.Created = 0 and then Report.Existing = 0 and then Report.Revised.Is_Empty
+           and then Report.Issues = 0 and then Report.Adopted.Is_Empty
+         then
+            declare
+               Listed : Unbounded_String;
+            begin
+               for One of Files loop
+                  Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ") & One);
+               end loop;
+               Pres.Put_Note (Screen, "cli.next.bootstrap_nothing",
+                              [Loc.Named ("detail", To_String (Listed))]);
+            end;
+         end if;
+
          --  A candidate requirement made waits to be accepted; with none
          --  read at all, how a document says one.
          if (for some Id of Report.Made =>
@@ -2278,7 +2366,10 @@ package body Model_Runner.CLI.Project_Commands is
             Pres.Report (Screen, Read);
             return;
          elsif Planned.Changed.Is_Empty then
-            Pres.Put_Note (Screen, "cli.project.reconfigure.nothing");
+            Pres.Put_Note (Screen, (if (for some Position in Changes.Iterate =>
+                                          Cf.Value_Maps.Element (Position) = "inherit")
+                                    then "cli.project.reconfigure.nothing_inherit"
+                                    else "cli.project.reconfigure.nothing"));
             return;
          end if;
          for Line of Planned.Changed loop
@@ -2302,8 +2393,7 @@ package body Model_Runner.CLI.Project_Commands is
                Of_Project   : constant Pm.Permission_Set :=
                  Pm.Level_Of (Planned.After, "project", Said_Project);
                Project : constant Pm.Permission_Set :=
-                 (if Said_Project then Of_Project
-                  else Pm.Effective (Store, "", "", Within_Sandbox => False));
+                 (if Said_Project then Of_Project else Pm.Project_Default);
             begin
                for Index in 1 .. R.Field_Count (Planned.After) loop
                   declare
@@ -2325,7 +2415,21 @@ package body Model_Runner.CLI.Project_Commands is
                for Level of Levels loop
                   declare
                      Present : Boolean;
-                     Given   : constant Pm.Permission_Set := Pm.Level_Of (Planned.After, Level, Present);
+                     --  What it asks for itself: one it inherits asks for
+                     --  nothing, and follows what is above.
+                     function Own_Asked return Pm.Permission_Set is
+                        Result : Pm.Permission_Set := Pm.Level_Of (Planned.After, Level, Present);
+                     begin
+                        for One in Pm.Capability loop
+                           if R.Get (Planned.After, "map.permission." & Level & "." & Pm.Word (One))
+                                = "inherit"
+                           then
+                              Result (One) := Pm.Nothing (One);
+                           end if;
+                        end loop;
+                        return Result;
+                     end Own_Asked;
+                     Given   : constant Pm.Permission_Set := Own_Asked;
                      Clipped : constant String := Pm.Clipped (Given, Project);
                   begin
                      if Present and then Clipped /= "" then
@@ -2479,9 +2583,18 @@ package body Model_Runner.CLI.Project_Commands is
                                  O : constant String :=
                                    (if Outer'Length > 1 and then Outer (Outer'Last) = '/'
                                     then Outer (Outer'First .. Outer'Last - 1) else Outer);
+                                 I : constant String :=
+                                   (if Inner'Length > 1 and then Inner (Inner'Last) = '/'
+                                    then Inner (Inner'First .. Inner'Last - 1) else Inner);
                               begin
-                                 if Inner'Length > O'Length
-                                   and then Inner (Inner'First .. Inner'First + O'Length) = O & "/"
+                                 --  Strictly within, and new with this change.
+                                 if I'Length > O'Length + 1
+                                   and then I (I'First .. I'First + O'Length) = O & "/"
+                                   and then (for some Line of Planned.Changed =>
+                                               Ada.Strings.Fixed.Index
+                                                 (Line, "map.component." & Name & ":") = Line'First
+                                               or else Ada.Strings.Fixed.Index
+                                                 (Line, "map.component." & Other & ":") = Line'First)
                                  then
                                     Pres.Put_Note
                                       (Screen, "cli.project.component_overlap",
@@ -2824,7 +2937,12 @@ package body Model_Runner.CLI.Project_Commands is
       elsif Word in "/tree" | "/sym" | "/refs" | "/deps" | "/users" | "/impact" | "/trace" then
          Command.Kind := Opt.Command_Repo;
          Command.Action := T.To_Bounded (Word (Word'First + 1 .. Word'Last));
-         Command.Action_Argument := T.To_Bounded (Argument (1));
+         --  --verbose among the words: all of it, as the shell's option.
+         Command.Action_Argument :=
+           T.To_Bounded (if Argument (1) = "--verbose" then Argument (2) else Argument (1));
+         if All_Words.Contains ("--verbose") then
+            Command.Level := Opt.Verbose;
+         end if;
          Model_Runner.CLI.Repo.Run (Command, Screen, Status);
 
       elsif Word = "/state" then
@@ -2880,6 +2998,29 @@ package body Model_Runner.CLI.Project_Commands is
          begin
             if Now = Model_Runner.Framework.Permissions.Unrestricted then
                Pres.Put_Note (Screen, "cli.project.sandbox.none");
+               --  And what that is, where there is a project to say it.
+               if S.Is_Initialized (".") then
+                  declare
+                     package Pm renames Model_Runner.Framework.Permissions;
+                     Store : S.Store;
+                     Read  : E.Error_Info;
+                     Left  : Unbounded_String;
+                  begin
+                     S.Open_To_Read (Store, ".", Read);
+                     if E.Is_Ok (Read) then
+                        for Line of Model_Runner.Framework.Lines_Of
+                          (Pm.Image (Pm.Effective (Store, "", "", Within_Sandbox => False)))
+                        loop
+                           Append (Left, (if Left = Null_Unbounded_String then "" else "; ") & Line);
+                        end loop;
+                        S.Close (Store);
+                        Pres.Put_Message
+                          (Screen, "cli.project.sandbox.effective",
+                           [Loc.Named ("value", (if Left = Null_Unbounded_String then "nothing"
+                                                 else To_String (Left)))]);
+                     end if;
+                  end;
+               end if;
             else
                --  In the form /sandbox takes back: capabilities a ; apart.
                declare
@@ -3038,7 +3179,9 @@ package body Model_Runner.CLI.Project_Commands is
       --  A sandbox is a session's: from the shell it is said how to give
       --  one to a command, not set for nothing.
       if Word = "sandbox" and then Rest /= "" then
-         Pres.Put_Note (Screen, "cli.project.sandbox.shell", [Loc.Named ("value", Rest)]);
+         Pres.Put_Note (Screen, "cli.project.sandbox.shell",
+                        [Loc.Named ("value", (if Ada.Strings.Fixed.Index (Rest, "TASK-") = Rest'First
+                                              then Rest else "TASK-ID"))]);
          Status := E.Exit_Success;
          return;
       end if;

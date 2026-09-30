@@ -93,6 +93,12 @@ package Model_Runner.Framework.Permissions is
       Level   : String;
       Present : out Boolean) return Permission_Set;
 
+   --  What a project that says nothing of its permissions gives: enough to
+   --  work and no more. A project capability written as inherit is this.
+   --
+   --  @return The default grants.
+   function Project_Default return Permission_Set;
+
    --  The same, from a configuration not yet kept: one a change would
    --  make.
    --

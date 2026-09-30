@@ -1782,6 +1782,46 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Eleventh usability round:**
+  - `check REQ` and `task verify` judge a failed run by the files it
+    failed in, as `check full` does: another requirement's failing test no
+    longer takes this one's verification away.
+  - Permissions: a level that names one capability writes the others as
+    `inherit`, following the level above as it changes rather than frozen
+    as it was; `inherit` at the project is its default; `=off` of a whole
+    level is refused; a stray word after `roots=` is refused; the hints
+    after a refused write, a withheld propose_tasks or a depth limit name
+    the level to change instead of a retry that fails the same way;
+    `sandbox` shows what the project's permissions give; a task's cleared
+    permissions say it takes its kind's, and `permissions=inherit` clears
+    them.
+  - A decision may govern several settings, each kept; two components may
+    not share a root, and overlap warnings are said only for the change
+    that makes them; `--quiet` never hides a question.
+  - Requirement states are judged at the end of every task command, not at
+    the next one's opening; `req supersede` refuses a verified replacement
+    unless asked `anyway`, and leaves the old work where the replacement
+    has its own; a cancel names what waits on it, and what waits on a task
+    ended undone says how on, in `work`, `plan` and the list.
+  - Rejected derived work, stale document issues, decision clashes (whole,
+    with the way on), `set.X=off`, git's output when a workspace is given
+    up, the lock message, `work` with only integrations waiting, splits of
+    candidates, parts' next steps, chooser rows waiting to be taken in,
+    `none` in a sandbox, the `sandbox TASK` hint, an agent command without
+    `$PROMPT`, `req link` (paths, unknown tasks, repeats, self-dependency),
+    missing-component hints, `bootstrap DIR` and repeated files, retired
+    requirements pointing to their replacement, `/impact --verbose`, the
+    opening notice in read-only commands, Ctrl-D, Ctrl-C and Esc at an
+    `/init` question, `/help NAME`, documentation tasks that changed
+    nothing, reported files that did not change, and the parts prompt at a
+    depth limit are all put right.
+  - Smaller: `work` checks the task before the agent, `depend … remove` of
+    nothing, `integrate` words, audit lines, one wording for files left
+    behind, refused-write text, "the task failed", config defaults and
+    permission values, summaries given as none, the repeated-call note,
+    derive and placement notes, `SPEC-001` rather than `SPEC-SPEC-001`,
+    `req ACTION` of no action, `req ID` listing its work and evidence,
+    `impact .`, `trace DIR`, `trace component:X`, "governed", and more.
 - **Tenth usability round:**
   - A whole-suite run that failed only in other requirements' files no
     longer takes a requirement's verification away; the init check warning

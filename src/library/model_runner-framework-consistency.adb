@@ -417,8 +417,13 @@ package body Model_Runner.Framework.Consistency is
                            Found (Missing_Component, Id,
                                   "it is in " & Records.Get (Defined, "component") & ", and "
                                   & Requirement & " it serves belongs to " & Linked.First_Element
-                                  & ": task edit " & Id & " --set component="
-                                  & Linked.First_Element & " places it there");
+                                  & (if Tasks.Components (Item).Contains (Linked.First_Element)
+                                     then ": task edit " & Id & " --set component="
+                                          & Linked.First_Element & " places it there"
+                                     else ", which is none of the project's components: req unlink "
+                                          & Requirement & " component " & Linked.First_Element
+                                          & ", or reconfigure map.component." & Linked.First_Element
+                                          & "=roots=DIR makes it one"));
                         end if;
                      end;
                   end loop;
@@ -481,16 +486,21 @@ package body Model_Runner.Framework.Consistency is
             Served : Boolean := False;
             Held   : Intent.Entity;
             Read   : E.Error_Info;
+            Ended  : Unbounded_String;
          begin
             for Other of Tasks.List (Item) loop
                declare
                   Defined : Records.Item;
                begin
                   Tasks.Definition (Item, Other, Defined, Read);
-                  Served := Served
-                    or else (E.Is_Ok (Read)
-                             and then Tasks.State_Of (Item, Other) not in "cancelled" | "rejected"
-                             and then Lines_Of (Records.Get (Defined, "requirements")).Contains (Id));
+                  if E.Is_Ok (Read) and then Lines_Of (Records.Get (Defined, "requirements")).Contains (Id)
+                  then
+                     if Tasks.State_Of (Item, Other) in "cancelled" | "rejected" then
+                        Ended := To_Unbounded_String (Other);
+                     else
+                        Served := True;
+                     end if;
+                  end if;
                end;
             end loop;
             Served := Served
@@ -503,6 +513,13 @@ package body Model_Runner.Framework.Consistency is
                        then "it is accepted and no task serves it, as its scope "
                             & To_String (Held.Scope) & " is none of the project's components; req link "
                             & Id & " component NAME places it, and a task is derived for it"
+                       elsif Ended /= Null_Unbounded_String
+                       then "it is accepted and no task serves it: " & To_String (Ended) & " was "
+                            & Tasks.State_Of (Item, To_String (Ended)) & ", and "
+                            & (if Tasks.State_Of (Item, To_String (Ended)) = "rejected"
+                               then "task reconsider " else "task reopen ")
+                            & To_String (Ended) & " takes it back, or task new TITLE --set kind=KIND"
+                            & " --set requirements=" & Id & " makes another"
                        else "it is accepted and no task serves it: task derive makes one, or task"
                             & " new TITLE --set kind=KIND --set requirements=" & Id));
             end if;
@@ -559,6 +576,10 @@ package body Model_Runner.Framework.Consistency is
          end Holds_File;
       begin
          for Id of Intent.List (Item, Intent.Requirement) loop
+            --  One retired links nothing that matters now.
+            if Intent.State_Of (Item, Intent.Requirement, Id) in "obsolete" | "rejected" | "superseded" then
+               goto Next_Requirement;
+            end if;
             for Relation in Intent.Implementation .. Intent.Test loop
                if Intent."/=" (Relation, Intent.Task_Link) then
                   for Target of Intent.Links (Item, Intent.Requirement, Id, Relation) loop
@@ -587,6 +608,7 @@ package body Model_Runner.Framework.Consistency is
                          & " takes the link away");
                end if;
             end loop;
+            <<Next_Requirement>>
          end loop;
       end;
 

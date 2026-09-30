@@ -776,8 +776,15 @@ package body Model_Runner.Framework.Bootstrap is
                         Summary    => To_Unbounded_String
                                         (Field (Next.Source) & " gives " & Given
                                          & ", which the project already has; it was made as "
-                                         & To_String (Id) & ", "
-                                         & Intent.State_Of (Item, Kind, To_String (Id))),
+                                         & To_String (Id) & ", " & State_Said (Intent.First_State (Kind))
+                                         & " -- give it an identifier the project does not have in "
+                                         & Field (Next.Source) & ", and "
+                                         & (case Kind is
+                                               when Intent.Decision      => "decision",
+                                               when Intent.Specification => "spec",
+                                               when Intent.Requirement   => "req")
+                                         & " reject " & To_String (Id) & " takes the one made here"
+                                         & " away"),
                         Payload    => Next.Text,
                         Provenance => Next.Provenance,
                         others     => <>);
@@ -891,8 +898,12 @@ package body Model_Runner.Framework.Bootstrap is
                                  Producer   => To_Unbounded_String ("bootstrap"),
                                  Summary    => To_Unbounded_String
                                                  (Field (Next.Source) & " gives " & Given
-                                                  & ", which the project already has; it was"
-                                                  & " made as " & To_String (Id)
+                                                  & (if Intent.Find_By_Provenance
+                                                          (Item, Intent.Requirement,
+                                                           Field (Next.Source) & "#" & Given) /= ""
+                                                     then " twice; the second"
+                                                     else ", which the project already has; it")
+                                                  & " was made as " & To_String (Id)
                                                   & ", a candidate"),
                                  Payload    => Next.Text,
                                  Provenance => Next.Provenance,

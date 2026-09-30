@@ -865,7 +865,12 @@ package body Model_Runner.Framework.Workspaces is
       Worked : Boolean;
       Home   : constant String := Dirs.Containing_Directory (To_String (Held.Path));
    begin
-      if Held.Kind = Git_Worktree then
+      --  Only a tree git keeps as a worktree -- its .git file there -- is
+      --  removed through git; another has nothing for git to say of it, and
+      --  asking prints git's refusal to the terminal.
+      if Held.Kind = Git_Worktree
+        and then Dirs.Exists (Hostkit.Fs.Join (To_String (Held.Path), ".git"))
+      then
          declare
             Ignored : constant String :=
               Git (Project_Of (Item),

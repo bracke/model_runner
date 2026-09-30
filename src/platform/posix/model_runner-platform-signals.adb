@@ -89,7 +89,7 @@ package body Model_Runner.Platform.Signals is
             begin
                Said := True;
             end;
-         elsif not Waiting and then not Told and then Seen = 1 then
+         elsif not Waiting and then not Told then
             --  The terminal echoed ^C where the line was: what is said of
             --  the stop starts on a line of its own.
             declare

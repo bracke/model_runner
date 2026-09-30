@@ -4,12 +4,14 @@ with Ada.Streams;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
 with Ada.Text_IO;
+with Interfaces.C_Streams;
 
 with Hostkit.Descriptors;
 with Hostkit.Terminal_Control;
 
 with Model_Runner.Localization;
 with Model_Runner.Platform;
+with Model_Runner.Platform.Signals;
 
 package body Model_Runner.CLI.Choosers is
 
@@ -155,6 +157,10 @@ package body Model_Runner.CLI.Choosers is
       if Item.Done then
          return;
       end if;
+      --  The mark of a refused Enter lasts until the next key.
+      if Pressed.Kind /= Return_Key then
+         Item.Told := False;
+      end if;
 
       --  Typing a filter takes the keys that are characters; the moves and
       --  Enter and Escape still mean what they mean, Escape ending the
@@ -225,8 +231,10 @@ package body Model_Runner.CLI.Choosers is
                   Item.Result := Item.Visible (Item.Cursor);
                   Item.Done := True;
                else
-                  --  Why it cannot be taken, rather than taking it.
+                  --  Why it cannot be taken, rather than taking it: shown
+                  --  whether or not details were on already.
                   Item.Details := True;
+                  Item.Told := True;
                end if;
             end if;
          when Escape =>
@@ -301,6 +309,7 @@ package body Model_Runner.CLI.Choosers is
       if Item.Details and then Item.Cursor > 0 then
          Details := Framework.Lines_Of
            (To_String (Item.Items (Item.Visible (Item.Cursor)).Details));
+
       end if;
 
       --  The title, the list, a blank, the details, the keys.
@@ -569,12 +578,29 @@ package body Model_Runner.CLI.Choosers is
    end Choose;
 
    --  A line typed at the terminal, or nothing at the end of input.
+   --  Given up by Ctrl-D, Ctrl-C or Esc: the question is, not whatever
+   --  asked it -- a session goes on reading after it.
    function Line (Ended : out Boolean) return String is
+      Before : constant Natural := Model_Runner.Platform.Signals.Interrupts;
    begin
       Ended := False;
-      return Ada.Text_IO.Get_Line;
+      declare
+         Typed : constant String := Ada.Text_IO.Get_Line;
+      begin
+         if Model_Runner.Platform.Signals.Interrupts /= Before
+           or else Ada.Strings.Fixed.Index (Typed, [1 => ASCII.ESC]) > 0
+           or else Ada.Strings.Fixed.Index (Typed, [1 => ASCII.ETX]) > 0
+         then
+            Ended := True;
+            return "";
+         end if;
+         return Typed;
+      end;
    exception
       when Ada.Text_IO.End_Error =>
+         --  Ctrl-D ends the answer, not the input: the terminal's end mark
+         --  is let go of, so what reads after it reads on.
+         Interfaces.C_Streams.clearerr (Interfaces.C_Streams.stdin);
          Ended := True;
          return "";
    end Line;
@@ -681,7 +707,9 @@ package body Model_Runner.CLI.Choosers is
       declare
          Shown : constant String := (if Secret then "" else Default);
       begin
-         Pres.Put_Note
+         --  A question is asked however quiet: without it the answer is
+         --  waited for unasked.
+         Pres.Put_Aside
            (Screen,
             (if Detail /= "" and then Shown /= "" then "cli.choose.field"
              elsif Detail /= "" then "cli.choose.field.no_default"

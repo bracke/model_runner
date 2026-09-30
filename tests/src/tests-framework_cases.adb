@@ -8448,6 +8448,20 @@ package body Tests.Framework_Cases is
             Given := Pm.Level_Of (Config, "kind.analysis", Present);
             Assert (not Present and then not Given (Pm.Write_Source).Granted,
                     "a level a configuration says nothing of was said to be there");
+            --  inherit: the level above's, and the project's default at the
+            --  top.
+            Model_Runner.Framework.Records.Set
+              (Config, "map.permission.kind.test.read_source", "inherit");
+            Given := Pm.Level_Of (Config, "kind.test", Present);
+            Assert (Given (Pm.Read_Source).Granted and then Given (Pm.Read_Source).Roots.Is_Empty,
+                    "a capability a level inherits was not taken from above");
+            Model_Runner.Framework.Records.Set
+              (Config, "map.permission.project.create_children", "inherit");
+            Given := Pm.Level_Of (Config, "project", Present);
+            Assert (Present
+                    and then Given (Pm.Create_Children).Max_Depth
+                             = Pm.Project_Default (Pm.Create_Children).Max_Depth,
+                    "the project's inherit was not its default");
          end;
       end;
 
@@ -8519,6 +8533,14 @@ package body Tests.Framework_Cases is
                    = "scalar.work.isolation = workspace",
                  "what an entry governs was not said: "
                  & Nt.Governs (Store, Nt.Requirement, To_String (R1)));
+         --  A second setting kept beside the first, not over it.
+         Nt.Govern (Store, Change, Nt.Requirement, To_String (R1), "scalar.work.agent",
+                    "scripted", "", Status);
+         S.Commit (Store, Change, Status);
+         Assert (Nt.Governs (Store, Nt.Requirement, To_String (R1)) = "scalar.work.agent = scripted"
+                 and then Nt.Also_Governs (Store, Nt.Requirement, To_String (R1)).Contains
+                            ("scalar.work.isolation = workspace"),
+                 "governing a second setting dropped the first");
          Assert (Model_Runner.Framework.Configurations.Known_Names.Contains ("scalar.work.agent"),
                  "the settings the harness reads were not known");
       end;

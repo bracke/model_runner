@@ -240,7 +240,7 @@ package body Model_Runner.Presentation is
       --  said as the session types them.
       Put_Line (Item, (if Item.Session
                          and then Key in "cli.task.item" | "cli.task.field" | "cli.work.issue_kept"
-                                       | "cli.work.kept_back"
+                                       | "cli.work.kept_back" | "cli.project.config_none"
                        then As_Typed_In_Session (Message (Item, Key, Arguments))
                        else Message (Item, Key, Arguments)));
    end Put_Message;
@@ -382,7 +382,8 @@ package body Model_Runner.Presentation is
            or else Here ("decision new") or else Here ("spec new") or else Here ("result dismiss")
            or else Here ("task reopen") or else Here ("task reconsider") or else Here ("task derive")
            or else Here ("req reconsider") or else Here ("req verify") or else Here ("decision link")
-           or else Here ("task verify") or else Here ("task resolve") or else Here ("result lists");
+           or else Here ("task verify") or else Here ("task resolve") or else Here ("result lists")
+           or else Here ("config lists");
       end Names_A_Command;
 
       --  Whether the word before a place is one a noun follows -- a
@@ -719,7 +720,12 @@ package body Model_Runner.Presentation is
             Hint : constant String :=
               E.Recovery_Hint (Condition.Code);
          begin
-            if Hint = "diagnostic.hint.usage" and then Item.Session then
+            if Hint = "diagnostic.hint.usage" and then Item.Session
+              and then E."=" (Condition.Code, E.CLI_Unknown_Command)
+            then
+               --  The error says where the commands are listed already.
+               null;
+            elsif Hint = "diagnostic.hint.usage" and then Item.Session then
                Put_Note (Item, "diagnostic.hint.usage_session");
             elsif Hint /= "" then
                Put_Note (Item, Hint);

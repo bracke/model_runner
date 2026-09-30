@@ -345,8 +345,15 @@ package body Model_Runner.Framework.Intent is
       else
          --  Made, and made again past any a source gave that has the number.
          loop
+            --  A key that only says the register again -- spec.md's SPEC
+            --  among specifications -- is no key: SPEC-001, not SPEC-SPEC-001.
             Stores.Allocate_Identifier
-              (Item, Change, Namespace (Kind), Key, Id, Status);
+              (Item, Change, Namespace (Kind),
+               (if Key = Namespace (Kind) or else Key & "S" = Namespace (Kind)
+                  or else Key = Namespace (Kind) & "S" or else Key = Namespace (Kind) & "IFICATIONS"
+                  or else Key = Namespace (Kind) & "UIREMENTS" or else Key = Namespace (Kind) & "ISIONS"
+                then "" else Key),
+               Id, Status);
             if E.Is_Error (Status) then
                return;
             end if;
@@ -395,6 +402,34 @@ package body Model_Runner.Framework.Intent is
         & (if Records.Get (Value, "overrides") = "" then ""
            else " (over " & Records.Get (Value, "overrides") & ")");
    end Governs;
+
+   ------------------
+   -- Also_Governs --
+   ------------------
+
+   function Also_Governs (Item : Stores.Store; Kind : Intent_Kind; Id : String) return Name_Lists.Vector is
+      Value  : Records.Item;
+      Status : E.Error_Info;
+      Result : Name_Lists.Vector;
+   begin
+      Stores.Read (Item, Area_Of (Kind), Id, Value, Status);
+      if E.Is_Ok (Status) then
+         for Line of Split_Lines (Records.Get (Value, "also_governs")) loop
+            declare
+               First  : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
+               Second : constant Natural :=
+                 (if First = 0 then 0 else Ada.Strings.Fixed.Index (Line (First + 1 .. Line'Last), [1 => ASCII.HT]));
+            begin
+               if First > Line'First and then Second > First then
+                  Result.Append (Line (Line'First .. First - 1) & " = " & Line (First + 1 .. Second - 1)
+                                 & (if Second = Line'Last then ""
+                                    else " (over " & Line (Second + 1 .. Line'Last) & ")"));
+               end if;
+            end;
+         end loop;
+      end if;
+      return Result;
+   end Also_Governs;
 
    --------------
    -- State_Of --
@@ -715,6 +750,31 @@ package body Model_Runner.Framework.Intent is
          --  is kept, what it governs is part of what it means, and it is
          --  said.
          Keep_Earlier (Item, Change, Kind, Id);
+         --  Ruling on another setting than the one it governs: that one is
+         --  kept beside it, not dropped; on the same, it is replaced.
+         declare
+            Before : constant String := Records.Get (Value, "governs");
+            Kept_Too : Unbounded_String;
+         begin
+            for Line of Split_Lines (Records.Get (Value, "also_governs")) loop
+               declare
+                  Tab : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
+               begin
+                  if Tab > Line'First and then Line (Line'First .. Tab - 1) /= Subject then
+                     Append (Kept_Too, Line & ASCII.LF);
+                  end if;
+               end;
+            end loop;
+            if Before /= "" and then Before /= Subject then
+               Append (Kept_Too, Before & ASCII.HT & Records.Get (Value, "ruling") & ASCII.HT
+                       & Records.Get (Value, "overrides") & ASCII.LF);
+            end if;
+            if Kept_Too = Null_Unbounded_String then
+               Records.Remove (Value, "also_governs");
+            else
+               Records.Set (Value, "also_governs", To_String (Kept_Too));
+            end if;
+         end;
          Records.Set (Value, "governs", Subject);
          Records.Set (Value, "ruling", Ruling);
          Records.Set (Value, "overrides", Overrides);

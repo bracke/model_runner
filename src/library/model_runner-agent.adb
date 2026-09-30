@@ -385,8 +385,9 @@ package body Model_Runner.Agent is
 
                Repeat_Note : constant String :=
                  "error: this exact call was already made in this "
-                 & "conversation; use its earlier result rather than "
-                 & "repeating the call";
+                 & "conversation, and its result is above; where that "
+                 & "was an error, the same call gives it again -- change "
+                 & "the call, or do something else";
             begin
                --  Decide each call in order: dedup, then approval.
                Plan_Calls :

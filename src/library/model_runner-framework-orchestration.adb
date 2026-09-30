@@ -322,11 +322,26 @@ package body Model_Runner.Framework.Orchestration is
             Status : E.Error_Info;
          begin
             Stores.Read (Item, Tasks_Area, Id & ".state", Value, Status);
-            Result.Append (Id & ": blocked, "
-                           & (if Records.Get (Value, "blocking_reasons") = ""
-                              then "moved there by hand; task accept " & Id & " takes it up again"
-                              else Records.Get (Value, "blocking_reasons")));
+            --  Waiting for its parts is waiting, not a judgment to make.
+            if Ada.Strings.Fixed.Index (Records.Get (Value, "blocking_reasons"), "waiting for its children") /= 1
+            then
+               Result.Append (Id & ": blocked, "
+                              & (if Records.Get (Value, "blocking_reasons") = ""
+                                 then "moved there by hand; task accept " & Id & " takes it up again"
+                                 else Records.Get (Value, "blocking_reasons")));
+            end if;
          end;
+      end loop;
+      --  Waiting for work that ended undone: let go, or have it done.
+      for Id of Tasks.List (Item, "accepted") loop
+         for Reason of Tasks.Ready (Item, Id).Reasons loop
+            if Ada.Strings.Fixed.Index (Reason, ", which is cancelled") > 0
+              or else Ada.Strings.Fixed.Index (Reason, ", which is rejected") > 0
+            then
+               Result.Append (Id & ": " & Reason & "; task depend " & Id & " TASK remove lets it go"
+                              & " on without, or task reopen TASK has it done");
+            end if;
+         end loop;
       end loop;
       --  Failed: tried again, or done by hand.
       for Id of Tasks.List (Item, "failed") loop

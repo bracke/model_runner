@@ -222,9 +222,9 @@ package body Model_Runner.CLI.Repo is
       Status := E.Exit_Success;
       for Line of Recovered loop
          --  In a session, what does not hold together was said as it opened.
-         if not (Pres.In_Session (Screen)
-                 and then Ada.Strings.Fixed.Index (Line, "what does not hold together") = Line'First)
-         then
+         --  A reading of the repository is no place for what does not
+         --  hold together in the state.
+         if Ada.Strings.Fixed.Index (Line, "what does not hold together") /= Line'First then
             Pres.Put_Note (Screen, "cli.project.recovered", [Loc.Named ("detail", Line)]);
          end if;
       end loop;
@@ -409,8 +409,38 @@ package body Model_Runner.CLI.Repo is
                      Shown : Model_Runner.Framework.Name_Lists.Vector;
                      State_Edges, Code_Edges : Model_Runner.Framework.Name_Lists.Vector;
                   begin
+                     --  A component the project has not: said, not traced.
+                     if Ada.Strings.Fixed.Index (Argument, "component:") = Argument'First
+                       and then not Tk.Components (Store).Contains
+                                      (Argument (Argument'First + 10 .. Argument'Last))
+                     then
+                        Outcome := E.Make (E.Framework_Not_Found);
+                        E.Add_Text (Outcome, "name", "a component called "
+                                    & Argument (Argument'First + 10 .. Argument'Last));
+                        Fail (Outcome);
+                        S.Close (Store);
+                        return;
+                     end if;
                      Nodes.Append (Argument);
                      Nodes.Append ("file:" & Argument);
+                     --  A directory is its files.
+                     if Argument'Length > 0 and then Ada.Directories.Exists (Hostkit.Fs.Join (Directory, Argument))
+                       and then Ada.Directories."=" (Ada.Directories.Kind (Hostkit.Fs.Join (Directory, Argument)),
+                                                     Ada.Directories.Directory)
+                     then
+                        for Index in 1 .. Rp.File_Count (Found) loop
+                           declare
+                              Path : constant String := To_String (Rp.File_At (Found, Index).Path);
+                              Bare : constant String :=
+                                (if Argument (Argument'Last) = '/' then Argument (Argument'First .. Argument'Last - 1)
+                                 else Argument);
+                           begin
+                              if Ada.Strings.Fixed.Index (Path, Bare & "/") = Path'First then
+                                 Nodes.Append ("file:" & Path);
+                              end if;
+                           end;
+                        end loop;
+                     end if;
                      Nodes.Append (Revision_Node (Argument));
                      for Name of Rp.Find_Symbols (Found, Argument) loop
                         Nodes.Append ("symbol:" & Name);
@@ -659,7 +689,7 @@ package body Model_Runner.CLI.Repo is
                         end loop;
                         Pres.Put_Message
                           (Screen, "cli.repo.impact_summary",
-                           [Loc.Named ("name", Argument),
+                           [Loc.Named ("name", (if Argument = "" then "the project" else Argument)),
                             Loc.Named ("count", Image (Natural (All_Reached.Length))),
                             Loc.Named ("detail", To_String (Counts))]);
                      end;

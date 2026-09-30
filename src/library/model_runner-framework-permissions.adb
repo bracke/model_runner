@@ -93,6 +93,13 @@ package body Model_Runner.Framework.Permissions is
          begin
             if Key = "" then
                null;
+            elsif Equal = 0 and then To_String (Last_Key) in "roots" | "deny"
+              and then Ada.Strings.Fixed.Index (Key, "/") = 0 and then Ada.Strings.Fixed.Index (Key, ".") = 0
+            then
+               --  A word after the roots that names no path is a slip, not a
+               --  root: src/ or README.md are, bogus is not.
+               return Key & " is no path: a root after " & To_String (Last_Key)
+                 & "= is a directory, as src/, or a file, as README.md";
             elsif Equal = 0 and then To_String (Last_Key) in "roots" | "deny" | "profiles" then
                null;
             elsif Equal = 0 then
@@ -199,6 +206,22 @@ package body Model_Runner.Framework.Permissions is
       return Level_Of (Config, Level, Present);
    end Level_Of;
 
+   ---------------------
+   -- Project_Default --
+   ---------------------
+
+   function Project_Default return Permission_Set is
+      Result : Permission_Set := Nothing;
+   begin
+      for Item_Kind in Read_Source .. Run_Tests loop
+         Result (Item_Kind).Granted := True;
+      end loop;
+      Result (Create_Children) :=
+        (Granted => True, Max_Depth => 1, Max_Children => 2, others => <>);
+      Result (Propose_Tasks).Granted := True;
+      return Result;
+   end Project_Default;
+
    function Level_Of
      (Config  : Records.Item;
       Level   : String;
@@ -213,7 +236,16 @@ package body Model_Runner.Framework.Permissions is
          begin
             if Records.Has (Config, Field) then
                Present := True;
-               Result (Item_Kind) := Constrained (Records.Get (Config, Field));
+               --  inherit: what the level above gives, read when it is
+               --  asked -- the project's default for the project, and for
+               --  a kind or role no narrowing of the level above at all.
+               if Records.Get (Config, Field) = "inherit" then
+                  Result (Item_Kind) :=
+                    (if Level = "project" then Project_Default (Item_Kind)
+                     else (Granted => True, others => <>));
+               else
+                  Result (Item_Kind) := Constrained (Records.Get (Config, Field));
+               end if;
             end if;
          end;
       end loop;
@@ -403,7 +435,7 @@ package body Model_Runner.Framework.Permissions is
    --  What the shell set, where off -- as /sandbox off -- is no confinement.
    function Shell_Text return String
    is (if Ada.Environment_Variables.Exists (Sandbox_Variable)
-         and then Trim (Ada.Environment_Variables.Value (Sandbox_Variable)) not in "off" | "none"
+         and then Trim (Ada.Environment_Variables.Value (Sandbox_Variable)) /= "off"
        then Ada.Environment_Variables.Value (Sandbox_Variable) else "");
 
    function Sandbox return Permission_Set is
@@ -484,6 +516,16 @@ package body Model_Runner.Framework.Permissions is
       Restriction (Text, Ignored, Status);
       if E.Is_Ok (Status) then
          Session_Text := To_Unbounded_String (Text);
+      else
+         --  Said as what it is: a sandbox that does not read.
+         declare
+            Why : constant String := E.Text_Of (Status, "detail");
+         begin
+            Status := E.Make (E.Framework_Input_Invalid);
+            E.Add_Text (Status, "name", "the sandbox");
+            E.Add_Text (Status, "value", Text);
+            E.Add_Text (Status, "detail", Why & "; off lifts the sandbox");
+         end;
       end if;
    end Set_Sandbox;
 
@@ -508,13 +550,7 @@ package body Model_Runner.Framework.Permissions is
       --  builds and tests, propose tasks, and hand a part of their work to
       --  at most two children one level down, and nothing more.
       if not Present then
-         Project := Nothing;
-         for Item_Kind in Read_Source .. Run_Tests loop
-            Project (Item_Kind).Granted := True;
-         end loop;
-         Project (Create_Children) :=
-           (Granted => True, Max_Depth => 1, Max_Children => 2, others => <>);
-         Project (Propose_Tasks).Granted := True;
+         Project := Project_Default;
       end if;
       Result := Intersect (Project, Runtime);
       if Within_Sandbox then

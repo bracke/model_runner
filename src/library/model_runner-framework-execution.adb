@@ -388,7 +388,8 @@ package body Model_Runner.Framework.Execution is
          return "there is nothing to run";
       elsif Needs_Shell (Command) then
          return (if Rules.Shell_Allowed then ""
-                 else "it needs a shell, and the policy does not allow one");
+                 else "it needs a shell, and the policy does not allow one; reconfigure"
+                      & " scalar.execution.shell=allowed lets checks use one");
       elsif not Rules.Allowed.Contains (Words.First_Element)
         and then not Rules.Allowed.Contains (Ada.Directories.Simple_Name (Words.First_Element))
       then

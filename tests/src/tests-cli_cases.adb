@@ -2249,7 +2249,7 @@ package body Tests.CLI_Cases is
       Assert (Code /= 0 and then Shows ("it is a profile ("),
               "check of no profile did not list them: " & To_String (Said));
       Run ("config|auto_accept");
-      Assert (Shows ("(not set)"), "config did not show a setting that is not set: " & To_String (Said));
+      Assert (Shows ("(not set"), "config did not show a setting that is not set: " & To_String (Said));
       Run ("result");
       Assert (Code = 0, "result with nothing named failed: " & To_String (Said));
       Run ("result|TASK-001");
@@ -2279,7 +2279,8 @@ package body Tests.CLI_Cases is
          Id    : constant String := (if At_Id > Start then Text (Start .. At_Id - 1) else "TASK-000");
       begin
          Run ("work|" & Id);
-         Assert (Code /= 0 and then Shows ("next: task accept " & Id),
+         --  The way on, in the refusal itself or after it.
+         Assert (Code /= 0 and then Shows ("task accept " & Id),
                  "work on a candidate gave no next step: " & To_String (Said));
       end;
       Run ("task|rehome|nowhere|elsewhere");

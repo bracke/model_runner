@@ -495,7 +495,8 @@ package body Model_Runner.CLI.Work is
       end Title_Of;
 
       procedure Say_What_Is_Ready is
-         Ready     : Natural := 0;
+         Ready       : Natural := 0;
+         Integrating : Natural := 0;
          Candidate : constant Natural := Natural (Tk.List (Store, "candidate").Length);
       begin
          for Id of Tk.List (Store, "accepted") loop
@@ -515,6 +516,7 @@ package body Model_Runner.CLI.Work is
          --  Work done and waiting on a person to take it in: said too.
          for Id of Tk.List (Store, "verification") loop
             if Model_Runner.Framework.Workspaces.Active_For (Store, Id) /= "" then
+               Integrating := Integrating + 1;
                Pres.Put_Note
                  (Screen, "cli.next.waits_integration",
                   [Loc.Named ("name", Id), Loc.Named ("value", Title_Of (Id)),
@@ -531,7 +533,7 @@ package body Model_Runner.CLI.Work is
             Pres.Put_Note
               (Screen, "cli.next.accept",
                [Loc.Named ("count", T.Image (Long_Long_Integer (Candidate)))]);
-         elsif Ready = 0 then
+         elsif Ready = 0 and then Integrating = 0 then
             Pres.Put_Note (Screen, "cli.next.create");
          end if;
       end Say_What_Is_Ready;
@@ -566,10 +568,19 @@ package body Model_Runner.CLI.Work is
             return Pres.Next_Step_Value (Screen, "cli.next.integrate", [Loc.Named ("name", Id)]);
          end if;
          --  Parts not done: they come first.
+         --  Each part with the step it waits for, as it stands.
          for Child of Tk.Children (Store, Id) loop
             if Tk.State_Of (Store, Child) not in "complete" | "cancelled" | "rejected" then
-               Append (Waiting, (if Waiting = Null_Unbounded_String then "" else ", ")
-                                & Child & " " & Tk.State_Of (Store, Child));
+               Append (Waiting, (if Waiting = Null_Unbounded_String then "" else "; ")
+                       & (if Tk.State_Of (Store, Child) = "candidate" then "task accept " & Child
+                          elsif Tk.State_Of (Store, Child) = "verification"
+                            and then Model_Runner.Framework.Workspaces.Active_For (Store, Child) /= ""
+                          then "task integrate " & Child
+                          elsif Tk.State_Of (Store, Child) = "running" then Child & " is being worked"
+                          elsif Tk.State_Of (Store, Child) in "blocked" | "failed"
+                          then "task accept " & Child & " (" & Tk.State_Of (Store, Child) & ")"
+                          elsif Tk.Ready (Store, Child).Ready then "work " & Child
+                          else Child & " waits"));
             end if;
          end loop;
          if Waiting /= Null_Unbounded_String then
@@ -591,7 +602,14 @@ package body Model_Runner.CLI.Work is
                end if;
             end;
          end loop;
-         if First /= Null_Unbounded_String then
+         if First /= Null_Unbounded_String
+           and then Tk.State_Of (Store, To_String (First)) in "cancelled" | "rejected"
+         then
+            --  What it waits for has ended undone: done after all, or let go.
+            return Pres.Next_Step_Value
+              (Screen, "cli.task.left_waiting",
+               [Loc.Named ("name", Id), Loc.Named ("value", To_String (First))]);
+         elsif First /= Null_Unbounded_String then
             return Pres.Next_Step_Value
               (Screen, "cli.next.waits_first",
                [Loc.Named ("name", Id), Loc.Named ("value", To_String (First)),
@@ -853,7 +871,9 @@ package body Model_Runner.CLI.Work is
                                    else ", serving " & On_One_Line (R.Get (Defined, "requirements")))
                                 & ASCII.LF);
                         if not Now.Ready then
-                           Append (Why, "not workable yet (" & Tk.State_Of (Store, Id) & ")"
+                           Append (Why, (if Tk.State_Of (Store, Id) = "verification"
+                                         then "not worked here: its work waits to be taken in"
+                                         else "not workable now (" & Tk.State_Of (Store, Id) & ")")
                                    & ASCII.LF);
                         end if;
                         for Reason of Now.Reasons loop
@@ -903,6 +923,24 @@ package body Model_Runner.CLI.Work is
       end if;
 
       loop
+         --  One that cannot be worked is said so before any agent is looked
+         --  for: what it waits for comes first.
+         if not Tk.Ready (Store, To_String (Chosen)).Ready then
+            Outcome := E.Make (E.Framework_Task_Not_Ready);
+            E.Add_Text (Outcome, "name", To_String (Chosen));
+            E.Add_Text (Outcome, "detail",
+                        (if Tk.Ready (Store, To_String (Chosen)).Reasons.Is_Empty then "it is not ready"
+                         else Tk.Ready (Store, To_String (Chosen)).Reasons.First_Element));
+            Fail (Outcome);
+            if Way_On (To_String (Chosen)) /= ""
+              and then Ada.Strings.Fixed.Index (E.Text_Of (Outcome, "detail"), "task ") = 0
+            then
+               Pres.Put_Note (Screen, "cli.next.way_on",
+                              [Loc.Named ("detail", Way_On (To_String (Chosen)))]);
+            end if;
+            S.Close (Store);
+            return;
+         end if;
          declare
             --  A runner that knows its model budgets for it; otherwise the
             --  profile the configuration names.
@@ -952,6 +990,13 @@ package body Model_Runner.CLI.Work is
                end if;
                if Command /= "" then
                   Say ("cli.work.runner", Command, To_String (Chosen));
+                  --  A command that names no place for its context is given
+                  --  none: said, as what its answer will lack.
+                  if Ada.Strings.Fixed.Index (Command, "$PROMPT") = 0
+                    and then Ada.Strings.Fixed.Index (Command, "${prompt}") = 0
+                  then
+                     Pres.Put_Note (Screen, "cli.work.no_prompt");
+                  end if;
                elsif Given_Runner /= null then
                   Say ("cli.work.runner", Pres.Message_Value (Screen, "cli.work.runner.session"),
                        To_String (Chosen));
@@ -998,8 +1043,13 @@ package body Model_Runner.CLI.Work is
             then
                Pres.Put_Note (Screen, "cli.next.model");
 
-            --  A task that cannot be worked on: what makes it workable.
-            elsif Way_On (To_String (Chosen)) /= "" then
+            --  A task that cannot be worked on: what makes it workable,
+            --  where the refusal did not say it already.
+            elsif Way_On (To_String (Chosen)) /= ""
+              and then Ada.Strings.Fixed.Index
+                         (E.Text_Of (Outcome, "detail"),
+                          Ada.Strings.Fixed.Trim (To_String (Chosen), Ada.Strings.Both) & " ") = 0
+            then
                Pres.Put_Note (Screen, "cli.next.way_on", [Loc.Named ("detail", Way_On (To_String (Chosen)))]);
             end if;
             S.Close (Store);
@@ -1052,7 +1102,9 @@ package body Model_Runner.CLI.Work is
             Say ("cli.work.waits_for", Other, To_String (Done.Task_Id));
          end loop;
          if Done.Claimed /= Null_Unbounded_String then
-            Say ("cli.work.claimed", To_String (Done.Claimed), To_String (Done.Summary));
+            Say ("cli.work.claimed", To_String (Done.Claimed),
+                 (if Done.Summary = Null_Unbounded_String then "(it gave no summary)"
+                  else To_String (Done.Summary)));
          end if;
          if Done.Scope /= Null_Unbounded_String then
             Say ("cli.work.scope",
@@ -1150,7 +1202,8 @@ package body Model_Runner.CLI.Work is
                   else To_String (Done.Final_State)), "");
          else
             Pres.Put_Message
-              (Screen, "cli.work.ended_because",
+              (Screen, (if To_String (Done.Final_State) = "failed" then "cli.work.failed_because"
+                        else "cli.work.ended_because"),
                [Loc.Named ("name", (if To_String (Done.Final_State) = "verification"
                                     then "in verification" else To_String (Done.Final_State))),
                 Loc.Named ("detail", Pres.Session_Form (Screen, To_String (Done.Reason)))]);
@@ -1167,9 +1220,45 @@ package body Model_Runner.CLI.Work is
             begin
                Pres.Put_Note
                  (Screen, "cli.next.parts",
-                  [Loc.Named ("detail", Reason (From .. (if Stop = 0 then Reason'Last else Stop - 1)))]);
+                  [Loc.Named ("detail", Ada.Strings.Fixed.Translate
+                                          (Reason (From .. (if Stop = 0 then Reason'Last else Stop - 1)),
+                                           Ada.Strings.Maps.To_Mapping (",", " ")))]);
             end;
-         elsif To_String (Done.Final_State) in "failed" | "blocked" then
+         elsif To_String (Done.Final_State) in "failed" | "blocked"
+           and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "files it may not write") > 0
+         then
+            --  A permission refused it: trying again is refused alike. The
+            --  level that withheld it is the one to change.
+            declare
+               Defined : R.Item;
+               Read    : E.Error_Info;
+               Project : constant Pm.Permission_Set :=
+                 Pm.Effective (Store, "", "", Within_Sandbox => False);
+               Kind    : Unbounded_String;
+            begin
+               Tk.Definition (Store, To_String (Done.Task_Id), Defined, Read);
+               Kind := To_Unbounded_String (R.Get (Defined, "kind"));
+               if R.Get (Defined, "permissions") /= "" then
+                  Pres.Put_Note (Screen, "cli.next.own_permissions_refused",
+                                 [Loc.Named ("name", To_String (Done.Task_Id))]);
+               else
+                  Pres.Put_Note
+                    (Screen, "cli.next.write_refused",
+                     [Loc.Named ("name", To_String (Done.Task_Id)),
+                      Loc.Named ("value",
+                                 (if not Project (Pm.Write_Source).Granted
+                                    or else not Project (Pm.Write_Source).Roots.Is_Empty
+                                  then "project"
+                                  else "kind." & To_String (Kind)))]);
+               end if;
+            end;
+         elsif To_String (Done.Final_State) in "failed" | "blocked"
+           and then not (for some Line of Done.Kept_Back =>
+                           Ada.Strings.Fixed.Index (Line, "children") > 0
+                           or else Ada.Strings.Fixed.Index (Line, "may not propose") > 0)
+         then
+            --  Refused for want of leave, a retry is refused alike: the way
+            --  on is said below, with the level that withheld it.
             Pres.Put_Note (Screen, "cli.next.retry", [Loc.Named ("name", To_String (Done.Task_Id))]);
          elsif To_String (Done.Final_State) = "cancelled" then
             Pres.Put_Note (Screen, "cli.next.reopen", [Loc.Named ("name", To_String (Done.Task_Id))]);
@@ -1182,11 +1271,11 @@ package body Model_Runner.CLI.Work is
                   begin
                      Tk.Definition (Store, Other, Defined, Read);
                      if E.Is_Ok (Read)
-                       and then Model_Runner.Framework.Lines_Of
-                                  (Ada.Strings.Fixed.Translate
-                                     (R.Get (Defined, "depends_on"),
-                                      Ada.Strings.Maps.To_Mapping (",", [1 => ASCII.LF])))
-                                  .Contains (To_String (Done.Task_Id))
+                       and then (for some One of Model_Runner.Framework.Lines_Of
+                                                  (Ada.Strings.Fixed.Translate
+                                                     (R.Get (Defined, "depends_on"),
+                                                      Ada.Strings.Maps.To_Mapping (",", [1 => ASCII.LF])))
+                                 => Ada.Strings.Fixed.Trim (One, Ada.Strings.Both) = To_String (Done.Task_Id))
                      then
                         Pres.Put_Note
                           (Screen, "cli.task.left_waiting",
