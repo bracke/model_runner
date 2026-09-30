@@ -2764,7 +2764,7 @@ package body Model_Runner.CLI.Options is
                         Escaped : Ada.Strings.Unbounded.Unbounded_String;
                      begin
                         for C of Argument loop
-                           if C in '"' | '\' then
+                           if C in '"' | '\' | ''' then
                               Ada.Strings.Unbounded.Append (Escaped, '\');
                            end if;
                            Ada.Strings.Unbounded.Append (Escaped, C);

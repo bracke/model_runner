@@ -139,7 +139,9 @@ package body Model_Runner.Framework.Traceability is
                   end if;
                   --  The document it was read from says it: a change there
                   --  reaches it.
-                  if To_String (Held.Source) /= "" then
+                  if To_String (Held.Source) not in "" | "user"
+                    and then To_String (Held.State) not in "rejected" | "obsolete" | "superseded"
+                  then
                      Link (Result, "file:" & To_String (Held.Source), Node, "sources",
                            Repository.Explicit, Repository.Certain, Id);
                   end if;
@@ -254,8 +256,22 @@ package body Model_Runner.Framework.Traceability is
                         (if To_String (Held.Scope) = "project" then "project"
                          else "component:" & To_String (Held.Scope)),
                         "applies_to", Repository.Explicit, Repository.Certain, Id);
-                  if To_String (Held.Source) /= "" then
-                     Link (Result, "file:" & To_String (Held.Source), Id & "@" & Image (Held.Revision),
+               end;
+            end loop;
+
+            --  The document each came from, whatever it is: candidates are
+            --  what a change to it reaches too.
+            for Id of Intent.List (Item, Kind) loop
+               declare
+                  Held   : Intent.Entity;
+                  Status : E.Error_Info;
+               begin
+                  Intent.Read (Item, Kind, Id, Held, Status);
+                  if E.Is_Ok (Status) and then To_String (Held.Source) not in "" | "user"
+                    and then To_String (Held.State) not in "rejected" | "obsolete" | "superseded"
+                  then
+                     Link (Result, "file:" & To_String (Held.Source),
+                           Id & "@" & Image (Held.Revision),
                            "sources", Repository.Explicit, Repository.Certain, Id);
                   end if;
                end;

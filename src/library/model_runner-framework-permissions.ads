@@ -105,14 +105,22 @@ package Model_Runner.Framework.Permissions is
    --  @return The sandbox level.
    function Sandbox return Permission_Set;
 
-   --  Confine the run, or free it: what Sandbox reads afterwards.
+   --  Confine the session, or free it: what Sandbox reads afterwards,
+   --  within whatever MODEL_RUNNER_SANDBOX confines the process to -- a
+   --  session narrows the shell's sandbox, and never lifts it.
    --
-   --  @param Text The restriction; empty to free the run.
+   --  @param Text The restriction; empty to lift the session's own.
    --  @param Status Framework_Schema_Violation when it does not read, and
    --    then nothing changes.
    procedure Set_Sandbox
      (Text   : String;
       Status : out Model_Runner.Errors.Error_Info);
+
+   --  Where the confinement in force comes from, to be said with what it
+   --  refused: MODEL_RUNNER_SANDBOX, the session's /sandbox, both, or none.
+   --
+   --  @return As said; empty where nothing confines the run.
+   function Sandbox_Source return String;
 
    --  What is wrong with the sandbox the environment sets, if anything:
    --  one that does not read confines an agent to nothing.
@@ -232,6 +240,23 @@ package Model_Runner.Framework.Permissions is
    --  @return The first capability that widens, as its word, or the empty
    --    string when none does.
    function Widening (Wider, Than : Permission_Set) return String;
+
+   --  Every capability one set gives beyond the other, as Widening finds
+   --  the first.
+   --
+   --  @param Wider The set that may be wider.
+   --  @param Than The set it should stay within.
+   --  @return Their words, in the order of Capability; empty for none.
+   function Widenings (Wider, Than : Permission_Set) return Name_Lists.Vector;
+
+   --  What a set that asks for more than another gets of each capability it
+   --  asks too much of: each word, with what both allow of it.
+   --
+   --  @param Asked What is asked.
+   --  @param Allowed What the level above allows.
+   --  @return As "create_children (gets max_depth=1 max_children=2),
+   --    use_network (gets none)"; empty where nothing is asked too much.
+   function Clipped (Asked, Allowed : Permission_Set) return String;
 
    --  A set, written as one line a granted capability.
    --

@@ -1327,6 +1327,10 @@ package body Model_Runner.Framework.Configurations is
       Result  : out Change_Plan;
       Status  : out Model_Runner.Errors.Error_Info)
    is
+      --  The permissions this change takes away: taken away after all else,
+      --  so that one level's defaults written out do not grant them again.
+      Taken_Away : Name_Lists.Vector;
+
       --  Whether the level a permission belongs to grants anything: a level
       --  that says something grants only what it says.
       function Level_Said (Name : String) return Boolean is
@@ -1567,6 +1571,9 @@ package body Model_Runner.Framework.Configurations is
             --  A permission is granted by being there, constraints or none:
             --  NAME= grants it with none, NAME=off takes it away.
             if Starts (Name, "map.permission.") then
+               if Given = "off" then
+                  Taken_Away.Append (Name);
+               end if;
                declare
                   Was : constant Boolean := Records.Has (Result.Before, Name);
                   Now : constant Boolean := Given /= "off";
@@ -1666,6 +1673,30 @@ package body Model_Runner.Framework.Configurations is
                end if;
             end if;
          end;
+      end loop;
+
+      --  What is taken away is away, whatever a level's defaults written
+      --  out for another change put back; and the lines that said so kept
+      --  are not said.
+      for Name of Taken_Away loop
+         if Records.Has (Result.After, Name) then
+            Records.Remove (Result.After, Name);
+         end if;
+         declare
+            Kept : Name_Lists.Vector;
+         begin
+            for Line of Result.Changed loop
+               if not (Starts (Line, Name & ": (")
+                       and then Ada.Strings.Fixed.Index (Line, "-> kept") > 0)
+               then
+                  Kept.Append (Line);
+               end if;
+            end loop;
+            Result.Changed := Kept;
+         end;
+         if not (for some Line of Result.Changed => Starts (Line, Name & ":")) then
+            Result.Changed.Append (Name & ": granted -> (not granted)");
+         end if;
       end loop;
 
       --  The whole of it, as it would be.

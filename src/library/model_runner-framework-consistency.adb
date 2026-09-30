@@ -305,31 +305,14 @@ package body Model_Runner.Framework.Consistency is
          end loop;
       end;
 
-      --  A task's component is one the project has: the configuration's
-      --  set.components names it, or a file of the repository is named
-      --  after it, as the traceability graph ties them.
+      --  A task's component is one the project has, as tasks are held to:
+      --  one it lists or places, or the project itself where it lists none.
+      --  A file whose path happens to hold the name is no component.
       declare
-         Files    : constant Repository.Graph :=
-           Repository.Now (Item);
          Listed   : Name_Lists.Vector;
 
-         function Known (Component : String) return Boolean is
-            Name : constant String := Ada.Characters.Handling.To_Lower (Component);
-         begin
-            if Listed.Contains (Component) then
-               return True;
-            end if;
-            for Index in 1 .. Repository.File_Count (Files) loop
-               if Ada.Strings.Fixed.Index
-                    (Ada.Characters.Handling.To_Lower
-                       (Ada.Strings.Unbounded.To_String (Repository.File_At (Files, Index).Path)),
-                     Name) > 0
-               then
-                  return True;
-               end if;
-            end loop;
-            return False;
-         end Known;
+         function Known (Component : String) return Boolean
+         is (Listed.Contains (Component));
       begin
          --  The components as tasks take them: listed, or the project
          --  itself by its name.
@@ -481,8 +464,9 @@ package body Model_Runner.Framework.Consistency is
                if not Tasks.Components (Item).Contains (Target) then
                   Found (Missing_Component, Id,
                          "it belongs to the component " & Target
-                         & ", which is not one of the project's: reconfigure set.components+="
-                         & Target & " makes it one, or req unlink " & Id & " component " & Target
+                         & ", which is not one of the project's: reconfigure map.component."
+                         & Target & "=roots=DIR makes it one, placed where its files are, or req"
+                         & " unlink " & Id & " component " & Target
                          & " takes the link away");
                end if;
             end loop;

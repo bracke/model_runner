@@ -313,10 +313,13 @@ package body Model_Runner.Framework.Permissions is
    -- Sandbox --
    -------------
 
-   function Sandbox return Permission_Set is
-      Text   : constant String :=
-        (if Ada.Environment_Variables.Exists (Sandbox_Variable)
-         then Ada.Environment_Variables.Value (Sandbox_Variable) else "");
+   --  The session's own confinement, set by /sandbox: below the shell's,
+   --  never beside it.
+   Session_Text : Unbounded_String;
+
+   --  One confinement as its text says it: none for none, nothing for one
+   --  that does not read.
+   function Confinement (Text : String) return Permission_Set is
       Result : Permission_Set;
       Status : E.Error_Info;
    begin
@@ -325,7 +328,37 @@ package body Model_Runner.Framework.Permissions is
       end if;
       Restriction (Text, Result, Status);
       return (if E.Is_Ok (Status) then Result else Nothing);
+   end Confinement;
+
+   function Shell_Text return String
+   is (if Ada.Environment_Variables.Exists (Sandbox_Variable)
+       then Ada.Environment_Variables.Value (Sandbox_Variable) else "");
+
+   function Sandbox return Permission_Set is
+      Shell   : constant Permission_Set := Confinement (Shell_Text);
+      Session : constant Permission_Set := Confinement (To_String (Session_Text));
+   begin
+      if Shell = Unrestricted then
+         return Session;
+      elsif Session = Unrestricted then
+         return Shell;
+      end if;
+      return Intersect (Shell, Session);
    end Sandbox;
+
+   --------------------
+   -- Sandbox_Source --
+   --------------------
+
+   function Sandbox_Source return String is
+      Shell   : constant Boolean := Trim (Shell_Text) /= "";
+      Session : constant Boolean := Trim (To_String (Session_Text)) /= "";
+   begin
+      return (if Shell and then Session then Sandbox_Variable & " and the session's /sandbox"
+              elsif Shell then Sandbox_Variable
+              elsif Session then "the session's /sandbox"
+              else "");
+   end Sandbox_Source;
 
    ---------------------
    -- Sandbox_Problem --
@@ -375,12 +408,12 @@ package body Model_Runner.Framework.Permissions is
    begin
       Status := E.Success;
       if Trim (Text) = "" then
-         Ada.Environment_Variables.Clear (Sandbox_Variable);
+         Session_Text := Null_Unbounded_String;
          return;
       end if;
       Restriction (Text, Ignored, Status);
       if E.Is_Ok (Status) then
-         Ada.Environment_Variables.Set (Sandbox_Variable, Text);
+         Session_Text := To_Unbounded_String (Text);
       end if;
    end Set_Sandbox;
 
@@ -500,6 +533,54 @@ package body Model_Runner.Framework.Permissions is
       end loop;
       return "";
    end Widening;
+
+   ---------------
+   -- Widenings --
+   ---------------
+
+   function Widenings (Wider, Than : Permission_Set) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+   begin
+      for Item in Capability loop
+         declare
+            One : Permission_Set := Nothing;
+         begin
+            One (Item) := Wider (Item);
+            if Widening (One, Than) /= "" then
+               Result.Append (Word (Item));
+            end if;
+         end;
+      end loop;
+      return Result;
+   end Widenings;
+
+   -------------
+   -- Clipped --
+   -------------
+
+   function Clipped (Asked, Allowed : Permission_Set) return String is
+      Both   : constant Permission_Set := Intersect (Asked, Allowed);
+      Result : Unbounded_String;
+   begin
+      for Name of Widenings (Asked, Allowed) loop
+         declare
+            Which : Capability := Capability'First;
+         begin
+            for Item in Capability loop
+               if Word (Item) = Name then
+                  Which := Item;
+               end if;
+            end loop;
+            Append (Result, (if Result = Null_Unbounded_String then "" else ", ") & Name
+                    & " (gets "
+                    & (if not Both (Which).Granted then "none"
+                       elsif Grant_Text (Both (Which)) = "" then "it"
+                       else Grant_Text (Both (Which)))
+                    & ")");
+         end;
+      end loop;
+      return To_String (Result);
+   end Clipped;
 
    ----------------
    -- Grant_Text --
@@ -711,13 +792,13 @@ package body Model_Runner.Framework.Permissions is
         and then not Allows (Allowed, Write_Specs, Path)
       then
          return "you may not write " & Path
-           & (if Sandbox_Refuses (Path, True) then " (the sandbox confines it)" else "");
+           & (if Sandbox_Refuses (Path, True) then " (" & Sandbox_Source & " confines it)" else "");
       elsif not Writing
         and then not Allows (Allowed, Read_Source, Path)
         and then not Allows (Allowed, Read_Specs, Path)
       then
          return "you may not read " & Path
-           & (if Sandbox_Refuses (Path, False) then " (the sandbox confines it)" else "");
+           & (if Sandbox_Refuses (Path, False) then " (" & Sandbox_Source & " confines it)" else "");
       end if;
       return "";
    end Path_Refusal;

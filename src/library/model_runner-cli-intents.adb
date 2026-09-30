@@ -76,7 +76,10 @@ package body Model_Runner.CLI.Intents is
          return;
       end if;
       for Id of Done.Derived loop
-         Pres.Put_Message (Screen, "cli.task.derived", [Loc.Named ("name", Id)]);
+         Pres.Put_Message
+              (Screen, "cli.task.derived",
+               [Loc.Named ("name", Id),
+                Loc.Named ("value", Model_Runner.Framework.Tasks.Component_Of_Task (Store, Id))]);
          --  A candidate until someone takes it up.
          if Model_Runner.Framework.Tasks.State_Of (Store, Id) = "candidate" then
             Pres.Put_Note (Screen, "cli.next.accept_task", [Loc.Named ("name", Id)]);
@@ -637,6 +640,7 @@ package body Model_Runner.CLI.Intents is
                                      (Model_Runner.Framework.Records.Get (Defined, "requirements"))
                                      .Contains (Word (2))
                           and then Model_Runner.Framework.Records.Get (Defined, "component") /= From (4)
+                          and then Model_Runner.Framework.Tasks.Components (Store).Contains (From (4))
                         then
                            Pres.Put_Note
                              (Screen, "cli.next.task_component",
@@ -677,9 +681,19 @@ package body Model_Runner.CLI.Intents is
          Needs (3, "the " & Word_Of (Kind) & " replaced and the one replacing it");
          if E.Is_Ok (Status) then
             declare
-               Was : constant String := Nt.State_Of (Store, Kind, Word (3));
+               Was      : constant String := Nt.State_Of (Store, Kind, Word (3));
+               Governed : constant String := Nt.Governs (Store, Kind, Word (2));
             begin
                Nt.Supersede (Store, Change, Kind, Word (2), Word (3), Status);
+               --  What the one replaced governed, and the one replacing it
+               --  does not: said, with how to carry it on.
+               if E.Is_Ok (Status) and then Governed /= ""
+                 and then Nt.Governs (Store, Kind, Word (3)) = ""
+               then
+                  Pres.Put_Note (Screen, "cli.intent.ruling_dropped",
+                                 [Loc.Named ("name", Word (2)), Loc.Named ("other", Word (3)),
+                                  Loc.Named ("value", Governed)]);
+               end if;
                Settle (Store, Change, Status, Screen, "cli.intent.superseded", Word (2));
 
                --  What replaces it stands in its place: a candidate is

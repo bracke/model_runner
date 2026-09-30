@@ -5,6 +5,8 @@ with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
 
+with Hostkit.Fs;
+
 with Model_Runner.Agent;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Init;
@@ -573,10 +575,10 @@ package body Model_Runner.CLI.Project_Commands is
          Put ("error: " & Pm.Path_Refusal (".", Path, Writing => Named = "write_file"));
       elsif Named in "read_file" | "list_directory" and then not May (Reading => True) then
          Put ("error: you may not read " & Path
-              & (if Pm.Sandbox_Refuses (Path, False) then " (the sandbox confines it)" else ""));
+              & (if Pm.Sandbox_Refuses (Path, False) then " (" & Pm.Sandbox_Source & " confines it)" else ""));
       elsif Named = "write_file" and then not May (Reading => False) then
          Put ("error: you may not write " & Path
-              & (if Pm.Sandbox_Refuses (Path, True) then " (the sandbox confines it)" else ""));
+              & (if Pm.Sandbox_Refuses (Path, True) then " (" & Pm.Sandbox_Source & " confines it)" else ""));
       else
          Model_Runner.Tools.Builtin.Run
            (Model_Runner.Tools.Builtin.Instance (Self), Named, Arguments, Result, Last,
@@ -748,11 +750,30 @@ package body Model_Runner.CLI.Project_Commands is
       Quoted  : Boolean := False;
       Started : Boolean := False;
       Escape  : Boolean := False;
+
+      --  Within single quotes, which open a word or a value after =, as a
+      --  shell has them: every character is itself, double quotes too. An
+      --  apostrophe inside a word is only an apostrophe.
+      Single  : Boolean := False;
    begin
       for Char of Line loop
+         if Single then
+            if Char = ''' then
+               Single := False;
+            else
+               Append (Current, Char);
+            end if;
+            Started := True;
+         elsif Char = ''' and then not Quoted and then not Escape
+           and then (not Started
+                     or else (Length (Current) > 0 and then Element (Current, Length (Current)) = '='))
+         then
+            Single := True;
+            Started := True;
+
          --  A quote or a backslash after a backslash is itself.
-         if Escape then
-            if Char not in '"' | '\' then
+         elsif Escape then
+            if Char not in '"' | '\' | ''' then
                Append (Current, '\');
             end if;
             Append (Current, Char);
@@ -1081,6 +1102,19 @@ package body Model_Runner.CLI.Project_Commands is
             end;
          end loop;
 
+         --  The components tasks may name, however each was declared:
+         --  listed in set.components or placed with map.component.
+         if Argument (1) = "" or else Ada.Strings.Fixed.Index ("components", Argument (1)) > 0 then
+            declare
+               Named : Unbounded_String;
+            begin
+               for One of Tk.Components (Store) loop
+                  Append (Named, (if Named = Null_Unbounded_String then "" else ", ") & One);
+               end loop;
+               Field ("components (listed or placed)", To_String (Named));
+            end;
+         end if;
+
          --  The project's permissions where the configuration says none:
          --  what agents are given all the same.
          if (Argument (1) = "" or else Ada.Strings.Fixed.Index ("map.permission.project", Argument (1)) > 0)
@@ -1179,6 +1213,38 @@ package body Model_Runner.CLI.Project_Commands is
             end loop;
          end Show_Record;
       begin
+         --  result dismiss ID: an issue a person has taken as read leaves the
+         --  listing; the result itself is kept.
+         if Id = "dismiss" then
+            declare
+               Named   : constant String := Argument (2);
+               Kept    : constant String :=
+                 Hostkit.Fs.Join (Hostkit.Fs.Join (S.Root (Store), "runtime"), "dismissed");
+               Got     : Rs.Result;
+            begin
+               Rs.Read (Store, Named, Got, Read, With_Payload => False);
+               if Named = "" or else E.Is_Error (Read) then
+                  Outcome := E.Make (E.Framework_Not_Found);
+                  E.Add_Text (Outcome, "name", (if Named = "" then "the issue to dismiss" else Named));
+                  Pres.Report (Screen, Outcome);
+                  return;
+               end if;
+               declare
+                  File : Ada.Text_IO.File_Type;
+               begin
+                  if Ada.Directories.Exists (Kept) then
+                     Ada.Text_IO.Open (File, Ada.Text_IO.Append_File, Kept);
+                  else
+                     Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Kept);
+                  end if;
+                  Ada.Text_IO.Put_Line (File, Named);
+                  Ada.Text_IO.Close (File);
+               end;
+               Pres.Put_Message (Screen, "cli.result.dismissed", [Loc.Named ("name", Named)]);
+            end;
+            return;
+         end if;
+
          if Id = "" then
             --  None named: the issues kept -- what bootstrap raised, what
             --  agents reported -- each by its identifier and what it says;
@@ -1186,6 +1252,24 @@ package body Model_Runner.CLI.Project_Commands is
             --  one about an entry since retired or replaced: acted on.
             declare
                Shown : Natural := 0;
+
+               --  What a person dismissed: result dismiss ID.
+               function Dismissed_List return Names.Vector is
+                  Kept : constant String :=
+                    Hostkit.Fs.Join (Hostkit.Fs.Join (S.Root (Store), "runtime"), "dismissed");
+                  Result : Names.Vector;
+                  File   : Ada.Text_IO.File_Type;
+               begin
+                  if Ada.Directories.Exists (Kept) then
+                     Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Kept);
+                     while not Ada.Text_IO.End_Of_File (File) loop
+                        Result.Append (Ada.Text_IO.Get_Line (File));
+                     end loop;
+                     Ada.Text_IO.Close (File);
+                  end if;
+                  return Result;
+               end Dismissed_List;
+               Dismissed : constant Names.Vector := Dismissed_List;
 
                function Acted_On (Issue_Id, Summary : String) return Boolean is
                   Colon : constant Natural := Ada.Strings.Fixed.Index (Summary, ": ");
@@ -1280,6 +1364,7 @@ package body Model_Runner.CLI.Project_Commands is
                   begin
                      Rs.Read (Store, Result_Id, One, Got, With_Payload => False);
                      if E.Is_Ok (Got) and then Rs."=" (One.Kind, Rs.Diagnostic)
+                       and then not Dismissed.Contains (Result_Id)
                        and then not Acted_On (Result_Id, To_String (One.Summary))
                      then
                         Field (Result_Id, To_String (One.Summary));
@@ -1411,6 +1496,15 @@ package body Model_Runner.CLI.Project_Commands is
                if To_String (Held.State) /= "verified" then
                   Field ("not verified", Vf.Why_Not_Verified (Store, Requirement));
                end if;
+               --  The others the checks moved, each named.
+               for Other of Changed loop
+                  if Other /= Requirement then
+                     Pres.Put_Message
+                       (Screen, "cli.work.requirement",
+                        [Loc.Named ("name", Other),
+                         Loc.Named ("value", Nt.State_Of (Store, Nt.Requirement, Other))]);
+                  end if;
+               end loop;
 
                --  Checks that did not pass: a failure, with why.
                for Evidence_Id of Failing loop
@@ -1492,22 +1586,6 @@ package body Model_Runner.CLI.Project_Commands is
                   return;
                end if;
 
-               --  New evidence: the requirements are judged again.
-               declare
-                  Changed : Names.Vector;
-               begin
-                  Vf.Reevaluate_Requirements (Store, Change, Changed, Outcome);
-                  if E.Is_Ok (Outcome) then
-                     S.Commit (Store, Change, Outcome);
-                  end if;
-                  for Requirement of Changed loop
-                     Pres.Put_Message
-                       (Screen, "cli.work.requirement",
-                        [Loc.Named ("name", Requirement),
-                         Loc.Named ("value", Nt.State_Of (Store, Nt.Requirement, Requirement))]);
-                  end loop;
-                  Outcome := E.Success;
-               end;
                declare
                   Said : constant Vf.Diagnostic_List :=
                     Vf.Diagnostics_Of (Store, To_String (Evidence));
@@ -1530,6 +1608,24 @@ package body Model_Runner.CLI.Project_Commands is
                       Loc.Named ("count", Image (Vf.Length
                                    (Vf.Parse_Profile (R.Get (Config, "profile." & Profile))))),
                       Loc.Named ("total", Image (Vf.Length (Said)))]);
+               end;
+
+               --  New evidence: the requirements are judged again, and said
+               --  after what the checks found.
+               declare
+                  Changed : Names.Vector;
+               begin
+                  Vf.Reevaluate_Requirements (Store, Change, Changed, Outcome);
+                  if E.Is_Ok (Outcome) then
+                     S.Commit (Store, Change, Outcome);
+                  end if;
+                  for Requirement of Changed loop
+                     Pres.Put_Message
+                       (Screen, "cli.work.requirement",
+                        [Loc.Named ("name", Requirement),
+                         Loc.Named ("value", Nt.State_Of (Store, Nt.Requirement, Requirement))]);
+                  end loop;
+                  Outcome := E.Success;
                end;
 
                --  A profile that runs no tests, said so, with what does.
@@ -1601,6 +1697,36 @@ package body Model_Runner.CLI.Project_Commands is
                Pres.Report (Screen, Outcome);
                return;
             end if;
+            --  A profile whose every check another in the list runs too is
+            --  not run twice: what it would find, that one finds.
+            declare
+               function Checks_Of (Profile : String) return Names.Vector is
+                  Result : Names.Vector;
+                  Parsed : constant Vf.Check_List :=
+                    Vf.Parse_Profile (R.Get (Config, "profile." & Profile));
+               begin
+                  for Index in 1 .. Vf.Length (Parsed) loop
+                     Result.Append (To_String (Vf.Element (Parsed, Index).Command));
+                  end loop;
+                  return Result;
+               end Checks_Of;
+
+               Kept : Names.Vector;
+            begin
+               for Profile of Profiles loop
+                  if Checks_Of (Profile).Is_Empty
+                    or else not (for some Other of Profiles =>
+                            Other /= Profile
+                            and then (for all Command of Checks_Of (Profile) =>
+                                        Checks_Of (Other).Contains (Command))
+                            and then Natural (Checks_Of (Other).Length)
+                                       > Natural (Checks_Of (Profile).Length))
+                  then
+                     Kept.Append (Profile);
+                  end if;
+               end loop;
+               Profiles := Kept;
+            end;
             for Profile of Profiles loop
                Run_One (Profile);
                exit when E.Is_Error (Outcome);
@@ -1838,8 +1964,8 @@ package body Model_Runner.CLI.Project_Commands is
          --  project's are named, a component at a time, with the way on;
          --  one declared with no roots is told where its files are said.
          if (for some Name of Planned.Changed =>
-               Ada.Strings.Fixed.Index (Name, "map.component.") = 1
-               or else Ada.Strings.Fixed.Index (Name, "set.components") = 1)
+               Ada.Strings.Fixed.Index (Name, "map.component.") = Name'First
+               or else Ada.Strings.Fixed.Index (Name, "set.components") = Name'First)
          then
             declare
                Known  : constant Names.Vector := Tk.Components (Store);
@@ -1905,57 +2031,51 @@ package body Model_Runner.CLI.Project_Commands is
          end if;
 
          --  A kind or a role granted more than the project allows gets
-         --  only what the project allows: said, with what it gets.
-         declare
-            Warned : Names.Vector;
-         begin
-            for Name of Planned.Changed loop
-               declare
-                  package Pm renames Model_Runner.Framework.Permissions;
-                  Prefix : constant String := "map.permission.";
-                  Rest   : constant String :=
-                    (if Ada.Strings.Fixed.Index (Name, Prefix) = 1
-                     then Name (Name'First + Prefix'Length .. Name'Last) else "");
-                  Colon  : constant Natural := Ada.Strings.Fixed.Index (Rest, ":");
-                  Key    : constant String := (if Colon = 0 then Rest else Rest (Rest'First .. Colon - 1));
-                  Dot    : constant Natural := Ada.Strings.Fixed.Index (Key, ".", Ada.Strings.Backward);
-                  Level  : constant String := (if Dot = 0 then "" else Key (Key'First .. Dot - 1));
-               begin
-                  if Level'Length > 5 and then Level (Level'First .. Level'First + 4) in "kind." | "role."
-                  then
-                     declare
-                        Present : Boolean;
-                        Given   : constant Pm.Permission_Set := Pm.Level_Of (Store, Level, Present);
-                        Project : constant Pm.Permission_Set :=
-                          Pm.Effective (Store, "", "", Within_Sandbox => False);
-                        Wider   : constant String := Pm.Widening (Given, Project);
+         --  only what the project allows: after any change to permissions,
+         --  every such level is said, once, with each capability it asks
+         --  too much of and what it gets.
+         if (for some Name of Planned.Changed =>
+               Ada.Strings.Fixed.Index (Name, "map.permission.") = Name'First)
+         then
+            declare
+               package Pm renames Model_Runner.Framework.Permissions;
+               Levels  : Names.Vector;
+               Project : constant Pm.Permission_Set :=
+                 Pm.Effective (Store, "", "", Within_Sandbox => False);
+            begin
+               for Index in 1 .. R.Field_Count (Planned.After) loop
+                  declare
+                     Field : constant String := R.Field_Name (Planned.After, Index);
+                     Rest  : constant String :=
+                       (if Field'Length > 15 and then Field (Field'First .. Field'First + 14)
+                                                     = "map.permission."
+                        then Field (Field'First + 15 .. Field'Last) else "");
+                     Dot   : constant Natural := Ada.Strings.Fixed.Index (Rest, ".", Ada.Strings.Backward);
+                     Level : constant String := (if Dot = 0 then "" else Rest (Rest'First .. Dot - 1));
+                  begin
+                     if Level'Length > 5 and then Level (Level'First .. Level'First + 4) in "kind." | "role."
+                       and then not Levels.Contains (Level)
+                     then
+                        Levels.Append (Level);
+                     end if;
+                  end;
+               end loop;
+               for Level of Levels loop
+                  declare
+                     Present : Boolean;
+                     Given   : constant Pm.Permission_Set := Pm.Level_Of (Store, Level, Present);
+                     Clipped : constant String := Pm.Clipped (Given, Project);
+                  begin
+                     if Present and then Clipped /= "" then
+                        Pres.Put_Note
+                          (Screen, "cli.project.clipped",
+                           [Loc.Named ("name", Level), Loc.Named ("detail", Clipped)]);
+                     end if;
+                  end;
+               end loop;
+            end;
+         end if;
 
-                        --  What it gets of that capability: the line of it the
-                        --  project allows, or nothing.
-                        function Gets return String is
-                        begin
-                           for Line of Model_Runner.Framework.Lines_Of
-                             (Pm.Image (Pm.Intersect (Given, Project)))
-                           loop
-                              if Ada.Strings.Fixed.Index (Line, Wider) = Line'First then
-                                 return Line;
-                              end if;
-                           end loop;
-                           return "no " & Wider & " at all";
-                        end Gets;
-                     begin
-                        if Present and then Wider /= "" and then not Warned.Contains (Level) then
-                           Warned.Append (Level);
-                           Pres.Put_Note
-                             (Screen, "cli.project.clipped",
-                              [Loc.Named ("name", Level), Loc.Named ("value", Wider),
-                               Loc.Named ("detail", Gets)]);
-                        end if;
-                     end;
-                  end if;
-               end;
-            end loop;
-         end;
          declare
             Written : Boolean;
          begin
@@ -2184,7 +2304,11 @@ package body Model_Runner.CLI.Project_Commands is
 
       --  A session works in the directory it was started in: another is
       --  refused by name, not worked in unasked or taken for text.
-      if Word /= "/init" and then All_Words.Contains ("--directory") then
+      if Word /= "/init"
+        and then (for some One of All_Words =>
+                    One = "--directory"
+                    or else (One'Length > 12 and then One (One'First .. One'First + 11) = "--directory="))
+      then
          Outcome := E.Make (E.CLI_Option_Not_For_Command);
          E.Add_Text (Outcome, "value", Word);
          E.Add_Text (Outcome, "option", "--directory");
@@ -2205,6 +2329,12 @@ package body Model_Runner.CLI.Project_Commands is
                if Positional (Index) = "--directory" and then Index < Natural (Positional.Length) then
                   Command.Project_Directory := T.To_Bounded (Positional (Index + 1));
                   Index := Index + 2;
+               elsif Ada.Strings.Fixed.Head (Positional (Index), 12) = "--directory="
+                 and then Positional (Index) /= "--directory="
+               then
+                  Command.Project_Directory := T.To_Bounded
+                    (Ada.Strings.Fixed.Delete (Positional (Index), 1, 12));
+                  Index := Index + 1;
                else
                   if Template = Null_Unbounded_String then
                      Template := To_Unbounded_String (Positional (Index));
@@ -2308,7 +2438,10 @@ package body Model_Runner.CLI.Project_Commands is
                      Append (Shown, (if Shown = Null_Unbounded_String then "" else "; ") & Line);
                   end loop;
                   Pres.Put_Message
-                    (Screen, "cli.project.sandbox.set", [Loc.Named ("value", To_String (Shown))]);
+                    (Screen, "cli.project.sandbox.set",
+                     [Loc.Named ("value", (if Shown = Null_Unbounded_String then "nothing"
+                                           else To_String (Shown))),
+                      Loc.Named ("name", Model_Runner.Framework.Permissions.Sandbox_Source)]);
                end;
             end if;
          end;

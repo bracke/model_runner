@@ -1782,6 +1782,43 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Eighth usability round:**
+  - An answer's empty lines are read as such: a blank line ends a list, so
+    a log or prose after a report is none of its files or proposals.
+  - An issue is a duplicate only where it says the same thing of the same
+    words: a document still defining a retired entry is said.
+  - A workspace given up by `cancel … anyway` or `move … failed anyway`
+    names what it held; the reason is not "anyway"; unreported changes are
+    said in workspace mode too; the audit lists every file changed.
+  - Every attempt carries its outcome and why, a cancel, an interrupt and a
+    recovery among them.
+  - Permission warnings name every capability asked beyond the level above,
+    with what each gets, and every kind and role is checked after a change.
+  - Two `=off` permissions in one `reconfigure` both take effect.
+  - Completing by hand after a workspace was given up is said; the audit
+    says a workspace was given up, not taken in.
+  - `integrate … resolved` with a file never settled needs `resolved
+    anyway`; `task verify` of work waiting in a workspace checks it there.
+  - `task rehome` moves what it can, and says what stays and why; the
+    consistency check holds tasks to the listed components; a component
+    change names tasks left behind; `config` lists the components.
+  - A session's `/sandbox` narrows the shell's `MODEL_RUNNER_SANDBOX` and
+    never lifts it; messages say which confined; a sandbox that does not
+    read is said when the session starts.
+  - `result dismiss ID` takes an issue off the list; superseding a
+    decision that governed something says what its successor must carry;
+    no hint names a move that is not there.
+  - Impact of a document reaches the candidates it sources and leaves out
+    retired entries and ended work; hand-made entries have no source file.
+  - Derived tasks and `check REQ` say where they went and what else moved;
+    `check full` runs no profile another in it covers and says what moved
+    after its results; refs of a unit the repository does not declare lists
+    where it is withed.
+  - Proposals offered as `task new` keep their own kind and component;
+    parts made proposals because children may not be made are said.
+  - `--directory=DIR` is refused in a session; accepting a task that waits
+    says for what; single quotes group a value in a session; Ctrl-C on the
+    first line is noted.
 - **Seventh usability round:**
   - The audit gives each attempt as the state it left the task in, and
     `result` counts spec and decision issues as acted on, and an issue a

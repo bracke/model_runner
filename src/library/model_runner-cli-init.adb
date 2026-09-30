@@ -511,7 +511,11 @@ package body Model_Runner.CLI.Init is
           Loc.Named
             ("detail",
              R.Get (Planned.Configuration, "configuration_fingerprint"))]);
-      Pres.Put_Note (Screen, "cli.next.init");
+      --  In a session, the steps after it are the session's commands, which
+      --  work where the session was started: not offered for elsewhere.
+      if not (Pres.In_Session (Screen) and then not T.Is_Empty (Item.Project_Directory)) then
+         Pres.Put_Note (Screen, "cli.next.init");
+      end if;
       --  Started elsewhere: each of those in the directory it names.
       if not T.Is_Empty (Item.Project_Directory) then
          Pres.Put_Note

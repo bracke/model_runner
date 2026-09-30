@@ -133,6 +133,26 @@ package body Model_Runner.Framework.Invocations is
       return Unquoted (Text);
    end Item_Of;
 
+   --  Every line of a text, empty ones too: an empty line ends a list.
+   function Every_Line (Text : String) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+      Start  : Positive := Text'First;
+   begin
+      for Index in Text'First .. Text'Last + 1 loop
+         if Index > Text'Last or else Text (Index) = ASCII.LF then
+            declare
+               Line : constant String := Text (Start .. Index - 1);
+            begin
+               Result.Append
+                 (if Line'Length > 0 and then Line (Line'Last) = ASCII.CR
+                  then Line (Line'First .. Line'Last - 1) else Line);
+            end;
+            Start := Index + 1;
+         end if;
+      end loop;
+      return Result;
+   end Every_Line;
+
    --  An answer given as a JSON object -- bare or in a fence, on one line
    --  or many -- written as the lines the contract reads: each member a
    --  NAME: VALUE line, a list a line an item, an object in a list as its
@@ -338,7 +358,7 @@ package body Model_Runner.Framework.Invocations is
       Result := (others => <>);
       Status := E.Success;
 
-      for Line of Lines_Of (Read_As) loop
+      for Line of Every_Line (Read_As) loop
          declare
             Colon : constant Natural := Ada.Strings.Fixed.Index (Line, ":");
             Said  : constant String :=

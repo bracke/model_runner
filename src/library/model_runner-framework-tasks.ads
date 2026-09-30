@@ -347,6 +347,13 @@ package Model_Runner.Framework.Tasks is
    --  @return Their names; none when the project has no name either.
    function Components (Item : Stores.Store) return Name_Lists.Vector;
 
+   --  The component a task is placed in.
+   --
+   --  @param Item The store.
+   --  @param Id The task.
+   --  @return Its component, or "(none)" where it names none.
+   function Component_Of_Task (Item : Stores.Store; Id : String) return String;
+
    --  The lease an agent writing a component in the project itself holds
    --  on it, so that no second agent writes it at the same time.
    --

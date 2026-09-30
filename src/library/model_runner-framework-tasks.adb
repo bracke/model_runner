@@ -1833,6 +1833,15 @@ package body Model_Runner.Framework.Tasks is
       end;
    end Components;
 
+   function Component_Of_Task (Item : Stores.Store; Id : String) return String is
+      Defined : Records.Item;
+      Status  : E.Error_Info;
+   begin
+      Definition (Item, Id, Defined, Status);
+      return (if E.Is_Ok (Status) and then Records.Get (Defined, "component") /= ""
+              then Records.Get (Defined, "component") else "(none)");
+   end Component_Of_Task;
+
    function Component_Problem (Item : Stores.Store; Component : String) return String is
    begin
       declare

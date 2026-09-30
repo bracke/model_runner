@@ -470,30 +470,13 @@ package body Model_Runner.CLI.Tasks is
                   declare
                      Allowed : constant Pm.Permission_Set :=
                        Pm.Effective (Store, Fields ("kind"), "", Within_Sandbox => False);
-                     Wider   : constant String := Pm.Widening (Asked, Allowed);
+                     Clipped : constant String := Pm.Clipped (Asked, Allowed);
                   begin
-                     if Wider /= "" then
-                        declare
-                           --  What it gets of that capability: its line of
-                           --  what both allow, or none.
-                           function Gets return String is
-                           begin
-                              for Line of Model_Runner.Framework.Lines_Of
-                                (Pm.Image (Pm.Intersect (Asked, Allowed)))
-                              loop
-                                 if Ada.Strings.Fixed.Index (Line, Wider) = Line'First then
-                                    return Line;
-                                 end if;
-                              end loop;
-                              return "no " & Wider & " at all";
-                           end Gets;
-                        begin
-                           Pres.Put_Note
-                             (Screen, "cli.task.clipped",
-                              [Loc.Named ("name", To_String (Id)), Loc.Named ("value", Wider),
-                               Loc.Named ("other", Fields ("kind")),
-                               Loc.Named ("detail", Gets)]);
-                        end;
+                     if Clipped /= "" then
+                        Pres.Put_Note
+                          (Screen, "cli.task.clipped",
+                           [Loc.Named ("name", To_String (Id)), Loc.Named ("other", Fields ("kind")),
+                            Loc.Named ("detail", Clipped)]);
                      end if;
                   end;
                end if;
@@ -597,6 +580,14 @@ package body Model_Runner.CLI.Tasks is
             Say_Left_Waiting (Argument);
          elsif Next = "accepted" and then Tk.Ready (Store, Argument).Ready then
             Pres.Put_Note (Screen, "cli.next.work", [Loc.Named ("name", Argument)]);
+         elsif Next = "accepted" and then Tk.State_Of (Store, Argument) = "accepted"
+           and then not Tk.Ready (Store, Argument).Reasons.Is_Empty
+         then
+            --  Accepted, and waiting: for what, and what makes it ready.
+            Pres.Put_Note
+              (Screen, "cli.task.accepted_waits",
+               [Loc.Named ("name", Argument),
+                Loc.Named ("detail", Tk.Ready (Store, Argument).Reasons.First_Element)]);
          end if;
          if Tk.State_Of (Store, Argument) /= Next then
             Pres.Put_Message
@@ -752,22 +743,13 @@ package body Model_Runner.CLI.Tasks is
                   declare
                      Allowed : constant Pm.Permission_Set :=
                        Pm.Effective (Store, R.Get (Defined, "kind"), "", Within_Sandbox => False);
-                     Wider   : constant String := Pm.Widening (Asked, Allowed);
-                     Gets    : Unbounded_String := To_Unbounded_String ("no " & Wider & " at all");
+                     Clipped : constant String := Pm.Clipped (Asked, Allowed);
                   begin
-                     for Line of Model_Runner.Framework.Lines_Of
-                       (Pm.Image (Pm.Intersect (Asked, Allowed)))
-                     loop
-                        if Wider /= "" and then Ada.Strings.Fixed.Index (Line, Wider) = Line'First then
-                           Gets := To_Unbounded_String (Line);
-                        end if;
-                     end loop;
-                     if Wider /= "" then
+                     if Clipped /= "" then
                         Pres.Put_Note
                           (Screen, "cli.task.clipped",
-                           [Loc.Named ("name", Argument), Loc.Named ("value", Wider),
-                            Loc.Named ("other", R.Get (Defined, "kind")),
-                            Loc.Named ("detail", To_String (Gets))]);
+                           [Loc.Named ("name", Argument), Loc.Named ("other", R.Get (Defined, "kind")),
+                            Loc.Named ("detail", Clipped)]);
                      end if;
                   end;
                end if;
@@ -881,6 +863,8 @@ package body Model_Runner.CLI.Tasks is
          Moved   : Model_Runner.Framework.Name_Lists.Vector;
          Left    : Model_Runner.Framework.Name_Lists.Vector;
          Kept_Home : Model_Runner.Framework.Name_Lists.Vector;
+         Busy      : Model_Runner.Framework.Name_Lists.Vector;
+         Belongs   : Model_Runner.Framework.Name_Lists.Vector;
 
          procedure Refuse (Name, Value, Detail : String) is
          begin
@@ -913,6 +897,21 @@ package body Model_Runner.CLI.Tasks is
                   if Tk.State_Of (Store, Id) in "complete" | "cancelled" | "rejected" then
                      Left.Append (Id);
 
+                  --  Being worked, or its work waiting to be taken in: not
+                  --  revised now.
+                  elsif Tk.State_Of (Store, Id) in "running" | "verification" then
+                     Busy.Append (Id);
+
+                  --  Serving a requirement that belongs to the component it is
+                  --  in: where it belongs.
+                  elsif (for some Requirement of Model_Runner.Framework.Lines_Of
+                                                   (R.Get (Defined, "requirements")) =>
+                           Model_Runner.Framework.Intent.Links
+                             (Store, Model_Runner.Framework.Intent.Requirement, Requirement,
+                              Model_Runner.Framework.Intent.Component).Contains (First_Word))
+                  then
+                     Belongs.Append (Id);
+
                   --  Serving a requirement that belongs to another component:
                   --  its place is that one, not the one named here.
                   elsif (for some Requirement of Model_Runner.Framework.Lines_Of
@@ -930,7 +929,16 @@ package body Model_Runner.CLI.Tasks is
                end if;
             end;
          end loop;
-         if Moved.Is_Empty and then not Kept_Home.Is_Empty then
+         if Moved.Is_Empty and then not (Busy.Is_Empty and then Belongs.Is_Empty) then
+            Refuse ("the component its tasks are in", First_Word,
+                    "none of its open tasks moves: "
+                    & (if Belongs.Is_Empty then ""
+                       else Joined (Belongs) & " serve requirements that belong to " & First_Word
+                            & ", where they are" & (if Busy.Is_Empty then "" else "; "))
+                    & (if Busy.Is_Empty then ""
+                       else Joined (Busy) & " are being worked or wait to be taken in"));
+            return;
+         elsif Moved.Is_Empty and then not Kept_Home.Is_Empty then
             Refuse ("the component its tasks are in", First_Word,
                     "its open tasks (" & Joined (Kept_Home) & ") serve requirements that belong"
                     & " to another component; task edit ID --set component=NAME places one");
@@ -982,6 +990,14 @@ package body Model_Runner.CLI.Tasks is
          if not Kept_Home.Is_Empty then
             Pres.Put_Note (Screen, "cli.task.rehome_kept",
                            [Loc.Named ("name", First_Word), Loc.Named ("detail", Joined (Kept_Home))]);
+         end if;
+         if not Belongs.Is_Empty then
+            Pres.Put_Note (Screen, "cli.task.rehome_belongs",
+                           [Loc.Named ("name", First_Word), Loc.Named ("detail", Joined (Belongs))]);
+         end if;
+         if not Busy.Is_Empty then
+            Pres.Put_Note (Screen, "cli.task.rehome_busy",
+                           [Loc.Named ("name", First_Word), Loc.Named ("detail", Joined (Busy))]);
          end if;
       end Rehome;
 
@@ -1146,8 +1162,23 @@ package body Model_Runner.CLI.Tasks is
             Fail (Outcome);
             return;
          end if;
-         Model_Runner.Framework.Verification.Run_Profile
-           (Store, Change, Profile, Argument, Evidence, Passed, Outcome);
+         --  Its work waiting in a workspace: checked there, where it is, not
+         --  in the project it has not reached.
+         declare
+            Space : constant String := Model_Runner.Framework.Workspaces.Active_For (Store, Argument);
+            Held  : Model_Runner.Framework.Workspaces.Workspace;
+            Read  : E.Error_Info;
+         begin
+            if Space /= "" then
+               Model_Runner.Framework.Workspaces.Read (Store, Space, Held, Read);
+            end if;
+            Model_Runner.Framework.Verification.Run_Profile
+              (Store, Change, Profile, Argument, Evidence, Passed, Outcome,
+               Workspace => (if Space /= "" and then E.Is_Ok (Read) then To_String (Held.Path) else ""));
+            if Space /= "" and then E.Is_Ok (Outcome) then
+               Pres.Put_Note (Screen, "cli.task.checked_in", [Loc.Named ("name", Space)]);
+            end if;
+         end;
          if E.Is_Ok (Outcome) then
             Commit;
          end if;
@@ -1294,9 +1325,41 @@ package body Model_Runner.CLI.Tasks is
                         & Model_Runner.Framework.Workspaces.Active_For (Store, Argument)
                         & " to be taken in");
             Fail (Outcome);
-            Pres.Put_Note (Screen, "cli.next.integrate", [Loc.Named ("name", Argument)]);
+            declare
+               Space : constant String :=
+                 Model_Runner.Framework.Workspaces.Active_For (Store, Argument);
+               Place : Model_Runner.Framework.Workspaces.Workspace;
+               Read  : E.Error_Info;
+            begin
+               if Model_Runner.Framework.Workspaces.Conflict_Files (Store, Space).Is_Empty then
+                  Pres.Put_Note (Screen, "cli.next.integrate", [Loc.Named ("name", Argument)]);
+               else
+                  --  In conflict: settled first, then taken in as settled.
+                  Model_Runner.Framework.Workspaces.Read (Store, Space, Place, Read);
+                  Pres.Put_Note (Screen, "cli.next.conflict",
+                                 [Loc.Named ("name", Argument),
+                                  Loc.Named ("path", To_String (Place.Path))]);
+               end if;
+            end;
             return;
          end if;
+
+         --  Its work given up with its workspace: completed by hand only
+         --  for work done by hand, which is said before it is taken so.
+         declare
+            Held_State : R.Item;
+            Read       : E.Error_Info;
+         begin
+            S.Read (Store, Model_Runner.Framework.Tasks_Area, Argument & ".state", Held_State, Read);
+            if E.Is_Ok (Read) and then R.Get (Held_State, "current_workspace") /= ""
+              and then Tk.State_Of (Store, Argument) in "failed" | "blocked"
+              and then Model_Runner.Framework.Workspaces.Active_For (Store, Argument) = ""
+            then
+               Pres.Put_Note (Screen, "cli.task.given_up_by_hand",
+                              [Loc.Named ("name", Argument),
+                               Loc.Named ("value", R.Get (Held_State, "current_workspace"))]);
+            end if;
+         end;
 
          --  Already complete: said, and nothing run.
          if Tk.State_Of (Store, Argument) = "complete" then
@@ -1421,9 +1484,33 @@ package body Model_Runner.CLI.Tasks is
             return;
          end if;
          --  integrate TASK anyway: taken in whatever the code joins it to.
+         --  Settled, it says, with a file as it was when the conflict was
+         --  found: taken over the project's change only when that is said.
+         if After_First = "resolved" then
+            declare
+               Space     : constant String :=
+                 Model_Runner.Framework.Workspaces.Active_For (Store, First_Word);
+               Unsettled : constant Model_Runner.Framework.Name_Lists.Vector :=
+                 (if Space = "" then Model_Runner.Framework.Name_Lists.Empty_Vector
+                  else Model_Runner.Framework.Workspaces.Conflict_Files
+                         (Store, Space, Unsettled_Only => True));
+            begin
+               if not Unsettled.Is_Empty then
+                  Outcome := E.Make (E.Framework_Integration_Conflict);
+                  E.Add_Text (Outcome, "name", Space);
+                  E.Add_Text (Outcome, "detail", Joined (Unsettled)
+                              & ", not changed since the conflict was found; settle "
+                              & (if Natural (Unsettled.Length) = 1 then "it" else "them")
+                              & " in the workspace, or task integrate " & First_Word
+                              & " resolved anyway takes the workspace's copy over the project's");
+                  Fail (Outcome);
+                  return;
+               end if;
+            end;
+         end if;
          Model_Runner.Framework.Work.Take_In
            (Store, First_Word, Done, Outcome, Semantic_Accepted => After_First = "anyway",
-            Text_Resolved => After_First = "resolved");
+            Text_Resolved => After_First in "resolved" | "resolved anyway");
          if E.Is_Error (Outcome) then
             Fail (Outcome);
 
@@ -1523,7 +1610,10 @@ package body Model_Runner.CLI.Tasks is
             [Loc.Named ("count", T.Image (Long_Long_Integer (Done.Events_Seen))),
              Loc.Named ("total", T.Image (Long_Long_Integer (Done.Actions_Taken)))]);
          for Id of Done.Derived loop
-            Pres.Put_Message (Screen, "cli.task.derived", [Loc.Named ("name", Id)]);
+            Pres.Put_Message
+              (Screen, "cli.task.derived",
+               [Loc.Named ("name", Id),
+                Loc.Named ("value", Model_Runner.Framework.Tasks.Component_Of_Task (Store, Id))]);
          end loop;
          for Id of Done.Became_Ready loop
             Pres.Put_Note (Screen, "cli.task.ready", [Loc.Named ("name", Id)]);
@@ -1558,7 +1648,10 @@ package body Model_Runner.CLI.Tasks is
             return;
          end if;
          for Id of Made loop
-            Pres.Put_Message (Screen, "cli.task.derived", [Loc.Named ("name", Id)]);
+            Pres.Put_Message
+              (Screen, "cli.task.derived",
+               [Loc.Named ("name", Id),
+                Loc.Named ("value", Model_Runner.Framework.Tasks.Component_Of_Task (Store, Id))]);
          end loop;
       end Derive;
    begin
@@ -1687,6 +1780,9 @@ package body Model_Runner.CLI.Tasks is
             declare
                Space : constant String :=
                  Model_Runner.Framework.Workspaces.Active_For (Store, First_Word);
+               Lost  : constant Model_Runner.Framework.Name_Lists.Vector :=
+                 (if Space = "" then Model_Runner.Framework.Name_Lists.Empty_Vector
+                  else Model_Runner.Framework.Workspaces.Changes (Store, Space));
             begin
                Model_Runner.Framework.Work.Cancel
                  (Store, First_Word, Outcome, Actor => Model_Runner.Framework.Transitions.User);
@@ -1698,7 +1794,9 @@ package body Model_Runner.CLI.Tasks is
                      [Loc.Named ("name", First_Word), Loc.Named ("value", "cancelled")]);
                   if Space /= "" then
                      Pres.Put_Note (Screen, "cli.task.workspace_given_up",
-                                    [Loc.Named ("name", Space)]);
+                                    [Loc.Named ("name", Space),
+                                     Loc.Named ("detail", (if Lost.Is_Empty then "nothing"
+                                                           else Joined (Lost)))]);
                   end if;
                   Say_Parts_Left (First_Word);
                   Say_Left_Waiting (First_Word);
@@ -1768,8 +1866,29 @@ package body Model_Runner.CLI.Tasks is
                   S.Close (Store);
                   return;
                end if;
-               Tk.Move (Store, Change, First_Word, Next, Why, Status => Outcome,
-                        Actor => Model_Runner.Framework.Transitions.User);
+               declare
+                  --  Given up with "anyway": said as what happened, and the
+                  --  work it held named.
+                  Space : constant String :=
+                    Model_Runner.Framework.Workspaces.Active_For (Store, First_Word);
+                  Lost  : constant Model_Runner.Framework.Name_Lists.Vector :=
+                    (if Space = "" then Model_Runner.Framework.Name_Lists.Empty_Vector
+                     else Model_Runner.Framework.Workspaces.Changes (Store, Space));
+                  Said  : constant String :=
+                    (if Why = "anyway" and then Space /= ""
+                     then "moved to " & Next & " by hand; " & Space & " is given up"
+                     elsif Why = "anyway" then "moved to " & Next & " by hand"
+                     else Why);
+               begin
+                  Tk.Move (Store, Change, First_Word, Next, Said, Status => Outcome,
+                           Actor => Model_Runner.Framework.Transitions.User);
+                  if E.Is_Ok (Outcome) and then Space /= "" then
+                     Pres.Put_Note (Screen, "cli.task.workspace_given_up",
+                                    [Loc.Named ("name", Space),
+                                     Loc.Named ("detail", (if Lost.Is_Empty then "nothing"
+                                                           else Joined (Lost)))]);
+                  end if;
+               end;
                if E.Is_Ok (Outcome) then
                   Commit;
                end if;

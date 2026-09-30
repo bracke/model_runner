@@ -441,27 +441,34 @@ en.cli.task.revised = {name} is revised
 en.cli.task.rehomed = {count} tasks placed in {value} from {name}: {detail}
 en.cli.task.rehome_left = left in {name}, as they are ended: {detail}
 en.cli.task.rehome_kept = left in {name}, as the requirements they serve belong to another component: {detail}
+en.cli.task.rehome_belongs = left in {name}, where the requirements they serve belong: {detail}
+en.cli.task.rehome_busy = left in {name} for now, as they are being worked or wait to be taken in: {detail}
 en.cli.task.part_there = {detail} is a part already: {name}
+en.cli.task.checked_in = checked in {name}, where its work waits: the project itself is not checked
+en.cli.task.given_up_by_hand = {value}, where its agent worked, was given up, so nothing of that work is in the project; {name} is completed on what the project holds now, as done by hand
+en.cli.task.accepted_waits = {name} is not ready yet: {detail}; it becomes ready once that is done
 en.cli.task.unchanged = {name} already says that; nothing is revised
 en.cli.task.sandbox_bad = MODEL_RUNNER_SANDBOX does not read, and would confine its agent to nothing: {detail}
-en.cli.task.workspace_given_up = its workspace {name} is given up: nothing of it was taken in
-en.cli.task.clipped = {name} asks for more {value} than a {other} task may have, and gets {detail}; its kind's permissions (config permission.kind.{other}) or the project's bound it
+en.cli.task.workspace_given_up = its workspace {name} is given up, and what it changed there with it: {detail}
+en.cli.task.clipped = {name} asks for more than a {other} task may have, and gets: {detail}; its kind's permissions (config permission.kind.{other}) or the project's bound it
 en.cli.intent.invalidated = {name}'s verification no longer applies
 en.cli.intent.linked = {name} is linked
 en.cli.result.elsewhere = {name} is shown by {value}
 en.cli.result.none = no issues are kept
+en.cli.result.dismissed = {name} is dismissed: result no longer lists it, and it is kept
 en.cli.intent.unlinked = {name}'s link is taken off
 en.cli.intent.unchanged = {name} already says that; nothing was revised
 en.cli.same_title = {name} has the same title as {other}
 en.cli.intent.link_unknown = {name} is not a file or a symbol the repository has; the link is kept, and consistency will name it until it is
-en.cli.intent.link_component = {name} is not one of the project's components ({value}); the link is kept, and consistency will name it until it is -- req unlink takes it off
+en.cli.intent.link_component = {name} is not one of the project's components ({value}); the link is kept, and consistency will name it until it is -- reconfigure map.component.{name}=roots=DIR makes it one, req unlink takes the link off
 en.cli.intent.link_missing = {name} is not one of the project's requirements; the link is kept, and consistency will name it until it is -- req unlink {value} dependency {name} takes it off
 en.cli.intent.already = {name} is {value} already; nothing to do
+en.cli.intent.ruling_dropped = {name} governed {value}, and {other} governs nothing: decision govern {other} SETTING RULING carries it on
 en.cli.intent.overrides_unknown = {name}, which it says it overrides, is nothing the project holds; it overrides nothing until it is
 en.cli.intent.moved = {name} moved from {other} to {value}
 en.cli.intent.superseded = {name} is superseded
 en.cli.task.field = {name}: {value}
-en.cli.task.derived = derived {name}
+en.cli.task.derived = derived {name}, in the component {value}
 en.cli.task.ready = {name} became ready
 en.cli.task.choose_kind = Select the kind of task:
 en.cli.task.cancelled = no task was created
@@ -482,7 +489,7 @@ en.cli.project.requirements = requirements
 en.cli.project.verified = verified
 en.cli.project.not_verified = {name} is implemented and not verified: {detail}
 en.cli.project.stale_verified = {name} is recorded verified, but its evidence no longer holds: {detail}
-en.cli.project.clipped = {name} asks for more {value} than the project allows, and gets what the project allows: {detail}; map.permission.project.{value}=... raises the project's
+en.cli.project.clipped = {name} asks for more than the project allows, and gets what it allows: {detail}; map.permission.project.CAPABILITY=... raises the project's
 en.cli.project.component_gone = {count} open tasks are in {name}, which is no longer one of the project's components ({value}): task rehome {name} NAME places them
 en.cli.project.component_rootless = {name} says nowhere where its files are: map.component.{name}=roots=DIR says so, and impact and verification reach it
 en.cli.project.unserved = {name} is accepted and no task serves it: task new TITLE --set kind=KIND --set requirements={name} makes one
@@ -532,7 +539,7 @@ en.cli.project.git.clean = nothing has changed since the last commit
 en.cli.project.git.none = the project is not in a Git repository git can read
 en.cli.project.sandbox.none = agents are confined only by the project's permissions
 en.cli.project.sandbox.shell = a sandbox lasts for a session; from the shell, put MODEL_RUNNER_SANDBOX="{value}" before the command it is to confine
-en.cli.project.sandbox.set = agents are confined to {value}
+en.cli.project.sandbox.set = agents are confined to {value} (by {name})
 en.cli.project.instruct.none = no instruction of yours stands
 en.cli.project.consistency = what does not hold together in the project's state: {count}
 en.cli.repo.summary = {count} files and {total} relations; graph {value}
@@ -1477,27 +1484,34 @@ da.cli.task.revised = {name} er revideret
 da.cli.task.rehomed = {count} opgaver placeret i {value} fra {name}: {detail}
 da.cli.task.rehome_left = efterladt i {name}, da de er afsluttede: {detail}
 da.cli.task.rehome_kept = efterladt i {name}, da kravene de tjener hører til en anden komponent: {detail}
+da.cli.task.rehome_belongs = efterladt i {name}, hvor kravene de tjener hører til: {detail}
+da.cli.task.rehome_busy = efterladt i {name} indtil videre, da de bearbejdes eller venter på at blive taget ind: {detail}
 da.cli.task.part_there = {detail} er allerede en del: {name}
+da.cli.task.checked_in = tjekket i {name}, hvor dets arbejde venter: selve projektet er ikke tjekket
+da.cli.task.given_up_by_hand = {value}, hvor dens agent arbejdede, blev opgivet, så intet af det arbejde er i projektet; {name} fuldføres på det projektet rummer nu, som gjort i hånden
+da.cli.task.accepted_waits = {name} er ikke klar endnu: {detail}; den bliver klar når det er gjort
 da.cli.task.unchanged = {name} siger allerede det; intet revideres
 da.cli.task.sandbox_bad = MODEL_RUNNER_SANDBOX kan ikke læses og ville begrænse dens agent til intet: {detail}
-da.cli.task.workspace_given_up = dets arbejdsområde {name} er opgivet: intet af det blev taget ind
-da.cli.task.clipped = {name} beder om mere {value} end en {other}-opgave må have, og får {detail}; dens arts tilladelser (config permission.kind.{other}) eller projektets begrænser den
+da.cli.task.workspace_given_up = dets arbejdsområde {name} er opgivet, og det der blev ændret der med det: {detail}
+da.cli.task.clipped = {name} beder om mere end en {other}-opgave må have, og får: {detail}; dens arts tilladelser (config permission.kind.{other}) eller projektets begrænser den
 da.cli.intent.invalidated = {name}s verifikation gælder ikke længere
 da.cli.intent.linked = {name} er forbundet
 da.cli.result.elsewhere = {name} vises af {value}
 da.cli.result.none = ingen problemer er gemt
+da.cli.result.dismissed = {name} er afvist: result viser den ikke længere, og den er gemt
 da.cli.intent.unlinked = {name}s link er fjernet
 da.cli.intent.unchanged = {name} siger allerede det; intet blev revideret
 da.cli.same_title = {name} har samme titel som {other}
 da.cli.intent.link_unknown = {name} er ikke en fil eller et symbol i depotet; linket beholdes, og konsistenstjekket nævner det indtil det er
-da.cli.intent.link_component = {name} er ikke en af projektets komponenter ({value}); linket beholdes, og konsistenstjekket nævner det indtil det er -- req unlink fjerner det
+da.cli.intent.link_component = {name} er ikke en af projektets komponenter ({value}); linket beholdes, og konsistenstjekket nævner det indtil det er -- reconfigure map.component.{name}=roots=MAPPE gør den til en, req unlink fjerner linket
 da.cli.intent.link_missing = {name} er ikke et af projektets krav; linket beholdes, og konsistenstjekket nævner det indtil det er -- req unlink {value} dependency {name} fjerner det
 da.cli.intent.already = {name} er allerede {value}; intet at gøre
+da.cli.intent.ruling_dropped = {name} styrede {value}, og {other} styrer intet: decision govern {other} INDSTILLING AFGØRELSE fører den videre
 da.cli.intent.overrides_unknown = {name}, som den siger den tilsidesætter, er intet projektet rummer; den tilsidesætter intet indtil den er
 da.cli.intent.moved = {name} flyttet fra {other} til {value}
 da.cli.intent.superseded = {name} er afløst
 da.cli.task.field = {name}: {value}
-da.cli.task.derived = afledte {name}
+da.cli.task.derived = afledt {name}, i komponenten {value}
 da.cli.task.ready = {name} blev klar
 da.cli.task.choose_kind = Vælg opgavens slags:
 da.cli.task.cancelled = ingen opgave blev oprettet
@@ -1518,7 +1532,7 @@ da.cli.project.requirements = krav
 da.cli.project.verified = verificeret
 da.cli.project.not_verified = {name} er implementeret og ikke verificeret: {detail}
 da.cli.project.stale_verified = {name} er registreret verificeret, men dens evidens holder ikke længere: {detail}
-da.cli.project.clipped = {name} beder om mere {value} end projektet tillader, og får det projektet tillader: {detail}; map.permission.project.{value}=... hæver projektets
+da.cli.project.clipped = {name} beder om mere end projektet tillader, og får det tilladte: {detail}; map.permission.project.KAPABILITET=... hæver projektets
 da.cli.project.component_gone = {count} åbne opgaver er i {name}, som ikke længere er en af projektets komponenter ({value}): task rehome {name} NAVN placerer dem
 da.cli.project.component_rootless = {name} siger ingen steder hvor dens filer er: map.component.{name}=roots=DIR siger det, og impact og verifikation når den
 da.cli.project.unserved = {name} er accepteret og ingen opgave tjener den: task new TITEL --set kind=ART --set requirements={name} laver en
@@ -1568,7 +1582,7 @@ da.cli.project.git.clean = intet er ændret siden sidste commit
 da.cli.project.git.none = projektet er ikke i et Git-repository som git kan læse
 da.cli.project.sandbox.none = agenter begrænses kun af projektets tilladelser
 da.cli.project.sandbox.shell = en sandkasse varer en session; fra skallen sættes MODEL_RUNNER_SANDBOX="{value}" foran den kommando den skal begrænse
-da.cli.project.sandbox.set = agenter er begrænset til {value}
+da.cli.project.sandbox.set = agenter er begrænset til {value} (af {name})
 da.cli.project.instruct.none = ingen instruks fra dig står ved magt
 da.cli.project.consistency = hvad der ikke hænger sammen i projektets tilstand: {count}
 da.cli.repo.summary = {count} filer og {total} relationer; graf {value}
@@ -2298,27 +2312,34 @@ qps.cli.task.revised = ⟦{name} íß ŕévíßéð⟧
 qps.cli.task.rehomed = ⟦{count} ŧáßkß pĺáçéð íñ {value} fŕóm {name}: {detail}⟧
 qps.cli.task.rehome_left = ⟦ĺéfŧ íñ {name}, áß ŧhéý áŕé éñðéð: {detail}⟧
 qps.cli.task.rehome_kept = ⟦ĺéfŧ íñ {name}, áß ŧhé ŕéqúíŕéméñŧß ŧhéý ßéŕvé béĺóñg ŧó áñóŧhéŕ çómpóñéñŧ: {detail}⟧
+qps.cli.task.rehome_belongs = ⟦ĺéfŧ íñ {name}, whéŕé ŧhé ŕéqúíŕéméñŧß ŧhéý ßéŕvé béĺóñg: {detail}⟧
+qps.cli.task.rehome_busy = ⟦ĺéfŧ íñ {name} fóŕ ñów, áß ŧhéý áŕé béíñg wóŕkéð óŕ wáíŧ ŧó bé ŧákéñ íñ: {detail}⟧
 qps.cli.task.part_there = ⟦{detail} íß á páŕŧ áĺŕéáðý: {name}⟧
+qps.cli.task.checked_in = ⟦çhéçkéð íñ {name}, whéŕé íŧß wóŕk wáíŧß: ŧhé pŕójéçŧ íŧßéĺf íß ñóŧ çhéçkéð⟧
+qps.cli.task.given_up_by_hand = ⟦{value}, whéŕé íŧß ágéñŧ wóŕkéð, wáß gívéñ úp, ßó ñóŧhíñg óf ŧháŧ wóŕk íß íñ ŧhé pŕójéçŧ; {name} íß çómpĺéŧéð óñ wháŧ ŧhé pŕójéçŧ hóĺðß ñów, áß ðóñé bý háñð⟧
+qps.cli.task.accepted_waits = ⟦{name} íß ñóŧ ŕéáðý ýéŧ: {detail}; íŧ béçóméß ŕéáðý óñçé ŧháŧ íß ðóñé⟧
 qps.cli.task.unchanged = ⟦{name} áĺŕéáðý ßáýß ŧháŧ; ñóŧhíñg íß ŕévíßéð⟧
 qps.cli.task.sandbox_bad = ⟦MODEL_RÚNNER_SANDBOX ðóéß ñóŧ ŕéáð, áñð wóúĺð çóñfíñé íŧß ágéñŧ ŧó ñóŧhíñg: {detail}⟧
-qps.cli.task.workspace_given_up = ⟦íŧß wóŕkßpáçé {name} íß gívéñ úp: ñóŧhíñg óf íŧ wáß ŧákéñ íñ⟧
-qps.cli.task.clipped = ⟦{name} áßkß fóŕ móŕé {value} ŧháñ á {other} ŧáßk máý hávé, áñð géŧß {detail}; íŧß kíñð'ß péŕmíßßíóñß (çóñfíg péŕmíßßíóñ.kíñð.{other}) óŕ ŧhé pŕójéçŧ'ß bóúñð íŧ⟧
+qps.cli.task.workspace_given_up = ⟦íŧß wóŕkßpáçé {name} íß gívéñ úp, áñð wháŧ íŧ çháñgéð ŧhéŕé wíŧh íŧ: {detail}⟧
+qps.cli.task.clipped = ⟦{name} áßkß fóŕ móŕé ŧháñ á {other} ŧáßk máý hávé, áñð géŧß: {detail}; íŧß kíñð'ß péŕmíßßíóñß (çóñfíg péŕmíßßíóñ.kíñð.{other}) óŕ ŧhé pŕójéçŧ'ß bóúñð íŧ⟧
 qps.cli.intent.invalidated = ⟦{name}'ß véŕífíçáŧíóñ ñó ĺóñgéŕ áþþĺíéß⟧
 qps.cli.intent.linked = ⟦{name} íß ĺíñkéð⟧
 qps.cli.result.elsewhere = ⟦{name} íß ßhówñ bý {value}⟧
 qps.cli.result.none = ⟦ñó íßßúéß áŕé képŧ⟧
+qps.cli.result.dismissed = ⟦{name} íß ðíßmíßßéð: ŕéßúĺŧ ñó ĺóñgéŕ ĺíßŧß íŧ, áñð íŧ íß képŧ⟧
 qps.cli.intent.unlinked = ⟦{name}'ß ĺíñk íß ŧákéñ óff⟧
 qps.cli.intent.unchanged = ⟦{name} áĺŕéáðý ßáýß ŧháŧ; ñóŧhíñg wáß ŕévíßéð⟧
 qps.cli.same_title = ⟦{name} háß ŧhé ßámé ŧíŧĺé áß {other}⟧
 qps.cli.intent.link_unknown = ⟦{name} íß ñóŧ á fíĺé óŕ á ßýmbóĺ ŧhé ŕépóßíŧóŕý háß; ŧhé ĺíñk íß képŧ, áñð çóñßíßŧéñçý wíĺĺ ñámé íŧ úñŧíĺ íŧ íß⟧
-qps.cli.intent.link_component = ⟦{name} íß ñóŧ óñé óf ŧhé pŕójéçŧ'ß çómpóñéñŧß ({value}); ŧhé ĺíñk íß képŧ, áñð çóñßíßŧéñçý wíĺĺ ñámé íŧ úñŧíĺ íŧ íß -- ŕéq úñĺíñk ŧákéß íŧ óff⟧
+qps.cli.intent.link_component = ⟦{name} íß ñóŧ óñé óf ŧhé pŕójéçŧ'ß çómpóñéñŧß ({value}); ŧhé ĺíñk íß képŧ, áñð çóñßíßŧéñçý wíĺĺ ñámé íŧ úñŧíĺ íŧ íß -- ŕéçóñfígúŕé máp.çómpóñéñŧ.{name}=ŕóóŧß=DIR mákéß íŧ óñé, ŕéq úñĺíñk ŧákéß ŧhé ĺíñk óff⟧
 qps.cli.intent.link_missing = ⟦{name} íß ñóŧ óñé óf ŧhé pŕójéçŧ'ß ŕéqúíŕéméñŧß; ŧhé ĺíñk íß képŧ, áñð çóñßíßŧéñçý wíĺĺ ñámé íŧ úñŧíĺ íŧ íß -- ŕéq úñĺíñk {value} ðépéñðéñçý {name} ŧákéß íŧ óff⟧
 qps.cli.intent.already = ⟦{name} íß {value} áĺŕéáðý; ñóŧhíñg ŧó ðó⟧
+qps.cli.intent.ruling_dropped = ⟦{name} góvéŕñéð {value}, áñð {other} góvéŕñß ñóŧhíñg: ðéçíßíóñ góvéŕñ {other} SEŦŦING RÚLING çáŕŕíéß íŧ óñ⟧
 qps.cli.intent.overrides_unknown = ⟦{name}, whíçh íŧ ßáýß íŧ óvéŕŕíðéß, íß ñóŧhíñg ŧhé pŕójéçŧ hóĺðß; íŧ óvéŕŕíðéß ñóŧhíñg úñŧíĺ íŧ íß⟧
 qps.cli.intent.moved = ⟦{name} ḿóvéð fŕóḿ {other} ŧó {value}⟧
 qps.cli.intent.superseded = ⟦{name} íß ßúþéŕßéðéð⟧
 qps.cli.task.field = ⟦{name}: {value}⟧
-qps.cli.task.derived = ⟦ðéŕívéð {name}⟧
+qps.cli.task.derived = ⟦ðéŕívéð {name}, íñ ŧhé çómpóñéñŧ {value}⟧
 qps.cli.task.ready = ⟦{name} béçámé ŕéáðý⟧
 qps.cli.task.choose_kind = ⟦Séĺéçŧ ŧhé kíñð óf ŧáßk:⟧
 qps.cli.task.cancelled = ⟦ñó ŧáßk wáß çŕéáŧéð⟧
@@ -2339,7 +2360,7 @@ qps.cli.project.requirements = ⟦ŕéqúíŕéméñŧß⟧
 qps.cli.project.verified = ⟦véŕífíéð⟧
 qps.cli.project.not_verified = ⟦{name} íß ímpĺéméñŧéð áñð ñóŧ véŕífíéð: {detail}⟧
 qps.cli.project.stale_verified = ⟦{name} íß ŕéçóŕðéð véŕífíéð, búŧ íŧß évíðéñçé ñó ĺóñgéŕ hóĺðß: {detail}⟧
-qps.cli.project.clipped = ⟦{name} áßkß fóŕ móŕé {value} ŧháñ ŧhé pŕójéçŧ áĺĺówß, áñð géŧß wháŧ ŧhé pŕójéçŧ áĺĺówß: {detail}; máp.péŕmíßßíóñ.pŕójéçŧ.{value}=... ŕáíßéß ŧhé pŕójéçŧ'ß⟧
+qps.cli.project.clipped = ⟦{name} áßkß fóŕ móŕé ŧháñ ŧhé pŕójéçŧ áĺĺówß, áñð géŧß wháŧ íŧ áĺĺówß: {detail}; máp.péŕmíßßíóñ.pŕójéçŧ.ÇAPABILIŦY=... ŕáíßéß ŧhé pŕójéçŧ'ß⟧
 qps.cli.project.component_gone = ⟦{count} ópéñ ŧáßkß áŕé íñ {name}, whíçh íß ñó ĺóñgéŕ óñé óf ŧhé pŕójéçŧ'ß çómpóñéñŧß ({value}): ŧáßk ŕéhómé {name} NAME pĺáçéß ŧhém⟧
 qps.cli.project.component_rootless = ⟦{name} ßáýß ñówhéŕé whéŕé íŧß fíĺéß áŕé: máp.çómpóñéñŧ.{name}=ŕóóŧß=DIR ßáýß ßó, áñð ímpáçŧ áñð véŕífíçáŧíóñ ŕéáçh íŧ⟧
 qps.cli.project.unserved = ⟦{name} íß áççépŧéð áñð ñó ŧáßk ßéŕvéß íŧ: ŧáßk ñéw ŦIŦLE --ßéŧ kíñð=KIND --ßéŧ ŕéqúíŕéméñŧß={name} mákéß óñé⟧
@@ -2389,7 +2410,7 @@ qps.cli.project.git.clean = ⟦ñóŧhíñg háß çháñgéð ßíñçé ŧhé 
 qps.cli.project.git.none = ⟦ŧhé þŕójéçŧ íß ñóŧ íñ á Gíŧ ŕéþóßíŧóŕý gíŧ çáñ ŕéáð⟧
 qps.cli.project.sandbox.none = ⟦ágéñŧß áŕé çóñfíñéð óñĺý ƀý ŧhé þŕóĵéçŧ'ß þéŕɱíßßíóñß⟧
 qps.cli.project.sandbox.shell = ⟦á ßáñðbóx ĺáßŧß fóŕ á ßéßßíóñ; fŕóm ŧhé ßhéĺĺ, púŧ MODEL_RÚNNER_SANDBOX="{value}" béfóŕé ŧhé çómmáñð íŧ íß ŧó çóñfíñé⟧
-qps.cli.project.sandbox.set = ⟦ágéñŧß áŕé çóñfíñéð ŧó {value}⟧
+qps.cli.project.sandbox.set = ⟦ágéñŧß áŕé çóñfíñéð ŧó {value} (bý {name})⟧
 qps.cli.project.instruct.none = ⟦ñó íñßŧŕúçŧíóñ óf ýóúŕß ßŧáñðß⟧
 qps.cli.project.consistency = ⟦wháŧ ðóéß ñóŧ hóĺð ŧógéŧhéŕ íñ ŧhé pŕójéçŧ'ß ßŧáŧé: {count}⟧
 qps.cli.repo.summary = ⟦{count} fíĺéß áñð {total} ŕéĺáŧíóñß; gŕáph {value}⟧

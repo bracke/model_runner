@@ -8375,6 +8375,23 @@ package body Tests.Framework_Cases is
                  and then Model_Runner.Framework.Permissions.Sandbox_Refuses ("src/x.adb", True)
                  and then not Model_Runner.Framework.Permissions.Sandbox_Refuses ("docs/x.md", True),
                  "a sandbox written as it is shown was not taken, or not said to refuse");
+         Assert (Model_Runner.Framework.Permissions.Sandbox_Source = "the session's /sandbox",
+                 "a session's sandbox was not said to be the session's");
+         declare
+            package Pm renames Model_Runner.Framework.Permissions;
+            Asked, Allowed : Pm.Permission_Set;
+            Read           : E.Error_Info;
+         begin
+            Pm.Restriction ("read_source; use_network; create_children max_depth=5", Asked, Read);
+            Pm.Restriction ("read_source; create_children max_depth=1", Allowed, Read);
+            Assert (Natural (Pm.Widenings (Asked, Allowed).Length) = 2
+                    and then Ada.Strings.Fixed.Index (Pm.Clipped (Asked, Allowed),
+                                                      "use_network (gets none)") > 0
+                    and then Ada.Strings.Fixed.Index (Pm.Clipped (Asked, Allowed),
+                                                      "create_children (gets max_depth=1)") > 0,
+                    "what asks for more than allowed was not all said, with what it gets: "
+                    & Pm.Clipped (Asked, Allowed));
+         end;
          Model_Runner.Framework.Permissions.Set_Sandbox ("", Set);
          Assert (not Model_Runner.Framework.Permissions.Sandbox_Refuses ("src/x.adb", True)
                  and then Model_Runner.Framework.Permissions.Sandbox_Problem = "",
@@ -8447,6 +8464,8 @@ package body Tests.Framework_Cases is
          Assert (E.Is_Ok (Status)
                  and then Nt.Links (Store, Nt.Requirement, To_String (R1), Nt.Component).Is_Empty,
                  "a link was not taken off");
+         Assert (Tk.Component_Of_Task (Store, To_String (Other)) /= "",
+                 "the component of a task was not said");
          Assert (Nt.State_Of (Store, Nt.Requirement, To_String (R1)) = "candidate"
                  and then Nt.State_Of (Store, Nt.Requirement, "REQ-NONE-999") = "",
                  "the state of an entry, or of none, was not said");

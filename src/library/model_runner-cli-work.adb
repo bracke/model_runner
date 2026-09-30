@@ -1117,17 +1117,52 @@ package body Model_Runner.CLI.Work is
                   end;
                end loop;
                for Title of Titles loop
-                  Append (Listed, (if Listed = Null_Unbounded_String then "" else "; ") & Title);
+                  declare
+                     Semicolon : constant Natural := Ada.Strings.Fixed.Index (Title, ";");
+                     Bare      : constant String :=
+                       (if Semicolon = 0 then Title else Title (Title'First .. Semicolon - 1));
+                  begin
+                     Append (Listed, (if Listed = Null_Unbounded_String then "" else "; ")
+                                     & Ada.Strings.Fixed.Trim (Bare, Ada.Strings.Both));
+                  end;
                end loop;
                Tk.Definition (Store, To_String (Done.Task_Id), Defined, Read);
                --  Its work done, what it would have added are tasks of their
                --  own: each made by hand as a new one, not a split of it.
                if To_String (Done.Final_State) in "complete" | "verification" then
-                  for Title of Titles loop
-                     Pres.Put_Note
-                       (Screen, "cli.next.task_new_for",
-                        [Loc.Named ("detail", Title), Loc.Named ("value", R.Get (Defined, "kind")),
-                         Loc.Named ("name", To_String (Done.Issue_Id))]);
+                  for Given of Titles loop
+                     --  TITLE; kind=K; component=C as the agent wrote it: its
+                     --  own kind and component, else this task's kind.
+                     declare
+                        Parts     : Model_Runner.Framework.Name_Lists.Vector;
+                        Start     : Positive := Given'First;
+                        Kind      : Unbounded_String := To_Unbounded_String (R.Get (Defined, "kind"));
+                        Component : Unbounded_String;
+                     begin
+                        for Index in Given'First .. Given'Last + 1 loop
+                           if Index > Given'Last or else Given (Index) = ';' then
+                              Parts.Append (Ada.Strings.Fixed.Trim (Given (Start .. Index - 1),
+                                                                    Ada.Strings.Both));
+                              Start := Index + 1;
+                           end if;
+                        end loop;
+                        for Part of Parts loop
+                           if Part'Length > 5 and then Part (Part'First .. Part'First + 4) = "kind=" then
+                              Kind := To_Unbounded_String (Part (Part'First + 5 .. Part'Last));
+                           elsif Part'Length > 10
+                             and then Part (Part'First .. Part'First + 9) = "component="
+                           then
+                              Component := To_Unbounded_String (Part (Part'First + 10 .. Part'Last));
+                           end if;
+                        end loop;
+                        Pres.Put_Note
+                          (Screen, "cli.next.task_new_for",
+                           [Loc.Named ("detail", Parts.First_Element),
+                            Loc.Named ("value", To_String (Kind)
+                                       & (if Component = Null_Unbounded_String then ""
+                                          else " --set component=" & To_String (Component))),
+                            Loc.Named ("name", To_String (Done.Issue_Id))]);
+                     end;
                   end loop;
                   goto Refused_Said;
                end if;
@@ -1148,9 +1183,8 @@ package body Model_Runner.CLI.Work is
                                               or else not Pm.Allows
                                                     (Pm.Sandbox,
                                                      Pm.Create_Children))
-                                  then "the sandbox withholds propose_tasks or create_children:"
-                                       & " /sandbox off lifts a session's, unsetting"
-                                       & " MODEL_RUNNER_SANDBOX the shell's"
+                                  then Pm.Sandbox_Source & " withholds propose_tasks or"
+                                       & " create_children"
                                   elsif R.Get (Defined, "permissions") /= ""
                                   then "its own permissions limit it: task edit "
                                        & To_String (Done.Task_Id) & " --set permissions=... widens them"

@@ -10,6 +10,7 @@ with Model_Runner.Conversation;
 with Model_Runner.Entropy;
 with Model_Runner.Errors;
 with Model_Runner.Limits;
+with Model_Runner.Framework.Permissions;
 with Model_Runner.Localization;
 with Model_Runner.Platform.Signals;
 with Model_Runner.Stops;
@@ -831,6 +832,12 @@ package body Model_Runner.CLI.Interactive is
       end;
 
       Pres.Put_Note (Screen, "cli.interactive.banner");
+      --  A sandbox the shell sets that does not read confines every agent
+      --  to nothing: said at once, not found out from a refusal.
+      if Model_Runner.Framework.Permissions.Sandbox_Problem /= "" then
+         Pres.Put_Note (Screen, "cli.task.sandbox_bad",
+                        [Loc.Named ("detail", Model_Runner.Framework.Permissions.Sandbox_Problem)]);
+      end if;
 
       --  Next steps are said as they are typed here.
       Pres.Use_Session (Screen, True);
@@ -869,6 +876,13 @@ package body Model_Runner.CLI.Interactive is
             pragma Unreferenced (Handled);
          begin
             begin
+               --  An interrupt that stopped what ran before is spent: one
+               --  seen once the line comes was pressed while it was typed.
+               if Model_Runner.Cancellation."/=" (Cancel, null)
+                 and then Model_Runner.Cancellation.Is_Cancelled (Cancel)
+               then
+                  Cancel.Reset;
+               end if;
                Model_Runner.Platform.Signals.Set_Waiting_For_Input (True);
                Ada.Text_IO.Get_Line (Ada.Text_IO.Current_Input, Room, Stop);
                Model_Runner.Platform.Signals.Set_Waiting_For_Input (False);
@@ -927,7 +941,6 @@ package body Model_Runner.CLI.Interactive is
                   --  line after starts afresh.
                   if Model_Runner.Cancellation."/=" (Cancel, null)
                     and then Model_Runner.Cancellation.Is_Cancelled (Cancel)
-                    and then Pending (Typing) /= ""
                   then
                      Taken (Typing);
                      Pres.Put_Note (Screen, "cli.interactive.dropped");

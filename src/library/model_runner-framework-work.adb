@@ -313,7 +313,8 @@ package body Model_Runner.Framework.Work is
       Change : in out Stores.Transaction;
       Agent  : String;
       State  : String;
-      Note   : String := "")
+      Note   : String := "";
+      Outcome : String := "")
    is
       Held   : Records.Item;
       Staged : Boolean;
@@ -333,6 +334,13 @@ package body Model_Runner.Framework.Work is
       end if;
       if Note /= "" then
          Records.Set (Held, "note", Note);
+         if Records.Get (Held, "summary") = "" then
+            Records.Set (Held, "summary", Note);
+         end if;
+      end if;
+      --  What its attempt left the task as, where that is known here.
+      if Outcome /= "" then
+         Records.Set (Held, "outcome", Outcome);
       end if;
       Stores.Put (Change, Runtime_Area, "agent." & Agent, Held);
    end Agent_State;
@@ -397,7 +405,8 @@ package body Model_Runner.Framework.Work is
                end if;
                if Agent /= "" then
                   Stop_Children (Item, Change, Agent);
-                  Agent_State (Item, Change, Agent, "failed", "it stopped without finishing");
+                  Agent_State (Item, Change, Agent, "failed", "its agent stopped without finishing",
+                               Outcome => "blocked");
                end if;
                Leases.Release (Item, Change, Lease_Of (Id), Agent, Status);
                if E.Is_Ok (Status) and then Component_Of (Item, Id) /= "" then
@@ -1061,6 +1070,15 @@ package body Model_Runner.Framework.Work is
       end Last_Call;
 
       Invocation : constant String := Last_Call;
+
+      --  What became of a workspace: taken in, given up, or still there.
+      function Workspace_Status (Id : String) return String is
+         Held : Workspaces.Workspace;
+         Read : E.Error_Info;
+      begin
+         Workspaces.Read (Item, Id, Held, Read);
+         return (if E.Is_Ok (Read) then To_String (Held.Status) else "");
+      end Workspace_Status;
    begin
       Tasks.Definition (Item, Task_Id, Defined, Status);
       Stores.Read (Item, Tasks_Area, Task_Id & ".state", State, Status);
@@ -1161,7 +1179,7 @@ package body Model_Runner.Framework.Work is
          end loop;
       end;
       Say ("proposed", Proposals_Of (Item, Task_Id));
-      Say ("files changed", Records.Get (State, "changed_files"));
+      Say ("files changed", Comma_Separated (Lines_Of (Records.Get (State, "changed_files"))));
       Say ("workspace", Records.Get (State, "current_workspace"));
       Say ("verification", Records.Get (State, "current_verification")
            & (if Records.Get (Proof, "profile") = "" then ""
@@ -1188,12 +1206,16 @@ package body Model_Runner.Framework.Work is
             then (if Tasks.State_Of (Item, Task_Id) in "candidate" | "accepted" then "none yet"
                   else "none: it wrote in the project itself")
             elsif Tasks.State_Of (Item, Task_Id) = "complete"
+              and then Workspace_Status (Records.Get (State, "current_workspace")) = "integrated"
             then "the workspace " & Records.Get (State, "current_workspace") & ", taken in"
             elsif Workspaces.Active_For (Item, Task_Id) /= ""
             then "the workspace " & Records.Get (State, "current_workspace") & ", waiting to be"
                  & " taken in"
             else "the workspace " & Records.Get (State, "current_workspace") & ", given up:"
-                 & " nothing of it was taken in"));
+                 & " nothing of it was taken in"
+                 & (if Records.Get (State, "changed_files") = "" then ""
+                    else ", and with it what it changed there: "
+                         & Comma_Separated (Lines_Of (Records.Get (State, "changed_files"))))));
       declare
          Became : Unbounded_String;
       begin
@@ -1822,6 +1844,10 @@ package body Model_Runner.Framework.Work is
       --  What it wrote that it may not, put back as it was.
       Put_Back_Files : Name_Lists.Vector;
 
+      --  Parts it asked for, made proposals of their own as its agent may
+      --  not make children.
+      Parts_Proposed : Name_Lists.Vector;
+
       --  The result its answer was kept as, which its end names.
       Last_Result : Unbounded_String;
 
@@ -1877,8 +1903,8 @@ package body Model_Runner.Framework.Work is
       begin
          for Path of Split_On (Paths, ',') loop
             if Permissions.Sandbox_Refuses (Trim (Path), Writing => True) then
-               return " -- the sandbox refused them, not the project's permissions: /sandbox off"
-                 & " lifts a session's, and unsetting MODEL_RUNNER_SANDBOX the shell's";
+               return " -- " & Permissions.Sandbox_Source & " refused them, not the project's"
+                 & " permissions";
             end if;
          end loop;
          return "";
@@ -1943,6 +1969,24 @@ package body Model_Runner.Framework.Work is
       Place    : Unbounded_String := To_Unbounded_String (Project);
 
       --  End the work with the task moved and the agent recorded.
+      --  Files it changed that its answer did not name, where it named
+      --  some: said, as what a person looks at before trusting its report.
+      function Unreported_Note return String is
+         Said_Changed : constant Name_Lists.Vector :=
+           Lines_Of (Replaced (Invocations.Claim (Said, "changed_files")));
+         Unreported   : Name_Lists.Vector;
+      begin
+         for Path of Result.Changed_Files loop
+            if not (for some Line of Said_Changed =>
+                      Trim (Line) = Path or else Trim (Line) = "./" & Path)
+            then
+               Unreported.Append (Path);
+            end if;
+         end loop;
+         return (if Unreported.Is_Empty or else Said_Changed.Is_Empty then ""
+                 else "it also changed files it did not report: " & Comma_Separated (Unreported));
+      end Unreported_Note;
+
       --  What an answer that is not taken proposed is not lost with it:
       --  kept as an issue, to be seen and made by hand.
       procedure Keep_Proposals_Aside is
@@ -2055,6 +2099,10 @@ package body Model_Runner.Framework.Work is
                --  The state it moves to here, not yet committed.
                Records.Set (Held, "outcome",
                             (if Next /= "" then Next else Tasks.State_Of (Item, Task_Id)));
+               --  Why, where its ending did not say: a cancel, an interrupt.
+               if Records.Get (Held, "summary") = "" and then Reason /= "" then
+                  Records.Set (Held, "summary", Reason);
+               end if;
                Stores.Put (Change, Runtime_Area, "agent." & To_String (Result.Agent_Id), Held);
             end if;
          end;
@@ -2695,6 +2743,17 @@ package body Model_Runner.Framework.Work is
          --  is: one made from this same answer; for a proposal, one not
          --  ended; for a part, one of this task's own parts, done or not.
          --  Never this task itself.
+         --  A task named as what it is: a part says whose.
+         function Described (Other : String) return String is
+            Its  : Records.Item;
+            Read : E.Error_Info;
+         begin
+            Tasks.Definition (Item, Other, Its, Read);
+            return Other
+              & (if E.Is_Ok (Read) and then Records.Get (Its, "parent") /= ""
+                 then " (a part of " & Records.Get (Its, "parent") & ")" else "");
+         end Described;
+
          function Same_Title (Title : String; Part : Boolean := False) return String is
             Lower : constant String := Ada.Characters.Handling.To_Lower (Title);
          begin
@@ -2788,7 +2847,7 @@ package body Model_Runner.Framework.Work is
                        & (if Other = Task_Id then "it is this task"
                           elsif State in "rejected" | "cancelled"
                           then "it is " & Other & ", which was " & State
-                          else "it is " & Other & " already");
+                          else "it is " & Described (Other) & " already");
                   begin
                      --  Said once, however often the answer says it.
                      if not Result.Kept_Back.Contains (Said) then
@@ -2881,7 +2940,8 @@ package body Model_Runner.Framework.Work is
                   if Made_Titles.Contains (Ada.Characters.Handling.To_Lower (Title)) then
                      null;
                   elsif Same_Title (Title) /= "" then
-                     Result.Kept_Back.Append (Title & ": it is " & Same_Title (Title) & " already");
+                     Result.Kept_Back.Append (Title & ": it is " & Described (Same_Title (Title))
+                                              & " already");
                   else
                      Fields.Include ("title", Title);
                      Fields.Include ("kind", Records.Get (Defined, "kind"));
@@ -2895,6 +2955,7 @@ package body Model_Runner.Framework.Work is
                         Made, Held);
                      if E.Is_Ok (Held) then
                         Result.Proposed.Append (To_String (Made));
+                        Parts_Proposed.Append (To_String (Made));
                         Made_Titles.Append (Ada.Characters.Handling.To_Lower (Title));
                         Made_Ids.Append (To_String (Made));
                      else
@@ -3066,7 +3127,11 @@ package body Model_Runner.Framework.Work is
          --  done it goes back to work on its own, and not before.
          Conclude ("blocked",
                    (if Split_Into.Is_Empty then To_String (Result.Summary)
-                    else Tasks.Waiting_For (Split_Into) & " (" & To_String (Result.Summary) & ")"),
+                    else Tasks.Waiting_For (Split_Into) & " (" & To_String (Result.Summary) & ")")
+                   & (if Parts_Proposed.Is_Empty then ""
+                      else "; its agent may not make children, so the parts it asked for are"
+                           & " proposals of their own (" & Comma_Separated (Parts_Proposed)
+                           & "): task split " & Task_Id & " makes parts of it by hand"),
                    "completed");
          return;
       elsif To_String (Result.Claimed) = "failed" then
@@ -3241,7 +3306,9 @@ package body Model_Runner.Framework.Work is
                return;
             elsif Work_Setting (Item, "integrate") /= "automatic" then
                Conclude ("", To_String (Result.Workspace_Id) & " waits to be taken in"
-                         & To_String (Said), "completed");
+                         & To_String (Said)
+                         & (if Unreported_Note = "" then "" else "; " & Unreported_Note),
+                         "completed");
                return;
             elsif not Passed then
                Conclude ("", To_String (Result.Workspace_Id) & " waits to be taken in"
@@ -3361,23 +3428,7 @@ package body Model_Runner.Framework.Work is
          if E.Is_Ok (Status) then
             --  Done, and with files changed it did not say it changed: said,
             --  as what a person looks at before trusting its report.
-            declare
-               Said_Changed : constant Name_Lists.Vector :=
-                 Lines_Of (Replaced (Invocations.Claim (Said, "changed_files")));
-               Unreported   : Name_Lists.Vector;
-            begin
-               for Path of Result.Changed_Files loop
-                  if not (for some Line of Said_Changed =>
-                            Trim (Line) = Path or else Trim (Line) = "./" & Path)
-                  then
-                     Unreported.Append (Path);
-                  end if;
-               end loop;
-               Conclude ("", (if Unreported.Is_Empty or else Said_Changed.Is_Empty then ""
-                              else "it also changed files it did not report: "
-                                   & Comma_Separated (Unreported)),
-                         "completed");
-            end;
+            Conclude ("", Unreported_Note, "completed");
          end if;
       end;
    end Execute_Work;

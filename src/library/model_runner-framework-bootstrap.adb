@@ -477,6 +477,14 @@ package body Model_Runner.Framework.Bootstrap is
 
       --  An issue, kept as a diagnostic result -- the same issue found
       --  again being the same result -- and said once, when it is new.
+      --  What an issue says, before the ways on it names: two about the same
+      --  words that say different things are two issues.
+      function Gist (Summary : String) return String is
+         Cut : constant Natural := Ada.Strings.Fixed.Index (Summary, ";");
+      begin
+         return (if Cut = 0 then Summary else Summary (Summary'First .. Cut - 1));
+      end Gist;
+
       procedure Raise_Issue (Said : in out Results.Result) is
          Id  : constant String := Results.Identifier_Of (Said);
          New_One : constant Boolean := not Stores.Exists (Item, Results_Area, Id);
@@ -501,7 +509,9 @@ package body Model_Runner.Framework.Bootstrap is
                      --  same words, whatever its summary adds; words the
                      --  document has changed since are another issue.
                      Results.Read (Item, Kept, Held, Read);
-                     if E.Is_Ok (Read) and then Held.Payload = Said.Payload then
+                     if E.Is_Ok (Read) and then Held.Payload = Said.Payload
+                       and then Gist (To_String (Held.Summary)) = Gist (To_String (Said.Summary))
+                     then
                         return;
                      end if;
                   end if;
@@ -597,8 +607,8 @@ package body Model_Runner.Framework.Bootstrap is
                                                & (if Held.Superseded_By = Null_Unbounded_String
                                                   then ""
                                                   else " by " & To_String (Held.Superseded_By))
-                                               & "; take it out of the document, or reconsider "
-                                               & Known),
+                                               & "; take it out of the document, or, to have it"
+                                               & " again, req new with its words makes it anew"),
                               Payload    => Next.Text,
                               Provenance => Next.Provenance,
                               others     => <>);
@@ -926,7 +936,8 @@ package body Model_Runner.Framework.Bootstrap is
                                             & (if To_String (Held.State) = Intent.First_State (Kind)
                                                then "reject " else "obsolete ")
                                             & Known & " retires it, or keep it as it is -- nothing"
-                                            & " needs doing then, and this is not raised again"
+                                            & " needs doing then, this is not raised again, and"
+                                            & " result dismiss ID takes it off the list"
                                             & (if Instead = Null_Unbounded_String then ""
                                                else "; made from the document now: "
                                                     & To_String (Instead))),

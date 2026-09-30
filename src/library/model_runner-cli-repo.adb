@@ -282,8 +282,36 @@ package body Model_Runner.CLI.Repo is
             Names : constant Model_Runner.Framework.Name_Lists.Vector :=
               Rp.Find_Symbols (Found, Argument);
          begin
+            --  A unit the repository does not declare -- a library's, the
+            --  runtime's -- is still used where it is withed: those uses,
+            --  said as what they are.
             if Names.Is_Empty then
-               Not_Found;
+               declare
+                  Any : Boolean := False;
+               begin
+                  for Index in 1 .. Rp.Relation_Count (Found) loop
+                     declare
+                        use type Rp.Relation_Kind;
+                        One : constant Rp.Relation := Rp.Relation_At (Found, Index);
+                     begin
+                        if One.Kind = Rp.Depends_On
+                          and then Ada.Characters.Handling.To_Lower (To_String (One.To))
+                                   = Ada.Characters.Handling.To_Lower (Argument)
+                          and then Length (One.Where) > 0
+                        then
+                           Any := True;
+                           Pres.Put_Message
+                             (Screen, "cli.repo.reference",
+                              [Loc.Named ("name", To_String (One.To)),
+                               Loc.Named ("path", To_String (One.Where)),
+                               Loc.Named ("detail", "withed; declared outside the repository")]);
+                        end if;
+                     end;
+                  end loop;
+                  if not Any then
+                     Not_Found;
+                  end if;
+               end;
                return;
             end if;
             --  Each with how it was found and how sure that is: a name that
@@ -470,8 +498,24 @@ package body Model_Runner.CLI.Repo is
                         Ids         : Model_Runner.Framework.Name_Lists.Vector;
                      begin
                         for Index in 1 .. Tr.Length (Reach) loop
-                           All_Reached.Append (Tr.Element (Reach, Index));
-                           Ids.Append (To_String (Tr.Element (Reach, Index).Id));
+                           declare
+                              One  : constant Tr.Reached := Tr.Element (Reach, Index);
+                              Name : constant String := Bare_Id (To_String (One.Id));
+                           begin
+                              --  Work ended and requirements retired are
+                              --  nothing a change reaches now.
+                              if not (To_String (One.Kind) = "task"
+                                      and then Tk.State_Of (Store, Name) in "rejected" | "cancelled")
+                                and then not (To_String (One.Kind) = "requirement"
+                                              and then Model_Runner.Framework.Intent.State_Of
+                                                         (Store, Model_Runner.Framework.Intent.Requirement,
+                                                          Name)
+                                                       in "rejected" | "obsolete" | "superseded")
+                              then
+                                 All_Reached.Append (One);
+                              end if;
+                              Ids.Append (To_String (One.Id));
+                           end;
                         end loop;
                         for Index in 1 .. Tr.Length (Reach) loop
                            declare
