@@ -74,6 +74,12 @@ package Model_Runner.Framework.Permissions is
    --  @return Its word, as write_source.
    function Word (Item : Capability) return String;
 
+   --  A grant's constraints as a setting's value writes them.
+   --
+   --  @param Given The grant.
+   --  @return Its constraints, a space apart; empty for none.
+   function Grant_Text (Given : Grant) return String;
+
    --  A level as the configuration writes it.
    --
    --  @param Item The store.

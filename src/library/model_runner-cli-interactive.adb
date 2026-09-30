@@ -11,6 +11,7 @@ with Model_Runner.Entropy;
 with Model_Runner.Errors;
 with Model_Runner.Limits;
 with Model_Runner.Localization;
+with Model_Runner.Platform.Signals;
 with Model_Runner.Stops;
 with Model_Runner.Templates;
 with Model_Runner.Text;
@@ -868,9 +869,12 @@ package body Model_Runner.CLI.Interactive is
             pragma Unreferenced (Handled);
          begin
             begin
+               Model_Runner.Platform.Signals.Set_Waiting_For_Input (True);
                Ada.Text_IO.Get_Line (Ada.Text_IO.Current_Input, Room, Stop);
+               Model_Runner.Platform.Signals.Set_Waiting_For_Input (False);
             exception
                when Ada.Text_IO.End_Error =>
+                  Model_Runner.Platform.Signals.Set_Waiting_For_Input (False);
                   exit Read_Loop;
             end;
 
@@ -951,6 +955,12 @@ package body Model_Runner.CLI.Interactive is
             end if;
          end;
          <<Next_Line>>
+         --  Told to end while something ran: it ends once that stopped.
+         if Model_Runner.Platform.Signals.Ending_Asked then
+            Status := E.Exit_Cancelled;
+            Leaving := True;
+            exit Read_Loop;
+         end if;
       end loop Read_Loop;
 
       --  At end of file a pending prompt is submitted, then the session ends.

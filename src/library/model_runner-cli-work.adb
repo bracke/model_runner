@@ -25,6 +25,7 @@ with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Verification;
+with Model_Runner.Framework.Workspaces;
 with Model_Runner.Localization;
 with Model_Runner.Platform;
 with Model_Runner.Platform.Signals;
@@ -523,6 +524,10 @@ package body Model_Runner.CLI.Work is
          Tk.Definition (Store, Id, Defined, Read);
          if State = "candidate" then
             return Pres.Next_Step_Value (Screen, "cli.next.accept_task", [Loc.Named ("name", Id)]);
+         elsif State = "verification"
+           and then Model_Runner.Framework.Workspaces.Active_For (Store, Id) /= ""
+         then
+            return Pres.Next_Step_Value (Screen, "cli.next.integrate", [Loc.Named ("name", Id)]);
          end if;
          --  Parts not done: they come first.
          for Child of Tk.Children (Store, Id) loop
@@ -936,6 +941,25 @@ package body Model_Runner.CLI.Work is
          if Done.Evidence_Id /= Null_Unbounded_String then
             Say ("cli.work.evidence", To_String (Done.Evidence_Id), "");
          end if;
+         --  Whatever its end, the requirements judged again on what it
+         --  left: a whole suite that failed takes verification away.
+         declare
+            Change : S.Transaction;
+            Moved  : Model_Runner.Framework.Name_Lists.Vector;
+            Judged : E.Error_Info;
+         begin
+            Model_Runner.Framework.Verification.Reevaluate_Requirements (Store, Change, Moved, Judged);
+            if E.Is_Ok (Judged) then
+               S.Commit (Store, Change, Judged);
+            end if;
+            if E.Is_Ok (Judged) then
+               for Requirement of Moved loop
+                  if not Done.Requirements.Contains (Requirement) then
+                     Done.Requirements.Append (Requirement);
+                  end if;
+               end loop;
+            end if;
+         end;
          for Requirement of Done.Requirements loop
             Say ("cli.work.requirement", Requirement,
                  Model_Runner.Framework.Intent.State_Of
@@ -968,20 +992,23 @@ package body Model_Runner.CLI.Work is
                   end if;
                end loop;
 
-               --  The last of its parent's parts done: the parent goes on,
-               --  its readiness worked out now rather than on the next open.
-               if R.Get (Defined, "parent") /= "" then
-                  declare
-                     Change : S.Transaction;
-                     Became : Model_Runner.Framework.Name_Lists.Vector;
-                     Moved  : E.Error_Info;
-                  begin
-                     Tk.Recompute_Readiness (Store, Change, Became, Moved);
-                     if E.Is_Ok (Moved) then
-                        S.Commit (Store, Change, Moved);
+               --  What its end lets go on -- a parent whose parts are done,
+               --  a task that waited for it -- worked out now, and named.
+               declare
+                  Change : S.Transaction;
+                  Became : Model_Runner.Framework.Name_Lists.Vector;
+                  Moved  : E.Error_Info;
+               begin
+                  Tk.Recompute_Readiness (Store, Change, Became, Moved);
+                  if E.Is_Ok (Moved) then
+                     S.Commit (Store, Change, Moved);
+                  end if;
+                  for Id of Became loop
+                     if Id /= R.Get (Defined, "parent") then
+                        Pres.Put_Note (Screen, "cli.task.ready", [Loc.Named ("name", Id)]);
                      end if;
-                  end;
-               end if;
+                  end loop;
+               end;
                if R.Get (Defined, "parent") /= ""
                  and then Tk.State_Of (Store, R.Get (Defined, "parent")) = "accepted"
                  and then Tk.Ready (Store, R.Get (Defined, "parent")).Ready
@@ -1018,58 +1045,6 @@ package body Model_Runner.CLI.Work is
                  (Screen, "cli.next.parts",
                   [Loc.Named ("detail", Reason (From .. (if Stop = 0 then Reason'Last else Stop - 1)))]);
             end;
-         elsif To_String (Done.Final_State) = "blocked"
-           and then Done.Issue_Id /= Null_Unbounded_String
-           and then (for some Line of Done.Kept_Back =>
-                       Ada.Strings.Fixed.Index (Line, "children") > 0
-                       or else Ada.Strings.Fixed.Index (Line, "may not propose") > 0)
-         then
-            --  Its parts or proposals refused: trying again gives the same;
-            --  a person makes them by hand, or lets its agent -- as what
-            --  refused them says.
-            declare
-               Titles  : Unbounded_String;
-               Why     : Unbounded_String;
-               Defined : R.Item;
-               Read    : E.Error_Info;
-            begin
-               for Line of Done.Kept_Back loop
-                  declare
-                     Colon : constant Natural := Ada.Strings.Fixed.Index (Line, ": ");
-                  begin
-                     --  Those refused for want of leave to make them.
-                     if Colon > Line'First
-                       and then (Ada.Strings.Fixed.Index (Line, "children") > Colon
-                                 or else Ada.Strings.Fixed.Index (Line, "may not propose") > Colon)
-                     then
-                        Append (Titles, (if Titles = Null_Unbounded_String then "" else "; ")
-                                        & Line (Line'First .. Colon - 1));
-                        if Why = Null_Unbounded_String then
-                           Why := To_Unbounded_String (Line (Colon + 2 .. Line'Last));
-                        end if;
-                     end if;
-                  end;
-               end loop;
-               Tk.Definition (Store, To_String (Done.Task_Id), Defined, Read);
-               Pres.Put_Note
-                 (Screen, "cli.next.refused_parts",
-                  [Loc.Named ("name", To_String (Done.Task_Id)),
-                   Loc.Named ("value", To_String (Done.Issue_Id)),
-                   Loc.Named ("detail", To_String (Titles)),
-                   Loc.Named ("other",
-                              (if R.Get (Defined, "permissions") /= ""
-                               then "its own permissions limit it: task edit "
-                                    & To_String (Done.Task_Id) & " --set permissions=... widens them"
-                               elsif Ada.Strings.Fixed.Index (To_String (Why), "max_depth") > 0
-                               then "reconfigure map.permission.kind." & R.Get (Defined, "kind")
-                                    & ".create_children=max_depth=N lets its agent go deeper"
-                               elsif Ada.Strings.Fixed.Index (To_String (Why), "max_children") > 0
-                               then "reconfigure map.permission.kind." & R.Get (Defined, "kind")
-                                    & ".create_children=max_children=N lets its agent make more"
-                               else "reconfigure map.permission.kind." & R.Get (Defined, "kind")
-                                    & ".create_children= and .propose_tasks= let its agent make"
-                                    & " them"))]);
-            end;
          elsif To_String (Done.Final_State) in "failed" | "blocked" then
             Pres.Put_Note (Screen, "cli.next.retry", [Loc.Named ("name", To_String (Done.Task_Id))]);
          elsif To_String (Done.Final_State) = "verification"
@@ -1077,6 +1052,67 @@ package body Model_Runner.CLI.Work is
          then
             Pres.Put_Note
               (Screen, "cli.next.integrate", [Loc.Named ("name", To_String (Done.Task_Id))]);
+         end if;
+
+         --  Parts or proposals refused for want of leave, whatever else it
+         --  made: trying again gives the same; a person makes them by hand,
+         --  or gives the leave at the level that withheld it.
+         if Done.Issue_Id /= Null_Unbounded_String
+           and then (for some Line of Done.Kept_Back =>
+                       Ada.Strings.Fixed.Index (Line, "children") > 0
+                       or else Ada.Strings.Fixed.Index (Line, "may not propose") > 0)
+         then
+            declare
+               Titles  : Model_Runner.Framework.Name_Lists.Vector;
+               Why     : Unbounded_String;
+               Defined : R.Item;
+               Read    : E.Error_Info;
+               Listed  : Unbounded_String;
+            begin
+               for Line of Done.Kept_Back loop
+                  declare
+                     Colon : constant Natural := Ada.Strings.Fixed.Index (Line, ": ");
+                  begin
+                     if Colon > Line'First
+                       and then (Ada.Strings.Fixed.Index (Line, "children") > Colon
+                                 or else Ada.Strings.Fixed.Index (Line, "may not propose") > Colon)
+                       and then not Titles.Contains (Line (Line'First .. Colon - 1))
+                     then
+                        Titles.Append (Line (Line'First .. Colon - 1));
+                        if Why = Null_Unbounded_String then
+                           Why := To_Unbounded_String (Line (Colon + 2 .. Line'Last));
+                        end if;
+                     end if;
+                  end;
+               end loop;
+               for Title of Titles loop
+                  Append (Listed, (if Listed = Null_Unbounded_String then "" else "; ") & Title);
+               end loop;
+               Tk.Definition (Store, To_String (Done.Task_Id), Defined, Read);
+               declare
+                  Kind  : constant String := R.Get (Defined, "kind");
+                  Level : constant String :=
+                    (if R.Has (Config, "map.permission.kind." & Kind & ".create_children")
+                     then "kind." & Kind else "project");
+               begin
+                  Pres.Put_Note
+                    (Screen, "cli.next.refused_parts",
+                     [Loc.Named ("name", To_String (Done.Task_Id)),
+                      Loc.Named ("value", To_String (Done.Issue_Id)),
+                      Loc.Named ("detail", '"' & To_String (Listed) & '"'),
+                      Loc.Named ("other",
+                                 (if R.Get (Defined, "permissions") /= ""
+                                  then "its own permissions limit it: task edit "
+                                       & To_String (Done.Task_Id) & " --set permissions=... widens them"
+                                  elsif Ada.Strings.Fixed.Index (To_String (Why), "max_depth") > 0
+                                    or else Ada.Strings.Fixed.Index (To_String (Why), "max_children") > 0
+                                  then "reconfigure map.permission." & Level
+                                       & ".create_children=""max_depth=N max_children=N"" raises the"
+                                       & " limit that stopped them"
+                                  else "reconfigure map.permission.kind." & Kind
+                                       & ".propose_tasks= lets its agent propose them"))]);
+               end;
+            end;
          end if;
 
          exit when Remaining.Is_Empty;

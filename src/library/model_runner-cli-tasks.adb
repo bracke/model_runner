@@ -472,16 +472,27 @@ package body Model_Runner.CLI.Tasks is
                      Wider   : constant String := Pm.Widening (Asked, Allowed);
                   begin
                      if Wider /= "" then
-                        Pres.Put_Note
-                          (Screen, "cli.project.clipped",
-                           [Loc.Named ("name", To_String (Id)), Loc.Named ("value", Wider),
-                            Loc.Named ("detail", Ada.Strings.Fixed.Trim
-                                                   (Ada.Strings.Fixed.Translate
-                                                      (Pm.Image (Pm.Intersect (Asked, Allowed)),
-                                                       Ada.Strings.Maps.To_Mapping
-                                                         ([1 => ASCII.LF], ";")),
-                                                    Ada.Strings.Maps.Null_Set,
-                                                    Ada.Strings.Maps.To_Set (";")))]);
+                        declare
+                           --  What it gets of that capability: its line of
+                           --  what both allow, or none.
+                           function Gets return String is
+                           begin
+                              for Line of Model_Runner.Framework.Lines_Of
+                                (Pm.Image (Pm.Intersect (Asked, Allowed)))
+                              loop
+                                 if Ada.Strings.Fixed.Index (Line, Wider) = 1 then
+                                    return Line;
+                                 end if;
+                              end loop;
+                              return "no " & Wider & " at all";
+                           end Gets;
+                        begin
+                           Pres.Put_Note
+                             (Screen, "cli.task.clipped",
+                              [Loc.Named ("name", To_String (Id)), Loc.Named ("value", Wider),
+                               Loc.Named ("other", Fields ("kind")),
+                               Loc.Named ("detail", Gets)]);
+                        end;
                      end if;
                   end;
                end if;
@@ -699,6 +710,43 @@ package body Model_Runner.CLI.Tasks is
             return;
          end if;
          Pres.Put_Message (Screen, "cli.task.revised", [Loc.Named ("name", Argument)]);
+
+         --  Its permissions asking for more than its kind allows: what it
+         --  gets, as a new task is told.
+         if Fields.Contains ("permissions") then
+            declare
+               package Pm renames Model_Runner.Framework.Permissions;
+               Defined : R.Item;
+               Read    : E.Error_Info;
+               Asked   : Pm.Permission_Set;
+            begin
+               Tk.Definition (Store, Argument, Defined, Read);
+               Pm.Restriction (Fields ("permissions"), Asked, Read);
+               if E.Is_Ok (Read) then
+                  declare
+                     Allowed : constant Pm.Permission_Set :=
+                       Pm.Effective (Store, R.Get (Defined, "kind"), "", Within_Sandbox => False);
+                     Wider   : constant String := Pm.Widening (Asked, Allowed);
+                     Gets    : Unbounded_String := To_Unbounded_String ("no " & Wider & " at all");
+                  begin
+                     for Line of Model_Runner.Framework.Lines_Of
+                       (Pm.Image (Pm.Intersect (Asked, Allowed)))
+                     loop
+                        if Wider /= "" and then Ada.Strings.Fixed.Index (Line, Wider) = 1 then
+                           Gets := To_Unbounded_String (Line);
+                        end if;
+                     end loop;
+                     if Wider /= "" then
+                        Pres.Put_Note
+                          (Screen, "cli.task.clipped",
+                           [Loc.Named ("name", Argument), Loc.Named ("value", Wider),
+                            Loc.Named ("other", R.Get (Defined, "kind")),
+                            Loc.Named ("detail", To_String (Gets))]);
+                     end if;
+                  end;
+               end if;
+            end;
+         end if;
       end Edit;
 
       --  A task decomposed: task split TASK FIRST TITLE; SECOND TITLE.
@@ -725,6 +773,48 @@ package body Model_Runner.CLI.Tasks is
             Outcome := E.Make (E.Framework_Input_Missing);
             E.Add_Text (Outcome, "name", "the task and its parts' titles, separated by ;");
             Fail (Outcome);
+            return;
+         end if;
+
+         --  A part it has already, or one named twice, is that part: said,
+         --  and not made again.
+         declare
+            Kept : Model_Runner.Framework.Name_Lists.Vector;
+         begin
+            for Title of Titles loop
+               declare
+                  Lower_Title : constant String := Ada.Characters.Handling.To_Lower (Title);
+                  Existing    : Unbounded_String;
+               begin
+                  for Child of Tk.Children (Store, First_Word) loop
+                     declare
+                        Defined : R.Item;
+                        Read    : E.Error_Info;
+                     begin
+                        Tk.Definition (Store, Child, Defined, Read);
+                        if E.Is_Ok (Read)
+                          and then Ada.Characters.Handling.To_Lower (R.Get (Defined, "title"))
+                                   = Lower_Title
+                          and then Tk.State_Of (Store, Child) not in "cancelled" | "rejected"
+                        then
+                           Existing := To_Unbounded_String (Child);
+                        end if;
+                     end;
+                  end loop;
+                  if Existing /= Null_Unbounded_String then
+                     Pres.Put_Note
+                       (Screen, "cli.task.part_there",
+                        [Loc.Named ("name", To_String (Existing)), Loc.Named ("detail", Title)]);
+                  elsif not (for some Other of Kept =>
+                               Ada.Characters.Handling.To_Lower (Other) = Lower_Title)
+                  then
+                     Kept.Append (Title);
+                  end if;
+               end;
+            end loop;
+            Titles := Kept;
+         end;
+         if Titles.Is_Empty then
             return;
          end if;
          Tk.Decompose (Store, Change, First_Word, Titles, Made, Outcome);
@@ -761,68 +851,73 @@ package body Model_Runner.CLI.Tasks is
       --  Every open task of one component placed in another: task rehome
       --  OLD NEW.
       procedure Rehome is
-         Space : constant Natural := Ada.Strings.Fixed.Index (After_First, " ");
-         Moved : Natural := 0;
+         Space   : constant Natural := Ada.Strings.Fixed.Index (After_First, " ");
+         Moved   : Model_Runner.Framework.Name_Lists.Vector;
+         Left    : Model_Runner.Framework.Name_Lists.Vector;
+
+         procedure Refuse (Name, Value, Detail : String) is
+         begin
+            Outcome := E.Make (E.Framework_Input_Invalid);
+            E.Add_Text (Outcome, "name", Name);
+            E.Add_Text (Outcome, "value", Value);
+            E.Add_Text (Outcome, "detail", Detail);
+            Fail (Outcome);
+         end Refuse;
       begin
-         if First_Word = "" or else After_First = "" or else Space /= 0 then
+         if First_Word = "" or else After_First = "" then
             Outcome := E.Make (E.Framework_Input_Missing);
             E.Add_Text (Outcome, "name", "the component its tasks are in, and the one to place"
                         & " them in: task rehome OLD NEW");
             Fail (Outcome);
-            Status := E.Exit_Usage;
+            return;
+         elsif Space /= 0 then
+            Refuse ("task rehome", After_First, "it takes two words, OLD and NEW, and was given more");
             return;
          end if;
-         --  Into one of the project's components, from one a task is in.
-         if not Tk.Components (Store).Contains (After_First) then
-            Outcome := E.Make (E.Framework_Input_Invalid);
-            E.Add_Text (Outcome, "name", "the component to place them in");
-            E.Add_Text (Outcome, "value", After_First);
-            E.Add_Text (Outcome, "detail", "the project's components are "
-                        & Joined (Tk.Components (Store))
-                        & "; reconfigure set.components+=" & After_First & " adds it");
-            Fail (Outcome);
-            return;
-         end if;
-         declare
-            Held : Boolean := False;
-         begin
-            for Id of Tk.List (Store) loop
-               declare
-                  Defined : R.Item;
-                  Read    : E.Error_Info;
-               begin
-                  Tk.Definition (Store, Id, Defined, Read);
-                  Held := Held or else (E.Is_Ok (Read) and then R.Get (Defined, "component") = First_Word
-                                        and then Tk.State_Of (Store, Id)
-                                                   not in "complete" | "cancelled" | "rejected");
-               end;
-            end loop;
-            if not Held then
-               Outcome := E.Make (E.Framework_Input_Invalid);
-               E.Add_Text (Outcome, "name", "the component its tasks are in");
-               E.Add_Text (Outcome, "value", First_Word);
-               E.Add_Text (Outcome, "detail", "no open task is in it");
-               Fail (Outcome);
-               return;
-            end if;
-         end;
+
+         --  From a component some task is in, into one of the project's.
          for Id of Tk.List (Store) loop
             declare
                Defined : R.Item;
                Read    : E.Error_Info;
-               Fields  : Tk.Field_Map;
             begin
                Tk.Definition (Store, Id, Defined, Read);
-               if E.Is_Ok (Read) and then R.Get (Defined, "component") = First_Word
-                 and then Tk.State_Of (Store, Id) not in "complete" | "cancelled" | "rejected"
-               then
-                  Fields.Include ("component", After_First);
-                  Tk.Revise (Store, Change, Id, Fields, Outcome);
-                  if E.Is_Error (Outcome) then
-                     Fail (Outcome);
-                     return;
+               if E.Is_Ok (Read) and then R.Get (Defined, "component") = First_Word then
+                  if Tk.State_Of (Store, Id) in "complete" | "cancelled" | "rejected" then
+                     Left.Append (Id);
+                  else
+                     Moved.Append (Id);
                   end if;
-                  Moved := Moved + 1;
+               end if;
+            end;
+         end loop;
+         if Moved.Is_Empty then
+            Refuse ("the component its tasks are in", First_Word,
+                    (if Left.Is_Empty then "no task is in it"
+                     else "only ended tasks are in it (" & Joined (Left)
+                          & "), and ended tasks stay where they were done"));
+            return;
+         elsif First_Word = After_First then
+            Pres.Put_Note (Screen, "cli.intent.already",
+                           [Loc.Named ("name", Joined (Moved)), Loc.Named ("value", "in " & After_First)]);
+            return;
+         elsif not Tk.Components (Store).Contains (After_First) then
+            Refuse ("the component to place them in", After_First,
+                    "the project's components are " & Joined (Tk.Components (Store))
+                    & "; reconfigure map.component." & After_First & "=roots=DIR makes it one,"
+                    & " placed where its files are");
+            return;
+         end if;
+
+         for Id of Moved loop
+            declare
+               Fields : Tk.Field_Map;
+            begin
+               Fields.Include ("component", After_First);
+               Tk.Revise (Store, Change, Id, Fields, Outcome);
+               if E.Is_Error (Outcome) then
+                  Fail (Outcome);
+                  return;
                end if;
             end;
          end loop;
@@ -833,8 +928,13 @@ package body Model_Runner.CLI.Tasks is
          end if;
          Pres.Put_Message
            (Screen, "cli.task.rehomed",
-            [Loc.Named ("count", T.Image (Long_Long_Integer (Moved))),
-             Loc.Named ("name", First_Word), Loc.Named ("value", After_First)]);
+            [Loc.Named ("count", T.Image (Long_Long_Integer (Natural (Moved.Length)))),
+             Loc.Named ("name", First_Word), Loc.Named ("value", After_First),
+             Loc.Named ("detail", Joined (Moved))]);
+         if not Left.Is_Empty then
+            Pres.Put_Note (Screen, "cli.task.rehome_left",
+                           [Loc.Named ("name", First_Word), Loc.Named ("detail", Joined (Left))]);
+         end if;
       end Rehome;
 
       procedure Show is
@@ -1063,6 +1163,21 @@ package body Model_Runner.CLI.Tasks is
          end if;
       end Verify;
 
+      --  The last of a task's parent's parts done: the parent goes on.
+      procedure Say_Parent_Ready (Id : String) is
+         Defined : R.Item;
+         Read    : E.Error_Info;
+      begin
+         Tk.Definition (Store, Id, Defined, Read);
+         if E.Is_Ok (Read) and then R.Get (Defined, "parent") /= ""
+           and then Tk.State_Of (Store, R.Get (Defined, "parent")) = "accepted"
+           and then Tk.Ready (Store, R.Get (Defined, "parent")).Ready
+         then
+            Pres.Put_Note
+              (Screen, "cli.work.parent_ready", [Loc.Named ("name", R.Get (Defined, "parent"))]);
+         end if;
+      end Say_Parent_Ready;
+
       --  Complete a task through its gates, then work out which
       --  requirements that verified.
       procedure Complete_Judged;
@@ -1096,6 +1211,27 @@ package body Model_Runner.CLI.Tasks is
             E.Add_Text (Outcome, "expected", "complete");
             E.Add_Text (Outcome, "detail", "a candidate is accepted first: task accept " & Argument);
             Fail (Outcome);
+            return;
+         end if;
+
+         --  Its work still in a workspace: taken in first, and nothing run.
+         if Tk.State_Of (Store, Argument) = "verification"
+           and then Model_Runner.Framework.Workspaces.Active_For (Store, Argument) /= ""
+         then
+            Outcome := E.Make (E.Framework_Task_Not_Ready);
+            E.Add_Text (Outcome, "name", Argument);
+            E.Add_Text (Outcome, "detail", "its work waits in "
+                        & Model_Runner.Framework.Workspaces.Active_For (Store, Argument)
+                        & " to be taken in");
+            Fail (Outcome);
+            Pres.Put_Note (Screen, "cli.next.integrate", [Loc.Named ("name", Argument)]);
+            return;
+         end if;
+
+         --  Already complete: said, and nothing run.
+         if Tk.State_Of (Store, Argument) = "complete" then
+            Pres.Put_Note (Screen, "cli.intent.already",
+                           [Loc.Named ("name", Argument), Loc.Named ("value", "complete")]);
             return;
          end if;
 
@@ -1204,20 +1340,7 @@ package body Model_Runner.CLI.Tasks is
             end;
          end loop;
 
-         --  The last of its parent's parts done: the parent goes on.
-         declare
-            Defined : R.Item;
-            Read    : E.Error_Info;
-         begin
-            Tk.Definition (Store, Argument, Defined, Read);
-            if E.Is_Ok (Read) and then R.Get (Defined, "parent") /= ""
-              and then Tk.State_Of (Store, R.Get (Defined, "parent")) = "accepted"
-              and then Tk.Ready (Store, R.Get (Defined, "parent")).Ready
-            then
-               Pres.Put_Note
-                 (Screen, "cli.work.parent_ready", [Loc.Named ("name", R.Get (Defined, "parent"))]);
-            end if;
-         end;
+         Say_Parent_Ready (Argument);
       end Complete_Judged;
 
       --  Take a task's workspace in, and verify and complete it.
@@ -1235,6 +1358,13 @@ package body Model_Runner.CLI.Tasks is
             Fail (Outcome);
 
             --  A conflict is not the end: where the work is, and the ways on.
+            if E."=" (Outcome.Code, E.Framework_Integration_Conflict)
+              and then After_First = "anyway"
+              and then Ada.Strings.Fixed.Index (E.Text_Of (Outcome, "detail"), "what the code joins")
+                       = 0
+            then
+               Pres.Put_Note (Screen, "cli.next.anyway_text", [Loc.Named ("name", First_Word)]);
+            end if;
             if E."=" (Outcome.Code, E.Framework_Integration_Conflict) then
                declare
                   Place : Model_Runner.Framework.Workspaces.Workspace;
@@ -1289,6 +1419,20 @@ package body Model_Runner.CLI.Tasks is
          end if;
          if To_String (Done.Final_State) in "failed" | "blocked" then
             Pres.Put_Note (Screen, "cli.next.retry", [Loc.Named ("name", First_Word)]);
+         end if;
+         if To_String (Done.Final_State) = "complete" then
+            --  What its end lets go on, named as any change's is.
+            declare
+               Became : Model_Runner.Framework.Name_Lists.Vector;
+            begin
+               Tk.Recompute_Readiness (Store, Change, Became, Outcome);
+               if E.Is_Ok (Outcome) then
+                  S.Commit (Store, Change, Outcome);
+                  Became_Ready.Append (Became);
+               end if;
+               Outcome := E.Success;
+            end;
+            Say_Parent_Ready (First_Word);
          end if;
          if To_String (Done.Final_State) /= "complete" then
             Status := E.Exit_Input_Output;
@@ -1423,6 +1567,17 @@ package body Model_Runner.CLI.Tasks is
          Show_List;
       elsif Action = "new" then
          Create;
+      elsif Action = "accept" and then Argument /= ""
+        and then Tk.State_Of (Store, Argument) in "cancelled" | "complete"
+      then
+         --  Ended: accepted again only by being reopened.
+         Outcome := E.Make (E.Framework_Transition_Invalid);
+         E.Add_Text (Outcome, "name", Argument);
+         E.Add_Text (Outcome, "value", Tk.State_Of (Store, Argument));
+         E.Add_Text (Outcome, "expected", "accepted");
+         E.Add_Text (Outcome, "detail", "an ended task is not accepted again; task reopen "
+                     & Argument & " makes it ready again");
+         Fail (Outcome);
       elsif Action = "accept" then
          Move ("accepted");
       elsif Action = "reject" then

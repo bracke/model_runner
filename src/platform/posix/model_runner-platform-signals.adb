@@ -19,12 +19,25 @@ package body Model_Runner.Platform.Signals is
    --  The one process-global object in this crate. A process has a single
    --  interrupt vector, so the handler cannot be per-session; the token it
    --  acts on is still supplied explicitly by whoever installs it.
+   --  Ended at once, as told: the runtime's own ending waits on the task
+   --  this runs in, and would never come.
+   procedure Quick_Exit (Status : Integer)
+     with Import, Convention => C, External_Name => "_exit";
+
    protected Handler is
 
       --  Interrupt entry point. It does the least possible work: set the
       --  token and count the interrupt.
       procedure Interrupt;
       pragma Interrupt_Handler (Interrupt);
+
+      --  Told to end: as an interrupt, and remembered; waiting for a line,
+      --  the program ends here.
+      procedure Ending;
+      pragma Interrupt_Handler (Ending);
+
+      procedure Set_Waiting (Value : Boolean);
+      function Ended return Boolean;
 
       --  Point the handler at a token.
       procedure Bind (Token : Model_Runner.Cancellation.Token_Reference);
@@ -33,8 +46,10 @@ package body Model_Runner.Platform.Signals is
       function Count return Natural;
 
    private
-      Target : Model_Runner.Cancellation.Token_Reference := null;
-      Seen   : Natural := 0;
+      Target  : Model_Runner.Cancellation.Token_Reference := null;
+      Seen    : Natural := 0;
+      Waiting : Boolean := False;
+      Told    : Boolean := False;
    end Handler;
 
    protected body Handler is
@@ -57,6 +72,22 @@ package body Model_Runner.Platform.Signals is
       end Bind;
 
       function Count return Natural is (Seen);
+
+      procedure Ending is
+      begin
+         Told := True;
+         Interrupt;
+         if Waiting then
+            Quick_Exit (7);
+         end if;
+      end Ending;
+
+      procedure Set_Waiting (Value : Boolean) is
+      begin
+         Waiting := Value;
+      end Set_Waiting;
+
+      function Ended return Boolean is (Told);
 
    end Handler;
 
@@ -87,9 +118,9 @@ package body Model_Runner.Platform.Signals is
          Ada.Interrupts.Attach_Handler
            (Handler.Interrupt'Access, Ada.Interrupts.Names.SIGINT);
          Ada.Interrupts.Attach_Handler
-           (Handler.Interrupt'Access, Ada.Interrupts.Names.SIGTERM);
+           (Handler.Ending'Access, Ada.Interrupts.Names.SIGTERM);
          Ada.Interrupts.Attach_Handler
-           (Handler.Interrupt'Access, Ada.Interrupts.Names.SIGHUP);
+           (Handler.Ending'Access, Ada.Interrupts.Names.SIGHUP);
          Attached := True;
       end if;
 
@@ -129,6 +160,13 @@ package body Model_Runner.Platform.Signals is
    ----------------
 
    function Interrupts return Natural is (Handler.Count);
+
+   procedure Set_Waiting_For_Input (Waiting : Boolean) is
+   begin
+      Handler.Set_Waiting (Waiting);
+   end Set_Waiting_For_Input;
+
+   function Ending_Asked return Boolean is (Handler.Ended);
 
    -------------------
    -- Failure_Name --

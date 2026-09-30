@@ -187,12 +187,24 @@ package body Model_Runner.Framework.Consistency is
                      if Standing.Relation = Authority.Conflict and then not Said.Contains (Line)
                      then
                         Said.Append (Line);
-                        Found (Conflicting_Authority, To_String (Standing.Governing.Subject),
-                               Line & "; to settle it, make them agree -- reconfigure "
-                               & To_String (Standing.Governing.Subject) & "="
-                               & To_String (Standing.Governing.Value)
-                               & ", or decision govern ID " & To_String (Standing.Governing.Subject)
-                               & " VALUE -- or say which holds with overrides=");
+                        declare
+                           Subject : constant String := To_String (Standing.Governing.Subject);
+                           Mine    : constant String := To_String (Standing.Governing.Source);
+                           Theirs  : constant String := To_String (Standing.Other.Source);
+                           Ruling  : constant String := To_String (Standing.Governing.Value);
+                        begin
+                           Found (Conflicting_Authority, Subject,
+                                  Line & "; to settle it, "
+                                  & (if Theirs = "CONFIG"
+                                     then "reconfigure " & Subject & "=" & Ruling
+                                          & " makes the configuration agree, or "
+                                     else "")
+                                  & (if Ada.Strings.Fixed.Index (Mine, "DEC-") = 1
+                                     then "decision govern " & Mine & " " & Subject & " " & Ruling
+                                          & " overrides=" & Theirs & " says " & Mine & " holds over "
+                                          & Theirs
+                                     else "decision supersede, or a ruling that says which holds"));
+                        end;
                      end if;
                   end;
                end loop;
@@ -320,27 +332,79 @@ package body Model_Runner.Framework.Consistency is
          --  The components as tasks take them: listed, or the project
          --  itself by its name.
          Listed := Tasks.Components (Item);
+
+         --  Each component that is none, once, with the open tasks in it.
+         declare
+            Missing : Name_Lists.Vector;
+         begin
+            for Id of Tasks.List (Item) loop
+               declare
+                  Defined   : Records.Item;
+                  Status    : E.Error_Info;
+               begin
+                  Tasks.Definition (Item, Id, Defined, Status);
+                  if E.Is_Ok (Status)
+                    and then Records.Get (Defined, "component") /= ""
+                    and then Tasks.State_Of (Item, Id) not in "complete" | "cancelled" | "rejected"
+                    and then not Known (Records.Get (Defined, "component"))
+                    and then not Missing.Contains (Records.Get (Defined, "component"))
+                  then
+                     Missing.Append (Records.Get (Defined, "component"));
+                  end if;
+               end;
+            end loop;
+            for Component of Missing loop
+               declare
+                  Held : Unbounded_String;
+               begin
+                  for Id of Tasks.List (Item) loop
+                     declare
+                        Defined : Records.Item;
+                        Status  : E.Error_Info;
+                     begin
+                        Tasks.Definition (Item, Id, Defined, Status);
+                        if E.Is_Ok (Status) and then Records.Get (Defined, "component") = Component
+                          and then Tasks.State_Of (Item, Id) not in "complete" | "cancelled" | "rejected"
+                        then
+                           Append (Held, (if Held = Null_Unbounded_String then "" else ", ") & Id);
+                        end if;
+                     end;
+                  end loop;
+                  Found (Missing_Component, Component,
+                         "the component of " & To_String (Held) & ", which is neither listed nor"
+                         & " found in the repository: task rehome " & Component
+                         & " NAME places them in one that is");
+               end;
+            end loop;
+         end;
+
+         --  A task in another component than the requirement it serves is
+         --  linked to.
          for Id of Tasks.List (Item) loop
             declare
-               Defined   : Records.Item;
-               Status    : E.Error_Info;
+               Defined : Records.Item;
+               Status  : E.Error_Info;
             begin
                Tasks.Definition (Item, Id, Defined, Status);
-               if E.Is_Ok (Status) then
-                  declare
-                     Component : constant String := Records.Get (Defined, "component");
-                  begin
-                     if Component /= ""
-                       and then Tasks.State_Of (Item, Id) not in "complete" | "cancelled" | "rejected"
-                       and then not Known (Component)
-                     then
-                        Found (Missing_Component, Id,
-                               "its component " & Component
-                               & " is neither listed nor found in the repository: task edit "
-                               & Id & " --set component=NAME places it, and task rehome "
-                               & Component & " NAME every task of " & Component);
-                     end if;
-                  end;
+               if E.Is_Ok (Status) and then Records.Get (Defined, "component") /= ""
+                 and then Tasks.State_Of (Item, Id) not in "complete" | "cancelled" | "rejected"
+               then
+                  for Requirement of Lines_Of (Records.Get (Defined, "requirements")) loop
+                     declare
+                        Linked : constant Name_Lists.Vector :=
+                          Intent.Links (Item, Intent.Requirement, Requirement, Intent.Component);
+                     begin
+                        if not Linked.Is_Empty
+                          and then not Linked.Contains (Records.Get (Defined, "component"))
+                        then
+                           Found (Missing_Component, Id,
+                                  "it is in " & Records.Get (Defined, "component") & ", and "
+                                  & Requirement & " it serves belongs to " & Linked.First_Element
+                                  & ": task edit " & Id & " --set component="
+                                  & Linked.First_Element & " places it there");
+                        end if;
+                     end;
+                  end loop;
                end if;
             end;
          end loop;

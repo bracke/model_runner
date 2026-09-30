@@ -44,8 +44,12 @@ package body Model_Runner.CLI.Intents is
         (if Title'Length > 3 and then Title (Title'Last - 2 .. Title'Last) = "..."
          then Title (Title'First .. Title'Last - 3) else Title);
    begin
-      return Stem /= "" and then Text'Length >= Stem'Length
-        and then Text (Text'First .. Text'First + Stem'Length - 1) = Stem;
+      --  The whole text, or the text cut at a hundred characters and
+      --  marked so: a title a person wrote that the text starts with is
+      --  theirs.
+      return Title = Text
+        or else (Stem /= Title and then Text'Length >= Stem'Length
+                 and then Text (Text'First .. Text'First + Stem'Length - 1) = Stem);
    end Title_From_Text;
 
    function Lower (Text : String) return String
@@ -469,6 +473,35 @@ package body Model_Runner.CLI.Intents is
                                         then To_String (Held.Criteria)
                                         else To_String (One.Criteria)),
                                        Result, Status);
+
+                                    --  Taken from the document: what it says is
+                                    --  what it was imported as, so a later edit
+                                    --  of the document is the document's.
+                                    if E.Is_Ok (Status) then
+                                       declare
+                                          Where  : constant Model_Runner.Framework.Area :=
+                                            (case Kind is
+                                               when Nt.Requirement   =>
+                                                  Model_Runner.Framework.Requirements_Area,
+                                               when Nt.Specification =>
+                                                  Model_Runner.Framework.Specs_Area,
+                                               when Nt.Decision      =>
+                                                  Model_Runner.Framework.Decisions_Area);
+                                          Value  : Model_Runner.Framework.Records.Item;
+                                          Staged : Boolean;
+                                       begin
+                                          S.Pending (Change, Where, Word (2), Value, Staged);
+                                          if Staged then
+                                             Model_Runner.Framework.Records.Set
+                                               (Value, "imported_text", To_String (One.Text));
+                                             Model_Runner.Framework.Records.Set
+                                               (Value, "imported_criteria", To_String (One.Criteria));
+                                             Model_Runner.Framework.Records.Set
+                                               (Value, "imported_title", To_String (One.Title));
+                                             S.Put (Change, Where, Word (2), Value);
+                                          end if;
+                                       end;
+                                    end if;
                                  end if;
                               end;
                            end loop;
@@ -586,6 +619,34 @@ package body Model_Runner.CLI.Intents is
                      [Loc.Named ("name", From (4)),
                       Loc.Named ("value", Joined_Components (Store))]);
                end if;
+               --  Linked to a component: the work serving it that is
+               --  elsewhere is named, with how to place it there.
+               if E.Is_Ok (Status) and then Nt."=" (Relation, Nt.Component)
+                 and then Nt."=" (Kind, Nt.Requirement)
+               then
+                  for Id of Model_Runner.Framework.Tasks.List (Store) loop
+                     declare
+                        Defined : Model_Runner.Framework.Records.Item;
+                        Read    : E.Error_Info;
+                     begin
+                        Model_Runner.Framework.Tasks.Definition (Store, Id, Defined, Read);
+                        if E.Is_Ok (Read)
+                          and then Model_Runner.Framework.Tasks.State_Of (Store, Id)
+                                     not in "complete" | "cancelled" | "rejected"
+                          and then Model_Runner.Framework.Lines_Of
+                                     (Model_Runner.Framework.Records.Get (Defined, "requirements"))
+                                     .Contains (Word (2))
+                          and then Model_Runner.Framework.Records.Get (Defined, "component") /= From (4)
+                        then
+                           Pres.Put_Note
+                             (Screen, "cli.next.task_component",
+                              [Loc.Named ("name", Id), Loc.Named ("value", From (4)),
+                               Loc.Named ("other", Word (2))]);
+                        end if;
+                     end;
+                  end loop;
+               end if;
+
                --  What it depends on is a requirement there is.
                if E.Is_Ok (Status) and then Nt."=" (Relation, Nt.Dependency)
                  and then Nt.State_Of (Store, Nt.Requirement, From (4)) = ""
@@ -721,6 +782,14 @@ package body Model_Runner.CLI.Intents is
                Field ("criteria", To_String (Held.Criteria));
                if Nt.Governs (Store, Kind, Named) /= "" then
                   Field ("governs", Nt.Governs (Store, Kind, Named));
+               end if;
+
+               --  Recorded verified, where its evidence no longer holds.
+               if Nt."=" (Kind, Nt.Requirement) and then To_String (Held.State) = "verified"
+                 and then Model_Runner.Framework.Verification.Why_Not_Verified (Store, Named) /= ""
+               then
+                  Field ("no longer holds",
+                         Model_Runner.Framework.Verification.Why_Not_Verified (Store, Named));
                end if;
 
                --  Not verified yet: what it still lacks, and what supplies it.

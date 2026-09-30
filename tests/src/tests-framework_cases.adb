@@ -1,4 +1,5 @@
 with Ada.Calendar;
+with Model_Runner.Platform.Signals;
 with Ada.Text_IO;
 with GNAT.OS_Lib;
 with Hostkit;
@@ -5025,7 +5026,7 @@ package body Tests.Framework_Cases is
               and then Length (Done.Evidence_Id) > 0 and then Length (Done.Manifest_Id) > 0
               and then Iv.State_Of (Store, To_String (Done.Invocation_Id)) = "completed",
               "what the work did was not all recorded");
-      Assert (Tk.Ready (Store, To_String (Ids (1))).Reasons.First_Element = "it is complete",
+      Assert (Tk.Ready (Store, To_String (Ids (1))).Reasons.First_Element = "it is done",
               "the task's lease was not let go");
 
       --  Its agent worked in the generation its move to running began, and
@@ -7338,7 +7339,7 @@ package body Tests.Framework_Cases is
                                   Broken => False),
                   Cx.Profile (Store, ""), Done, Status);
       declare
-         First_Space : constant String := Ws.Active_For (Store, To_String (Id));
+         First_Space : constant String := To_String (Done.Workspace_Id);
          Held        : Ws.Workspace;
       begin
          Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
@@ -8118,7 +8119,7 @@ package body Tests.Framework_Cases is
       Tk.Create (Store, Change, Fields ("Second", "analysis", "depends_on", To_String (First)),
                  "user", "", Second, Status);
       S.Commit (Store, Change, Status);
-      Assert (Has (Cs.Missing_Component, To_String (First)),
+      Assert (Has (Cs.Missing_Component, "nowhere"),
               "a component the project does not have went unseen");
 
       if S.Exists (Store, Model_Runner.Framework.Indexes_Area, "readiness") then
@@ -8381,6 +8382,11 @@ package body Tests.Framework_Cases is
                    (Model_Runner.Framework.Permissions.Sandbox_Problem, "bogus_cap") > 0,
                  "a sandbox naming no capability was not said to be wrong");
          Ada.Environment_Variables.Clear ("MODEL_RUNNER_SANDBOX");
+         --  Told to end with nothing waited for, it does not end here; the
+         --  flag is only asked.
+         Model_Runner.Platform.Signals.Set_Waiting_For_Input (False);
+         Assert (not Model_Runner.Platform.Signals.Ending_Asked,
+                 "an ending was said to be asked with none sent");
       end;
 
       --  What makes a task that cannot wait so say why.
@@ -8951,7 +8957,7 @@ package body Tests.Framework_Cases is
          Changes.Clear;
          Changes.Include ("scalar.repository.state_policy", "sometimes");
          Cf.Plan_Change (Store, Changes, Planned, Status);
-         Assert (Status.Code = E.Framework_Input_Invalid, "a policy that is none was taken");
+         Assert (Status.Code = E.CLI_Invalid_Option_Value, "a policy that is none was taken");
       end;
 
       --  Git, asked.

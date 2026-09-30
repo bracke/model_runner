@@ -133,6 +133,189 @@ package body Model_Runner.Framework.Invocations is
       return Unquoted (Text);
    end Item_Of;
 
+   --  An answer given as a JSON object -- bare or in a fence, on one line
+   --  or many -- written as the lines the contract reads: each member a
+   --  NAME: VALUE line, a list a line an item, an object in a list as its
+   --  title and then NAME=VALUE for each other member, a ; apart. The
+   --  empty string where the answer holds no object that reads.
+   function Lines_Of_JSON (Answer : String) return String is
+      Position : Natural := Answer'First;
+      Failed   : exception;
+      Out_Text : Unbounded_String;
+
+      procedure Skip is
+      begin
+         while Position <= Answer'Last
+           and then Answer (Position) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR
+         loop
+            Position := Position + 1;
+         end loop;
+      end Skip;
+
+      function Peek return Character is
+      begin
+         Skip;
+         if Position > Answer'Last then
+            raise Failed;
+         end if;
+         return Answer (Position);
+      end Peek;
+
+      procedure Expect (C : Character) is
+      begin
+         if Peek /= C then
+            raise Failed;
+         end if;
+         Position := Position + 1;
+      end Expect;
+
+      function Text_Value return String is
+         Held : Unbounded_String;
+      begin
+         Expect ('"');
+         while Position <= Answer'Last and then Answer (Position) /= '"' loop
+            if Answer (Position) = '\' and then Position < Answer'Last then
+               Position := Position + 1;
+               case Answer (Position) is
+                  when 'n'    => Append (Held, ASCII.LF);
+                  when 't'    => Append (Held, ' ');
+                  when others => Append (Held, Answer (Position));
+               end case;
+            else
+               Append (Held, Answer (Position));
+            end if;
+            Position := Position + 1;
+         end loop;
+         Expect ('"');
+         return To_String (Held);
+      end Text_Value;
+
+      --  A number, true, false or null, as written.
+      function Bare_Value return String is
+         Start : constant Positive := Position;
+      begin
+         while Position <= Answer'Last
+           and then Answer (Position) not in ',' | '}' | ']' | ' ' | ASCII.LF | ASCII.CR
+         loop
+            Position := Position + 1;
+         end loop;
+         if Position = Start then
+            raise Failed;
+         end if;
+         return (if Answer (Start .. Position - 1) = "null" then ""
+                 else Answer (Start .. Position - 1));
+      end Bare_Value;
+
+      function Any_Value return String;
+
+      --  An object as one line: its title, then its other members.
+      function Object_Line return String is
+         Title : Unbounded_String;
+         Rest  : Unbounded_String;
+      begin
+         Expect ('{');
+         if Peek = '}' then
+            Position := Position + 1;
+            return "";
+         end if;
+         loop
+            declare
+               Name  : constant String := Text_Value;
+               Value : String := "";
+            begin
+               Expect (':');
+               declare
+                  Given : constant String := Any_Value;
+               begin
+                  if Lower (Name) in "title" | "name" and then Title = Null_Unbounded_String then
+                     Title := To_Unbounded_String (Given);
+                  elsif Given /= "" then
+                     Append (Rest, "; " & Name & "=" & Given);
+                  end if;
+               end;
+               pragma Unreferenced (Value);
+            end;
+            exit when Peek = '}';
+            Expect (',');
+         end loop;
+         Expect ('}');
+         return To_String (Title) & To_String (Rest);
+      end Object_Line;
+
+      --  A list as its items, a line each.
+      function List_Lines return String is
+         Held : Unbounded_String;
+      begin
+         Expect ('[');
+         if Peek = ']' then
+            Position := Position + 1;
+            return "";
+         end if;
+         loop
+            declare
+               Item : constant String := Any_Value;
+            begin
+               if Item /= "" then
+                  Append (Held, (if Held = Null_Unbounded_String then "" else [1 => ASCII.LF]) & Item);
+               end if;
+            end;
+            exit when Peek = ']';
+            Expect (',');
+         end loop;
+         Expect (']');
+         return To_String (Held);
+      end List_Lines;
+
+      function Any_Value return String is
+      begin
+         case Peek is
+            when '"'    => return Text_Value;
+            when '{'    => return Object_Line;
+            when '['    => return List_Lines;
+            when others => return Bare_Value;
+         end case;
+      end Any_Value;
+
+      Start : constant Natural := Ada.Strings.Fixed.Index (Answer, "{");
+   begin
+      if Start = 0 then
+         return "";
+      end if;
+      Position := Start;
+      Expect ('{');
+      if Peek = '}' then
+         return "";
+      end if;
+      loop
+         declare
+            Name  : constant String := Text_Value;
+         begin
+            Expect (':');
+            declare
+               Given : constant String := Any_Value;
+               Items : constant Name_Lists.Vector := Lines_Of (Given);
+            begin
+               --  A value of one line after its name; of several, each on
+               --  a line of its own under it.
+               if Natural (Items.Length) <= 1 then
+                  Append (Out_Text, Name & ": " & Given & ASCII.LF);
+               else
+                  Append (Out_Text, Name & ":" & ASCII.LF);
+                  for Item of Items loop
+                     Append (Out_Text, "- " & Item & ASCII.LF);
+                  end loop;
+               end if;
+            end;
+         end;
+         exit when Peek = '}';
+         Expect (',');
+      end loop;
+      return To_String (Out_Text);
+   exception
+      when Failed | Constraint_Error =>
+         return "";
+   end Lines_Of_JSON;
+
    procedure Hold
      (Rules  : Contract;
       Answer : String;
@@ -140,6 +323,10 @@ package body Model_Runner.Framework.Invocations is
       Status : out Model_Runner.Errors.Error_Info)
    is
       Current : Unbounded_String;
+
+      --  Given as JSON, read as the lines it says.
+      From_JSON : constant String := Lines_Of_JSON (Answer);
+      Read_As   : constant String := (if From_JSON /= "" then From_JSON else Answer);
 
       procedure Refuse (Field, Detail : String) is
       begin
@@ -151,7 +338,7 @@ package body Model_Runner.Framework.Invocations is
       Result := (others => <>);
       Status := E.Success;
 
-      for Line of Lines_Of (Answer) loop
+      for Line of Lines_Of (Read_As) loop
          declare
             Colon : constant Natural := Ada.Strings.Fixed.Index (Line, ":");
             Said  : constant String :=

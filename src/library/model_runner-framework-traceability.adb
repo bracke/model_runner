@@ -393,13 +393,13 @@ package body Model_Runner.Framework.Traceability is
       --  reach it; and forward from a requirement to the tests it names,
       --  which are its explicitly and before any a dependency finds.
       function Forward (Kind : String) return Boolean
-      is (Kind in "contains" | "implements" | "declares" | "tested_by");
+      is (Kind in "contains" | "implements" | "declares" | "tested_by" | "served_by");
 
       --  A file and its units reach each other either way: a changed spec
       --  reaches its body, and a dependent unit reaches its files, tests
       --  among them.
       function Both_Ways (Kind : String) return Boolean
-      is (Kind in "contains" | "implements");
+      is (Kind in "contains" | "implements" | "served_by");
 
       Queue  : Name_Lists.Vector;
       Seeds  : Name_Lists.Vector;

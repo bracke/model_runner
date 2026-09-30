@@ -1130,11 +1130,10 @@ package body Model_Runner.Framework.Work is
                                 & Name (Name'First + 6 .. Name'Last)
                                 & (if Records.Get (Value, "invocation") = "" then ""
                                    else " in " & Records.Get (Value, "invocation"))
-                                & " " & Records.Get (Value, "state")
-                                & (if Why = "" then ""
-                                   elsif Why'Length > 100 then ": " & Why (Why'First .. Why'First + 96)
-                                                              & "..."
-                                   else ": " & Why));
+                                & " " & (if Records.Get (Value, "outcome") /= ""
+                                         then "left it " & Records.Get (Value, "outcome")
+                                         else Records.Get (Value, "state"))
+                                & (if Why = "" then "" else ": " & Why));
                      end;
                   end if;
                end if;
@@ -1184,9 +1183,17 @@ package body Model_Runner.Framework.Work is
             elsif Records.Get (State, "current_verification") = ""
             then "its gates passed, with no evidence"
             else "its gates passed on " & Records.Get (State, "current_verification")));
-      Say ("integration", (if Records.Get (State, "current_workspace") = ""
-                           then "none: it wrote in the project itself"
-                           else "the workspace " & Records.Get (State, "current_workspace")));
+      Say ("integration",
+           (if Records.Get (State, "current_workspace") = ""
+            then (if Tasks.State_Of (Item, Task_Id) in "candidate" | "accepted" then "none yet"
+                  else "none: it wrote in the project itself")
+            elsif Tasks.State_Of (Item, Task_Id) = "complete"
+            then "the workspace " & Records.Get (State, "current_workspace") & ", taken in"
+            elsif Workspaces.Active_For (Item, Task_Id) /= ""
+            then "the workspace " & Records.Get (State, "current_workspace") & ", waiting to be"
+                 & " taken in"
+            else "the workspace " & Records.Get (State, "current_workspace") & ", given up:"
+                 & " nothing of it was taken in"));
       declare
          Became : Unbounded_String;
       begin
@@ -1752,7 +1759,7 @@ package body Model_Runner.Framework.Work is
            and then Runs_Before (Id) < Retries;
          Told := To_Unbounded_String
            (Id & " (" & Ada.Characters.Handling.To_Lower (Agents.Obligation'Image (Child.Need))
-            & ") " & (if Good then "done" else "failed")
+            & ") " & (if Good then "done" elsif Interrupted (Ran) then "cancelled" else "failed")
             & (if Kept.Id = Null_Unbounded_String then "" else ", " & To_String (Kept.Id))
             & ": " & To_String (Why)
             & (if Good and then Invocations.Claim (Said, "findings") /= ""
@@ -1990,7 +1997,24 @@ package body Model_Runner.Framework.Work is
             return "; what it changed is still in the project: " & To_String (Named);
          end Left_Behind;
 
-         Reason : constant String := Given_Reason & Left_Behind;
+         --  Not done, where it worked apart: its workspace is given up --
+         --  a retry starts afresh -- and said.
+         function Given_Up return String is
+            Held : E.Error_Info;
+         begin
+            if not Isolated or else Next not in "failed" | "blocked"
+              or else Result.Workspace_Id = Null_Unbounded_String
+              or else Workspaces.Active_For (Item, Task_Id) /= To_String (Result.Workspace_Id)
+            then
+               return "";
+            end if;
+            Workspaces.Abandon (Item, Change, To_String (Result.Workspace_Id), Held);
+            return (if E.Is_Ok (Held)
+                    then "; its workspace " & To_String (Result.Workspace_Id) & " is given up"
+                    else "");
+         end Given_Up;
+
+         Reason : constant String := Given_Reason & Left_Behind & Given_Up;
       begin
          if Next /= "" then
             Tasks.Move (Item, Change, Task_Id, Next, Reason, Status => Status);
@@ -2012,6 +2036,18 @@ package body Model_Runner.Framework.Work is
             end if;
             if E.Is_Error (Ended) then
                Agent_State (Item, Change, To_String (Result.Agent_Id), Agent_End, Reason);
+            end if;
+         end;
+         --  What its attempt came to, beside how its agent ended: the state
+         --  it left the task in.
+         declare
+            Held   : Records.Item;
+            Staged : Boolean;
+         begin
+            Stores.Pending (Change, Runtime_Area, "agent." & To_String (Result.Agent_Id), Held, Staged);
+            if Staged then
+               Records.Set (Held, "outcome", Tasks.State_Of (Item, Task_Id));
+               Stores.Put (Change, Runtime_Area, "agent." & To_String (Result.Agent_Id), Held);
             end if;
          end;
          --  A move lets go of what the task held; staying in verification,
@@ -3363,10 +3399,24 @@ package body Model_Runner.Framework.Work is
          E.Add_Text (Status, "name", Task_Id);
          E.Add_Text (Status, "value", Tasks.State_Of (Item, Task_Id));
          E.Add_Text (Status, "expected", "being taken in");
-         E.Add_Text (Status, "detail",
-                     (if Id = "" then "it has no workspace -- it wrote in the project itself --"
-                                      & " so there is nothing to take in"
-                      else "only work that waits to be taken in is taken in"));
+         declare
+            State_Value : Records.Item;
+            Read        : E.Error_Info;
+            Had         : Unbounded_String;
+         begin
+            Stores.Read (Item, Tasks_Area, Task_Id & ".state", State_Value, Read);
+            Had := To_Unbounded_String (Records.Get (State_Value, "current_workspace"));
+            E.Add_Text
+              (Status, "detail",
+               (if Id /= "" then "only work that waits to be taken in is taken in"
+                elsif Had = Null_Unbounded_String
+                then "it has no workspace -- it wrote in the project itself -- so there is nothing"
+                     & " to take in"
+                elsif Tasks.State_Of (Item, Task_Id) = "complete"
+                then To_String (Had) & " was taken in already"
+                else To_String (Had) & " was given up when it " & Tasks.State_Of (Item, Task_Id)
+                     & "; task accept " & Task_Id & " does its work again"));
+         end;
          return;
       end if;
       if Id = "" then

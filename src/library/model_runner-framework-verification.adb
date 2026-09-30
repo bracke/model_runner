@@ -551,7 +551,7 @@ package body Model_Runner.Framework.Verification is
            (Value, "configuration_fingerprint",
             Records.Get (Settings, "configuration_fingerprint"));
          Records.Set
-           (Value, "verification_fingerprint", Configurations.Verification_Fingerprint (Settings));
+           (Value, "checks_fingerprint", Configurations.Verification_Fingerprint (Settings));
          Records.Set
            (Value, "environment_fingerprint",
             Fingerprint (Model_Runner.Platform.Passed_Environment
@@ -1100,13 +1100,18 @@ package body Model_Runner.Framework.Verification is
       end if;
       --  Only what bears on verification: a change of agent or of its
       --  permissions leaves evidence as it was.
-      if Records.Get (Value, "verification_fingerprint") /= "" then
-         if Records.Get (Value, "verification_fingerprint")
+      if Records.Get (Value, "checks_fingerprint") /= "" then
+         if Records.Get (Value, "checks_fingerprint")
               /= (if Configuration /= "" then Configuration
                   else Configurations.Verification_Fingerprint (Settings))
          then
             Reasons.Append ("the configuration of its checks has changed since " & Evidence);
          end if;
+
+      --  Taken before what bears on checks was told apart: held to nothing
+      --  of the configuration, rather than to all of it.
+      elsif Records.Get (Value, "verification_fingerprint") /= "" then
+         null;
       elsif Records.Get (Value, "configuration_fingerprint")
               /= Records.Get (Settings, "configuration_fingerprint")
       then
@@ -1277,9 +1282,13 @@ package body Model_Runner.Framework.Verification is
             Result.Stands_For := To_Unbounded_String (Own);
          else
             Result.Profile := To_Unbounded_String (Own);
+            --  Nothing narrower to run: what runs is the whole suite, and
+            --  said as that.
             if Width /= "full" then
-               Append (Result.Reason, "; no narrower profile is configured, so "
-                       & (if Own = "" then "none" else Own) & " runs whole");
+               Result.Scope := To_Unbounded_String ("full_suite");
+               Result.Reason := To_Unbounded_String
+                 ("no narrower profile is configured, so "
+                  & (if Own = "" then "none" else Own) & " runs whole");
             end if;
          end if;
       end;
@@ -1822,7 +1831,9 @@ package body Model_Runner.Framework.Verification is
             begin
                if Latest = Null_Unbounded_String or else Id > To_String (Latest) then
                   Stores.Read (Item, Verification_Area, Id, Value, Read);
-                  if E.Is_Ok (Read) and then Records.Get (Value, "task") = ""
+                  if E.Is_Ok (Read)
+                    and then (Records.Get (Value, "task") = ""
+                              or else Records.Get (Value, "given.scope") = "full_suite")
                     and then Records.Get (Value, "workspace") = ""
                     and then Records.Get (Config (Item), "scalar.profile_capability."
                                                          & Records.Get (Value, "profile"))
@@ -1862,8 +1873,8 @@ package body Model_Runner.Framework.Verification is
    begin
       Find_Project_Runs;
       if Project_Failed /= Null_Unbounded_String then
-         return Lacks (To_String (Project_Failed) & ", the latest run of the project's tests on the"
-                       & " files as they are, did not pass");
+         return Lacks (To_String (Project_Failed) & ", the latest run of the project's whole suite"
+                       & " on the files as they are, did not pass; fix what failed, then check full");
       end if;
       if Project_Passed /= Null_Unbounded_String
         and then (Standing = Null_Unbounded_String or else Project_Passed > Standing)

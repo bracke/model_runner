@@ -53,4 +53,16 @@ package Model_Runner.Platform.Signals is
    --  @return Interrupt count.
    function Interrupts return Natural;
 
+   --  Say whether the program waits for a line typed at its terminal: told
+   --  to end then -- by a service manager, a closed terminal -- it ends at
+   --  once, cancelled, having nothing under way to stop.
+   --
+   --  @param Waiting True while it waits.
+   procedure Set_Waiting_For_Input (Waiting : Boolean);
+
+   --  Whether the program has been told to end, as an interrupt is not.
+   --
+   --  @return True after a termination or hang-up signal.
+   function Ending_Asked return Boolean;
+
 end Model_Runner.Platform.Signals;

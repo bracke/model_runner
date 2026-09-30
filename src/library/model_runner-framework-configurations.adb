@@ -111,30 +111,28 @@ package body Model_Runner.Framework.Configurations is
    ------------------------------
 
    function Verification_Fingerprint (Value : Records.Item) return String is
-      Meaning : Records.Item := Copy (Value, Current_Entity);
-      Aside   : constant Name_Lists.Vector :=
-        ["scalar.work.", "input.work_", "scalar.agents.", "map.permission.", "set.bootstrap.",
-         "scalar.bootstrap.", "list.automation.", "map.task_field.", "scalar.task.",
-         "set.task.", "task_kind.", "baseline.", "set.execution.allowed", "file.",
-         "decision.", "scalar.execution.timeout", "scalar.init.", "scalar.consistency.",
-         "scalar.orchestration.", "list.verification.full"];
-      Names   : Name_Lists.Vector;
+      --  What the checks read: their profiles and what runs them, the
+      --  verification policy, the project's build and adapters, what the
+      --  repository holds, and the environment and programs they run with.
+      Bearing : constant Name_Lists.Vector :=
+        ["profile.", "list.verification.", "scalar.verification.", "scalar.profile_capability.",
+         "scalar.build.", "adapter.", "set.repository.", "set.source", "set.directories",
+         "set.execution.shell", "set.execution.environment", "scalar.execution.network",
+         "scalar.execution.memory", "scalar.execution.cpu", "scalar.execution.processes",
+         "scalar.execution.file", "map.component.", "set.components", "input.project_name"];
+      Meaning : Records.Item := Records.Create (Current_Entity, 1, "", 1);
    begin
       for Index in 1 .. Records.Field_Count (Value) loop
-         Names.Append (Records.Field_Name (Value, Index));
-      end loop;
-      Records.Remove (Meaning, "configuration_fingerprint");
-      for Field of Provenance loop
-         Records.Remove (Meaning, Field.all);
-      end loop;
-      for Name of Names loop
-         for Prefix of Aside loop
-            if Name'Length >= Prefix'Length
-              and then Name (Name'First .. Name'First + Prefix'Length - 1) = Prefix
+         declare
+            Name : constant String := Records.Field_Name (Value, Index);
+         begin
+            if (for some Prefix of Bearing =>
+                  Name'Length >= Prefix'Length
+                  and then Name (Name'First .. Name'First + Prefix'Length - 1) = Prefix)
             then
-               Records.Remove (Meaning, Name);
+               Records.Set (Meaning, Name, Records.Get (Value, Name));
             end if;
-         end loop;
+         end;
       end loop;
       return Records.Fingerprint_Of (Meaning);
    end Verification_Fingerprint;
@@ -1354,10 +1352,11 @@ package body Model_Runner.Framework.Configurations is
 
       --  A change asked for that cannot be made: the caller's to put right.
       function Refused (Name, Detail : String) return E.Error_Info is
-         Made : E.Error_Info := E.Make (E.Framework_Input_Invalid);
+         Made : E.Error_Info := E.Make (E.CLI_Invalid_Option_Value);
       begin
-         E.Add_Text (Made, "name", "a setting");
-         E.Add_Text (Made, "value", Name);
+         E.Add_Text (Made, "option", Name);
+         E.Add_Text (Made, "value", Detail);
+         E.Add_Text (Made, "name", Name);
          E.Add_Text (Made, "detail", Detail);
          return Made;
       end Refused;
@@ -1489,7 +1488,7 @@ package body Model_Runner.Framework.Configurations is
             end Near;
          begin
             if not (for some Prefix of Changeable => Starts (Name, Prefix.all)) then
-               Status := Refused (Name, "no setting is called so" & Near
+               Status := Refused (Name, "there is no setting " & Name & Near
                                   & "; a new one is named with its kind: scalar." & Name
                                   & " for one value, set." & Name & " for several");
                return;
@@ -1502,7 +1501,7 @@ package body Model_Runner.Framework.Configurations is
               and then not Starts (Name, "profile.") and then not Starts (Name, "fact.")
               and then not Starts (Name, "map.") and then not Starts (Name, "task_kind.")
             then
-               Status := Refused (Name, "no setting is called so" & Near);
+               Status := Refused (Name, "there is no setting " & Name & Near);
                return;
             elsif (Adding or else Taking)
               and then not (Starts (Name, "set.") or else Starts (Name, "list."))
@@ -1523,9 +1522,9 @@ package body Model_Runner.Framework.Configurations is
                   for Taken of Lines_Of (Lines_From (Given)) loop
                      if not Lines_Of (Old).Contains (Taken) then
                         Status := Refused
-                          (Name, Taken & " is not in it"
+                          (Name, Taken & " is not in " & Name
                            & (if Held = Null_Unbounded_String then ", which is empty"
-                              else "; it holds " & To_String (Held)));
+                              else " (it holds " & To_String (Held) & ")"));
                         return;
                      end if;
                   end loop;
@@ -1552,7 +1551,68 @@ package body Model_Runner.Framework.Configurations is
                declare
                   Was : constant Boolean := Records.Has (Result.Before, Name);
                   Now : constant Boolean := Given /= "off";
+
+                  --  The level it belongs to, and what that level has from
+                  --  the one above while it says nothing itself.
+                  Dot   : constant Natural := Ada.Strings.Fixed.Index (Name, ".", Ada.Strings.Backward);
+                  Level : constant String := Name (Name'First + 15 .. Dot - 1);
+                  Above : constant Permissions.Permission_Set :=
+                    Permissions.Effective (Item, "", "", Within_Sandbox => False);
+                  Capable : Boolean := False;
+                  Which   : Permissions.Capability := Permissions.Capability'First;
+
+                  function Inherited return String is
+                  begin
+                     if not Capable or else not Above (Which).Granted then
+                        return "(not granted by the level above)";
+                     end if;
+                     return "(from the level above: "
+                       & (if Permissions.Grant_Text (Above (Which)) = "" then "granted"
+                          else Permissions.Grant_Text (Above (Which))) & ")";
+                  end Inherited;
                begin
+                  for One in Permissions.Capability loop
+                     if Permissions.Word (One) = Name (Dot + 1 .. Name'Last) then
+                        Capable := True;
+                        Which := One;
+                     end if;
+                  end loop;
+
+                  --  A level that says nothing yet has what the one above
+                  --  gives it; saying one thing there would take the rest
+                  --  away, so what it had is written there first.
+                  if not Level_Said (Name) and then Level /= "project" then
+                     for One in Permissions.Capability loop
+                        declare
+                           Field : constant String :=
+                             "map.permission." & Level & "." & Permissions.Word (One);
+                        begin
+                           if Field /= Name and then Above (One).Granted
+                             and then not Records.Has (Result.After, Field)
+                           then
+                              Records.Set (Result.After, Field, Permissions.Grant_Text (Above (One)));
+                              Result.Changed.Append
+                                (Field & ": (from the level above) -> kept at " & Level);
+                           end if;
+                        end;
+                     end loop;
+                  elsif not Level_Said (Name) then
+                     --  The project's own, where it says none: what it gave
+                     --  by default, kept beside the one changed.
+                     for One in Permissions.Capability loop
+                        declare
+                           Field : constant String := "map.permission.project." & Permissions.Word (One);
+                        begin
+                           if Field /= Name and then Above (One).Granted
+                             and then not Records.Has (Result.After, Field)
+                           then
+                              Records.Set (Result.After, Field, Permissions.Grant_Text (Above (One)));
+                              Result.Changed.Append
+                                (Field & ": (the default) -> kept as the project's");
+                           end if;
+                        end;
+                     end loop;
+                  end if;
                   if Was /= Now or else (Now and then Given /= Old) then
                      if Now then
                         Records.Set (Result.After, Name, Given);
@@ -1561,8 +1621,8 @@ package body Model_Runner.Framework.Configurations is
                      end if;
                      Result.Changed.Append
                        (Name & ": " & (if not Was and then Level_Said (Name)
-                                       then "(not granted at this level)"
-                                       elsif not Was then "(not set here: the level above holds)"
+                                       then "(not granted: this level grants only what it names)"
+                                       elsif not Was then Inherited
                                        elsif Old = "" then "granted" else Old)
                         & " -> " & (if not Now then "(not granted)" elsif Given = "" then "granted"
                                     else Given));
@@ -1589,7 +1649,7 @@ package body Model_Runner.Framework.Configurations is
 
       --  The whole of it, as it would be.
       if not Result.Changed.Is_Empty and then Whole_Problem (Result.After) /= "" then
-         Status := Refused ("the configuration", Whole_Problem (Result.After));
+         Status := Refused ("reconfigure", Whole_Problem (Result.After));
          return;
       end if;
 
@@ -1600,9 +1660,9 @@ package body Model_Runner.Framework.Configurations is
         and then Verification_Fingerprint (Result.Before) /= Verification_Fingerprint (Result.After)
       then
          Result.Impact.Append
-           ("evidence: what was verified under revision"
-            & Natural'Image (Records.Revision (Result.Before))
-            & " no longer applies until it is checked again");
+           ("evidence: what its checks read changes, so each requirement's evidence is judged"
+            & " again against it -- evidence taken under other settings may apply, or stop"
+            & " applying");
       end if;
       Records.Set_Revision (Result.After, Records.Revision (Result.Before) + 1);
       Records.Set

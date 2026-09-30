@@ -1782,6 +1782,49 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Sixth usability round:**
+  - An answer given as a JSON object, bare or in a fence, one line or many,
+    is read as the contract's lines, lists and objects in lists included.
+  - Granting one capability at a level that said none keeps what the level
+    had from the one above; `max_depth=1 max_children=2` is read as two
+    constraints; previews show what a level inherits.
+  - A result stored as a payload file is not taken for the agent's write.
+  - `from-document` records the document's words as imported, so a later
+    edit is taken in or raises its own issue; an issue is raised again when
+    the document says something new.
+  - An accepted decision or specification can be made obsolete.
+  - `task split` makes no part twice; a parent's reason names every part it
+    still waits for, and is rewritten as they end.
+  - Evidence depends only on the settings its checks read; a whole-suite
+    run, from `check full` or from `work`, restores or takes verification
+    away; `state` and `req` say when recorded verification no longer holds.
+  - A task waiting in a workspace is told `task integrate`; an attempt that
+    ends blocked or failed in a workspace gives it up; `task integrate` on a
+    failed or complete task says what became of its workspace; `anyway`
+    says what it covers.
+  - `task rehome` checks both components, names what it moved and what it
+    left, and refuses extra words; changing components names the tasks left
+    in one that is gone, and a component with no roots.
+  - Consistency groups tasks of a component that is none, and names a task
+    in another component than its requirement's; linking a requirement to a
+    component names its tasks elsewhere.
+  - A title a person wrote is kept when the text changes; bootstrap counts
+    entries kept for a person's revision, and leaves rejected ones alone.
+  - A conflict of authority names the command that settles it, and
+    `overrides=` may name several.
+  - Refused parts are named, quoted, with the level that bound them, even
+    when other parts were made; `task new` and `task edit` say what a
+    permission wider than the kind allows gets.
+  - SIGTERM ends an idle session (exit 7); a cancel from another terminal
+    stops the model mid-turn, and a helper stopped so is said cancelled.
+  - `/init --directory DIR` in a session; the scope line no longer
+    contradicts itself; `reconfigure` refusals read as what is wrong, and
+    `reconfigure NAME` with no value is refused; accepting a cancelled task
+    points to `task reopen`; `task complete` on a complete task says so; a
+    model repeating its calls is said to; `help work` names its exit
+    statuses.
+  - Impact reaches a requirement's tasks as surely as the requirement; the
+    audit gives each attempt as the state it left the task in.
 - **In a session, a line is read as soon as it is typed:** sending took an
   extra Enter, as the check for the end of input waited for the line after
   the one typed. Ctrl-C and Esc on a line drop it as it is entered.

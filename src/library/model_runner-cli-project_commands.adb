@@ -26,6 +26,7 @@ with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Records;
+with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
@@ -256,6 +257,31 @@ package body Model_Runner.CLI.Project_Commands is
       Last      : out Natural;
       Status    : out Model_Runner.Errors.Error_Info);
 
+   --  Generated text written as it comes, and between its pieces the work
+   --  asked after: ended elsewhere -- cancelled from another terminal --
+   --  the turn stops there, not at its next call.
+   type Watching_Sink is limited new Pres.Standard_Output_Sink with record
+      Stop : Model_Runner.Cancellation.Token_Reference := null;
+   end record;
+
+   overriding procedure Write
+     (Self   : in out Watching_Sink;
+      Item   : String;
+      Closed : out Boolean);
+
+   overriding procedure Write
+     (Self   : in out Watching_Sink;
+      Item   : String;
+      Closed : out Boolean)
+   is
+      use type Model_Runner.Cancellation.Token_Reference;
+   begin
+      Pres.Standard_Output_Sink (Self).Write (Item, Closed);
+      if Self.Stop /= null and then Model_Runner.Framework.Execution.Work_Withdrawn then
+         Self.Stop.Request;
+      end if;
+   end Write;
+
    --  One agent's loop, on the session: the root working on its task, or a
    --  child on what it was asked. A root that answers without calling a tool
    --  has changed nothing, whatever its answer says; it is told so and goes
@@ -276,7 +302,7 @@ package body Model_Runner.CLI.Project_Commands is
       Runner   : Work_Tools (Self'Unchecked_Access, Host);
       Guard    : aliased Fence (Self.Screen);
       Watcher  : aliased Watch (Self.Screen, Host);
-      Sink     : aliased Pres.Standard_Output_Sink;
+      Sink     : aliased Watching_Sink;
       Clock    : aliased Model_Runner.Clocks.System_Clock;
       Seeds    : aliased Model_Runner.Entropy.Host_Source;
       Request  : Model_Runner.Generation.Request;
@@ -296,6 +322,7 @@ package body Model_Runner.CLI.Project_Commands is
       Tokens := 0;
       Prompt_Tokens := 0;
       Watcher.Stop := Self.Cancel;
+      Sink.Stop := Self.Cancel;
 
       Conv.Open (Messages, Status => Status);
       if E.Is_Ok (Status) then
@@ -371,6 +398,12 @@ package body Model_Runner.CLI.Project_Commands is
             Self.Cancel.Reset;
          end if;
          Status := E.Make (E.Generation_Cancelled);
+      elsif Outcome.Reason = Model_Runner.Agent.Repeating then
+         --  Going round, not a request that was wrong.
+         Status := E.Make (E.Framework_Limit_Exceeded);
+         E.Add_Text (Status, "name", "the model");
+         E.Add_Text (Status, "detail", "it kept repeating calls it had already made, and got no"
+                     & " further");
       elsif Outcome.Reason = Model_Runner.Agent.Timed_Out then
          Status := E.Make (E.Framework_Limit_Exceeded);
          E.Add_Text (Status, "name", "time");
@@ -871,6 +904,18 @@ package body Model_Runner.CLI.Project_Commands is
          for Id of Nt.List (Store, Nt.Requirement, "implemented") loop
             Pres.Put_Note (Screen, "cli.project.not_verified", [Loc.Named ("name", Id)]);
          end loop;
+         --  Recorded verified, and its evidence no longer holds: said, not
+         --  counted on until it is judged again.
+         for Id of Nt.List (Store, Nt.Requirement, "verified") loop
+            declare
+               Why : constant String := Vf.Why_Not_Verified (Store, Id);
+            begin
+               if Why /= "" then
+                  Pres.Put_Note (Screen, "cli.project.stale_verified",
+                                 [Loc.Named ("name", Id), Loc.Named ("detail", Why)]);
+               end if;
+            end;
+         end loop;
          --  Accepted, and nothing open or done serves it: no work will
          --  carry it out unless some is made.
          for Id of Nt.List (Store, Nt.Requirement, "accepted") loop
@@ -1156,7 +1201,10 @@ package body Model_Runner.CLI.Project_Commands is
                            Rs.Read (Store, Issue_Id, Issue, Got);
                            return E.Is_Ok (Got)
                              and then (To_String (Held.State) in "obsolete" | "superseded" | "rejected"
-                                       or else To_String (Held.Text) = To_String (Issue.Payload));
+                                       or else Names."="
+                                                 (Model_Runner.Framework.Lines_Of (To_String (Held.Text)),
+                                                  Model_Runner.Framework.Lines_Of
+                                                    (To_String (Issue.Payload))));
                         end;
                      end if;
                   end;
@@ -1627,6 +1675,14 @@ package body Model_Runner.CLI.Project_Commands is
                      Value := To_Unbounded_String (Part (Equal + 1 .. Part'Last));
                   elsif Name /= Null_Unbounded_String then
                      Append (Value, " " & Part);
+                  else
+                     --  A name with no value: a value is what a change is.
+                     Read := E.Make (E.CLI_Invalid_Option_Value);
+                     E.Add_Text (Read, "option", Part);
+                     E.Add_Text (Read, "value", "a setting is changed as " & Part & "=VALUE"
+                                 & "; config " & Part & " shows what it is");
+                     Pres.Report (Screen, Read);
+                     return;
                   end if;
                end;
             end loop;
@@ -1718,6 +1774,76 @@ package body Model_Runner.CLI.Project_Commands is
                    Loc.Named ("value", Nt.State_Of (Store, Nt.Requirement, Requirement))]);
             end loop;
          end;
+         --  Components changed: open tasks in one that is no longer the
+         --  project's are named, a component at a time, with the way on;
+         --  one declared with no roots is told where its files are said.
+         if (for some Name of Planned.Changed =>
+               Ada.Strings.Fixed.Index (Name, "map.component.") = 1
+               or else Ada.Strings.Fixed.Index (Name, "set.components") = 1)
+         then
+            declare
+               Known  : constant Names.Vector := Tk.Components (Store);
+               Former : Names.Vector;
+
+               function Joined (Items : Names.Vector) return String is
+                  Text : Unbounded_String;
+               begin
+                  for One of Items loop
+                     Append (Text, (if Text = Null_Unbounded_String then "" else ", ") & One);
+                  end loop;
+                  return To_String (Text);
+               end Joined;
+            begin
+               for Id of Tk.List (Store) loop
+                  declare
+                     Defined : R.Item;
+                     Got     : E.Error_Info;
+                  begin
+                     Tk.Definition (Store, Id, Defined, Got);
+                     if E.Is_Ok (Got) and then R.Get (Defined, "component") /= ""
+                       and then not Known.Contains (R.Get (Defined, "component"))
+                       and then not Former.Contains (R.Get (Defined, "component"))
+                       and then Tk.State_Of (Store, Id) not in "complete" | "cancelled" | "rejected"
+                     then
+                        Former.Append (R.Get (Defined, "component"));
+                     end if;
+                  end;
+               end loop;
+               for Old of Former loop
+                  declare
+                     Count : Natural := 0;
+                  begin
+                     for Id of Tk.List (Store) loop
+                        declare
+                           Defined : R.Item;
+                           Got     : E.Error_Info;
+                        begin
+                           Tk.Definition (Store, Id, Defined, Got);
+                           if E.Is_Ok (Got) and then R.Get (Defined, "component") = Old
+                             and then Tk.State_Of (Store, Id)
+                                        not in "complete" | "cancelled" | "rejected"
+                           then
+                              Count := Count + 1;
+                           end if;
+                        end;
+                     end loop;
+                     Pres.Put_Note
+                       (Screen, "cli.project.component_gone",
+                        [Loc.Named ("count", Image (Count)), Loc.Named ("name", Old),
+                         Loc.Named ("value", Joined (Known))]);
+                  end;
+               end loop;
+               for Name of Known loop
+                  if Model_Runner.Framework.Repository.Component_Roots (Store, Name).Is_Empty
+                    and then R.Get (Planned.After, "input.project_name") /= Name
+                  then
+                     Pres.Put_Note (Screen, "cli.project.component_rootless",
+                                    [Loc.Named ("name", Name)]);
+                  end if;
+               end loop;
+            end;
+         end if;
+
          --  A kind or a role granted more than the project allows gets
          --  only what the project allows: said, with what it gets.
          for Name of Planned.Changed loop
@@ -1993,7 +2119,25 @@ package body Model_Runner.CLI.Project_Commands is
 
       if Word = "/init" then
          Command.Kind := Opt.Command_Init;
-         Command.Template_Name := T.To_Bounded (Argument (1));
+         --  --directory DIR as the shell takes it: the project started
+         --  there, the template the word that is neither.
+         declare
+            Template : Unbounded_String;
+            Index    : Positive := 1;
+         begin
+            while Index <= Natural (Positional.Length) loop
+               if Positional (Index) = "--directory" and then Index < Natural (Positional.Length) then
+                  Command.Project_Directory := T.To_Bounded (Positional (Index + 1));
+                  Index := Index + 2;
+               else
+                  if Template = Null_Unbounded_String then
+                     Template := To_Unbounded_String (Positional (Index));
+                  end if;
+                  Index := Index + 1;
+               end if;
+            end loop;
+            Command.Template_Name := T.To_Bounded (To_String (Template));
+         end;
          Model_Runner.CLI.Init.Run (Command, Screen, Status);
 
       elsif Word = "/task" then

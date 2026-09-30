@@ -178,7 +178,7 @@ en.help.repo.verbose =   --verbose               report progress and detail on s
 en.help.repo.locale =   --locale NAME           locale for program messages
 en.help.repo.color =   --color=MODE            colour output: {value}
 en.help.work.usage = Usage: model_runner work [TASK] [options]
-en.help.work.summary = Run one ready task: an agent holds it in a new generation, its context is built and kept, the model call recorded, and what the agent answers is held to the work contract. The files show what changed; the task's verification runs, and it completes through its gates or ends blocked or failed with why. The agent is --set model=PATH, run as this program's agent with no shell, network or delegation, or the configuration's scalar work.agent command, with $PROMPT for its context's file. Without a task named, a terminal chooses one.
+en.help.work.summary = Run one ready task: an agent holds it in a new generation, its context is built and kept, the model call recorded, and what the agent answers is held to the work contract. The files show what changed; the task's verification runs, and it completes through its gates or ends blocked or failed with why. The agent is --set model=PATH, run as this program's agent with no shell, network or delegation, or the configuration's scalar work.agent command, with $PROMPT for its context's file. Without a task named, a terminal chooses one. It exits 0 when the task is complete, waits to be taken in or waits for its parts; 6 when it ends failed or blocked, with why; 7 when it is cancelled.
 en.help.work.options = Options:
 en.help.work.set =   --set NAME=VALUE        model=PATH, steps=N or profile=ID or all=yes; repeatable
 en.help.work.directory =   --directory DIR         the project in DIR rather than the current directory
@@ -437,7 +437,10 @@ en.cli.task.undepends = {name} no longer waits for {value}
 en.cli.task.left_waiting = {name} still waits for {value}; task depend {name} {value} remove lets it go on without
 en.cli.task.part_of = {value} is a part of {name}, which goes back to work without it once its other parts are done
 en.cli.task.revised = {name} is revised
-en.cli.task.rehomed = {count} tasks placed in {value} from {name}
+en.cli.task.rehomed = {count} tasks placed in {value} from {name}: {detail}
+en.cli.task.rehome_left = left in {name}, as they are ended: {detail}
+en.cli.task.part_there = {detail} is a part already: {name}
+en.cli.task.clipped = {name} asks for more {value} than a {other} task may have, and gets {detail}; its kind's permissions (config permission.kind.{other}) or the project's bound it
 en.cli.intent.invalidated = {name}'s verification no longer applies
 en.cli.intent.linked = {name} is linked
 en.cli.result.elsewhere = {name} is shown by {value}
@@ -472,7 +475,10 @@ en.cli.project.configuration = configuration revision
 en.cli.project.requirements = requirements
 en.cli.project.verified = verified
 en.cli.project.not_verified = {name} is implemented and not verified: check {name} verifies it
+en.cli.project.stale_verified = {name} is recorded verified, but its evidence no longer holds: {detail}
 en.cli.project.clipped = {name} asks for more {value} than the project allows, and gets what the project allows: {detail}; map.permission.project.{value}=... raises the project's
+en.cli.project.component_gone = {count} open tasks are in {name}, which is no longer one of the project's components ({value}): task rehome {name} NAME places them
+en.cli.project.component_rootless = {name} says nowhere where its files are: map.component.{name}=roots=DIR says so, and impact and verification reach it
 en.cli.project.unserved = {name} is accepted and no task serves it: task new TITLE --set kind=KIND --set requirements={name} makes one
 en.cli.project.candidate_requirements = candidate requirements
 en.cli.project.which =   {name}: {value}
@@ -561,13 +567,15 @@ en.cli.next.parts = next: task accept each of its parts ({detail}); it goes back
 en.cli.next.parts_first = next: its parts come first ({detail}); task accept and work each, and {name} goes on once they are done
 en.cli.next.waits_first = next: {detail} first, as {name} waits for {value}; or task depend {name} {value} remove stops it waiting
 en.cli.next.way_on = {detail}
-en.cli.next.integrate = next: task integrate {name} takes its work into the project
+en.cli.next.integrate = next: task integrate {name} takes its work into the project (task integrate {name} resolved once a conflict is settled in its workspace)
+en.cli.next.anyway_text = anyway takes in work only the code joins to the project's; files both changed are settled in the workspace first, then task integrate {name} resolved
 en.cli.next.gates = next: put right what the gates above say, then task complete {name} again
 en.cli.next.accept_task = next: task accept {name} accepts it, and work {name} then does it
 en.cli.next.accept_intent = next: {value} accept {name} accepts it; until then it governs nothing and no task is derived from it
 en.cli.next.work = next: work {name} does it
 en.cli.next.proposed = next: task accept ID accepts each proposal ({detail}), task reject ID drops one
 en.cli.next.task_left = next: {name} still serves {other}; task {value} {name} lets it go
+en.cli.next.task_component = next: {name} serves {other} and is elsewhere; task edit {name} --set component={value} places it with it
 en.cli.next.refused_parts = next: not made, kept in {value}: {detail}; task split {name} {detail} makes them by hand, or {other}
 en.cli.check.no_tests = {name} ran: it runs no tests; check full runs the project's tests as well
 en.cli.next.conflict = next: the work is in {path}; compare each file named above with the project's (diff {path}/FILE FILE) and settle it there, then task integrate {name} resolved takes the workspace's files; or task move {name} failed abandons it, and task accept {name} does it again
@@ -1049,7 +1057,7 @@ da.help.repo.verbose =   --verbose               vis status og detaljer på stan
 da.help.repo.locale =   --locale NAVN           sprog for programmets beskeder
 da.help.repo.color =   --color=TILSTAND        farvet output: {value}
 da.help.work.usage = Brug: model_runner work [OPGAVE] [tilvalg]
-da.help.work.summary = Kør en klar opgave: en agent holder den i en ny generation, dens kontekst bygges og gemmes, modelkaldet registreres, og agentens svar holdes op mod arbejdskontrakten. Filerne viser hvad der ændredes; opgavens verifikation kører, og den fuldføres gennem sine porte eller ender blokeret eller fejlet med hvorfor. Agenten er --set model=STI, kørt som dette programs agent uden skal, netværk eller uddelegering, eller konfigurationens scalar work.agent-kommando med $PROMPT for kontekstens fil. Uden en navngivet opgave vælger en terminal en.
+da.help.work.summary = Kør en klar opgave: en agent holder den i en ny generation, dens kontekst bygges og gemmes, modelkaldet registreres, og agentens svar holdes op mod arbejdskontrakten. Filerne viser hvad der ændredes; opgavens verifikation kører, og den fuldføres gennem sine porte eller ender blokeret eller fejlet med hvorfor. Agenten er --set model=STI, kørt som dette programs agent uden skal, netværk eller uddelegering, eller konfigurationens scalar work.agent-kommando med $PROMPT for kontekstens fil. Uden en navngivet opgave vælger en terminal en. Den afslutter med 0 når opgaven er fuldført, venter på at blive taget ind eller venter på sine dele; 6 når den ender fejlet eller blokeret, med hvorfor; 7 når den annulleres.
 da.help.work.options = Tilvalg:
 da.help.work.set =   --set NAVN=VÆRDI        model=STI, steps=N eller profile=ID or all=yes; kan gentages
 da.help.work.directory =   --directory MAPPE       projektet i MAPPE i stedet for den aktuelle mappe
@@ -1454,7 +1462,10 @@ da.cli.task.undepends = {name} venter ikke længere på {value}
 da.cli.task.left_waiting = {name} venter stadig på {value}; task depend {name} {value} remove lader den fortsætte uden
 da.cli.task.part_of = {value} er en del af {name}, som går i gang igen uden den når dens andre dele er færdige
 da.cli.task.revised = {name} er revideret
-da.cli.task.rehomed = {count} opgaver placeret i {value} fra {name}
+da.cli.task.rehomed = {count} opgaver placeret i {value} fra {name}: {detail}
+da.cli.task.rehome_left = efterladt i {name}, da de er afsluttede: {detail}
+da.cli.task.part_there = {detail} er allerede en del: {name}
+da.cli.task.clipped = {name} beder om mere {value} end en {other}-opgave må have, og får {detail}; dens arts tilladelser (config permission.kind.{other}) eller projektets begrænser den
 da.cli.intent.invalidated = {name}s verifikation gælder ikke længere
 da.cli.intent.linked = {name} er forbundet
 da.cli.result.elsewhere = {name} vises af {value}
@@ -1489,7 +1500,10 @@ da.cli.project.configuration = konfigurationsrevision
 da.cli.project.requirements = krav
 da.cli.project.verified = verificeret
 da.cli.project.not_verified = {name} er implementeret og ikke verificeret: check {name} verificerer det
+da.cli.project.stale_verified = {name} er registreret verificeret, men dens evidens holder ikke længere: {detail}
 da.cli.project.clipped = {name} beder om mere {value} end projektet tillader, og får det projektet tillader: {detail}; map.permission.project.{value}=... hæver projektets
+da.cli.project.component_gone = {count} åbne opgaver er i {name}, som ikke længere er en af projektets komponenter ({value}): task rehome {name} NAVN placerer dem
+da.cli.project.component_rootless = {name} siger ingen steder hvor dens filer er: map.component.{name}=roots=DIR siger det, og impact og verifikation når den
 da.cli.project.unserved = {name} er accepteret og ingen opgave tjener den: task new TITEL --set kind=ART --set requirements={name} laver en
 da.cli.project.candidate_requirements = kandidatkrav
 da.cli.project.which =   {name}: {value}
@@ -1578,13 +1592,15 @@ da.cli.next.parts = næste: task accept hver af dens dele ({detail}); den går i
 da.cli.next.parts_first = næste: dens dele kommer først ({detail}); task accept og work hver, og {name} fortsætter når de er færdige
 da.cli.next.waits_first = næste: {detail} først, da {name} venter på {value}; eller task depend {name} {value} remove får den til at stoppe med at vente
 da.cli.next.way_on = {detail}
-da.cli.next.integrate = næste: task integrate {name} tager dens arbejde ind i projektet
+da.cli.next.integrate = næste: task integrate {name} tager dets arbejde ind i projektet (task integrate {name} resolved når en konflikt er afgjort i dets arbejdsområde)
+da.cli.next.anyway_text = anyway tager kun arbejde ind som koden forbinder med projektets; filer begge ændrede afgøres i arbejdsområdet først, derefter task integrate {name} resolved
 da.cli.next.gates = næste: ret det portene ovenfor siger, og kør så task complete {name} igen
 da.cli.next.accept_task = næste: task accept {name} accepterer den, og work {name} udfører den så
 da.cli.next.accept_intent = næste: {value} accept {name} accepterer den; indtil da styrer den intet, og ingen opgave afledes af den
 da.cli.next.work = næste: work {name} udfører den
 da.cli.next.proposed = næste: task accept ID accepterer hvert forslag ({detail}), task reject ID dropper et
 da.cli.next.task_left = næste: {name} tjener stadig {other}; task {value} {name} slipper den
+da.cli.next.task_component = næste: {name} tjener {other} og er et andet sted; task edit {name} --set component={value} placerer den sammen med den
 da.cli.next.refused_parts = næste: ikke lavet, gemt i {value}: {detail}; task split {name} {detail} laver dem i hånden, eller {other}
 da.cli.check.no_tests = {name} kørte: den kører ingen tests; check full kører også projektets tests
 da.cli.next.conflict = næste: arbejdet ligger i {path}; sammenlign hver fil nævnt ovenfor med projektets (diff {path}/FIL FIL) og afgør det der, så tager task integrate {name} resolved arbejdsområdets filer; eller task move {name} failed opgiver det, og task accept {name} gør det igen
@@ -2256,7 +2272,10 @@ qps.cli.task.undepends = ⟦{name} ñó ĺóñgéŕ wáíŧß fóŕ {value}⟧
 qps.cli.task.left_waiting = ⟦{name} ßŧíĺĺ wáíŧß fóŕ {value}; ŧáßk ðépéñð {name} {value} ŕémóvé ĺéŧß íŧ gó óñ wíŧhóúŧ⟧
 qps.cli.task.part_of = ⟦{value} íß á páŕŧ óf {name}, whíçh góéß báçk ŧó wóŕk wíŧhóúŧ íŧ óñçé íŧß óŧhéŕ páŕŧß áŕé ðóñé⟧
 qps.cli.task.revised = ⟦{name} íß ŕévíßéð⟧
-qps.cli.task.rehomed = ⟦{count} ŧáßkß pĺáçéð íñ {value} fŕóm {name}⟧
+qps.cli.task.rehomed = ⟦{count} ŧáßkß pĺáçéð íñ {value} fŕóm {name}: {detail}⟧
+qps.cli.task.rehome_left = ⟦ĺéfŧ íñ {name}, áß ŧhéý áŕé éñðéð: {detail}⟧
+qps.cli.task.part_there = ⟦{detail} íß á páŕŧ áĺŕéáðý: {name}⟧
+qps.cli.task.clipped = ⟦{name} áßkß fóŕ móŕé {value} ŧháñ á {other} ŧáßk máý hávé, áñð géŧß {detail}; íŧß kíñð'ß péŕmíßßíóñß (çóñfíg péŕmíßßíóñ.kíñð.{other}) óŕ ŧhé pŕójéçŧ'ß bóúñð íŧ⟧
 qps.cli.intent.invalidated = ⟦{name}'ß véŕífíçáŧíóñ ñó ĺóñgéŕ áþþĺíéß⟧
 qps.cli.intent.linked = ⟦{name} íß ĺíñkéð⟧
 qps.cli.result.elsewhere = ⟦{name} íß ßhówñ bý {value}⟧
@@ -2291,7 +2310,10 @@ qps.cli.project.configuration = ⟦çóñfígúŕáŧíóñ ŕévíßíóñ⟧
 qps.cli.project.requirements = ⟦ŕéqúíŕéméñŧß⟧
 qps.cli.project.verified = ⟦véŕífíéð⟧
 qps.cli.project.not_verified = ⟦{name} íß ímpĺéméñŧéð áñð ñóŧ véŕífíéð: çhéçk {name} véŕífíéß íŧ⟧
+qps.cli.project.stale_verified = ⟦{name} íß ŕéçóŕðéð véŕífíéð, búŧ íŧß évíðéñçé ñó ĺóñgéŕ hóĺðß: {detail}⟧
 qps.cli.project.clipped = ⟦{name} áßkß fóŕ móŕé {value} ŧháñ ŧhé pŕójéçŧ áĺĺówß, áñð géŧß wháŧ ŧhé pŕójéçŧ áĺĺówß: {detail}; máp.péŕmíßßíóñ.pŕójéçŧ.{value}=... ŕáíßéß ŧhé pŕójéçŧ'ß⟧
+qps.cli.project.component_gone = ⟦{count} ópéñ ŧáßkß áŕé íñ {name}, whíçh íß ñó ĺóñgéŕ óñé óf ŧhé pŕójéçŧ'ß çómpóñéñŧß ({value}): ŧáßk ŕéhómé {name} NAME pĺáçéß ŧhém⟧
+qps.cli.project.component_rootless = ⟦{name} ßáýß ñówhéŕé whéŕé íŧß fíĺéß áŕé: máp.çómpóñéñŧ.{name}=ŕóóŧß=DIR ßáýß ßó, áñð ímpáçŧ áñð véŕífíçáŧíóñ ŕéáçh íŧ⟧
 qps.cli.project.unserved = ⟦{name} íß áççépŧéð áñð ñó ŧáßk ßéŕvéß íŧ: ŧáßk ñéw ŦIŦLE --ßéŧ kíñð=KIND --ßéŧ ŕéqúíŕéméñŧß={name} mákéß óñé⟧
 qps.cli.project.candidate_requirements = ⟦çáñðíðáŧé ŕéqúíŕéméñŧß⟧
 qps.cli.project.which = ⟦  {name}: {value}⟧
@@ -2380,13 +2402,15 @@ qps.cli.next.parts = ⟦ñéxŧ: ŧáßk áççépŧ éáçh óf íŧß páŕŧ�
 qps.cli.next.parts_first = ⟦ñéxŧ: íŧß páŕŧß çómé fíŕßŧ ({detail}); ŧáßk áççépŧ áñð wóŕk éáçh, áñð {name} góéß óñ óñçé ŧhéý áŕé ðóñé⟧
 qps.cli.next.waits_first = ⟦ñéxŧ: {detail} fíŕßŧ, áß {name} wáíŧß fóŕ {value}; óŕ ŧáßk ðépéñð {name} {value} ŕémóvé ßŧópß íŧ wáíŧíñg⟧
 qps.cli.next.way_on = ⟦{detail}⟧
-qps.cli.next.integrate = ⟦ñéxŧ: ŧáßk íñŧégŕáŧé {name} ŧákéß íŧß wóŕk íñŧó ŧhé pŕójéçŧ⟧
+qps.cli.next.integrate = ⟦ñéxŧ: ŧáßk íñŧégŕáŧé {name} ŧákéß íŧß wóŕk íñŧó ŧhé pŕójéçŧ (ŧáßk íñŧégŕáŧé {name} ŕéßóĺvéð óñçé á çóñfĺíçŧ íß ßéŧŧĺéð íñ íŧß wóŕkßpáçé)⟧
+qps.cli.next.anyway_text = ⟦áñýwáý ŧákéß íñ wóŕk óñĺý ŧhé çóðé jóíñß ŧó ŧhé pŕójéçŧ'ß; fíĺéß bóŧh çháñgéð áŕé ßéŧŧĺéð íñ ŧhé wóŕkßpáçé fíŕßŧ, ŧhéñ ŧáßk íñŧégŕáŧé {name} ŕéßóĺvéð⟧
 qps.cli.next.gates = ⟦ñéxŧ: púŧ ŕíghŧ wháŧ ŧhé gáŧéß ábóvé ßáý, ŧhéñ ŧáßk çómpĺéŧé {name} ágáíñ⟧
 qps.cli.next.accept_task = ⟦ñéxŧ: ŧáßk áççépŧ {name} áççépŧß íŧ, áñð wóŕk {name} ŧhéñ ðóéß íŧ⟧
 qps.cli.next.accept_intent = ⟦ñéxŧ: {value} áççépŧ {name} áççépŧß íŧ; úñŧíĺ ŧhéñ íŧ góvéŕñß ñóŧhíñg áñð ñó ŧáßk íß ðéŕívéð fŕóm íŧ⟧
 qps.cli.next.work = ⟦ñéxŧ: wóŕk {name} ðóéß íŧ⟧
 qps.cli.next.proposed = ⟦ñéxŧ: ŧáßk áççépŧ ID áççépŧß éáçh pŕópóßáĺ ({detail}), ŧáßk ŕéjéçŧ ID ðŕópß óñé⟧
 qps.cli.next.task_left = ⟦ñéxŧ: {name} ßŧíĺĺ ßéŕvéß {other}; ŧáßk {value} {name} ĺéŧß íŧ gó⟧
+qps.cli.next.task_component = ⟦ñéxŧ: {name} ßéŕvéß {other} áñð íß éĺßéwhéŕé; ŧáßk éðíŧ {name} --ßéŧ çómpóñéñŧ={value} pĺáçéß íŧ wíŧh íŧ⟧
 qps.cli.next.refused_parts = ⟦ñéxŧ: ñóŧ máðé, képŧ íñ {value}: {detail}; ŧáßk ßpĺíŧ {name} {detail} mákéß ŧhém bý háñð, óŕ {other}⟧
 qps.cli.check.no_tests = ⟦{name} ŕáñ: íŧ ŕúñß ñó ŧéßŧß; çhéçk fúĺĺ ŕúñß ŧhé pŕójéçŧ'ß ŧéßŧß áß wéĺĺ⟧
 qps.cli.next.conflict = ⟦ñéxŧ: ŧhé wóŕk íß íñ {path}; çómpáŕé éáçh fíĺé ñáméð ábóvé wíŧh ŧhé pŕójéçŧ'ß (ðíff {path}/FILE FILE) áñð ßéŧŧĺé íŧ ŧhéŕé, ŧhéñ ŧáßk íñŧégŕáŧé {name} ŕéßóĺvéð ŧákéß ŧhé wóŕkßpáçé'ß fíĺéß; óŕ ŧáßk móvé {name} fáíĺéð ábáñðóñß íŧ, áñð ŧáßk áççépŧ {name} ðóéß íŧ ágáíñ⟧

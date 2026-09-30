@@ -79,7 +79,9 @@ package body Model_Runner.Framework.Permissions is
    function Constrained (Text : String) return Grant is
       Result : Grant := (Granted => True, others => <>);
    begin
-      for Pair of Parts (Text, ',') loop
+      --  A comma or a space apart: max_depth=1 max_children=2 as well.
+      for Pair of Parts (Ada.Strings.Fixed.Translate
+                           (Text, Ada.Strings.Maps.To_Mapping (" ", ",")), ',') loop
          declare
             Equal : constant Natural := Ada.Strings.Fixed.Index (Pair, "=");
             Key   : constant String :=
@@ -482,6 +484,45 @@ package body Model_Runner.Framework.Permissions is
       end loop;
       return "";
    end Widening;
+
+   ----------------
+   -- Grant_Text --
+   ----------------
+
+   function Grant_Text (Given : Grant) return String is
+      Result : Unbounded_String;
+
+      procedure Add (Part : String) is
+      begin
+         Append (Result, (if Result = Null_Unbounded_String then "" else " ") & Part);
+      end Add;
+
+      function Joined (Items : Name_Lists.Vector) return String is
+         Text : Unbounded_String;
+      begin
+         for Part of Items loop
+            Append (Text, (if Text = Null_Unbounded_String then "" else "|") & Part);
+         end loop;
+         return To_String (Text);
+      end Joined;
+   begin
+      if not Given.Roots.Is_Empty then
+         Add ("roots=" & Joined (Given.Roots));
+      end if;
+      if not Given.Deny.Is_Empty then
+         Add ("deny=" & Joined (Given.Deny));
+      end if;
+      if not Given.Profiles.Is_Empty then
+         Add ("profiles=" & Joined (Given.Profiles));
+      end if;
+      if Given.Max_Depth /= Natural'Last then
+         Add ("max_depth=" & Trim (Natural'Image (Given.Max_Depth)));
+      end if;
+      if Given.Max_Children /= Natural'Last then
+         Add ("max_children=" & Trim (Natural'Image (Given.Max_Children)));
+      end if;
+      return To_String (Result);
+   end Grant_Text;
 
    -----------
    -- Image --

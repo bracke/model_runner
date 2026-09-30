@@ -1476,7 +1476,9 @@ package body Model_Runner.Framework.Stores is
             if Name in "." | ".." then
                null;
             elsif Ada.Directories.Kind (Found) = Ada.Directories.Directory then
-               if Relative not in "runtime/exec" | "runtime/slots"
+               --  Payloads are the harness's, written as a result is kept --
+               --  by name, from what they hold -- not by a commit.
+               if Relative not in "runtime/exec" | "runtime/slots" | "results/payloads"
                  and then not (Under = "workspaces")
                then
                   Gather (Root, Relative, Into);

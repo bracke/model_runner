@@ -92,6 +92,9 @@ package body Model_Runner.Framework.Intent is
                Allow (Result, First, "rejected");
                Allow (Result, "rejected", First, Reconsideration);
                Allow (Result, "accepted", "superseded");
+               --  Retired with nothing in its place: it governs nothing
+               --  from then on.
+               Allow (Result, "accepted", "obsolete");
             end;
 
          when Requirement =>
@@ -222,12 +225,12 @@ package body Model_Runner.Framework.Intent is
       case Kind is
          when Specification =>
             return (if Next = "accepted" then Specification_Accepted
-                    elsif Next = "superseded" then Specification_Superseded
+                    elsif Next in "superseded" | "obsolete" then Specification_Superseded
                     elsif Next = "rejected" then Specification_Rejected
                     else Specification_Reconsidered);
          when Decision =>
             return (if Next = "accepted" then Decision_Accepted
-                    elsif Next = "superseded" then Decision_Superseded
+                    elsif Next in "superseded" | "obsolete" then Decision_Superseded
                     elsif Next = "rejected" then Decision_Rejected
                     else Decision_Reconsidered);
          when Requirement =>

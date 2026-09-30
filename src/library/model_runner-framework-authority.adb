@@ -276,15 +276,31 @@ package body Model_Runner.Framework.Authority is
       --  Whether a statement overrides another, itself or through what it
       --  overrides: an instruction overriding a decision overrides what the
       --  decision overrode.
+      --  What a statement says it overrides may be several, a comma apart.
+      function Names_It (Rule : Statement; Source : Unbounded_String) return Boolean is
+         Said : constant String := To_String (Rule.Overrides);
+         Start : Natural := Said'First;
+      begin
+         for Index in Said'First .. Said'Last + 1 loop
+            if Index > Said'Last or else Said (Index) in ',' | ' ' then
+               if Index > Start and then Said (Start .. Index - 1) = To_String (Source) then
+                  return True;
+               end if;
+               Start := Index + 1;
+            end if;
+         end loop;
+         return False;
+      end Names_It;
+
       function Overrides (Rule, Other : Statement; Depth : Natural := 0) return Boolean is
       begin
          if Rule.Overrides = Null_Unbounded_String or else Depth > 8 then
             return False;
-         elsif Rule.Overrides = Other.Source then
+         elsif Names_It (Rule, Other.Source) then
             return True;
          end if;
          for Next of From.Statements loop
-            if Next.Subject = Rule.Subject and then Next.Source = Rule.Overrides
+            if Next.Subject = Rule.Subject and then Names_It (Rule, Next.Source)
               and then Overrides (Next, Other, Depth + 1)
             then
                return True;

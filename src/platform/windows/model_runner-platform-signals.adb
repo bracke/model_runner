@@ -204,6 +204,15 @@ package body Model_Runner.Platform.Signals is
 
    function Interrupts return Natural is (Handler.Count);
 
+   --  Nothing here ends the program on being told to: said never asked.
+   procedure Set_Waiting_For_Input (Waiting : Boolean) is
+      pragma Unreferenced (Waiting);
+   begin
+      null;
+   end Set_Waiting_For_Input;
+
+   function Ending_Asked return Boolean is (False);
+
    ------------------
    -- Failure_Name --
    ------------------

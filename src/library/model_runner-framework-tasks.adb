@@ -33,6 +33,15 @@ package body Model_Runner.Framework.Tasks is
    function Is_Core (Name : String) return Boolean
    is (for some Field of Core => Field.all = Name);
 
+   procedure Set_Reason
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Id     : String;
+      Reason : String);
+
+   function Open_Children (Item : Stores.Store; Change : Stores.Transaction; Id : String)
+     return Name_Lists.Vector;
+
    --  A field no task of a kind has: refused, with those it has.
    procedure No_Such_Field
      (Status  : out E.Error_Info;
@@ -98,25 +107,6 @@ package body Model_Runner.Framework.Tasks is
       end loop;
       return Result;
    end Split;
-
-   --  The children a waiting reason names: those it waits for, not every
-   --  child it has -- a part an earlier split made and nobody took is not
-   --  one of them.
-   function Waited_For (Reason : String) return Name_Lists.Vector is
-      From  : constant Natural := Reason'First + Children_Reason'Length;
-      Stop  : Natural := Ada.Strings.Fixed.Index (Reason, " (");
-      Named : Name_Lists.Vector;
-   begin
-      if Stop = 0 then
-         Stop := Reason'Last + 1;
-      end if;
-      for Part of Split (Reason (From .. Stop - 1)) loop
-         if Trim (Part) /= "" then
-            Named.Append (Trim (Part));
-         end if;
-      end loop;
-      return Named;
-   end Waited_For;
 
    function Joined (Items : Name_Lists.Vector; Between : String) return String is
       Result : Unbounded_String;
@@ -946,7 +936,14 @@ package body Model_Runner.Framework.Tasks is
                   else "");
             end if;
             Result.Reasons.Append
-              ("it is " & State & (if Why = Null_Unbounded_String then "" else ": " & To_String (Why)));
+              (if State = "verification"
+                 and then Records.Get (Runtime_Value, "current_workspace") /= ""
+               then "its work waits in " & Records.Get (Runtime_Value, "current_workspace")
+                    & " to be taken in: task integrate " & Id
+               elsif State = "verification" then "it is being verified"
+               elsif State = "complete" then "it is done"
+               else "it is " & State
+                    & (if Why = Null_Unbounded_String then "" else ": " & To_String (Why)));
          end;
       end if;
 
@@ -1062,15 +1059,25 @@ package body Model_Runner.Framework.Tasks is
               and then Ada.Strings.Fixed.Index
                          (Records.Get (Value, "blocking_reasons"),
                           Children_Reason) = 1
-              and then (for all Child of Waited_For (Records.Get (Value, "blocking_reasons")) =>
-                          not Holds_Parent (Item, Child, State_Of (Item, Child))
-                          and then State_Of (Item, Child) /= "candidate")
             then
-               Move (Item, Change, Id, "accepted", "its children are done",
-                     Status => Status);
-               if E.Is_Error (Status) then
-                  return;
-               end if;
+               declare
+                  Open : constant Name_Lists.Vector := Open_Children (Item, Change, Id);
+               begin
+                  if Open.Is_Empty then
+                     Move (Item, Change, Id, "accepted", "its children are done",
+                           Status => Status);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
+
+                  --  Still waiting, for fewer or more than it says: said as
+                  --  it is.
+                  elsif Children_Reason & Joined (Open, ", ")
+                          /= Records.Get (Value, "blocking_reasons")
+                  then
+                     Set_Reason (Item, Change, Id, Children_Reason & Joined (Open, ", "));
+                  end if;
+               end;
             end if;
          end;
       end loop;
@@ -2010,6 +2017,46 @@ package body Model_Runner.Framework.Tasks is
                    "revision" & Natural'Image (Records.Revision (Value)), Event, Status);
    end Revise;
 
+   --  A blocked task's reason written again, as what it waits for is now.
+   procedure Set_Reason
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Id     : String;
+      Reason : String)
+   is
+      Value  : Records.Item;
+      Staged : Boolean;
+      Read   : E.Error_Info;
+   begin
+      Stores.Pending (Change, Tasks_Area, Id & State_Suffix, Value, Staged);
+      if not Staged then
+         Stores.Read (Item, Tasks_Area, Id & State_Suffix, Value, Read);
+         if E.Is_Error (Read) then
+            return;
+         end if;
+         Records.Set_Revision (Value, Records.Revision (Value) + 1);
+      end if;
+      Records.Set (Value, "blocking_reasons", Reason);
+      Stores.Put (Change, Tasks_Area, Id & State_Suffix, Value);
+   end Set_Reason;
+
+   --  The children a parent still waits for: those not done, candidates
+   --  among them.
+   function Open_Children (Item : Stores.Store; Change : Stores.Transaction; Id : String)
+     return Name_Lists.Vector
+   is
+      Result : Name_Lists.Vector;
+   begin
+      for Child of Children (Item, Id) loop
+         if Holds_Parent (Item, Child, State_In (Item, Change, Child))
+           or else State_In (Item, Change, Child) = "candidate"
+         then
+            Result.Append (Child);
+         end if;
+      end loop;
+      return Result;
+   end Open_Children;
+
    ---------------
    -- Decompose --
    ---------------
@@ -2060,7 +2107,25 @@ package body Model_Runner.Framework.Tasks is
               and then not Made.Is_Empty
             then
                Move (Item, Change, Parent, "blocked",
-                     Children_Reason & Joined (Made, ", "), Status => Status);
+                     Children_Reason & Joined (Open_Children (Item, Change, Parent), ", "),
+                     Status => Status);
+
+            --  Split again while it waits: it waits for all of them.
+            elsif State_Of (Item, Parent) = "blocked" and then not Made.Is_Empty then
+               declare
+                  Value : Records.Item;
+                  Read  : E.Error_Info;
+               begin
+                  Stores.Read (Item, Tasks_Area, Parent & State_Suffix, Value, Read);
+                  if E.Is_Ok (Read)
+                    and then Ada.Strings.Fixed.Index
+                               (Records.Get (Value, "blocking_reasons"), Children_Reason) = 1
+                  then
+                     Set_Reason (Item, Change, Parent,
+                                 Children_Reason
+                                 & Joined (Open_Children (Item, Change, Parent), ", "));
+                  end if;
+               end;
             end if;
          end;
       end;

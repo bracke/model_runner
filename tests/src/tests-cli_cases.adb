@@ -2255,7 +2255,7 @@ package body Tests.CLI_Cases is
 
       --  13. A fourth round.
       Run ("reconfigure|execution.allowed-=nothing|confirm=yes");
-      Assert (Code /= 0 and then Shows ("nothing is not in it"),
+      Assert (Code /= 0 and then Shows ("nothing is not in set.execution.allowed"),
               "-= of what a set does not hold was not said so: " & To_String (Said));
       Run ("decision|govern|DEC-001|nosuch.setting|5");
       Assert (Code /= 0 and then Shows ("no setting is called so"),
@@ -2281,9 +2281,8 @@ package body Tests.CLI_Cases is
                  "work on a candidate gave no next step: " & To_String (Said));
       end;
       Run ("task|rehome|nowhere|elsewhere");
-      Assert (Code = 2 and then Shows ("the project's components are"),
-              "rehome into no component was not refused with the components there are: "
-              & To_String (Said));
+      Assert (Code = 2 and then Shows ("no task is in it"),
+              "rehome from a component no task is in was not refused so: " & To_String (Said));
       Run ("config|map.permission.project");
       Assert (Shows ("map.permission.project") and then Shows ("(the default)"),
               "the permissions a project is given unasked were not shown: " & To_String (Said));

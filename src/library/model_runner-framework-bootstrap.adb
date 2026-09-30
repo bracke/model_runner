@@ -492,10 +492,18 @@ package body Model_Runner.Framework.Bootstrap is
                      then Name (Name'First .. Name'Last - 4) else Name);
                begin
                   Results.Read (Item, Kept, Held, Read, With_Payload => False);
-                  if E.Is_Ok (Read) and then Held.Summary = Said.Summary
-                    and then To_String (Held.Producer) = "bootstrap"
+                  if E.Is_Ok (Read) and then To_String (Held.Producer) = "bootstrap"
+                    and then (Held.Summary = Said.Summary
+                              or else (Held.Provenance = Said.Provenance
+                                       and then Length (Said.Provenance) > 0))
                   then
-                     return;
+                     --  Of the same thing: the same issue where it says the
+                     --  same words, whatever its summary adds; words the
+                     --  document has changed since are another issue.
+                     Results.Read (Item, Kept, Held, Read);
+                     if E.Is_Ok (Read) and then Held.Payload = Said.Payload then
+                        return;
+                     end if;
                   end if;
                end;
             end loop;
@@ -574,7 +582,7 @@ package body Model_Runner.Framework.Bootstrap is
                     (if Records.Has (Kept, "imported_title") then Records.Get (Kept, "imported_title")
                      else To_String (Held.Title));
                begin
-                  if To_String (Held.State) in "obsolete" | "superseded" then
+                  if To_String (Held.State) in "obsolete" | "superseded" | "rejected" then
                      Result.Existing := Result.Existing + 1;
 
                   --  Its words unchanged, or already what it holds -- a person
@@ -627,6 +635,8 @@ package body Model_Runner.Framework.Bootstrap is
                            Provenance => Next.Provenance,
                            others     => <>);
                      begin
+                        --  There, and kept as a person has it: counted so.
+                        Result.Existing := Result.Existing + 1;
                         Raise_Issue (Said);
                      end;
                   else
