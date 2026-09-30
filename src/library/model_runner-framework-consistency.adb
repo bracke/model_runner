@@ -168,7 +168,21 @@ package body Model_Runner.Framework.Consistency is
       end;
 
       for Resource of Leases.Stale (Item) loop
-         Found (Stale_Lease, Resource, "its lease has run out");
+         Found (Stale_Lease, Resource,
+                "its lease has run out: /state, or any command that changes the project, lets it go");
+      end loop;
+
+      --  A task that waits on its parts, one of which failed or ended
+      --  undone: it waits for ever unless a person acts.
+      for Id of Tasks.List (Item, "blocked") loop
+         for Child of Tasks.Children (Item, Id) loop
+            if Tasks.State_Of (Item, Child) in "failed" | "cancelled" | "rejected" then
+               Found (Ready_With_Open_Dependency, Id,
+                      "it waits for its parts, and " & Child & " is " & Tasks.State_Of (Item, Child)
+                      & ": /task accept " & Child & " does it again, or /task accept " & Id
+                      & " takes the whole up again");
+            end if;
+         end loop;
       end loop;
 
       --  A requirement depended on is one there is.

@@ -2334,7 +2334,8 @@ package body Tests.Framework_Cases is
               "the requirements bootstrap made are not the ones it found, under"
               & " the identifier the document gives");
 
-      --  The imported line changed: its next revision, not another item.
+      --  The imported line changed: accepted, so a person's to take --
+      --  an issue, the requirement as it was, and not another item.
       Bs.Apply (Store, Change,
                 Bs.Scan ("docs/parser.md",
                          "- REQ-PARSE-003: Input is read in one pass, and never twice." & LF),
@@ -2344,11 +2345,11 @@ package body Tests.Framework_Cases is
          Held : Nt.Entity;
       begin
          Nt.Read (Store, Nt.Requirement, "REQ-PARSE-003", Held, Status);
-         Assert (E.Is_Ok (Status) and then Report.Created = 0 and then Natural (Report.Revised.Length) = 1
-                 and then Held.Revision = 2
-                 and then Ada.Strings.Fixed.Index (To_String (Held.Text), "never twice") > 0
+         Assert (E.Is_Ok (Status) and then Report.Created = 0 and then Natural (Report.Revised.Length) = 0
+                 and then Report.Issues >= 1 and then Held.Revision = 1
+                 and then Ada.Strings.Fixed.Index (To_String (Held.Text), "never twice") = 0
                  and then Natural (Nt.List (Store, Nt.Requirement).Length) = 4,
-                 "a changed imported line was not revised: " & Code_Of (Status));
+                 "a changed accepted line was revised without a person: " & Code_Of (Status));
       end;
 
       --  An imported requirement made obsolete is not revised, and does
@@ -3584,7 +3585,7 @@ package body Tests.Framework_Cases is
 
       procedure Type_Secret (Pair : Hostkit.Pty.Pair; Seen : String) is
          Last : Ada.Streams.Stream_Element_Offset;
-         Word : constant String := "hunter2" & ASCII.CR;
+         Word : constant String := "hunter2" & ASCII.CR & ASCII.CR;
          Keys : Ada.Streams.Stream_Element_Array (1 .. Word'Length);
          Sent : Hostkit.Descriptors.Transfer_Outcome;
       begin
@@ -8634,6 +8635,10 @@ package body Tests.Framework_Cases is
          Model_Runner.Presentation.Put_Note
            (Screen, "cli.next.retry", [Model_Runner.Localization.Named ("name", "TASK-7")]);
          Model_Runner.Presentation.Put_Aside (Screen, "cli.interactive.help.projects");
+         --  A usage error of a command points to that command's help.
+         Model_Runner.Presentation.Use_Command (Screen, "task");
+         Model_Runner.Presentation.Report
+           (Screen, Model_Runner.Errors.Make (Model_Runner.Errors.CLI_Unexpected_Operand));
          Assert (Ada.Strings.Fixed.Index
                             (Model_Runner.Presentation.Next_Step_Value
                                (Screen, "cli.next.accept_task",
@@ -8645,6 +8650,8 @@ package body Tests.Framework_Cases is
          Assert (Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"),
                                           ASCII.LF & "project commands:") > 0,
                  "a line put aside was written with the program's name before it");
+         Assert (Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"), "/help task") > 0,
+                 "a usage error in a command did not point to that command's help");
          Assert (Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"), "/task accept TASK-7") > 0,
                  "a next step in a session was not its slash command: "
                  & Read_Whole ("obj/session-next.txt"));
@@ -9257,7 +9264,7 @@ package body Tests.Framework_Cases is
                Assert (Ada.Strings.Fixed.Index (Text, "complete tasks: 2") > 0
                        and then Ada.Strings.Fixed.Index (Text, "candidate tasks: 0") > 0,
                        "/state did not count the tasks as the state holds them: " & Text);
-               Assert (Ada.Strings.Fixed.Index (Text, "runtime.state") > 0
+               Assert (Ada.Strings.Fixed.Index (Text, "state: complete") > 0
                        and then Ada.Strings.Fixed.Index (Text, "nonsense") > 0
                        and then Ada.Strings.Fixed.Index (Text, "Stars counted") > 0
                        and then Ada.Strings.Fixed.Index (Text, "moved from") > 0

@@ -139,12 +139,16 @@ package Model_Runner.Framework.Bootstrap is
    --  @param Found The outputs.
    --  @param Result What was made and what was passed over.
    --  @param Status A failure staging one of them.
+   --  @param Accept_Numbered Whether an item a document numbers is taken
+   --    as accepted, as the policy says; False has it proposed however the
+   --    policy has it -- a person asked, and said no.
    procedure Apply
      (Item   : Stores.Store;
       Change : in out Stores.Transaction;
       Found  : Output_List;
       Result : out Report;
-      Status : out Model_Runner.Errors.Error_Info);
+      Status : out Model_Runner.Errors.Error_Info;
+      Accept_Numbered : Boolean := True);
 
 private
 

@@ -292,6 +292,42 @@ package body Model_Runner.CLI.Choosers is
       return Text;
    end Fit;
 
+   --  A text's lines, each broken at a space where it is wider than the
+   --  window: what does not fit is shown on the rows below, not cut off.
+   function Wrapped (Text : String; Columns : Positive) return Framework.Name_Lists.Vector is
+      Result : Framework.Name_Lists.Vector;
+
+      procedure Add (Line : String) is
+         Width : Natural := 0;
+         Cut   : Natural := 0;
+      begin
+         for Index in Line'Range loop
+            if Character'Pos (Line (Index)) not in 16#80# .. 16#BF# then
+               Width := Width + 1;
+            end if;
+            if Line (Index) = ' ' then
+               Cut := Index;
+            end if;
+            if Width > Columns then
+               if Cut > Line'First then
+                  Result.Append (Line (Line'First .. Cut - 1));
+                  Add (Line (Cut + 1 .. Line'Last));
+               else
+                  Result.Append (Line (Line'First .. Index - 1));
+                  Add (Line (Index .. Line'Last));
+               end if;
+               return;
+            end if;
+         end loop;
+         Result.Append (Line);
+      end Add;
+   begin
+      for Line of Framework.Lines_Of (Text) loop
+         Add (Line);
+      end loop;
+      return Result;
+   end Wrapped;
+
    ------------
    -- Render --
    ------------
@@ -307,8 +343,8 @@ package body Model_Runner.CLI.Choosers is
       Room    : Integer;
    begin
       if Item.Details and then Item.Cursor > 0 then
-         Details := Framework.Lines_Of
-           (To_String (Item.Items (Item.Visible (Item.Cursor)).Details));
+         Details := Wrapped
+           (To_String (Item.Items (Item.Visible (Item.Cursor)).Details), Positive'Max (1, Columns - 4));
 
       end if;
 
@@ -316,7 +352,7 @@ package body Model_Runner.CLI.Choosers is
       --  question -- the list, a blank, the details, the keys.
       declare
          Title : constant Framework.Name_Lists.Vector :=
-           Framework.Lines_Of (To_String (Words.Title));
+           Wrapped (To_String (Words.Title), Columns);
          Extra : constant Integer :=
            Integer (Details.Length) + (if Details.Is_Empty then 0 else 1);
          --  A title too long for the window keeps its last lines, the

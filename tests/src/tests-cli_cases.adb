@@ -2060,7 +2060,7 @@ package body Tests.CLI_Cases is
 
       --  2. The session's project commands from the shell.
       Run ("state");
-      Assert (Code = 0 and then Shows ("candidate requirements"),
+      Assert (Code = 0 and then Shows ("of them candidates"),
               "state did not report from the shell: " & To_String (Said));
       Run ("req");
       Assert (Shows ("no requirements yet"), "an empty register did not say how to begin");
@@ -2125,7 +2125,7 @@ package body Tests.CLI_Cases is
               "a crashed agent's task was not set aside, blocked: " & To_String (Said));
       Run ("reconfigure|work.agent=" & Root & "/bad.sh $PROMPT|confirm=yes");
       Run ("task|accept|TASK-404");
-      Assert (Code /= 0 and then Shows ("TASK-404 is not in the project state")
+      Assert (Code /= 0 and then Shows ("TASK-404") and then Shows ("is not in the project state")
               and then not Shows (".state"),
               "an unknown task was not said by its name: " & To_String (Said));
       Run ("task|new|Nothing");
@@ -2380,10 +2380,17 @@ package body Tests.CLI_Cases is
          Assert (Code = 0 and then Shows ("no longer waits for"),
                  "a dependency could not be taken off: " & To_String (Said));
          Run ("task|complete|" & Two);
-         Assert (Code /= 0 and then Shows ("accepted first"),
-                 "completing a candidate did not say to accept it first: " & To_String (Said));
-         Run ("task|accept|" & Two);
-         Assert (Shows ("next: /work " & Two), "an accepted task gave no next step");
+         Assert (Shows (Two & " is accepted"),
+                 "completing a candidate did not accept it first: " & To_String (Said));
+         Run ("task|new|Third step|--set|kind=analysis");
+         declare
+            Text  : constant String := To_String (Said);
+            Found : constant Natural := Ada.Strings.Fixed.Index (Text, "TASK-");
+            Three : constant String := (if Found = 0 then "TASK-?" else Text (Found .. Found + 7));
+         begin
+            Run ("task|accept|" & Three);
+            Assert (Shows ("next: /work " & Three), "an accepted task gave no next step: " & To_String (Said));
+         end;
       end;
       --  check of a setting that is none, and a profile that is none.
       Run ("reconfigure|scalar.work.agnt=x|confirm=yes");
@@ -2626,8 +2633,9 @@ package body Tests.CLI_Cases is
               "an accepted task with nothing to wait for is not listed ready: "
               & Last_Output);
       Assert (Task_Run ("show", "TASK-001", "") = 0
-              and then Ada.Strings.Fixed.Index (Last_Output, "fingerprint") > 0,
-              "the effective task was not shown");
+              and then Ada.Strings.Fixed.Index (Last_Output, "kind") > 0
+              and then Ada.Strings.Fixed.Index (Last_Output, "fingerprint") = 0,
+              "the effective task was not shown, or shown with its bookkeeping: " & Last_Output);
       Assert (Task_Run ("reject", "TASK-001", "") = 2,
               "an accepted task was rejected");
       Assert (Task_Run ("cancel", "TASK-001", "") = 0,
@@ -2657,8 +2665,9 @@ package body Tests.CLI_Cases is
          Assert (Move_To ("accepted") = 0 and then Move_To ("running") /= 0,
                  "a person started a task without work: " & Last_Output);
       end;
-      Assert (Task_Run ("accept", "", "") = 2,
-              "a move naming no task was taken");
+      Assert (Task_Run ("accept", "", "") in 0 | 2
+              and then Ada.Strings.Fixed.Index (Last_Output, " is accepted") = 0,
+              "a move naming no task was taken: " & Last_Output);
       Assert (Task_Run ("show", "TASK-404", "") = 2,
               "a task nobody made was shown");
       Assert (Task_Run ("derive", "", "") = 0,

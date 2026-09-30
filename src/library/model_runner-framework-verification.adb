@@ -1,5 +1,8 @@
 with Ada.Characters.Handling;
+with Ada.Directories;
 with Ada.Strings.Fixed;
+
+with Hostkit.Fs;
 
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Events;
@@ -1936,8 +1939,12 @@ package body Model_Runner.Framework.Verification is
       Any   : Boolean := False;
       Tested : Boolean := False;
       Empty_Suite : Unbounded_String;
+      --  Something implements it: a linked file the project holds -- a
+      --  link to one it does not shows nothing.
       Built : Boolean :=
-        not Intent.Links (Item, Intent.Requirement, Requirement, Intent.Implementation).Is_Empty;
+        (for some Target of Intent.Links (Item, Intent.Requirement, Requirement, Intent.Implementation) =>
+           Ada.Directories.Exists
+             (Hostkit.Fs.Join (Ada.Directories.Containing_Directory (Stores.Root (Item)), Target)));
       --  Whether what a run failed on lies wholly outside this
       --  requirement's files -- those linked to it as implementing or
       --  testing it, and those the work serving it changed -- as the run

@@ -179,6 +179,13 @@ package Model_Runner.Framework.Work is
       What : Permissions.Capability;
       Path : String := "") return Boolean;
 
+   --  Where the agent now working may write, as its grants say it: what a
+   --  refused write is answered with.
+   --
+   --  @param Host The host.
+   --  @return write_source and write_specs with their roots, or nothing.
+   function Where_Writes (Host : Child_Host) return String;
+
    --  How many model turns the root agent may take: the task kind's scalar
    --  task.max_steps.KIND, else agents.max_steps, else 24.
    --

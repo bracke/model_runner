@@ -1511,6 +1511,32 @@ package body Model_Runner.Framework.Work is
                                       <= Held.Allowed (Permissions.Create_Children).Max_Depth));
    end May;
 
+   ------------------
+   -- Where_Writes --
+   ------------------
+
+   function Where_Writes (Host : Child_Host) return String is
+      Held   : Agents.Agent;
+      Status : E.Error_Info;
+      Said   : Unbounded_String;
+   begin
+      Agents.Read (Host.Item.all, Current (Host), Held, Status);
+      if E.Is_Ok (Status) then
+         for One in Permissions.Capability loop
+            if Permissions."=" (One, Permissions.Write_Source) or else Permissions."=" (One, Permissions.Write_Specs)
+            then
+               if Held.Allowed (One).Granted then
+                  Append (Said, (if Said = Null_Unbounded_String then "" else "; ") & Permissions.Word (One)
+                          & (if Permissions.Grant_Text (Held.Allowed (One)) = "" then " anywhere in the project"
+                             else " " & Permissions.Grant_Text (Held.Allowed (One))));
+               end if;
+            end if;
+         end loop;
+      end if;
+      return (if Said = Null_Unbounded_String then "nowhere: this task is answered, not written"
+              else To_String (Said));
+   end Where_Writes;
+
    ---------------
    -- Time_Left --
    ---------------
@@ -1968,7 +1994,10 @@ package body Model_Runner.Framework.Work is
          else
             Invocations.Hold (Child_Claim, Answer, Said, Held);
             if E.Is_Error (Held) then
-               Why := To_Unbounded_String ("its answer did not keep to the child result contract");
+               Why := To_Unbounded_String
+                 ("its answer did not keep to the child result contract: "
+                  & E.Text_Of (Held, "name") & ": " & E.Text_Of (Held, "detail")
+                  & " -- a helper answers with status: done, and summary: one line on what it found");
             elsif E.Is_Error (Charged) then
                Why := To_Unbounded_String ("it went over its budget");
             else
@@ -2413,7 +2442,8 @@ package body Model_Runner.Framework.Work is
          function Left_Behind return String is
             Named : Unbounded_String;
          begin
-            if Isolated or else Next not in "failed" | "blocked" or else Result.Changed_Files.Is_Empty
+            if Isolated or else Next not in "failed" | "blocked" | "cancelled"
+              or else Result.Changed_Files.Is_Empty
             then
                return "";
             end if;
@@ -2526,8 +2556,8 @@ package body Model_Runner.Framework.Work is
             Conclude ("verification",
                       Why & "; what it changed is kept in its workspace "
                       & To_String (Result.Workspace_Id) & ": " & Comma_Separated (Result.Changed_Files)
-                      & " -- /task integrate " & Task_Id & " checks it and takes it in, /task cancel "
-                      & Task_Id & " gives it up",
+                      & " -- /task integrate " & Task_Id & " checks it and takes it in, /task integrate "
+                      & Task_Id & " discard gives it up and does the task afresh",
                       "failed");
          elsif not Result.Changed_Files.Is_Empty then
             Conclude ("blocked",
@@ -3777,6 +3807,9 @@ package body Model_Runner.Framework.Work is
                   Held, Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For),
                   Workspace => To_String (Space.Path));
                if E.Is_Ok (Held) then
+                  --  Its evidence, as the task's audit reads it.
+                  Annotate (Item, Change, Task_Id, "current_verification",
+                            To_String (Result.Evidence_Id));
                   Stores.Commit (Item, Change, Held);
                else
                   Change := Stores.No_Changes;
@@ -3787,17 +3820,20 @@ package body Model_Runner.Framework.Work is
                   & (if Result.Evidence_Id = Null_Unbounded_String then ""
                      else " (" & To_String (Result.Evidence_Id) & ")"));
             end if;
-            --  Work that does not pass where it was written is not offered
-            --  to the project: the task fails, with what failed, and the
-            --  workspace is given up.
+            --  Work that does not pass where it was written is not taken in
+            --  -- and not thrown away either: what nearly does is what is
+            --  put right. It waits in its workspace, with what failed.
             if not Passed and then Result.Evidence_Id /= Null_Unbounded_String then
                declare
                   Evidence : constant String := To_String (Result.Evidence_Id);
+                  Space_Id : constant String := To_String (Result.Workspace_Id);
                begin
-                  Workspaces.Abandon (Item, Change, To_String (Result.Workspace_Id), Held);
-                  Conclude ("failed", Evidence & " did not pass in " & To_String (Result.Workspace_Id)
+                  Conclude ("", Evidence & " did not pass in " & Space_Id
                             & ", so nothing was taken in"
-                            & First_Diagnostics (Item, Evidence), "completed");
+                            & First_Diagnostics (Item, Evidence)
+                            & "; the work is kept there -- put it right in " & Space_Id
+                            & " and /task integrate " & Task_Id & " checks it again, or /task integrate "
+                            & Task_Id & " discard gives it up and does the task afresh", "completed");
                end;
                return;
             elsif Work_Setting (Item, "integrate") /= "automatic" then

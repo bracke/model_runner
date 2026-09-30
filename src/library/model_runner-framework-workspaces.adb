@@ -884,6 +884,20 @@ package body Model_Runner.Framework.Workspaces is
       if Dirs.Exists (Home) then
          Files.Remove_Tree (Home);
       end if;
+
+      --  A worktree whose tree went some other way is still registered:
+      --  git is told it is gone, so git worktree list does not keep it.
+      if Held.Kind = Git_Worktree then
+         declare
+            Said    : constant String :=
+              Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "runtime"), "git-prune-output");
+            Ignored : constant String :=
+              Git (Project_Of (Item), Words ("worktree", "prune"), Said, Worked);
+            pragma Unreferenced (Ignored);
+         begin
+            Files.Discard (Said);
+         end;
+      end if;
    exception
       when others =>
          null;
@@ -965,6 +979,46 @@ package body Model_Runner.Framework.Workspaces is
                           & Print_Of (Hostkit.Fs.Join (To_String (Held.Path), Path)) & ASCII.LF);
                end loop;
                Files.Write_Text (Conflict_Record (Item, Id), To_String (Kept), Ignored);
+
+               --  For each, the two changes joined with the lines both
+               --  touched marked, beside the tree -- merge/PATH -- for a
+               --  person to settle from: git merge-file over the base.
+               for Path of Clashes loop
+                  declare
+                     Home    : constant String := Dirs.Containing_Directory (To_String (Held.Path));
+                     Merged  : constant String := Hostkit.Fs.Join (Hostkit.Fs.Join (Home, "merge"), Path);
+                     Base    : constant String := Hostkit.Fs.Join (Base_Tree (Held), Path);
+                     Theirs  : constant String := Hostkit.Fs.Join (Project_Of (Item), Path);
+                     Ours    : constant String := Hostkit.Fs.Join (To_String (Held.Path), Path);
+                     Args    : Name_Lists.Vector;
+                     Worked  : Boolean;
+                  begin
+                     if Dirs.Exists (Base) and then Dirs.Exists (Theirs) and then Dirs.Exists (Ours) then
+                        Dirs.Create_Path (Dirs.Containing_Directory (Merged));
+                        Dirs.Copy_File (Ours, Merged);
+                        Args.Append ("merge-file");
+                        Args.Append ("-L");
+                        Args.Append ("workspace");
+                        Args.Append ("-L");
+                        Args.Append ("base");
+                        Args.Append ("-L");
+                        Args.Append ("project");
+                        Args.Append (Merged);
+                        Args.Append (Base);
+                        Args.Append (Theirs);
+                        declare
+                           Ignored_Said : constant String :=
+                             Git (Project_Of (Item), Args, Hostkit.Fs.Join (Home, "merge-output"), Worked);
+                           pragma Unreferenced (Ignored_Said);
+                        begin
+                           null;
+                        end;
+                     end if;
+                  exception
+                     when others =>
+                        null;
+                  end;
+               end loop;
             end;
             for Path of Clashes loop
                Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ") & Path);

@@ -592,12 +592,18 @@ package body Model_Runner.Framework.Configurations is
                         Status := E.Success;
                      else
                         --  Too short a name -- a directory called p1 -- as one
-                        --  that is long enough: p1_app.
-                        Check_Input (Declared, Near & "_app", Again);
-                        if E.Is_Ok (Again) then
-                           Value := To_Unbounded_String (Near & "_app");
-                           Status := E.Success;
-                        end if;
+                        --  that is long enough: p1_app, or p1_lib for a library.
+                        declare
+                           Padded : constant String :=
+                             Near & (if Ada.Strings.Fixed.Index (Templates.Id (Root_Template), "library") > 0
+                                     then "_lib" else "_app");
+                        begin
+                           Check_Input (Declared, Padded, Again);
+                           if E.Is_Ok (Again) then
+                              Value := To_Unbounded_String (Padded);
+                              Status := E.Success;
+                           end if;
+                        end;
                      end if;
                   end;
                end if;
@@ -1094,6 +1100,10 @@ package body Model_Runner.Framework.Configurations is
          return "everything bootstrap finds";
       elsif Name = "set.components" then
          return "one: the project itself";
+      elsif Name in "scalar.work.agent" | "scalar.model.default" then
+         return "/work uses this session's model";
+      elsif Name = "scalar.verification.default" then
+         return "the check /init set";
       end if;
       return "";
    end Default_Of;
@@ -1823,7 +1833,15 @@ package body Model_Runner.Framework.Configurations is
                return (if Found = Null_Unbounded_String then "" else "; did you mean " & To_String (Found));
             end Near;
          begin
-            if not (for some Prefix of Changeable => Starts (Name, Prefix.all)) then
+            if Starts (Name, "input.") then
+               --  An input is what /init was given, kept as said: the
+               --  settings it made are what is changed.
+               Status := Refused
+                 (Name, Name & " is what /init was given, kept as it was; what it set is changed by"
+                  & " the setting's own name -- /config lists them, as scalar.work.isolation for"
+                  & " input.work_isolation");
+               return;
+            elsif not (for some Prefix of Changeable => Starts (Name, Prefix.all)) then
                Status := Refused (Name, "there is no setting " & Name & Near
                                   & "; a new one is named with its kind: scalar." & Name
                                   & " for one value, set." & Name & " for several");
@@ -1944,12 +1962,25 @@ package body Model_Runner.Framework.Configurations is
                      --  whenever it is asked; the project's default for the
                      --  project, which has none above it.
                      Records.Set (Result.After, Name, "inherit");
-                     Result.Changed.Append
-                       (Name & ": " & (if Old /= "" then Old
-                                       elsif Rest (Rest'First .. Dot - 1) = "project" then "(the default)"
-                                       else "(as the level above has it)") & " -> inherit, "
-                        & (if Rest (Rest'First .. Dot - 1) = "project" then "the project's default"
-                           else "as the level above gives it"));
+                     declare
+                        --  What the level above gives this capability, which
+                        --  it now has: said, as it is what changes.
+                        Above : constant Permissions.Permission_Set :=
+                          Permissions.Effective (Item, "", "", Within_Sandbox => False);
+                        Granted_Above : constant Boolean :=
+                          (for some One in Permissions.Capability =>
+                             Permissions.Word (One) = Rest (Dot + 1 .. Rest'Last) and then Above (One).Granted);
+                     begin
+                        Result.Changed.Append
+                          (Name & ": " & (if Old /= "" then Old
+                                          elsif Rest (Rest'First .. Dot - 1) = "project" then "(the default)"
+                                          elsif Level_Said (Name)
+                                          then "(not granted: this level grants only what it names)"
+                                          else "(as the level above has it)") & " -> inherit, "
+                           & (if Rest (Rest'First .. Dot - 1) = "project" then "the project's default"
+                              else "as the level above gives it")
+                           & (if Granted_Above then ": granted" else ": not granted"));
+                     end;
                   end if;
                   if not Result.Impact.Contains (Reach (Name)) then
                      Result.Impact.Append (Reach (Name));

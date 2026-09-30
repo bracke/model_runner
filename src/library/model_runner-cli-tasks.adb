@@ -1,10 +1,13 @@
 with Ada.Characters.Handling;
+with Ada.Text_IO;
 with Ada.Directories;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
 with Ada.Strings.Unbounded;
 
+with Hostkit;
 with Hostkit.Fs;
+with Hostkit.Process;
 
 with Model_Runner.CLI.Choosers;
 with Model_Runner.Errors;
@@ -70,8 +73,16 @@ package body Model_Runner.CLI.Tasks is
          return (if Files.Is_Empty then "the files both changed" else Joined (Files));
       end if;
       for File of Files loop
-         Append (Shown, (if Shown = Null_Unbounded_String then "" else "; ")
-                        & "diff " & Tree & "/" & File & " " & File);
+         declare
+            Merged : constant String :=
+              Ada.Directories.Containing_Directory (Tree) & "/merge/" & File;
+         begin
+            Append (Shown, (if Shown = Null_Unbounded_String then "" else "; ")
+                           & "diff " & Tree & "/" & File & " " & File
+                           & (if Ada.Directories.Exists (Merged)
+                              then ", and the two joined with what both touched marked: " & Merged
+                              else ""));
+         end;
       end loop;
       return To_String (Shown);
    end In_Conflict;
@@ -220,9 +231,16 @@ package body Model_Runner.CLI.Tasks is
               (if Space = 0 then Argument else Argument (Argument'First .. Space - 1));
          begin
             if Tk.State_Of (Store, Id) = "" then
-               Outcome := E.Make (E.Framework_Not_Found);
-               E.Add_Text (Outcome, "name", Id);
-               Fail (Outcome);
+               --  Named, with the nearest there is, and where they are.
+               declare
+                  Near : constant String := Model_Runner.Framework.Nearest (Id, Tk.List (Store));
+               begin
+                  Outcome := E.Make (E.Framework_Not_Found);
+                  E.Add_Text (Outcome, "name",
+                              Id & (if Near /= "" then " (did you mean " & Near & "?)" else ""));
+                  Fail (Outcome);
+                  Pres.Put_Note (Screen, "cli.next.task_list");
+               end;
                return False;
             end if;
          end;
@@ -232,9 +250,24 @@ package body Model_Runner.CLI.Tasks is
       --  The tasks, narrowed by what was given as NAME=VALUE: state (ready
       --  among them, derived), kind, component, requirement, origin and
       --  parent.
+      --  The tasks, the ready ones first: what can be worked now leads.
+      function Ready_First return Model_Runner.Framework.Name_Lists.Vector is
+         Result : Model_Runner.Framework.Name_Lists.Vector;
+         Rest   : Model_Runner.Framework.Name_Lists.Vector;
+      begin
+         for Id of Tk.List (Store) loop
+            if Tk.State_Of (Store, Id) = "accepted" and then Tk.Ready (Store, Id).Ready then
+               Result.Append (Id);
+            else
+               Rest.Append (Id);
+            end if;
+         end loop;
+         Result.Append (Rest);
+         return Result;
+      end Ready_First;
+
       procedure Show_List is
-         Listed : constant Model_Runner.Framework.Name_Lists.Vector :=
-           Tk.List (Store);
+         Listed : constant Model_Runner.Framework.Name_Lists.Vector := Ready_First;
          Shown  : Natural := 0;
 
          function Wanted (Name : String) return String is
@@ -384,10 +417,14 @@ package body Model_Runner.CLI.Tasks is
                                 Ada.Strings.Fixed.Index (Reason, "did not pass") > 0)
                   then "checks failed"
                   elsif Space /= "" then "to integrate"
+                  --  Waiting for parts still being done; one whose part
+                  --  failed or ended undone is blocked, and shown so.
                   elsif State = "blocked"
                     and then (for some Reason of Tk.Ready (Store, Id).Reasons =>
                                 Ada.Strings.Fixed.Index (Reason, "waiting for its children") > 0
                                 or else Ada.Strings.Fixed.Index (Reason, "its child ") = Reason'First)
+                    and then not (for some Child of Tk.Children (Store, Id) =>
+                                    Tk.State_Of (Store, Child) in "failed" | "cancelled" | "rejected")
                   then "waiting for parts"
                   else State);
 
@@ -397,6 +434,7 @@ package body Model_Runner.CLI.Tasks is
                Tk.Definition (Store, Id, Defined, Read);
                if (Fits ("state", Shown_State)
                    or else (Wanted ("state") = "accepted" and then State = "accepted")
+                   or else (Wanted ("state") = "blocked" and then State = "blocked")
                    or else (Wanted ("state") = "verification" and then State = "verification"))
                  and then Fits ("kind", R.Get (Defined, "kind"))
                  and then Fits ("component", R.Get (Defined, "component"))
@@ -856,11 +894,24 @@ package body Model_Runner.CLI.Tasks is
          elsif Next = "accepted" and then Tk.State_Of (Store, Argument) = "accepted"
            and then not Tk.Ready (Store, Argument).Reasons.Is_Empty
          then
-            --  Accepted, and waiting: for what, and what makes it ready.
-            Pres.Put_Note
-              (Screen, "cli.task.accepted_waits",
-               [Loc.Named ("name", Argument),
-                Loc.Named ("detail", Tk.Ready (Store, Argument).Reasons.First_Element)]);
+            --  Accepted, and waiting: for what, and what makes it ready --
+            --  a requirement retired is never done, and says what instead.
+            declare
+               Why : constant String := Tk.Ready (Store, Argument).Reasons.First_Element;
+            begin
+               if Ada.Strings.Fixed.Index (Why, " is obsolete") > 0
+                 or else Ada.Strings.Fixed.Index (Why, " is superseded") > 0
+                 or else Ada.Strings.Fixed.Index (Why, " is rejected") > 0
+               then
+                  Pres.Put_Note
+                    (Screen, "cli.task.serves_retired",
+                     [Loc.Named ("name", Argument), Loc.Named ("detail", Why)]);
+               else
+                  Pres.Put_Note
+                    (Screen, "cli.task.accepted_waits",
+                     [Loc.Named ("name", Argument), Loc.Named ("detail", Why)]);
+               end if;
+            end;
          end if;
          if Tk.State_Of (Store, Argument) /= Next then
             Pres.Put_Message
@@ -1490,11 +1541,29 @@ package body Model_Runner.CLI.Tasks is
               ["definition.title", "runtime.state", "blocked_by", "definition.kind",
                "definition.component", "definition.requirements", "definition.depends_on"];
 
+            --  A field by its own name, the record's grouping left out --
+            --  definition.title is title -- and one that says nothing, or
+            --  is the harness's own bookkeeping, not shown.
             procedure Line (Name : String) is
+               function Starts (Prefix : String) return Boolean
+               is (Name'Length > Prefix'Length
+                   and then Name (Name'First .. Name'First + Prefix'Length - 1) = Prefix);
+
+               function Shown_Name return String
+               is (if Starts ("definition.") then Name (Name'First + 11 .. Name'Last)
+                   elsif Starts ("runtime.") then Name (Name'First + 8 .. Name'Last)
+                   elsif Starts ("authority.") then "rule " & Name (Name'First + 10 .. Name'Last)
+                   else Name);
             begin
+               if R.Get (View, Name) = ""
+                 or else Name in "fingerprint" | "runtime.generation" | "definition.revision"
+                               | "definition.created_by" | "definition.origin"
+               then
+                  return;
+               end if;
                Pres.Put_Message
                  (Screen, "cli.task.field",
-                  [Loc.Named ("name", Name), Loc.Named ("value", R.Get (View, Name))]);
+                  [Loc.Named ("name", Shown_Name), Loc.Named ("value", R.Get (View, Name))]);
             end Line;
 
             function Leading (Name : String) return Boolean
@@ -1813,15 +1882,20 @@ package body Model_Runner.CLI.Tasks is
             return;
          end if;
 
-         --  A candidate is accepted first: nothing is run for one.
+         --  A candidate completed by hand is accepted on the way: saying the
+         --  work is done is saying it was wanted.
          if Tk.State_Of (Store, Argument) = "candidate" then
-            Outcome := E.Make (E.Framework_Transition_Invalid);
-            E.Add_Text (Outcome, "name", Argument);
-            E.Add_Text (Outcome, "value", "candidate");
-            E.Add_Text (Outcome, "expected", "complete");
-            E.Add_Text (Outcome, "detail", "a candidate is accepted first: /task accept " & Argument);
-            Fail (Outcome);
-            return;
+            Tk.Move (Store, Change, Argument, "accepted", "completed by hand",
+                     Status => Outcome, Actor => Model_Runner.Framework.Transitions.User);
+            if E.Is_Ok (Outcome) then
+               Commit;
+            end if;
+            if E.Is_Error (Outcome) then
+               Fail (Outcome);
+               return;
+            end if;
+            Pres.Put_Message (Screen, "cli.task.moved",
+                              [Loc.Named ("name", Argument), Loc.Named ("value", "accepted")]);
          end if;
 
          --  Its work still in a workspace: taken in first, and nothing run.
@@ -2129,6 +2203,60 @@ package body Model_Runner.CLI.Tasks is
                end if;
             end;
          end if;
+         --  resolved anyway: the workspace's copy of each file still as it was
+         --  when the conflict was found goes over the project's -- asked at a
+         --  terminal, and the project's kept, so a person's own edit is not
+         --  lost unseen.
+         if After_First = "resolved anyway" then
+            declare
+               Space     : constant String :=
+                 Model_Runner.Framework.Workspaces.Active_For (Store, First_Word);
+               Unsettled : constant Model_Runner.Framework.Name_Lists.Vector :=
+                 (if Space = "" then Model_Runner.Framework.Name_Lists.Empty_Vector
+                  else Model_Runner.Framework.Workspaces.Conflict_Files
+                         (Store, Space, Unsettled_Only => True));
+               Project   : constant String := Ada.Directories.Containing_Directory (S.Root (Store));
+               Kept_In   : constant String :=
+                 Hostkit.Fs.Join (Hostkit.Fs.Join (S.Root (Store), "runtime"), "replaced-" & First_Word);
+            begin
+               if not Unsettled.Is_Empty then
+                  if Interactive then
+                     Pres.Put_Message (Screen, "cli.task.anyway_confirm",
+                                       [Loc.Named ("name", First_Word),
+                                        Loc.Named ("detail", Joined (Unsettled))]);
+                     declare
+                        Answer : constant String :=
+                          Ada.Characters.Handling.To_Lower
+                            (Ada.Strings.Fixed.Trim (Ada.Text_IO.Get_Line, Ada.Strings.Both));
+                     begin
+                        if Answer not in "y" | "yes" | "j" | "ja" then
+                           Pres.Put_Message (Screen, "cli.task.anyway_kept", [Loc.Named ("name", First_Word)]);
+                           return;
+                        end if;
+                     exception
+                        when Ada.Text_IO.End_Error =>
+                           return;
+                     end;
+                  end if;
+                  for File of Unsettled loop
+                     declare
+                        From : constant String := Hostkit.Fs.Join (Project, File);
+                        To   : constant String := Hostkit.Fs.Join (Kept_In, File);
+                     begin
+                        if Ada.Directories.Exists (From) then
+                           Ada.Directories.Create_Path (Ada.Directories.Containing_Directory (To));
+                           Ada.Directories.Copy_File (From, To);
+                        end if;
+                     exception
+                        when others =>
+                           null;
+                     end;
+                  end loop;
+                  Pres.Put_Note (Screen, "cli.task.anyway_saved", [Loc.Named ("path", Kept_In)]);
+               end if;
+            end;
+         end if;
+
          --  anyway where nothing stood in the way: taken in all the same, and
          --  said that it was not needed.
          if After_First = "anyway"
@@ -2203,6 +2331,15 @@ package body Model_Runner.CLI.Tasks is
             [Loc.Named ("name", To_String (Done.Workspace_Id)),
              Loc.Named ("detail", (if Done.Changed_Files.Is_Empty then "nothing"
                                    else Joined (Done.Changed_Files)))]);
+         --  The project as it is after, checked: said with its evidence.
+         if Length (Done.Evidence_Id) > 0 then
+            Pres.Put_Message
+              (Screen, "cli.task.field",
+               [Loc.Named ("name", "checked after"),
+                Loc.Named ("value", To_String (Done.Evidence_Id)
+                                    & (if To_String (Done.Final_State) in "failed" | "blocked"
+                                       then " did not pass" else " passed"))]);
+         end if;
          --  Files its agent changed and did not report are in the project
          --  now too: named, however they got there.
          declare
@@ -2437,7 +2574,7 @@ package body Model_Runner.CLI.Tasks is
                --  right, not across a listing: in a session it was said as
                --  it opened, and state and check consistency say it.
                if not ((Pres.In_Session (Screen)
-                        or else Action in "list" | "show" | "audit" | "plan" | "context")
+                        or else Action in "list" | "show" | "audit" | "plan" | "context" | "diff")
                        and then Ada.Strings.Fixed.Index (Line, "what does not hold together") = Line'First)
                then
                   Pres.Put_Note (Screen, "cli.project.recovered", [Loc.Named ("detail", Line)]);
@@ -2715,6 +2852,68 @@ package body Model_Runner.CLI.Tasks is
          Integrate;
       elsif Action = "step" then
          Step;
+      elsif Action = "diff" then
+         --  What a task's work waiting in its workspace changes: each file,
+         --  as diff -u shows the project's beside the workspace's.
+         declare
+            Space : constant String :=
+              (if First_Word = "" then "" else Model_Runner.Framework.Workspaces.Active_For (Store, First_Word));
+            Place : Model_Runner.Framework.Workspaces.Workspace;
+            Read  : E.Error_Info;
+         begin
+            if not Needs_Task then
+               null;
+            elsif Space = "" then
+               Outcome := E.Make (E.Framework_Not_Found);
+               E.Add_Text (Outcome, "name", "work of " & First_Word & " waiting in a workspace");
+               Fail (Outcome);
+            else
+               Model_Runner.Framework.Workspaces.Read (Store, Space, Place, Read);
+               declare
+                  Project : constant String := Ada.Directories.Containing_Directory (S.Root (Store));
+                  Differ  : constant String := Hostkit.Process.Locate ("diff");
+                  Output  : constant String :=
+                    Hostkit.Fs.Join (Hostkit.Fs.Join (S.Root (Store), "runtime"), "diff-" & First_Word);
+               begin
+                  for File of Model_Runner.Framework.Workspaces.Changes (Store, Space) loop
+                     Pres.Put_Message (Screen, "cli.task.diff_file", [Loc.Named ("path", File)]);
+                     if Differ /= "" then
+                        declare
+                           Args : Hostkit.String_Vectors.Vector;
+                           Ran  : Hostkit.Process.Process_Outcome;
+                           Mine : constant String := Hostkit.Fs.Join (Project, File);
+                        begin
+                           Args.Append (To_Unbounded_String ("-u"));
+                           Args.Append (To_Unbounded_String
+                                          (if Ada.Directories.Exists (Mine) then Mine
+                                           else Hostkit.Fs.Null_Device));
+                           Args.Append (To_Unbounded_String (Hostkit.Fs.Join (To_String (Place.Path), File)));
+                           Ran := Hostkit.Process.Run_Captured
+                             (Differ, Args, Stdin_Path => Hostkit.Fs.Null_Device,
+                              Stdout_Path => Output, Stderr_Path => Output, Timeout_Ms => 20_000);
+                           pragma Unreferenced (Ran);
+                           declare
+                              File_In : Ada.Text_IO.File_Type;
+                           begin
+                              Ada.Text_IO.Open (File_In, Ada.Text_IO.In_File, Output);
+                              while not Ada.Text_IO.End_Of_File (File_In) loop
+                                 Pres.Put_Line (Screen, Ada.Text_IO.Get_Line (File_In));
+                              end loop;
+                              Ada.Text_IO.Close (File_In);
+                              Ada.Directories.Delete_File (Output);
+                           exception
+                              when others =>
+                                 if Ada.Text_IO.Is_Open (File_In) then
+                                    Ada.Text_IO.Close (File_In);
+                                 end if;
+                           end;
+                        end;
+                     end if;
+                  end loop;
+                  Pres.Put_Note (Screen, "cli.next.integrate", [Loc.Named ("name", First_Word)]);
+               end;
+            end if;
+         end;
       elsif Action = "plan" then
          Show_Plan;
       elsif Action = "derive" then
@@ -2729,7 +2928,7 @@ package body Model_Runner.CLI.Tasks is
               ("list" & ASCII.LF & "new" & ASCII.LF & "accept" & ASCII.LF & "reject" & ASCII.LF
                & "cancel" & ASCII.LF & "move" & ASCII.LF & "edit" & ASCII.LF & "depend" & ASCII.LF
                & "split" & ASCII.LF & "rehome" & ASCII.LF & "reopen" & ASCII.LF & "reconsider"
-               & ASCII.LF & "complete" & ASCII.LF & "verify" & ASCII.LF & "integrate" & ASCII.LF
+               & ASCII.LF & "complete" & ASCII.LF & "verify" & ASCII.LF & "diff" & ASCII.LF & "integrate" & ASCII.LF
                & "show" & ASCII.LF & "audit" & ASCII.LF & "derive" & ASCII.LF & "plan")
             loop
                Actions.Append (One);
@@ -2747,7 +2946,7 @@ package body Model_Runner.CLI.Tasks is
       end if;
       --  What a change to the tasks makes of the requirements they serve,
       --  judged before the command ends, however the change was made.
-      if Action not in "list" | "show" | "audit" | "plan" | "context" | "help"
+      if Action not in "list" | "show" | "audit" | "plan" | "context" | "help" | "diff"
         and then not S.Is_Read_Only (Store)
       then
          Change := S.No_Changes;

@@ -1782,6 +1782,33 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Thirteenth usability round:**
+  - `/init` asks at a terminal every time, the plan short with its details a
+    Tab away, and "Change an input" goes back to the plan; a kept
+    `alire.toml` naming another crate and tests that have not run are said.
+  - `/config` shows each setting's real default, marks inputs given at
+    `/init`, and says per permission level what it withholds and inherits.
+  - Identifiers as typed: `task-8` and a bare `8` where a task is named are
+    `TASK-008`; `REQ-1` is `REQ-001`. `/task complete`, `/check`, `/accept`
+    and the requirement verbs take several IDs or `all`.
+  - A value runs on past its first word (`/task new title=Add a parser`).
+  - `/task show` drops the `definition.`/`runtime.` prefixes and the
+    bookkeeping fields; the agent's prompt skips empty sections.
+  - `/task diff ID` shows work waiting in a workspace; a conflict writes the
+    two changes joined with markers to `merge/PATH`; `resolved anyway`
+    confirms and keeps the project's copies; `discard` gives the work up.
+  - Bootstrap reads quoted, listed, numbered and table requirements and
+    `Decision (...)` lines, skips fenced code, revises a reworded line in
+    place, and asks once before accepting numbered requirements.
+  - `/cancel` confirms and names files left behind; a cancel from another
+    session says the changes were kept. A crash or a broken answer with
+    changes keeps them for review.
+  - `/instruct` refuses a `permission.` subject and points to
+    `/reconfigure`; an unknown subject gets a "did you mean".
+  - Helper agents' lines are labelled, and they start and end with a banner.
+  - Ctrl-C says the whole message is dropped; `/work` says what is typed
+    meanwhile waits.
+  - The repository scan includes dotfiles, except tool and VCS directories.
 - **Twelfth usability round:**
   - Every hint names its command as a session types it -- with the slash
     -- in the catalog and the code alike; the guess that added slashes as

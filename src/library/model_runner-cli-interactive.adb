@@ -447,6 +447,10 @@ package body Model_Runner.CLI.Interactive is
                      Pres.Put_Aside (Screen, "cli.interactive.usage.req");
                   elsif Named = "reconfigure" then
                      Pres.Put_Aside (Screen, "cli.project.reconfigure.usage");
+                  elsif Named = "config" then
+                     Pres.Put_Aside (Screen, "cli.interactive.usage.config");
+                  elsif Named = "state" then
+                     Pres.Put_Aside (Screen, "cli.interactive.usage.state");
                   end if;
                else
                   Pres.Put_Message (Screen, "cli.interactive.help_unknown",

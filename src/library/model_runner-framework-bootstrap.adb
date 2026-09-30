@@ -127,12 +127,67 @@ package body Model_Runner.Framework.Bootstrap is
           and then Ada.Characters.Handling.To_Lower (Item (Item'First .. Item'First + Prefix'Length - 1))
                    = Ada.Characters.Handling.To_Lower (Prefix));
 
+      --  A line as what it says, its markup taken off: a quote's >, a list
+      --  item's - or * or 1. or 1), and a table row's cells -- the one that
+      --  is an identifier first, as ID: the rest.
+      function Unmarked (Line : String) return String is
+      begin
+         if Line'Length > 1 and then Line (Line'First) = '>' then
+            return Unmarked (Trim (Line (Line'First + 1 .. Line'Last)));
+         elsif Line'Length > 2 and then Line (Line'First) in '-' | '*' | '+'
+           and then Line (Line'First + 1) = ' '
+         then
+            return Trim (Line (Line'First + 2 .. Line'Last));
+         elsif Line'Length > 0 and then Line (Line'First) = '|' then
+            declare
+               Cells : Name_Lists.Vector;
+               Start : Positive := Line'First + 1;
+               Id    : Unbounded_String;
+               Rest  : Unbounded_String;
+            begin
+               for Index in Line'First + 1 .. Line'Last + 1 loop
+                  if Index > Line'Last or else Line (Index) = '|' then
+                     if Trim (Line (Start .. Index - 1)) /= "" then
+                        Cells.Append (Trim (Line (Start .. Index - 1)));
+                     end if;
+                     Start := Index + 1;
+                  end if;
+               end loop;
+               for Cell of Cells loop
+                  if Id = Null_Unbounded_String and then Cell'Length > 4
+                    and then Cell (Cell'First .. Cell'First + 3) in "REQ-" | "DEC-"
+                    and then Identifiers.Is_Valid (Cell)
+                  then
+                     Id := To_Unbounded_String (Cell);
+                  elsif (for some C of Cell => C not in '-' | ':' | ' ') then
+                     Append (Rest, (if Rest = Null_Unbounded_String then "" else " ") & Cell);
+                  end if;
+               end loop;
+               return (if Id = Null_Unbounded_String then To_String (Rest)
+                       else To_String (Id) & ": " & To_String (Rest));
+            end;
+         else
+            --  A numbered item: 1. or 12) and a space.
+            declare
+               Digits_End : Natural := Line'First - 1;
+            begin
+               while Digits_End < Line'Last and then Line (Digits_End + 1) in '0' .. '9' loop
+                  Digits_End := Digits_End + 1;
+               end loop;
+               if Digits_End >= Line'First and then Digits_End + 2 <= Line'Last
+                 and then Line (Digits_End + 1) in '.' | ')'
+                 and then Line (Digits_End + 2) = ' '
+               then
+                  return Trim (Line (Digits_End + 3 .. Line'Last));
+               end if;
+            end;
+            return Line;
+         end if;
+      end Unmarked;
+
       procedure Line_Of (Raw : String) is
          Line : constant String := Trim (Raw);
-         Item : constant String :=
-           (if Line'Length > 2 and then Line (Line'First) in '-' | '*'
-              and then Line (Line'First + 1) = ' '
-            then Trim (Line (Line'First + 2 .. Line'Last)) else Line);
+         Item : constant String := Unmarked (Line);
          Colon : constant Natural := Ada.Strings.Fixed.Index (Item, ":");
       begin
          --  A blank line ends a heading's statement: what follows is said
@@ -251,6 +306,19 @@ package body Model_Runner.Framework.Bootstrap is
             end if;
          end;
 
+         --  Decision (2024-01): text -- a date or a note in brackets before
+         --  its colon -- is a decision too.
+         if Item'Length > 10 and then Item (Item'First .. Item'First + 9) = "Decision ("
+           and then Ada.Strings.Fixed.Index (Item, "):") > 0
+         then
+            declare
+               Said : constant String :=
+                 Trim (Item (Ada.Strings.Fixed.Index (Item, "):") + 2 .. Item'Last));
+            begin
+               Found (Decision_Candidate, Path & "#" & Fingerprint (Said), Headline (Said), Said);
+            end;
+            return;
+         end if;
          if Item'Length > 9 and then Item (Item'First .. Item'First + 8) = "Decision:"
          then
             declare
@@ -454,7 +522,8 @@ package body Model_Runner.Framework.Bootstrap is
       Change : in out Stores.Transaction;
       Found  : Output_List;
       Result : out Report;
-      Status : out Model_Runner.Errors.Error_Info)
+      Status : out Model_Runner.Errors.Error_Info;
+      Accept_Numbered : Boolean := True)
    is
       function Field (Text : Unbounded_String) return String
       is (To_String (Text));
@@ -463,7 +532,14 @@ package body Model_Runner.Framework.Bootstrap is
       Kinds    : constant Name_Lists.Vector :=
         Items_Of (Records.Get (Settings, "set.bootstrap.propose"));
       Accept_Imports : constant Boolean :=
-        Records.Get (Settings, "scalar.bootstrap.import") /= "candidate";
+        Accept_Numbered and then Records.Get (Settings, "scalar.bootstrap.import") /= "candidate";
+
+      --  Whether a document's new words revise what it numbers without a
+      --  person: only where the project says the documents rule, with
+      --  scalar bootstrap.import = accepted. Otherwise an accepted one is a
+      --  person's to change, as it is what work was judged by.
+      Document_Rules : constant Boolean :=
+        Records.Get (Settings, "scalar.bootstrap.import") = "accepted";
 
       --  Whether the policy lets bootstrap make outputs of a kind.
       function Made (Kind : Output_Kind) return Boolean
@@ -646,9 +722,9 @@ package body Model_Runner.Framework.Bootstrap is
                                                   else "; take it out of the document, or, to have"
                                                        & " it again, "
                                                        & (if Intent."=" (Kind, Intent.Decision)
-                                                          then "decision"
+                                                          then "/decision"
                                                           elsif Intent."=" (Kind, Intent.Specification)
-                                                          then "spec" else "req")
+                                                          then "/spec" else "/req")
                                                        & " new with its words makes it anew")),
                               Payload    => Next.Text,
                               Provenance => Next.Provenance,
@@ -680,6 +756,9 @@ package body Model_Runner.Framework.Bootstrap is
                      else
                         Result.Existing := Result.Existing + 1;
                      end if;
+                  --  Agreed on -- accepted, whether by a person or as its
+                  --  document numbered it -- a document's new words are a
+                  --  person's to take: it is what work was judged by.
                   elsif (To_String (Held.State) /= Intent.First_State (Kind) and then not Settled)
                     or else (Records.Get (Kept, "imported_text") /= ""
                              and then To_String (Held.Text) /= Imported)
@@ -689,9 +768,9 @@ package body Model_Runner.Framework.Bootstrap is
                      declare
                         Word : constant String :=
                           (case Kind is
-                              when Intent.Requirement   => "req",
-                              when Intent.Decision      => "decision",
-                              when Intent.Specification => "spec");
+                              when Intent.Requirement   => "/req",
+                              when Intent.Decision      => "/decision",
+                              when Intent.Specification => "/spec");
                         Said : Results.Result :=
                           (Kind       => Results.Diagnostic,
                            Producer   => To_Unbounded_String ("bootstrap"),
@@ -753,7 +832,7 @@ package body Model_Runner.Framework.Bootstrap is
                then
                   return False;
                end if;
-               Again (Kind, Given, Settled => Accept_Imports);
+               Again (Kind, Given, Settled => Document_Rules);
                if E.Is_Error (Status) then
                   return True;
                end if;
@@ -805,7 +884,7 @@ package body Model_Runner.Framework.Bootstrap is
                              and then Length (Held.Provenance) > 0
                              and then not Still_Said (To_String (Held.Provenance))
                              and then not Rewritten.Contains (Other)
-                             and then To_String (Held.State) not in "obsolete" | "superseded" | "rejected"
+                             and then To_String (Held.State) /= "rejected"
                              and then Likeness (To_String (Held.Text), Field (Next.Text)) > Score
                            then
                               Score := Likeness (To_String (Held.Text), Field (Next.Text));
@@ -813,6 +892,37 @@ package body Model_Runner.Framework.Bootstrap is
                            end if;
                         end;
                      end loop;
+                     --  Its new words are like one retired: that one is not
+                     --  proposed again beside what replaced it -- said, for a
+                     --  person to put the document right.
+                     if Best /= Null_Unbounded_String
+                       and then Intent.State_Of (Item, Kind, To_String (Best)) in "obsolete" | "superseded"
+                     then
+                        declare
+                           Held : Intent.Entity;
+                           Read : E.Error_Info;
+                           Said : Results.Result;
+                        begin
+                           Intent.Read (Item, Kind, To_String (Best), Held, Read);
+                           Rewritten.Append (To_String (Best));
+                           Said :=
+                             (Kind       => Results.Diagnostic,
+                              Producer   => To_Unbounded_String ("bootstrap"),
+                              Summary    => To_Unbounded_String
+                                              (Field (Next.Source) & " now says '" & Field (Next.Text)
+                                               & "', which is like " & To_String (Best) & ", "
+                                               & To_String (Held.State)
+                                               & (if Held.Superseded_By = Null_Unbounded_String then ""
+                                                  else " by " & To_String (Held.Superseded_By))
+                                               & ": nothing new was proposed -- take the line out,"
+                                               & " or write what replaced it there"),
+                              Payload    => Next.Text,
+                              Provenance => Next.Provenance,
+                              others     => <>);
+                           Raise_Issue (Said);
+                        end;
+                        return;
+                     end if;
                      if Best /= Null_Unbounded_String then
                         declare
                            Value  : Records.Item;
@@ -862,9 +972,9 @@ package body Model_Runner.Framework.Bootstrap is
                                          & " -- give it an identifier the project does not have in "
                                          & Field (Next.Source) & ", and "
                                          & (case Kind is
-                                               when Intent.Decision      => "decision",
-                                               when Intent.Specification => "spec",
-                                               when Intent.Requirement   => "req")
+                                               when Intent.Decision      => "/decision",
+                                               when Intent.Specification => "/spec",
+                                               when Intent.Requirement   => "/req")
                                          & " reject " & To_String (Id) & " takes the one made here"
                                          & " away"),
                         Payload    => Next.Text,
@@ -931,7 +1041,7 @@ package body Model_Runner.Framework.Bootstrap is
                      --  revision; otherwise a person decides.
                      Again (Intent.Requirement,
                             Intent.Find_By_Provenance (Item, Intent.Requirement, Provenance),
-                            Settled => Accept_Imports);
+                            Settled => Document_Rules);
                   else
                      --  Under the identifier the document gives it -- unless
                      --  something else holds it: then made under another,
@@ -1089,18 +1199,9 @@ package body Model_Runner.Framework.Bootstrap is
                            if Best > 0 then
                               Instead := To_Unbounded_String
                                 (Result.Made (Best) & ", most like it -- "
-                                 & (if Intent."=" (Kind, Intent.Decision) then "decision" else "req")
+                                 & (if Intent."=" (Kind, Intent.Decision) then "/decision" else "/req")
                                  & " supersede " & Known
                                  & " " & Result.Made (Best) & " keeps it as that one's history");
-                           else
-                              for Index in 1 .. Natural (Result.Made.Length) loop
-                                 if Made_Sources (Index) = To_String (Held.Source)
-                                   and then Same_Kind (Result.Made (Index))
-                                 then
-                                    Append (Instead, (if Instead = Null_Unbounded_String then ""
-                                                      else ", ") & Result.Made (Index));
-                                 end if;
-                              end loop;
                            end if;
                         end;
                         Said :=
@@ -1108,8 +1209,8 @@ package body Model_Runner.Framework.Bootstrap is
                            Producer   => To_Unbounded_String ("bootstrap"),
                            Summary    => To_Unbounded_String
                                            (Why & "; "
-                                            & (if Intent."=" (Kind, Intent.Decision) then "decision "
-                                               else "req ")
+                                            & (if Intent."=" (Kind, Intent.Decision) then "/decision "
+                                               else "/req ")
                                             & (if To_String (Held.State) = Intent.First_State (Kind)
                                                then "reject " else "obsolete ")
                                             & Known & " retires it, or keep it as it is -- nothing"

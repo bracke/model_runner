@@ -596,14 +596,24 @@ package body Model_Runner.Framework.Templates is
    function Details (Value : Template) return String is
       Result : Unbounded_String;
 
+      Seen : Name_Lists.Vector;
+
+      --  Each word once, whatever its case: Ada and ada are one.
       procedure Add (Part : Unbounded_String) is
       begin
-         if Part /= Null_Unbounded_String then
-            if Result /= Null_Unbounded_String then
-               Append (Result, ", ");
-            end if;
-            Append (Result, Part);
-         end if;
+         for Word of Split (To_String (Part)) loop
+            declare
+               Lower : constant String := Ada.Characters.Handling.To_Lower (Word);
+            begin
+               if not Seen.Contains (Lower) then
+                  Seen.Append (Lower);
+                  if Result /= Null_Unbounded_String then
+                     Append (Result, ", ");
+                  end if;
+                  Append (Result, Word);
+               end if;
+            end;
+         end loop;
       end Add;
    begin
       Add (Value.Category);

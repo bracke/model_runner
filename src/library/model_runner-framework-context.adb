@@ -24,8 +24,8 @@ package body Model_Runner.Framework.Context is
    --  What every context starts with: how the harness expects to be
    --  answered, whatever the project.
    Harness_Rules : constant String :=
-     "You are doing one task in a project. Change the project's files as"
-     & " the task needs, and nothing outside the task. The harness keeps"
+     "You are doing one task in a project. Do what the task needs, and"
+     & " nothing outside it. The harness keeps"
      & " the project's records -- tasks, requirements, verification -- and"
      & " decides from your answer and its own checks what happens next, so"
      & " say plainly what you did. If you find more work than the task"
@@ -274,6 +274,27 @@ package body Model_Runner.Framework.Context is
          return To_String (Text);
       end Fields_Of;
 
+      --  The project's standing rules as the rules they are: where each
+      --  came from -- project_baseline CONFIG: -- is the harness's to know,
+      --  and costs the model tokens for nothing. A ruling a person or a
+      --  decision made keeps its source: it says why it stands above.
+      function Without_Baseline_Source (Lines : String) return String is
+         Result : Unbounded_String;
+         Mark   : constant String := "project_baseline CONFIG: ";
+      begin
+         for Line of Lines_Of (Lines) loop
+            declare
+               At_Mark : constant Natural := Ada.Strings.Fixed.Index (Line, Mark);
+            begin
+               Append (Result, (if At_Mark = 0 then Line
+                                else Line (Line'First .. At_Mark - 1)
+                                     & Line (At_Mark + Mark'Length .. Line'Last))
+                               & ASCII.LF);
+            end;
+         end loop;
+         return To_String (Result);
+      end Without_Baseline_Source;
+
       --  The facts the registry holds that the configuration does not say
       --  -- found by bootstrap, say -- with where they came from.
       function Registry_Facts (Config : Records.Item) return String is
@@ -407,12 +428,8 @@ package body Model_Runner.Framework.Context is
       --  What governs the work, above the configuration, and every override
       --  and conflict: the model is told what holds, not left to guess.
       Offer (Task_Id & "#authority", "authority", Mandatory,
-             Fields_Of (View, "authority.") & Fields_Of (View, "override.")
-             & Fields_Of (View, "conflict."));
-
-      --  Where the task stands: which attempt this is.
-      Offer (Task_Id & "#runtime", "runtime", High,
-             "attempt: " & Records.Get (View, "runtime.generation"));
+             Without_Baseline_Source (Fields_Of (View, "authority."))
+             & Fields_Of (View, "override.") & Fields_Of (View, "conflict."));
 
       --  How the project is configured, as far as work on it goes.
       declare
@@ -588,7 +605,10 @@ package body Model_Runner.Framework.Context is
                Held : Results.Result;
             begin
                Results.Read (Item, Records.Get (State, "last_result"), Held, Read);
-               if E.Is_Ok (Read) then
+               --  An answer that said nothing tells the next attempt nothing.
+               if E.Is_Ok (Read)
+                 and then Ada.Strings.Fixed.Trim (To_String (Held.Payload), Ada.Strings.Both) /= ""
+               then
                   Append (Listed, "The last answer (" & Records.Get (State, "last_result") & "):"
                           & ASCII.LF & To_String (Held.Payload) & ASCII.LF);
                   Append (Sources, "," & Records.Get (State, "last_result"));
@@ -733,8 +753,11 @@ package body Model_Runner.Framework.Context is
       end Heading;
    begin
       for Next of From.Included loop
-         Append (Text, "## " & Heading (Next) & ASCII.LF
-                 & To_String (Next.Text) & ASCII.LF & ASCII.LF);
+         --  A section with nothing in it is no section.
+         if Ada.Strings.Fixed.Trim (To_String (Next.Text), Ada.Strings.Both) /= "" then
+            Append (Text, "## " & Heading (Next) & ASCII.LF
+                    & To_String (Next.Text) & ASCII.LF & ASCII.LF);
+         end if;
       end loop;
       return To_String (Text & From.Instructions);
    end Rendered;

@@ -8,7 +8,6 @@ with Terminal_Styles;
 
 with Model_Runner.Backend;
 with Model_Runner.Clocks;
-with Model_Runner.Text;
 with Model_Runner.UTF8;
 
 package body Model_Runner.Presentation is
@@ -407,6 +406,15 @@ package body Model_Runner.Presentation is
       Item.Session := On;
    end Use_Session;
 
+   -----------------
+   -- Use_Command --
+   -----------------
+
+   procedure Use_Command (Item : in out Console; Word : String) is
+   begin
+      Item.Command := Model_Runner.Text.To_Bounded (Word);
+   end Use_Command;
+
    -------------------
    -- Put_Tool_Call --
    -------------------
@@ -642,6 +650,11 @@ package body Model_Runner.Presentation is
             then
                --  The error says where the commands are listed already.
                null;
+            elsif Hint = "diagnostic.hint.usage" and then Item.Session
+              and then not Model_Runner.Text.Is_Empty (Item.Command)
+            then
+               Put_Note (Item, "diagnostic.hint.usage_command",
+                         [Loc.Named ("name", Model_Runner.Text.To_String (Item.Command))]);
             elsif Hint = "diagnostic.hint.usage" and then Item.Session then
                Put_Note (Item, "diagnostic.hint.usage_session");
             elsif Hint /= "" then

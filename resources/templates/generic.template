@@ -31,7 +31,7 @@ discover pyproject.toml fact build_system = Python
 input check_command
   type = text
   label = Check command
-  description = the command that builds and tests the repository
+  description = the command that builds and tests the repository, as make test or alr build
   required = true
 
 # The program checks may run: the one the command starts, unless named.

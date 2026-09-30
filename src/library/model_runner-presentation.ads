@@ -7,6 +7,7 @@ with Model_Runner.Sampling;
 with Model_Runner.Localization;
 with Model_Runner.Output;
 with Model_Runner.Progress;
+with Model_Runner.Text;
 
 --  Terminal presentation.
 --
@@ -217,12 +218,19 @@ package Model_Runner.Presentation is
       Arguments : Model_Runner.Localization.Argument_List :=
         Model_Runner.Localization.Empty_Arguments);
 
-   --  Have the console speak for a session: what a next step names -- a
-   --  task, req or work command -- is said as its slash command.
+   --  Have the console speak for a session: its usage errors point to the
+   --  session's help.
    --
    --  @param Item Console to change.
    --  @param On Whether it is a session's.
    procedure Use_Session (Item : in out Console; On : Boolean);
+
+   --  The session's command now running, as /help knows it: a usage error
+   --  it reports points to that command's help. Empty for none.
+   --
+   --  @param Item Console to change.
+   --  @param Word The command, without its slash.
+   procedure Use_Command (Item : in out Console; Word : String);
 
    --  Whether next steps are said as a session types them.
    --
@@ -499,6 +507,7 @@ private
       Failure       : Natural := 0;
       Error_Count   : Natural := 0;
       Session       : Boolean := False;
+      Command       : Model_Runner.Text.Bounded;
    end record;
 
    type Standard_Output_Sink is limited new Model_Runner.Output.Sink with record

@@ -145,11 +145,18 @@ package body Model_Runner.Framework.Traceability is
                      Link (Result, "file:" & To_String (Held.Source), Node, "sources",
                            Repository.Explicit, Repository.Certain, Id);
                   end if;
+                  --  One the repository does not hold is linked all the same,
+                  --  and said to be missing: not a certainty.
                   for Target of Intent.Links (Item, Intent.Requirement, Id,
                                               Intent.Implementation)
                   loop
-                     Link (Result, Node, Target_Node (Target), "implemented_by",
-                           Repository.Explicit, Repository.Certain, Id);
+                     if Held_By_Repository (Target) then
+                        Link (Result, Node, Target_Node (Target), "implemented_by",
+                              Repository.Explicit, Repository.Certain, Id);
+                     else
+                        Link (Result, Node, Target_Node (Target), "implemented_by, missing",
+                              Repository.Explicit, Repository.Uncertain, Id);
+                     end if;
                   end loop;
 
                   --  What it rests on, and the component it is linked to.
@@ -184,6 +191,9 @@ package body Model_Runner.Framework.Traceability is
                      if Held_By_Repository (Target) then
                         Link (Result, Node, Target_Node (Target), "tested_by",
                               Repository.Explicit, Repository.Certain, Id);
+                     else
+                        Link (Result, Node, Target_Node (Target), "tested_by, missing",
+                              Repository.Explicit, Repository.Uncertain, Id);
                      end if;
                   end loop;
                   Stores.Read (Item, Requirements_Area, Id, Value, Status);

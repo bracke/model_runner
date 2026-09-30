@@ -1,6 +1,7 @@
 with Ada.Directories;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
+with Ada.Text_IO;
 
 with Hostkit.Fs;
 
@@ -8,6 +9,7 @@ with Model_Runner.Errors;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Options;
 with Model_Runner.Framework;
+with Model_Runner.Framework.Bootstrap;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Verification;
@@ -56,6 +58,7 @@ package body Model_Runner.CLI.Init is
       Given    : Cf.Value_Maps.Map;
       Confirmed : Boolean := False;
       Allowing  : Boolean := False;
+      Changing  : Boolean := False;
       Fixes     : Cf.Value_Maps.Map;
       Planned  : Cf.Plan;
       Done     : Cf.Outcome;
@@ -360,274 +363,482 @@ package body Model_Runner.CLI.Init is
       Confirmed := Given.Contains ("confirm") and then Given ("confirm") in "yes" | "true";
       Given.Exclude ("confirm");
 
-      --  What is known is not asked for: given, found in the project or
-      --  defaulted. A terminal is asked for the rest, one at a time.
+      --  Planned, shown and confirmed -- and planned again where an input
+      --  is changed at the confirmation.
+      Planning :
       loop
-         Cf.Prepare (Composed, Directory, Given, Planned, Outcome);
-         exit when E.Is_Ok (Outcome);
+         Changing := False;
+         Fixes.Clear;
+         --  What is known is not asked for: given, found in the project or
+         --  defaulted. A terminal is asked for the rest, one at a time.
+         loop
+            Cf.Prepare (Composed, Directory, Given, Planned, Outcome);
+            exit when E.Is_Ok (Outcome);
 
-         --  A program reading the answer is given an entry for each input
-         --  missing, each named in a field of its own.
-         if Outcome.Code = E.Framework_Input_Missing and then not Interactive
-           and then Pres.Is_Structured (Screen) and then not Planned.Missing.Is_Empty
-         then
-            for Missing of Planned.Missing loop
-               declare
-                  One : E.Error_Info := E.Make (E.Framework_Input_Missing);
-               begin
-                  E.Add_Text (One, "name", Missing);
-                  --  What it is and how it is given, as plain output says.
-                  for Index in 1 .. Tp.Input_Count (Composed) loop
-                     declare
-                        Declared : constant Tp.Input_Declaration :=
-                          Cf.Resolved (Tp.Input_At (Composed, Index), Directory);
-                     begin
-                        if To_String (Declared.Id) = Missing then
-                           E.Add_Text (One, "detail", Input_Detail (Declared, Planned));
-                           E.Add_Text (One, "value", Missing & "=...");
-                        end if;
-                     end;
-                  end loop;
-                  Pres.Report (Screen, One);
-               end;
-            end loop;
-            Status := E.Exit_Status (Outcome);
-            return;
-         end if;
-
-         if Outcome.Code /= E.Framework_Input_Missing or else not Interactive
-         then
-            Fail (Outcome);
-
-            --  Each input missing, as it is given, what it is, and why a
-            --  default did not do.
-            if Outcome.Code = E.Framework_Input_Missing then
+            --  A program reading the answer is given an entry for each input
+            --  missing, each named in a field of its own.
+            if Outcome.Code = E.Framework_Input_Missing and then not Interactive
+              and then Pres.Is_Structured (Screen) and then not Planned.Missing.Is_Empty
+            then
                for Missing of Planned.Missing loop
-                  for Index in 1 .. Tp.Input_Count (Composed) loop
-                     declare
-                        Declared : constant Tp.Input_Declaration :=
-                          Cf.Resolved (Tp.Input_At (Composed, Index), Directory);
-                     begin
-                        if To_String (Declared.Id) = Missing then
-                           Pres.Put_Note
-                             (Screen, "cli.input.needed",
-                              [Loc.Named ("name", Missing),
-                               Loc.Named ("detail", Input_Detail (Declared, Planned))]);
-                        end if;
-                     end;
-                  end loop;
-               end loop;
-
-               --  And the confirmation it will want, with the rest, not
-               --  asked for once they are given.
-               if not Confirmed
-                 and then (for some Index in 1 .. Tp.Setting_Count (Composed) =>
-                             Tp."=" (Tp.Setting_At (Composed, Index).Kind, Tp.Scalar_Setting)
-                             and then To_String (Tp.Setting_At (Composed, Index).Key) = "init.confirm"
-                             and then To_String (Tp.Setting_At (Composed, Index).Value)
-                                        in "yes" | "true" | "required")
-               then
-                  Pres.Put_Note (Screen, "cli.next.confirm_init_also");
-               end if;
-            end if;
-            return;
-         end if;
-
-         for Missing of Planned.Missing loop
-            for Index in 1 .. Tp.Input_Count (Composed) loop
-               declare
-                  Declared : constant Tp.Input_Declaration :=
-                    Cf.Resolved (Tp.Input_At (Composed, Index), Directory);
-                  Got      : Boolean;
-               begin
-                  if To_String (Declared.Id) = Missing then
-                     Ask (Declared, Got);
-                     if not Got then
-                        Pres.Put_Note (Screen, "cli.init.cancelled");
-                        Status := E.Exit_Cancelled;
-                        return;
-                     end if;
-                  end if;
-               end;
-            end loop;
-         end loop;
-      end loop;
-
-      --  The plan and what it will not be able to do, worked out before
-      --  anything is written: shown, and -- where it writes into a
-      --  directory that holds a project already, where a check it names
-      --  will be refused, or where the template wants it -- asked about
-      --  with the plan above the question.
-      declare
-         Plan_Text : Unbounded_String;
-         Writes_In : Boolean := False;
-         Refused   : Model_Runner.Framework.Name_Lists.Vector;
-         Rules     : constant Model_Runner.Framework.Execution.Policy :=
-           Model_Runner.Framework.Execution.Policy_From (Planned.Configuration);
-
-         procedure Say (Key : String; Arguments : Loc.Argument_List) is
-            Line : constant String := Pres.Next_Step_Value (Screen, Key, Arguments);
-         begin
-            Append (Plan_Text, Line & ASCII.LF);
-            if Model_Runner.CLI.Options."/=" (Item.Level, Model_Runner.CLI.Options.Quiet) then
-               Pres.Put_Message (Screen, Key, Arguments);
-            end if;
-         end Say;
-      begin
-         Say ("cli.init.plan",
-              [Loc.Named ("name", Tp.Id (Tp.Root (Composed))),
-               Loc.Named ("version", Tp.Version (Tp.Root (Composed))),
-               Loc.Named ("path", Ada.Directories.Full_Name (Directory))]);
-         --  Each input's value, however it came -- given, found or its
-         --  default -- so one never asked for is still seen.
-         for Position in Planned.Inputs.Iterate loop
-            declare
-               Id     : constant String := Cf.Value_Maps.Key (Position);
-               Secret : Boolean := False;
-            begin
-               --  A secret is not shown, not even here.
-               for Index in 1 .. Tp.Input_Count (Composed) loop
-                  if To_String (Tp.Input_At (Composed, Index).Id) = Id then
-                     Secret := Tp.Input_At (Composed, Index).Secret;
-                  end if;
-               end loop;
-               Say ("cli.init.input",
-                    [Loc.Named ("name", Id),
-                     Loc.Named ("value", (if Secret then Pres.Message_Value (Screen, "cli.init.secret")
-                                          else Cf.Value_Maps.Element (Position)))]);
-            end;
-         end loop;
-         for Made of Planned.Directories loop
-            Say ("cli.init.directory", [Loc.Named ("path", Made)]);
-         end loop;
-         for Position in Planned.Files.Iterate loop
-            declare
-               Path : constant String := Cf.Value_Maps.Key (Position);
-               There : constant Boolean :=
-                 Ada.Directories.Exists (Hostkit.Fs.Join (Directory, Path));
-            begin
-               Writes_In := Writes_In or else not There;
-               Say ((if There then "cli.init.file_kept" else "cli.init.file"),
-                    [Loc.Named ("path", Path)]);
-            end;
-         end loop;
-         for Position in Planned.Template_Facts.Iterate loop
-            if not Planned.Discovered_Facts.Contains (Cf.Value_Maps.Key (Position)) then
-               Say ("cli.init.fact", [Loc.Named ("name", Cf.Value_Maps.Key (Position)),
-                                      Loc.Named ("value", Cf.Value_Maps.Element (Position))]);
-            end if;
-         end loop;
-         for Position in Planned.Discovered_Facts.Iterate loop
-            Say ("cli.init.fact", [Loc.Named ("name", Cf.Value_Maps.Key (Position)),
-                                   Loc.Named ("value", Cf.Value_Maps.Element (Position))]);
-         end loop;
-
-         --  A check the project's own policy will not run, with the
-         --  setting that lets it.
-         for Index in 1 .. R.Field_Count (Planned.Configuration) loop
-            declare
-               Name : constant String := R.Field_Name (Planned.Configuration, Index);
-            begin
-               if Ada.Strings.Fixed.Index (Name, "profile.") = Name'First then
                   declare
-                     package Vf renames Model_Runner.Framework.Verification;
-                     package Ex renames Model_Runner.Framework.Execution;
-                     Checks : constant Vf.Check_List :=
-                       Vf.Parse_Profile (R.Get (Planned.Configuration, Name));
+                     One : E.Error_Info := E.Make (E.Framework_Input_Missing);
                   begin
-                     for Index in 1 .. Vf.Length (Checks) loop
+                     E.Add_Text (One, "name", Missing);
+                     --  What it is and how it is given, as plain output says.
+                     for Index in 1 .. Tp.Input_Count (Composed) loop
                         declare
-                           One     : constant Vf.Check := Vf.Element (Checks, Index);
-                           Command : constant String := To_String (One.Command);
-                           Why     : constant String :=
-                             (if Command = "" then "" else Ex.Refusal (Rules, Command));
-                           Words   : constant Model_Runner.Framework.Name_Lists.Vector :=
-                             Ex.Words_Of (Command);
+                           Declared : constant Tp.Input_Declaration :=
+                             Cf.Resolved (Tp.Input_At (Composed, Index), Directory);
                         begin
-                           if Why /= "" and then not Refused.Contains (Command) then
-                              Refused.Append (Command);
-                              Say ("cli.init.check_refused",
-                                   [Loc.Named ("name", To_String (One.Label)),
-                                    Loc.Named ("value", Command), Loc.Named ("detail", Why)]);
-                              if Ex.Needs_Shell (Command) then
-                                 Fixes.Include ("scalar.execution.shell", "allowed");
-                              elsif not Words.Is_Empty then
-                                 Fixes.Include
-                                   ("set.execution.allowed+",
-                                    (if Fixes.Contains ("set.execution.allowed+")
-                                     then Fixes.Element ("set.execution.allowed+") & ","
-                                     else "")
-                                    & Ada.Directories.Simple_Name (Words.First_Element));
-                              end if;
+                           if To_String (Declared.Id) = Missing then
+                              E.Add_Text (One, "detail", Input_Detail (Declared, Planned));
+                              E.Add_Text (One, "value", Missing & "=...");
                            end if;
                         end;
                      end loop;
+                     Pres.Report (Screen, One);
                   end;
-               end if;
-            end;
-         end loop;
-
-         --  Asked where the template wants it, and at a terminal wherever it
-         --  writes into what is there or starts with a check it will refuse.
-         if (R.Get (Planned.Configuration, "scalar.init.confirm") in "yes" | "true" | "required"
-             or else (Interactive and then Has_Content and then Writes_In)
-             or else (Interactive and then not Refused.Is_Empty))
-           and then not Confirmed
-         then
-            if not Interactive then
-               Outcome := E.Make (E.Framework_Input_Missing);
-               E.Add_Text (Outcome, "name", "confirm");
-               Fail (Outcome);
-               Pres.Put_Note (Screen, "cli.next.confirm_init");
+               end loop;
+               Status := E.Exit_Status (Outcome);
                return;
             end if;
-            declare
-               Answers : Choosers.Choice_List;
-               Allow   : Unbounded_String;
-            begin
-               for Position in Fixes.Iterate loop
-                  Append (Allow, (if Allow = Null_Unbounded_String then "" else " ")
-                                 & Cf.Value_Maps.Key (Position) & "="
-                                 & Cf.Value_Maps.Element (Position));
+
+            if Outcome.Code /= E.Framework_Input_Missing or else not Interactive
+            then
+               Fail (Outcome);
+
+               --  Each input missing, as it is given, what it is, and why a
+               --  default did not do.
+               if Outcome.Code = E.Framework_Input_Missing then
+                  for Missing of Planned.Missing loop
+                     for Index in 1 .. Tp.Input_Count (Composed) loop
+                        declare
+                           Declared : constant Tp.Input_Declaration :=
+                             Cf.Resolved (Tp.Input_At (Composed, Index), Directory);
+                        begin
+                           if To_String (Declared.Id) = Missing then
+                              Pres.Put_Note
+                                (Screen, "cli.input.needed",
+                                 [Loc.Named ("name", Missing),
+                                  Loc.Named ("detail", Input_Detail (Declared, Planned))]);
+                           end if;
+                        end;
+                     end loop;
+                  end loop;
+
+                  --  And the confirmation it will want, with the rest, not
+                  --  asked for once they are given.
+                  if not Confirmed
+                    and then (for some Index in 1 .. Tp.Setting_Count (Composed) =>
+                                Tp."=" (Tp.Setting_At (Composed, Index).Kind, Tp.Scalar_Setting)
+                                and then To_String (Tp.Setting_At (Composed, Index).Key) = "init.confirm"
+                                and then To_String (Tp.Setting_At (Composed, Index).Value)
+                                           in "yes" | "true" | "required")
+                  then
+                     Pres.Put_Note (Screen, "cli.next.confirm_init_also");
+                  end if;
+               end if;
+               return;
+            end if;
+
+            for Missing of Planned.Missing loop
+               for Index in 1 .. Tp.Input_Count (Composed) loop
+                  declare
+                     Declared : constant Tp.Input_Declaration :=
+                       Cf.Resolved (Tp.Input_At (Composed, Index), Directory);
+                     Got      : Boolean;
+                  begin
+                     if To_String (Declared.Id) = Missing then
+                        Ask (Declared, Got);
+                        if not Got then
+                           Pres.Put_Note (Screen, "cli.init.cancelled");
+                           Status := E.Exit_Cancelled;
+                           return;
+                        end if;
+                     end if;
+                  end;
                end loop;
-               Choosers.Append
-                 (Answers, (Label      => To_Unbounded_String
-                                            (Pres.Message_Value (Screen, "cli.init.confirm.yes")),
-                            Tag        => Null_Unbounded_String,
-                            Details    => Null_Unbounded_String,
-                            Selectable => True));
-               if not Fixes.Is_Empty then
+            end loop;
+         end loop;
+
+         --  The plan and what it will not be able to do, worked out before
+         --  anything is written: shown, and -- where it writes into a
+         --  directory that holds a project already, where a check it names
+         --  will be refused, or where the template wants it -- asked about
+         --  with the plan above the question.
+         declare
+            Plan_Text : Unbounded_String;
+            Writes_In : Boolean := False;
+
+            --  The plan as the question shows it: short enough to be read
+            --  above it, each part a line.
+            Inputs_Said : Unbounded_String;
+            Files_Said  : Unbounded_String;
+            Dirs_Said   : Unbounded_String;
+            Kept_Said   : Unbounded_String;
+            Warned      : Unbounded_String;
+
+            --  What an input is for, as its template says.
+            function Described (Id : String) return String is
+            begin
+               for Index in 1 .. Tp.Input_Count (Composed) loop
+                  declare
+                     Declared : constant Tp.Input_Declaration := Tp.Input_At (Composed, Index);
+                  begin
+                     if To_String (Declared.Id) = Id and then Length (Declared.Description) > 0 then
+                        return "  -- " & To_String (Declared.Description);
+                     end if;
+                  end;
+               end loop;
+               return "";
+            end Described;
+
+            --  The crate a manifest names, or "".
+            function Crate_Named (Path : String) return String is
+               File  : Ada.Text_IO.File_Type;
+               Found : Unbounded_String;
+            begin
+               Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
+               while not Ada.Text_IO.End_Of_File (File) and then Found = Null_Unbounded_String loop
+                  declare
+                     Bare  : constant String :=
+                       Ada.Strings.Fixed.Trim (Ada.Text_IO.Get_Line (File), Ada.Strings.Both);
+                     First : constant Natural := Ada.Strings.Fixed.Index (Bare, [1 => '"']);
+                     Last  : constant Natural :=
+                       Ada.Strings.Fixed.Index (Bare, [1 => '"'], Ada.Strings.Backward);
+                  begin
+                     if Bare'Length > 4 and then Bare (Bare'First .. Bare'First + 3) = "name"
+                       and then First > 0 and then Last > First
+                     then
+                        Found := To_Unbounded_String (Bare (First + 1 .. Last - 1));
+                     end if;
+                  end;
+               end loop;
+               Ada.Text_IO.Close (File);
+               return To_String (Found);
+            exception
+               when others =>
+                  if Ada.Text_IO.Is_Open (File) then
+                     Ada.Text_IO.Close (File);
+                  end if;
+                  return "";
+            end Crate_Named;
+            Refused   : Model_Runner.Framework.Name_Lists.Vector;
+            Rules     : constant Model_Runner.Framework.Execution.Policy :=
+              Model_Runner.Framework.Execution.Policy_From (Planned.Configuration);
+
+            procedure Say (Key : String; Arguments : Loc.Argument_List) is
+               Line : constant String := Pres.Next_Step_Value (Screen, Key, Arguments);
+            begin
+               Append (Plan_Text, Line & ASCII.LF);
+               if Model_Runner.CLI.Options."/=" (Item.Level, Model_Runner.CLI.Options.Quiet) then
+                  Pres.Put_Message (Screen, Key, Arguments);
+               end if;
+            end Say;
+         begin
+            Say ("cli.init.plan",
+                 [Loc.Named ("name", Tp.Id (Tp.Root (Composed))),
+                  Loc.Named ("version", Tp.Version (Tp.Root (Composed))),
+                  Loc.Named ("path", Ada.Directories.Full_Name (Directory))]);
+            --  Each input's value, however it came -- given, found or its
+            --  default -- so one never asked for is still seen.
+            for Position in Planned.Inputs.Iterate loop
+               declare
+                  Id     : constant String := Cf.Value_Maps.Key (Position);
+                  Secret : Boolean := False;
+               begin
+                  --  A secret is not shown, not even here.
+                  for Index in 1 .. Tp.Input_Count (Composed) loop
+                     if To_String (Tp.Input_At (Composed, Index).Id) = Id then
+                        Secret := Tp.Input_At (Composed, Index).Secret;
+                     end if;
+                  end loop;
+                  Say ("cli.init.input",
+                       [Loc.Named ("name", Id),
+                        Loc.Named ("value", (if Secret then Pres.Message_Value (Screen, "cli.init.secret")
+                                             else Cf.Value_Maps.Element (Position))),
+                        Loc.Named ("detail", Described (Id))]);
+                  Append (Inputs_Said, (if Inputs_Said = Null_Unbounded_String then "" else ", ")
+                                       & Id & " = "
+                                       & (if Secret then Pres.Message_Value (Screen, "cli.init.secret")
+                                          else Cf.Value_Maps.Element (Position)));
+               end;
+            end loop;
+            for Made of Planned.Directories loop
+               Say ("cli.init.directory", [Loc.Named ("path", Made)]);
+            end loop;
+            for Made of Planned.Directories loop
+               Append (Dirs_Said, (if Dirs_Said = Null_Unbounded_String then "" else ", ") & Made);
+            end loop;
+            for Position in Planned.Files.Iterate loop
+               declare
+                  Path : constant String := Cf.Value_Maps.Key (Position);
+                  There : constant Boolean :=
+                    Ada.Directories.Exists (Hostkit.Fs.Join (Directory, Path));
+               begin
+                  Writes_In := Writes_In or else not There;
+                  Say ((if There then "cli.init.file_kept" else "cli.init.file"),
+                       [Loc.Named ("path", Path)]);
+                  if There then
+                     Append (Kept_Said, (if Kept_Said = Null_Unbounded_String then "" else ", ") & Path);
+                     --  A manifest kept that names another crate than the
+                     --  inputs: what the template writes beside it assumes
+                     --  its own, and would not build against this one.
+                     if Ada.Directories.Simple_Name (Path) = "alire.toml"
+                       and then Planned.Inputs.Contains ("project_name")
+                       and then Crate_Named (Hostkit.Fs.Join (Directory, Path)) /= ""
+                       and then Crate_Named (Hostkit.Fs.Join (Directory, Path))
+                                /= Planned.Inputs ("project_name")
+                     then
+                        Say ("cli.init.kept_differs",
+                             [Loc.Named ("path", Path),
+                              Loc.Named ("name", Crate_Named (Hostkit.Fs.Join (Directory, Path))),
+                              Loc.Named ("value", Planned.Inputs ("project_name"))]);
+                        Append (Warned, Pres.Next_Step_Value
+                                          (Screen, "cli.init.kept_differs",
+                                           [Loc.Named ("path", Path),
+                                            Loc.Named ("name", Crate_Named (Hostkit.Fs.Join (Directory, Path))),
+                                            Loc.Named ("value", Planned.Inputs ("project_name"))])
+                                        & ASCII.LF);
+                     end if;
+                  else
+                     Append (Files_Said, (if Files_Said = Null_Unbounded_String then "" else ", ") & Path);
+                  end if;
+               end;
+            end loop;
+            for Position in Planned.Template_Facts.Iterate loop
+               if not Planned.Discovered_Facts.Contains (Cf.Value_Maps.Key (Position)) then
+                  Say ("cli.init.fact", [Loc.Named ("name", Cf.Value_Maps.Key (Position)),
+                                         Loc.Named ("value", Cf.Value_Maps.Element (Position))]);
+               end if;
+            end loop;
+            for Position in Planned.Discovered_Facts.Iterate loop
+               Say ("cli.init.fact", [Loc.Named ("name", Cf.Value_Maps.Key (Position)),
+                                      Loc.Named ("value", Cf.Value_Maps.Element (Position))]);
+            end loop;
+
+            --  A check the project's own policy will not run, with the
+            --  setting that lets it.
+            for Index in 1 .. R.Field_Count (Planned.Configuration) loop
+               declare
+                  Name : constant String := R.Field_Name (Planned.Configuration, Index);
+               begin
+                  if Ada.Strings.Fixed.Index (Name, "profile.") = Name'First then
+                     declare
+                        package Vf renames Model_Runner.Framework.Verification;
+                        package Ex renames Model_Runner.Framework.Execution;
+                        Checks : constant Vf.Check_List :=
+                          Vf.Parse_Profile (R.Get (Planned.Configuration, Name));
+                     begin
+                        for Index in 1 .. Vf.Length (Checks) loop
+                           declare
+                              One     : constant Vf.Check := Vf.Element (Checks, Index);
+                              Command : constant String := To_String (One.Command);
+                              Why     : constant String :=
+                                (if Command = "" then "" else Ex.Refusal (Rules, Command));
+                              Words   : constant Model_Runner.Framework.Name_Lists.Vector :=
+                                Ex.Words_Of (Command);
+                           begin
+                              if Why /= "" and then not Refused.Contains (Command) then
+                                 Refused.Append (Command);
+                                 Say ("cli.init.check_refused",
+                                      [Loc.Named ("name", To_String (One.Label)),
+                                       Loc.Named ("value", Command), Loc.Named ("detail", Why)]);
+                                 Append (Warned, Pres.Next_Step_Value
+                                                   (Screen, "cli.init.check_refused",
+                                                    [Loc.Named ("name", To_String (One.Label)),
+                                                     Loc.Named ("value", Command),
+                                                     Loc.Named ("detail", Why)])
+                                                 & ASCII.LF);
+                                 if Ex.Needs_Shell (Command) then
+                                    Fixes.Include ("scalar.execution.shell", "allowed");
+                                 elsif not Words.Is_Empty then
+                                    Fixes.Include
+                                      ("set.execution.allowed+",
+                                       (if Fixes.Contains ("set.execution.allowed+")
+                                        then Fixes.Element ("set.execution.allowed+") & ","
+                                        else "")
+                                       & Ada.Directories.Simple_Name (Words.First_Element));
+                                 end if;
+                              end if;
+                           end;
+                        end loop;
+                     end;
+                  end if;
+               end;
+            end loop;
+
+            --  Asked where the template wants it, and at a terminal wherever it
+            --  writes into what is there or starts with a check it will refuse.
+            --  A tree that holds tests, checked by a command that names none
+            --  of them: said, as every verification would rest on a build.
+            declare
+               Checks_Text : Unbounded_String;
+            begin
+               for Index in 1 .. R.Field_Count (Planned.Configuration) loop
+                  if Ada.Strings.Fixed.Index (R.Field_Name (Planned.Configuration, Index), "profile.") = 1 then
+                     Append (Checks_Text, R.Get (Planned.Configuration,
+                                                  R.Field_Name (Planned.Configuration, Index)));
+                  end if;
+               end loop;
+               for Tests_Dir of Model_Runner.Framework.Name_Lists.Vector'(["tests", "test"]) loop
+                  if Ada.Directories.Exists (Hostkit.Fs.Join (Directory, Tests_Dir))
+                    and then Ada.Strings.Fixed.Index (To_String (Checks_Text), "test") = 0
+                    and then not Planned.Files.Contains (Tests_Dir & "/alire.toml")
+                  then
+                     Say ("cli.init.tests_unrun", [Loc.Named ("path", Tests_Dir & "/")]);
+                     Append (Warned, Pres.Next_Step_Value
+                                       (Screen, "cli.init.tests_unrun",
+                                        [Loc.Named ("path", Tests_Dir & "/")]) & ASCII.LF);
+                     exit;
+                  end if;
+               end loop;
+            end;
+
+            --  Asked where the template wants it, and at a terminal always:
+            --  the plan is the user's to see before it is written.
+            if (R.Get (Planned.Configuration, "scalar.init.confirm") in "yes" | "true" | "required"
+                or else Interactive)
+              and then not Confirmed
+            then
+               if not Interactive then
+                  Outcome := E.Make (E.Framework_Input_Missing);
+                  E.Add_Text (Outcome, "name", "confirm");
+                  Fail (Outcome);
+                  Pres.Put_Note (Screen, "cli.next.confirm_init");
+                  return;
+               end if;
+               declare
+                  Answers : Choosers.Choice_List;
+                  Allow   : Unbounded_String;
+               begin
+                  for Position in Fixes.Iterate loop
+                     Append (Allow, (if Allow = Null_Unbounded_String then "" else " ")
+                                    & Cf.Value_Maps.Key (Position) & "="
+                                    & Cf.Value_Maps.Element (Position));
+                  end loop;
                   Choosers.Append
                     (Answers, (Label      => To_Unbounded_String
-                                               (Pres.Next_Step_Value
-                                                  (Screen, "cli.init.confirm.allow",
-                                                   [Loc.Named ("detail", To_String (Allow))])),
+                                               (Pres.Message_Value (Screen, "cli.init.confirm.yes")),
+                               Tag        => Null_Unbounded_String,
+                               Details    => Plan_Text,
+                               Selectable => True));
+                  if not Fixes.Is_Empty then
+                     Choosers.Append
+                       (Answers, (Label      => To_Unbounded_String
+                                                  (Pres.Next_Step_Value
+                                                     (Screen, "cli.init.confirm.allow",
+                                                      [Loc.Named ("detail", To_String (Allow))])),
+                                  Tag        => Null_Unbounded_String,
+                                  Details    => Null_Unbounded_String,
+                                  Selectable => True));
+                  end if;
+                  if not Planned.Inputs.Is_Empty then
+                     Choosers.Append
+                       (Answers, (Label      => To_Unbounded_String
+                                                  (Pres.Message_Value (Screen, "cli.init.confirm.change")),
+                                  Tag        => Null_Unbounded_String,
+                                  Details    => Inputs_Said,
+                                  Selectable => True));
+                  end if;
+                  Choosers.Append
+                    (Answers, (Label      => To_Unbounded_String
+                                               (Pres.Message_Value (Screen, "cli.init.confirm.no")),
                                Tag        => Null_Unbounded_String,
                                Details    => Null_Unbounded_String,
                                Selectable => True));
-               end if;
-               Choosers.Append
-                 (Answers, (Label      => To_Unbounded_String
-                                            (Pres.Message_Value (Screen, "cli.init.confirm.no")),
-                            Tag        => Null_Unbounded_String,
-                            Details    => Null_Unbounded_String,
-                            Selectable => True));
-               declare
-                  Picked : constant Natural :=
-                    Choosers.Choose (Screen, "cli.init.confirm", Answers,
-                                     Heading => To_String (Plan_Text)
-                                                & Pres.Message_Value (Screen, "cli.init.confirm"));
-               begin
-                  if Picked = 0 or else Picked = Choosers.Length (Answers) then
-                     Pres.Put_Note (Screen, "cli.init.cancelled");
-                     Status := E.Exit_Cancelled;
-                     return;
-                  end if;
-                  Allowing := Picked = 2 and then not Fixes.Is_Empty;
+                  declare
+                     Heading : constant String :=
+                       Pres.Next_Step_Value
+                         (Screen, "cli.init.plan",
+                          [Loc.Named ("name", Tp.Id (Tp.Root (Composed))),
+                           Loc.Named ("version", Tp.Version (Tp.Root (Composed))),
+                           Loc.Named ("path", Ada.Directories.Full_Name (Directory))])
+                       & ASCII.LF
+                       & (if Inputs_Said = Null_Unbounded_String then ""
+                          else Pres.Next_Step_Value (Screen, "cli.init.short.inputs",
+                                                     [Loc.Named ("detail", To_String (Inputs_Said))])
+                               & ASCII.LF)
+                       & (if Files_Said = Null_Unbounded_String and then Dirs_Said = Null_Unbounded_String
+                          then Pres.Message_Value (Screen, "cli.init.short.nothing") & ASCII.LF
+                          else Pres.Next_Step_Value
+                                 (Screen, "cli.init.short.writes",
+                                  [Loc.Named ("detail",
+                                              To_String (Files_Said)
+                                              & (if Dirs_Said = Null_Unbounded_String then ""
+                                                 else (if Files_Said = Null_Unbounded_String then ""
+                                                       else "; ")
+                                                      & "directories " & To_String (Dirs_Said)))])
+                               & ASCII.LF)
+                       & (if Kept_Said = Null_Unbounded_String then ""
+                          else Pres.Next_Step_Value (Screen, "cli.init.short.keeps",
+                                                     [Loc.Named ("detail", To_String (Kept_Said))])
+                               & ASCII.LF)
+                       & To_String (Warned)
+                       & Pres.Message_Value (Screen, "cli.init.confirm");
+                     Picked : constant Natural :=
+                       Choosers.Choose (Screen, "cli.init.confirm", Answers, Heading => Heading);
+                     Change_At : constant Natural :=
+                       (if Planned.Inputs.Is_Empty then 0 else Choosers.Length (Answers) - 1);
+                  begin
+                     if Picked = 0 or else Picked = Choosers.Length (Answers) then
+                        Pres.Put_Note (Screen, "cli.init.cancelled");
+                        Status := E.Exit_Cancelled;
+                        return;
+                     elsif Picked = Change_At then
+                        --  Which, and its new value -- the one it has offered
+                        --  to keep -- and the plan made again.
+                        declare
+                           Offer : Choosers.Choice_List;
+                           Ids   : Model_Runner.Framework.Name_Lists.Vector;
+                        begin
+                           for Position in Planned.Inputs.Iterate loop
+                              Ids.Append (Cf.Value_Maps.Key (Position));
+                              Choosers.Append
+                                (Offer, (Label      => To_Unbounded_String
+                                                         (Cf.Value_Maps.Key (Position) & " = "
+                                                          & Cf.Value_Maps.Element (Position)),
+                                         Tag        => Null_Unbounded_String,
+                                         Details    => To_Unbounded_String
+                                                         (Described (Cf.Value_Maps.Key (Position))),
+                                         Selectable => True));
+                           end loop;
+                           declare
+                              Which : constant Natural :=
+                                Choosers.Choose (Screen, "cli.init.choose_input", Offer);
+                           begin
+                              if Which > 0 then
+                                 for Index in 1 .. Tp.Input_Count (Composed) loop
+                                    declare
+                                       Declared : Tp.Input_Declaration :=
+                                         Cf.Resolved (Tp.Input_At (Composed, Index), Directory);
+                                    begin
+                                       if To_String (Declared.Id) = Ids (Which) then
+                                          --  What it has now is what Enter keeps.
+                                          Declared.Default := To_Unbounded_String
+                                            (Planned.Inputs (Ids (Which)));
+                                          declare
+                                             Got : Boolean;
+                                          begin
+                                             Ask (Declared, Got);
+                                          end;
+                                       end if;
+                                    end;
+                                 end loop;
+                              end if;
+                           end;
+                        end;
+                        Changing := True;
+                     else
+                        Allowing := Picked = 2 and then not Fixes.Is_Empty;
+                     end if;
+                  end;
                end;
-            end;
-         end if;
-      end;
+            end if;
+         end;
+         exit Planning when not Changing;
+      end loop Planning;
 
       Cf.Initialize (Store, Directory, Planned, Done, Outcome);
       if E.Is_Error (Outcome) then
@@ -699,7 +910,26 @@ package body Model_Runner.CLI.Init is
       --  In a session, the steps after it are the session's commands, which
       --  work where the session was started: not offered for elsewhere.
       if not (Pres.In_Session (Screen) and then not T.Is_Empty (Item.Project_Directory)) then
-         Pres.Put_Note (Screen, "cli.next.init");
+         --  Documents there to read: named, as /bootstrap will read them.
+         declare
+            Found  : constant Model_Runner.Framework.Name_Lists.Vector :=
+              Model_Runner.Framework.Bootstrap.Documents (Store);
+            Listed : Unbounded_String;
+            Count  : Natural := 0;
+         begin
+            for Path of Found loop
+               Count := Count + 1;
+               if Count <= 5 then
+                  Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ") & Path);
+               end if;
+            end loop;
+            if Found.Is_Empty then
+               Pres.Put_Note (Screen, "cli.next.init");
+            else
+               Pres.Put_Note (Screen, "cli.next.init_documents",
+                              [Loc.Named ("detail", To_String (Listed) & (if Count > 5 then ", ..." else ""))]);
+            end if;
+         end;
       end if;
       --  Started elsewhere: each of those in the directory it names.
       if not T.Is_Empty (Item.Project_Directory) then

@@ -230,9 +230,9 @@ package body Model_Runner.CLI.Intents is
    --  The command a register is worked with.
    function Word_Of_Command (Kind : Nt.Intent_Kind) return String
    is (case Kind is
-          when Nt.Requirement   => "req",
-          when Nt.Specification => "spec",
-          when Nt.Decision      => "decision");
+          when Nt.Requirement   => "/req",
+          when Nt.Specification => "/spec",
+          when Nt.Decision      => "/decision");
 
    --  Work still open for a requirement retired: how to let that go.
    procedure Work_Left
@@ -428,7 +428,7 @@ package body Model_Runner.CLI.Intents is
          end;
 
       elsif Action = "new" then
-         Needs (2, "a title");
+         Needs (2, "a title: " & Word_Of_Command (Kind) & " new TITLE text=... criteria=... scope=...");
          --  What it says is its text: a title alone says nothing to be
          --  held to.
          if E.Is_Ok (Status) and then Given ("text") = "" then
@@ -497,9 +497,9 @@ package body Model_Runner.CLI.Intents is
                                  else "cli.next.accept_intent"),
                         [Loc.Named ("name", To_String (Id)),
                          Loc.Named ("value", (case Kind is
-                                                when Nt.Requirement   => "req",
-                                                when Nt.Specification => "spec",
-                                                when Nt.Decision      => "decision"))]);
+                                                when Nt.Requirement   => "/req",
+                                                when Nt.Specification => "/spec",
+                                                when Nt.Decision      => "/decision"))]);
                   end if;
                end if;
             end;
@@ -640,6 +640,13 @@ package body Model_Runner.CLI.Intents is
                   [Loc.Named ("name", To_String (Evidence)),
                    Loc.Named ("value", (if Passed then "passed" else "failed")),
                    Loc.Named ("count", "1"), Loc.Named ("total", "0")]);
+               --  Passed, and still not verified: why, not silence.
+               if Nt.State_Of (Store, Kind, Word (2)) /= "verified" then
+                  Pres.Put_Message
+                    (Screen, "cli.check.passed_not_verified",
+                     [Loc.Named ("name", Word (2)),
+                      Loc.Named ("detail", Vf.Why_Not_Verified (Store, Word (2)))]);
+               end if;
                for Requirement of Moved loop
                   Pres.Put_Message
                     (Screen, "cli.work.requirement",
@@ -934,9 +941,9 @@ package body Model_Runner.CLI.Intents is
                     (Screen, "cli.intent.link_component",
                      [Loc.Named ("name", From (4)),
                       Loc.Named ("value", Joined_Components (Store)),
-                      Loc.Named ("other", (if Nt."=" (Kind, Nt.Requirement) then "req"
-                                           elsif Nt."=" (Kind, Nt.Decision) then "decision"
-                                           else "spec") & " unlink " & Word (2))]);
+                      Loc.Named ("other", (if Nt."=" (Kind, Nt.Requirement) then "/req"
+                                           elsif Nt."=" (Kind, Nt.Decision) then "/decision"
+                                           else "/spec") & " unlink " & Word (2))]);
                end if;
                --  Linked to a component: the work serving it that is
                --  elsewhere is named, with how to place it there.
@@ -1069,9 +1076,9 @@ package body Model_Runner.CLI.Intents is
                         Pres.Put_Note
                           (Screen, "cli.intent.link_unknown",
                            [Loc.Named ("name", Target),
-                            Loc.Named ("other", (if Nt."=" (Kind, Nt.Requirement) then "req"
-                                                 elsif Nt."=" (Kind, Nt.Decision) then "decision"
-                                                 else "spec") & " unlink " & Word (2)),
+                            Loc.Named ("other", (if Nt."=" (Kind, Nt.Requirement) then "/req"
+                                                 elsif Nt."=" (Kind, Nt.Decision) then "/decision"
+                                                 else "/spec") & " unlink " & Word (2)),
                             Loc.Named ("value", Lower (Word (3)))]);
                      end if;
                   end;

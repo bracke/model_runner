@@ -1175,10 +1175,14 @@ package body Model_Runner.Framework.Repository is
    function Reads_References (Path : String) return Boolean
    is (Language_Of (Path) in "Ada" | "C" | "C++" | "Rust" | "Python");
 
-   --  Whether a scan leaves a file or directory out: a hidden one, or one
-   --  the roots skip.
+   --  Whether a scan leaves a file or directory out: version control's,
+   --  the project state's, a tool's cache, or one the roots skip. A file
+   --  whose name starts with a dot is the project's like any other --
+   --  .gitignore, .github/ -- and work on it is work.
    function Skipped (Name, Relative : String; Within : Roots) return Boolean
-   is (Name'Length = 0 or else Name (Name'First) = '.'
+   is (Name'Length = 0 or else Name in "." | ".." | ".git" | ".hg" | ".svn" | ".model_runner"
+                                       | ".alire" | ".cache" | ".venv" | ".tox" | ".mypy_cache"
+                                       | ".pytest_cache" | ".gradle"
        or else Named_By (Within.Skip, Relative));
 
    ----------

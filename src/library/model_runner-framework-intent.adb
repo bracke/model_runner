@@ -347,11 +347,18 @@ package body Model_Runner.Framework.Intent is
          loop
             --  A key that only says the register again -- spec.md's SPEC
             --  among specifications -- is no key: SPEC-001, not SPEC-SPEC-001.
+            --  Not for what a document is read into, though: its own lines
+            --  may number REQ-001 on, and one it gives no number is kept out
+            --  of that sequence, REQ-REQUIREMENTS-001, so the document's next
+            --  number never finds its identifier taken.
             Stores.Allocate_Identifier
               (Item, Change, Namespace (Kind),
-               (if Key = Namespace (Kind) or else Key & "S" = Namespace (Kind)
-                  or else Key = Namespace (Kind) & "S" or else Key = Namespace (Kind) & "IFICATIONS"
-                  or else Key = Namespace (Kind) & "UIREMENTS" or else Key = Namespace (Kind) & "ISIONS"
+               (if (Provenance = "" or else Kind = Specification)
+                  and then (Key = Namespace (Kind) or else Key & "S" = Namespace (Kind)
+                            or else Key = Namespace (Kind) & "S"
+                            or else Key = Namespace (Kind) & "IFICATIONS"
+                            or else Key = Namespace (Kind) & "UIREMENTS"
+                            or else Key = Namespace (Kind) & "ISIONS")
                 then "" else Key),
                Id, Status);
             if E.Is_Error (Status) then

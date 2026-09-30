@@ -607,7 +607,9 @@ package body Model_Runner.CLI.Work is
             --  What it waits for has ended undone: done after all, or let go.
             return Pres.Next_Step_Value
               (Screen, "cli.task.left_waiting",
-               [Loc.Named ("name", Id), Loc.Named ("value", To_String (First))]);
+               [Loc.Named ("name", Id), Loc.Named ("value", To_String (First)),
+                Loc.Named ("other", (if Tk.State_Of (Store, To_String (First)) = "rejected"
+                                     then "reconsider" else "reopen"))]);
          elsif First /= Null_Unbounded_String then
             return Pres.Next_Step_Value
               (Screen, "cli.next.waits_first",
@@ -761,6 +763,7 @@ package body Model_Runner.CLI.Work is
                            & (if Any_State.Is_Empty then ""
                               else " that is accepted (of those it matches, none is)"));
                Fail (Outcome);
+               Pres.Put_Note (Screen, "cli.next.task_list");
                S.Close (Store);
                return;
             elsif Natural (Matching.Length) = 1 then
@@ -1272,8 +1275,15 @@ package body Model_Runner.CLI.Work is
                            or else Ada.Strings.Fixed.Index (Line, "may not propose") > 0)
          then
             --  Refused for want of leave, a retry is refused alike: the way
-            --  on is said below, with the level that withheld it.
-            Pres.Put_Note (Screen, "cli.next.retry", [Loc.Named ("name", To_String (Done.Task_Id))]);
+            --  on is said below, with the level that withheld it. An agent
+            --  that said it was blocked asked for something: given in the
+            --  task's notes, which its next attempt is told.
+            if To_String (Done.Claimed) = "blocked" then
+               Pres.Put_Note (Screen, "cli.next.answer_blocked",
+                              [Loc.Named ("name", To_String (Done.Task_Id))]);
+            else
+               Pres.Put_Note (Screen, "cli.next.retry", [Loc.Named ("name", To_String (Done.Task_Id))]);
+            end if;
          elsif To_String (Done.Final_State) = "cancelled" then
             Pres.Put_Note (Screen, "cli.next.reopen", [Loc.Named ("name", To_String (Done.Task_Id))]);
             --  What waits for it waits still, as a cancel here says.
@@ -1293,7 +1303,9 @@ package body Model_Runner.CLI.Work is
                      then
                         Pres.Put_Note
                           (Screen, "cli.task.left_waiting",
-                           [Loc.Named ("name", Other), Loc.Named ("value", To_String (Done.Task_Id))]);
+                           [Loc.Named ("name", Other), Loc.Named ("value", To_String (Done.Task_Id)),
+                            Loc.Named ("other", (if Tk.State_Of (Store, To_String (Done.Task_Id)) = "rejected"
+                                                 then "reconsider" else "reopen"))]);
                      end if;
                   end;
                end if;

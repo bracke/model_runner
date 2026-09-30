@@ -2004,9 +2004,10 @@ package body Model_Runner.Framework.Tasks is
                   E.Add_Text (Status, "name", Name);
                   E.Add_Text (Status, "value", Given);
                   E.Add_Text (Status, "detail", "it is not revised; "
-                              & (if Name = "kind" then "make a task of the other kind"
-                                 elsif Name = "parent" then "split the parent instead"
-                                 else "add a dependency instead"));
+                              & (if Name = "kind" then "/task new TITLE kind=KIND makes a task of the other kind"
+                                 elsif Name = "parent" then "/task split PARENT A; B makes parts of a task"
+                                 else "/task depend " & Id & " ON adds a dependency, and /task depend "
+                                      & Id & " ON remove takes one away"));
                   return;
                elsif not Is_Core (Name) and then not Allowed.Contains (Name) then
                   No_Such_Field (Status, Name, Kind, Allowed);
