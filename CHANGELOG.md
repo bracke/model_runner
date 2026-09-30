@@ -1782,6 +1782,9 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **In a session, a line is read as soon as it is typed:** sending took an
+  extra Enter, as the check for the end of input waited for the line after
+  the one typed. Ctrl-C and Esc on a line drop it as it is entered.
 - **Fifth usability round:**
   - A workspace's own checks run where it is, whatever directory the project
     was opened by: `task integrate ID resolved` takes in nothing that fails

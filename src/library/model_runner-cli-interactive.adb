@@ -3,8 +3,6 @@ with Ada.Strings.Fixed;
 with Ada.Text_IO;
 with Ada.Unchecked_Deallocation;
 
-with Hostkit.Process;
-
 with Model_Runner.CLI.Checkpoint;
 with Model_Runner.CLI.Project_Commands;
 with Model_Runner.Clocks;
@@ -846,33 +844,9 @@ package body Model_Runner.CLI.Interactive is
              then "cli.interactive.prompt"
              else "cli.interactive.continuation"));
 
-         --  Waiting at a terminal for a line, Ctrl-C drops what was being
-         --  typed at once, without a line to end it: the terminal has
-         --  thrown the line away already, and the prompt starts afresh.
-         if Ada.Text_IO."=" (Ada.Text_IO.Current_Input, Ada.Text_IO.Standard_Input)
-           and then Model_Runner.Cancellation."/=" (Cancel, null)
-         then
-            loop
-               declare
-                  use type Hostkit.Process.Wait_Outcome;
-                  Came : constant Hostkit.Process.Wait_Outcome :=
-                    Hostkit.Process.Wait_FD (0, For_Write => False, Timeout_MS => 100);
-               begin
-                  exit when Came /= Hostkit.Process.Wait_Timed_Out;
-                  if Model_Runner.Cancellation.Is_Cancelled (Cancel) then
-                     Cancel.Reset;
-                     Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Error);
-                     if Pending (Typing) /= "" then
-                        Taken (Typing);
-                     end if;
-                     Pres.Put_Note (Screen, "cli.interactive.dropped");
-                     Pres.Put_Prompt (Screen, "cli.interactive.prompt");
-                  end if;
-               end;
-            end loop;
-         end if;
-
-         exit Read_Loop when Ada.Text_IO.End_Of_File (Ada.Text_IO.Current_Input);
+         --  No End_Of_File before the line: at a terminal it reads ahead
+         --  past the line mark, and waits for the line after the one typed.
+         --  The end of input is found by reading, and ends the loop.
 
          declare
             --  Read into a fixed buffer rather than as a String: the function
@@ -893,7 +867,12 @@ package body Model_Runner.CLI.Interactive is
             Handled : Boolean;
             pragma Unreferenced (Handled);
          begin
-            Ada.Text_IO.Get_Line (Ada.Text_IO.Current_Input, Room, Stop);
+            begin
+               Ada.Text_IO.Get_Line (Ada.Text_IO.Current_Input, Room, Stop);
+            exception
+               when Ada.Text_IO.End_Error =>
+                  exit Read_Loop;
+            end;
 
             --  A line longer than the buffer arrives in pieces. Joining them
             --  would be the same turn; treating each as a line would put line
