@@ -352,6 +352,19 @@ package Model_Runner.Framework.Work is
       Recovered : out Name_Lists.Vector;
       Status    : out Model_Runner.Errors.Error_Info);
 
+   --  Readiness and which requirements are verified, worked out again as
+   --  the state now stands: what a command that changed the state -- a
+   --  bootstrap, a revision -- leaves to follow from it, said under that
+   --  command rather than the next one.
+   --
+   --  @param Item The store.
+   --  @param Said Each requirement whose state moved, and why, one a line.
+   --  @param Status A failure committing it.
+   procedure Reevaluate
+     (Item   : in out Stores.Store;
+      Said   : out Name_Lists.Vector;
+      Status : out Model_Runner.Errors.Error_Info);
+
    --  Everything a project's state needs looked at when it is opened, with
    --  no conversation to go on: what the store's own recovery did to its
    --  transactions and index; tasks left running with no one running them

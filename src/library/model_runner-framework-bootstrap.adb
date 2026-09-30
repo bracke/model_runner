@@ -61,8 +61,80 @@ package body Model_Runner.Framework.Bootstrap is
       return False;
    end Has_Word;
 
+   --  Whether a line states a requirement: SHALL, MUST or SHOULD in
+   --  capitals anywhere; shall in any case; must and should in any case
+   --  on a line the document lists -- an item, a numbered item, a table
+   --  row -- where prose that merely uses the word is rare.
+   function Says_Requirement (Item : String; Listed : Boolean) return Boolean is
+      Lower : constant String := Ada.Characters.Handling.To_Lower (Item);
+   begin
+      return Has_Word (Item, "SHALL") or else Has_Word (Item, "MUST") or else Has_Word (Item, "SHOULD")
+        or else Has_Word (Lower, "shall")
+        or else (Listed and then (Has_Word (Lower, "must") or else Has_Word (Lower, "should")));
+   end Says_Requirement;
+
+   --  A document's own label at the start of a line -- FR-001, [NFR-01],
+   --  **R-10**, ADR-2: -- and what follows it. Letters in capitals, a
+   --  dash, and a number; bold, brackets or backquotes around it, and a
+   --  colon after it, taken off.
+   procedure Label_Split
+     (Item  : String;
+      Label : out Ada.Strings.Unbounded.Unbounded_String;
+      Rest  : out Ada.Strings.Unbounded.Unbounded_String)
+   is
+      Index : Natural := Item'First;
+
+      procedure Skip (Marks : String) is
+      begin
+         while Index <= Item'Last and then Ada.Strings.Fixed.Index (Marks, [1 => Item (Index)]) > 0 loop
+            Index := Index + 1;
+         end loop;
+      end Skip;
+
+      First_Letter : Natural;
+      Dash         : Natural;
+      Number_End   : Natural;
+   begin
+      Label := Null_Unbounded_String;
+      Rest := Null_Unbounded_String;
+      Skip ("*[`_");
+      First_Letter := Index;
+      while Index <= Item'Last and then Item (Index) in 'A' .. 'Z' loop
+         Index := Index + 1;
+      end loop;
+      if Index - First_Letter not in 1 .. 8 or else Index > Item'Last or else Item (Index) /= '-' then
+         return;
+      end if;
+      Dash := Index;
+      Index := Index + 1;
+      while Index <= Item'Last and then Item (Index) in '0' .. '9' | 'A' .. 'Z' | '.' | '-' | '_' loop
+         Index := Index + 1;
+      end loop;
+      Number_End := Index - 1;
+      while Number_End > Dash and then Item (Number_End) in '.' | '-' | '_' loop
+         Number_End := Number_End - 1;
+      end loop;
+      if Number_End <= Dash
+        or else not (for some C of Item (Dash + 1 .. Number_End) => C in '0' .. '9')
+      then
+         return;
+      end if;
+      Index := Number_End + 1;
+      Skip ("*]`_:");
+      if Index <= Item'Last and then Item (Index) /= ' ' then
+         return;
+      end if;
+      Skip (" :-");
+      if Index > Item'Last then
+         return;
+      end if;
+      Label := To_Unbounded_String (Item (First_Letter .. Number_End));
+      Rest := To_Unbounded_String (Item (Index .. Item'Last));
+   end Label_Split;
+
    --  The key a document's identifiers are given under: its name, in
-   --  capitals, as an identifier's word.
+   --  capitals, as an identifier's word; a long one by the first letter
+   --  of each of its words, and a short word whole.
    function Key_Of (Path : String) return String is
       Base : constant String :=
         Ada.Characters.Handling.To_Upper
@@ -74,6 +146,29 @@ package body Model_Runner.Framework.Bootstrap is
             Char := '_';
          end if;
       end loop;
+      if Word'Length > 16 then
+         declare
+            Short : Ada.Strings.Unbounded.Unbounded_String;
+            Start : Positive := Word'First;
+         begin
+            for Index in Word'First .. Word'Last + 1 loop
+               if Index > Word'Last or else Word (Index) = '_' then
+                  if Index > Start then
+                     Ada.Strings.Unbounded.Append
+                       (Short, (if Index - Start <= 3 then Word (Start .. Index - 1) else Word (Start .. Start)));
+                  end if;
+                  Start := Index + 1;
+               end if;
+            end loop;
+            declare
+               Made : constant String := Ada.Strings.Unbounded.To_String (Short);
+            begin
+               if Made'Length >= 2 and then Identifiers.Is_Valid (Made) then
+                  return Made;
+               end if;
+            end;
+         end;
+      end if;
       return (if Identifiers.Is_Valid (Word) then Word else "DOC");
    exception
       when others =>
@@ -102,6 +197,15 @@ package body Model_Runner.Framework.Bootstrap is
 
       --  The requirement an Acceptance: line is about: the last one found.
       Last_Requirement : Natural := 0;
+
+      --  A heading a document's own label opens -- ### FR-001 Capacity --
+      --  whose first line stating a requirement is that requirement.
+      Pending_Label : Unbounded_String;
+      Pending_Title : Unbounded_String;
+
+      --  A requirement whose line leads into a list -- SHALL distinguish:
+      --  -- and so takes the items that follow as part of what it says.
+      Lead : Natural := 0;
 
       procedure Found
         (Kind : Output_Kind; Provenance, Title, Body_Text : String; Given : String := "")
@@ -153,15 +257,23 @@ package body Model_Runner.Framework.Bootstrap is
                      Start := Index + 1;
                   end if;
                end loop;
+               --  The identifier, and of the rest the cell that says the
+               --  most: a priority or a status beside it is not the
+               --  statement.
                for Cell of Cells loop
-                  if Id = Null_Unbounded_String and then Cell'Length > 4
-                    and then Cell (Cell'First .. Cell'First + 3) in "REQ-" | "DEC-"
-                    and then Identifiers.Is_Valid (Cell)
-                  then
-                     Id := To_Unbounded_String (Cell);
-                  elsif (for some C of Cell => C not in '-' | ':' | ' ') then
-                     Append (Rest, (if Rest = Null_Unbounded_String then "" else " ") & Cell);
-                  end if;
+                  declare
+                     Label : Unbounded_String;
+                     After : Unbounded_String;
+                  begin
+                     Label_Split (Cell & " x", Label, After);
+                     if Id = Null_Unbounded_String and then To_String (Label) = Cell then
+                        Id := To_Unbounded_String (Cell);
+                     elsif (for some C of Cell => C not in '-' | ':' | ' ')
+                       and then Cell'Length > Length (Rest)
+                     then
+                        Rest := To_Unbounded_String (Cell);
+                     end if;
+                  end;
                end loop;
                return (if Id = Null_Unbounded_String then To_String (Rest)
                        else To_String (Id) & ": " & To_String (Rest));
@@ -189,7 +301,25 @@ package body Model_Runner.Framework.Bootstrap is
          Line : constant String := Trim (Raw);
          Item : constant String := Unmarked (Line);
          Colon : constant Natural := Ada.Strings.Fixed.Index (Item, ":");
+         --  Listed: an item, a numbered item or a table row.
+         Listed : constant Boolean := Item /= Line and then Line'Length > 0 and then Line (Line'First) /= '>';
+         Label  : Unbounded_String;
+         Rest   : Unbounded_String;
       begin
+         --  The items under a requirement that leads into them are what it
+         --  says; anything else ends its list.
+         if Lead > 0 and then Item /= "" then
+            if Listed and then not Says_Requirement (Item, Listed) then
+               declare
+                  Held : Output := Result.Outputs (Lead);
+               begin
+                  Held.Text := Held.Text & ASCII.LF & "- " & Item;
+                  Result.Outputs (Lead) := Held;
+               end;
+               return;
+            end if;
+            Lead := 0;
+         end if;
          --  A blank line ends a heading's statement: what follows is said
          --  apart, though Acceptance: lines still go to the requirement.
          if Item = "" then
@@ -218,6 +348,23 @@ package body Model_Runner.Framework.Bootstrap is
                --  its identifier and title; what its section says is its
                --  statement, and its Acceptance: lines its criteria.
                Section := 0;
+               Pending_Label := Null_Unbounded_String;
+               Label_Split (Heading, Label, Rest);
+               if First'Length > 4 and then First (First'First .. First'First + 3) = "REQ-"
+                 and then Identifiers.Is_Valid (First)
+               then
+                  null;
+               --  ## ADR-001: Title -- a decision record: its section says it.
+               elsif Length (Label) > 4 and then Slice (Label, 1, 4) = "ADR-" then
+                  Found (Decision_Candidate, Path & "#" & To_String (Label),
+                         To_String (Label) & ": " & To_String (Rest), "");
+                  Section := Length (Result);
+                  return;
+               elsif Label /= Null_Unbounded_String then
+                  Pending_Label := Label;
+                  Pending_Title := Rest;
+                  return;
+               end if;
                if First'Length > 4 and then First (First'First .. First'First + 3) = "REQ-"
                  and then Identifiers.Is_Valid (First)
                then
@@ -283,6 +430,40 @@ package body Model_Runner.Framework.Bootstrap is
             return;
          end if;
 
+         --  Under a heading a document's own label opens, the first line
+         --  stating a requirement is it, under that label.
+         if Pending_Label /= Null_Unbounded_String and then Says_Requirement (Item, True) then
+            Found (Requirement_Candidate, Path & "#" & To_String (Pending_Label),
+                   To_String (Pending_Label) & ": " & Headline (To_String (Pending_Title)), Item);
+            Pending_Label := Null_Unbounded_String;
+            Section := Length (Result);
+            return;
+         end if;
+
+         --  A line a document's own label begins -- FR-001, [NFR-01],
+         --  **R-10** -- is known by it: the label kept in its title, and
+         --  what it is found again by when the line is reworded.
+         Label_Split (Item, Label, Rest);
+         if Label /= Null_Unbounded_String
+           and then not (Length (Label) > 4 and then Slice (Label, 1, 4) in "REQ-" | "DEC-")
+           and then Says_Requirement (To_String (Rest), True)
+         then
+            Found (Requirement_Candidate, Path & "#" & To_String (Label),
+                   To_String (Label) & ": " & Headline (To_String (Rest)), To_String (Rest));
+            if To_String (Rest) (Length (Rest)) = ':' then
+               Lead := Length (Result);
+            end if;
+            return;
+         end if;
+
+         --  We decided to ...: a decision, as the document tells it.
+         if Starts_With (Item, "We decided ") or else Starts_With (Item, "We chose ")
+           or else Starts_With (Item, "We will use ")
+         then
+            Found (Decision_Candidate, Path & "#" & Fingerprint (Item), Headline (Item), Item);
+            return;
+         end if;
+
          --  REQ-IO-003: text, or REQ-IO-003 text -- in a list item too: a
          --  requirement the document names; DEC-001 the same for a
          --  decision.
@@ -344,9 +525,7 @@ package body Model_Runner.Framework.Bootstrap is
             return;
          end if;
 
-         if Has_Word (Item, "SHALL") or else Has_Word (Item, "MUST")
-           or else Has_Word (Item, "SHOULD")
-         then
+         if Says_Requirement (Item, Listed) then
             declare
                Print : constant String := Fingerprint (Item);
             begin
@@ -357,10 +536,39 @@ package body Model_Runner.Framework.Bootstrap is
                   Seen.Append (Print);
                   Found (Requirement_Candidate, Path & "#" & Print,
                          Headline (Item), Item);
+                  if Item (Item'Last) = ':' then
+                     Lead := Length (Result);
+                  end if;
                end if;
             end;
          end if;
       end Line_Of;
+      --  A paragraph wrapped over several lines is one line of what the
+      --  document says: joined, so a requirement is not read from half a
+      --  sentence. A line goes on the one before where that ended mid
+      --  sentence and this one starts nothing of its own.
+      Paragraph : Unbounded_String;
+
+      function Starts_Own (Raw : String) return Boolean is
+         Label : Unbounded_String;
+         Rest  : Unbounded_String;
+      begin
+         if Raw = "" or else Raw (Raw'First) in '#' | '|' | '>' | '-' | '*' | '+' | '0' .. '9' then
+            return True;
+         end if;
+         Label_Split (Raw, Label, Rest);
+         return Label /= Null_Unbounded_String
+           or else (for some Prefix of Name_Lists.Vector'(["Acceptance", "Fact:", "Decision", "Status:"])
+                      => Starts_With (Raw, Prefix));
+      end Starts_Own;
+
+      procedure Flush is
+      begin
+         if Paragraph /= Null_Unbounded_String then
+            Line_Of (To_String (Paragraph));
+            Paragraph := Null_Unbounded_String;
+         end if;
+      end Flush;
    begin
       for Index in Text'First .. Text'Last + 1 loop
          if Index > Text'Last or else Text (Index) = ASCII.LF then
@@ -370,14 +578,28 @@ package body Model_Runner.Framework.Bootstrap is
                Raw : constant String := Trim (Text (Start .. Index - 1));
             begin
                if Raw'Length >= 3 and then Raw (Raw'First .. Raw'First + 2) in "```" | "~~~" then
+                  Flush;
                   In_Fence := not In_Fence;
                elsif not In_Fence then
-                  Line_Of (Text (Start .. Index - 1));
+                  if Paragraph /= Null_Unbounded_String and then not Starts_Own (Raw)
+                    and then Element (Paragraph, Length (Paragraph)) not in '.' | '!' | '?' | ':'
+                    and then Element (Paragraph, 1) not in '#' | '|'
+                  then
+                     Append (Paragraph, " " & Raw);
+                  else
+                     Flush;
+                     if Raw = "" then
+                        Line_Of ("");
+                     else
+                        Paragraph := To_Unbounded_String (Raw);
+                     end if;
+                  end if;
                end if;
             end;
             Start := Index + 1;
          end if;
       end loop;
+      Flush;
 
       --  A heading with nothing under it says what it is by its title.
       for Index in 1 .. Length (Result) loop
@@ -431,10 +653,68 @@ package body Model_Runner.Framework.Bootstrap is
       Listed  : Name_Lists.Vector :=
         Items_Of (Records.Get (Settings_Of (Item), "set.bootstrap.sources"));
       Result  : Name_Lists.Vector;
+
+      --  A history of changes names what was asked long ago, not what the
+      --  project must be now: left out where a pattern finds it, read
+      --  where it is named.
+      function History (Name : String) return Boolean is
+         Upper : constant String := Ada.Characters.Handling.To_Upper (Name);
+      begin
+         return (for some Word of Name_Lists.Vector'(["CHANGELOG", "CHANGES", "HISTORY", "NEWS"])
+                   => Upper'Length >= Word'Length and then Upper (Upper'First .. Upper'First + Word'Length - 1) = Word);
+      end History;
+
+      --  The files in Dir (relative) matching Name; in its subdirectories
+      --  too where Deep.
+      procedure Collect (Dir, Name : String; Deep, Pattern : Boolean) is
+         Where  : constant String := (if Dir = "" then Project else Project & "/" & Dir);
+         Search : Ada.Directories.Search_Type;
+         Found  : Ada.Directories.Directory_Entry_Type;
+         Below  : Name_Lists.Vector;
+      begin
+         if not Ada.Directories.Exists (Where) then
+            return;
+         end if;
+         Ada.Directories.Start_Search
+           (Search, Where, Name, [Ada.Directories.Ordinary_File => True, others => False]);
+         while Ada.Directories.More_Entries (Search) loop
+            Ada.Directories.Get_Next_Entry (Search, Found);
+            declare
+               Simple : constant String := Ada.Directories.Simple_Name (Found);
+               Path   : constant String := (if Dir = "" then "" else Dir & "/") & Simple;
+            begin
+               if not Result.Contains (Path) and then not (Pattern and then History (Simple)) then
+                  Result.Append (Path);
+               end if;
+            end;
+         end loop;
+         Ada.Directories.End_Search (Search);
+         if Deep then
+            Ada.Directories.Start_Search
+              (Search, Where, "", [Ada.Directories.Directory => True, others => False]);
+            while Ada.Directories.More_Entries (Search) loop
+               Ada.Directories.Get_Next_Entry (Search, Found);
+               declare
+                  Simple : constant String := Ada.Directories.Simple_Name (Found);
+               begin
+                  if Simple (Simple'First) /= '.' then
+                     Below.Append ((if Dir = "" then "" else Dir & "/") & Simple);
+                  end if;
+               end;
+            end loop;
+            Ada.Directories.End_Search (Search);
+            for Sub of Below loop
+               Collect (Sub, Name, Deep, Pattern);
+            end loop;
+         end if;
+      exception
+         when others =>
+            null;
+      end Collect;
    begin
       if Listed.Is_Empty then
          Listed.Append ("*.md");
-         Listed.Append ("docs/*.md");
+         Listed.Append ("docs/**/*.md");
       end if;
       for Entry_Text of Listed loop
          declare
@@ -442,36 +722,20 @@ package body Model_Runner.Framework.Bootstrap is
             Slash : constant Natural := Ada.Strings.Fixed.Index (Given, "/", Ada.Strings.Backward);
             Dir   : constant String := (if Slash = 0 then "" else Given (Given'First .. Slash - 1));
             Name  : constant String := (if Slash = 0 then Given else Given (Slash + 1 .. Given'Last));
-            Where : constant String := (if Dir = "" then Project else Project & "/" & Dir);
+            --  dir/**: dir and every directory below it.
+            Deep  : constant Boolean :=
+              Dir'Length >= 2 and then Dir (Dir'Last - 1 .. Dir'Last) = "**";
+            Base  : constant String :=
+              (if not Deep then Dir
+               elsif Dir'Length = 2 then ""
+               else Dir (Dir'First .. Dir'Last - 3));
          begin
             --  Within the project, and never its state.
             if Given /= "" and then Given (Given'First) not in '/' | '\'
               and then Ada.Strings.Fixed.Index (Given, "..") = 0
               and then Ada.Strings.Fixed.Index (Given, State_Directory) = 0
-              and then Ada.Directories.Exists (Where)
             then
-               declare
-                  Search : Ada.Directories.Search_Type;
-                  Found  : Ada.Directories.Directory_Entry_Type;
-               begin
-                  Ada.Directories.Start_Search
-                    (Search, Where, Name, [Ada.Directories.Ordinary_File => True, others => False]);
-                  while Ada.Directories.More_Entries (Search) loop
-                     Ada.Directories.Get_Next_Entry (Search, Found);
-                     declare
-                        Path : constant String :=
-                          (if Dir = "" then "" else Dir & "/") & Ada.Directories.Simple_Name (Found);
-                     begin
-                        if not Result.Contains (Path) then
-                           Result.Append (Path);
-                        end if;
-                     end;
-                  end loop;
-                  Ada.Directories.End_Search (Search);
-               exception
-                  when others =>
-                     null;
-               end;
+               Collect (Base, Name, Deep, Pattern => Ada.Strings.Fixed.Index (Name, "*") > 0);
             end if;
          end;
       end loop;
@@ -851,8 +1115,51 @@ package body Model_Runner.Framework.Bootstrap is
                return True;
             end Adopted;
 
+            --  An entry read from a document that is gone, found here under
+            --  the same part of it -- its label, identifier or wording: the
+            --  document moved, and the entry is read from where it is now.
+            function Moved_Here (Kind : Intent.Intent_Kind) return String is
+               Project : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
+               Mark    : constant Natural := Ada.Strings.Fixed.Index (Provenance, "#");
+               Part    : constant String :=
+                 (if Mark = 0 then "" else Provenance (Mark .. Provenance'Last));
+            begin
+               for Name of Intent.List (Item, Kind) loop
+                  declare
+                     Held  : Records.Item;
+                     Read  : E.Error_Info;
+                  begin
+                     Stores.Read (Item, Area_Of (Kind), Name, Held, Read);
+                     declare
+                        Was    : constant String := Records.Get (Held, "provenance");
+                        At_Was : constant Natural := Ada.Strings.Fixed.Index (Was, "#");
+                        --  The document it was read from; a whole document --
+                        --  a specification -- is its provenance.
+                        From   : constant String :=
+                          (if At_Was = 0 then Was else Was (Was'First .. At_Was - 1));
+                     begin
+                        if E.Is_Ok (Read) and then From /= "" and then From /= Field (Next.Source)
+                          and then not Ada.Directories.Exists (Project & "/" & From)
+                          and then (if Part = ""
+                                    then At_Was = 0 and then Records.Get (Held, "title") = Field (Next.Title)
+                                    else At_Was > Was'First and then Was (At_Was .. Was'Last) = Part)
+                        then
+                           Records.Set_Revision (Held, Records.Revision (Held) + 1);
+                           Records.Set (Held, "provenance", Provenance);
+                           Records.Set (Held, "source", Field (Next.Source));
+                           Stores.Put (Change, Area_Of (Kind), Name, Held);
+                           Result.Moved.Append (Name & " from " & Field (Next.Source));
+                           return Name;
+                        end if;
+                     end;
+                  end;
+               end loop;
+               return "";
+            end Moved_Here;
+
             procedure Propose (Kind : Intent.Intent_Kind) is
-               Known : constant String := Intent.Find_By_Provenance (Item, Kind, Provenance);
+               Found_Here : constant String := Intent.Find_By_Provenance (Item, Kind, Provenance);
+               Known : constant String := (if Found_Here /= "" then Found_Here else Moved_Here (Kind));
                Given : constant String := Field (Next.Given_Id);
                Taken : constant Boolean :=
                  Given /= "" and then Stores.Is_Name (Given)

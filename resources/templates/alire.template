@@ -9,7 +9,6 @@ tags = alire
 
 fact build_system = Alire
 adapter build = alire
-scalar build.command = alr build
 profile build = build: alr build
 scalar profile_capability.build = run_build
 

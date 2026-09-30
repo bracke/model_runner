@@ -1793,6 +1793,48 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Fourteenth usability round:**
+  - A fault in one project command is said with where it was raised, and
+    the session goes on; two that ended sessions are fixed -- accepting a
+    parent waiting for its parts, and a helper's end.
+  - Lines typed while `/work` runs survive a Ctrl-C that stops it; Ctrl-C
+    with the session's model sets the task aside instead of failing it.
+  - `/task integrate ID resolved` checks for a conflict first when none was
+    found; `discard`, `cancel ... anyway` and `move ... failed anyway` ask,
+    and keep what the work changed in `runtime/given-up-TASK`.
+  - `/work` refuses a task whose permissions and sandbox leave its agent
+    unable to do it; the refused-write hint adds the refused directory to
+    the roots the level has, and none is offered after the agent touched
+    the project's state.
+  - Identifiers a document numbered its own way (REQ-1) are found as
+    written. Bootstrap reads lower-case shall, and must and should in
+    lists and tables; keeps a document's own labels (FR-001, [NFR-01],
+    **R-10**, table IDs, `### FR-001 Title`); reads ADR headings and "We
+    decided" as decisions, `docs/**` and not a changelog by default; joins
+    wrapped lines and a lead-in's list; refuses source files; takes globs;
+    follows a renamed document instead of duplicating it; says long imports
+    as runs.
+  - What a command changes in verification is said under it, with why and
+    `/check ID`. An empty test suite is said as one, not as a failure;
+    `/task complete all` reuses a run of the same checks on the same files.
+  - `/impact` on a 300-file project 8.4 s -> 0.65 s: edges indexed once.
+  - `/config` shows what an accepted decision rules beside each setting and
+    whether they disagree, matches filters by words, and parts a set's
+    items one way; a value nothing reads is said so. `map.permission.CAP`
+    is the project's.
+  - `/state` on an empty project is one line, and counts specifications
+    and decisions waiting; `/accept` with several waiting lists them
+    without an error, `/accept all` accepts the tasks it derives, and
+    `/req accept` takes the one waiting.
+  - `/task diff` compares against the workspace's base, says a file removed
+    or new and a project copy that moved on; taken-in lists leave out what
+    changed nothing. Next steps fixed after split, verify, integrate,
+    reopen and a parent's parts; a timeout names its limit; a retry is told
+    why the last attempt did not end the task; the prompt describes only
+    the tools an agent holds, and rules without their jargon.
+  - `/result` names each issue's task and takes an identifier's start.
+    `/init` shows its plan in the question and writes it out once, without
+    the configuration hash; the generic template is "Any Language".
 - **Thirteenth usability round:**
   - `/init` asks at a terminal every time, the plan short with its details a
     Tab away, and "Change an input" goes back to the plan; a kept

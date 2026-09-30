@@ -9223,8 +9223,8 @@ package body Tests.Framework_Cases is
                        "an ambiguous work selector off a terminal did not fail with its matches");
                Assert (Ada.Strings.Fixed.Index (Text, """matches"": ""TASK-") > 0,
                        "an ambiguous work selector for a program did not give its matches: " & Text);
-               Assert (Ada.Strings.Fixed.Index (Text, "decide one by name") > 0,
-                       "a bare /accept with more than one waiting did not refuse and list them");
+               Assert (Ada.Strings.Fixed.Index (Text, "several wait to be decided") > 0,
+                       "a bare /accept with more than one waiting did not list them");
                Assert (Ada.Strings.Fixed.Index (Text, "the program's name") > 0
                        and then Ada.Strings.Fixed.Index (Text, "it is said --set") = 0,
                        "an apostrophe inside quotes, or --set on a requirement, was not taken as"
@@ -9382,7 +9382,8 @@ package body Tests.Framework_Cases is
       Wk.Execute (Store, To_String (Id), Scripted_Parent'(Plan => Out_Of_Time),
                   Cx.Profile (Store, ""), Done, Status);
       Assert (To_String (Done.Final_State) = "blocked"
-              and then To_String (Done.Reason) = "its work ran out of time",
+              and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "its work ran out of time") = 1
+              and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "max_seconds=N") > 0,
               "work out of time was not set aside: " & To_String (Done.Final_State) & " "
               & To_String (Done.Reason));
       S.Close (Store);

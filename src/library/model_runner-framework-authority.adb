@@ -366,6 +366,11 @@ package body Model_Runner.Framework.Authority is
                      Relation  =>
                        (if Rule.Value = Next.Value then Agreement
                         elsif Overrides (Rule, Next) then Explicit_Override
+                        --  A person's instruction stands above every other
+                        --  source by what it is: over one below it, not
+                        --  against it.
+                        elsif Rule.Standing = Human_Instruction and then Next.Standing /= Human_Instruction
+                        then Explicit_Override
                         else Conflict)));
             end if;
          end;

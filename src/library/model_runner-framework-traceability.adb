@@ -1,4 +1,6 @@
 with Ada.Characters.Handling;
+with Ada.Containers.Indefinite_Hashed_Maps;
+with Ada.Strings.Hash;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
 
@@ -409,15 +411,52 @@ package body Model_Runner.Framework.Traceability is
       package Mark_Vectors is new Ada.Containers.Vectors (Positive, Mark);
       Seen : Mark_Vectors.Vector;
 
+      --  Where each node reached is in Seen, and the edges from and to each
+      --  node, found once: a large project's graph holds a hundred thousand
+      --  edges, and walking them all for every node reached took seconds.
+      package Places is new Ada.Containers.Indefinite_Hashed_Maps
+        (String, Positive, Ada.Strings.Hash, "=");
+      package Edge_Lists is new Ada.Containers.Vectors (Positive, Positive);
+      package Edge_Lists_Sorting is new Edge_Lists.Generic_Sorting;
+      package Edge_Index is new Ada.Containers.Indefinite_Hashed_Maps
+        (String, Edge_Lists.Vector, Ada.Strings.Hash, "=", Edge_Lists."=");
+      Where : Places.Map;
+      Out_Of : Edge_Index.Map;
+      Into   : Edge_Index.Map;
+      Tests  : Places.Map;
+
       function Place (Node : String) return Natural is
+         Found : constant Places.Cursor := Where.Find (Node);
       begin
-         for Index in 1 .. Natural (Seen.Length) loop
-            if To_String (Seen (Index).Node) = Node then
-               return Index;
-            end if;
-         end loop;
-         return 0;
+         return (if Places.Has_Element (Found) then Places.Element (Found) else 0);
       end Place;
+
+      procedure Index_Edges is
+         procedure Add (Into_Map : in out Edge_Index.Map; Key : String; At_Edge : Positive) is
+            Found : constant Edge_Index.Cursor := Into_Map.Find (Key);
+         begin
+            if Edge_Index.Has_Element (Found) then
+               Into_Map.Reference (Found).Append (At_Edge);
+            else
+               Into_Map.Insert (Key, Edge_Lists.To_Vector (At_Edge, 1));
+            end if;
+         end Add;
+      begin
+         for At_Edge in 1 .. Natural (From.Edges.Length) loop
+            declare
+               One : constant Edge := From.Edges (At_Edge);
+            begin
+               Add (Out_Of, To_String (One.From), At_Edge);
+               Add (Into, To_String (One.To), At_Edge);
+               --  A test by its place, or by a requirement naming it one.
+               if To_String (One.Kind) = "is_test" then
+                  Tests.Include (To_String (One.From), 1);
+               elsif To_String (One.Kind) = "tested_by" then
+                  Tests.Include (To_String (One.To), 1);
+               end if;
+            end;
+         end loop;
+      end Index_Edges;
 
       --  Reach a node; true when this is new or surer than before.
       function Reach (Node : String; Sure : Repository.Confidence) return Boolean is
@@ -425,6 +464,7 @@ package body Model_Runner.Framework.Traceability is
       begin
          if Held = 0 then
             Seen.Append (Mark'(To_Unbounded_String (Node), Sure));
+            Where.Insert (Node, Natural (Seen.Length));
             return True;
          elsif Sure < Seen (Held).Sure then
             Seen (Held).Sure := Sure;
@@ -453,6 +493,7 @@ package body Model_Runner.Framework.Traceability is
       Seeds  : Name_Lists.Vector;
       Served : Name_Lists.Vector;
    begin
+      Index_Edges;
       for Path of Changed loop
          Seeds.Append (Seed_Of (Path));
          if Reach (Seed_Of (Path), Repository.Certain) then
@@ -466,47 +507,67 @@ package body Model_Runner.Framework.Traceability is
             Sure : constant Repository.Confidence := Seen (Place (Node)).Sure;
          begin
             Queue.Delete_First;
-            for Next of From.Edges loop
-               declare
-                  Kind : constant String := To_String (Next.Kind);
+            --  Only the edges that touch it: those from it, then those into
+            --  it -- each once, where it both starts and ends one.
+            declare
+               Touching : Edge_Lists.Vector;
+               Found    : Edge_Index.Cursor := Out_Of.Find (Node);
+            begin
+               if Edge_Index.Has_Element (Found) then
+                  Touching := Edge_Index.Element (Found);
+               end if;
+               Found := Into.Find (Node);
+               if Edge_Index.Has_Element (Found) then
+                  for At_Edge of Edge_Index.Element (Found) loop
+                     if To_String (From.Edges (At_Edge).From) /= Node then
+                        Touching.Append (At_Edge);
+                     end if;
+                  end loop;
+               end if;
+               Edge_Lists_Sorting.Sort (Touching);
+               for At_Edge of Touching loop
+                  declare
+                     Next : constant Edge := From.Edges (At_Edge);
+                     Kind : constant String := To_String (Next.Kind);
 
-                  --  Reached only through sharing a component is not
-                  --  reached surely: the component is wider than the change.
-                  Along : constant Repository.Confidence :=
-                    (if Kind in "scope" | "belongs_to" | "part_of"
-                     then Weaker (Weaker (Sure, Next.Sure), Repository.Probable)
-                     else Weaker (Sure, Next.Sure));
-               begin
-                  if Forward (Kind) and then To_String (Next.From) = Node then
-                     if Reach (To_String (Next.To), Along) then
-                        Queue.Append (To_String (Next.To));
-                     end if;
+                     --  Reached only through sharing a component is not
+                     --  reached surely: the component is wider than the change.
+                     Along : constant Repository.Confidence :=
+                       (if Kind in "scope" | "belongs_to" | "part_of"
+                        then Weaker (Weaker (Sure, Next.Sure), Repository.Probable)
+                        else Weaker (Sure, Next.Sure));
+                  begin
+                     if Forward (Kind) and then To_String (Next.From) = Node then
+                        if Reach (To_String (Next.To), Along) then
+                           Queue.Append (To_String (Next.To));
+                        end if;
 
-                  --  A requirement changed reaches what it is carried out
-                  --  in: its implementation, the tasks serving it, and its
-                  --  component -- as surely as its links say -- and the
-                  --  components those tasks are in.
-                  elsif ((Seeds.Contains (Node)
-                          and then Kind in "implemented_by" | "scope" | "belongs_to" | "served_by")
-                         or else (Served.Contains (Node) and then Kind = "part_of"))
-                    and then To_String (Next.From) = Node
-                  then
-                     if Kind = "served_by" then
-                        Served.Append (To_String (Next.To));
+                     --  A requirement changed reaches what it is carried out
+                     --  in: its implementation, the tasks serving it, and its
+                     --  component -- as surely as its links say -- and the
+                     --  components those tasks are in.
+                     elsif ((Seeds.Contains (Node)
+                             and then Kind in "implemented_by" | "scope" | "belongs_to" | "served_by")
+                            or else (Served.Contains (Node) and then Kind = "part_of"))
+                       and then To_String (Next.From) = Node
+                     then
+                        if Kind = "served_by" then
+                           Served.Append (To_String (Next.To));
+                        end if;
+                        if Reach (To_String (Next.To), Weaker (Sure, Next.Sure)) then
+                           Queue.Append (To_String (Next.To));
+                        end if;
+                     elsif (not Forward (Kind) or else Both_Ways (Kind))
+                       and then Kind /= "is_test"
+                       and then To_String (Next.To) = Node
+                     then
+                        if Reach (To_String (Next.From), Along) then
+                           Queue.Append (To_String (Next.From));
+                        end if;
                      end if;
-                     if Reach (To_String (Next.To), Weaker (Sure, Next.Sure)) then
-                        Queue.Append (To_String (Next.To));
-                     end if;
-                  elsif (not Forward (Kind) or else Both_Ways (Kind))
-                    and then Kind /= "is_test"
-                    and then To_String (Next.To) = Node
-                  then
-                     if Reach (To_String (Next.From), Along) then
-                        Queue.Append (To_String (Next.From));
-                     end if;
-                  end if;
-               end;
-            end loop;
+                  end;
+               end loop;
+            end;
          end;
       end loop;
 
@@ -518,13 +579,9 @@ package body Model_Runner.Framework.Traceability is
             function Kind_Of return String is
             begin
                --  A test by its place, or by a requirement naming it one.
-               for Next of From.Edges loop
-                  if (To_String (Next.From) = Node and then To_String (Next.Kind) = "is_test")
-                    or else (To_String (Next.To) = Node and then To_String (Next.Kind) = "tested_by")
-                  then
-                     return "test";
-                  end if;
-               end loop;
+               if Tests.Contains (Node) then
+                  return "test";
+               end if;
                if Node'Length > 5 and then Node (Node'First .. Node'First + 4) = "file:" then
                   return "file";
                elsif Node'Length > 5 and then Node (Node'First .. Node'First + 4) = "unit:" then

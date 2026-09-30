@@ -77,6 +77,10 @@ package Model_Runner.Framework.Bootstrap is
       --  Entries made by hand that a document now names by their
       --  identifier: read from it from then on, each as ID from PATH.
       Adopted  : Name_Lists.Vector;
+
+      --  Entries whose document moved -- renamed, or into another
+      --  directory -- read from where it is now, each as ID from PATH.
+      Moved    : Name_Lists.Vector;
    end record;
 
    --  Add an output.

@@ -240,7 +240,7 @@ package body Model_Runner.Framework.Consistency is
                            Found (Conflicting_Authority, Subject,
                                   Line & "; to settle it, "
                                   & (if Theirs = "CONFIG"
-                                     then "reconfigure " & Subject & "=" & Ruling
+                                     then "/reconfigure " & Subject & "=" & Ruling
                                           & " makes the configuration agree, or "
                                      else "")
                                   & (if Ada.Strings.Fixed.Index (Mine, "DEC-") = 1

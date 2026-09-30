@@ -1,6 +1,7 @@
 with Ada.Characters.Handling;
 with Ada.Text_IO;
 with Ada.Directories;
+with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
 with Ada.Strings.Unbounded;
@@ -914,13 +915,23 @@ package body Model_Runner.CLI.Tasks is
             end;
          end if;
          if Tk.State_Of (Store, Argument) /= Next then
-            Pres.Put_Message
-              (Screen, "cli.task.field",
-               [Loc.Named ("name", "reason"),
-                Loc.Named ("value", (declare
-                                        Now : constant Tk.Readiness := Tk.Ready (Store, Argument);
-                                     begin
-                                        (if Now.Reasons.Is_Empty then "" else Now.Reasons.First_Element)))]);
+            declare
+               Now : constant Tk.Readiness := Tk.Ready (Store, Argument);
+               Why : constant String := (if Now.Reasons.Is_Empty then "" else Now.Reasons.First_Element);
+               Parts : constant Natural := Ada.Strings.Fixed.Index (Why, "children: ");
+               First : constant String :=
+                 (if Parts = 0 then "" else Why (Parts + 10 .. Why'Last));
+               Comma : constant Natural := Ada.Strings.Fixed.Index (First, ",");
+            begin
+               Pres.Put_Message
+                 (Screen, "cli.task.field", [Loc.Named ("name", "reason"), Loc.Named ("value", Why)]);
+               --  Waiting for its parts: the first of them is what to do.
+               if First /= "" then
+                  Pres.Put_Note (Screen, "cli.next.work",
+                                 [Loc.Named ("name", (if Comma = 0 then First
+                                                      else First (First'First .. Comma - 1)))]);
+               end if;
+            end;
          end if;
       end Move;
 
@@ -938,6 +949,71 @@ package body Model_Runner.CLI.Tasks is
                  else Ada.Strings.Fixed.Trim (Argument (Space + 1 .. Argument'Last),
                                               Ada.Strings.Both));
       end After_First;
+
+      --  Asked at a terminal before work is given up: yes goes on;
+      --  anywhere else, what was typed is the answer already.
+      function Confirmed (Key : String; Name, Detail : String) return Boolean is
+      begin
+         if not Interactive then
+            return True;
+         end if;
+         Pres.Put_Message (Screen, Key, [Loc.Named ("name", Name), Loc.Named ("detail", Detail)]);
+         declare
+            Answer : constant String :=
+              Ada.Characters.Handling.To_Lower (Ada.Strings.Fixed.Trim (Ada.Text_IO.Get_Line, Ada.Strings.Both));
+         begin
+            --  A command typed here is not an answer: said, and not run.
+            if Answer'Length > 1 and then Answer (Answer'First) = '/' then
+               Pres.Put_Note (Screen, "cli.choose.command_typed",
+                              [Loc.Named ("value", Answer), Loc.Named ("name", "a yes or no")]);
+            end if;
+            if Answer in "y" | "yes" | "j" | "ja" then
+               return True;
+            end if;
+            Pres.Put_Message (Screen, "cli.task.give_up_kept", [Loc.Named ("name", Name)]);
+            return False;
+         end;
+      exception
+         when Ada.Text_IO.End_Error =>
+            return False;
+      end Confirmed;
+
+      --  A task's work in its workspace, about to be given up: each file
+      --  it changed copied to runtime/given-up-TASK, so none is lost unseen.
+      procedure Keep_Given_Up (Task_Id : String) is
+         Space : constant String := Model_Runner.Framework.Workspaces.Active_For (Store, Task_Id);
+         Place : Model_Runner.Framework.Workspaces.Workspace;
+         Read  : E.Error_Info;
+         Into  : constant String :=
+           Hostkit.Fs.Join (Hostkit.Fs.Join (S.Root (Store), "runtime"), "given-up-" & Task_Id);
+         Kept  : Boolean := False;
+      begin
+         if Space = "" then
+            return;
+         end if;
+         Model_Runner.Framework.Workspaces.Read (Store, Space, Place, Read);
+         if E.Is_Error (Read) then
+            return;
+         end if;
+         for File of Model_Runner.Framework.Workspaces.Changes (Store, Space) loop
+            declare
+               From : constant String := Hostkit.Fs.Join (To_String (Place.Path), File);
+               To   : constant String := Hostkit.Fs.Join (Into, File);
+            begin
+               if Ada.Directories.Exists (From) then
+                  Ada.Directories.Create_Path (Ada.Directories.Containing_Directory (To));
+                  Ada.Directories.Copy_File (From, To);
+                  Kept := True;
+               end if;
+            exception
+               when others =>
+                  null;
+            end;
+         end loop;
+         if Kept then
+            Pres.Put_Note (Screen, "cli.task.given_up_kept", [Loc.Named ("path", Into)]);
+         end if;
+      end Keep_Given_Up;
 
       --  Reopen an ended task, or reconsider a rejected one: moves only an
       --  explicit act allows, its history kept.
@@ -1380,16 +1456,26 @@ package body Model_Runner.CLI.Tasks is
            (Screen, "cli.task.moved",
             [Loc.Named ("name", First_Word),
              Loc.Named ("value", Tk.State_Of (Store, First_Word))]);
+         --  What comes next: a candidate parent is accepted with its parts,
+         --  or it is left a candidate once they are done; accepted, the
+         --  first part ready is worked.
          declare
-            Waiting : Unbounded_String;
+            Waiting : Unbounded_String :=
+              (if Tk.State_Of (Store, First_Word) = "candidate" then To_Unbounded_String (First_Word)
+               else Null_Unbounded_String);
+            Ready   : Unbounded_String;
          begin
             for Part of Made loop
                if Tk.State_Of (Store, Part) = "candidate" then
                   Append (Waiting, (if Waiting = Null_Unbounded_String then "" else " ") & Part);
+               elsif Ready = Null_Unbounded_String and then Tk.Ready (Store, Part).Ready then
+                  Ready := To_Unbounded_String (Part);
                end if;
             end loop;
             if Waiting /= Null_Unbounded_String then
                Pres.Put_Note (Screen, "cli.next.parts", [Loc.Named ("detail", To_String (Waiting))]);
+            elsif Ready /= Null_Unbounded_String then
+               Pres.Put_Note (Screen, "cli.next.work", [Loc.Named ("name", To_String (Ready))]);
             end if;
          end;
       end Split_Task;
@@ -1609,11 +1695,20 @@ package body Model_Runner.CLI.Tasks is
                             (Joined (Model_Runner.Framework.Lines_Of (Held)),
                              Ada.Strings.Both)
                      else Held);
-                  Mark  : constant String := "project_baseline CONFIG: ";
-                  Found : constant Natural := Ada.Strings.Fixed.Index (Value, Mark);
+                  --  A rule's LEVEL SOURCE: TEXT is TEXT, and (SOURCE) after
+                  --  it where a person or an entry said it.
+                  Colon : constant Natural := Ada.Strings.Fixed.Index (Value, ": ");
+                  Space : constant Natural := Ada.Strings.Fixed.Index (Value, " ");
+                  Level : constant String :=
+                    (if Colon = 0 or else Space = 0 or else Space > Colon then ""
+                     else Value (Value'First .. Space - 1));
                begin
-                  return (if Found = 0 then Value
-                          else Value (Value'First .. Found - 1) & Value (Found + Mark'Length .. Value'Last));
+                  return (if Ada.Strings.Fixed.Index (Name, "authority.") /= Name'First or else Level = ""
+                            or else not (for all C of Level => C in 'a' .. 'z' | '_')
+                          then Value
+                          elsif Level in "project_baseline" | "language_baseline"
+                          then Value (Colon + 2 .. Value'Last)
+                          else Value (Colon + 2 .. Value'Last) & " (" & Value (Space + 1 .. Colon - 1) & ")");
                end Shown_Value;
             begin
                --  Also left out: what a derived task was made from, kept to
@@ -1906,8 +2001,20 @@ package body Model_Runner.CLI.Tasks is
          elsif Action = "verify"
            and then Tk.State_Of (Store, Argument) in "failed" | "blocked" | "accepted"
          then
-            --  Passing now, and not done yet: what finishes it.
-            Pres.Put_Note (Screen, "cli.next.complete", [Loc.Named ("name", Argument)]);
+            --  Passing now, and not done yet: what finishes it -- or, where
+            --  it still waits for another, what that is.
+            declare
+               Now : constant Tk.Readiness := Tk.Ready (Store, Argument);
+            begin
+               if not Now.Ready and then not Now.Reasons.Is_Empty
+                 and then Ada.Strings.Fixed.Index (Now.Reasons.First_Element, "wait") > 0
+               then
+                  Pres.Put_Note (Screen, "cli.task.accepted_waits",
+                                 [Loc.Named ("name", Argument), Loc.Named ("detail", Now.Reasons.First_Element)]);
+               else
+                  Pres.Put_Note (Screen, "cli.next.complete", [Loc.Named ("name", Argument)]);
+               end if;
+            end;
          end if;
       end Verify;
 
@@ -2076,10 +2183,24 @@ package body Model_Runner.CLI.Tasks is
             Read       : E.Error_Info;
          begin
             S.Read (Store, Model_Runner.Framework.Tasks_Area, Argument & ".state", Held_State, Read);
-            return (if E.Is_Ok (Read) and then R.Get (Held_State, "current_workspace") /= ""
-                      and then Tk.State_Of (Store, Argument) in "failed" | "blocked"
-                      and then Model_Runner.Framework.Workspaces.Active_For (Store, Argument) = ""
-                    then R.Get (Held_State, "current_workspace") else "");
+            if E.Is_Ok (Read) and then R.Get (Held_State, "current_workspace") /= ""
+              and then Tk.State_Of (Store, Argument) in "failed" | "blocked"
+              and then Model_Runner.Framework.Workspaces.Active_For (Store, Argument) = ""
+            then
+               --  Taken in is not given up: its work is in the project.
+               declare
+                  Place : Model_Runner.Framework.Workspaces.Workspace;
+                  Got   : E.Error_Info;
+               begin
+                  Model_Runner.Framework.Workspaces.Read
+                    (Store, R.Get (Held_State, "current_workspace"), Place, Got);
+                  if E.Is_Ok (Got) and then To_String (Place.Status) = "integrated" then
+                     return "";
+                  end if;
+               end;
+               return R.Get (Held_State, "current_workspace");
+            end if;
+            return "";
          end Given_Up;
          Space : constant String := Given_Up;
 
@@ -2221,6 +2342,12 @@ package body Model_Runner.CLI.Tasks is
                   Fail (Outcome);
                   return;
                end if;
+               if not Confirmed ("cli.task.give_up_confirm", First_Word,
+                                 (if Lost.Is_Empty then "nothing" else Joined (Lost)))
+               then
+                  return;
+               end if;
+               Keep_Given_Up (First_Word);
                Tk.Move (Store, Change, First_Word, "failed",
                         "its work in " & Space & " was given up by hand, to be done afresh",
                         Status => Outcome, Actor => Model_Runner.Framework.Transitions.User);
@@ -2298,6 +2425,11 @@ package body Model_Runner.CLI.Tasks is
                           Ada.Characters.Handling.To_Lower
                             (Ada.Strings.Fixed.Trim (Ada.Text_IO.Get_Line, Ada.Strings.Both));
                      begin
+                        --  A command typed here is not an answer: said, and not run.
+                        if Answer'Length > 1 and then Answer (Answer'First) = '/' then
+                           Pres.Put_Note (Screen, "cli.choose.command_typed",
+                                          [Loc.Named ("value", Answer), Loc.Named ("name", "a yes or no")]);
+                        end if;
                         if Answer not in "y" | "yes" | "j" | "ja" then
                            Pres.Put_Message (Screen, "cli.task.anyway_kept", [Loc.Named ("name", First_Word)]);
                            return;
@@ -2337,9 +2469,20 @@ package body Model_Runner.CLI.Tasks is
          then
             Pres.Put_Note (Screen, "cli.task.anyway_unneeded");
          end if;
-         Model_Runner.Framework.Work.Take_In
-           (Store, First_Word, Done, Outcome, Semantic_Accepted => After_First = "anyway",
-            Text_Resolved => After_First in "resolved" | "resolved anyway");
+         declare
+            Space : constant String := Model_Runner.Framework.Workspaces.Active_For (Store, First_Word);
+            --  Settled means a conflict was found first: without one, the
+            --  project is checked for one as a plain integrate checks it.
+            Found : constant Boolean :=
+              Space /= "" and then not Model_Runner.Framework.Workspaces.Conflict_Files (Store, Space).Is_Empty;
+         begin
+            if After_First in "resolved" | "resolved anyway" and then not Found then
+               Pres.Put_Note (Screen, "cli.task.no_conflict_yet", [Loc.Named ("name", First_Word)]);
+            end if;
+            Model_Runner.Framework.Work.Take_In
+              (Store, First_Word, Done, Outcome, Semantic_Accepted => After_First = "anyway",
+               Text_Resolved => Found and then After_First in "resolved" | "resolved anyway");
+         end;
          if E.Is_Error (Outcome) then
             Fail (Outcome);
 
@@ -2395,19 +2538,37 @@ package body Model_Runner.CLI.Tasks is
             Status := E.Exit_Input_Output;
             return;
          end if;
-         Pres.Put_Message
-           (Screen, "cli.task.integrated",
-            [Loc.Named ("name", To_String (Done.Workspace_Id)),
-             Loc.Named ("detail", (if Done.Changed_Files.Is_Empty then "nothing"
-                                   else Joined (Done.Changed_Files)))]);
-         --  The project as it is after, checked: said with its evidence.
-         if Length (Done.Evidence_Id) > 0 then
+         declare
+            Project : constant String := Ada.Directories.Containing_Directory (S.Root (Store));
+            Said    : Model_Runner.Framework.Name_Lists.Vector;
+         begin
+            --  A file the work took away is said removed.
+            for Path of Done.Changed_Files loop
+               Said.Append (Path & (if Ada.Directories.Exists (Hostkit.Fs.Join (Project, Path)) then ""
+                                    else " (removed)"));
+            end loop;
             Pres.Put_Message
-              (Screen, "cli.task.field",
-               [Loc.Named ("name", "checked after"),
-                Loc.Named ("value", To_String (Done.Evidence_Id)
-                                    & (if To_String (Done.Final_State) in "failed" | "blocked"
-                                       then " did not pass" else " passed"))]);
+              (Screen, "cli.task.integrated",
+               [Loc.Named ("name", To_String (Done.Workspace_Id)),
+                Loc.Named ("detail", (if Said.Is_Empty then "nothing" else Joined (Said)))]);
+         end;
+         --  The project as it is after, checked: said with its evidence.
+         --  Passed or not by its own record: a task held back by a gate
+         --  of its own -- parts still open -- was checked all the same.
+         if Length (Done.Evidence_Id) > 0 then
+            declare
+               Evidence : R.Item;
+               Read     : E.Error_Info;
+            begin
+               S.Read (Store, Model_Runner.Framework.Verification_Area, To_String (Done.Evidence_Id),
+                       Evidence, Read);
+               Pres.Put_Message
+                 (Screen, "cli.task.field",
+                  [Loc.Named ("name", "checked after"),
+                   Loc.Named ("value", To_String (Done.Evidence_Id)
+                                       & (if E.Is_Ok (Read) and then R.Get (Evidence, "passed") = "true"
+                                          then " passed" else " did not pass"))]);
+            end;
          end if;
          --  Files its agent changed and did not report are in the project
          --  now too: named, however they got there.
@@ -2430,8 +2591,28 @@ package body Model_Runner.CLI.Tasks is
               (Screen, "cli.task.field",
                [Loc.Named ("name", "reason"), Loc.Named ("value", To_String (Done.Reason))]);
          end if;
+         --  Held back by its parts: the first of them is what to do; a
+         --  retry would only wait for them again.
          if To_String (Done.Final_State) in "failed" | "blocked" then
-            Pres.Put_Note (Screen, "cli.next.retry", [Loc.Named ("name", First_Word)]);
+            declare
+               Parts : constant Model_Runner.Framework.Name_Lists.Vector := Tk.Children (Store, First_Word);
+               Open  : Unbounded_String;
+            begin
+               for Part of Parts loop
+                  if Open = Null_Unbounded_String
+                    and then Tk.State_Of (Store, Part) not in "complete" | "cancelled" | "rejected"
+                  then
+                     Open := To_Unbounded_String (Part);
+                  end if;
+               end loop;
+               if Open /= Null_Unbounded_String
+                 and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "children") > 0
+               then
+                  Pres.Put_Note (Screen, "cli.next.work", [Loc.Named ("name", To_String (Open))]);
+               else
+                  Pres.Put_Note (Screen, "cli.next.retry", [Loc.Named ("name", First_Word)]);
+               end if;
+            end;
          end if;
          if To_String (Done.Final_State) = "complete" then
             --  What its end lets go on, named as any change's is.
@@ -2756,6 +2937,14 @@ package body Model_Runner.CLI.Tasks is
                  (if Space = "" then Model_Runner.Framework.Name_Lists.Empty_Vector
                   else Model_Runner.Framework.Workspaces.Changes (Store, Space));
             begin
+               --  Work waiting to be taken in: asked, and kept aside.
+               if Space /= "" and then not Lost.Is_Empty then
+                  if not Confirmed ("cli.task.give_up_confirm", First_Word, Joined (Lost)) then
+                     S.Close (Store);
+                     return;
+                  end if;
+                  Keep_Given_Up (First_Word);
+               end if;
                Model_Runner.Framework.Work.Cancel
                  (Store, First_Word, Outcome, Actor => Model_Runner.Framework.Transitions.User);
                if E.Is_Error (Outcome) then
@@ -2880,6 +3069,13 @@ package body Model_Runner.CLI.Tasks is
                      elsif Why = "anyway" then "moved to " & Next & " by hand"
                      else Why);
                begin
+                  if Why = "anyway" and then Space /= "" and then not Lost.Is_Empty then
+                     if not Confirmed ("cli.task.give_up_confirm", First_Word, Joined (Lost)) then
+                        S.Close (Store);
+                        return;
+                     end if;
+                     Keep_Given_Up (First_Word);
+                  end if;
                   Tk.Move (Store, Change, First_Word, Next, Said, Status => Outcome,
                            Actor => Model_Runner.Framework.Transitions.User);
                   if E.Is_Ok (Outcome) and then Space /= "" then
@@ -2947,18 +3143,73 @@ package body Model_Runner.CLI.Tasks is
                     Hostkit.Fs.Join (Hostkit.Fs.Join (S.Root (Store), "runtime"), "diff-" & First_Word);
                begin
                   for File of Model_Runner.Framework.Workspaces.Changes (Store, Space) loop
-                     Pres.Put_Message (Screen, "cli.task.diff_file", [Loc.Named ("path", File)]);
+                     declare
+                        --  What the work changed: the file as the workspace
+                        --  began from, beside the workspace's -- not the
+                        --  project's now, which may have moved on since.
+                        Base   : constant String :=
+                          Hostkit.Fs.Join (Hostkit.Fs.Join (Ada.Directories.Containing_Directory
+                                                              (To_String (Place.Path)), "base"), File);
+                        Mine   : constant String := Hostkit.Fs.Join (Project, File);
+                        Theirs : constant String := Hostkit.Fs.Join (To_String (Place.Path), File);
+                        From   : constant String :=
+                          (if Ada.Directories.Exists (Base) then Base
+                           elsif Ada.Directories.Exists (Mine) then Mine
+                           else Hostkit.Fs.Null_Device);
+                        function Same (Left, Right : String) return Boolean is
+                           function Whole (Path : String) return String is
+                              use Ada.Streams.Stream_IO;
+                              File : File_Type;
+                           begin
+                              Open (File, In_File, Path);
+                              declare
+                                 Text : String (1 .. Natural (Size (File)));
+                              begin
+                                 String'Read (Stream (File), Text);
+                                 Close (File);
+                                 return Text;
+                              end;
+                           end Whole;
+                        begin
+                           return Ada.Directories."=" (Ada.Directories.Size (Left), Ada.Directories.Size (Right))
+                             and then Whole (Left) = Whole (Right);
+                        exception
+                           when others =>
+                              return False;
+                        end Same;
+                     begin
+                        Pres.Put_Message
+                          (Screen, "cli.task.diff_file",
+                           [Loc.Named ("path", File
+                                       & (if not Ada.Directories.Exists (Theirs) then " (removed)"
+                                          elsif not Ada.Directories.Exists (From) then " (new)"
+                                          else ""))]);
+                        --  The project's copy moved on as well: said, as what
+                        --  taking it in will check.
+                        if From = Base and then Ada.Directories.Exists (Mine) and then not Same (Base, Mine) then
+                           Pres.Put_Note (Screen, "cli.task.diff_project_moved",
+                                          [Loc.Named ("path", File), Loc.Named ("name", First_Word)]);
+                        end if;
+                     end;
                      if Differ /= "" then
                         declare
                            Args : Hostkit.String_Vectors.Vector;
                            Ran  : Hostkit.Process.Process_Outcome;
-                           Mine : constant String := Hostkit.Fs.Join (Project, File);
+                           Base : constant String :=
+                             Hostkit.Fs.Join (Hostkit.Fs.Join (Ada.Directories.Containing_Directory
+                                                                 (To_String (Place.Path)), "base"), File);
+                           Mine : constant String :=
+                             (if Ada.Directories.Exists (Base) then Base
+                              else Hostkit.Fs.Join (Project, File));
+                           Theirs : constant String := Hostkit.Fs.Join (To_String (Place.Path), File);
                         begin
                            Args.Append (To_Unbounded_String ("-u"));
                            Args.Append (To_Unbounded_String
                                           (if Ada.Directories.Exists (Mine) then Mine
                                            else Hostkit.Fs.Null_Device));
-                           Args.Append (To_Unbounded_String (Hostkit.Fs.Join (To_String (Place.Path), File)));
+                           Args.Append (To_Unbounded_String
+                                          (if Ada.Directories.Exists (Theirs) then Theirs
+                                           else Hostkit.Fs.Null_Device));
                            Ran := Hostkit.Process.Run_Captured
                              (Differ, Args, Stdin_Path => Hostkit.Fs.Null_Device,
                               Stdout_Path => Output, Stderr_Path => Output, Timeout_Ms => 20_000);
@@ -2981,7 +3232,7 @@ package body Model_Runner.CLI.Tasks is
                         end;
                      end if;
                   end loop;
-                  Pres.Put_Note (Screen, "cli.next.integrate", [Loc.Named ("name", First_Word)]);
+                  Pres.Put_Note (Screen, "cli.next.integrate_diffed", [Loc.Named ("name", First_Word)]);
                end;
             end if;
          end;
@@ -3024,8 +3275,12 @@ package body Model_Runner.CLI.Tasks is
          Commit;
       end if;
       for Id of Became_Ready loop
-         --  The one just accepted was said with its next step already.
-         if not (Action = "accept" and then Id = Argument) then
+         --  The one just accepted was said with its next step already, and
+         --  one that is done is not ready for anything: only those that can
+         --  now be worked are said.
+         if not (Action = "accept" and then Id = Argument)
+           and then Tk.State_Of (Store, Id) = "accepted"
+         then
             Pres.Put_Note (Screen, "cli.task.ready", [Loc.Named ("name", Id)]);
          end if;
       end loop;

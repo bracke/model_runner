@@ -1,8 +1,8 @@
 # Any repository, whatever it is written in. Records what the files at
 # its top say about it and asks nothing it can find out.
 template = generic
-name = Existing Repository
-description = A repository of any kind, taken as it is.
+name = Any Language
+description = A project in any language, new or already there, checked by a command of its own.
 version = 1
 category = existing
 includes = standard-development
@@ -25,13 +25,15 @@ discover CMakeLists.txt fact build_system = CMake
 discover Cargo.toml fact build_system = Cargo
 discover package.json fact build_system = npm
 discover pyproject.toml fact build_system = Python
+discover go.mod fact build_system = Go
+discover pom.xml fact build_system = Maven
 
 # How the repository is checked: found from its build system where there is
 # one, asked for where there is not. Its program is the one checks may run.
 input check_command
   type = text
   label = Check command
-  description = the command that builds and tests the repository, as make test or alr build
+  description = the command that builds and tests it, as make test, pytest or npm test -- true where there is nothing to check yet
   required = true
 
 # The program checks may run: the one the command starts, unless named.
@@ -44,11 +46,15 @@ input check_program
 
 discover *.gpr input check_command = gprbuild
 discover alire.toml input check_command = alr build
-discover Makefile input check_command = make check
+discover Makefile input check_command = make test
 discover CMakeLists.txt input check_command = ctest --test-dir build
 discover Cargo.toml input check_command = cargo test
 discover package.json input check_command = npm test
 discover pyproject.toml input check_command = python3 -m pytest
+discover setup.py input check_command = python3 -m pytest
+discover requirements.txt input check_command = python3 -m pytest
+discover go.mod input check_command = go test ./...
+discover pom.xml input check_command = mvn test
 
 profile checks = check: ${check_command}
 scalar profile_capability.checks = run_tests

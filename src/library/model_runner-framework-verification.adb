@@ -674,6 +674,80 @@ package body Model_Runner.Framework.Verification is
             Records.Set (Value, "harness_version", Model_Runner.Version);
          end;
 
+         --  The same checks, run a moment ago on the same files with the
+         --  same configuration, environment and values: their result is
+         --  this run's -- kept as that, naming the run it is -- not taken
+         --  again. Several tasks completed at once run the suite once.
+         if Workspace = "" then
+            declare
+               Now   : constant String := Repository_Now (Item);
+               Names : constant Name_Lists.Vector := Stores.Names (Item, Verification_Area);
+               Seen  : Natural := 0;
+            begin
+               for Position in reverse 1 .. Natural (Names.Length) loop
+                  exit when Seen >= 20;
+                  Seen := Seen + 1;
+                  declare
+                     Name  : constant String := Names (Position);
+                     Id    : constant String :=
+                       (if Name'Length > 4 and then Name (Name'Last - 3 .. Name'Last) = ".rec"
+                        then Name (Name'First .. Name'Last - 4) else Name);
+                     Prior : Records.Item;
+                     Read  : E.Error_Info;
+                     Same  : Boolean;
+                  begin
+                     Stores.Read (Item, Verification_Area, Id, Prior, Read);
+                     Same := E.Is_Ok (Read)
+                       and then Records.Get (Prior, "workspace") = ""
+                       and then Records.Get (Prior, "state_changed") = ""
+                       and then Records.Get (Prior, "passed") /= ""
+                       and then Records.Get (Prior, "profile") = Profile
+                       and then Records.Get (Prior, "repository_revision") = Now
+                       and then Records.Get (Prior, "scope_files") = ""
+                       and then (for all Field of Name_Lists.Vector'
+                                   (["checks_fingerprint", "configuration_fingerprint",
+                                     "environment_fingerprint", "network"]) =>
+                                   Records.Get (Prior, Field) = Records.Get (Value, Field));
+                     --  The same values given to its commands, none more.
+                     if Same then
+                        for Index in 1 .. Records.Field_Count (Prior) loop
+                           if Starts (Records.Field_Name (Prior, Index), "given.") then
+                              Same := Same and then Records.Get (Value, Records.Field_Name (Prior, Index))
+                                                    = Records.Get (Prior, Records.Field_Name (Prior, Index));
+                           end if;
+                        end loop;
+                        for Index in 1 .. Records.Field_Count (Value) loop
+                           if Starts (Records.Field_Name (Value, Index), "given.") then
+                              Same := Same and then Records.Has (Prior, Records.Field_Name (Value, Index));
+                           end if;
+                        end loop;
+                     end if;
+                     if Same then
+                        for Index in 1 .. Records.Field_Count (Prior) loop
+                           declare
+                              Field : constant String := Records.Field_Name (Prior, Index);
+                           begin
+                              if Starts (Field, "check.") or else Starts (Field, "parameters.")
+                                or else Starts (Field, "diagnostic.") or else Starts (Field, "tool.")
+                              then
+                                 Records.Set (Value, Field, Records.Get (Prior, Field));
+                              end if;
+                           end;
+                        end loop;
+                        Passed := Records.Get (Prior, "passed") = "true";
+                        Records.Set (Value, "reused_from", Id);
+                        Records.Set (Value, "repository_revision", Now);
+                        Records.Set (Value, "workspace_revision", Now);
+                        Records.Set (Value, "passed", (if Passed then "true" else "false"));
+                        Records.Set (Value, "ended_at", Timestamp);
+                        Stores.Put (Change, Verification_Area, To_String (Evidence), Value);
+                        return;
+                     end if;
+                  end;
+               end loop;
+            end;
+         end if;
+
          Passed := True;
          Stores.Snapshot_State (Item, State);
          for Index in 1 .. Length (Checks) loop
@@ -1881,6 +1955,9 @@ package body Model_Runner.Framework.Verification is
       --  says the tests do not pass on the files as they are.
       Project_Passed : Unbounded_String;
       Project_Failed : Unbounded_String;
+      --  The latest whole-suite run passed and ran no test: an empty suite.
+      Project_Empty  : Unbounded_String;
+      Empty_Run      : Boolean := False;
 
       procedure Find_Project_Runs is
          Latest  : Unbounded_String;
@@ -1913,6 +1990,8 @@ package body Model_Runner.Framework.Verification is
                      Latest := To_Unbounded_String (Id);
                      Good := Records.Get (Value, "passed") = "true"
                        and then Showing (Item, Value) = Tests_Ran;
+                     Empty_Run := Records.Get (Value, "passed") = "true"
+                       and then Showing (Item, Value) = Found_None;
                   end if;
                end if;
             end;
@@ -1925,6 +2004,8 @@ package body Model_Runner.Framework.Verification is
          if Latest /= Null_Unbounded_String then
             if Good then
                Project_Passed := Latest;
+            elsif Empty_Run then
+               Project_Empty := Latest;
             else
                Project_Failed := Latest;
             end if;
@@ -1997,6 +2078,13 @@ package body Model_Runner.Framework.Verification is
       end Failed_Elsewhere;
    begin
       Find_Project_Runs;
+      --  A suite that ran nothing passed nothing: said as that, with the
+      --  way on -- a test that shows it -- not as a failure to fix.
+      if Project_Empty /= Null_Unbounded_String and then Standing_Of_Tasks = "" then
+         return Lacks (To_String (Project_Empty) & ", the latest run of the project's whole suite,"
+                       & " passed and ran no test: the suite is empty; add a test that shows "
+                       & Requirement & ", then /check full");
+      end if;
       if Project_Failed /= Null_Unbounded_String then
          declare
             Value  : Records.Item;
@@ -2061,11 +2149,18 @@ package body Model_Runner.Framework.Verification is
             then
                Any := True;
                if State /= "complete" then
+                  --  The way on first -- the work done -- and taking what is
+                  --  there as done only after, for code written already.
                   return Lacks (Id & " serves it and is " & State
                                 & "; it is verified once that is complete"
+                                & (if State = "candidate"
+                                   then ": /task accept " & Id & ", then /work " & Id & " does it"
+                                   elsif State in "accepted" | "blocked" | "failed"
+                                   then ": /work " & Id & " does it"
+                                   else "")
                                 & (if State in "accepted" | "blocked" | "failed" | "candidate"
-                                   then " -- where the code is there already, /task complete " & Id
-                                        & " takes it as done, its checks passing"
+                                   then " (or, for code that is there already, /task complete " & Id
+                                        & " takes it as done, its checks passing)"
                                    else ""));
                end if;
 
@@ -2143,7 +2238,9 @@ package body Model_Runner.Framework.Verification is
          return Lacks ("no task serves it");
       elsif not Built then
          return Lacks ("nothing implements it: no task serving it changed a file, and no"
-                       & " implementation is linked");
+                       & " implementation is linked; where the code is there already, /req link "
+                       & Requirement & " implementation FILE names it, and /check " & Requirement
+                       & " then judges it");
       end if;
 
       --  Where the project verifies requirements themselves, by its

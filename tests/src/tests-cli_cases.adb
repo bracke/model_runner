@@ -1966,7 +1966,7 @@ package body Tests.CLI_Cases is
               and then Ada.Directories.Exists (Project & "/.model_runner/indexes/tasks.rec"),
               "a confirmed project was not made, or without its indexes: " & Last_Output);
       Assert (Ada.Strings.Fixed.Index
-                (Text_Of (Project & "/.model_runner/config/resolved.rec"), "make check") > 0,
+                (Text_Of (Project & "/.model_runner/config/resolved.rec"), "make test") > 0,
               "an existing repository's build system did not give it its checks");
       Ada.Directories.Delete_Tree (Project);
    end Init_Starts_A_Project;
@@ -2069,8 +2069,8 @@ package body Tests.CLI_Cases is
 
       --  2. The session's project commands from the shell.
       Run ("state");
-      Assert (Code = 0 and then Shows ("of them candidates"),
-              "state did not report from the shell: " & To_String (Said));
+      Assert (Code = 0 and then Shows ("nothing in it yet"),
+              "state of an empty project did not say so, and how to begin: " & To_String (Said));
       Run ("req");
       Assert (Shows ("no requirements yet"), "an empty register did not say how to begin");
       Run ("reconfigure|work.lease=90|confirm=yes");

@@ -1096,6 +1096,13 @@ package body Model_Runner.Framework.Workspaces is
                From   : constant String := Hostkit.Fs.Join (To_String (Held.Path), Path);
                Target : constant String := Hostkit.Fs.Join (Project, Path);
             begin
+               --  What would change nothing -- the project holds it as the
+               --  workspace does, or neither holds it -- is not taken in.
+               if (Dirs.Exists (From) and then Dirs.Exists (Target) and then Print_Of (From) = Print_Of (Target))
+                 or else (not Dirs.Exists (From) and then not Dirs.Exists (Target))
+               then
+                  goto Next_Path;
+               end if;
                Taken.Append (Path);
                if Dirs.Exists (From) then
                   if not Files.Make_Directory (Dirs.Containing_Directory (Target)) then
@@ -1138,6 +1145,7 @@ package body Model_Runner.Framework.Workspaces is
                   Put_Back;
                   return;
             end;
+            <<Next_Path>>
          end loop;
       end;
 

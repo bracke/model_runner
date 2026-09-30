@@ -409,7 +409,7 @@ package body Model_Runner.Framework.Invocations is
               (if Result.Values.Contains (Field) then Result.Values (Field) else "");
          begin
             if Given = "" and then not Rules.Optional.Contains (Field) then
-               Refuse (Field, "the answer does not give it");
+               Refuse (Field, "the answer has no " & Field & ": line");
                return;
             elsif Given /= "" and then Allowed /= "" then
                declare

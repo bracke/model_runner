@@ -821,6 +821,48 @@ package body Model_Runner.CLI.Work is
             S.Close (Store);
             return;
          end if;
+         --  An agent left nothing to do its task with -- by the task's own
+         --  permissions or the sandbox -- is not started to fail: said, with
+         --  what gives it the rest.
+         declare
+            View    : R.Item;
+            Read    : E.Error_Info;
+         begin
+            Tk.Effective (Store, To_String (Chosen), View, Read);
+            if E.Is_Ok (Read) then
+               declare
+                  Allowed : constant Pm.Permission_Set :=
+                    Pm.Effective (Store, R.Get (View, "definition.kind"), "worker",
+                                  Task_Level => R.Get (View, "definition.permissions"));
+                  Writes  : constant Boolean :=
+                    Ada.Strings.Fixed.Index (R.Get (View, "gates"), "implementation_present") > 0;
+                  Lacks   : constant String :=
+                    (if Pm.Image (Allowed) = "" then "anything"
+                     elsif Writes and then not Pm.Allows (Allowed, Pm.Write_Source) then "write a file"
+                     elsif not Pm.Allows (Allowed, Pm.Read_Source) then "read the source"
+                     else "");
+               begin
+                  if Lacks /= "" then
+                     Outcome := E.Make (E.Framework_Permission_Denied);
+                     E.Add_Text (Outcome, "name", "the agent of " & To_String (Chosen));
+                     E.Add_Text (Outcome, "detail",
+                                 "it would not be let " & Lacks
+                                 & (if Lacks = "write a file" then ", which its gate implementation_present needs"
+                                    else "")
+                                 & (if Pm."/=" (Pm.Sandbox, Pm.Unrestricted)
+                                    then "; " & Pm.Sandbox_Source & " confines it -- /sandbox off lifts that"
+                                    else "")
+                                 & (if R.Get (View, "definition.permissions") /= ""
+                                    then "; its own permissions narrow it -- /task edit " & To_String (Chosen)
+                                         & " permissions=inherit takes its kind's"
+                                    else ""));
+                     Fail (Outcome);
+                     S.Close (Store);
+                     return;
+                  end if;
+               end;
+            end if;
+         end;
          declare
             --  A runner that knows its model budgets for it; otherwise the
             --  profile the configuration names.
@@ -917,9 +959,25 @@ package body Model_Runner.CLI.Work is
             return;
          end if;
 
-         for Path of Done.Changed_Files loop
-            Say ("cli.work.changed", Path, "");
-         end loop;
+         --  Each as what happened to it: a file the work took away is
+         --  removed, not changed.
+         declare
+            Tree  : Unbounded_String := To_Unbounded_String
+              (Ada.Directories.Containing_Directory (S.Root (Store)));
+            Place : Model_Runner.Framework.Workspaces.Workspace;
+            Got   : E.Error_Info;
+         begin
+            if Length (Done.Workspace_Id) > 0 then
+               Model_Runner.Framework.Workspaces.Read (Store, To_String (Done.Workspace_Id), Place, Got);
+               if E.Is_Ok (Got) then
+                  Tree := Place.Path;
+               end if;
+            end if;
+            for Path of Done.Changed_Files loop
+               Say ((if Ada.Directories.Exists (Hostkit.Fs.Join (To_String (Tree), Path))
+                     then "cli.work.changed" else "cli.work.removed"), Path, "");
+            end loop;
+         end;
          for Child of Done.Children loop
             Say ("cli.work.child", Child, "");
          end loop;
@@ -1107,15 +1165,69 @@ package body Model_Runner.CLI.Work is
                elsif R.Get (Defined, "permissions") /= "" then
                   Pres.Put_Note (Screen, "cli.next.own_permissions_refused",
                                  [Loc.Named ("name", To_String (Done.Task_Id))]);
-               else
-                  Pres.Put_Note
-                    (Screen, "cli.next.write_refused",
-                     [Loc.Named ("name", To_String (Done.Task_Id)),
-                      Loc.Named ("value",
-                                 (if not Project (Pm.Write_Source).Granted
-                                    or else not Project (Pm.Write_Source).Roots.Is_Empty
-                                  then "project"
-                                  else "kind." & To_String (Kind)))]);
+               --  An agent that touched the project's state is not one to
+               --  be let write more.
+               elsif Ada.Strings.Fixed.Index (To_String (Done.Reason), "project's state") = 0 then
+                  declare
+                     Level  : constant String :=
+                       (if not Project (Pm.Write_Source).Granted
+                          or else not Project (Pm.Write_Source).Roots.Is_Empty
+                        then "project"
+                        else "kind." & To_String (Kind));
+                     Present : Boolean;
+                     Held    : constant Pm.Permission_Set := Pm.Level_Of (Store, Level, Present);
+                     Why     : constant String := To_String (Done.Reason);
+                     Marks   : constant Model_Runner.Framework.Name_Lists.Vector :=
+                       ["they were: ", "still there: "];
+                     Roots   : Model_Runner.Framework.Name_Lists.Vector := Held (Pm.Write_Source).Roots;
+                     Joined_Roots : Unbounded_String;
+                  begin
+                     --  The roots it has, and the directory of each file it
+                     --  was refused: what to write for it to have both.
+                     for Mark of Marks loop
+                        declare
+                           At_Mark : constant Natural := Ada.Strings.Fixed.Index (Why, Mark);
+                           From    : constant Natural := At_Mark + Mark'Length;
+                           Stop    : Natural := Why'Last;
+                        begin
+                           if At_Mark > 0 then
+                              for Index in From .. Why'Last loop
+                                 if Why (Index) = ';'
+                                   or else (Index < Why'Last and then Why (Index .. Index + 1) = " -")
+                                 then
+                                    Stop := Index - 1;
+                                    exit;
+                                 end if;
+                              end loop;
+                              for File of Model_Runner.Framework.Lines_Of
+                                (Ada.Strings.Fixed.Translate
+                                   (Why (From .. Stop), Ada.Strings.Maps.To_Mapping (",", [1 => ASCII.LF])))
+                              loop
+                                 declare
+                                    Path  : constant String := Ada.Strings.Fixed.Trim (File, Ada.Strings.Both);
+                                    Slash : constant Natural :=
+                                      Ada.Strings.Fixed.Index (Path, "/", Ada.Strings.Backward);
+                                    Dir   : constant String :=
+                                      (if Slash = 0 then Path else Path (Path'First .. Slash));
+                                 begin
+                                    if Dir /= "" and then not Roots.Contains (Dir) then
+                                       Roots.Append (Dir);
+                                    end if;
+                                 end;
+                              end loop;
+                           end if;
+                        end;
+                     end loop;
+                     for Root of Roots loop
+                        Append (Joined_Roots, (if Joined_Roots = Null_Unbounded_String then "" else "|") & Root);
+                     end loop;
+                     Pres.Put_Note
+                       (Screen, "cli.next.write_refused",
+                        [Loc.Named ("name", To_String (Done.Task_Id)),
+                         Loc.Named ("value", Level),
+                         Loc.Named ("detail", (if Joined_Roots = Null_Unbounded_String then "..."
+                                               else To_String (Joined_Roots)))]);
+                  end;
                end if;
             end;
          elsif To_String (Done.Final_State) in "failed" | "blocked"

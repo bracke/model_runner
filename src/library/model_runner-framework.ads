@@ -58,7 +58,9 @@ package Model_Runner.Framework is
    --  @param State The state.
    --  @return It with the article a noun takes.
    function State_Said (State : String) return String
-   is (if State = "candidate" then "a candidate" else State);
+   is (if State = "candidate" then "a candidate"
+       elsif State = "verification" then "waiting in verification"
+       else State);
 
    --  The lines of a text, empty ones left out: how a field holding a
    --  list keeps it.

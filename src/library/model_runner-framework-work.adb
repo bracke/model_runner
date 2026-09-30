@@ -59,17 +59,25 @@ package body Model_Runner.Framework.Work is
      & "summary: one line on what you found" & ASCII.LF
      & "changed_files: none" & ASCII.LF & ASCII.LF;
 
+   --  Only what the agent has is described: a sentence about a tool it
+   --  does not hold is tokens spent on nothing, or a call it cannot make.
    function Instructions_For
-     (May_Propose : Boolean; May_Split : Boolean := True; May_Write : Boolean := True) return String
+     (May_Propose  : Boolean;
+      May_Split    : Boolean := True;
+      May_Write    : Boolean := True;
+      May_Delegate : Boolean := True;
+      May_Check    : Boolean := True) return String
    is ((if not May_Write then Read_Only_Opening
         else "## What to do" & ASCII.LF
        & "Do the task now, with the tools: read_file reads a file, write_file"
        & " writes the whole new content of a file, list_directory lists a"
        & " directory. Paths are relative to the project. Make each change by"
-       & " calling write_file; describing a change does not make it. Where"
-       & " you have delegate, a part better done apart -- a review, an"
-       & " investigation -- can be handed to a helper, who reports back; where"
-       & " you have run_checks, it runs the project's checks on what you wrote."
+       & " calling write_file; describing a change does not make it."
+       & (if May_Delegate
+          then " delegate hands a part better done apart -- a review, an investigation --"
+               & " to a helper, who reports back."
+          else "")
+       & (if May_Check then " run_checks runs the project's checks on what you wrote." else "")
        & ASCII.LF & ASCII.LF
        & "When the files are written, finish with a short report in these lines:"
        & ASCII.LF & ASCII.LF
@@ -94,8 +102,11 @@ package body Model_Runner.Framework.Work is
                & " is too large to do as one, say blocked and say so in the summary. A")
        & " task this one should wait for goes under waits_for:,"
        & " and verify: yes asks for your work to be checked whatever the"
-       & " status. If a helper you needed failed and you did its part another"
-       & " way, say how under instead:." & ASCII.LF);
+       & " status."
+       & (if May_Delegate
+          then " If a helper you needed failed and you did its part another way, say how under instead:."
+          else "")
+       & ASCII.LF);
 
    function Instructions return String is (Instructions_For (May_Propose => True));
 
@@ -665,6 +676,45 @@ package body Model_Runner.Framework.Work is
       return To_String (Result);
    end First_Diagnostics;
 
+   ----------------
+   -- Reevaluate --
+   ----------------
+
+   procedure Reevaluate
+     (Item   : in out Stores.Store;
+      Said   : out Name_Lists.Vector;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Change : Stores.Transaction;
+      Became : Name_Lists.Vector;
+      Moved  : Name_Lists.Vector;
+      Was    : Configurations.Value_Maps.Map;
+   begin
+      Said.Clear;
+      for Id of Intent.List (Item, Intent.Requirement) loop
+         Was.Include (Id, Intent.State_Of (Item, Intent.Requirement, Id));
+      end loop;
+      Tasks.Recompute_Readiness (Item, Change, Became, Status);
+      if E.Is_Ok (Status) then
+         Verification.Reevaluate_Requirements (Item, Change, Moved, Status);
+      end if;
+      if E.Is_Ok (Status) then
+         Stores.Commit (Item, Change, Status);
+      end if;
+      --  Only a state that changed is said, with from and to, and what
+      --  judges it again.
+      for Id of Moved loop
+         if not Was.Contains (Id) or else Was (Id) /= Intent.State_Of (Item, Intent.Requirement, Id)
+         then
+            Said.Append (Id & " is " & Intent.State_Of (Item, Intent.Requirement, Id) & " now"
+                         & (if Was.Contains (Id) then ", not " & Configurations.Value_Maps.Element (Was, Id)
+                            else "")
+                         & ": what verified it no longer covers it as it stands -- it or its code changed;"
+                         & " /check " & Id & " judges it again");
+         end if;
+      end loop;
+   end Reevaluate;
+
    ------------------------
    -- Recover_On_Opening --
    ------------------------
@@ -863,29 +913,10 @@ package body Model_Runner.Framework.Work is
 
       --  7: readiness and verification, as the state now stands.
       declare
-         Became : Name_Lists.Vector;
-         Moved  : Name_Lists.Vector;
-         Was    : Configurations.Value_Maps.Map;
+         Moved : Name_Lists.Vector;
       begin
-         for Id of Intent.List (Item, Intent.Requirement) loop
-            Was.Include (Id, Intent.State_Of (Item, Intent.Requirement, Id));
-         end loop;
-         Tasks.Recompute_Readiness (Item, Change, Became, Status);
-         if E.Is_Ok (Status) then
-            Verification.Reevaluate_Requirements (Item, Change, Moved, Status);
-         end if;
-         if E.Is_Ok (Status) then
-            Stores.Commit (Item, Change, Status);
-         end if;
-         --  Only a state that changed is said, with from and to.
-         for Id of Moved loop
-            if not Was.Contains (Id) or else Was (Id) /= Intent.State_Of (Item, Intent.Requirement, Id)
-            then
-               Said.Append (Id & " is " & Intent.State_Of (Item, Intent.Requirement, Id) & " now"
-                            & (if Was.Contains (Id) then ", not " & Configurations.Value_Maps.Element (Was, Id) else "")
-                            & ": what verified it was judged again");
-            end if;
-         end loop;
+         Reevaluate (Item, Moved, Status);
+         Said.Append (Moved);
       end;
 
       --  What of the state goes into the repository, as the policy says.
@@ -2185,6 +2216,26 @@ package body Model_Runner.Framework.Work is
            or else Held_Agent.Allowed (Permissions.Write_Specs).Granted;
       end May_Write_Here;
 
+      --  Whether its agent holds delegate, and run_checks: what it is told
+      --  of them follows.
+      function May_Delegate_Here return Boolean is
+         Held_Agent : Agents.Agent;
+         Read       : E.Error_Info;
+      begin
+         Agents.Read (Item, To_String (Result.Agent_Id), Held_Agent, Read);
+         return E.Is_Error (Read) or else Held_Agent.Allowed (Permissions.Create_Children).Granted;
+      end May_Delegate_Here;
+
+      function May_Check_Here return Boolean is
+         Held_Agent : Agents.Agent;
+         Read       : E.Error_Info;
+      begin
+         Agents.Read (Item, To_String (Result.Agent_Id), Held_Agent, Read);
+         return E.Is_Error (Read)
+           or else Held_Agent.Allowed (Permissions.Run_Build).Granted
+           or else Held_Agent.Allowed (Permissions.Run_Tests).Granted;
+      end May_Check_Here;
+
       --  Whether its agent may propose work: what it is told to answer
       --  with follows.
       function May_Propose_Here return Boolean is
@@ -2620,7 +2671,8 @@ package body Model_Runner.Framework.Work is
       --  What it is told, and the call, recorded before it is made.
       Context.Build
         (Item, Task_Id, Model, Built, Held,
-         Instructions => Instructions_For (May_Propose_Here, May_Split_Here, May_Write_Here)
+         Instructions => Instructions_For (May_Propose_Here, May_Split_Here, May_Write_Here,
+                                           May_Delegate => May_Delegate_Here, May_Check => May_Check_Here)
                          & Allowed_Here & Its_Parts);
       if E.Is_Error (Held) then
          Conclude ("blocked", "its context cannot be built: "
@@ -2980,7 +3032,26 @@ package body Model_Runner.Framework.Work is
          --  Out of time is not wrong work: the task is set aside, not
          --  failed, with what its agents made stopped.
          Stop_Children (Item, Change, To_String (Result.Agent_Id), "the work ran out of time");
-         Conclude ("blocked", "its work ran out of time", "failed");
+         declare
+            Defined : Records.Item;
+            Read    : E.Error_Info;
+         begin
+            Tasks.Definition (Item, Task_Id, Defined, Read);
+            declare
+               Own : constant Boolean :=
+                 Tasks.Kind_Policy (Item, Records.Get (Defined, "kind"), "max_seconds") /= "";
+               --  Which limit it was, and how it is raised: a retry alone
+               --  runs out the same way.
+               Limit : constant String :=
+                 (if Own then "task.max_seconds." & Records.Get (Defined, "kind")
+                  elsif Scalar (Item, "agents.max_seconds") /= "" then "agents.max_seconds"
+                  else "work.lease");
+            begin
+               Conclude ("blocked", "its work ran out of time:" & Natural'Image (Time_Allowed (Item, Task_Id))
+                         & " s, as " & Limit & " allows; /reconfigure " & Limit & "=N gives it longer",
+                         "failed");
+            end;
+         end;
          return;
       elsif E.Is_Error (Ran) and then Ran.Code = E.Framework_Agent_Failed then
          --  A crash is not wrong work: what it changed is kept to be
@@ -4020,6 +4091,11 @@ package body Model_Runner.Framework.Work is
                   and then not Tasks.Children (Item, Task_Id).Is_Empty
                 then To_String (Had) & " was given up when it split into parts; it goes on once they"
                      & " are done"
+                --  Ready to be worked again: no work of it waits, and /work
+                --  is what makes some.
+                elsif Tasks.State_Of (Item, Task_Id) = "accepted"
+                then "no work of it waits to be taken in -- " & To_String (Had) & " went with its last"
+                     & " attempt; /work " & Task_Id & " does it"
                 else To_String (Had) & " was given up when it " & Tasks.State_Of (Item, Task_Id)
                      & "; /task accept " & Task_Id & " does its work again"));
          end;

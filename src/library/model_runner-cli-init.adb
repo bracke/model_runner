@@ -528,11 +528,18 @@ package body Model_Runner.CLI.Init is
             Rules     : constant Model_Runner.Framework.Execution.Policy :=
               Model_Runner.Framework.Execution.Policy_From (Planned.Configuration);
 
+            --  Asked about at a terminal, the plan is the question's: shown
+            --  in it, and written out once, when it is taken -- not again
+            --  for each round of changing an input.
+            Asking : constant Boolean := Interactive and then not Confirmed;
+
             procedure Say (Key : String; Arguments : Loc.Argument_List) is
                Line : constant String := Pres.Next_Step_Value (Screen, Key, Arguments);
             begin
                Append (Plan_Text, Line & ASCII.LF);
-               if Model_Runner.CLI.Options."/=" (Item.Level, Model_Runner.CLI.Options.Quiet) then
+               if Model_Runner.CLI.Options."/=" (Item.Level, Model_Runner.CLI.Options.Quiet)
+                 and then not Asking
+               then
                   Pres.Put_Message (Screen, Key, Arguments);
                end if;
             end Say;
@@ -832,6 +839,10 @@ package body Model_Runner.CLI.Init is
                         Changing := True;
                      else
                         Allowing := Picked = 2 and then not Fixes.Is_Empty;
+                        --  Taken: the plan it was, in the scrollback once.
+                        for Line of Model_Runner.Framework.Lines_Of (To_String (Plan_Text)) loop
+                           Pres.Put_Line (Screen, Line);
+                        end loop;
                      end if;
                   end;
                end;
@@ -903,10 +914,7 @@ package body Model_Runner.CLI.Init is
       Pres.Put_Message
         (Screen, "cli.init.done",
          [Loc.Named ("name", S.Project_Name (Store)),
-          Loc.Named ("path", S.Root (Store)),
-          Loc.Named
-            ("detail",
-             R.Get (Planned.Configuration, "configuration_fingerprint"))]);
+          Loc.Named ("path", S.Root (Store))]);
       --  In a session, the steps after it are the session's commands, which
       --  work where the session was started: not offered for elsewhere.
       if not (Pres.In_Session (Screen) and then not T.Is_Empty (Item.Project_Directory)) then

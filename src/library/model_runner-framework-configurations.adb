@@ -1088,7 +1088,7 @@ package body Model_Runner.Framework.Configurations is
       elsif Name = "scalar.bootstrap.import" then
          return "accepted: an item a document names by its own identifier is imported accepted";
       elsif Name = "set.bootstrap.sources" then
-         return "the Markdown at the top and in docs";
+         return "the Markdown at the top and in docs and below it, a changelog left out";
       elsif Name = "set.bootstrap.propose" then
          return "everything bootstrap finds";
       elsif Name = "set.components" then
@@ -1699,6 +1699,17 @@ package body Model_Runner.Framework.Configurations is
                Found : Unbounded_String;
                Count : Natural := 0;
             begin
+               --  A capability named with no level is the project's:
+               --  map.permission.use_network is map.permission.project.use_network.
+               for Level_Prefix of Name_Lists.Vector'(["map.permission.", "permission."]) loop
+                  if Starts (Short, Level_Prefix)
+                    and then Ada.Strings.Fixed.Index (Short (Short'First + Level_Prefix'Length .. Short'Last), ".") = 0
+                    and then (for some One in Permissions.Capability =>
+                                Permissions.Word (One) = Short (Short'First + Level_Prefix'Length .. Short'Last))
+                  then
+                     return "map.permission.project." & Short (Short'First + Level_Prefix'Length .. Short'Last);
+                  end if;
+               end loop;
                if (for some Prefix of Changeable => Starts (Short, Prefix.all)) then
                   return Short;
                end if;

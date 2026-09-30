@@ -280,16 +280,28 @@ package body Model_Runner.Framework.Context is
       --  decision made keeps its source: it says why it stands above.
       function Without_Baseline_Source (Lines : String) return String is
          Result : Unbounded_String;
-         Mark   : constant String := "project_baseline CONFIG: ";
       begin
+         --  SUBJECT: LEVEL SOURCE: TEXT, as the task's record keeps it, is
+         --  SUBJECT: TEXT to the agent -- a baseline's source said nothing
+         --  -- or SUBJECT: TEXT (SOURCE) where a person or an entry said it.
          for Line of Lines_Of (Lines) loop
             declare
-               At_Mark : constant Natural := Ada.Strings.Fixed.Index (Line, Mark);
+               First  : constant Natural := Ada.Strings.Fixed.Index (Line, ": ");
+               Second : constant Natural :=
+                 (if First = 0 then 0 else Ada.Strings.Fixed.Index (Line (First + 2 .. Line'Last), ": "));
+               Header : constant String := (if Second = 0 then "" else Line (First + 2 .. Second - 1));
+               Space  : constant Natural := Ada.Strings.Fixed.Index (Header, " ");
+               Level  : constant String := (if Space = 0 then "" else Header (Header'First .. Space - 1));
+               Source : constant String := (if Space = 0 then "" else Header (Space + 1 .. Header'Last));
             begin
-               Append (Result, (if At_Mark = 0 then Line
-                                else Line (Line'First .. At_Mark - 1)
-                                     & Line (At_Mark + Mark'Length .. Line'Last))
-                               & ASCII.LF);
+               if Level'Length > 0 and then (for all C of Level => C in 'a' .. 'z' | '_') then
+                  Append (Result, Line (Line'First .. First + 1) & Line (Second + 2 .. Line'Last)
+                          & (if Level in "project_baseline" | "language_baseline" then ""
+                             else " (" & Source & ")")
+                          & ASCII.LF);
+               else
+                  Append (Result, Line & ASCII.LF);
+               end if;
             end;
          end loop;
          return To_String (Result);
@@ -638,6 +650,17 @@ package body Model_Runner.Framework.Context is
                end if;
             end;
          end if;
+         --  Why the last attempt did not end the task: the gate that held
+         --  it, or what failed -- what a retry has to do differently.
+         declare
+            Why : constant String :=
+              (if Records.Get (State, "current_failure") /= "" then Records.Get (State, "current_failure")
+               else Records.Get (State, "blocking_reasons"));
+         begin
+            if Ada.Strings.Fixed.Trim (Why, Ada.Strings.Both) /= "" then
+               Append (Listed, "Why it did not end the task: " & Why & ASCII.LF);
+            end if;
+         end;
          Offer (Task_Id & "#results"
                 & (if Sources = Null_Unbounded_String then ""
                    else ":" & Slice (Sources, 2, Length (Sources))),

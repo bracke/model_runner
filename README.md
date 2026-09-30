@@ -98,24 +98,25 @@ $ cd ~/src/hello
 $ model_runner qwen2.5-coder-0.5b-instruct-q8_0.gguf      # a session opens; no --interactive needed
 
 > /init ada-cli project_name=hello                        # start the project's state from a template
-Check command (the command that builds and tests the repository):
-alr build && bin/tests
-  ▸ Initialize                                            # confirm the plan
+  ▸ Initialize                                            # confirm the plan; Tab shows it whole
 initialized hello in ./.model_runner
 next: /bootstrap FILE reads a document's requirements in, /req new TITLE text=... says one,
       and /task new TITLE kind=KIND makes a task
 
 > /bootstrap docs/requirements.md                         # REQ-… lines are imported, SHALL lines proposed
 > /req new "Greets by name" text="The program SHALL print Hello, NAME."
+created REQ-001: Greets by name
 > /accept                                                 # the one candidate waiting; several → it lists each
-> /task derive                                            # tasks that the accepted requirements imply
+REQ-001 is accepted
+derived TASK-001, in the component hello                  # a task that serves it, made at once
+> /task accept 1                                          # 1 is TASK-001
 > /task list                                              # ready tasks shown first
-TASK-HELLO-001  ready  implementation  Greets by name
+TASK-001  [ready]  REQ-001: Greets by name
 
-> /work TASK-HELLO-001                                    # this session's model does it:
+> /work 1                                                 # this session's model does it:
                                                           # context → call → changed files → verify
 > /check                                                  # the project's checks, recorded as a verification
-> /task integrate TASK-HELLO-001                          # take the workspace's changes into the project
+> /task integrate 1                                       # where work runs in a workspace: take it in
 > /state                                                  # where the project stands
 > /tree   /sym Greet   /refs Greet   /impact src/hello.adb   # ask about the code; no model involved
 > /exit
@@ -150,9 +151,10 @@ the project and within its `read_source`/`read_specs` and
 project as the task will be verified, where `run_build`, `run_tests` or
 `run_static_analysis` covers the profile; and a workspace is taken in for
 it only with `request_integration`. A task can narrow its agent further
-with a `permissions` field -- `/task new "..." "permissions=write_source:
-roots=src/parser/; run_tests"` -- and what that does not name, the agent
-may not do. Work an agent proposes becomes candidate tasks where it may
+with a `permissions` field -- `/task new "..." "permissions=read_source;
+write_source: roots=src/parser/; run_tests"` -- and what that does not
+name, the agent may not do, reading included; `/work` refuses a task whose
+agent would be left unable to do it. Work an agent proposes becomes candidate tasks where it may
 `propose_tasks` (by default it may), and an issue where it may not.
 Ctrl-C stops a reply or a `/work` as it runs: the invocation and its
 agents are recorded cancelled and the task is set aside, blocked, until

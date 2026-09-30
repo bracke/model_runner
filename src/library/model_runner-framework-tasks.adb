@@ -60,7 +60,9 @@ package body Model_Runner.Framework.Tasks is
          end if;
       end loop;
       Status := E.Make (E.Framework_Input_Invalid);
-      E.Add_Text (Status, "name", "a field of a " & Kind & " task");
+      E.Add_Text (Status, "name", "a field of "
+                  & (if Kind'Length > 0 and then Kind (Kind'First) in 'a' | 'e' | 'i' | 'o' | 'u'
+                     then "an " else "a ") & Kind & " task");
       E.Add_Text (Status, "value", Name);
       E.Add_Text (Status, "detail", "no field is called so; they are " & To_String (Fields));
    end No_Such_Field;

@@ -53,10 +53,13 @@ package Model_Runner.CLI.Intents is
    --  @param Which KIND:ID.
    --  @param Accepting Whether to accept it.
    --  @param Screen Where to write.
+   --  @param Say_Next Whether the tasks it derives are named with their
+   --    next step; not where the caller decides those too.
    procedure Decide
      (Store     : in out Model_Runner.Framework.Stores.Store;
       Which     : String;
       Accepting : Boolean;
-      Screen    : in out Model_Runner.Presentation.Console);
+      Screen    : in out Model_Runner.Presentation.Console;
+      Say_Next  : Boolean := True);
 
 end Model_Runner.CLI.Intents;

@@ -37,6 +37,7 @@ map permission.kind.analysis.read_source =
 map permission.kind.analysis.read_specs =
 map permission.kind.analysis.run_build =
 map permission.kind.analysis.run_tests =
+map permission.kind.analysis.run_static_analysis =
 map permission.kind.analysis.propose_tasks =
 map permission.kind.documentation.read_source =
 map permission.kind.documentation.read_specs =
@@ -68,7 +69,7 @@ set repository.generated = generated *.pb.go *_pb2.py *.pb.h *.pb.cc
 # document gives its own identifier is accepted as the document says or
 # only proposed.
 set bootstrap.sources = *.md
-set bootstrap.sources = docs/*.md
+set bootstrap.sources = docs/**/*.md
 set bootstrap.propose = facts, imports, requirements, decisions, specifications, issues
 scalar bootstrap.import = accepted
 

@@ -65,6 +65,10 @@ package body Model_Runner.CLI.Intents is
          when Nt.Decision      => "decision");
 
    --  Move the project along after a change, and say what that did.
+   --  Set while a caller that decides the derived tasks too runs Decide:
+   --  their next steps are its to say.
+   Next_Held : Boolean := False;
+
    procedure Move_Along
      (Store  : in out S.Store;
       Screen : in out Pres.Console)
@@ -142,13 +146,17 @@ package body Model_Runner.CLI.Intents is
             Count := Count + 1;
          end if;
       end loop;
-      if Count = 1 then
+      if Next_Held then
+         null;
+      elsif Count = 1 then
          Pres.Put_Note (Screen, "cli.next.accept_task", [Loc.Named ("name", To_String (Candidates))]);
       elsif Count > 1 then
          Pres.Put_Note (Screen, "cli.next.accept_tasks", [Loc.Named ("detail", To_String (Candidates))]);
       end if;
       for Id of Done.Became_Ready loop
-         Pres.Put_Note (Screen, "cli.task.ready", [Loc.Named ("name", Id)]);
+         if Model_Runner.Framework.Tasks.State_Of (Store, Id) = "accepted" then
+            Pres.Put_Note (Screen, "cli.task.ready", [Loc.Named ("name", Id)]);
+         end if;
       end loop;
    end Move_Along;
 
@@ -377,6 +385,26 @@ package body Model_Runner.CLI.Intents is
          end loop;
       end if;
 
+      --  None named, and one of its kind waiting to be decided: that one,
+      --  said so.
+      if Action in "accept" | "reject" and then Natural (Plain.Length) = 1 then
+         declare
+            Of_Kind : Names.Vector;
+         begin
+            for Which of Pending (Store) loop
+               if Ada.Strings.Fixed.Index (Which, ":") > Which'First
+                 and then Which (Which'First .. Ada.Strings.Fixed.Index (Which, ":") - 1) = Word_Of (Kind)
+               then
+                  Of_Kind.Append (Which (Ada.Strings.Fixed.Index (Which, ":") + 1 .. Which'Last));
+               end if;
+            end loop;
+            if Natural (Of_Kind.Length) = 1 then
+               Plain.Append (Of_Kind.First_Element);
+               Pres.Put_Note (Screen, "cli.intent.only_one", [Loc.Named ("name", Of_Kind.First_Element)]);
+            end if;
+         end;
+      end if;
+
       --  Several named, or all: each moved as if named alone, in turn.
       --  all is every one waiting to be decided.
       if Action in "accept" | "reject" | "reconsider" | "obsolete" | "block" | "unblock"
@@ -424,6 +452,10 @@ package body Model_Runner.CLI.Intents is
             --  None at all: how to make the first.
             if Nt."=" (Kind, Nt.Requirement) and then Nt.List (Store, Kind).Is_Empty then
                Pres.Put_Note (Screen, "cli.next.requirements");
+            elsif Nt."=" (Kind, Nt.Specification) and then Nt.List (Store, Kind).Is_Empty then
+               Pres.Put_Note (Screen, "cli.next.specifications");
+            elsif Nt."=" (Kind, Nt.Decision) and then Nt.List (Store, Kind).Is_Empty then
+               Pres.Put_Note (Screen, "cli.next.decisions");
             end if;
          end;
 
@@ -847,7 +879,7 @@ package body Model_Runner.CLI.Intents is
          end if;
 
       elsif Action = "unlink" then
-         Needs (4, "unlink ID KIND TARGET, whose KIND is dependency, component,"
+         Needs (4, "unlink ID RELATION TARGET, whose RELATION is dependency, component,"
                 & " implementation, task, test or verification");
          if E.Is_Ok (Status) then
             declare
@@ -876,7 +908,7 @@ package body Model_Runner.CLI.Intents is
          end if;
 
       elsif Action = "link" then
-         Needs (4, "link ID KIND TARGET, whose KIND is dependency, component,"
+         Needs (4, "link ID RELATION TARGET, whose RELATION is dependency, component,"
                 & " implementation, task, test or verification");
          if E.Is_Ok (Status) then
             declare
@@ -1254,7 +1286,8 @@ package body Model_Runner.CLI.Intents is
          end if;
 
       elsif Action = "govern" then
-         Needs (4, "the " & Word_Of (Kind) & ", the setting it governs, and its ruling");
+         Needs (4, "what it governs and its ruling: " & Word_Of_Command (Kind) & " govern "
+                   & (if Word (2) = "" then "ID" else Word (2)) & " SETTING RULING, as scalar.work.isolation project");
          --  A setting there is: one the configuration holds, one the
          --  harness reads, or a baseline; another is refused with the
          --  nearest there are.
@@ -1565,7 +1598,8 @@ package body Model_Runner.CLI.Intents is
      (Store     : in out Model_Runner.Framework.Stores.Store;
       Which     : String;
       Accepting : Boolean;
-      Screen    : in out Model_Runner.Presentation.Console)
+      Screen    : in out Model_Runner.Presentation.Console;
+      Say_Next  : Boolean := True)
    is
       Colon : constant Natural := Ada.Strings.Fixed.Index (Which, ":");
       Kind  : Nt.Intent_Kind := Nt.Requirement;
@@ -1578,7 +1612,13 @@ package body Model_Runner.CLI.Intents is
       end loop;
       Words.Append (if Accepting then "accept" else "reject");
       Words.Append (Which (Colon + 1 .. Which'Last));
+      Next_Held := not Say_Next;
       Run (Store, Kind, Words, Screen);
+      Next_Held := False;
+   exception
+      when others =>
+         Next_Held := False;
+         raise;
    end Decide;
 
 end Model_Runner.CLI.Intents;
