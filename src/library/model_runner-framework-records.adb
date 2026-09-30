@@ -19,31 +19,40 @@ package body Model_Runner.Framework.Records is
       return Text (Text'First + 1 .. Text'Last);
    end Image;
 
-   --  Where a field is, or where it would go to keep the fields sorted.
+   --  Where a field is, or where it would go to keep the fields sorted: by
+   --  halves, since the fields are kept sorted, and past the last one at
+   --  once, since a record is mostly built in order.
    procedure Locate
      (Value : Item;
       Name  : String;
       Place : out Positive;
       Found : out Boolean)
    is
+      Low  : Positive := 1;
+      High : Natural := Natural (Value.Fields.Length);
    begin
       Found := False;
-      Place := 1;
-      for Index in 1 .. Natural (Value.Fields.Length) loop
+      if High = 0 or else To_String (Value.Fields (High).Name) < Name then
+         Place := High + 1;
+         return;
+      end if;
+      while Low <= High loop
          declare
-            Held : constant String := To_String (Value.Fields (Index).Name);
+            Middle : constant Positive := (Low + High) / 2;
+            Held   : constant String := To_String (Value.Fields (Middle).Name);
          begin
             if Held = Name then
-               Place := Index;
+               Place := Middle;
                Found := True;
                return;
-            elsif Held > Name then
-               Place := Index;
-               return;
+            elsif Held < Name then
+               Low := Middle + 1;
+            else
+               High := Middle - 1;
             end if;
          end;
-         Place := Index + 1;
       end loop;
+      Place := Low;
    end Locate;
 
    -------------------

@@ -364,7 +364,7 @@ en.cli.init.kept = kept {path}, which was there already
 en.cli.init.check_refused = verification will not run {value} (the check named {name}): {detail}
 en.cli.init.done = initialized {name} in {path}; configuration {detail}
 en.cli.init.cannot = cannot be used: it does not compose
-en.cli.input.needed =   --set {name}=...  {detail}
+en.cli.input.needed =   {name}=...  {detail}
 en.cli.task.item = {name}  [{value}]  {detail}
 en.cli.task.none = there are no tasks
 en.cli.task.help_is = model_runner help task lists what task does, and in a session /help task
@@ -377,7 +377,7 @@ en.cli.task.part_of = {value} is a part of {name}, which goes back to work witho
 en.cli.task.revised = {name} is revised
 en.cli.task.rehomed = placed in {value} from {name}: {detail}
 en.cli.task.rehome_left = left in {name}, as they are ended: {detail}
-en.cli.task.rehome_kept = left in {name}, as the requirements they serve belong to {value}: {detail}; task edit ID --set component={value} places one there
+en.cli.task.rehome_kept = left in {name}, as the requirements they serve belong to {value}: {detail}; task edit ID component={value} places one there
 en.cli.task.rehome_belongs = left in {name}, where the requirements they serve belong: {detail}
 en.cli.task.rehome_busy = left in {name} for now, as they are being worked or wait to be taken in: {detail}
 en.cli.task.part_there = {detail} is a part already: {name}
@@ -402,7 +402,7 @@ en.cli.intent.unlinked = {name}'s link is taken off
 en.cli.intent.unchanged = {name} already says that; nothing was revised
 en.cli.same_title = {name} has the same title as {other}
 en.cli.intent.link_unknown = {name} is not a file or a symbol the repository has; the link is kept, and consistency will name it until it is -- {other} {value} {name} takes it off
-en.cli.intent.link_task_retired = {name} serves {detail}, which is retired: task cancel {name} lets it go, or task edit {name} --set requirements={value} has it serve this one
+en.cli.intent.link_task_retired = {name} serves {detail}, which is retired: task cancel {name} lets it go, or task edit {name} requirements={value} has it serve this one
 en.cli.intent.link_component = {name} is not one of the project's components ({value}); the link is kept, and consistency will name it until it is -- reconfigure map.component.{name}=roots=DIR makes it one, {other} component {name} takes the link off
 en.cli.intent.link_missing = {name} is not one of the project's requirements; the link is kept, and consistency will name it until it is -- req unlink {value} dependency {name} takes it off
 en.cli.intent.link_doubtful = {name}'s link to {value} is kept, and consistency will name it until it is put right: {detail}
@@ -420,10 +420,10 @@ en.cli.intent.work_moved = {name} serves {value} now, in {other}'s place
 en.cli.intent.work_kept = {name} still serves {other}: {value} is served by {detail} already, so it is not moved there; task cancel {name} lets it go
 en.cli.task.field = {name}: {value}
 en.cli.task.derived = derived {name}, in the component {value}
-en.cli.task.derived_placed = {name} is in {value}, the first component listed, since what it serves is the whole project's; task edit {name} --set component=NAME places it in another (in a project of several components, a task's identifier names its component)
-en.cli.task.derived_one_of = {name} serves {other}, which belongs to {detail}: it was derived in {value} alone; task new TITLE --set kind=KIND --set component=NAME --set requirements={other} makes one for another
+en.cli.task.derived_placed = {name} is in {value}, the first component listed, since what it serves is the whole project's; task edit {name} component=NAME places it in another (in a project of several components, a task's identifier names its component)
+en.cli.task.derived_one_of = {name} serves {other}, which belongs to {detail}: it was derived in {value} alone; task new TITLE kind=KIND component=NAME requirements={other} makes one for another
 en.cli.task.nothing_derived = nothing to derive: every accepted requirement has work serving it
-en.cli.task.derived_ended = {name} was derived once, as {value}, which is {detail}: nothing is derived for it again; {other} takes it back, or task new TITLE --set kind=KIND --set requirements={name} makes another
+en.cli.task.derived_ended = {name} was derived once, as {value}, which is {detail}: nothing is derived for it again; {other} takes it back, or task new TITLE kind=KIND requirements={name} makes another
 en.cli.task.nothing_to_derive = nothing to derive: no requirement is accepted; req accept ID accepts one
 en.cli.task.ready = {name} became ready
 en.cli.task.choose_kind = Select the kind of task:
@@ -451,7 +451,7 @@ en.cli.project.clipped = {name} asks for more than the project allows, and gets 
 en.cli.project.component_gone = {name} is no longer one of the project's components ({value}), and open tasks in it: {count}; task rehome {name} NAME places them, or reconfigure map.component.{name}=roots=DIR keeps it one
 en.cli.project.component_rootless = {name} says nowhere where its files are: map.component.{name}=roots=DIR says so, and impact and verification reach it
 en.cli.project.component_overlap = {name}'s root {value} lies within {other}'s {detail}: the files there are {name}'s, as its root holds them more closely
-en.cli.project.unserved = {name} is accepted and no task serves it: task new TITLE --set kind=KIND --set requirements={name} makes one
+en.cli.project.unserved = {name} is accepted and no task serves it: task new TITLE kind=KIND requirements={name} makes one
 en.cli.project.candidate_requirements = candidate requirements
 en.cli.project.which =   {name}: {value}
 en.cli.project.candidates = candidate tasks
@@ -478,13 +478,13 @@ en.cli.next.bootstrap = next: req accept ID keeps a requirement it made, and req
 en.cli.next.bootstrap_no_requirement = no requirement was read: a requirement is a line with SHALL, MUST or SHOULD, or a heading ## REQ-001 Title with its statement under it
 en.cli.next.bootstrap_nothing = nothing in {detail} reads as a requirement, decision or specification: a requirement is a line with SHALL, MUST or SHOULD, or a heading ## REQ-001 Title with its statement under it
 en.cli.next.no_documents = no documents to read: bootstrap looks at *.md and docs/*.md (set bootstrap.sources names others); a requirement in one is a line with SHALL, MUST or SHOULD, or a heading ## REQ-001 Title with its statement under it
-en.cli.next.init = next: bootstrap FILE reads a document's requirements in, req new TITLE text=... says one, and task new TITLE --set kind=KIND makes a task
+en.cli.next.init = next: bootstrap FILE reads a document's requirements in, req new TITLE text=... says one, and task new TITLE kind=KIND makes a task
 en.cli.next.requirements = no requirements yet; req new TITLE text=... says one, bootstrap FILE reads a document's in
-en.cli.next.tasks = no tasks yet; task new TITLE --set kind=KIND makes one
-en.cli.next.model = next: --set model=PATH runs a model file as the agent, or reconfigure work.agent="COMMAND $PROMPT" names a command
+en.cli.next.tasks = no tasks yet; task new TITLE kind=KIND makes one
+en.cli.next.model = next: model=PATH runs a model file as the agent, or reconfigure work.agent="COMMAND $PROMPT" names a command
 en.cli.next.confirm = next: add confirm=yes to the same command, which applies it without being asked
-en.cli.next.confirm_init = next: add --set confirm=yes, which initializes without being asked
-en.cli.next.confirm_init_also = next: give those above with --set, and --set confirm=yes with them, which initializes without being asked
+en.cli.next.confirm_init = next: add confirm=yes, which initializes without being asked
+en.cli.next.confirm_init_also = next: give those above as NAME=VALUE, and confirm=yes with them, which initializes without being asked
 en.cli.next.initialized = next: reconfigure NAME=VALUE changes its settings, and config shows them
 en.cli.next.in_directory = each with --directory {path}, or run from {path}
 en.cli.next.in_directory_session = this session works in the directory it was started in; start one in {path} to work on that project
@@ -557,7 +557,7 @@ en.cli.work.ended_because = the task is {name}: {detail}
 en.cli.work.failed_because = the task failed: {detail}
 en.cli.next.retry = next: task accept {name} to try it again, or task complete {name} once it is done by hand
 en.cli.next.write_refused = next: trying again is refused the same way; reconfigure map.permission.{value}.write_source=roots=... lets agents of that level write there, or task complete {name} once it is done by hand
-en.cli.next.own_permissions_refused = next: trying again is refused the same way; its own permissions limit it: task edit {name} --set permissions=... widens them
+en.cli.next.own_permissions_refused = next: trying again is refused the same way; its own permissions limit it: task edit {name} permissions=... widens them
 en.cli.next.reopen = next: task reopen {name} makes it ready to be worked again
 en.cli.next.parts = next: task accept {detail} accepts its parts; it goes back to work once they are done
 en.cli.next.parts_first = next: its parts come first -- {detail} -- and {name} goes on once they are done
@@ -574,16 +574,16 @@ en.cli.next.accept_decision = next: decision accept {name} accepts it, and decis
 en.cli.next.accept_requirement = next: req accept {name} accepts it; until then no task is derived from it
 en.cli.next.work = next: work {name} does it
 en.cli.next.proposed = next: task accept ID accepts each proposal ({detail}), task reject ID drops one
-en.cli.next.task_left = next: {name} still serves {other}; task {value} {name} lets it go, or task edit {name} --set requirements=ID has it serve another
-en.cli.next.task_component = next: {name} serves {other} and is elsewhere; task edit {name} --set component={value} places it with it
+en.cli.next.task_left = next: {name} still serves {other}; task {value} {name} lets it go, or task edit {name} requirements=ID has it serve another
+en.cli.next.task_component = next: {name} serves {other} and is elsewhere; task edit {name} component={value} places it with it
 en.cli.next.refused_parts = next: not made, kept in {value}: {detail}; task split {name} {detail} makes them by hand (each one ; apart), or {other}
-en.cli.next.task_new_for = next: task new "{detail}" --set kind={value} makes it by hand (kept in {name})
+en.cli.next.task_new_for = next: task new "{detail}" kind={value} makes it by hand (kept in {name})
 en.cli.check.no_tests = {name} ran: it runs no tests; check full runs the project's tests as well
 en.cli.next.conflict = next: the work is in {path}; compare {detail} there with the project's (diff {path}/F F, for each file F) and settle it, then task integrate {name} resolved takes the workspace's files -- or resolved anyway takes them as they are; task cancel {name} anyway gives the work up, and task reopen {name} then does it again
 en.cli.next.ready = ready to work on: {name}  {value}
 en.cli.next.waits_integration = {name} ({value}) waits to be taken in: {detail}
 en.cli.next.accept = next: candidate tasks waiting to be accepted: {count}; task list shows them, task accept ID accepts one
-en.cli.next.create = next: task new TITLE --set kind=KIND makes a task, or req new TITLE text=... a requirement to derive tasks from
+en.cli.next.create = next: task new TITLE kind=KIND makes a task, or req new TITLE text=... a requirement to derive tasks from
 en.cli.agent.stopped = agent stopped: {state} after {count} steps and {total} tool calls
 en.cli.interactive.tool_needs_text = /tool needs the tool's answer as text
 en.cli.interactive.path_needed = that command needs a file path
@@ -1393,7 +1393,7 @@ da.cli.init.kept = beholdt {path}, som var der i forvejen
 da.cli.init.check_refused = verifikationen vil ikke køre {value} (tjekket ved navn {name}): {detail}
 da.cli.init.done = initialiserede {name} i {path}; konfiguration {detail}
 da.cli.init.cannot = kan ikke bruges: den kan ikke sammensættes
-da.cli.input.needed =   --set {name}=...  {detail}
+da.cli.input.needed =   {name}=...  {detail}
 da.cli.task.item = {name}  [{value}]  {detail}
 da.cli.task.none = der er ingen opgaver
 da.cli.task.help_is = model_runner help task viser hvad task gør, og i en session /help task
@@ -1406,7 +1406,7 @@ da.cli.task.part_of = {value} er en del af {name}, som går i gang igen uden den
 da.cli.task.revised = {name} er revideret
 da.cli.task.rehomed = placeret i {value} fra {name}: {detail}
 da.cli.task.rehome_left = efterladt i {name}, da de er afsluttede: {detail}
-da.cli.task.rehome_kept = efterladt i {name}, da de krav, de betjener, hører til {value}: {detail}; task edit ID --set component={value} placerer en der
+da.cli.task.rehome_kept = efterladt i {name}, da de krav, de betjener, hører til {value}: {detail}; task edit ID component={value} placerer en der
 da.cli.task.rehome_belongs = efterladt i {name}, hvor kravene de tjener hører til: {detail}
 da.cli.task.rehome_busy = efterladt i {name} indtil videre, da de bearbejdes eller venter på at blive taget ind: {detail}
 da.cli.task.part_there = {detail} er allerede en del: {name}
@@ -1431,7 +1431,7 @@ da.cli.intent.unlinked = {name}s link er fjernet
 da.cli.intent.unchanged = {name} siger allerede det; intet blev revideret
 da.cli.same_title = {name} har samme titel som {other}
 da.cli.intent.link_unknown = {name} er ikke en fil eller et symbol, som repositoriet har; linket beholdes, og konsistenstjekket nævner det, indtil det er -- {other} {value} {name} fjerner det
-da.cli.intent.link_task_retired = {name} betjener {detail}, som er trukket tilbage: task cancel {name} slipper den, eller task edit {name} --set requirements={value} lader den betjene denne
+da.cli.intent.link_task_retired = {name} betjener {detail}, som er trukket tilbage: task cancel {name} slipper den, eller task edit {name} requirements={value} lader den betjene denne
 da.cli.intent.link_component = {name} er ikke en af projektets komponenter ({value}); linket beholdes, og konsistenstjekket nævner det, indtil det er -- reconfigure map.component.{name}=roots=MAPPE gør den til en, {other} component {name} fjerner linket
 da.cli.intent.link_missing = {name} er ikke et af projektets krav; linket beholdes, og konsistenstjekket nævner det indtil det er -- req unlink {value} dependency {name} fjerner det
 da.cli.intent.link_doubtful = {name}s link til {value} beholdes, og konsistenstjekket nævner det, indtil det er rettet: {detail}
@@ -1449,10 +1449,10 @@ da.cli.intent.work_moved = {name} betjener {value} nu, i stedet for {other}
 da.cli.intent.work_kept = {name} betjener stadig {other}: {value} betjenes allerede af {detail}, så den flyttes ikke dertil; task cancel {name} slipper den
 da.cli.task.field = {name}: {value}
 da.cli.task.derived = afledt {name}, i komponenten {value}
-da.cli.task.derived_placed = {name} er i {value}, den første komponent på listen, da det den betjener er hele projektets; task edit {name} --set component=NAVN placerer den i en anden (i et projekt med flere komponenter nævner en opgaves identifikator dens komponent)
-da.cli.task.derived_one_of = {name} betjener {other}, som hører til {detail}: den blev afledt i {value} alene; task new TITEL --set kind=ART --set component=NAVN --set requirements={other} laver en til en anden
+da.cli.task.derived_placed = {name} er i {value}, den første komponent på listen, da det den betjener er hele projektets; task edit {name} component=NAVN placerer den i en anden (i et projekt med flere komponenter nævner en opgaves identifikator dens komponent)
+da.cli.task.derived_one_of = {name} betjener {other}, som hører til {detail}: den blev afledt i {value} alene; task new TITEL kind=ART component=NAVN requirements={other} laver en til en anden
 da.cli.task.nothing_derived = intet at aflede: hvert accepteret krav har arbejde, der betjener det
-da.cli.task.derived_ended = {name} blev afledt én gang, som {value}, der er {detail}: intet afledes for den igen; {other} tager den tilbage, eller task new TITEL --set kind=ART --set requirements={name} laver en anden
+da.cli.task.derived_ended = {name} blev afledt én gang, som {value}, der er {detail}: intet afledes for den igen; {other} tager den tilbage, eller task new TITEL kind=ART requirements={name} laver en anden
 da.cli.task.nothing_to_derive = intet at aflede: intet krav er accepteret; req accept ID accepterer et
 da.cli.task.ready = {name} blev klar
 da.cli.task.choose_kind = Vælg opgavens slags:
@@ -1480,7 +1480,7 @@ da.cli.project.clipped = {name} beder om mere end projektet tillader, og får de
 da.cli.project.component_gone = {name} er ikke længere en af projektets komponenter ({value}), og åbne opgaver i den: {count}; task rehome {name} NAVN placerer dem, eller reconfigure map.component.{name}=roots=MAPPE beholder den
 da.cli.project.component_rootless = {name} siger ingen steder hvor dens filer er: map.component.{name}=roots=DIR siger det, og impact og verifikation når den
 da.cli.project.component_overlap = {name}s rod {value} ligger inden i {other}s {detail}: filerne der er {name}s, da dens rod holder dem tættere
-da.cli.project.unserved = {name} er accepteret og ingen opgave tjener den: task new TITEL --set kind=ART --set requirements={name} laver en
+da.cli.project.unserved = {name} er accepteret og ingen opgave tjener den: task new TITEL kind=ART requirements={name} laver en
 da.cli.project.candidate_requirements = kandidatkrav
 da.cli.project.which =   {name}: {value}
 da.cli.project.candidates = kandidatopgaver
@@ -1507,13 +1507,13 @@ da.cli.next.bootstrap = næste: req accept ID beholder et krav den lavede, og re
 da.cli.next.bootstrap_no_requirement = intet krav blev læst: et krav er en linje med SHALL, MUST eller SHOULD, eller en overskrift ## REQ-001 Titel med sin formulering under
 da.cli.next.bootstrap_nothing = intet i {detail} læses som et krav, en beslutning eller en specifikation: et krav er en linje med SHALL, MUST eller SHOULD, eller en overskrift ## REQ-001 Titel med sin formulering under
 da.cli.next.no_documents = ingen dokumenter at læse: bootstrap ser på *.md og docs/*.md (set bootstrap.sources nævner andre); et krav i et er en linje med SHALL, MUST eller SHOULD, eller en overskrift ## REQ-001 Titel med sin ordlyd under
-da.cli.next.init = næste: bootstrap FIL læser et dokuments krav ind, req new TITEL text=... siger et, og task new TITEL --set kind=ART laver en opgave
+da.cli.next.init = næste: bootstrap FIL læser et dokuments krav ind, req new TITEL text=... siger et, og task new TITEL kind=ART laver en opgave
 da.cli.next.requirements = ingen krav endnu; req new TITEL text=... siger et, bootstrap FIL læser et dokuments ind
-da.cli.next.tasks = ingen opgaver endnu; task new TITEL --set kind=ART laver en
-da.cli.next.model = næste: --set model=STI kører en modelfil som agent, eller reconfigure work.agent="KOMMANDO $PROMPT" angiver en kommando
+da.cli.next.tasks = ingen opgaver endnu; task new TITEL kind=ART laver en
+da.cli.next.model = næste: model=STI kører en modelfil som agent, eller reconfigure work.agent="KOMMANDO $PROMPT" angiver en kommando
 da.cli.next.confirm = næste: tilføj confirm=yes til samme kommando, som så anvender det uden at spørge
-da.cli.next.confirm_init = næste: tilføj --set confirm=yes, som initialiserer uden at spørge
-da.cli.next.confirm_init_also = næste: giv dem ovenfor med --set, og --set confirm=yes sammen med dem, som initialiserer uden at spørge
+da.cli.next.confirm_init = næste: tilføj confirm=yes, som initialiserer uden at spørge
+da.cli.next.confirm_init_also = næste: giv dem ovenfor som NAVN=VÆRDI, og confirm=yes sammen med dem, som initialiserer uden at spørge
 da.cli.next.initialized = næste: reconfigure NAVN=VÆRDI ændrer dens indstillinger, og config viser dem
 da.cli.next.in_directory = hver med --directory {path}, eller kørt fra {path}
 da.cli.next.in_directory_session = denne session arbejder i mappen den blev startet i; start en i {path} for at arbejde på det projekt
@@ -1586,7 +1586,7 @@ da.cli.work.ended_because = opgaven er {name}: {detail}
 da.cli.work.failed_because = opgaven mislykkedes: {detail}
 da.cli.next.retry = næste: task accept {name} for at prøve igen, eller task complete {name} når den er gjort i hånden
 da.cli.next.write_refused = næste: et nyt forsøg afvises på samme måde; reconfigure map.permission.{value}.write_source=roots=... lader agenter på det niveau skrive der, eller task complete {name} når det er gjort i hånden
-da.cli.next.own_permissions_refused = næste: et nyt forsøg afvises på samme måde; dens egne tilladelser begrænser den: task edit {name} --set permissions=... udvider dem
+da.cli.next.own_permissions_refused = næste: et nyt forsøg afvises på samme måde; dens egne tilladelser begrænser den: task edit {name} permissions=... udvider dem
 da.cli.next.reopen = næste: task reopen {name} gør den klar til at blive arbejdet på igen
 da.cli.next.parts = næste: task accept {detail} accepterer dens dele; den går i gang igen, når de er færdige
 da.cli.next.parts_first = næste: dens dele kommer først -- {detail} -- og {name} fortsætter, når de er færdige
@@ -1603,16 +1603,16 @@ da.cli.next.accept_decision = næste: decision accept {name} accepterer den, og 
 da.cli.next.accept_requirement = næste: req accept {name} accepterer det; indtil da afledes ingen opgave af det
 da.cli.next.work = næste: work {name} udfører den
 da.cli.next.proposed = næste: task accept ID accepterer hvert forslag ({detail}), task reject ID dropper et
-da.cli.next.task_left = næste: {name} betjener stadig {other}; task {value} {name} slipper den, eller task edit {name} --set requirements=ID lader den betjene et andet
-da.cli.next.task_component = næste: {name} tjener {other} og er et andet sted; task edit {name} --set component={value} placerer den sammen med den
+da.cli.next.task_left = næste: {name} betjener stadig {other}; task {value} {name} slipper den, eller task edit {name} requirements=ID lader den betjene et andet
+da.cli.next.task_component = næste: {name} tjener {other} og er et andet sted; task edit {name} component={value} placerer den sammen med den
 da.cli.next.refused_parts = næste: ikke lavet, gemt i {value}: {detail}; task split {name} {detail} laver dem i hånden (hver adskilt af ;), eller {other}
-da.cli.next.task_new_for = næste: task new "{detail}" --set kind={value} laver den i hånden (gemt i {name})
+da.cli.next.task_new_for = næste: task new "{detail}" kind={value} laver den i hånden (gemt i {name})
 da.cli.check.no_tests = {name} kørte: den kører ingen tests; check full kører også projektets tests
 da.cli.next.conflict = næste: arbejdet ligger i {path}; sammenlign {detail} der med projektets (diff {path}/F F, for hver fil F) og afgør det, så tager task integrate {name} resolved arbejdsområdets filer -- eller resolved anyway tager dem som de er; task cancel {name} anyway opgiver arbejdet, og task reopen {name} gør det så igen
 da.cli.next.ready = klar til arbejde: {name}  {value}
 da.cli.next.waits_integration = {name} ({value}) venter på at blive taget ind: {detail}
 da.cli.next.accept = næste: kandidatopgaver der venter på at blive accepteret: {count}; task list viser dem, task accept ID accepterer en
-da.cli.next.create = næste: task new TITEL --set kind=ART laver en opgave, eller req new TITEL text=... et krav at udlede opgaver af
+da.cli.next.create = næste: task new TITEL kind=ART laver en opgave, eller req new TITEL text=... et krav at udlede opgaver af
 da.cli.agent.stopped = agenten stoppede: {state} efter {count} trin og {total} værktøjskald
 da.cli.interactive.tool_needs_text = /tool skal have værktøjets svar som tekst
 da.cli.interactive.path_needed = den kommando skal have en filsti
@@ -2205,7 +2205,7 @@ qps.cli.init.kept = ⟦képŧ {path}, whíçh wáß ŧhéŕé áĺŕéáðý⟧
 qps.cli.init.check_refused = ⟦véŕífíçáŧíóñ wíĺĺ ñóŧ ŕúñ {value} (ŧhé çhéçk ñáméð {name}): {detail}⟧
 qps.cli.init.done = ⟦íñíŧíáĺízéð {name} íñ {path}; çóñfígúŕáŧíóñ {detail}⟧
 qps.cli.init.cannot = ⟦çáññóŧ bé úßéð: íŧ ðóéß ñóŧ çómpóßé⟧
-qps.cli.input.needed = ⟦  --ßéŧ {name}=...  {detail}⟧
+qps.cli.input.needed = ⟦  {name}=...  {detail}⟧
 qps.cli.task.item = ⟦{name}  [{value}]  {detail}⟧
 qps.cli.task.none = ⟦ŧhéŕé áŕé ñó ŧáßkß⟧
 qps.cli.task.help_is = ⟦móðéĺ_ŕúññéŕ héĺp ŧáßk ĺíßŧß wháŧ ŧáßk ðóéß, áñð íñ á ßéßßíóñ /héĺp ŧáßk⟧
@@ -2218,7 +2218,7 @@ qps.cli.task.part_of = ⟦{value} íß á páŕŧ óf {name}, whíçh góéß b�
 qps.cli.task.revised = ⟦{name} íß ŕévíßéð⟧
 qps.cli.task.rehomed = ⟦pĺáçéð íñ {value} fŕóm {name}: {detail}⟧
 qps.cli.task.rehome_left = ⟦ĺéfŧ íñ {name}, áß ŧhéý áŕé éñðéð: {detail}⟧
-qps.cli.task.rehome_kept = ⟦ĺéfŧ íñ {name}, áß ŧhé ŕéqúíŕéméñŧß ŧhéý ßéŕvé béĺóñg ŧó {value}: {detail}; ŧáßk éðíŧ ID --ßéŧ çómpóñéñŧ={value} pĺáçéß óñé ŧhéŕé⟧
+qps.cli.task.rehome_kept = ⟦ĺéfŧ íñ {name}, áß ŧhé ŕéqúíŕéméñŧß ŧhéý ßéŕvé béĺóñg ŧó {value}: {detail}; ŧáßk éðíŧ ID çómpóñéñŧ={value} pĺáçéß óñé ŧhéŕé⟧
 qps.cli.task.rehome_belongs = ⟦ĺéfŧ íñ {name}, whéŕé ŧhé ŕéqúíŕéméñŧß ŧhéý ßéŕvé béĺóñg: {detail}⟧
 qps.cli.task.rehome_busy = ⟦ĺéfŧ íñ {name} fóŕ ñów, áß ŧhéý áŕé béíñg wóŕkéð óŕ wáíŧ ŧó bé ŧákéñ íñ: {detail}⟧
 qps.cli.task.part_there = ⟦{detail} íß á páŕŧ áĺŕéáðý: {name}⟧
@@ -2243,7 +2243,7 @@ qps.cli.intent.unlinked = ⟦{name}'ß ĺíñk íß ŧákéñ óff⟧
 qps.cli.intent.unchanged = ⟦{name} áĺŕéáðý ßáýß ŧháŧ; ñóŧhíñg wáß ŕévíßéð⟧
 qps.cli.same_title = ⟦{name} háß ŧhé ßámé ŧíŧĺé áß {other}⟧
 qps.cli.intent.link_unknown = ⟦{name} íß ñóŧ á fíĺé óŕ á ßýmbóĺ ŧhé ŕépóßíŧóŕý háß; ŧhé ĺíñk íß képŧ, áñð çóñßíßŧéñçý wíĺĺ ñámé íŧ úñŧíĺ íŧ íß -- {other} {value} {name} ŧákéß íŧ óff⟧
-qps.cli.intent.link_task_retired = ⟦{name} ßéŕvéß {detail}, whíçh íß ŕéŧíŕéð: ŧáßk çáñçéĺ {name} ĺéŧß íŧ gó, óŕ ŧáßk éðíŧ {name} --ßéŧ ŕéqúíŕéméñŧß={value} háß íŧ ßéŕvé ŧhíß óñé⟧
+qps.cli.intent.link_task_retired = ⟦{name} ßéŕvéß {detail}, whíçh íß ŕéŧíŕéð: ŧáßk çáñçéĺ {name} ĺéŧß íŧ gó, óŕ ŧáßk éðíŧ {name} ŕéqúíŕéméñŧß={value} háß íŧ ßéŕvé ŧhíß óñé⟧
 qps.cli.intent.link_component = ⟦{name} íß ñóŧ óñé óf ŧhé pŕójéçŧ'ß çómpóñéñŧß ({value}); ŧhé ĺíñk íß képŧ, áñð çóñßíßŧéñçý wíĺĺ ñámé íŧ úñŧíĺ íŧ íß -- ŕéçóñfígúŕé máp.çómpóñéñŧ.{name}=ŕóóŧß=DIR mákéß íŧ óñé, {other} çómpóñéñŧ {name} ŧákéß ŧhé ĺíñk óff⟧
 qps.cli.intent.link_missing = ⟦{name} íß ñóŧ óñé óf ŧhé pŕójéçŧ'ß ŕéqúíŕéméñŧß; ŧhé ĺíñk íß képŧ, áñð çóñßíßŧéñçý wíĺĺ ñámé íŧ úñŧíĺ íŧ íß -- ŕéq úñĺíñk {value} ðépéñðéñçý {name} ŧákéß íŧ óff⟧
 qps.cli.intent.link_doubtful = ⟦{name}'ß ĺíñk ŧó {value} íß képŧ, áñð çóñßíßŧéñçý wíĺĺ ñámé íŧ úñŧíĺ íŧ íß púŧ ŕíghŧ: {detail}⟧
@@ -2261,10 +2261,10 @@ qps.cli.intent.work_moved = ⟦{name} ßéŕvéß {value} ñów, íñ {other}'ß
 qps.cli.intent.work_kept = ⟦{name} ßŧíĺĺ ßéŕvéß {other}: {value} íß ßéŕvéð bý {detail} áĺŕéáðý, ßó íŧ íß ñóŧ móvéð ŧhéŕé; ŧáßk çáñçéĺ {name} ĺéŧß íŧ gó⟧
 qps.cli.task.field = ⟦{name}: {value}⟧
 qps.cli.task.derived = ⟦ðéŕívéð {name}, íñ ŧhé çómpóñéñŧ {value}⟧
-qps.cli.task.derived_placed = ⟦{name} íß íñ {value}, ŧhé fíŕßŧ çómpóñéñŧ ĺíßŧéð, ßíñçé wháŧ íŧ ßéŕvéß íß ŧhé whóĺé pŕójéçŧ'ß; ŧáßk éðíŧ {name} --ßéŧ çómpóñéñŧ=NAME pĺáçéß íŧ íñ áñóŧhéŕ (íñ á pŕójéçŧ óf ßévéŕáĺ çómpóñéñŧß, á ŧáßk'ß íðéñŧífíéŕ ñáméß íŧß çómpóñéñŧ)⟧
-qps.cli.task.derived_one_of = ⟦{name} ßéŕvéß {other}, whíçh béĺóñgß ŧó {detail}: íŧ wáß ðéŕívéð íñ {value} áĺóñé; ŧáßk ñéw ŦIŦLE --ßéŧ kíñð=KIND --ßéŧ çómpóñéñŧ=NAME --ßéŧ ŕéqúíŕéméñŧß={other} mákéß óñé fóŕ áñóŧhéŕ⟧
+qps.cli.task.derived_placed = ⟦{name} íß íñ {value}, ŧhé fíŕßŧ çómpóñéñŧ ĺíßŧéð, ßíñçé wháŧ íŧ ßéŕvéß íß ŧhé whóĺé pŕójéçŧ'ß; ŧáßk éðíŧ {name} çómpóñéñŧ=NAME pĺáçéß íŧ íñ áñóŧhéŕ (íñ á pŕójéçŧ óf ßévéŕáĺ çómpóñéñŧß, á ŧáßk'ß íðéñŧífíéŕ ñáméß íŧß çómpóñéñŧ)⟧
+qps.cli.task.derived_one_of = ⟦{name} ßéŕvéß {other}, whíçh béĺóñgß ŧó {detail}: íŧ wáß ðéŕívéð íñ {value} áĺóñé; ŧáßk ñéw ŦIŦLE kíñð=KIND çómpóñéñŧ=NAME ŕéqúíŕéméñŧß={other} mákéß óñé fóŕ áñóŧhéŕ⟧
 qps.cli.task.nothing_derived = ⟦ñóŧhíñg ŧó ðéŕívé: évéŕý áççépŧéð ŕéqúíŕéméñŧ háß wóŕk ßéŕvíñg íŧ⟧
-qps.cli.task.derived_ended = ⟦{name} wáß ðéŕívéð óñçé, áß {value}, whíçh íß {detail}: ñóŧhíñg íß ðéŕívéð fóŕ íŧ ágáíñ; {other} ŧákéß íŧ báçk, óŕ ŧáßk ñéw ŦIŦLE --ßéŧ kíñð=KIND --ßéŧ ŕéqúíŕéméñŧß={name} mákéß áñóŧhéŕ⟧
+qps.cli.task.derived_ended = ⟦{name} wáß ðéŕívéð óñçé, áß {value}, whíçh íß {detail}: ñóŧhíñg íß ðéŕívéð fóŕ íŧ ágáíñ; {other} ŧákéß íŧ báçk, óŕ ŧáßk ñéw ŦIŦLE kíñð=KIND ŕéqúíŕéméñŧß={name} mákéß áñóŧhéŕ⟧
 qps.cli.task.nothing_to_derive = ⟦ñóŧhíñg ŧó ðéŕívé: ñó ŕéqúíŕéméñŧ íß áççépŧéð; ŕéq áççépŧ ID áççépŧß óñé⟧
 qps.cli.task.ready = ⟦{name} béçámé ŕéáðý⟧
 qps.cli.task.choose_kind = ⟦Séĺéçŧ ŧhé kíñð óf ŧáßk:⟧
@@ -2292,7 +2292,7 @@ qps.cli.project.clipped = ⟦{name} áßkß fóŕ móŕé ŧháñ ŧhé pŕójé
 qps.cli.project.component_gone = ⟦{name} íß ñó ĺóñgéŕ óñé óf ŧhé pŕójéçŧ'ß çómpóñéñŧß ({value}), áñð ópéñ ŧáßkß íñ íŧ: {count}; ŧáßk ŕéhómé {name} NAME pĺáçéß ŧhém, óŕ ŕéçóñfígúŕé máp.çómpóñéñŧ.{name}=ŕóóŧß=DIR kéépß íŧ óñé⟧
 qps.cli.project.component_rootless = ⟦{name} ßáýß ñówhéŕé whéŕé íŧß fíĺéß áŕé: máp.çómpóñéñŧ.{name}=ŕóóŧß=DIR ßáýß ßó, áñð ímpáçŧ áñð véŕífíçáŧíóñ ŕéáçh íŧ⟧
 qps.cli.project.component_overlap = ⟦{name}'ß ŕóóŧ {value} ĺíéß wíŧhíñ {other}'ß {detail}: ŧhé fíĺéß ŧhéŕé áŕé {name}'ß, áß íŧß ŕóóŧ hóĺðß ŧhém móŕé çĺóßéĺý⟧
-qps.cli.project.unserved = ⟦{name} íß áççépŧéð áñð ñó ŧáßk ßéŕvéß íŧ: ŧáßk ñéw ŦIŦLE --ßéŧ kíñð=KIND --ßéŧ ŕéqúíŕéméñŧß={name} mákéß óñé⟧
+qps.cli.project.unserved = ⟦{name} íß áççépŧéð áñð ñó ŧáßk ßéŕvéß íŧ: ŧáßk ñéw ŦIŦLE kíñð=KIND ŕéqúíŕéméñŧß={name} mákéß óñé⟧
 qps.cli.project.candidate_requirements = ⟦çáñðíðáŧé ŕéqúíŕéméñŧß⟧
 qps.cli.project.which = ⟦  {name}: {value}⟧
 qps.cli.project.candidates = ⟦çáñðíðáŧé ŧáßkß⟧
@@ -2319,13 +2319,13 @@ qps.cli.next.bootstrap = ⟦ñéxŧ: ŕéq áççépŧ ID kéépß á ŕéqúí�
 qps.cli.next.bootstrap_no_requirement = ⟦ñó ŕéqúíŕéméñŧ wáß ŕéáð: á ŕéqúíŕéméñŧ íß á ĺíñé wíŧh SHALL, MÚSŦ óŕ SHOÚLD, óŕ á héáðíñg ## REQ-001 Ŧíŧĺé wíŧh íŧß ßŧáŧéméñŧ úñðéŕ íŧ⟧
 qps.cli.next.bootstrap_nothing = ⟦ñóŧhíñg íñ {detail} ŕéáðß áß á ŕéqúíŕéméñŧ, ðéçíßíóñ óŕ ßpéçífíçáŧíóñ: á ŕéqúíŕéméñŧ íß á ĺíñé wíŧh SHALL, MÚSŦ óŕ SHOÚLD, óŕ á héáðíñg ## REQ-001 Ŧíŧĺé wíŧh íŧß ßŧáŧéméñŧ úñðéŕ íŧ⟧
 qps.cli.next.no_documents = ⟦ñó ðóçúméñŧß ŧó ŕéáð: bóóŧßŧŕáp ĺóókß áŧ *.mð áñð ðóçß/*.mð (ßéŧ bóóŧßŧŕáp.ßóúŕçéß ñáméß óŧhéŕß); á ŕéqúíŕéméñŧ íñ óñé íß á ĺíñé wíŧh SHALL, MÚSŦ óŕ SHOÚLD, óŕ á héáðíñg ## REQ-001 Ŧíŧĺé wíŧh íŧß ßŧáŧéméñŧ úñðéŕ íŧ⟧
-qps.cli.next.init = ⟦ñéxŧ: bóóŧßŧŕáp FILE ŕéáðß á ðóçúméñŧ'ß ŕéqúíŕéméñŧß íñ, ŕéq ñéw ŦIŦLE ŧéxŧ=... ßáýß óñé, áñð ŧáßk ñéw ŦIŦLE --ßéŧ kíñð=KIND mákéß á ŧáßk⟧
+qps.cli.next.init = ⟦ñéxŧ: bóóŧßŧŕáp FILE ŕéáðß á ðóçúméñŧ'ß ŕéqúíŕéméñŧß íñ, ŕéq ñéw ŦIŦLE ŧéxŧ=... ßáýß óñé, áñð ŧáßk ñéw ŦIŦLE kíñð=KIND mákéß á ŧáßk⟧
 qps.cli.next.requirements = ⟦ñó ŕéqúíŕéméñŧß ýéŧ; ŕéq ñéw ŦIŦLE ŧéxŧ=... ßáýß óñé, bóóŧßŧŕáp FILE ŕéáðß á ðóçúméñŧ'ß íñ⟧
-qps.cli.next.tasks = ⟦ñó ŧáßkß ýéŧ; ŧáßk ñéw ŦIŦLE --ßéŧ kíñð=KIND mákéß óñé⟧
-qps.cli.next.model = ⟦ñéxŧ: --ßéŧ móðéĺ=PAŦH ŕúñß á móðéĺ fíĺé áß ŧhé ágéñŧ, óŕ ŕéçóñfígúŕé wóŕk.ágéñŧ="ÇOMMAND $PROMPŦ" ñáméß á çómmáñð⟧
+qps.cli.next.tasks = ⟦ñó ŧáßkß ýéŧ; ŧáßk ñéw ŦIŦLE kíñð=KIND mákéß óñé⟧
+qps.cli.next.model = ⟦ñéxŧ: móðéĺ=PAŦH ŕúñß á móðéĺ fíĺé áß ŧhé ágéñŧ, óŕ ŕéçóñfígúŕé wóŕk.ágéñŧ="ÇOMMAND $PROMPŦ" ñáméß á çómmáñð⟧
 qps.cli.next.confirm = ⟦ñéxŧ: áðð çóñfíŕm=ýéß ŧó ŧhé ßámé çómmáñð, whíçh áppĺíéß íŧ wíŧhóúŧ béíñg áßkéð⟧
-qps.cli.next.confirm_init = ⟦ñéxŧ: áðð --ßéŧ çóñfíŕm=ýéß, whíçh íñíŧíáĺízéß wíŧhóúŧ béíñg áßkéð⟧
-qps.cli.next.confirm_init_also = ⟦ñéxŧ: gívé ŧhóßé ábóvé wíŧh --ßéŧ, áñð --ßéŧ çóñfíŕm=ýéß wíŧh ŧhém, whíçh íñíŧíáĺízéß wíŧhóúŧ béíñg áßkéð⟧
+qps.cli.next.confirm_init = ⟦ñéxŧ: áðð çóñfíŕm=ýéß, whíçh íñíŧíáĺízéß wíŧhóúŧ béíñg áßkéð⟧
+qps.cli.next.confirm_init_also = ⟦ñéxŧ: gívé ŧhóßé ábóvé áß NAME=VALÚE, áñð çóñfíŕm=ýéß wíŧh ŧhém, whíçh íñíŧíáĺízéß wíŧhóúŧ béíñg áßkéð⟧
 qps.cli.next.initialized = ⟦ñéxŧ: ŕéçóñfígúŕé NAME=VALÚE çháñgéß íŧß ßéŧŧíñgß, áñð çóñfíg ßhówß ŧhém⟧
 qps.cli.next.in_directory = ⟦éáçh wíŧh --ðíŕéçŧóŕý {path}, óŕ ŕúñ fŕóm {path}⟧
 qps.cli.next.in_directory_session = ⟦ŧhíß ßéßßíóñ wóŕkß íñ ŧhé ðíŕéçŧóŕý íŧ wáß ßŧáŕŧéð íñ; ßŧáŕŧ óñé íñ {path} ŧó wóŕk óñ ŧháŧ pŕójéçŧ⟧
@@ -2398,7 +2398,7 @@ qps.cli.work.ended_because = ⟦ŧhé ŧáßk íß {name}: {detail}⟧
 qps.cli.work.failed_because = ⟦ŧhé ŧáßk fáíĺéð: {detail}⟧
 qps.cli.next.retry = ⟦ñéxŧ: ŧáßk áççépŧ {name} ŧó ŧŕý íŧ ágáíñ, óŕ ŧáßk çómpĺéŧé {name} óñçé íŧ íß ðóñé bý háñð⟧
 qps.cli.next.write_refused = ⟦ñéxŧ: ŧŕýíñg ágáíñ íß ŕéfúßéð ŧhé ßámé wáý; ŕéçóñfígúŕé máp.péŕmíßßíóñ.{value}.wŕíŧé_ßóúŕçé=ŕóóŧß=... ĺéŧß ágéñŧß óf ŧháŧ ĺévéĺ wŕíŧé ŧhéŕé, óŕ ŧáßk çómpĺéŧé {name} óñçé íŧ íß ðóñé bý háñð⟧
-qps.cli.next.own_permissions_refused = ⟦ñéxŧ: ŧŕýíñg ágáíñ íß ŕéfúßéð ŧhé ßámé wáý; íŧß ówñ péŕmíßßíóñß ĺímíŧ íŧ: ŧáßk éðíŧ {name} --ßéŧ péŕmíßßíóñß=... wíðéñß ŧhém⟧
+qps.cli.next.own_permissions_refused = ⟦ñéxŧ: ŧŕýíñg ágáíñ íß ŕéfúßéð ŧhé ßámé wáý; íŧß ówñ péŕmíßßíóñß ĺímíŧ íŧ: ŧáßk éðíŧ {name} péŕmíßßíóñß=... wíðéñß ŧhém⟧
 qps.cli.next.reopen = ⟦ñéxŧ: ŧáßk ŕéópéñ {name} mákéß íŧ ŕéáðý ŧó bé wóŕkéð ágáíñ⟧
 qps.cli.next.parts = ⟦ñéxŧ: ŧáßk áççépŧ {detail} áççépŧß íŧß páŕŧß; íŧ góéß báçk ŧó wóŕk óñçé ŧhéý áŕé ðóñé⟧
 qps.cli.next.parts_first = ⟦ñéxŧ: íŧß páŕŧß çómé fíŕßŧ -- {detail} -- áñð {name} góéß óñ óñçé ŧhéý áŕé ðóñé⟧
@@ -2415,16 +2415,16 @@ qps.cli.next.accept_decision = ⟦ñéxŧ: ðéçíßíóñ áççépŧ {name} �
 qps.cli.next.accept_requirement = ⟦ñéxŧ: ŕéq áççépŧ {name} áççépŧß íŧ; úñŧíĺ ŧhéñ ñó ŧáßk íß ðéŕívéð fŕóm íŧ⟧
 qps.cli.next.work = ⟦ñéxŧ: wóŕk {name} ðóéß íŧ⟧
 qps.cli.next.proposed = ⟦ñéxŧ: ŧáßk áççépŧ ID áççépŧß éáçh pŕópóßáĺ ({detail}), ŧáßk ŕéjéçŧ ID ðŕópß óñé⟧
-qps.cli.next.task_left = ⟦ñéxŧ: {name} ßŧíĺĺ ßéŕvéß {other}; ŧáßk {value} {name} ĺéŧß íŧ gó, óŕ ŧáßk éðíŧ {name} --ßéŧ ŕéqúíŕéméñŧß=ID háß íŧ ßéŕvé áñóŧhéŕ⟧
-qps.cli.next.task_component = ⟦ñéxŧ: {name} ßéŕvéß {other} áñð íß éĺßéwhéŕé; ŧáßk éðíŧ {name} --ßéŧ çómpóñéñŧ={value} pĺáçéß íŧ wíŧh íŧ⟧
+qps.cli.next.task_left = ⟦ñéxŧ: {name} ßŧíĺĺ ßéŕvéß {other}; ŧáßk {value} {name} ĺéŧß íŧ gó, óŕ ŧáßk éðíŧ {name} ŕéqúíŕéméñŧß=ID háß íŧ ßéŕvé áñóŧhéŕ⟧
+qps.cli.next.task_component = ⟦ñéxŧ: {name} ßéŕvéß {other} áñð íß éĺßéwhéŕé; ŧáßk éðíŧ {name} çómpóñéñŧ={value} pĺáçéß íŧ wíŧh íŧ⟧
 qps.cli.next.refused_parts = ⟦ñéxŧ: ñóŧ máðé, képŧ íñ {value}: {detail}; ŧáßk ßpĺíŧ {name} {detail} mákéß ŧhém bý háñð (éáçh óñé ; ápáŕŧ), óŕ {other}⟧
-qps.cli.next.task_new_for = ⟦ñéxŧ: ŧáßk ñéw "{detail}" --ßéŧ kíñð={value} mákéß íŧ bý háñð (képŧ íñ {name})⟧
+qps.cli.next.task_new_for = ⟦ñéxŧ: ŧáßk ñéw "{detail}" kíñð={value} mákéß íŧ bý háñð (képŧ íñ {name})⟧
 qps.cli.check.no_tests = ⟦{name} ŕáñ: íŧ ŕúñß ñó ŧéßŧß; çhéçk fúĺĺ ŕúñß ŧhé pŕójéçŧ'ß ŧéßŧß áß wéĺĺ⟧
 qps.cli.next.conflict = ⟦ñéxŧ: ŧhé wóŕk íß íñ {path}; çómpáŕé {detail} ŧhéŕé wíŧh ŧhé pŕójéçŧ'ß (ðíff {path}/F F, fóŕ éáçh fíĺé F) áñð ßéŧŧĺé íŧ, ŧhéñ ŧáßk íñŧégŕáŧé {name} ŕéßóĺvéð ŧákéß ŧhé wóŕkßpáçé'ß fíĺéß -- óŕ ŕéßóĺvéð áñýwáý ŧákéß ŧhém áß ŧhéý áŕé; ŧáßk çáñçéĺ {name} áñýwáý gívéß ŧhé wóŕk úp, áñð ŧáßk ŕéópéñ {name} ŧhéñ ðóéß íŧ ágáíñ⟧
 qps.cli.next.ready = ⟦ŕéáðý ŧó wóŕk óñ: {name}  {value}⟧
 qps.cli.next.waits_integration = ⟦{name} ({value}) wáíŧß ŧó bé ŧákéñ íñ: {detail}⟧
 qps.cli.next.accept = ⟦ñéxŧ: çáñðíðáŧé ŧáßkß wáíŧíñg ŧó bé áççépŧéð: {count}; ŧáßk ĺíßŧ ßhówß ŧhém, ŧáßk áççépŧ ID áççépŧß óñé⟧
-qps.cli.next.create = ⟦ñéxŧ: ŧáßk ñéw ŦIŦLE --ßéŧ kíñð=KIND mákéß á ŧáßk, óŕ ŕéq ñéw ŦIŦLE ŧéxŧ=... á ŕéqúíŕéméñŧ ŧó ðéŕívé ŧáßkß fŕóm⟧
+qps.cli.next.create = ⟦ñéxŧ: ŧáßk ñéw ŦIŦLE kíñð=KIND mákéß á ŧáßk, óŕ ŕéq ñéw ŦIŦLE ŧéxŧ=... á ŕéqúíŕéméñŧ ŧó ðéŕívé ŧáßkß fŕóm⟧
 qps.cli.agent.stopped = ⟦ágéñŧ ßŧóppéð: {state} áfŧéŕ {count} ßŧépß áñð {total} ŧóóĺ çáĺĺß⟧
 qps.cli.interactive.tool_needs_text = ⟦/tool ñééðß ŧhé ŧóóĺ'ß áñßwéŕ áß ŧéxŧ⟧
 qps.cli.interactive.path_needed = ⟦ŧháŧ çómmáñð ñééðß á fíĺé páŧh⟧

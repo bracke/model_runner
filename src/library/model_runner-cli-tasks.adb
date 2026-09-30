@@ -846,7 +846,7 @@ package body Model_Runner.CLI.Tasks is
                Outcome := E.Make (E.Framework_Input_Missing);
                E.Add_Text (Outcome, "name", "a value for "
                            & Model_Runner.Framework.Configurations.Value_Maps.Key (Position)
-                           & ", as --set "
+                           & ", as "
                            & Model_Runner.Framework.Configurations.Value_Maps.Key (Position) & "=NAME");
                Fail (Outcome);
                return;
@@ -856,7 +856,7 @@ package body Model_Runner.CLI.Tasks is
          if Fields.Is_Empty then
             Outcome := E.Make (E.Framework_Input_Missing);
             E.Add_Text (Outcome, "name", "what to change: task edit " & Argument
-                        & " --set FIELD=VALUE, as title=, notes=, component= or requirements=");
+                        & " FIELD=VALUE, as title=, notes=, component= or requirements=");
             Fail (Outcome);
             return;
          end if;
@@ -997,7 +997,7 @@ package body Model_Runner.CLI.Tasks is
                E.Add_Text (Outcome, "name", "the parts of " & First_Word);
                E.Add_Text (Outcome, "value", Titles.First_Element);
                E.Add_Text (Outcome, "detail", "one part is the task itself: name two or more, a ; apart,"
-                           & " or task edit " & First_Word & " --set title=... renames it");
+                           & " or task edit " & First_Word & " title=... renames it");
                Fail (Outcome);
                return;
             elsif not Had.Is_Empty then
@@ -1184,7 +1184,7 @@ package body Model_Runner.CLI.Tasks is
             E.Add_Text (Outcome, "name", "the component whose tasks move");
             E.Add_Text (Outcome, "value", First_Word);
             E.Add_Text (Outcome, "detail", "rehome moves every open task of a component; task edit "
-                        & First_Word & " --set component=" & After_First & " moves one");
+                        & First_Word & " component=" & After_First & " moves one");
             Fail (Outcome);
             return;
          elsif Moved.Is_Empty and then not (Busy.Is_Empty and then Belongs.Is_Empty) then
@@ -1206,7 +1206,7 @@ package body Model_Runner.CLI.Tasks is
             E.Add_Text (Outcome, "name", "the open tasks in " & First_Word);
             E.Add_Text (Outcome, "detail",
                         Joined (Kept_Home) & " serve requirements that belong to " & Joined (Homes)
-                        & "; task edit ID --set component=" & Homes.First_Element & " places one there");
+                        & "; task edit ID component=" & Homes.First_Element & " places one there");
             Fail (Outcome);
             return;
          elsif Moved.Is_Empty then

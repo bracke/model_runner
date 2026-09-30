@@ -348,7 +348,7 @@ package body Model_Runner.CLI.Init is
                      begin
                         if To_String (Declared.Id) = Missing then
                            E.Add_Text (One, "detail", Input_Detail (Declared, Planned));
-                           E.Add_Text (One, "value", "--set " & Missing & "=...");
+                           E.Add_Text (One, "value", Missing & "=...");
                         end if;
                      end;
                   end loop;

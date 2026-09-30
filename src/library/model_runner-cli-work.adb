@@ -643,9 +643,9 @@ package body Model_Runner.CLI.Work is
          begin
             if Name not in "model" | "steps" | "profile" | "all" then
                Outcome := E.Make (E.Framework_Input_Invalid);
-               E.Add_Text (Outcome, "name", "what work --set takes");
+               E.Add_Text (Outcome, "name", "what work takes");
                E.Add_Text (Outcome, "value", Name);
-               E.Add_Text (Outcome, "detail", "work takes --set model=PATH, steps=N, profile=NAME"
+               E.Add_Text (Outcome, "detail", "work takes model=PATH, steps=N, profile=NAME"
                            & " and all=yes; the agent is the setting work.agent");
                Fail (Outcome);
                return;
@@ -1391,7 +1391,7 @@ package body Model_Runner.CLI.Work is
                            [Loc.Named ("detail", Parts.First_Element),
                             Loc.Named ("value", To_String (Kind)
                                        & (if Component = Null_Unbounded_String then ""
-                                          else " --set component=" & To_String (Component))),
+                                          else " component=" & To_String (Component))),
                             Loc.Named ("name", To_String (Done.Issue_Id))]);
                      end;
                   end loop;
@@ -1432,7 +1432,7 @@ package body Model_Runner.CLI.Work is
                                        & " create_children"
                                   elsif R.Get (Defined, "permissions") /= ""
                                   then "its own permissions limit it: task edit "
-                                       & To_String (Done.Task_Id) & " --set permissions=... widens them"
+                                       & To_String (Done.Task_Id) & " permissions=... widens them"
                                   elsif Ada.Strings.Fixed.Index (To_String (Why), "max_depth") > 0
                                     or else Ada.Strings.Fixed.Index (To_String (Why), "max_children") > 0
                                   then "reconfigure map.permission." & Level

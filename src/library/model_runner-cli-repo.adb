@@ -179,7 +179,6 @@ package body Model_Runner.CLI.Repo is
       procedure Keep is
          Store  : S.Store;
          Report : S.Recovery_Report;
-         Kept   : Rp.Graph;
          Change : S.Transaction;
       begin
          if not S.Is_Initialized (Directory) then
@@ -187,27 +186,28 @@ package body Model_Runner.CLI.Repo is
          end if;
          S.Open (Store, Directory, Report, Outcome);
          if E.Is_Ok (Outcome) then
-            Rp.Load (Store, Kept, Outcome);
-            if E.Is_Error (Outcome)
-              or else Rp.Graph_Fingerprint (Kept) /= Rp.Graph_Fingerprint (Found)
-            then
-               Rp.Keep (Store, Change, Found, Outcome);
+            declare
+               Kept : constant String := Rp.Kept_Fingerprint (Store);
+            begin
+               if Kept /= Rp.Graph_Fingerprint (Found) then
+                  Rp.Keep (Store, Change, Found, Outcome);
 
-               --  A graph that was kept before and differs now is source
-               --  that changed, which the orchestrator acts on.
-               if E.Is_Ok (Outcome) and then Rp.File_Count (Kept) > 0 then
-                  declare
-                     Event : Unbounded_String;
-                  begin
-                     Model_Runner.Framework.Events.Emit
-                       (Store, Change, Model_Runner.Framework.Events.Source_Changed,
-                        "PROJECT", Rp.Graph_Fingerprint (Found), Event, Outcome);
-                  end;
+                  --  A graph that was kept before and differs now is source
+                  --  that changed, which the orchestrator acts on.
+                  if E.Is_Ok (Outcome) and then Kept /= "" then
+                     declare
+                        Event : Unbounded_String;
+                     begin
+                        Model_Runner.Framework.Events.Emit
+                          (Store, Change, Model_Runner.Framework.Events.Source_Changed,
+                           "PROJECT", Rp.Graph_Fingerprint (Found), Event, Outcome);
+                     end;
+                  end if;
+                  if E.Is_Ok (Outcome) then
+                     S.Commit (Store, Change, Outcome);
+                  end if;
                end if;
-               if E.Is_Ok (Outcome) then
-                  S.Commit (Store, Change, Outcome);
-               end if;
-            end if;
+            end;
          end if;
          S.Close (Store);
 
@@ -288,12 +288,23 @@ package body Model_Runner.CLI.Repo is
                return;
             end if;
             --  Every declaration of each: an overloaded name is declared
-            --  more than once, and each is its own line.
-            for Name of Names loop
+            --  more than once, and each is its own line. The declarations
+            --  are gathered in one walk of the symbols, then said by name.
+            declare
+               package Symbol_Vectors is new Ada.Containers.Vectors (Positive, Rp.Symbol, Rp."=");
+               Declared : Symbol_Vectors.Vector;
+            begin
                for Index in 1 .. Rp.Symbol_Count (Found) loop
                   declare
                      Named : constant Rp.Symbol := Rp.Symbol_At (Found, Index);
                   begin
+                     if Names.Contains (To_String (Named.Name)) then
+                        Declared.Append (Named);
+                     end if;
+                  end;
+               end loop;
+               for Name of Names loop
+                  for Named of Declared loop
                      if To_String (Named.Name) = Name then
                         Pres.Put_Message
                           (Screen, "cli.repo.symbol",
@@ -302,9 +313,9 @@ package body Model_Runner.CLI.Repo is
                             Loc.Named ("path", To_String (Named.Path) & ":"
                                                & Image (Named.Line))]);
                      end if;
-                  end;
+                  end loop;
                end loop;
-            end loop;
+            end;
          end;
 
       elsif Action = "refs" then

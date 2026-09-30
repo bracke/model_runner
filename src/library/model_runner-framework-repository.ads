@@ -321,6 +321,13 @@ package Model_Runner.Framework.Repository is
       Found  : out Graph;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  The fingerprint of the graph kept in the project state: known in
+   --  this process once it has read or kept one, loaded otherwise.
+   --
+   --  @param Item The store.
+   --  @return Its Graph_Fingerprint; empty when none is kept.
+   function Kept_Fingerprint (Item : Stores.Store) return String;
+
    --  The graph kept in the project state.
    --
    --  @param Item The store.

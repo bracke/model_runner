@@ -1532,60 +1532,22 @@ package body Model_Runner.Framework.Repository is
       return Result;
    end Refresh;
 
-   ---------
-   -- Now --
-   ---------
-
-   function Now (Item : Stores.Store) return Graph is
-      Kept       : Graph;
-      Read       : E.Error_Info;
-      Read_Again : Natural;
-   begin
-      Load (Item, Kept, Read);
-      return Refresh (Ada.Directories.Containing_Directory (Stores.Root (Item)), Kept, Read_Again,
-                      Roots_Of (Item));
-   end Now;
-
-   -------------
-   -- Current --
-   -------------
-
-   procedure Current
-     (Item   : in out Stores.Store;
-      Found  : out Graph;
-      Status : out Model_Runner.Errors.Error_Info)
-   is
-      Kept       : Graph;
-      Read       : E.Error_Info;
-      Read_Again : Natural;
-      Change     : Stores.Transaction;
-   begin
-      Status := E.Success;
-      Load (Item, Kept, Read);
-      Found := Refresh (Ada.Directories.Containing_Directory (Stores.Root (Item)), Kept,
-                        Read_Again, Roots_Of (Item));
-      if Read_Again > 0 or else E.Is_Error (Read)
-        or else Natural (Found.Files.Length) /= Natural (Kept.Files.Length)
-      then
-         Keep (Item, Change, Found, Status);
-         if E.Is_Ok (Status) then
-            Stores.Commit (Item, Change, Status);
-         end if;
-      end if;
-   end Current;
-
-   ----------
-   -- Scan --
-   ----------
+   ------------
+   -- Memory --
+   ------------
 
    --  The graphs this process made last, by project and roots: a session
    --  asks of the same tree again and again, and a graph brought up to
    --  date reads only what changed. A few, for the workspaces beside it.
+   --  Each with the fingerprint of the graph its project's state keeps,
+   --  where this process knows it, so neither reading nor keeping has to
+   --  load the kept one to learn it.
    Remembered_Count : constant := 4;
 
    type Remembered is record
       Key   : Unbounded_String;
       Found : Graph;
+      Kept  : Unbounded_String;
    end record;
 
    Memory : array (1 .. Remembered_Count) of Remembered;
@@ -1610,41 +1572,8 @@ package body Model_Runner.Framework.Repository is
       end Release;
    end Memory_Lock;
 
-   --  What Memory holds for a key, and whether it holds anything.
-   procedure Recall (Key : String; Found : out Graph; Held : out Boolean) is
-   begin
-      Held := False;
-      Memory_Lock.Seize;
-      for Index in Memory'Range loop
-         if Memory (Index).Key = Key then
-            Found := Memory (Index).Found;
-            Held := True;
-            exit;
-         end if;
-      end loop;
-      Memory_Lock.Release;
-   end Recall;
-
-   --  Remember a graph for a key, most recent first.
-   procedure Remember (Key : String; Found : Graph) is
-      Last : Positive := Memory'Last;
-   begin
-      Memory_Lock.Seize;
-      for Index in Memory'Range loop
-         if Memory (Index).Key = Key then
-            Last := Index;
-            exit;
-         end if;
-      end loop;
-      Memory (2 .. Last) := Memory (1 .. Last - 1);
-      Memory (1) := (To_Unbounded_String (Key), Found);
-      Memory_Lock.Release;
-   end Remember;
-
-   function Scan
-     (Project_Directory : String;
-      Within            : Roots := Default_Roots) return Graph
-   is
+   --  What names a graph in Memory: the project's whole path and its roots.
+   function Key_Of (Project_Directory : String; Within : Roots) return String is
       function Joined (Names : Name_Lists.Vector) return String is
          Text : Unbounded_String;
       begin
@@ -1654,19 +1583,172 @@ package body Model_Runner.Framework.Repository is
          return To_String (Text);
       end Joined;
 
-      Key : constant String :=
-        (declare
-           Whole : constant String :=
-             (if Dirs.Exists (Project_Directory) then Dirs.Full_Name (Project_Directory)
-              else Project_Directory);
-         begin
-           Whole & ASCII.NUL & Joined (Within.Skip) & ASCII.NUL & Joined (Within.Tests)
-           & ASCII.NUL & Joined (Within.Documentation) & ASCII.NUL & Joined (Within.Generated));
+      Whole : constant String :=
+        (if Dirs.Exists (Project_Directory) then Dirs.Full_Name (Project_Directory)
+         else Project_Directory);
+   begin
+      return Whole & ASCII.NUL & Joined (Within.Skip) & ASCII.NUL & Joined (Within.Tests)
+        & ASCII.NUL & Joined (Within.Documentation) & ASCII.NUL & Joined (Within.Generated);
+   end Key_Of;
+
+   --  The key of a store's project, with the roots it sets.
+   function Key_Of (Item : Stores.Store) return String
+   is (Key_Of (Ada.Directories.Containing_Directory (Stores.Root (Item)), Roots_Of (Item)));
+
+   --  What Memory holds for a key: the graph, whether there is one, and the
+   --  kept graph's fingerprint, empty where it is not known.
+   procedure Recall
+     (Key   : String;
+      Found : out Graph;
+      Held  : out Boolean;
+      Kept  : out Unbounded_String) is
+   begin
+      Held := False;
+      Kept := Null_Unbounded_String;
+      Memory_Lock.Seize;
+      for Index in Memory'Range loop
+         if Memory (Index).Key = Key then
+            Found := Memory (Index).Found;
+            Kept := Memory (Index).Kept;
+            Held := True;
+            exit;
+         end if;
+      end loop;
+      Memory_Lock.Release;
+   end Recall;
+
+   --  Remember a graph for a key, most recent first, with the kept graph's
+   --  fingerprint where Kept says it; an empty one keeps what was known.
+   procedure Remember (Key : String; Found : Graph; Kept : String := "") is
+      Last  : Positive := Memory'Last;
+      Known : Unbounded_String := To_Unbounded_String (Kept);
+   begin
+      Memory_Lock.Seize;
+      for Index in Memory'Range loop
+         if Memory (Index).Key = Key then
+            Last := Index;
+            if Kept = "" then
+               Known := Memory (Index).Kept;
+            end if;
+            exit;
+         end if;
+      end loop;
+      Memory (2 .. Last) := Memory (1 .. Last - 1);
+      Memory (1) := (To_Unbounded_String (Key), Found, Known);
+      Memory_Lock.Release;
+   end Remember;
+
+   ---------
+   -- Now --
+   ---------
+
+   function Now (Item : Stores.Store) return Graph is
+      Key        : constant String := Key_Of (Item);
       Kept       : Graph;
       Held       : Boolean;
+      Kept_Print : Unbounded_String;
+      Read       : E.Error_Info;
       Read_Again : Natural;
    begin
-      Recall (Key, Kept, Held);
+      Recall (Key, Kept, Held, Kept_Print);
+      if not Held then
+         Load (Item, Kept, Read);
+      end if;
+      return Result : constant Graph :=
+        Refresh (Ada.Directories.Containing_Directory (Stores.Root (Item)), Kept, Read_Again,
+                 Roots_Of (Item))
+      do
+         Remember (Key, Result,
+                   (if not Held and then E.Is_Ok (Read) then Graph_Fingerprint (Kept) else ""));
+      end return;
+   end Now;
+
+   -------------
+   -- Current --
+   -------------
+
+   procedure Current
+     (Item   : in out Stores.Store;
+      Found  : out Graph;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Key        : constant String := Key_Of (Item);
+      Kept       : Graph;
+      Held       : Boolean;
+      Kept_Print : Unbounded_String;
+      Read       : E.Error_Info;
+      Read_Again : Natural;
+      Change     : Stores.Transaction;
+   begin
+      Status := E.Success;
+
+      --  Known here: brought up to date from what this process holds, and
+      --  kept where that is not what the state keeps.
+      Recall (Key, Kept, Held, Kept_Print);
+      if Held and then Kept_Print /= Null_Unbounded_String then
+         Found := Refresh (Ada.Directories.Containing_Directory (Stores.Root (Item)), Kept,
+                           Read_Again, Roots_Of (Item));
+         if Graph_Fingerprint (Found) /= To_String (Kept_Print) then
+            Keep (Item, Change, Found, Status);
+            if E.Is_Ok (Status) then
+               Stores.Commit (Item, Change, Status);
+            end if;
+         else
+            Remember (Key, Found);
+         end if;
+         return;
+      end if;
+
+      Load (Item, Kept, Read);
+      Found := Refresh (Ada.Directories.Containing_Directory (Stores.Root (Item)), Kept,
+                        Read_Again, Roots_Of (Item));
+      if Read_Again > 0 or else E.Is_Error (Read)
+        or else Natural (Found.Files.Length) /= Natural (Kept.Files.Length)
+      then
+         Keep (Item, Change, Found, Status);
+         if E.Is_Ok (Status) then
+            Stores.Commit (Item, Change, Status);
+         end if;
+      else
+         Remember (Key, Found, Graph_Fingerprint (Kept));
+      end if;
+   end Current;
+
+   ------------------------
+   -- Kept_Fingerprint --
+   ------------------------
+
+   function Kept_Fingerprint (Item : Stores.Store) return String is
+      Key        : constant String := Key_Of (Item);
+      Kept       : Graph;
+      Held       : Boolean;
+      Kept_Print : Unbounded_String;
+      Read       : E.Error_Info;
+   begin
+      Recall (Key, Kept, Held, Kept_Print);
+      if Kept_Print /= Null_Unbounded_String then
+         return To_String (Kept_Print);
+      end if;
+      Load (Item, Kept, Read);
+      return (if E.Is_Ok (Read) and then Natural (Kept.Files.Length) > 0
+              then Graph_Fingerprint (Kept) else "");
+   end Kept_Fingerprint;
+
+   ----------
+   -- Scan --
+   ----------
+
+   function Scan
+     (Project_Directory : String;
+      Within            : Roots := Default_Roots) return Graph
+   is
+      Key        : constant String := Key_Of (Project_Directory, Within);
+      Kept       : Graph;
+      Held       : Boolean;
+      Kept_Print : Unbounded_String;
+      Read_Again : Natural;
+   begin
+      Recall (Key, Kept, Held, Kept_Print);
       return Result : constant Graph :=
         (if Held then Refresh (Project_Directory, Kept, Read_Again, Within)
          else Scan_All (Project_Directory, Within))
@@ -1708,6 +1790,8 @@ package body Model_Runner.Framework.Repository is
            Stores.Current_Revision (Item, Indexes_Area, Index_Name) + 1);
    begin
       Status := E.Success;
+      --  In the order the record keeps its fields -- file, fingerprint,
+      --  relation, symbol -- so each is set at the end.
       for Index in 1 .. Natural (Found.Files.Length) loop
          declare
             File : File_Entry renames Found.Files (Index);
@@ -1719,16 +1803,7 @@ package body Model_Runner.Framework.Repository is
                & To_String (File.Fingerprint) & Tab & To_String (File.Stamp));
          end;
       end loop;
-      for Index in 1 .. Natural (Found.Symbols.Length) loop
-         declare
-            Named : Symbol renames Found.Symbols (Index);
-         begin
-            Records.Set
-              (Value, "symbol." & Six (Index),
-               To_String (Named.Name) & Tab & To_String (Named.Kind) & Tab
-               & To_String (Named.Path) & Tab & Image (Named.Line));
-         end;
-      end loop;
+      Records.Set (Value, "fingerprint", Graph_Fingerprint (Found));
       for Index in 1 .. Natural (Found.Relations.Length) loop
          declare
             Link : Relation renames Found.Relations (Index);
@@ -1742,8 +1817,20 @@ package body Model_Runner.Framework.Repository is
                & To_String (Link.Where) & Tab & To_String (Link.Origin));
          end;
       end loop;
-      Records.Set (Value, "fingerprint", Graph_Fingerprint (Found));
+      for Index in 1 .. Natural (Found.Symbols.Length) loop
+         declare
+            Named : Symbol renames Found.Symbols (Index);
+         begin
+            Records.Set
+              (Value, "symbol." & Six (Index),
+               To_String (Named.Name) & Tab & To_String (Named.Kind) & Tab
+               & To_String (Named.Path) & Tab & Image (Named.Line));
+         end;
+      end loop;
       Stores.Put (Change, Indexes_Area, Index_Name, Value);
+
+      --  What the state will keep, known here from now on.
+      Remember (Key_Of (Item), Found, Graph_Fingerprint (Found));
    end Keep;
 
    ----------

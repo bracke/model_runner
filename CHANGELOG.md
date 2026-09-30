@@ -1782,6 +1782,18 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A project with a large tree opens fast:** keeping the repository graph
+  set each of its hundred thousand fields by walking the record, so `/init`
+  on this repository's sources ran past six minutes; a record's fields are
+  now found by halves and the graph is written in their order -- 2 s. The
+  graph a process has read or kept is remembered with the kept one's
+  fingerprint, so opening a project, `/scan` and the rest neither load the
+  kept graph nor keep it again when nothing changed; and a large record
+  whose text is the text last parsed is not parsed again. In a session on
+  290 files: `/task list` 0.8 s to 0.1 s, `/state` 0.4 s to 0.06 s, `/sym`
+  0.7 s to 0.16 s, `/scan` from a new process 2.2 s to 0.7 s.
+- **Session hints name settings as a session takes them:** `NAME=VALUE`,
+  no longer the shell's `--set NAME=VALUE`.
 - **Repository scans 45× faster:** a file's references are found by
   looking each visible symbol's name up in an index of the file's words,
   not by walking every token for every symbol. `/scan`, `/tree`, `/sym`,

@@ -418,7 +418,7 @@ package body Model_Runner.Framework.Consistency is
                                   "it is in " & Records.Get (Defined, "component") & ", and "
                                   & Requirement & " it serves belongs to " & Linked.First_Element
                                   & (if Tasks.Components (Item).Contains (Linked.First_Element)
-                                     then ": task edit " & Id & " --set component="
+                                     then ": task edit " & Id & " component="
                                           & Linked.First_Element & " places it there"
                                      else ", which is none of the project's components: req unlink "
                                           & Requirement & " component " & Linked.First_Element
@@ -518,10 +518,10 @@ package body Model_Runner.Framework.Consistency is
                             & Tasks.State_Of (Item, To_String (Ended)) & ", and "
                             & (if Tasks.State_Of (Item, To_String (Ended)) = "rejected"
                                then "task reconsider " else "task reopen ")
-                            & To_String (Ended) & " takes it back, or task new TITLE --set kind=KIND"
-                            & " --set requirements=" & Id & " makes another"
+                            & To_String (Ended) & " takes it back, or task new TITLE kind=KIND"
+                            & " requirements=" & Id & " makes another"
                        else "it is accepted and no task serves it: task derive makes one, or task"
-                            & " new TITLE --set kind=KIND --set requirements=" & Id));
+                            & " new TITLE kind=KIND requirements=" & Id));
             end if;
          end;
       end loop;

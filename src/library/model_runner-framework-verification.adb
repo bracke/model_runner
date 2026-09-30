@@ -2154,8 +2154,8 @@ package body Model_Runner.Framework.Verification is
       --  that it does what it says.
       if not Tested and then Empty_Suite /= Null_Unbounded_String then
          return Lacks ("its tests ran and found none to run (" & To_String (Empty_Suite)
-                       & "): a test that exercises it -- task new TITLE --set kind=test"
-                       & " --set requirements=" & Requirement & " -- then check "
+                       & "): a test that exercises it -- task new TITLE kind=test"
+                       & " requirements=" & Requirement & " -- then check "
                        & Requirement & " verifies it");
       elsif not Tested then
          return Lacks ("no evidence for it ran tests: a build shows it is there, not that it"

@@ -2043,7 +2043,7 @@ package body Tests.CLI_Cases is
       Assert (Code /= 0 and then Shows ("not a kind of project"),
               "a part was not refused as a kind of project: " & To_String (Said));
       Run ("init|ada-cli", "p1");
-      Assert (Code /= 0 and then Shows ("--set project_name=") and then Shows ("3 to 64"),
+      Assert (Code /= 0 and then Shows ("project_name=...") and then Shows ("3 to 64"),
               "a directory name that is no crate was not said so: " & To_String (Said));
       Run ("init|ada-cli|--set|confirm=yes", "My-App");
       Assert (Code = 0 and then Ada.Directories.Exists (Root & "/My-App/my_app.gpr"),
@@ -2103,7 +2103,7 @@ package body Tests.CLI_Cases is
               and then not Shows (".state"),
               "an unknown task was not said by its name: " & To_String (Said));
       Run ("task|new|Nothing");
-      Assert (Code /= 0 and then Shows ("--set kind=...  analysis"),
+      Assert (Code /= 0 and then Shows ("kind=...  analysis"),
               "the kinds to choose from were not listed: " & To_String (Said));
       Run ("task|cancel|TASK-404");
       Assert (Code /= 0, "an unknown task was cancelled");

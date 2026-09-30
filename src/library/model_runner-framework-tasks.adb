@@ -2075,7 +2075,7 @@ package body Model_Runner.Framework.Tasks is
          if E.Is_Error (Checked) then
             Status := E.Make (E.Framework_Input_Invalid);
             E.Add_Text (Status, "name", "a field of " & Id);
-            E.Add_Text (Status, "value", "what --set gave");
+            E.Add_Text (Status, "value", "what gave");
             E.Add_Text (Status, "detail", E.Text_Of (Checked, "detail"));
             return;
          end if;

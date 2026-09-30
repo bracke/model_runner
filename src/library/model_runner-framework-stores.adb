@@ -129,16 +129,66 @@ package body Model_Runner.Framework.Stores is
    end Word;
 
    --  Read a record from a file and check it against its schema.
+   --  The large records this process parsed last, each with the text it
+   --  was parsed from: a record read again whose text is the same text is
+   --  the same record, and a derived index of megabytes is read by every
+   --  command that opens the project. Compared whole, so a rewrite of the
+   --  same size in the same second is still seen.
+   Parsed_Least : constant := 256 * 1024;
+   Parsed_Count : constant := 4;
+
+   type Parsed_Record is record
+      Path  : Unbounded_String;
+      Text  : Unbounded_String;
+      Value : Records.Item;
+   end record;
+
+   Parsed : array (1 .. Parsed_Count) of Parsed_Record;
+
+   --  Held while Parsed is read or written.
+   protected Parsed_Lock is
+      entry Seize;
+      procedure Release;
+   private
+      Held : Boolean := False;
+   end Parsed_Lock;
+
+   protected body Parsed_Lock is
+      entry Seize when not Held is
+      begin
+         Held := True;
+      end Seize;
+
+      procedure Release is
+      begin
+         Held := False;
+      end Release;
+   end Parsed_Lock;
+
    procedure Read_Record
      (Path   : String;
       Origin : String;
       Value  : out Records.Item;
       Status : out E.Error_Info)
    is
-      Text : Unbounded_String;
+      Text  : Unbounded_String;
+      Large : Boolean := False;
+      Key   : constant String := Path & ASCII.NUL & Origin;
    begin
       Value := Records.Create ("", 1, "", 0);
       Read_Text (Path, Text, Status);
+      if E.Is_Ok (Status) and then Length (Text) >= Parsed_Least then
+         Large := True;
+         Parsed_Lock.Seize;
+         for One of Parsed loop
+            if One.Path = Key and then One.Text = Text then
+               Value := One.Value;
+               Parsed_Lock.Release;
+               return;
+            end if;
+         end loop;
+         Parsed_Lock.Release;
+      end if;
       if E.Is_Ok (Status) then
          Records.Parse (To_String (Text), Origin, Value, Status);
       end if;
@@ -154,6 +204,12 @@ package body Model_Runner.Framework.Stores is
       end if;
       if E.Is_Ok (Status) then
          Schemas.Validate (Value, Origin, Status);
+      end if;
+      if Large and then E.Is_Ok (Status) then
+         Parsed_Lock.Seize;
+         Parsed (2 .. Parsed'Last) := Parsed (1 .. Parsed'Last - 1);
+         Parsed (1) := (To_Unbounded_String (Key), Text, Value);
+         Parsed_Lock.Release;
       end if;
    end Read_Record;
 

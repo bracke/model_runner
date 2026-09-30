@@ -1421,7 +1421,7 @@ package body Model_Runner.Framework.Configurations is
             return "";
          elsif Starts (Level, "task.") then
             return "a task's permissions are its own field: task edit "
-              & Level (Level'First + 5 .. Level'Last) & " --set permissions=... sets them";
+              & Level (Level'First + 5 .. Level'Last) & " permissions=... sets them";
          else
             return Level & " is no level permissions are read at: they are project, kind.KIND and"
               & " role.ROLE";
