@@ -13,8 +13,8 @@ task_kind test = component?, requirements?, notes?
 task_kind documentation = component?, notes?
 task_kind analysis = component?, notes?, question?
 
-# What completes a task of each kind: work that changes code is complete only
-# when it changed something.
+# What completes a task of each kind: work that changes code or tests is
+# complete only when it changed something.
 set task.gates.implementation = verification
 set task.gates.implementation = children
 set task.gates.implementation = no_blocking_issue
@@ -25,6 +25,11 @@ set task.gates.bugfix = children
 set task.gates.bugfix = no_blocking_issue
 set task.gates.bugfix = integration
 set task.gates.bugfix = implementation_present
+set task.gates.test = verification
+set task.gates.test = children
+set task.gates.test = no_blocking_issue
+set task.gates.test = integration
+set task.gates.test = implementation_present
 
 # What an agent may do, by kind, within the project's least: analysis reads
 # and checks, documentation writes documents, tests write tests.

@@ -1047,7 +1047,19 @@ package body Model_Runner.Framework.Configurations is
          begin
             Permissions.Restriction
               (Name (Last_Dot + 1 .. Name'Last) & ": " & Value, Level, Read);
-            if E.Is_Error (Read) then
+            if E.Is_Error (Read)
+              and then Name (Last_Dot + 1 .. Name'Last) in "project" | "kind" | "role" | "task"
+            then
+               --  A whole level at once: each of its capabilities is set.
+               return "a level is not set whole: set each capability as " & Name
+                 & ".CAPABILITY=..., as " & Name & ".read_source=";
+            elsif E.Is_Error (Read)
+              and then (Starts (Name, "map.permission.kind.") or else Starts (Name, "map.permission.role."))
+              and then Ada.Strings.Fixed.Count (Name (Name'First + 20 .. Name'Last), ".") = 0
+            then
+               return "a level is not set whole: set each capability as " & Name
+                 & ".CAPABILITY=...";
+            elsif E.Is_Error (Read) then
                return "no capability is called " & Name (Last_Dot + 1 .. Name'Last);
             end if;
          end;
@@ -1345,6 +1357,19 @@ package body Model_Runner.Framework.Configurations is
          return False;
       end Level_Said;
 
+      --  Whether the word from From on says NAME=VALUE: the roots end
+      --  there; any other word after a space or a comma is one more root.
+      function Setting_At (Text : String; From : Positive) return Boolean is
+      begin
+         for Index in From .. Text'Last loop
+            exit when Text (Index) in '|' | ',' | ' ';
+            if Text (Index) = '=' then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Setting_At;
+
       --  The first root a component's placing names that is not there.
       function Missing_Root (Value : String) return String is
          Mark  : constant Natural := Ada.Strings.Fixed.Index (Value, "roots=");
@@ -1367,7 +1392,8 @@ package body Model_Runner.Framework.Configurations is
                   end;
                end if;
                Start := Index + 1;
-               exit when Index <= Value'Last and then Value (Index) in ',' | ' ';
+               exit when Index <= Value'Last and then Value (Index) in ',' | ' '
+                 and then Setting_At (Value, Index + 1);
             end if;
          end loop;
          return "";
@@ -1439,6 +1465,21 @@ package body Model_Runner.Framework.Configurations is
             Name  : constant String := Full_Name;
             Given : constant String := Value_Maps.Element (Position);
             Old   : constant String := Records.Get (Result.Before, Name);
+            --  A set of names -- components, programs -- is taken apart at
+            --  spaces as at commas: none of them holds a space.
+            function Spaced_As_Commas return String is
+               Result : String := Given;
+            begin
+               if Name in "set.components" | "set.execution.allowed" then
+                  for C of Result loop
+                     if C = ' ' then
+                        C := ',';
+                     end if;
+                  end loop;
+               end if;
+               return Result;
+            end Spaced_As_Commas;
+
             --  The items of a set or list after the change: each once.
             function Items_After return String is
                Held   : Name_Lists.Vector := Lines_Of (Old);
@@ -1447,7 +1488,7 @@ package body Model_Runner.Framework.Configurations is
                if not (Adding or else Taking) then
                   Held.Clear;
                end if;
-               for Item of Lines_Of (Lines_From (Given)) loop
+               for Item of Lines_Of (Lines_From (Spaced_As_Commas)) loop
                   if Taking then
                      if Held.Contains (Item) then
                         Held.Delete (Held.Find_Index (Item));
@@ -1659,6 +1700,15 @@ package body Model_Runner.Framework.Configurations is
                      end if;
                   end if;
                end;
+            --  A component placed is unplaced by NAME=off: its entry goes.
+            elsif Starts (Name, "map.component.") and then Given = "off" then
+               if Old /= "" then
+                  Records.Remove (Result.After, Name);
+                  Result.Changed.Append (Name & ": " & On_One_Line (Old) & " -> (none)");
+                  if not Result.Impact.Contains (Reach (Name)) then
+                     Result.Impact.Append (Reach (Name));
+                  end if;
+               end if;
             elsif Value /= Old then
                if Value = "" then
                   Records.Remove (Result.After, Name);
@@ -1666,7 +1716,10 @@ package body Model_Runner.Framework.Configurations is
                   Records.Set (Result.After, Name, Value);
                end if;
                Result.Changed.Append
-                 (Name & ": " & (if Old = "" then "(none)" else On_One_Line (Old)) & " -> "
+                 (Name & ": "
+                  & (if Old = "" and then (for some Known of Known_Settings => Known.all = Name)
+                     then "(not set: the harness's default)"
+                     elsif Old = "" then "(none)" else On_One_Line (Old)) & " -> "
                   & (if Value = "" then "(none)" else On_One_Line (Value)));
                if not Result.Impact.Contains (Reach (Name)) then
                   Result.Impact.Append (Reach (Name));

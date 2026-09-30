@@ -1,7 +1,10 @@
 with Ada.Characters.Handling;
 with Ada.Containers.Vectors;
+with Ada.Directories;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
+
+with Hostkit.Fs;
 
 with Model_Runner.Errors;
 with Model_Runner.Framework;
@@ -209,7 +212,12 @@ package body Model_Runner.CLI.Repo is
    begin
       Status := E.Exit_Success;
       for Line of Recovered loop
-         Pres.Put_Note (Screen, "cli.project.recovered", [Loc.Named ("detail", Line)]);
+         --  In a session, what does not hold together was said as it opened.
+         if not (Pres.In_Session (Screen)
+                 and then Ada.Strings.Fixed.Index (Line, "what does not hold together") = Line'First)
+         then
+            Pres.Put_Note (Screen, "cli.project.recovered", [Loc.Named ("detail", Line)]);
+         end if;
       end loop;
 
       if Action in "sym" | "refs" | "deps" | "users" | "impact" | "trace"
@@ -461,6 +469,47 @@ package body Model_Runner.CLI.Repo is
                            for Path of Files_Of (Argument) loop
                               Changed.Append (Path);
                            end loop;
+
+                           --  A directory is the files in it: those the
+                           --  repository reads, and the documents there.
+                           declare
+                              Bare : constant String :=
+                                (if Argument'Length > 1 and then Argument (Argument'Last) = '/'
+                                 then Argument (Argument'First .. Argument'Last - 1) else Argument);
+                              Whole : constant String := Hostkit.Fs.Join (Directory, Bare);
+                           begin
+                              if Ada.Directories.Exists (Whole)
+                                and then Ada.Directories."=" (Ada.Directories.Kind (Whole),
+                                                              Ada.Directories.Directory)
+                              then
+                                 for Index in 1 .. Rp.File_Count (Found) loop
+                                    declare
+                                       Path : constant String := To_String (Rp.File_At (Found, Index).Path);
+                                    begin
+                                       if Ada.Strings.Fixed.Index (Path, Bare & "/") = Path'First then
+                                          Changed.Append (Path);
+                                       end if;
+                                    end;
+                                 end loop;
+                                 declare
+                                    Search : Ada.Directories.Search_Type;
+                                    One    : Ada.Directories.Directory_Entry_Type;
+                                 begin
+                                    Ada.Directories.Start_Search
+                                      (Search, Whole, "*.md",
+                                       [Ada.Directories.Ordinary_File => True, others => False]);
+                                    while Ada.Directories.More_Entries (Search) loop
+                                       Ada.Directories.Get_Next_Entry (Search, One);
+                                       if not Changed.Contains
+                                                (Bare & "/" & Ada.Directories.Simple_Name (One))
+                                       then
+                                          Changed.Append (Bare & "/" & Ada.Directories.Simple_Name (One));
+                                       end if;
+                                    end loop;
+                                    Ada.Directories.End_Search (Search);
+                                 end;
+                              end if;
+                           end;
                         end if;
                         --  A requirement is its node at its revision.
                         if Revision_Node (Argument) /= Argument then

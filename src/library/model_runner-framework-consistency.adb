@@ -31,6 +31,33 @@ package body Model_Runner.Framework.Consistency is
    -----------
 
    function Check (Item : Stores.Store) return Finding_List is
+
+      --  What a decision overrides, without those since retired: they
+      --  govern nothing to be held over.
+      function Standing_Only (Overrides : String) return String is
+         Kept  : Unbounded_String;
+         Start : Positive := Overrides'First;
+      begin
+         for Index in Overrides'First .. Overrides'Last + 1 loop
+            if Index > Overrides'Last or else Overrides (Index) = ',' then
+               declare
+                  One : constant String := Ada.Strings.Fixed.Trim (Overrides (Start .. Index - 1),
+                                                                   Ada.Strings.Both);
+               begin
+                  if One /= ""
+                    and then (One = "CONFIG"
+                              or else Intent.State_Of (Item, Intent.Decision, One)
+                                        not in "obsolete" | "superseded" | "rejected")
+                  then
+                     Append (Kept, (if Kept = Null_Unbounded_String then "" else ",") & One);
+                  end if;
+               end;
+               Start := Index + 1;
+            end if;
+         end loop;
+         return To_String (Kept);
+      end Standing_Only;
+
       Result : Finding_List;
 
       --  Every indexed entity and where its record is, as the index keeps
@@ -191,7 +218,8 @@ package body Model_Runner.Framework.Consistency is
                            Theirs  : constant String := To_String (Standing.Other.Source);
                            Ruling  : constant String := To_String (Standing.Governing.Value);
                            --  What it overrides already, kept beside the new.
-                           Before  : constant String := To_String (Standing.Governing.Overrides);
+                           Before  : constant String := Standing_Only
+                                                          (To_String (Standing.Governing.Overrides));
                            Over    : constant String :=
                              (if Before = "" then Theirs else Before & "," & Theirs);
                         begin
@@ -379,8 +407,12 @@ package body Model_Runner.Framework.Consistency is
                         Linked : constant Name_Lists.Vector :=
                           Intent.Links (Item, Intent.Requirement, Requirement, Intent.Component);
                      begin
+                        --  Not of one retired: letting the task go is the
+                        --  way on then, not moving it.
                         if not Linked.Is_Empty
                           and then not Linked.Contains (Records.Get (Defined, "component"))
+                          and then Intent.State_Of (Item, Intent.Requirement, Requirement)
+                                     not in "obsolete" | "rejected" | "superseded"
                         then
                            Found (Missing_Component, Id,
                                   "it is in " & Records.Get (Defined, "component") & ", and "

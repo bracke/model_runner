@@ -1,6 +1,7 @@
 with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
@@ -9,6 +10,7 @@ with Hostkit.Fs;
 with Model_Runner.Errors;
 with Model_Runner.Framework.Bootstrap;
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Orchestration;
 with Model_Runner.Framework.Repository;
@@ -133,6 +135,67 @@ package body Model_Runner.CLI.Intents is
       Move_Along (Store, Screen);
    end Settle;
 
+   --  The command that has another decision govern what one governed:
+   --  its setting, ruling and what it overrode -- none since retired.
+   function Carried_On (Store : S.Store; Governed, Other : String) return String is
+      Equal : constant Natural := Ada.Strings.Fixed.Index (Governed, " = ");
+      Over  : constant Natural := Ada.Strings.Fixed.Index (Governed, " (over ");
+      Kept  : Unbounded_String;
+   begin
+      if Equal = 0 then
+         return "decision govern " & Other & " SETTING RULING";
+      end if;
+      if Over > 0 then
+         for Name of Model_Runner.Framework.Lines_Of
+                       (Ada.Strings.Fixed.Translate
+                          (Governed (Over + 7 .. Governed'Last - 1),
+                           Ada.Strings.Maps.To_Mapping (",", [1 => ASCII.LF])))
+         loop
+            declare
+               Bare : constant String := Ada.Strings.Fixed.Trim (Name, Ada.Strings.Both);
+            begin
+               if Bare = "CONFIG"
+                 or else Nt.State_Of (Store, Nt.Decision, Bare) not in "obsolete" | "superseded" | "rejected"
+               then
+                  Append (Kept, (if Kept = Null_Unbounded_String then "" else ",") & Bare);
+               end if;
+            end;
+         end loop;
+      end if;
+      return "decision govern " & Other & " " & Governed (Governed'First .. Equal - 1) & " "
+        & Governed (Equal + 3 .. (if Over = 0 then Governed'Last else Over - 1))
+        & (if Kept = Null_Unbounded_String then "" else " overrides=" & To_String (Kept));
+   end Carried_On;
+
+   --  Work still open for a requirement retired: how to let that go.
+   procedure Work_Left
+     (Store       : in out S.Store;
+      Screen      : in out Pres.Console;
+      Requirement : String) is
+   begin
+      for Id of Model_Runner.Framework.Tasks.List (Store) loop
+         declare
+            Defined : Model_Runner.Framework.Records.Item;
+            Read    : E.Error_Info;
+            State   : constant String := Model_Runner.Framework.Tasks.State_Of (Store, Id);
+         begin
+            Model_Runner.Framework.Tasks.Definition (Store, Id, Defined, Read);
+            if E.Is_Ok (Read)
+              and then State not in "complete" | "cancelled" | "rejected"
+              and then Model_Runner.Framework.Lines_Of
+                         (Model_Runner.Framework.Records.Get (Defined, "requirements"))
+                         .Contains (Requirement)
+            then
+               Pres.Put_Note
+                 (Screen, "cli.next.task_left",
+                  [Loc.Named ("name", Id),
+                   Loc.Named ("value", (if State = "candidate" then "reject" else "cancel")),
+                   Loc.Named ("other", Requirement)]);
+            end if;
+         end;
+      end loop;
+   end Work_Left;
+
    ---------
    -- Run --
    ---------
@@ -202,11 +265,16 @@ package body Model_Runner.CLI.Intents is
          declare
             Equal : constant Natural := Ada.Strings.Fixed.Index (Part, "=");
          begin
-            if Equal > Part'First
+            --  --set NAME=VALUE, as a task takes it, is NAME=VALUE.
+            if Part = "--set" then
+               null;
+            elsif Equal > Part'First
               and then (for all C of Part (Part'First .. Equal - 1) =>
                           C in 'a' .. 'z' | 'A' .. 'Z' | '_')
             then
-               Settings.Append (Part);
+               --  acceptance= is what criteria= says.
+               Settings.Append (if Lower (Part (Part'First .. Equal - 1)) = "acceptance"
+                                then "criteria" & Part (Equal .. Part'Last) else Part);
             elsif not Settings.Is_Empty then
                --  A value runs on to the next NAME=: text=the parser
                --  shall stop is one text, not a word and three more.
@@ -217,6 +285,27 @@ package body Model_Runner.CLI.Intents is
             end if;
          end;
       end loop;
+
+      --  A field new or revise does not take is refused by name, not
+      --  dropped unsaid.
+      if Action in "new" | "revise" then
+         for Pair of Settings loop
+            declare
+               Name : constant String :=
+                 Lower (Pair (Pair'First .. Ada.Strings.Fixed.Index (Pair, "=") - 1));
+            begin
+               if Name not in "text" | "criteria" | "title" | "scope" then
+                  Status := E.Make (E.Framework_Input_Invalid);
+                  E.Add_Text (Status, "name", "the " & Word_Of (Kind) & "'s fields");
+                  E.Add_Text (Status, "value", Name);
+                  E.Add_Text (Status, "detail", Action & " takes text=, criteria=, title= and scope=; "
+                              & Name & " is not one");
+                  Pres.Report (Screen, Status);
+                  return;
+               end if;
+            end;
+         end loop;
+      end if;
 
       if Action = "" or else Action = "list" then
          declare
@@ -280,7 +369,8 @@ package body Model_Runner.CLI.Intents is
                   --  A candidate: how it comes to count.
                   if Nt.State_Of (Store, Kind, To_String (Id)) = Nt.First_State (Kind) then
                      Pres.Put_Note
-                       (Screen, "cli.next.accept_intent",
+                       (Screen, (if Nt."=" (Kind, Nt.Requirement) then "cli.next.accept_requirement"
+                                 else "cli.next.accept_intent"),
                         [Loc.Named ("name", To_String (Id)),
                          Loc.Named ("value", (case Kind is
                                                 when Nt.Requirement   => "req",
@@ -302,6 +392,8 @@ package body Model_Runner.CLI.Intents is
                   elsif Action = "reconsider" then Nt.First_State (Kind)
                   elsif Action = "obsolete" then "obsolete"
                   else "blocked");
+               Governed : constant String :=
+                 (if Next in "obsolete" | "rejected" then Nt.Governs (Store, Kind, Word (2)) else "");
             begin
                if Action = "reconsider" then
                   Granted (Tr.Reconsideration) := True;
@@ -324,29 +416,30 @@ package body Model_Runner.CLI.Intents is
                  (Screen, "cli.task.moved", [Loc.Named ("name", Word (2)), Loc.Named ("value", Next)]);
                Move_Along (Store, Screen);
 
+               --  What it governed is governed no more: said, with what the
+               --  setting is now.
+               if Governed /= "" and then Ada.Strings.Fixed.Index (Governed, " = ") > 0 then
+                  declare
+                     Setting : constant String :=
+                       Governed (Governed'First .. Ada.Strings.Fixed.Index (Governed, " = ") - 1);
+                     Config  : Model_Runner.Framework.Records.Item;
+                     Read    : E.Error_Info;
+                  begin
+                     Model_Runner.Framework.Configurations.Read (Store, Config, Read);
+                     Pres.Put_Note
+                       (Screen, "cli.intent.ruling_gone",
+                        [Loc.Named ("name", Word (2)), Loc.Named ("value", Governed),
+                         Loc.Named ("detail",
+                                    Setting & " = "
+                                    & (if Model_Runner.Framework.Records.Get (Config, Setting) = ""
+                                       then "(its default)"
+                                       else Model_Runner.Framework.Records.Get (Config, Setting)))]);
+                  end;
+               end if;
+
                --  Retired, with work still open for it: how to let that go.
                if Nt."=" (Kind, Nt.Requirement) and then Next in "rejected" | "obsolete" then
-                  for Id of Model_Runner.Framework.Tasks.List (Store) loop
-                     declare
-                        Defined : Model_Runner.Framework.Records.Item;
-                        Read    : E.Error_Info;
-                        State   : constant String := Model_Runner.Framework.Tasks.State_Of (Store, Id);
-                     begin
-                        Model_Runner.Framework.Tasks.Definition (Store, Id, Defined, Read);
-                        if E.Is_Ok (Read)
-                          and then State not in "complete" | "cancelled" | "rejected"
-                          and then Model_Runner.Framework.Lines_Of
-                                     (Model_Runner.Framework.Records.Get (Defined, "requirements"))
-                                     .Contains (Word (2))
-                        then
-                           Pres.Put_Note
-                             (Screen, "cli.next.task_left",
-                              [Loc.Named ("name", Id),
-                               Loc.Named ("value", (if State = "candidate" then "reject" else "cancel")),
-                               Loc.Named ("other", Word (2))]);
-                        end if;
-                     end;
-                  end loop;
+                  Work_Left (Store, Screen, Word (2));
                end if;
             end;
          end if;
@@ -436,7 +529,14 @@ package body Model_Runner.CLI.Intents is
                      Text : Ada.Strings.Unbounded.Unbounded_String;
                      File : Ada.Text_IO.File_Type;
                   begin
-                     if To_String (Held.Source) = "" or else not Ada.Directories.Exists (Path) then
+                     if To_String (Held.Source) in "" | "user" or else Length (Held.Provenance) = 0 then
+                        --  Made by hand: there are no words to take.
+                        Status := E.Make (E.Framework_Input_Invalid);
+                        E.Add_Text (Status, "name", "from-document");
+                        E.Add_Text (Status, "value", Word (2));
+                        E.Add_Text (Status, "detail", Word (2) & " was made by hand; it has no document to"
+                                    & " take words from, and text=... revises it");
+                     elsif not Ada.Directories.Exists (Path) then
                         Status := E.Make (E.Framework_Not_Found);
                         E.Add_Text (Status, "name", "the document " & Word (2) & " came from");
                      else
@@ -651,6 +751,31 @@ package body Model_Runner.CLI.Intents is
                   end loop;
                end if;
 
+               --  A task linked that serves a requirement since retired:
+               --  said, with the two ways on.
+               if E.Is_Ok (Status) and then Nt."=" (Relation, Nt.Task_Link) then
+                  declare
+                     Defined : Model_Runner.Framework.Records.Item;
+                     Read    : E.Error_Info;
+                  begin
+                     Model_Runner.Framework.Tasks.Definition (Store, From (4), Defined, Read);
+                     if E.Is_Ok (Read) then
+                        for Served of Model_Runner.Framework.Lines_Of
+                                        (Model_Runner.Framework.Records.Get (Defined, "requirements"))
+                        loop
+                           if Nt.State_Of (Store, Nt.Requirement, Served)
+                                in "obsolete" | "rejected" | "superseded"
+                           then
+                              Pres.Put_Note
+                                (Screen, "cli.intent.link_task_retired",
+                                 [Loc.Named ("name", From (4)), Loc.Named ("detail", Served),
+                                  Loc.Named ("value", Word (2))]);
+                           end if;
+                        end loop;
+                     end if;
+                  end;
+               end if;
+
                --  What it depends on is a requirement there is.
                if E.Is_Ok (Status) and then Nt."=" (Relation, Nt.Dependency)
                  and then Nt.State_Of (Store, Nt.Requirement, From (4)) = ""
@@ -670,7 +795,13 @@ package body Model_Runner.CLI.Intents is
                         Known := Known or else To_String (Rp.File_At (Now, Index).Path) = Target;
                      end loop;
                      if not Known then
-                        Pres.Put_Note (Screen, "cli.intent.link_unknown", [Loc.Named ("name", Target)]);
+                        Pres.Put_Note
+                          (Screen, "cli.intent.link_unknown",
+                           [Loc.Named ("name", Target),
+                            Loc.Named ("other", (if Nt."=" (Kind, Nt.Requirement) then "req "
+                                                 elsif Nt."=" (Kind, Nt.Decision) then "decision "
+                                                 else "spec ") & Word (2)),
+                            Loc.Named ("value", Lower (Word (3)))]);
                      end if;
                   end;
                end if;
@@ -692,9 +823,20 @@ package body Model_Runner.CLI.Intents is
                then
                   Pres.Put_Note (Screen, "cli.intent.ruling_dropped",
                                  [Loc.Named ("name", Word (2)), Loc.Named ("other", Word (3)),
-                                  Loc.Named ("value", Governed)]);
+                                  Loc.Named ("value", Governed),
+                                  Loc.Named ("detail", Carried_On (Store, Governed, Word (3)))]);
                end if;
-               Settle (Store, Change, Status, Screen, "cli.intent.superseded", Word (2));
+               Settle (Store, Change, Status, Screen, "", Word (2));
+               if E.Is_Ok (Status) then
+                  Pres.Put_Message
+                    (Screen, "cli.intent.superseded",
+                     [Loc.Named ("name", Word (2)),
+                      Loc.Named ("value", Nt.State_Of (Store, Kind, Word (2))),
+                      Loc.Named ("other", Word (3))]);
+                  if Nt."=" (Kind, Nt.Requirement) then
+                     Work_Left (Store, Screen, Word (2));
+                  end if;
+               end if;
 
                --  What replaces it stands in its place: a candidate is
                --  accepted by being made its replacement, and said so.
@@ -769,10 +911,40 @@ package body Model_Runner.CLI.Intents is
                end if;
             end;
          end if;
+         --  Governing so already: said, and not revised again.
+         if E.Is_Ok (Status)
+           and then Nt.Governs (Store, Kind, Word (2))
+                      = Word (3) & " = " & From (4)
+                        & (if Given ("overrides") = "" then "" else " (over " & Given ("overrides") & ")")
+         then
+            Pres.Put_Note (Screen, "cli.intent.already_governs",
+                           [Loc.Named ("name", Word (2)),
+                            Loc.Named ("value", Nt.Governs (Store, Kind, Word (2)))]);
+            return;
+         end if;
          if E.Is_Ok (Status) then
             Nt.Govern (Store, Change, Kind, Word (2), Word (3), From (4), Given ("overrides"),
                        Status);
             Settle (Store, Change, Status, Screen, "cli.task.revised", Word (2));
+
+            --  What it now stands against -- the configuration, another
+            --  decision -- said at once, with how to settle it.
+            if E.Is_Ok (Status) then
+               declare
+                  package Cs renames Model_Runner.Framework.Consistency;
+                  Found : constant Cs.Finding_List := Cs.Check (Store);
+               begin
+                  for Index in 1 .. Cs.Length (Found) loop
+                     if To_String (Cs.Element (Found, Index).Subject) = Word (3) then
+                        Pres.Put_Message
+                          (Screen, "cli.task.item",
+                           [Loc.Named ("name", Word (3)),
+                            Loc.Named ("value", Cs.Kind_Word (Cs.Element (Found, Index).Kind)),
+                            Loc.Named ("detail", To_String (Cs.Element (Found, Index).Detail))]);
+                     end if;
+                  end loop;
+               end;
+            end if;
 
             --  What it says it holds over, where that is nothing there is.
             if E.Is_Ok (Status) then

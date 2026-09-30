@@ -606,9 +606,20 @@ package body Model_Runner.Framework.Bootstrap is
                                                & ", which is " & To_String (Held.State)
                                                & (if Held.Superseded_By = Null_Unbounded_String
                                                   then ""
-                                                  else " by " & To_String (Held.Superseded_By))
-                                               & "; take it out of the document, or, to have it"
-                                               & " again, req new with its words makes it anew"),
+                                                  else ", replaced by "
+                                                       & To_String (Held.Superseded_By))
+                                               & (if Held.Superseded_By /= Null_Unbounded_String
+                                                  then "; the document says "
+                                                       & To_String (Held.Superseded_By)
+                                                       & " in its place once changed, or it is"
+                                                       & " taken out"
+                                                  else "; take it out of the document, or, to have"
+                                                       & " it again, "
+                                                       & (if Intent."=" (Kind, Intent.Decision)
+                                                          then "decision"
+                                                          elsif Intent."=" (Kind, Intent.Specification)
+                                                          then "spec" else "req")
+                                                       & " new with its words makes it anew")),
                               Payload    => Next.Text,
                               Provenance => Next.Provenance,
                               others     => <>);

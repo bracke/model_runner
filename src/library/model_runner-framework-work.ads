@@ -318,6 +318,9 @@ package Model_Runner.Framework.Work is
       --  proposed.
       Proposed      : Name_Lists.Vector;
 
+      --  Titles its answer proposed more than once: made once.
+      Twice         : Name_Lists.Vector;
+
       --  The tasks it says this one should wait for: kept as said, not
       --  made so.
       Waits_For     : Name_Lists.Vector;

@@ -165,6 +165,12 @@ package body Model_Runner.Framework.Traceability is
                               "depends_on", Repository.Explicit, Repository.Certain, Id);
                      end;
                   end loop;
+                  --  A task linked to it by hand serves it as one naming it
+                  --  does.
+                  for Target of Intent.Links (Item, Intent.Requirement, Id, Intent.Task_Link) loop
+                     Link (Result, Node, Target, "served_by",
+                           Repository.Explicit, Repository.Certain, Id);
+                  end loop;
                   for Target of Intent.Links (Item, Intent.Requirement, Id, Intent.Component) loop
                      Component (Target);
                      Link (Result, Node, "component:" & Target, "belongs_to",

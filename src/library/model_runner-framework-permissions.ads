@@ -1,5 +1,6 @@
 with Model_Runner.Errors;
 with Model_Runner.Framework.Stores;
+with Model_Runner.Framework.Records;
 
 --  What an agent may do, as capabilities with scope.
 --
@@ -89,6 +90,18 @@ package Model_Runner.Framework.Permissions is
    --  @return The grants it makes.
    function Level_Of
      (Item    : Stores.Store;
+      Level   : String;
+      Present : out Boolean) return Permission_Set;
+
+   --  The same, from a configuration not yet kept: one a change would
+   --  make.
+   --
+   --  @param Config The configuration.
+   --  @param Level project, kind.KIND or role.ROLE.
+   --  @param Present Whether it says anything at that level.
+   --  @return The grants it makes.
+   function Level_Of
+     (Config  : Records.Item;
       Level   : String;
       Present : out Boolean) return Permission_Set;
 

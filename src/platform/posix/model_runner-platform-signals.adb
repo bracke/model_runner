@@ -24,6 +24,14 @@ package body Model_Runner.Platform.Signals is
    procedure Quick_Exit (Status : Integer)
      with Import, Convention => C, External_Name => "_exit";
 
+   --  Said before ending there, straight to the descriptor: the prompt's
+   --  line is ended, and the shell's own starts on a line of its own.
+   function Write_Error (Descriptor : Integer; Text : String; Count : Natural) return Integer
+     with Import, Convention => C, External_Name => "write";
+
+   Stopped_Line : constant String :=
+     ASCII.LF & "stopped: told to end (SIGTERM or SIGHUP)" & ASCII.LF;
+
    protected Handler is
 
       --  Interrupt entry point. It does the least possible work: set the
@@ -36,8 +44,9 @@ package body Model_Runner.Platform.Signals is
       procedure Ending;
       pragma Interrupt_Handler (Ending);
 
-      procedure Set_Waiting (Value : Boolean);
+      procedure Set_Waiting (Value : Boolean; Note : String);
       function Ended return Boolean;
+      function Noted return Boolean;
 
       --  Point the handler at a token.
       procedure Bind (Token : Model_Runner.Cancellation.Token_Reference);
@@ -50,6 +59,11 @@ package body Model_Runner.Platform.Signals is
       Seen    : Natural := 0;
       Waiting : Boolean := False;
       Told    : Boolean := False;
+
+      --  What an interrupt while waiting says, and whether it was said.
+      Said_Text : String (1 .. 240) := [others => ' '];
+      Said_Last : Natural := 0;
+      Said      : Boolean := False;
    end Handler;
 
    protected body Handler is
@@ -62,6 +76,16 @@ package body Model_Runner.Platform.Signals is
 
          if Target /= null then
             Target.all.Request;
+         end if;
+         --  Waiting for a line, the terminal has dropped what was typed:
+         --  said now, not once the next line comes.
+         if Waiting and then Said_Last > 0 and then not Told then
+            declare
+               Ignored : constant Integer :=
+                 Write_Error (2, Said_Text (1 .. Said_Last), Said_Last);
+            begin
+               Said := True;
+            end;
          end if;
       end Interrupt;
 
@@ -78,14 +102,27 @@ package body Model_Runner.Platform.Signals is
          Told := True;
          Interrupt;
          if Waiting then
+            declare
+               Ignored : constant Integer := Write_Error (2, Stopped_Line, Stopped_Line'Length);
+            begin
+               null;
+            end;
             Quick_Exit (7);
          end if;
       end Ending;
 
-      procedure Set_Waiting (Value : Boolean) is
+      procedure Set_Waiting (Value : Boolean; Note : String) is
+         Line : constant String := ASCII.LF & Note & ASCII.LF;
       begin
          Waiting := Value;
+         if Value then
+            Said := False;
+            Said_Last := (if Note = "" then 0 else Natural'Min (Line'Length, Said_Text'Length));
+            Said_Text (1 .. Said_Last) := Line (Line'First .. Line'First + Said_Last - 1);
+         end if;
       end Set_Waiting;
+
+      function Noted return Boolean is (Said);
 
       function Ended return Boolean is (Told);
 
@@ -161,10 +198,12 @@ package body Model_Runner.Platform.Signals is
 
    function Interrupts return Natural is (Handler.Count);
 
-   procedure Set_Waiting_For_Input (Waiting : Boolean) is
+   procedure Set_Waiting_For_Input (Waiting : Boolean; Note : String := "") is
    begin
-      Handler.Set_Waiting (Waiting);
+      Handler.Set_Waiting (Waiting, Note);
    end Set_Waiting_For_Input;
+
+   function Interrupt_Noted return Boolean is (Handler.Noted);
 
    function Ending_Asked return Boolean is (Handler.Ended);
 

@@ -44,7 +44,7 @@ package body Model_Runner.Framework.Work is
    -- Instructions --
    ------------------
 
-   function Instructions return String
+   function Instructions_For (May_Propose : Boolean) return String
    is ("## What to do" & ASCII.LF
        & "Do the task now, with the tools: read_file reads a file, write_file"
        & " writes the whole new content of a file, list_directory lists a"
@@ -61,20 +61,27 @@ package body Model_Runner.Framework.Work is
        & "If you could not do it, the status is failed and the summary says"
        & " why. Two other statuses are for rare cases: issue, for a problem"
        & " found outside the task, and blocked, for a decision only a person"
-       & " can make. Further work you found goes in proposed_tasks:, one a"
-       & " line, each as TITLE; kind=K; component=C where it is another's."
-       & " If the task is too large to do as one, say blocked and name the"
-       & " parts it should be split into under parts:, one a line. A decision"
-       & " or specification you would propose goes under decisions: or"
-       & " specifications:, a task this one should wait for under waits_for:,"
+       & " can make."
+       & (if May_Propose
+          then " Further work you found goes in proposed_tasks:, one a"
+               & " line, each as TITLE; kind=K; component=C where it is another's."
+               & " If the task is too large to do as one, say blocked and name the"
+               & " parts it should be split into under parts:, one a line. A decision"
+               & " or specification you would propose goes under decisions: or"
+               & " specifications:, a"
+          else " Further work you found goes under issues:, one a line; if the task"
+               & " is too large to do as one, say blocked and say so in the summary. A")
+       & " task this one should wait for goes under waits_for:,"
        & " and verify: yes asks for your work to be checked whatever the"
        & " status. If a helper you needed failed and you did its part another"
        & " way, say how under instead:." & ASCII.LF);
 
+   function Instructions return String is (Instructions_For (May_Propose => True));
+
    --  The same, for an agent that is a command: it works on the files
    --  itself, in the directory it is started in, and answers on its
    --  standard output; it has no tools to call.
-   function Command_Instructions return String
+   function Command_Instructions (May_Propose : Boolean) return String
    is ("## What to do" & ASCII.LF
        & "Do the task now, working on the files yourself: you are started in"
        & " the project's directory, and paths are relative to it. Change the"
@@ -87,10 +94,15 @@ package body Model_Runner.Framework.Work is
        & "changed_files: the files you wrote, one a line" & ASCII.LF & ASCII.LF
        & "If you could not do it, the status is failed and the summary says"
        & " why; issue is for a problem found outside the task, and blocked for"
-       & " a decision only a person can make. Further work you found goes in"
-       & " proposed_tasks:, one a line, as TITLE; kind=K; component=C. If the"
-       & " task is too large to do as one, say blocked and name its parts under"
-       & " parts:, one a line." & ASCII.LF);
+       & " a decision only a person can make."
+       & (if May_Propose
+          then " Further work you found goes in"
+               & " proposed_tasks:, one a line, as TITLE; kind=K; component=C. If the"
+               & " task is too large to do as one, say blocked and name its parts under"
+               & " parts:, one a line."
+          else " Further work you found goes under issues:, one a line; if the task is"
+               & " too large to do as one, say blocked and say so in the summary.")
+       & ASCII.LF);
 
    --  Names a comma apart.
    function Comma_Separated (Names : Name_Lists.Vector) return String is
@@ -368,13 +380,14 @@ package body Model_Runner.Framework.Work is
    procedure Stop_Children
      (Item   : Stores.Store;
       Change : in out Stores.Transaction;
-      Agent  : String)
+      Agent  : String;
+      Why    : String)
    is
       Stopped : Name_Lists.Vector;
       Status  : E.Error_Info;
    begin
       for Child of Agents.Children (Item, Agent) loop
-         Agents.Cancel (Item, Change, Child, Stopped, Status);
+         Agents.Cancel (Item, Change, Child, Stopped, Status, Why => "it was stopped: " & Why);
       end loop;
    end Stop_Children;
 
@@ -395,16 +408,37 @@ package body Model_Runner.Framework.Work is
          if Leases.Holder (Item, Lease_Of (Id)) = "" then
             declare
                Agent : constant String := Holder_Record (Item, Id);
+               Space : constant String := Workspaces.Active_For (Item, Id);
+
+               --  Where it worked apart, the workspace is given up as an
+               --  interrupt gives it up -- a retry starts afresh -- with
+               --  what it had changed there named.
+               function Given_Up return String is
+                  Named : Unbounded_String;
+                  Held  : E.Error_Info;
+               begin
+                  if Space = "" then
+                     return "";
+                  end if;
+                  for Path of Workspaces.Changes (Item, Space) loop
+                     Append (Named, (if Named = Null_Unbounded_String then "" else ", ") & Path);
+                  end loop;
+                  Workspaces.Abandon (Item, Change, Space, Held);
+                  return (if E.Is_Error (Held) then ""
+                          else "; its workspace " & Space & " is given up"
+                               & (if Named = Null_Unbounded_String then ""
+                                  else ", and what it changed there with it: " & To_String (Named)));
+               end Given_Up;
             begin
                Tasks.Move
                  (Item, Change, Id, "blocked",
                   "its agent " & (if Agent = "" then "" else Agent & " ")
-                  & "stopped without finishing", Status => Status);
+                  & "stopped without finishing" & Given_Up, Status => Status);
                if E.Is_Error (Status) then
                   return;
                end if;
                if Agent /= "" then
-                  Stop_Children (Item, Change, Agent);
+                  Stop_Children (Item, Change, Agent, "its parent stopped without finishing");
                   Agent_State (Item, Change, Agent, "failed", "its agent stopped without finishing",
                                Outcome => "blocked");
                end if;
@@ -608,8 +642,22 @@ package body Model_Runner.Framework.Work is
          return;
       end if;
       for Id of Put_Back loop
-         Said.Append (Id & " was running with no one running it; it is "
-                      & Tasks.State_Of (Item, Id) & " now");
+         declare
+            Held   : Records.Item;
+            Read   : E.Error_Info;
+            Reason : Unbounded_String;
+         begin
+            --  A workspace given up with it is said with it.
+            Stores.Read (Item, Tasks_Area, Id & ".state", Held, Read);
+            if E.Is_Ok (Read) then
+               Reason := To_Unbounded_String (Records.Get (Held, "blocking_reasons"));
+            end if;
+            Said.Append (Id & " was running with no one running it; it is "
+                         & Tasks.State_Of (Item, Id) & " now"
+                         & (if Index (Reason, "; its workspace") > 0
+                            then Slice (Reason, Index (Reason, "; its workspace"), Length (Reason))
+                            else ""));
+         end;
       end loop;
 
       --  4: agents and invocations no one is running any more.
@@ -1136,7 +1184,14 @@ package body Model_Runner.Framework.Work is
                   Append (Workers, (if Workers = Null_Unbounded_String then "" else ", ")
                           & Name (Name'First + 6 .. Name'Last) & " " & Records.Get (Value, "state")
                           & (if Records.Get (Value, "parent") = "" then ""
-                             else " (a child of " & Records.Get (Value, "parent") & ")"));
+                             else " (a child of " & Records.Get (Value, "parent")
+                                  & (if Records.Get (Value, "retry_of") = "" then ""
+                                     else ", a retry of " & Records.Get (Value, "retry_of"))
+                                  & ")")
+                          --  An ended one says why, where it was stopped.
+                          & (if Records.Get (Value, "state") = "cancelled"
+                               and then Records.Get (Value, "summary") /= ""
+                             then ": " & Records.Get (Value, "summary") else ""));
 
                   --  An attempt is its root agent's run: how that ended,
                   --  and why, not only that its call returned.
@@ -1208,6 +1263,8 @@ package body Model_Runner.Framework.Work is
             elsif Tasks.State_Of (Item, Task_Id) = "complete"
               and then Workspace_Status (Records.Get (State, "current_workspace")) = "integrated"
             then "the workspace " & Records.Get (State, "current_workspace") & ", taken in"
+                 & (if Records.Get (State, "integration_note") = "" then ""
+                    else "; " & Records.Get (State, "integration_note"))
             elsif Workspaces.Active_For (Item, Task_Id) /= ""
             then "the workspace " & Records.Get (State, "current_workspace") & ", waiting to be"
                  & " taken in"
@@ -1750,7 +1807,8 @@ package body Model_Runner.Framework.Work is
             declare
                Stopped : Name_Lists.Vector;
             begin
-               Agents.Cancel (Host.Item.all, Change, Id, Stopped, Status);
+               Agents.Cancel (Host.Item.all, Change, Id, Stopped, Status,
+                              Why => To_String (Why), Result_Id => To_String (Kept.Id));
             end;
          elsif E.Is_Ok (Status) then
             Agents.Finish
@@ -1910,6 +1968,29 @@ package body Model_Runner.Framework.Work is
          return "";
       end Sandbox_Said;
 
+      --  Whether its agent may propose work: what it is told to answer
+      --  with follows.
+      function May_Propose_Here return Boolean is
+         Held_Agent : Agents.Agent;
+         Read       : E.Error_Info;
+      begin
+         Agents.Read (Item, To_String (Result.Agent_Id), Held_Agent, Read);
+         return E.Is_Error (Read)
+           or else Permissions.Allows (Held_Agent.Allowed, Permissions.Propose_Tasks);
+      end May_Propose_Here;
+
+      --  A permissions image, its lines a semicolon apart.
+      function On_One_Line (Text : String) return String is
+         Joined : Unbounded_String;
+      begin
+         for Line of Lines_Of (Text) loop
+            if Trim (Line) /= "" then
+               Append (Joined, (if Joined = Null_Unbounded_String then "" else "; ") & Trim (Line));
+            end if;
+         end loop;
+         return To_String (Joined);
+      end On_One_Line;
+
       --  What its agent may do, said before it does anything: where it may
       --  write, and whether it may propose work.
       function Allowed_Here return String is
@@ -1921,7 +2002,8 @@ package body Model_Runner.Framework.Work is
             return "";
          end if;
          return ASCII.LF & "## What you may do" & ASCII.LF
-           & "Your permissions: " & Permissions.Image (Held_Agent.Allowed) & "." & ASCII.LF
+           & "Your permissions: " & On_One_Line (Permissions.Image (Held_Agent.Allowed)) & "."
+           & ASCII.LF
            & "Change only files write_source or write_specs lets you write; a change"
            & " to any other file fails the work."
            & (if Permissions.Allows (Held_Agent.Allowed, Permissions.Propose_Tasks) then ""
@@ -2231,7 +2313,8 @@ package body Model_Runner.Framework.Work is
       Context.Build
         (Item, Task_Id, Model, Built, Held,
          Instructions => (if Ada.Strings.Fixed.Index (Runner_Named, "the command ") = 1
-                          then Command_Instructions else Instructions)
+                          then Command_Instructions (May_Propose_Here)
+                          else Instructions_For (May_Propose_Here))
                          & Allowed_Here & Its_Parts);
       if E.Is_Error (Held) then
          Conclude ("blocked", "its context cannot be built: "
@@ -2570,17 +2653,17 @@ package body Model_Runner.Framework.Work is
       --  known against it -- until it is accepted again.
       if Interrupted (Ran) and then Execution.Cancel_Asked_From_Outside then
          --  Cancelled from another terminal: cancelled, as asked.
-         Stop_Children (Item, Change, To_String (Result.Agent_Id));
+         Stop_Children (Item, Change, To_String (Result.Agent_Id), "the task was cancelled");
          Conclude ("cancelled", "it was cancelled from another terminal", "cancelled");
          return;
       elsif Interrupted (Ran) then
-         Stop_Children (Item, Change, To_String (Result.Agent_Id));
+         Stop_Children (Item, Change, To_String (Result.Agent_Id), "the work was interrupted");
          Conclude ("blocked", "its work was interrupted before it finished", "cancelled");
          return;
       elsif Out_Of_Time (Ran) then
          --  Out of time is not wrong work: the task is set aside, not
          --  failed, with what its agents made stopped.
-         Stop_Children (Item, Change, To_String (Result.Agent_Id));
+         Stop_Children (Item, Change, To_String (Result.Agent_Id), "the work ran out of time");
          Conclude ("blocked", "its work ran out of time", "failed");
          return;
       elsif E.Is_Error (Ran) then
@@ -2836,8 +2919,10 @@ package body Model_Runner.Framework.Work is
                elsif May_Propose and then Made_Titles.Contains
                                             (Ada.Characters.Handling.To_Lower (Title))
                then
-                  --  Said twice in this answer: made once, and nothing more.
-                  null;
+                  --  Said twice in this answer: made once, and said so.
+                  if not Result.Twice.Contains (Title) then
+                     Result.Twice.Append (Title);
+                  end if;
                elsif May_Propose and then Same_Title (Title) /= "" then
                   declare
                      Other : constant String := Same_Title (Title);
@@ -2874,12 +2959,16 @@ package body Model_Runner.Framework.Work is
                      Made_Titles.Append (Ada.Characters.Handling.To_Lower (Title));
                      Made_Ids.Append (To_String (Made));
                   else
-                     Append (Kept_Back, ASCII.LF & "proposed: " & Title);
+                     Append (Kept_Back, ASCII.LF & "asked for: " & Trim (Line));
                      Result.Kept_Back.Append (Title & ": " & Why_Of (Held));
                   end if;
-               else
-                  Append (Kept_Back, ASCII.LF & "proposed: " & Title);
-                  Result.Kept_Back.Append (Title & ": this task's agent may not propose tasks");
+               --  Kept as the answer said it, kind and component with it, so
+               --  that it can be made by hand as it was meant; said once.
+               elsif not Result.Kept_Back.Contains
+                           (Trim (Line) & ": this task's agent may not propose tasks")
+               then
+                  Append (Kept_Back, ASCII.LF & "asked for: " & Trim (Line));
+                  Result.Kept_Back.Append (Trim (Line) & ": this task's agent may not propose tasks");
                end if;
             end;
          end loop;
@@ -2959,14 +3048,14 @@ package body Model_Runner.Framework.Work is
                         Made_Titles.Append (Ada.Characters.Handling.To_Lower (Title));
                         Made_Ids.Append (To_String (Made));
                      else
-                        Append (Kept_Back, ASCII.LF & "part: " & Title);
+                        Append (Kept_Back, ASCII.LF & "part asked for: " & Title);
                         Result.Kept_Back.Append (Title & ": " & Why_Of (Held));
                      end if;
                   end if;
                elsif May_Propose and then Same_Title (Title, Part => True) = ""
                  and then Natural (Split_Into.Length) >= Split_Room
                then
-                  Append (Kept_Back, ASCII.LF & "part: " & Title);
+                  Append (Kept_Back, ASCII.LF & "part asked for: " & Title);
                   Result.Kept_Back.Append (Title & ": " & To_String (Split_Why));
 
                --  A part there already -- from an earlier split, or twice in
@@ -2991,13 +3080,17 @@ package body Model_Runner.Framework.Work is
                      Made_Titles.Append (Ada.Characters.Handling.To_Lower (Title));
                      Made_Ids.Append (To_String (Made));
                   else
-                     Append (Kept_Back, ASCII.LF & "part: " & Title);
+                     Append (Kept_Back, ASCII.LF & "part asked for: " & Title);
                      Result.Kept_Back.Append (Title & ": " & Why_Of (Held));
                   end if;
                else
-                  Append (Kept_Back, ASCII.LF & "part: " & Title);
-                  Result.Kept_Back.Append (Title & ": this task's agent may not propose tasks or"
-                                           & " parts");
+                  if not Result.Kept_Back.Contains
+                           (Title & ": this task's agent may not propose tasks or parts")
+                  then
+                     Append (Kept_Back, ASCII.LF & "part asked for: " & Title);
+                     Result.Kept_Back.Append (Title & ": this task's agent may not propose tasks or"
+                                              & " parts");
+                  end if;
                end if;
             end;
          end loop;
@@ -3029,10 +3122,10 @@ package body Model_Runner.Framework.Work is
                         if E.Is_Ok (Held) then
                            Result.Proposed.Append (To_String (Made));
                         else
-                           Append (Kept_Back, ASCII.LF & "proposed: " & Text);
+                           Append (Kept_Back, ASCII.LF & "asked for: " & Text);
                         end if;
                      else
-                        Append (Kept_Back, ASCII.LF & "proposed: " & Text);
+                        Append (Kept_Back, ASCII.LF & "asked for: " & Text);
                      end if;
                   end;
                end loop;
@@ -3594,9 +3687,31 @@ package body Model_Runner.Framework.Work is
             else Name_Lists.Empty_Vector);
       begin
          if not Unsettled.Is_Empty then
-            Result.Reason := To_Unbounded_String
-              ("not changed since the conflict was found, so the workspace's copy replaced the"
-               & " project's change: " & Comma_Separated (Unsettled));
+            declare
+               --  The tasks whose change to those files the copy replaced.
+               Whose : Name_Lists.Vector;
+            begin
+               for Other of Tasks.List (Item, "complete") loop
+                  declare
+                     State : Records.Item;
+                     Read  : E.Error_Info;
+                  begin
+                     Stores.Read (Item, Tasks_Area, Other & ".state", State, Read);
+                     if Other /= Task_Id and then E.Is_Ok (Read)
+                       and then (for some Path of Unsettled =>
+                                   Lines_Of (Records.Get (State, "changed_files")).Contains (Path))
+                     then
+                        Whose.Append (Other);
+                     end if;
+                  end;
+               end loop;
+               Result.Reason := To_Unbounded_String
+                 ("not changed since the conflict was found, so the workspace's copy replaced the"
+                  & " project's change"
+                  & (if Whose.Is_Empty then "" else " (" & Comma_Separated (Whose) & "'s)")
+                  & ": " & Comma_Separated (Unsettled));
+               Annotate (Item, Change, Task_Id, "integration_note", To_String (Result.Reason));
+            end;
          end if;
       end;
       Workspaces.Integrate (Item, Change, Id, True, Taken, Status, Semantic_Accepted,
@@ -3710,7 +3825,7 @@ package body Model_Runner.Framework.Work is
       --  workspace; its agent and children are stopped here, and holds a
       --  gone process left are let go of too.
       if Agent /= "" then
-         Stop_Children (Item, Change, Agent);
+         Stop_Children (Item, Change, Agent, "the task was cancelled");
          Agent_State (Item, Change, Agent, "cancelled", "the task was cancelled");
          if Leases.Holder (Item, Lease_Of (Task_Id)) = "" then
             Leases.Release (Item, Change, Lease_Of (Task_Id), Agent, Status);

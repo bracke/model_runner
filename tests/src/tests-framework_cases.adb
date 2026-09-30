@@ -8403,9 +8403,31 @@ package body Tests.Framework_Cases is
          Ada.Environment_Variables.Clear ("MODEL_RUNNER_SANDBOX");
          --  Told to end with nothing waited for, it does not end here; the
          --  flag is only asked.
+         Model_Runner.Platform.Signals.Set_Waiting_For_Input (True, Note => "dropped");
          Model_Runner.Platform.Signals.Set_Waiting_For_Input (False);
-         Assert (not Model_Runner.Platform.Signals.Ending_Asked,
-                 "an ending was said to be asked with none sent");
+         Assert (not Model_Runner.Platform.Signals.Ending_Asked
+                 and then not Model_Runner.Platform.Signals.Interrupt_Noted,
+                 "an ending or an interrupt's note was said with none sent");
+
+         --  A level's grants from a configuration not yet kept: what a
+         --  reconfigure's preview judges.
+         declare
+            package Pm renames Model_Runner.Framework.Permissions;
+            Config  : Model_Runner.Framework.Records.Item :=
+              Model_Runner.Framework.Records.Create ("configuration", 1, "config", 1);
+            Present : Boolean;
+            Given   : Pm.Permission_Set;
+         begin
+            Model_Runner.Framework.Records.Set
+              (Config, "map.permission.kind.test.write_source", "roots=tests/");
+            Given := Pm.Level_Of (Config, "kind.test", Present);
+            Assert (Present and then Given (Pm.Write_Source).Granted
+                    and then not Given (Pm.Read_Source).Granted,
+                    "a level read from a configuration not kept did not grant what it names");
+            Given := Pm.Level_Of (Config, "kind.analysis", Present);
+            Assert (not Present and then not Given (Pm.Write_Source).Granted,
+                    "a level a configuration says nothing of was said to be there");
+         end;
       end;
 
       --  What makes a task that cannot wait so say why.
@@ -8608,7 +8630,9 @@ package body Tests.Framework_Cases is
               "a task left running was left running");
       Assert (Iv.State_Of (Store, To_String (Call)) = "failed" and then Says (To_String (Call)),
               "a call no one was running was not recorded abandoned");
-      Assert (Says (To_String (Made.Id) & ": its directory is gone"),
+      --  The running task's workspace is given up with it, and said so.
+      Assert (Says (To_String (Made.Id) & ": its directory is gone")
+              or else Says ("its workspace " & To_String (Made.Id) & " is given up"),
               "a workspace whose directory is gone was not reconciled");
       Assert (Says ("WS-999999 has no record"),
               "a workspace directory with no record was not reported");
@@ -9126,6 +9150,11 @@ package body Tests.Framework_Cases is
               ("/reconfigure scalar.work.lease=90 confirm=yes", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run
               ("/reconfigure profile.checks=exists: test -d src confirm=yes", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run
+              ("/req new 'the program's name' --set text=it is said", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/req new Bogus text=x bogus=1", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/result TASK-099", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/result dismiss REQ-001", Screen, Agent);
             Set_Output (Standard_Output);
             Set_Error (Standard_Error);
             Close (Said);
@@ -9138,8 +9167,20 @@ package body Tests.Framework_Cases is
                        "an ambiguous work selector for a program did not give its matches: " & Text);
                Assert (Ada.Strings.Fixed.Index (Text, "decide one by name") > 0,
                        "a bare /accept with more than one waiting did not refuse and list them");
+               Assert (Ada.Strings.Fixed.Index (Text, "the program's name") > 0
+                       and then Ada.Strings.Fixed.Index (Text, "it is said --set") = 0,
+                       "an apostrophe inside quotes, or --set on a requirement, was not taken as"
+                       & " typed: " & Text);
+               Assert (Ada.Strings.Fixed.Index (Text, "bogus is not one") > 0,
+                       "a field a requirement does not take was dropped unsaid");
+               Assert (Ada.Strings.Fixed.Index (Text, "TASK-099 is not in the project state") > 0
+                       and then Ada.Strings.Fixed.Index (Text, "REQ-001 is not an issue") > 0,
+                       "a result asked of what is not there, or dismissed that is no issue, was"
+                       & " not refused by name");
+               Assert (Ada.Strings.Fixed.Index (Text, "open issues (result lists them)") > 0,
+                       "state did not count the open issues");
                Assert (Ada.Strings.Fixed.Index (Text, "REQ-001") > 0
-                       and then Ada.Strings.Fixed.Index (Text, "checks,") > 0,
+                       and then Ada.Strings.Fixed.Index (Text, "checks:") > 0,
                        "/trace or /check said nothing of what it was asked: " & Text);
                Assert (Ada.Strings.Fixed.Index (Text, "kind: ") > 0
                        and then Ada.Strings.Fixed.Index (Text, "payload: ") > 0,

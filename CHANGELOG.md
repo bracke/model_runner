@@ -1782,6 +1782,61 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Ninth usability round:**
+  - A proposal refused for want of propose_tasks keeps its own kind and
+    component, and the `task new` line offered builds it as it was meant;
+    one proposed twice is said once, as made once.
+  - `/init --directory=DIR` in a session is the directory, not a template
+    input; an apostrophe inside single quotes (`'the program's name'`) is
+    an apostrophe.
+  - A helper stopped by a cancel, an interrupt or a timeout says why, in its
+    record, in the work's child lines and in the audit; a retry says whose.
+  - A task left running by a killed run gives its workspace up on opening,
+    naming what it changed there.
+  - `roots=` takes roots a space or a comma apart as it takes them a `|`
+    apart; `set.components=a b` is two components; `map.component.X=off`
+    takes the placing away; a component gone is said once, with how to keep
+    it one.
+  - An issue about a line a document no longer holds -- an entry retired,
+    criteria before any requirement -- leaves the list.
+  - `req supersede` says the state it leaves the old one in and the work
+    still serving it; the issue for a retired entry offers the command of
+    its own register, or the entry that replaced it.
+  - `state` lists the accepted tasks that wait, with why, and counts the
+    open issues and what does not hold together.
+  - `decision obsolete` on a decision that governs a setting says what the
+    setting is now; `decision govern` says "already governs", names what
+    the ruling now conflicts with, and the carry-on hint after a supersede
+    is the whole command, without retired decisions in `overrides=`.
+  - `req revise ... from-document` on an entry made by hand, `result
+    dismiss` of what is no issue, `result` of a task or entry that is not
+    there, and agent or manifest ids not found are refused by name.
+  - `req new` takes `--set NAME=VALUE` and `acceptance=`, and refuses a
+    field it does not take; project commands take `--set` from the shell.
+  - A whole-suite run that failed for another task's work no longer takes
+    a requirement's own current evidence away; where it does, it names
+    whose work it ran for.
+  - `work` names the issue its agent's report was kept as; the agent is not
+    told to propose what it may not; a check command the policy will not
+    run is said at `init`; the reconfigure preview shows what a kind or
+    role would get less of.
+  - `integrate ... resolved anyway` names the task whose change it
+    replaced, in its answer and the audit; a conflict's next step names the
+    files; a test task that changed nothing is not complete.
+  - The task chooser says what each task is, and why one cannot be taken.
+  - A requirement revised to its document's new words names the work made
+    for the old ones.
+  - SIGTERM at the prompt ends the line and says so; a session told to end
+    mid-work gives the shell's next steps; exit status 7 is documented as
+    cancelled or interrupted; Ctrl-C at the prompt is said as it is pressed.
+  - Smaller: rehome says which component, keeps its notes under --quiet,
+    and has no plural slips; hints in session findings carry their `/`;
+    session errors point to `/help`; `/help` lists `/check full|REQ` and
+    `/result dismiss`; "1 checks", "(none)" for a harness default, a bare
+    `model_runner`, `model_runner trace`, `repo impact DIR`, `task reopen`
+    of a rejected task, `task derive` with nothing to derive, `work ""`,
+    `task integrate resolved` without a task and a second cancel all say
+    something useful; `result dismiss` hints carry the issue's own id.
 - **A helper's unspent budget goes back to its parent:** a child agent that
   ends, finished, failed or cancelled, returns what it did not use of the
   tokens reserved for it, so a parent stopped mid-delegate reports what was

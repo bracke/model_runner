@@ -347,14 +347,16 @@ package body Model_Runner.Framework.Agents is
             E.Add_Text (Status, "expected", "running");
             E.Add_Text (Status, "detail", "only a running agent makes children");
             return;
+         --  Past the depth: said as that, whether or not it was given
+         --  create_children at a depth where it could use none.
+         elsif Depth > Bounds.Max_Depth or else Depth > Grant.Max_Depth then
+            Over (Parent, "a child would be" & Natural'Image (Depth)
+                  & " deep, past the limit", Status);
+            return;
          elsif not Grant.Granted then
             Status := E.Make (E.Framework_Permission_Denied);
             E.Add_Text (Status, "name", Parent);
             E.Add_Text (Status, "detail", "it may not create children");
-            return;
-         elsif Depth > Bounds.Max_Depth or else Depth > Grant.Max_Depth then
-            Over (Parent, "a child would be" & Natural'Image (Depth)
-                  & " deep, past the limit", Status);
             return;
          elsif Retry_Of = ""
            and then First_Runs >= Natural'Min (Bounds.Max_Children, Grant.Max_Children)
@@ -625,7 +627,9 @@ package body Model_Runner.Framework.Agents is
       Change    : in out Stores.Transaction;
       Id        : String;
       Cancelled : out Name_Lists.Vector;
-      Status    : out Model_Runner.Errors.Error_Info)
+      Status    : out Model_Runner.Errors.Error_Info;
+      Why       : String := "";
+      Result_Id : String := "")
    is
       procedure Stop (Named : String) is
          Value : Records.Item;
@@ -640,6 +644,15 @@ package body Model_Runner.Framework.Agents is
          end if;
          Records.Set (Value, "state", "cancelled");
          Records.Set (Value, "ended_at", Timestamp);
+         --  Why it stopped, said on it: its own for the one asked, its
+         --  parent's stopping for those below.
+         if Records.Get (Value, "summary") = "" and then Why /= "" then
+            Records.Set (Value, "summary",
+                         (if Named = Id then Why else "it was stopped with its parent: " & Why));
+         end if;
+         if Named = Id and then Result_Id /= "" then
+            Records.Set (Value, "result", Result_Id);
+         end if;
          Stores.Put (Change, Runtime_Area, Prefix & Named, Value);
          Give_Back (Item, Change, Value);
          Events.Emit (Item, Change, Events.Agent_Cancelled, Named, "", Event, Status);

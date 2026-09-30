@@ -883,7 +883,8 @@ package body Model_Runner.CLI.Interactive is
                then
                   Cancel.Reset;
                end if;
-               Model_Runner.Platform.Signals.Set_Waiting_For_Input (True);
+               Model_Runner.Platform.Signals.Set_Waiting_For_Input
+                 (True, Note => Pres.Message_Value (Screen, "cli.interactive.dropped"));
                Ada.Text_IO.Get_Line (Ada.Text_IO.Current_Input, Room, Stop);
                Model_Runner.Platform.Signals.Set_Waiting_For_Input (False);
             exception
@@ -943,7 +944,10 @@ package body Model_Runner.CLI.Interactive is
                     and then Model_Runner.Cancellation.Is_Cancelled (Cancel)
                   then
                      Taken (Typing);
-                     Pres.Put_Note (Screen, "cli.interactive.dropped");
+                     --  Said when it was pressed, where it could be.
+                     if not Model_Runner.Platform.Signals.Interrupt_Noted then
+                        Pres.Put_Note (Screen, "cli.interactive.dropped");
+                     end if;
                   end if;
 
                   --  An interrupt stops what the line starts, not one typed

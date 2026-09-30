@@ -58,7 +58,15 @@ package Model_Runner.Platform.Signals is
    --  once, cancelled, having nothing under way to stop.
    --
    --  @param Waiting True while it waits.
-   procedure Set_Waiting_For_Input (Waiting : Boolean);
+   --  @param Note Said at once when an interrupt comes while it waits: the
+   --    terminal has dropped the line typed so far, and says so only then.
+   procedure Set_Waiting_For_Input (Waiting : Boolean; Note : String := "");
+
+   --  Whether the note was said for an interrupt since the program last
+   --  began to wait: what it says need not be said again.
+   --
+   --  @return True once said.
+   function Interrupt_Noted return Boolean;
 
    --  Whether the program has been told to end, as an interrupt is not.
    --

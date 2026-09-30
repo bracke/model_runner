@@ -7,7 +7,6 @@ with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
 
 with Model_Runner.Framework.Configurations;
-with Model_Runner.Framework.Records;
 
 package body Model_Runner.Framework.Permissions is
 
@@ -136,14 +135,23 @@ package body Model_Runner.Framework.Permissions is
    is
       Config : Records.Item;
       Status : E.Error_Info;
-      Result : Permission_Set := Nothing;
    begin
       Present := False;
       Configurations.Read (Item, Config, Status);
       if E.Is_Error (Status) then
-         return Result;
+         return Nothing;
       end if;
+      return Level_Of (Config, Level, Present);
+   end Level_Of;
 
+   function Level_Of
+     (Config  : Records.Item;
+      Level   : String;
+      Present : out Boolean) return Permission_Set
+   is
+      Result : Permission_Set := Nothing;
+   begin
+      Present := False;
       for Item_Kind in Capability loop
          declare
             Field : constant String := "map.permission." & Level & "." & Word (Item_Kind);
@@ -727,8 +735,19 @@ package body Model_Runner.Framework.Permissions is
       Writing : Boolean;
       Allowed : Permission_Set := Unrestricted) return String
    is
+      --  The path it asked for, as the project would name it: its last
+      --  part, which is what a model that began it with / most likely
+      --  meant -- not an example it would take literally.
+      function Last_Part return String is
+         Slash : constant Natural :=
+           Ada.Strings.Fixed.Index (Path, "/", Ada.Strings.Backward);
+      begin
+         return (if Slash = 0 or else Slash = Path'Last then "" else Path (Slash + 1 .. Path'Last));
+      end Last_Part;
+
       Outside : constant String :=
-        Path & " is outside the project; paths are relative to it, as src/main.adb";
+        Path & " is outside the project; paths are relative to it"
+        & (if Last_Part = "" then "" else ": try " & Last_Part & ", or list_directory . to see them");
       Parts   : Name_Lists.Vector;
       Start   : Natural := Path'First;
 

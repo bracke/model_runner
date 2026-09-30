@@ -233,6 +233,19 @@ package body Model_Runner.Framework.Repository is
       Config : Records.Item;
       Read   : E.Error_Info;
       Result : Name_Lists.Vector;
+
+      --  Whether the word from From on says NAME=VALUE: the roots end
+      --  there; any other word after a space or a comma is one more root.
+      function Setting_At (Text : String; From : Positive) return Boolean is
+      begin
+         for Index in From .. Text'Last loop
+            exit when Text (Index) in '|' | ',' | ' ';
+            if Text (Index) = '=' then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Setting_At;
    begin
       Configurations.Read (Item, Config, Read);
       declare
@@ -250,7 +263,8 @@ package body Model_Runner.Framework.Repository is
                   Result.Append (Text (Start .. Index - 1));
                end if;
                Start := Index + 1;
-               exit when Index <= Text'Last and then Text (Index) in ',' | ' ';
+               exit when Index <= Text'Last and then Text (Index) in ',' | ' '
+                 and then Setting_At (Text, Index + 1);
             end if;
          end loop;
       end;

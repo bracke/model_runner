@@ -227,7 +227,7 @@ package body Model_Runner.CLI.Options is
       (Text ("--tensors"), [Command_Inspect => True, others => False], Text ("tensors")),
       (Text ("--validate"), [Command_Inspect => True, others => False], Text ("validate")),
       (Text ("--set"),
-       [Command_Init | Command_Task | Command_Work => True, others => False],
+       [Command_Init | Command_Task | Command_Work | Command_Project => True, others => False],
        Text ("set")),
       (Text ("--directory"),
        [Command_Init | Command_Task | Command_Repo | Command_Work | Command_Project => True,
@@ -2727,6 +2727,10 @@ package body Model_Runner.CLI.Options is
                      Result.Kind := Command_Help;
                   elsif Argument = "version" then
                      Result.Kind := Command_Version;
+                  elsif Argument in "trace" | "refs" | "impact" | "tree" | "sym" | "deps" | "users" then
+                     --  A session's /trace is the shell's repo trace.
+                     Fail (E.CLI_Unknown_Command, "", Argument & "; repo " & Argument & " is the one");
+                     return;
                   else
                      Fail (E.CLI_Unknown_Command, "", Argument);
                      return;
@@ -2779,7 +2783,12 @@ package body Model_Runner.CLI.Options is
                   end if;
 
                elsif Operands = 2 and then Result.Kind = Command_Work then
-                  --  work TASK: the task to run.
+                  --  work TASK: the task to run; an empty one names none, and
+                  --  is not taken for no task named.
+                  if Argument = "" then
+                     Fail (E.CLI_Unexpected_Operand, "", "an empty task name");
+                     return;
+                  end if;
                   Result.Action_Argument := T.To_Bounded (Argument);
 
                elsif Operands = 2 and then Result.Kind = Command_Repo then

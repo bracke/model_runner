@@ -515,6 +515,25 @@ package body Model_Runner.CLI.Work is
       --  What makes a task that cannot be worked on workable, as a next
       --  step: accepting a candidate, doing or dropping what it waits for,
       --  its parts first, or trying again.
+      --  A task's title.
+      function Title_Of (Id : String) return String is
+         Defined : R.Item;
+         Read    : E.Error_Info;
+      begin
+         Tk.Definition (Store, Id, Defined, Read);
+         return (if E.Is_Ok (Read) then R.Get (Defined, "title") else "");
+      end Title_Of;
+
+      --  A field of several lines, as one: a comma apart.
+      function On_One_Line (Text : String) return String is
+         Joined : Unbounded_String;
+      begin
+         for Line of Model_Runner.Framework.Lines_Of (Text) loop
+            Append (Joined, (if Joined = Null_Unbounded_String then "" else ", ") & Line);
+         end loop;
+         return To_String (Joined);
+      end On_One_Line;
+
       function Way_On (Id : String) return String is
          Defined : R.Item;
          Read    : E.Error_Info;
@@ -623,7 +642,12 @@ package body Model_Runner.CLI.Work is
       begin
          W.Recover_On_Opening (Store, Report, Said, Outcome);
          for Line of Said loop
-            Pres.Put_Note (Screen, "cli.project.recovered", [Loc.Named ("detail", Line)]);
+            --  In a session, what does not hold together was said as it opened.
+            if not (Pres.In_Session (Screen)
+                    and then Ada.Strings.Fixed.Index (Line, "what does not hold together") = Line'First)
+            then
+               Pres.Put_Note (Screen, "cli.project.recovered", [Loc.Named ("detail", Line)]);
+            end if;
          end loop;
       end;
 
@@ -800,6 +824,18 @@ package body Model_Runner.CLI.Work is
                         Why     : Unbounded_String;
                      begin
                         Tk.Definition (Store, Id, Defined, Read);
+                        --  What it is, for any row; for one not workable
+                        --  yet, why and what makes it so first.
+                        Append (Why, "kind " & R.Get (Defined, "kind")
+                                & (if R.Get (Defined, "component") = "" then ""
+                                   else ", in " & R.Get (Defined, "component"))
+                                & (if R.Get (Defined, "requirements") = "" then ""
+                                   else ", serving " & On_One_Line (R.Get (Defined, "requirements")))
+                                & ASCII.LF);
+                        if not Now.Ready then
+                           Append (Why, "not workable yet (" & Tk.State_Of (Store, Id) & ")"
+                                   & ASCII.LF);
+                        end if;
                         for Reason of Now.Reasons loop
                            Append (Why, Reason & ASCII.LF);
                         end loop;
@@ -907,6 +943,13 @@ package body Model_Runner.CLI.Work is
             end if;
          end;
 
+         --  A session told to end ends once this is said: its next steps
+         --  are the shell's, where they will be typed.
+         if Pres.In_Session (Screen) and then Model_Runner.Platform.Signals.Ending_Asked then
+            Pres.Put_Note (Screen, "cli.work.session_ending");
+            Pres.Use_Session (Screen, False);
+         end if;
+
          if E.Is_Error (Outcome) then
             Fail (Outcome);
             if E."=" (Outcome.Code, E.Framework_Input_Missing) and then E.Text_Of (Outcome, "name") = "model"
@@ -930,11 +973,19 @@ package body Model_Runner.CLI.Work is
          for Candidate of Done.Proposed loop
             Say ("cli.work.proposed", Candidate, "");
          end loop;
+         for Title of Done.Twice loop
+            Pres.Put_Message (Screen, "cli.work.twice", [Loc.Named ("detail", Title)]);
+         end loop;
          for Line of Done.Kept_Back loop
             Pres.Put_Message
               (Screen, "cli.work.kept_back",
                [Loc.Named ("detail", Line), Loc.Named ("name", To_String (Done.Issue_Id))]);
          end loop;
+         --  Issues it reported, with nothing kept back: where they are.
+         if Done.Kept_Back.Is_Empty and then Done.Issue_Id /= Null_Unbounded_String then
+            Pres.Put_Message
+              (Screen, "cli.work.issue_kept", [Loc.Named ("name", To_String (Done.Issue_Id))]);
+         end if;
          --  What it proposed waits for a person: said how.
          declare
             Waiting : Unbounded_String;
@@ -1078,6 +1129,8 @@ package body Model_Runner.CLI.Work is
             end;
          elsif To_String (Done.Final_State) in "failed" | "blocked" then
             Pres.Put_Note (Screen, "cli.next.retry", [Loc.Named ("name", To_String (Done.Task_Id))]);
+         elsif To_String (Done.Final_State) = "cancelled" then
+            Pres.Put_Note (Screen, "cli.next.reopen", [Loc.Named ("name", To_String (Done.Task_Id))]);
          elsif To_String (Done.Final_State) = "verification"
            and then Done.Workspace_Id /= Null_Unbounded_String
          then
@@ -1116,6 +1169,32 @@ package body Model_Runner.CLI.Work is
                      end if;
                   end;
                end loop;
+               --  One a task already is -- made as a proposal of its own --
+               --  is not offered to be made again.
+               declare
+                  Open : Model_Runner.Framework.Name_Lists.Vector;
+               begin
+                  for Title of Titles loop
+                     declare
+                        Semicolon : constant Natural := Ada.Strings.Fixed.Index (Title, ";");
+                        Bare      : constant String := Ada.Characters.Handling.To_Lower
+                          (Ada.Strings.Fixed.Trim
+                             ((if Semicolon = 0 then Title else Title (Title'First .. Semicolon - 1)),
+                              Ada.Strings.Both));
+                     begin
+                        if not (for some Id of Tk.List (Store) =>
+                                  Tk.State_Of (Store, Id) not in "cancelled" | "rejected"
+                                  and then Ada.Characters.Handling.To_Lower (Title_Of (Id)) = Bare)
+                        then
+                           Open.Append (Title);
+                        end if;
+                     end;
+                  end loop;
+                  Titles := Open;
+               end;
+               if Titles.Is_Empty then
+                  goto Refused_Said;
+               end if;
                for Title of Titles loop
                   declare
                      Semicolon : constant Natural := Ada.Strings.Fixed.Index (Title, ";");

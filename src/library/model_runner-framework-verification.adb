@@ -1877,8 +1877,47 @@ package body Model_Runner.Framework.Verification is
    begin
       Find_Project_Runs;
       if Project_Failed /= Null_Unbounded_String then
-         return Lacks (To_String (Project_Failed) & ", the latest run of the project's whole suite"
-                       & " on the files as they are, did not pass; fix what failed, then check full");
+         declare
+            Value  : Records.Item;
+            Read   : E.Error_Info;
+            For_Task : Unbounded_String;
+            Serves : Unbounded_String;
+            Served : Name_Lists.Vector;
+         begin
+            Stores.Read (Item, Verification_Area, To_String (Project_Failed), Value, Read);
+            if E.Is_Ok (Read) then
+               For_Task := To_Unbounded_String (Records.Get (Value, "task"));
+            end if;
+            if For_Task /= Null_Unbounded_String then
+               declare
+                  Defined : Records.Item;
+               begin
+                  Tasks.Definition (Item, To_String (For_Task), Defined, Read);
+                  if E.Is_Ok (Read) then
+                     Served := Lines_Of (Records.Get (Defined, "requirements"));
+                     for One of Served loop
+                        Append (Serves, (if Serves = Null_Unbounded_String then "" else ", ") & One);
+                     end loop;
+                  end if;
+               end;
+            end if;
+            --  Run for another task's work, which this requirement is not
+            --  served by, while its own evidence still holds: what failed
+            --  is that work's, not this one's.
+            if For_Task /= Null_Unbounded_String and then Standing_Of_Tasks /= ""
+              and then not Served.Contains (Requirement)
+            then
+               null;
+            else
+               return Lacks (To_String (Project_Failed) & ", the latest run of the project's whole"
+                             & " suite on the files as they are"
+                             & (if For_Task = Null_Unbounded_String then ""
+                                else " (for " & To_String (For_Task)
+                                     & (if Serves = Null_Unbounded_String then ""
+                                        else ", which serves " & To_String (Serves)) & ")")
+                             & ", did not pass; fix what failed, then check full");
+            end if;
+         end;
       end if;
       if Project_Passed /= Null_Unbounded_String
         and then (Standing = Null_Unbounded_String or else Project_Passed > Standing)

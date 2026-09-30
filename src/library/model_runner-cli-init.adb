@@ -5,6 +5,7 @@ with Model_Runner.Errors;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
@@ -144,13 +145,16 @@ package body Model_Runner.CLI.Init is
       procedure Ask (Declared : Tp.Input_Declaration; Got : out Boolean) is
          Check : E.Error_Info;
          Typed : Unbounded_String;
+         --  Why its default did not do, said the first time only: a value
+         --  typed and refused is refused with its own reason.
+         First : Boolean := True;
       begin
          loop
             Choosers.Ask
               (Screen, To_String (Declared.Label),
                To_String (Declared.Description)
-               & (if Planned.Missing_Why.Contains (To_String (Declared.Id))
-                  then " (" & Planned.Missing_Why (To_String (Declared.Id)) & ")" else ""),
+               & (if First and then Planned.Missing_Why.Contains (To_String (Declared.Id))
+                  then "; " & Planned.Missing_Why (To_String (Declared.Id)) else ""),
                To_String (Declared.Choices),
                (if Ada.Strings.Fixed.Index (To_String (Declared.Default), "${") > 0 then ""
                 else To_String (Declared.Default)),
@@ -164,6 +168,7 @@ package body Model_Runner.CLI.Init is
                return;
             end if;
             Pres.Report (Screen, Check);
+            First := False;
          end loop;
       end Ask;
 
@@ -493,6 +498,39 @@ package body Model_Runner.CLI.Init is
       for Kept of Done.Kept_Files loop
          Pres.Put_Note (Screen, "cli.init.kept", [Loc.Named ("path", Kept)]);
       end loop;
+
+      --  A check the project's own policy will not run: said now, not at
+      --  the first verification that blocks on it.
+      declare
+         Rules : constant Model_Runner.Framework.Execution.Policy :=
+           Model_Runner.Framework.Execution.Policy_Of (Store);
+      begin
+         for Index in 1 .. R.Field_Count (Planned.Configuration) loop
+            declare
+               Name : constant String := R.Field_Name (Planned.Configuration, Index);
+            begin
+               if Ada.Strings.Fixed.Index (Name, "profile.") = Name'First then
+                  for Line of Model_Runner.Framework.Lines_Of (R.Get (Planned.Configuration, Name)) loop
+                     declare
+                        Colon   : constant Natural := Ada.Strings.Fixed.Index (Line, ": ");
+                        Command : constant String :=
+                          (if Colon = 0 then "" else Line (Colon + 2 .. Line'Last));
+                        Why     : constant String :=
+                          (if Command = "" then ""
+                           else Model_Runner.Framework.Execution.Refusal (Rules, Command));
+                     begin
+                        if Why /= "" then
+                           Pres.Put_Note
+                             (Screen, "cli.init.check_refused",
+                              [Loc.Named ("name", Line (Line'First .. Colon - 1)),
+                               Loc.Named ("value", Command), Loc.Named ("detail", Why)]);
+                        end if;
+                     end;
+                  end loop;
+               end if;
+            end;
+         end loop;
+      end;
 
       --  What of the state goes into the repository, as the policy says.
       declare

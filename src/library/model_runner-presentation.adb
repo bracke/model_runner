@@ -225,6 +225,8 @@ package body Model_Runner.Presentation is
       Put_Line (Item, Ada.Strings.Unbounded.To_String (Line));
    end Put_Record;
 
+   function As_Typed_In_Session (Text : String) return String;
+
    procedure Put_Message
      (Item      : in out Console;
       Key       : String;
@@ -234,7 +236,13 @@ package body Model_Runner.Presentation is
          Put_Record (Item, "message", Key, Arguments, Message (Item, Key, Arguments));
          return;
       end if;
-      Put_Line (Item, Message (Item, Key, Arguments));
+      --  A finding or a field in a session: the ways on it names are
+      --  said as the session types them.
+      Put_Line (Item, (if Item.Session
+                         and then Key in "cli.task.item" | "cli.task.field" | "cli.work.issue_kept"
+                                       | "cli.work.kept_back"
+                       then As_Typed_In_Session (Message (Item, Key, Arguments))
+                       else Message (Item, Key, Arguments)));
    end Put_Message;
 
    --  Write one line to standard error, tolerating a closed destination.
@@ -369,7 +377,12 @@ package body Model_Runner.Presentation is
            or else Here ("spec revise") or else Here ("check REQ-") or else Here ("check full")
            or else Here ("config shows") or else Here ("decision accept") or else Here ("spec accept")
            or else Here ("decision supersede") or else Here ("task split") or else Here ("task edit")
-           or else Here ("task rehome") or else Here ("req link") or else Here ("sandbox off");
+           or else Here ("task rehome") or else Here ("req link") or else Here ("sandbox off")
+           or else Here ("decision govern") or else Here ("decision obsolete")
+           or else Here ("decision new") or else Here ("spec new") or else Here ("result dismiss")
+           or else Here ("task reopen") or else Here ("task reconsider") or else Here ("task derive")
+           or else Here ("req reconsider") or else Here ("req verify") or else Here ("decision link")
+           or else Here ("task verify") or else Here ("task resolve") or else Here ("result lists");
       end Names_A_Command;
    begin
       for Index in Text'Range loop
@@ -687,7 +700,9 @@ package body Model_Runner.Presentation is
             Hint : constant String :=
               E.Recovery_Hint (Condition.Code);
          begin
-            if Hint /= "" then
+            if Hint = "diagnostic.hint.usage" and then Item.Session then
+               Put_Note (Item, "diagnostic.hint.usage_session");
+            elsif Hint /= "" then
                Put_Note (Item, Hint);
             end if;
          end;

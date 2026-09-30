@@ -518,8 +518,9 @@ package body Model_Runner.Framework.Intent is
             Status := E.Make (E.Framework_Transition_Invalid);
             E.Add_Text (Status, "name", Id);
             E.Add_Text (Status, "value", State);
-            E.Add_Text (Status, "expected", State);
-            E.Add_Text (Status, "detail", "what has been replaced is not revised");
+            E.Add_Text (Status, "expected", "a new revision");
+            E.Add_Text (Status, "detail", "it is retired, and what is retired is not revised; new with"
+                        & " its words makes it anew");
             return;
          end if;
 

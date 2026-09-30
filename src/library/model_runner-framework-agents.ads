@@ -227,12 +227,17 @@ package Model_Runner.Framework.Agents is
    --  @param Id The agent.
    --  @param Cancelled The agents cancelled, it first.
    --  @param Status A failure staging it.
+   --  @param Why Why it was stopped, kept as the summary of each one that
+   --  has none.
+   --  @param Result_Id The result kept for it, where one was.
    procedure Cancel
      (Item      : Stores.Store;
       Change    : in out Stores.Transaction;
       Id        : String;
       Cancelled : out Name_Lists.Vector;
-      Status    : out Model_Runner.Errors.Error_Info);
+      Status    : out Model_Runner.Errors.Error_Info;
+      Why       : String := "";
+      Result_Id : String := "");
 
    --  What a parent is told of its children: each one's result reference
    --  and summary, one a line -- never what they said on the way.
