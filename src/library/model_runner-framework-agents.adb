@@ -431,6 +431,35 @@ package body Model_Runner.Framework.Agents is
       end;
    end Charge;
 
+   --  What a child was given and did not spend goes back to its parent
+   --  once the child has ended, however it ended: what the parent is said
+   --  to have used is what was used, not what was set aside.
+   procedure Give_Back
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Child  : Records.Item)
+   is
+      Parent : constant String := Records.Get (Child, "parent");
+      Budget : constant Natural := Number (Records.Get (Child, "budget"), 0);
+      Spent  : constant Natural := Natural'Min (Number (Records.Get (Child, "used"), 0), Budget);
+      Owner  : Records.Item;
+      Held   : E.Error_Info;
+   begin
+      if Parent = "" or else Budget = Spent then
+         return;
+      end if;
+      Current (Item, Change, Parent, Owner, Held);
+      if E.Is_Ok (Held) then
+         declare
+            Used : constant Natural := Number (Records.Get (Owner, "used"), 0);
+         begin
+            Records.Set (Owner, "used",
+                         Image (if Used > Budget - Spent then Used - (Budget - Spent) else 0));
+            Stores.Put (Change, Runtime_Area, Prefix & Parent, Owner);
+         end;
+      end if;
+   end Give_Back;
+
    ------------
    -- Finish --
    ------------
@@ -465,6 +494,7 @@ package body Model_Runner.Framework.Agents is
       Records.Set (Value, "result", Result_Id);
       Records.Set (Value, "summary", Summary);
       Stores.Put (Change, Runtime_Area, Prefix & Id, Value);
+      Give_Back (Item, Change, Value);
       Events.Emit (Item, Change,
                    (if Succeeded then Events.Agent_Completed else Events.Agent_Failed),
                    Id, Summary, Event, Status);
@@ -611,6 +641,7 @@ package body Model_Runner.Framework.Agents is
          Records.Set (Value, "state", "cancelled");
          Records.Set (Value, "ended_at", Timestamp);
          Stores.Put (Change, Runtime_Area, Prefix & Named, Value);
+         Give_Back (Item, Change, Value);
          Events.Emit (Item, Change, Events.Agent_Cancelled, Named, "", Event, Status);
          Cancelled.Append (Named);
          for Child of Children (Item, Named) loop

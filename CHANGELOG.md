@@ -1782,6 +1782,10 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A helper's unspent budget goes back to its parent:** a child agent that
+  ends, finished, failed or cancelled, returns what it did not use of the
+  tokens reserved for it, so a parent stopped mid-delegate reports what was
+  actually spent.
 - **Eighth usability round:**
   - An answer's empty lines are read as such: a blank line ends a list, so
     a log or prose after a report is none of its files or proposals.
