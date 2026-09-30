@@ -2,6 +2,7 @@ with Ada.Strings.Unbounded;
 
 with Model_Runner.Cancellation;
 with Model_Runner.Errors;
+with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
 
 --  Every external program the harness runs, run one way.
@@ -142,6 +143,13 @@ package Model_Runner.Framework.Execution is
    --  @param Item The store.
    --  @return The policy.
    function Policy_Of (Item : Stores.Store) return Policy;
+
+   --  The policy a configuration sets: for one not yet kept, as a project
+   --  about to be started has.
+   --
+   --  @param Config The configuration record.
+   --  @return The policy.
+   function Policy_From (Config : Records.Item) return Policy;
 
    --  Whether a command needs a shell to run as written.
    --

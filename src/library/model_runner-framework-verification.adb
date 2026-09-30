@@ -1655,6 +1655,14 @@ package body Model_Runner.Framework.Verification is
    -- Verify_Requirement --
    ------------------------
 
+   --  The profile a requirement itself is verified by: the project's
+   --  for requirements, or its default where it names none.
+   function Requirement_Profile (Item : Stores.Store) return String is
+      Named : constant String := Records.Get (Config (Item), "scalar.verification.requirements");
+   begin
+      return (if Named /= "" then Named else Records.Get (Config (Item), "scalar.verification.default"));
+   end Requirement_Profile;
+
    procedure Verify_Requirement
      (Item        : Stores.Store;
       Change      : in out Stores.Transaction;
@@ -1663,16 +1671,21 @@ package body Model_Runner.Framework.Verification is
       Passed      : out Boolean;
       Status      : out Model_Runner.Errors.Error_Info)
    is
-      Profile : constant String := Records.Get (Config (Item), "scalar.verification.requirements");
+      Profile : constant String := Requirement_Profile (Item);
       Given   : Name_Lists.Vector;
       Tests   : Unbounded_String;
    begin
       Evidence := Null_Unbounded_String;
       Passed := False;
-      if Profile = "" or else not Stores.Exists (Item, Requirements_Area, Requirement) then
+      if Profile = "" then
+         Status := E.Make (E.Framework_Input_Missing);
+         E.Add_Text (Status, "name", "a profile to verify requirements by: /reconfigure"
+                     & " scalar.verification.requirements=PROFILE names one, or"
+                     & " scalar.verification.default a profile for everything");
+         return;
+      elsif not Stores.Exists (Item, Requirements_Area, Requirement) then
          Status := E.Make (E.Framework_Not_Found);
-         E.Add_Text (Status, "name",
-                     (if Profile = "" then "a profile for requirements" else Requirement));
+         E.Add_Text (Status, "name", Requirement);
          return;
       end if;
       for Test of Intent.Links (Item, Intent.Requirement, Requirement, Intent.Test) loop
@@ -2019,7 +2032,7 @@ package body Model_Runner.Framework.Verification is
                                 else " (for " & To_String (For_Task)
                                      & (if Serves = Null_Unbounded_String then ""
                                         else ", which serves " & To_String (Serves)) & ")")
-                             & ", did not pass; fix what failed, then check full");
+                             & ", did not pass; fix what failed, then /check full");
             end if;
          end;
       end if;
@@ -2042,7 +2055,11 @@ package body Model_Runner.Framework.Verification is
                Any := True;
                if State /= "complete" then
                   return Lacks (Id & " serves it and is " & State
-                                & "; it is verified once that is complete");
+                                & "; it is verified once that is complete"
+                                & (if State in "accepted" | "blocked" | "failed" | "candidate"
+                                   then " -- where the code is there already, /task complete " & Id
+                                        & " takes it as done, its checks passing"
+                                   else ""));
                end if;
 
                --  Something implements it: a linked implementation, or
@@ -2063,7 +2080,7 @@ package body Model_Runner.Framework.Verification is
                   Reasons  : Name_Lists.Vector;
                begin
                   if Evidence = "" then
-                     return Lacks (Id & " has no evidence; task verify " & Id & " takes it");
+                     return Lacks (Id & " has no evidence; /task verify " & Id & " takes it");
                   end if;
                   Stores.Read (Item, Verification_Area, Evidence, Value, Read);
                   --  Stale or failed, and a later whole run passed over the
@@ -2086,12 +2103,12 @@ package body Model_Runner.Framework.Verification is
                      goto Next_Task;
                   elsif Records.Get (Value, "passed") /= "true" then
                      return Lacks (Evidence & ", " & Id & "'s latest, did not pass;"
-                                   & " task verify " & Id & " takes it again");
+                                   & " /task verify " & Id & " takes it again");
                   elsif not Is_Current (Item, Evidence, Reasons, Configuration) then
                      return Lacks (Evidence & ", " & Id & "'s latest, no longer applies"
                                    & (if Reasons.Is_Empty then ""
                                       else ": " & Reasons.First_Element)
-                                   & "; task verify " & Id & " takes it again");
+                                   & "; /task verify " & Id & " takes it again");
                   elsif not Criteria_Shown (Requirement, Value) then
                      return Lacks (Evidence & " does not show a criterion's named check"
                                    & " passing");
@@ -2154,7 +2171,7 @@ package body Model_Runner.Framework.Verification is
       --  that it does what it says.
       if not Tested and then Empty_Suite /= Null_Unbounded_String then
          return Lacks ("its tests ran and found none to run (" & To_String (Empty_Suite)
-                       & "): a test that exercises it -- task new TITLE kind=test"
+                       & "): a test that exercises it -- /task new TITLE kind=test"
                        & " requirements=" & Requirement & " -- then check "
                        & Requirement & " verifies it");
       elsif not Tested then

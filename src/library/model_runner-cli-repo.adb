@@ -264,19 +264,39 @@ package body Model_Runner.CLI.Repo is
              Loc.Named ("value", Rp.Graph_Fingerprint (Found))]);
 
       elsif Action = "tree" then
-         for Index in 1 .. Rp.File_Count (Found) loop
-            declare
-               File : constant Rp.File_Entry := Rp.File_At (Found, Index);
-            begin
-               Pres.Put_Message
-                 (Screen, "cli.repo.file",
-                  [Loc.Named ("path", To_String (File.Path)),
-                   Loc.Named ("value", To_String (File.Language)),
-                   Loc.Named ("detail",
-                              Ada.Characters.Handling.To_Lower
-                                (Rp.File_Role'Image (File.Role)))]);
-            end;
-         end loop;
+         --  Under a directory, when one is named: its files only.
+         declare
+            Under : constant String :=
+              (if Argument in "" | "." then ""
+               elsif Argument (Argument'Last) = '/' then Argument else Argument & "/");
+            Shown : Natural := 0;
+         begin
+            for Index in 1 .. Rp.File_Count (Found) loop
+               declare
+                  File : constant Rp.File_Entry := Rp.File_At (Found, Index);
+                  Path : constant String := To_String (File.Path);
+               begin
+                  if Under = ""
+                    or else (Path'Length > Under'Length
+                             and then Path (Path'First .. Path'First + Under'Length - 1) = Under)
+                    or else Path = Argument
+                  then
+                     Shown := Shown + 1;
+                     Pres.Put_Message
+                       (Screen, "cli.repo.file",
+                        [Loc.Named ("path", Path),
+                         Loc.Named ("value", To_String (File.Language)),
+                         Loc.Named ("detail",
+                                    Ada.Characters.Handling.To_Lower
+                                      (Rp.File_Role'Image (File.Role)))]);
+                  end if;
+               end;
+            end loop;
+            if Shown = 0 and then Under /= "" then
+               Not_Found;
+               return;
+            end if;
+         end;
 
       elsif Action = "sym" then
          declare
@@ -744,8 +764,59 @@ package body Model_Runner.CLI.Repo is
                return Result;
             end Of_Units;
 
-            Units : constant Model_Runner.Framework.Name_Lists.Vector := Of_Units;
+            --  A symbol that is no unit -- Lexer.Scan -- answered at its own
+            --  level: the units whose files use it, or what the unit it is
+            --  declared in depends on.
+            Symbols : constant Model_Runner.Framework.Name_Lists.Vector :=
+              (if Files_Of (Argument).Is_Empty and then Units_In (Argument).Is_Empty
+               then Rp.Find_Symbols (Found, Argument)
+               else Model_Runner.Framework.Name_Lists.Empty_Vector);
+
+            function Of_Symbols return Model_Runner.Framework.Name_Lists.Vector is
+               use type Rp.Relation_Kind;
+               Result : Model_Runner.Framework.Name_Lists.Vector;
+            begin
+               for Named of Symbols loop
+                  if Action = "users" then
+                     for Index in 1 .. Rp.Relation_Count (Found) loop
+                        declare
+                           One : constant Rp.Relation := Rp.Relation_At (Found, Index);
+                        begin
+                           if One.Kind = Rp.References and then To_String (One.To) = Named then
+                              for Unit of Units_In (To_String (One.From)) loop
+                                 if not Result.Contains (Unit) then
+                                    Result.Append (Unit);
+                                 end if;
+                              end loop;
+                           end if;
+                        end;
+                     end loop;
+                  else
+                     declare
+                        Dot   : constant Natural :=
+                          Ada.Strings.Fixed.Index (Named, ".", Ada.Strings.Backward);
+                        Owner : constant String :=
+                          (if Dot = 0 then Named else Named (Named'First .. Dot - 1));
+                     begin
+                        for Unit of Rp.Dependencies_Of (Found, Owner) loop
+                           if not Result.Contains (Unit) then
+                              Result.Append (Unit);
+                           end if;
+                        end loop;
+                     end;
+                  end if;
+               end loop;
+               return Result;
+            end Of_Symbols;
+
+            Units : constant Model_Runner.Framework.Name_Lists.Vector :=
+              (if Symbols.Is_Empty then Of_Units else Of_Symbols);
          begin
+            if not Symbols.Is_Empty then
+               Pres.Put_Note
+                 (Screen, (if Action = "users" then "cli.repo.symbol_users" else "cli.repo.symbol_deps"),
+                  [Loc.Named ("name", Argument)]);
+            end if;
             for Unit of Units loop
                Pres.Put_Message
                  (Screen, "cli.repo.unit", [Loc.Named ("name", Unit)]);

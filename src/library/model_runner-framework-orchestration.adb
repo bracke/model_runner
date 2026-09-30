@@ -327,7 +327,7 @@ package body Model_Runner.Framework.Orchestration is
             then
                Result.Append (Id & ": blocked, "
                               & (if Records.Get (Value, "blocking_reasons") = ""
-                                 then "moved there by hand; task accept " & Id & " takes it up again"
+                                 then "moved there by hand; /task accept " & Id & " takes it up again"
                                  else Records.Get (Value, "blocking_reasons")));
             end if;
          end;
@@ -338,8 +338,31 @@ package body Model_Runner.Framework.Orchestration is
             if Ada.Strings.Fixed.Index (Reason, ", which is cancelled") > 0
               or else Ada.Strings.Fixed.Index (Reason, ", which is rejected") > 0
             then
-               Result.Append (Id & ": " & Reason & "; task depend " & Id & " TASK remove lets it go"
-                              & " on without, or task reopen TASK has it done");
+               --  The task it waits for, by its identifier as the reason
+               --  names it; brought back as its end allows.
+               declare
+                  At_Id : constant Natural := Ada.Strings.Fixed.Index (Reason, "TASK-");
+                  Last  : Natural := At_Id;
+               begin
+                  if At_Id > 0 then
+                     while Last < Reason'Last
+                       and then Reason (Last + 1) in 'A' .. 'Z' | '0' .. '9' | '-' | '_'
+                     loop
+                        Last := Last + 1;
+                     end loop;
+                  end if;
+                  declare
+                     Other : constant String :=
+                       (if At_Id = 0 then "TASK" else Reason (At_Id .. Last));
+                  begin
+                     Result.Append
+                       (Id & ": " & Reason & "; /task depend " & Id & " " & Other
+                        & " remove lets it go on without, or /task "
+                        & (if Ada.Strings.Fixed.Index (Reason, ", which is rejected") > 0
+                           then "reconsider " else "reopen ")
+                        & Other & " has it done");
+                  end;
+               end;
             end if;
          end loop;
       end loop;
@@ -353,7 +376,7 @@ package body Model_Runner.Framework.Orchestration is
             Result.Append (Id & ": failed"
                            & (if Records.Get (Value, "current_failure") = "" then ""
                               else ", " & Records.Get (Value, "current_failure"))
-                           & "; task accept " & Id & " tries again, task complete " & Id
+                           & "; /task accept " & Id & " tries again, /task complete " & Id
                            & " once it is done by hand");
          end;
       end loop;
@@ -366,7 +389,7 @@ package body Model_Runner.Framework.Orchestration is
             Stores.Read (Item, Tasks_Area, Id & ".state", Value, Status);
             if Records.Get (Value, "current_workspace") /= "" then
                Result.Append (Id & ": its work waits in " & Records.Get (Value, "current_workspace")
-                              & " to be taken in; task integrate " & Id);
+                              & " to be taken in; /task integrate " & Id);
             end if;
          end;
       end loop;

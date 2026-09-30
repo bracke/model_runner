@@ -67,6 +67,14 @@ package Model_Runner.Framework is
    --  @return Its lines.
    function Lines_Of (Text : String) return Name_Lists.Vector;
 
+   --  The name a mistyped one most likely meant: one of those given a
+   --  letter or two from it, whatever the case; the nearest first.
+   --
+   --  @param Word What was typed.
+   --  @param Among The names it may have meant.
+   --  @return The nearest, or an empty string when none is that near.
+   function Nearest (Word : String; Among : Name_Lists.Vector) return String;
+
    --  What kind of state an area holds.
    --
    --  Authored state is what people and the harness decided; runtime state

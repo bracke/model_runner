@@ -2,6 +2,8 @@ with Ada.Directories;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 
+with Hostkit.Fs;
+
 with Model_Runner.Errors;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Options;
@@ -53,10 +55,35 @@ package body Model_Runner.CLI.Init is
       Composed : Tp.Composition;
       Given    : Cf.Value_Maps.Map;
       Confirmed : Boolean := False;
+      Allowing  : Boolean := False;
+      Fixes     : Cf.Value_Maps.Map;
       Planned  : Cf.Plan;
       Done     : Cf.Outcome;
       Store    : S.Store;
       Outcome  : E.Error_Info;
+
+      --  Whether the directory holds anything of its own already -- more
+      --  than what a version control system keeps.
+      function Has_Content return Boolean is
+         use Ada.Directories;
+         Search : Search_Type;
+         Found  : Directory_Entry_Type;
+         Any    : Boolean := False;
+      begin
+         if not Exists (Directory) then
+            return False;
+         end if;
+         Start_Search (Search, Directory, "");
+         while More_Entries (Search) and then not Any loop
+            Get_Next_Entry (Search, Found);
+            Any := Simple_Name (Found) not in "." | ".." | ".git" | ".hg" | ".svn";
+         end loop;
+         End_Search (Search);
+         return Any;
+      exception
+         when others =>
+            return False;
+      end Has_Content;
 
       procedure Fail (Condition : E.Error_Info) is
       begin
@@ -66,13 +93,21 @@ package body Model_Runner.CLI.Init is
 
       --  The templates a project may start from, by their place in the
       --  registry: a part only other templates include is not one.
+      --  In a directory that already holds a project, the templates that
+      --  take one as it is come first, so the one Enter takes writes
+      --  nothing over it.
       function Kinds return Model_Runner.Framework.Name_Lists.Vector is
          Result : Model_Runner.Framework.Name_Lists.Vector;
       begin
-         for Index in 1 .. Tp.Count (Registry) loop
-            if Tp.Is_Standalone (Tp.Template_At (Registry, Index)) then
-               Result.Append (T.Image (Long_Long_Integer (Index)));
-            end if;
+         for Pass in Boolean loop
+            for Index in 1 .. Tp.Count (Registry) loop
+               if Tp.Is_Standalone (Tp.Template_At (Registry, Index))
+                 and then (Tp.Category (Tp.Template_At (Registry, Index)) = "existing")
+                          = (Pass = not Has_Content)
+               then
+                  Result.Append (T.Image (Long_Long_Integer (Index)));
+               end if;
+            end loop;
          end loop;
          return Result;
       end Kinds;
@@ -112,23 +147,6 @@ package body Model_Runner.CLI.Init is
             end;
          end loop;
       end List;
-
-      --  Facts to record; a template's that discovery answered otherwise
-      --  is shown as discovery found it.
-      procedure Show_Facts (Facts : Cf.Value_Maps.Map; Declared : Boolean) is
-      begin
-         for Position in Facts.Iterate loop
-            if not Declared
-              or else not Planned.Discovered_Facts.Contains
-                            (Cf.Value_Maps.Key (Position))
-            then
-               Pres.Put_Message
-              (Screen, "cli.init.fact",
-                  [Loc.Named ("name", Cf.Value_Maps.Key (Position)),
-                   Loc.Named ("value", Cf.Value_Maps.Element (Position))]);
-            end if;
-         end loop;
-      end Show_Facts;
 
       --  What an input is, what it takes and why its default did not do.
       function Input_Detail (Declared : Tp.Input_Declaration; From : Cf.Plan) return String is
@@ -282,19 +300,37 @@ package body Model_Runner.CLI.Init is
          if Tp.Id (Tp.Template_At (Registry, Index)) = To_String (Chosen)
            and then not Tp.Is_Standalone (Tp.Template_At (Registry, Index))
          then
-            Pres.Put_Message (Screen, "cli.init.header");
-            List;
             Outcome := E.Make (E.Framework_Input_Invalid);
             E.Add_Text (Outcome, "name", "template");
             E.Add_Text (Outcome, "value", To_String (Chosen));
             E.Add_Text (Outcome, "detail", "it is a part other templates include, not a kind of project");
             Fail (Outcome);
+            Pres.Put_Message (Screen, "cli.init.header");
+            List;
             return;
          end if;
       end loop;
 
       Tp.Compose (Registry, To_String (Chosen), Composed, Outcome);
       if E.Is_Error (Outcome) then
+         --  A name a letter or two from one there is: that one, offered.
+         if E."=" (Outcome.Code, E.Framework_Template_Not_Found) then
+            declare
+               Ids  : Model_Runner.Framework.Name_Lists.Vector;
+            begin
+               for Place of Kinds loop
+                  Ids.Append (Tp.Id (Tp.Template_At (Registry, Positive'Value (Place))));
+               end loop;
+               declare
+                  Near : constant String := Model_Runner.Framework.Nearest (To_String (Chosen), Ids);
+               begin
+                  if Near /= "" then
+                     Outcome := E.Make (E.Framework_Template_Not_Found);
+                     E.Add_Text (Outcome, "name", To_String (Chosen) & "; did you mean " & Near & "?");
+                  end if;
+               end;
+            end;
+         end if;
          Fail (Outcome);
 
          --  One not installed: those that are.
@@ -417,60 +453,181 @@ package body Model_Runner.CLI.Init is
          end loop;
       end loop;
 
-      --  The plan, as an answer: what the project will be -- not shown
-      --  to one who asked for quiet.
-      if Model_Runner.CLI.Options."/=" (Item.Level, Model_Runner.CLI.Options.Quiet) then
-         Pres.Put_Message
-           (Screen, "cli.init.plan",
-            [Loc.Named ("name", Tp.Id (Tp.Root (Composed))),
-             Loc.Named ("version", Tp.Version (Tp.Root (Composed))),
-             Loc.Named ("path", Directory)]);
+      --  The plan and what it will not be able to do, worked out before
+      --  anything is written: shown, and -- where it writes into a
+      --  directory that holds a project already, where a check it names
+      --  will be refused, or where the template wants it -- asked about
+      --  with the plan above the question.
+      declare
+         Plan_Text : Unbounded_String;
+         Writes_In : Boolean := False;
+         Refused   : Model_Runner.Framework.Name_Lists.Vector;
+         Rules     : constant Model_Runner.Framework.Execution.Policy :=
+           Model_Runner.Framework.Execution.Policy_From (Planned.Configuration);
+
+         procedure Say (Key : String; Arguments : Loc.Argument_List) is
+            Line : constant String := Pres.Next_Step_Value (Screen, Key, Arguments);
+         begin
+            Append (Plan_Text, Line & ASCII.LF);
+            if Model_Runner.CLI.Options."/=" (Item.Level, Model_Runner.CLI.Options.Quiet) then
+               Pres.Put_Message (Screen, Key, Arguments);
+            end if;
+         end Say;
+      begin
+         Say ("cli.init.plan",
+              [Loc.Named ("name", Tp.Id (Tp.Root (Composed))),
+               Loc.Named ("version", Tp.Version (Tp.Root (Composed))),
+               Loc.Named ("path", Ada.Directories.Full_Name (Directory))]);
+         --  Each input's value, however it came -- given, found or its
+         --  default -- so one never asked for is still seen.
+         for Position in Planned.Inputs.Iterate loop
+            declare
+               Id     : constant String := Cf.Value_Maps.Key (Position);
+               Secret : Boolean := False;
+            begin
+               --  A secret is not shown, not even here.
+               for Index in 1 .. Tp.Input_Count (Composed) loop
+                  if To_String (Tp.Input_At (Composed, Index).Id) = Id then
+                     Secret := Tp.Input_At (Composed, Index).Secret;
+                  end if;
+               end loop;
+               Say ("cli.init.input",
+                    [Loc.Named ("name", Id),
+                     Loc.Named ("value", (if Secret then Pres.Message_Value (Screen, "cli.init.secret")
+                                          else Cf.Value_Maps.Element (Position)))]);
+            end;
+         end loop;
          for Made of Planned.Directories loop
-            Pres.Put_Message (Screen, "cli.init.directory", [Loc.Named ("path", Made)]);
+            Say ("cli.init.directory", [Loc.Named ("path", Made)]);
          end loop;
          for Position in Planned.Files.Iterate loop
-            Pres.Put_Message
-              (Screen, "cli.init.file",
-               [Loc.Named ("path", Cf.Value_Maps.Key (Position))]);
+            declare
+               Path : constant String := Cf.Value_Maps.Key (Position);
+               There : constant Boolean :=
+                 Ada.Directories.Exists (Hostkit.Fs.Join (Directory, Path));
+            begin
+               Writes_In := Writes_In or else not There;
+               Say ((if There then "cli.init.file_kept" else "cli.init.file"),
+                    [Loc.Named ("path", Path)]);
+            end;
          end loop;
-         Show_Facts (Planned.Template_Facts, Declared => True);
-         Show_Facts (Planned.Discovered_Facts, Declared => False);
-      end if;
+         for Position in Planned.Template_Facts.Iterate loop
+            if not Planned.Discovered_Facts.Contains (Cf.Value_Maps.Key (Position)) then
+               Say ("cli.init.fact", [Loc.Named ("name", Cf.Value_Maps.Key (Position)),
+                                      Loc.Named ("value", Cf.Value_Maps.Element (Position))]);
+            end if;
+         end loop;
+         for Position in Planned.Discovered_Facts.Iterate loop
+            Say ("cli.init.fact", [Loc.Named ("name", Cf.Value_Maps.Key (Position)),
+                                   Loc.Named ("value", Cf.Value_Maps.Element (Position))]);
+         end loop;
 
-      --  Confirmed where the policy wants it: asked at a terminal, and
-      --  otherwise given as confirm=yes or missing, never assumed.
-      if R.Get (Planned.Configuration, "scalar.init.confirm") in "yes" | "true" | "required"
-        and then not Confirmed
-      then
-         if not Interactive then
-            Outcome := E.Make (E.Framework_Input_Missing);
-            E.Add_Text (Outcome, "name", "confirm");
-            Fail (Outcome);
-            Pres.Put_Note (Screen, "cli.next.confirm_init");
-            return;
-         end if;
-         declare
-            Answers : Choosers.Choice_List;
-         begin
-            Choosers.Append
-              (Answers, (Label      => To_Unbounded_String
-                                         (Pres.Message_Value (Screen, "cli.init.confirm.yes")),
-                         Tag        => Null_Unbounded_String,
-                         Details    => Null_Unbounded_String,
-                         Selectable => True));
-            Choosers.Append
-              (Answers, (Label      => To_Unbounded_String
-                                         (Pres.Message_Value (Screen, "cli.init.confirm.no")),
-                         Tag        => Null_Unbounded_String,
-                         Details    => Null_Unbounded_String,
-                         Selectable => True));
-            if Choosers.Choose (Screen, "cli.init.confirm", Answers) /= 1 then
-               Pres.Put_Note (Screen, "cli.init.cancelled");
-               Status := E.Exit_Cancelled;
+         --  A check the project's own policy will not run, with the
+         --  setting that lets it.
+         for Index in 1 .. R.Field_Count (Planned.Configuration) loop
+            declare
+               Name : constant String := R.Field_Name (Planned.Configuration, Index);
+            begin
+               if Ada.Strings.Fixed.Index (Name, "profile.") = Name'First then
+                  declare
+                     package Vf renames Model_Runner.Framework.Verification;
+                     package Ex renames Model_Runner.Framework.Execution;
+                     Checks : constant Vf.Check_List :=
+                       Vf.Parse_Profile (R.Get (Planned.Configuration, Name));
+                  begin
+                     for Index in 1 .. Vf.Length (Checks) loop
+                        declare
+                           One     : constant Vf.Check := Vf.Element (Checks, Index);
+                           Command : constant String := To_String (One.Command);
+                           Why     : constant String :=
+                             (if Command = "" then "" else Ex.Refusal (Rules, Command));
+                           Words   : constant Model_Runner.Framework.Name_Lists.Vector :=
+                             Ex.Words_Of (Command);
+                        begin
+                           if Why /= "" and then not Refused.Contains (Command) then
+                              Refused.Append (Command);
+                              Say ("cli.init.check_refused",
+                                   [Loc.Named ("name", To_String (One.Label)),
+                                    Loc.Named ("value", Command), Loc.Named ("detail", Why)]);
+                              if Ex.Needs_Shell (Command) then
+                                 Fixes.Include ("scalar.execution.shell", "allowed");
+                              elsif not Words.Is_Empty then
+                                 Fixes.Include
+                                   ("set.execution.allowed+",
+                                    (if Fixes.Contains ("set.execution.allowed+")
+                                     then Fixes.Element ("set.execution.allowed+") & ","
+                                     else "")
+                                    & Ada.Directories.Simple_Name (Words.First_Element));
+                              end if;
+                           end if;
+                        end;
+                     end loop;
+                  end;
+               end if;
+            end;
+         end loop;
+
+         --  Asked where the template wants it, and at a terminal wherever it
+         --  writes into what is there or starts with a check it will refuse.
+         if (R.Get (Planned.Configuration, "scalar.init.confirm") in "yes" | "true" | "required"
+             or else (Interactive and then Has_Content and then Writes_In)
+             or else (Interactive and then not Refused.Is_Empty))
+           and then not Confirmed
+         then
+            if not Interactive then
+               Outcome := E.Make (E.Framework_Input_Missing);
+               E.Add_Text (Outcome, "name", "confirm");
+               Fail (Outcome);
+               Pres.Put_Note (Screen, "cli.next.confirm_init");
                return;
             end if;
-         end;
-      end if;
+            declare
+               Answers : Choosers.Choice_List;
+               Allow   : Unbounded_String;
+            begin
+               for Position in Fixes.Iterate loop
+                  Append (Allow, (if Allow = Null_Unbounded_String then "" else " ")
+                                 & Cf.Value_Maps.Key (Position) & "="
+                                 & Cf.Value_Maps.Element (Position));
+               end loop;
+               Choosers.Append
+                 (Answers, (Label      => To_Unbounded_String
+                                            (Pres.Message_Value (Screen, "cli.init.confirm.yes")),
+                            Tag        => Null_Unbounded_String,
+                            Details    => Null_Unbounded_String,
+                            Selectable => True));
+               if not Fixes.Is_Empty then
+                  Choosers.Append
+                    (Answers, (Label      => To_Unbounded_String
+                                               (Pres.Next_Step_Value
+                                                  (Screen, "cli.init.confirm.allow",
+                                                   [Loc.Named ("detail", To_String (Allow))])),
+                               Tag        => Null_Unbounded_String,
+                               Details    => Null_Unbounded_String,
+                               Selectable => True));
+               end if;
+               Choosers.Append
+                 (Answers, (Label      => To_Unbounded_String
+                                            (Pres.Message_Value (Screen, "cli.init.confirm.no")),
+                            Tag        => Null_Unbounded_String,
+                            Details    => Null_Unbounded_String,
+                            Selectable => True));
+               declare
+                  Picked : constant Natural :=
+                    Choosers.Choose (Screen, "cli.init.confirm", Answers,
+                                     Heading => To_String (Plan_Text)
+                                                & Pres.Message_Value (Screen, "cli.init.confirm"));
+               begin
+                  if Picked = 0 or else Picked = Choosers.Length (Answers) then
+                     Pres.Put_Note (Screen, "cli.init.cancelled");
+                     Status := E.Exit_Cancelled;
+                     return;
+                  end if;
+                  Allowing := Picked = 2 and then not Fixes.Is_Empty;
+               end;
+            end;
+         end if;
+      end;
 
       Cf.Initialize (Store, Directory, Planned, Done, Outcome);
       if E.Is_Error (Outcome) then
@@ -502,45 +659,25 @@ package body Model_Runner.CLI.Init is
          Pres.Put_Note (Screen, "cli.init.kept", [Loc.Named ("path", Kept)]);
       end loop;
 
-      --  A check the project's own policy will not run: said now, not at
-      --  the first verification that blocks on it.
-      declare
-         Rules : constant Model_Runner.Framework.Execution.Policy :=
-           Model_Runner.Framework.Execution.Policy_Of (Store);
-      begin
-         for Index in 1 .. R.Field_Count (Planned.Configuration) loop
-            declare
-               Name : constant String := R.Field_Name (Planned.Configuration, Index);
-            begin
-               if Ada.Strings.Fixed.Index (Name, "profile.") = Name'First then
-                  --  Each check as verification reads it, not the text
-                  --  it is written in.
-                  declare
-                     package Vf renames Model_Runner.Framework.Verification;
-                     Checks : constant Vf.Check_List :=
-                       Vf.Parse_Profile (R.Get (Planned.Configuration, Name));
-                  begin
-                     for Index in 1 .. Vf.Length (Checks) loop
-                        declare
-                           One     : constant Vf.Check := Vf.Element (Checks, Index);
-                           Command : constant String := To_String (One.Command);
-                           Why     : constant String :=
-                             (if Command = "" then ""
-                              else Model_Runner.Framework.Execution.Refusal (Rules, Command));
-                        begin
-                           if Why /= "" then
-                              Pres.Put_Note
-                                (Screen, "cli.init.check_refused",
-                                 [Loc.Named ("name", To_String (One.Label)),
-                                  Loc.Named ("value", Command), Loc.Named ("detail", Why)]);
-                           end if;
-                        end;
-                     end loop;
-                  end;
-               end if;
-            end;
-         end loop;
-      end;
+      --  What the checks need, where that was asked for with the plan.
+      if Allowing then
+         declare
+            Change   : Cf.Change_Plan;
+            Revision : Natural;
+         begin
+            Cf.Plan_Change (Store, Fixes, Change, Outcome);
+            if E.Is_Ok (Outcome) then
+               Cf.Reconfigure (Store, Change, Revision, Outcome);
+            end if;
+            if E.Is_Error (Outcome) then
+               Pres.Report (Screen, Outcome);
+            else
+               for Line of Change.Changed loop
+                  Pres.Put_Message (Screen, "cli.init.allowed", [Loc.Named ("detail", Line)]);
+               end loop;
+            end if;
+         end;
+      end if;
 
       --  What of the state goes into the repository, as the policy says.
       declare

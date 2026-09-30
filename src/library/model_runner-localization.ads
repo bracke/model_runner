@@ -1,4 +1,4 @@
-private with Ada.Strings.Unbounded;
+with Ada.Strings.Unbounded;
 private with Messages.Runtime;
 
 with Model_Runner.Errors;
@@ -34,10 +34,12 @@ package Model_Runner.Localization is
    --  A resolved message catalog.
    type Catalog is tagged limited private;
 
-   --  A named argument for a message.
+   --  A named argument for a message. Its value is whole whatever its
+   --  length: a note is a message given as another's argument, and a next
+   --  step cut short is one that cannot be followed.
    type Argument is record
       Name  : Model_Runner.Text.Bounded;
-      Value : Model_Runner.Text.Bounded;
+      Value : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    type Argument_List is array (Positive range <>) of Argument;

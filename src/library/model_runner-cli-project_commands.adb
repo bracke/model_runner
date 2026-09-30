@@ -153,6 +153,12 @@ package body Model_Runner.CLI.Project_Commands is
 
       --  The run's own stop, asked for when its work is ended elsewhere.
       Stop  : Model_Runner.Cancellation.Token_Reference := null;
+
+      --  The agent the run started with, and the last answer shown: a
+      --  helper's lines are marked with its identifier, and an answer the
+      --  same as the one before is not written out again.
+      Root  : Unbounded_String;
+      Shown : Unbounded_String;
    end record;
 
    overriding procedure On_Call
@@ -160,6 +166,23 @@ package body Model_Runner.CLI.Project_Commands is
 
    overriding procedure On_Result
      (Self : in out Watch; Named : String; Result : String);
+
+   --  Whose line it is: nothing for the agent the run started with, the
+   --  helper's identifier for a helper's.
+   function Whose (Self : in out Watch) return String is
+   begin
+      if Self.Host = null then
+         return "";
+      end if;
+      declare
+         Now : constant String := Wk.Current (Self.Host.all);
+      begin
+         if Self.Root = Null_Unbounded_String then
+            Self.Root := To_Unbounded_String (Now);
+         end if;
+         return (if Now = To_String (Self.Root) or else Now = "" then "" else Now & " ");
+      end;
+   end Whose;
 
    overriding procedure On_Call
      (Self : in out Watch; Named : String; Arguments : String) is
@@ -171,13 +194,19 @@ package body Model_Runner.CLI.Project_Commands is
          Self.Stop.Request;
       end if;
       Self.Asked.Append (Arguments);
-      Pres.Put_Tool_Call (Self.Screen.all, Named, Arguments);
+      Pres.Put_Tool_Call (Self.Screen.all, Whose (Self) & Named, Arguments);
    end On_Call;
 
    overriding procedure On_Result
      (Self : in out Watch; Named : String; Result : String) is
+      Label : constant String := Whose (Self);
    begin
-      Pres.Put_Tool_Result (Self.Screen.all, Result);
+      if Label & Result = To_String (Self.Shown) then
+         Pres.Put_Tool_Result (Self.Screen.all, Label & Pres.Message_Value (Self.Screen.all, "cli.agent.same_again"));
+      else
+         Pres.Put_Tool_Result (Self.Screen.all, Label & Result);
+      end if;
+      Self.Shown := To_Unbounded_String (Label & Result);
       if Self.Host /= null then
          Self.Host.Note_Call
            (Named, (if Self.Asked.Is_Empty then "" else Self.Asked.First_Element), Result);
@@ -201,6 +230,46 @@ package body Model_Runner.CLI.Project_Commands is
    function Strings (Names : String; Required : String) return String
    is ("{""type"": ""object"", ""properties"": {" & Names & "}, ""required"": ["
        & Required & "]}");
+
+   --  The roles the project gives permissions to -- map.permission.role.R
+   --  -- as the helper's role is offered: one of them, or anything, where
+   --  the project names none.
+   function Role_Property return String is
+      Store  : S.Store;
+      Status : E.Error_Info;
+      Config : R.Item;
+      Roles  : Names.Vector;
+      Listed : Unbounded_String;
+   begin
+      if S.Is_Initialized (".") then
+         S.Open_To_Read (Store, ".", Status);
+         if E.Is_Ok (Status) then
+            Model_Runner.Framework.Configurations.Read (Store, Config, Status);
+         end if;
+         S.Close (Store);
+      end if;
+      if E.Is_Ok (Status) then
+         for Index in 1 .. R.Field_Count (Config) loop
+            declare
+               Field : constant String := R.Field_Name (Config, Index);
+               Rest  : constant String :=
+                 (if Field'Length > 20 and then Field (Field'First .. Field'First + 19)
+                                               = "map.permission.role."
+                  then Field (Field'First + 20 .. Field'Last) else "");
+               Dot   : constant Natural := Ada.Strings.Fixed.Index (Rest, ".");
+               Role  : constant String := (if Dot = 0 then Rest else Rest (Rest'First .. Dot - 1));
+            begin
+               if Role /= "" and then not Roles.Contains (Role) then
+                  Roles.Append (Role);
+                  Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ")
+                                  & '"' & Role & '"');
+               end if;
+            end;
+         end loop;
+      end if;
+      return (if Roles.Is_Empty then """role"": {""type"": ""string""}, "
+              else """role"": {""type"": ""string"", ""enum"": [" & To_String (Listed) & "]}, ");
+   end Role_Property;
 
    --  The tools an agent is offered: reading always, writing and handing
    --  work to a helper where it may.
@@ -233,10 +302,11 @@ package body Model_Runner.CLI.Project_Commands is
                        & " a piece to write -- to a helper that starts with no"
                        & " memory of this conversation and reports back only its"
                        & " result. Say everything it needs in task. role names"
-                       & " what it is for; need is required (the default),"
+                       & " what it is for, and gives it that role's permissions where the"
+                       & " project names the role; need is required (the default),"
                        & " optional or advisory.",
                        Strings ("""task"": {""type"": ""string""}, "
-                                & """role"": {""type"": ""string""}, "
+                                & Role_Property
                                 & """need"": {""type"": ""string"", ""enum"": "
                                 & "[""required"", ""optional"", ""advisory""]}",
                                 """task"""))
@@ -654,7 +724,7 @@ package body Model_Runner.CLI.Project_Commands is
    --  An issue's text with its own identifier where it says ID: it cannot
    --  hold that itself, as it is named by what it says.
    function With_Id (Id, Summary : String) return String is
-      Mark : constant Natural := Ada.Strings.Fixed.Index (Summary, "result dismiss ID");
+      Mark : constant Natural := Ada.Strings.Fixed.Index (Summary, "/result dismiss ID");
    begin
       return (if Mark = 0 then Summary
               else Summary (Summary'First .. Mark + 14) & Id
@@ -910,6 +980,28 @@ package body Model_Runner.CLI.Project_Commands is
       for Line of Said loop
          Pres.Put_Note (Screen, "cli.project.recovered", [Loc.Named ("detail", Line)]);
       end loop;
+
+      --  Work finished and waiting on a person to be taken in: said as the
+      --  session opens, not left for /state to find.
+      if E.Is_Ok (Status) then
+         declare
+            Waiting : Unbounded_String;
+            Count   : Natural := 0;
+         begin
+            for Id of Tk.List (Store, "verification") loop
+               if Model_Runner.Framework.Workspaces.Active_For (Store, Id) /= "" then
+                  Count := Count + 1;
+                  Append (Waiting, (if Waiting = Null_Unbounded_String then "" else ", ")
+                                   & "/task integrate " & Id);
+               end if;
+            end loop;
+            if Count > 0 then
+               Pres.Put_Note (Screen, "cli.project.opening_waiting",
+                              [Loc.Named ("count", Image (Count)),
+                               Loc.Named ("detail", To_String (Waiting))]);
+            end if;
+         end;
+      end if;
       S.Close (Store);
    end Recover_Here;
 
@@ -1276,6 +1368,20 @@ package body Model_Runner.CLI.Project_Commands is
          end;
          Line_Of ("cli.project.agents_active",
                   Image (Model_Runner.Framework.Agents.Active_Count (Store)));
+         --  What confines every agent the session starts, where anything does.
+         if Model_Runner.Framework.Permissions.Sandbox_Source /= "" then
+            declare
+               Shown : Unbounded_String;
+            begin
+               for Part of Model_Runner.Framework.Lines_Of
+                 (Model_Runner.Framework.Permissions.Image (Model_Runner.Framework.Permissions.Sandbox))
+               loop
+                  Append (Shown, (if Shown = Null_Unbounded_String then "" else "; ") & Part);
+               end loop;
+               Line_Of ("cli.project.sandbox",
+                        Model_Runner.Framework.Permissions.Sandbox_Source & ": " & To_String (Shown));
+            end;
+         end if;
          --  What waits on a person besides tasks: issues not yet dealt
          --  with, and what does not hold together.
          declare
@@ -1330,9 +1436,12 @@ package body Model_Runner.CLI.Project_Commands is
                   S.Read (Store, Model_Runner.Framework.Verification_Area, Name, Held, Read);
                   --  A test is a profile that runs tests: a build in the
                   --  full verification is not one.
+                  --  And on the project: a check run in a task's workspace
+                  --  tested that workspace, not the project.
                   if E.Is_Ok (Read) and then Full.Contains (R.Get (Held, "profile"))
                     and then R.Get (Config, "scalar.profile_capability." & R.Get (Held, "profile"))
                              = "run_tests"
+                    and then R.Get (Held, "workspace") = ""
                   then
                      Latest := To_Unbounded_String (Name);
                      Result := To_Unbounded_String
@@ -1342,6 +1451,38 @@ package body Model_Runner.CLI.Project_Commands is
             end loop;
             if Latest /= Null_Unbounded_String then
                Line_Of ("cli.project.last_full", To_String (Latest) & " " & To_String (Result));
+            end if;
+         end;
+
+         --  The step that comes next, as the state stands: work to take in,
+         --  a ready task, candidates to decide, or how to begin.
+         declare
+            To_Take   : Unbounded_String;
+            Ready_One : Unbounded_String;
+         begin
+            for Id of Tk.List (Store, "verification") loop
+               if To_Take = Null_Unbounded_String
+                 and then Model_Runner.Framework.Workspaces.Active_For (Store, Id) /= ""
+               then
+                  To_Take := To_Unbounded_String (Id);
+               end if;
+            end loop;
+            for Id of Tk.List (Store, "accepted") loop
+               if Ready_One = Null_Unbounded_String and then Tk.Ready (Store, Id).Ready then
+                  Ready_One := To_Unbounded_String (Id);
+               end if;
+            end loop;
+            if To_Take /= Null_Unbounded_String then
+               Pres.Put_Note (Screen, "cli.next.integrate", [Loc.Named ("name", To_String (To_Take))]);
+            elsif Ready_One /= Null_Unbounded_String then
+               Pres.Put_Note (Screen, "cli.next.work", [Loc.Named ("name", To_String (Ready_One))]);
+            elsif not Tk.List (Store, "candidate").Is_Empty then
+               Pres.Put_Note (Screen, "cli.next.accept",
+                              [Loc.Named ("count", Count ("candidate"))]);
+            elsif not Nt.List (Store, Nt.Requirement, Nt.First_State (Nt.Requirement)).Is_Empty then
+               Pres.Put_Note (Screen, "cli.next.bootstrap");
+            elsif Tk.List (Store).Is_Empty and then Nt.List (Store, Nt.Requirement).Is_Empty then
+               Pres.Put_Note (Screen, "cli.next.init");
             end if;
          end;
       end State;
@@ -1401,7 +1542,10 @@ package body Model_Runner.CLI.Project_Commands is
                if (Name'Length < 5 or else Name (Name'First .. Name'First + 4) /= "file.")
                  and then (Argument (1) = "" or else Ada.Strings.Fixed.Index (Name, Argument (1)) > 0)
                then
-                  Field (Name, Shown);
+                  --  An input is what /init was given: the settings it made
+                  --  may have been changed since, and are shown as they are.
+                  Field (Name, (if Name'Length > 6 and then Name (Name'First .. Name'First + 5) = "input."
+                                then Shown & " (given at /init)" else Shown));
                end if;
             end;
          end loop;
@@ -1469,19 +1613,30 @@ package body Model_Runner.CLI.Project_Commands is
             for Known of Model_Runner.Framework.Configurations.Known_Names loop
                if Ada.Strings.Fixed.Index (Known, Argument (1)) > 0 and then not R.Has (Config, Known)
                then
-                  --  Not set, and what that means where the harness says.
+                  --  Not set, and what that means. The agents' bounds hold
+                  --  with the project's create_children grant below them,
+                  --  and the lower of the two is what an agent meets.
                   declare
-                     Defaults : constant Model_Runner.Framework.Agents.Limits :=
-                       (others => <>);
-                     Default  : constant String :=
-                       (if Known = "scalar.agents.max_depth" then Image (Defaults.Max_Depth)
-                        elsif Known = "scalar.agents.max_children" then Image (Defaults.Max_Children)
-                        elsif Known = "scalar.agents.max_active" then Image (Defaults.Max_Active)
-                        elsif Known = "scalar.agents.token_budget" then Image (Defaults.Token_Budget)
-                        else "");
+                     Default : constant String :=
+                       Model_Runner.Framework.Configurations.Default_Of (Known);
+                     package Pm renames Model_Runner.Framework.Permissions;
+                     Grant   : constant Pm.Permission_Set :=
+                       Pm.Effective (Store, "", "", Within_Sandbox => False);
+                     Granted : constant Natural :=
+                       (if Known = "scalar.agents.max_children"
+                        then Grant (Pm.Create_Children).Max_Children
+                        elsif Known = "scalar.agents.max_depth"
+                        then Grant (Pm.Create_Children).Max_Depth
+                        else Natural'Last);
                   begin
-                     Field (Known, (if Default = "" then "(not set: the harness's default)"
-                                    else "(not set: " & Default & " by default)"));
+                     Field (Known,
+                            (if Default = "" then "(not set: nothing holds it)"
+                             else "(not set: " & Default
+                                  & (if Granted /= Natural'Last and then Grant (Pm.Create_Children).Granted
+                                     then "; the project's create_children grants "
+                                          & Image (Granted) & ", which is what an agent meets"
+                                     else "")
+                                  & ")"));
                   end;
                end if;
             end loop;
@@ -1521,7 +1676,7 @@ package body Model_Runner.CLI.Project_Commands is
                if Upper (Upper'First .. Dash - 1) in "AG" | "INV" | "VER"
                  and then Rest'Length in 1 .. 5 and then (for all C of Rest => C in '0' .. '9')
                then
-                  return Upper (Upper'First .. Dash) & (1 .. 6 - Rest'Length => '0') & Rest;
+                  return Upper (Upper'First .. Dash) & [1 .. 6 - Rest'Length => '0'] & Rest;
                end if;
                return Upper;
             end;
@@ -1644,7 +1799,7 @@ package body Model_Runner.CLI.Project_Commands is
                Rs.Read (Store, Named, Got, Read, With_Payload => False);
                if Named = "" then
                   Outcome := E.Make (E.Framework_Input_Missing);
-                  E.Add_Text (Outcome, "name", "the issue to dismiss: result dismiss RES-ID, as result"
+                  E.Add_Text (Outcome, "name", "the issue to dismiss: /result dismiss RES-ID, as result"
                               & " lists them");
                   Pres.Report (Screen, Outcome);
                   return;
@@ -1660,7 +1815,7 @@ package body Model_Runner.CLI.Project_Commands is
                   Outcome := E.Make (E.Framework_Input_Invalid);
                   E.Add_Text (Outcome, "name", "the issue to dismiss");
                   E.Add_Text (Outcome, "value", Named);
-                  E.Add_Text (Outcome, "detail", Named & " is not an issue; result lists the issues");
+                  E.Add_Text (Outcome, "detail", Named & " is not an issue; /result lists the issues");
                   Pres.Report (Screen, Outcome);
                   return;
                elsif Named = "" or else E.Is_Error (Read) then
@@ -1738,7 +1893,7 @@ package body Model_Runner.CLI.Project_Commands is
             Pres.Put_Note
               (Screen, "cli.result.elsewhere",
                [Loc.Named ("name", Id),
-                Loc.Named ("value", (if Starts ("TASK-") then "task show " & Id & " and task audit " & Id
+                Loc.Named ("value", (if Starts ("TASK-") then "/task show " & Id & " and /task audit " & Id
                                      elsif Starts ("REQ-") then "req " & Id
                                      elsif Starts ("DEC-") then "decision " & Id
                                      else "spec " & Id))]);
@@ -1913,7 +2068,7 @@ package body Model_Runner.CLI.Project_Commands is
          --  together, found without a model.
          if Argument (1) = "consistency" and then Argument (2) /= "" then
             Outcome := E.Make (E.Framework_Input_Invalid);
-            E.Add_Text (Outcome, "name", "check consistency");
+            E.Add_Text (Outcome, "name", "/check consistency");
             E.Add_Text (Outcome, "value", Argument (2));
             E.Add_Text (Outcome, "detail", "it only lists what does not hold together; nothing"
                         & " follows it");
@@ -2321,15 +2476,43 @@ package body Model_Runner.CLI.Project_Commands is
          Read     : E.Error_Info;
          Revision : Natural;
       begin
+         --  Nothing named, or help asked for: how it is used.
+         if Natural (All_Words.Length) < 2
+           or else All_Words (2) in "--help" | "-h" | "help"
+         then
+            Pres.Put_Message (Screen, "cli.project.reconfigure.usage");
+            return;
+         end if;
+
          --  NAME=VALUE, the value running on to the next NAME=: a value of
-         --  several words needs no quotes.
+         --  several words needs no quotes. NAME = VALUE, spaced as
+         --  /instruct takes it, is the same.
          declare
             Name  : Unbounded_String;
             Value : Unbounded_String;
+            Words_Given : Names.Vector;
          begin
             for Index in 2 .. Natural (All_Words.Length) loop
                declare
-                  Part  : constant String := All_Words (Index);
+                  Part : constant String := All_Words (Index);
+               begin
+                  if not Words_Given.Is_Empty
+                    and then (Part = "=" or else Part (Part'First) = '='
+                              or else Words_Given.Last_Element (Words_Given.Last_Element'Last) = '=')
+                    and then Ada.Strings.Fixed.Index (Words_Given.Last_Element, "=")
+                               in 0 | Words_Given.Last_Element'Last
+                    and then not (Part /= "=" and then Part (Part'First) /= '='
+                                  and then Ada.Strings.Fixed.Index (Part, "=") > 0)
+                  then
+                     Words_Given.Replace_Element
+                       (Words_Given.Last_Index, Words_Given.Last_Element & Part);
+                  else
+                     Words_Given.Append (Part);
+                  end if;
+               end;
+            end loop;
+            for Part of Words_Given loop
+               declare
                   Equal : constant Natural := Ada.Strings.Fixed.Index (Part, "=");
                begin
                   if Part = "confirm=yes" then
@@ -2355,7 +2538,7 @@ package body Model_Runner.CLI.Project_Commands is
                      E.Add_Text (Read, "value",
                                  (if Part (Part'First) = '='
                                   then "a setting is named before its =, as NAME=VALUE"
-                                  else "a setting is changed as " & Part & "=VALUE; config "
+                                  else "a setting is changed as " & Part & "=VALUE; /config "
                                        & Part & " shows what it is"));
                      Pres.Report (Screen, Read);
                      return;
@@ -2448,6 +2631,39 @@ package body Model_Runner.CLI.Project_Commands is
             end;
          end if;
 
+         --  What it leaves without a place, said before it is asked: open
+         --  tasks in a component the change takes away.
+         Known_Before := Tk.Components (Store);
+         declare
+            Known_After : constant Names.Vector := Tk.Components_Of (Planned.After);
+            Listed      : Unbounded_String;
+         begin
+            for One of Known_After loop
+               Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ") & One);
+            end loop;
+            for Old of Known_Before loop
+               if not Known_After.Contains (Old) then
+                  declare
+                     Count : Natural := 0;
+                  begin
+                     for Id of Tk.List (Store) loop
+                        if Tk.Component_Of_Task (Store, Id) = Old
+                          and then Tk.State_Of (Store, Id) not in "complete" | "cancelled" | "rejected"
+                        then
+                           Count := Count + 1;
+                        end if;
+                     end loop;
+                     if Count > 0 then
+                        Pres.Put_Note
+                          (Screen, "cli.project.component_gone",
+                           [Loc.Named ("count", Image (Count)), Loc.Named ("name", Old),
+                            Loc.Named ("value", To_String (Listed))]);
+                     end if;
+                  end;
+               end if;
+            end loop;
+         end;
+
          --  Confirmed by confirm=yes among the words, or asked -- but only
          --  on a terminal: a script's next line is not an answer.
          if All_Words.Contains ("confirm=yes") then
@@ -2479,7 +2695,6 @@ package body Model_Runner.CLI.Project_Commands is
             end;
          end if;
 
-         Known_Before := Tk.Components (Store);
          declare
             Change  : S.Transaction;
             Moved   : Names.Vector;
@@ -2517,67 +2732,15 @@ package body Model_Runner.CLI.Project_Commands is
                    Loc.Named ("value", Nt.State_Of (Store, Nt.Requirement, Requirement))]);
             end loop;
          end;
-         --  Components changed: open tasks in one that is no longer the
-         --  project's are named, a component at a time, with the way on;
-         --  one declared with no roots is told where its files are said.
+         --  Components changed: one declared with no roots is told where
+         --  its files are said.
          if (for some Name of Planned.Changed =>
                Ada.Strings.Fixed.Index (Name, "map.component.") = Name'First
                or else Ada.Strings.Fixed.Index (Name, "set.components") = Name'First)
          then
             declare
                Known  : constant Names.Vector := Tk.Components (Store);
-               Former : Names.Vector;
-
-               function Joined (Items : Names.Vector) return String is
-                  Text : Unbounded_String;
-               begin
-                  for One of Items loop
-                     Append (Text, (if Text = Null_Unbounded_String then "" else ", ") & One);
-                  end loop;
-                  return To_String (Text);
-               end Joined;
             begin
-               for Id of Tk.List (Store) loop
-                  declare
-                     Defined : R.Item;
-                     Got     : E.Error_Info;
-                  begin
-                     Tk.Definition (Store, Id, Defined, Got);
-                     if E.Is_Ok (Got) and then R.Get (Defined, "component") /= ""
-                       and then not Known.Contains (R.Get (Defined, "component"))
-                       and then not Former.Contains (R.Get (Defined, "component"))
-                       --  Gone with this change, not said again at each one.
-                       and then Known_Before.Contains (R.Get (Defined, "component"))
-                       and then Tk.State_Of (Store, Id) not in "complete" | "cancelled" | "rejected"
-                     then
-                        Former.Append (R.Get (Defined, "component"));
-                     end if;
-                  end;
-               end loop;
-               for Old of Former loop
-                  declare
-                     Count : Natural := 0;
-                  begin
-                     for Id of Tk.List (Store) loop
-                        declare
-                           Defined : R.Item;
-                           Got     : E.Error_Info;
-                        begin
-                           Tk.Definition (Store, Id, Defined, Got);
-                           if E.Is_Ok (Got) and then R.Get (Defined, "component") = Old
-                             and then Tk.State_Of (Store, Id)
-                                        not in "complete" | "cancelled" | "rejected"
-                           then
-                              Count := Count + 1;
-                           end if;
-                        end;
-                     end loop;
-                     Pres.Put_Note
-                       (Screen, "cli.project.component_gone",
-                        [Loc.Named ("count", Image (Count)), Loc.Named ("name", Old),
-                         Loc.Named ("value", Joined (Known))]);
-                  end;
-               end loop;
                --  Roots within another's: said, with whose the files are.
                for Name of Known loop
                   for Other of Known loop
@@ -2729,7 +2892,44 @@ package body Model_Runner.CLI.Project_Commands is
             Over      : constant String :=
               (if Overrides > Equals then Ada.Strings.Fixed.Trim (Text (Overrides + 12 .. Text'Last), Ada.Strings.Both)
                else "");
+            --  The settings the subject may name: the configuration's, by
+            --  their whole names or without their kind, and those the
+            --  harness reads.
+            function Known_Subjects return Names.Vector is
+               Config : R.Item;
+               Read   : E.Error_Info;
+               Result : Names.Vector;
+
+               procedure Add (Name : String) is
+                  Dot : constant Natural := Ada.Strings.Fixed.Index (Name, ".");
+               begin
+                  if not Result.Contains (Name) then
+                     Result.Append (Name);
+                  end if;
+                  if Dot > 0 and then not Result.Contains (Name (Dot + 1 .. Name'Last)) then
+                     Result.Append (Name (Dot + 1 .. Name'Last));
+                  end if;
+               end Add;
+            begin
+               Model_Runner.Framework.Configurations.Read (Store, Config, Read);
+               for Index in 1 .. R.Field_Count (Config) loop
+                  Add (R.Field_Name (Config, Index));
+               end loop;
+               for Name of Model_Runner.Framework.Configurations.Known_Names loop
+                  Add (Name);
+               end loop;
+               return Result;
+            end Known_Subjects;
          begin
+            --  An instruction is SUBJECT = VALUE: words alone name nothing it
+            --  could stand above.
+            if Equals = 0 or else Subject = "" then
+               Outcome := E.Make (E.Framework_Input_Missing);
+               E.Add_Text (Outcome, "name", "the subject: an instruction is SUBJECT = VALUE, as"
+                           & " /instruct build.command = alr build --release");
+               Pres.Report (Screen, Outcome);
+               return;
+            end if;
             Au.Instruct (Store, Change, Subject, Value, Over,
                          Model_Runner.Framework.Transitions.User, Id, Outcome);
             if E.Is_Ok (Outcome) then
@@ -2741,6 +2941,22 @@ package body Model_Runner.CLI.Project_Commands is
                Pres.Put_Message (Screen, "cli.task.created",
                                  [Loc.Named ("name", To_String (Id)),
                                   Loc.Named ("detail", Subject & " = " & Value)]);
+               --  What it does and does not do: agents are told it above
+               --  every other source; a setting it names is not changed by it.
+               declare
+                  Known : constant Names.Vector := Known_Subjects;
+                  Near  : constant String := Model_Runner.Framework.Nearest (Subject, Known);
+               begin
+                  if not Known.Contains (Subject)
+                    and then Ada.Strings.Fixed.Index (Subject, "permission.") /= Subject'First
+                  then
+                     Pres.Put_Note (Screen, "cli.project.instruct.unknown",
+                                    [Loc.Named ("name", Subject),
+                                     Loc.Named ("detail", (if Near = "" then ""
+                                                           else "; did you mean " & Near & "?"))]);
+                  end if;
+                  Pres.Put_Note (Screen, "cli.project.instruct.advisory", [Loc.Named ("name", Subject)]);
+               end;
             end if;
          end;
       end Instruct;
@@ -2753,6 +2969,31 @@ package body Model_Runner.CLI.Project_Commands is
          Listed  : Unbounded_String;
       begin
          Waiting.Append (Intent_Waiting);
+
+         --  all: every one waiting -- the registers' first, as accepting a
+         --  requirement may make tasks, then the tasks that were waiting.
+         if Ada.Characters.Handling.To_Lower (Argument (1)) = "all" then
+            if Waiting.Is_Empty then
+               Pres.Put_Note (Screen, "cli.project.no_pending");
+               return;
+            end if;
+            for Which of Intent_Waiting loop
+               Model_Runner.CLI.Intents.Decide (Store, Which, Word = "/accept", Screen);
+            end loop;
+            if not Tasks_Waiting.Is_Empty then
+               declare
+                  Joined : Unbounded_String;
+               begin
+                  for Id of Tasks_Waiting loop
+                     Append (Joined, (if Joined = Null_Unbounded_String then "" else " ") & Id);
+                  end loop;
+                  Command.Action := T.To_Bounded (if Word = "/accept" then "accept" else "reject");
+                  Command.Action_Argument := T.To_Bounded (To_String (Joined));
+                  To_Task := True;
+               end;
+            end if;
+            return;
+         end if;
 
          --  One named: that one, and only if it waits to be decided.
          if Argument (1) /= "" then
@@ -2787,9 +3028,9 @@ package body Model_Runner.CLI.Project_Commands is
                   Got     : E.Error_Info;
                begin
                   Model_Runner.Framework.Tasks.Definition (Store, Id, Defined, Got);
-                  Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ")
+                  Append (Listed, (if Listed = Null_Unbounded_String then "" else [1 => ASCII.LF])
                           & "/task " & (if Word = "/accept" then "accept " else "reject ") & Id
-                          & " (" & R.Get (Defined, "title") & ")");
+                          & "  (" & R.Get (Defined, "title") & ")");
                end;
             end loop;
             for Which of Intent_Waiting loop
@@ -2797,8 +3038,8 @@ package body Model_Runner.CLI.Project_Commands is
                   Colon : constant Natural := Ada.Strings.Fixed.Index (Which, ":");
                   Kind  : constant String := Which (Which'First .. Colon - 1);
                begin
-                  Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ")
-                          & (if Pres.In_Session (Screen) then "/" else "")
+                  Append (Listed, (if Listed = Null_Unbounded_String then "" else [1 => ASCII.LF])
+                          & "/"
                           & (if Kind = "requirement" then "req"
                              elsif Kind = "decision" then "decision" else "spec")
                           & (if Word = "/accept" then " accept " else " reject ")
@@ -2809,11 +3050,14 @@ package body Model_Runner.CLI.Project_Commands is
             declare
                Which_One : E.Error_Info := E.Make (E.Framework_Input_Missing);
             begin
-               E.Add_Text (Which_One, "name", "the one to decide");
+               E.Add_Text (Which_One, "name", "which one to decide -- several are waiting; name one, or /accept all");
                Pres.Report (Screen, Which_One);
             end;
-            Pres.Put_Message
-              (Screen, "cli.project.pending_many", [Loc.Named ("detail", To_String (Listed))]);
+            --  Each on its own line, as the command that decides it.
+            Pres.Put_Message (Screen, "cli.project.pending_many");
+            for Line of Model_Runner.Framework.Lines_Of (To_String (Listed)) loop
+               Pres.Put_Message (Screen, "cli.project.pending_one", [Loc.Named ("detail", Line)]);
+            end loop;
          elsif Intent_Waiting.Is_Empty then
             Command.Action := T.To_Bounded (if Word = "/accept" then "accept" else "reject");
             Command.Action_Argument := T.To_Bounded (Waiting.First_Element);
@@ -2935,10 +3179,81 @@ package body Model_Runner.CLI.Project_Commands is
          if Argument (1) = "" then
             Pres.Put_Note (Screen, "cli.project.nothing_running");
          else
+            --  Asked first at a terminal: a cancelled task is ended, and its
+            --  agent stopped.
+            if Model_Runner.CLI.Choosers.Is_Available (Screen) and then Argument (2) /= "yes" then
+               declare
+                  Store  : S.Store;
+                  Read   : E.Error_Info;
+                  Titled : Unbounded_String;
+               begin
+                  if S.Is_Initialized (Here) then
+                     S.Open_To_Read (Store, Here, Read);
+                     if E.Is_Ok (Read) and then Tk.State_Of (Store, Argument (1)) /= "" then
+                        declare
+                           Defined : R.Item;
+                        begin
+                           Tk.Definition (Store, Argument (1), Defined, Read);
+                           Titled := To_Unbounded_String
+                             (R.Get (Defined, "title") & ", " & Tk.State_Of (Store, Argument (1)));
+                        end;
+                     end if;
+                     S.Close (Store);
+                  end if;
+                  Pres.Put_Message (Screen, "cli.project.cancel.confirm",
+                                    [Loc.Named ("name", Argument (1)),
+                                     Loc.Named ("detail", To_String (Titled))]);
+                  declare
+                     Answer : constant String :=
+                       Ada.Characters.Handling.To_Lower
+                         (Ada.Strings.Fixed.Trim (Ada.Text_IO.Get_Line, Ada.Strings.Both));
+                  begin
+                     if Answer not in "y" | "yes" | "j" | "ja" then
+                        Pres.Put_Message (Screen, "cli.project.cancel.kept",
+                                          [Loc.Named ("name", Argument (1))]);
+                        return;
+                     end if;
+                  exception
+                     when Ada.Text_IO.End_Error =>
+                        return;
+                  end;
+               end;
+            end if;
             Command.Action := T.To_Bounded ("cancel");
-            Command.Action_Argument := T.To_Bounded (Argument (1));
+            Command.Action_Argument := T.To_Bounded
+              (Argument (1) & (if Argument (2) = "anyway" then " anyway" else ""));
             Model_Runner.CLI.Tasks.Run (Command, Screen, Status);
             Last_Status := Status;
+
+            --  What its work left in the project, named: cancelling ends
+            --  the task, not what it wrote.
+            declare
+               Store : S.Store;
+               Read  : E.Error_Info;
+               Held  : R.Item;
+            begin
+               if S.Is_Initialized (Here) then
+                  S.Open_To_Read (Store, Here, Read);
+                  if E.Is_Ok (Read) and then Tk.State_Of (Store, Argument (1)) = "cancelled" then
+                     S.Read (Store, Model_Runner.Framework.Tasks_Area, Argument (1) & ".state", Held, Read);
+                     if E.Is_Ok (Read) and then R.Get (Held, "changed_files") /= ""
+                       and then R.Get (Held, "current_workspace") = ""
+                     then
+                        declare
+                           Files : Unbounded_String;
+                        begin
+                           for Path of Model_Runner.Framework.Lines_Of (R.Get (Held, "changed_files")) loop
+                              Append (Files, (if Files = Null_Unbounded_String then "" else ", ") & Path);
+                           end loop;
+                           Pres.Put_Note (Screen, "cli.project.cancel.left",
+                                          [Loc.Named ("name", Argument (1)),
+                                           Loc.Named ("detail", To_String (Files))]);
+                        end;
+                     end if;
+                  end if;
+                  S.Close (Store);
+               end if;
+            end;
          end if;
 
       elsif Word = "/work" then
@@ -2958,6 +3273,14 @@ package body Model_Runner.CLI.Project_Commands is
          Last_Status := Status;
 
       elsif Word = "/state" then
+         if Argument (1) /= "" then
+            --  It takes nothing: a word after it is a mistake to say.
+            Outcome := E.Make (E.CLI_Unexpected_Operand);
+            E.Add_Text (Outcome, "value", Rest (1) & "; /state takes no argument");
+            Pres.Report (Screen, Outcome);
+            Last_Status := E.Exit_Status (Outcome);
+            return;
+         end if;
          With_Store (State'Access);
       elsif Word = "/config" then
          With_Store (Show_Config'Access);

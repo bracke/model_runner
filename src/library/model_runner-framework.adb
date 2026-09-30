@@ -1,4 +1,6 @@
 with Ada.Calendar.Formatting;
+with Ada.Characters.Handling;
+with Ada.Strings.Unbounded;
 
 package body Model_Runner.Framework is
 
@@ -87,6 +89,55 @@ package body Model_Runner.Framework is
       end loop;
       return Result;
    end Lines_Of;
+
+   -------------
+   -- Nearest --
+   -------------
+
+   function Nearest (Word : String; Among : Name_Lists.Vector) return String is
+      use Ada.Strings.Unbounded;
+      function Lower (Text : String) return String
+        renames Ada.Characters.Handling.To_Lower;
+
+      --  How many letters apart two names are: added, taken out or changed.
+      function Distance (Left, Right : String) return Natural is
+         Row : array (0 .. Right'Length) of Natural;
+         Before, Diagonal : Natural;
+      begin
+         for J in Row'Range loop
+            Row (J) := J;
+         end loop;
+         for I in 1 .. Left'Length loop
+            Diagonal := Row (0);
+            Row (0) := I;
+            for J in 1 .. Right'Length loop
+               Before := Row (J);
+               Row (J) := Natural'Min
+                 (Natural'Min (Row (J) + 1, Row (J - 1) + 1),
+                  Diagonal + (if Left (Left'First + I - 1) = Right (Right'First + J - 1) then 0 else 1));
+               Diagonal := Before;
+            end loop;
+         end loop;
+         return Row (Right'Length);
+      end Distance;
+
+      Best  : Natural := Natural'Last;
+      Found : Unbounded_String;
+      --  A letter or two, and no more than a third of the word.
+      Limit : constant Natural := Natural'Max (1, Natural'Min (2, Word'Length / 3));
+   begin
+      for Name of Among loop
+         declare
+            Apart : constant Natural := Distance (Lower (Word), Lower (Name));
+         begin
+            if Apart <= Limit and then Apart < Best and then Lower (Word) /= Lower (Name) then
+               Best := Apart;
+               Found := To_Unbounded_String (Name);
+            end if;
+         end;
+      end loop;
+      return To_String (Found);
+   end Nearest;
 
    ---------------
    -- Timestamp --

@@ -8634,9 +8634,7 @@ package body Tests.Framework_Cases is
          Model_Runner.Presentation.Put_Note
            (Screen, "cli.next.retry", [Model_Runner.Localization.Named ("name", "TASK-7")]);
          Model_Runner.Presentation.Put_Aside (Screen, "cli.interactive.help.projects");
-         Assert (Model_Runner.Presentation.Session_Form (Screen, "or reconfigure x+=y")
-                   = "or /reconfigure x+=y"
-                 and then Ada.Strings.Fixed.Index
+         Assert (Ada.Strings.Fixed.Index
                             (Model_Runner.Presentation.Next_Step_Value
                                (Screen, "cli.next.accept_task",
                                 [Model_Runner.Localization.Named ("name", "TASK-8")]),
@@ -9246,7 +9244,7 @@ package body Tests.Framework_Cases is
                        and then Ada.Strings.Fixed.Index (Text, "REQ-001 is not an issue") > 0,
                        "a result asked of what is not there, or dismissed that is no issue, was"
                        & " not refused by name");
-               Assert (Ada.Strings.Fixed.Index (Text, "open issues (result lists them)") > 0,
+               Assert (Ada.Strings.Fixed.Index (Text, "open issues (/result lists them)") > 0,
                        "state did not count the open issues");
                Assert (Ada.Strings.Fixed.Index (Text, "REQ-001") > 0
                        and then Ada.Strings.Fixed.Index (Text, "checks:") > 0,

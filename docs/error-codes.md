@@ -309,6 +309,7 @@ ordinal is never reused, not because they might appear.
 | `MR-FRAMEWORK-0031` | `error.framework.limit_exceeded` | recovery_resource_limited | 6 | raised |
 | `MR-FRAMEWORK-0032` | `error.framework.permission_denied` | recovery_user_correctable | 2 | raised |
 | `MR-FRAMEWORK-0033` | `error.framework.verification_failed` | recovery_user_correctable | 6 | raised |
+| `MR-FRAMEWORK-0034` | `error.framework.agent_failed` | recovery_user_correctable | 6 | raised |
 
 ## INTERNAL
 

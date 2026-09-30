@@ -82,7 +82,7 @@ baseline project.scope = work changes only what its task is about
 input work_isolation
   type = choice
   label = Work isolation
-  description = project to write in the project itself; workspace for a workspace per task, taken in by task integrate
+  description = project to write in the project itself; workspace for a workspace per task, taken in by /task integrate
   choices = project, workspace
   default = project
 scalar work.isolation = ${work_isolation}

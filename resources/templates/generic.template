@@ -7,8 +7,8 @@ version = 1
 category = existing
 includes = standard-development
 
-# Writing into a repository that is already there is confirmed first: at a
-# terminal it is asked, and otherwise given as --set confirm=yes.
+# Writing into a repository that is already there is confirmed first, the
+# plan shown above the question.
 scalar init.confirm = yes
 
 input project_name
@@ -34,24 +34,21 @@ input check_command
   description = the command that builds and tests the repository
   required = true
 
+# The program checks may run: the one the command starts, unless named.
 input check_program
   type = text
   label = Check program
-  description = the program that command runs, which checks may run
+  description = the program the check command runs, which checks may run
   required = true
+  default = ${check_command.program}
 
+discover *.gpr input check_command = gprbuild
 discover alire.toml input check_command = alr build
-discover alire.toml input check_program = alr
 discover Makefile input check_command = make check
-discover Makefile input check_program = make
 discover CMakeLists.txt input check_command = ctest --test-dir build
-discover CMakeLists.txt input check_program = ctest
 discover Cargo.toml input check_command = cargo test
-discover Cargo.toml input check_program = cargo
 discover package.json input check_command = npm test
-discover package.json input check_program = npm
 discover pyproject.toml input check_command = python3 -m pytest
-discover pyproject.toml input check_program = python3
 
 profile checks = check: ${check_command}
 scalar profile_capability.checks = run_tests

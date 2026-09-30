@@ -2034,22 +2034,28 @@ package body Tests.CLI_Cases is
       Ada.Directories.Create_Path (Root & "/g/src");
 
       --  1. Only kinds of project are offered; a part is refused as one; a
-      --     directory name that is no crate is said so, and one near a
-      --     crate's name is made one.
+      --     directory name too short for a crate is made one that is long
+      --     enough, and one near a crate's name is made one -- either shown
+      --     in the plan.
       Run ("init", "g");
       Assert (Shows (") ada-cli") and then not Shows (") aunit"),
               "init offered a template that is only a part: " & To_String (Said));
+      --  In a directory that holds a project already, the template that
+      --  takes one as it is comes first.
+      Assert (Shows ("1) generic"),
+              "a directory holding files was not offered the existing-repository template first: "
+              & To_String (Said));
       Run ("init|aunit");
       Assert (Code /= 0 and then Shows ("not a kind of project"),
               "a part was not refused as a kind of project: " & To_String (Said));
       Run ("init|ada-cli", "p1");
-      Assert (Code /= 0 and then Shows ("project_name=...") and then Shows ("3 to 64"),
-              "a directory name that is no crate was not said so: " & To_String (Said));
+      Assert (Code = 0 and then Shows ("input project_name = p1_app"),
+              "a directory name too short for a crate was not made one: " & To_String (Said));
       Run ("init|ada-cli|--set|confirm=yes", "My-App");
       Assert (Code = 0 and then Ada.Directories.Exists (Root & "/My-App/my_app.gpr"),
               "a directory name near a crate's was not made one: " & To_String (Said));
-      Run ("init|3|--set|confirm=yes|--set|check_command=true|--set|check_program=true");
-      Assert (Code = 0 and then Shows ("next: bootstrap"),
+      Run ("init|1|--set|confirm=yes|--set|check_command=true|--set|check_program=true");
+      Assert (Code = 0 and then Shows ("next: /bootstrap"),
               "init by number did not start the project and say what next: " & To_String (Said));
 
       --  2. The session's project commands from the shell.
@@ -2096,8 +2102,28 @@ package body Tests.CLI_Cases is
       Run ("task|accept|TASK-002");
       Run ("work|TASK-002");
       Assert (Code /= 0 and then Shows ("the answer is kept as RES-")
-              and then Shows ("next: task accept TASK-002"),
+              and then Shows ("next: /task accept TASK-002"),
               "a broken answer did not say why and what next: " & To_String (Said));
+
+      --  An agent that crashes is said as one -- it did not finish -- not as
+      --  an answer that broke the contract, and the task is set aside.
+      Write (Root & "/crash.sh", "#!/bin/sh" & LF & "echo 'segfault here' >&2" & LF & "exit 139" & LF,
+             Executable => True);
+      Run ("reconfigure|work.agent=" & Root & "/crash.sh $PROMPT|execution.allowed+=crash.sh|confirm=yes");
+      Run ("task|accept|TASK-002");
+      Run ("work|TASK-002");
+      --  Said in words where the catalog is found from here, and by its
+      --  code where it is not; a crash either way.
+      Assert (Code /= 0
+              and then (Shows ("did not finish")
+                        or else Shows (E.Diagnostic_Code (E.Framework_Agent_Failed)))
+              and then Shows ("ended with 139")
+              and then not Shows ("work contract"),
+              "a crashed agent was not said as one: " & To_String (Said));
+      Run ("task|list");
+      Assert (Shows ("TASK-002  [blocked]"),
+              "a crashed agent's task was not set aside, blocked: " & To_String (Said));
+      Run ("reconfigure|work.agent=" & Root & "/bad.sh $PROMPT|confirm=yes");
       Run ("task|accept|TASK-404");
       Assert (Code /= 0 and then Shows ("TASK-404 is not in the project state")
               and then not Shows (".state"),
@@ -2146,7 +2172,7 @@ package body Tests.CLI_Cases is
              & "Arguments SHALL be quoted." & LF & "Acceptance: a space survives" & LF & LF
              & "- DEC-001: We use posix_spawn." & LF & LF & "It SHOULD retry once." & LF);
       Run ("bootstrap");
-      Assert (Shows ("REQ-SHELL-001") and then Shows ("DEC-001") and then Shows ("next: req accept")
+      Assert (Shows ("REQ-SHELL-001") and then Shows ("DEC-001") and then Shows ("next: /req accept")
               and then Shows ("made REQ-SHELL-001, accepted"),
               "bootstrap did not keep the document's identifiers, or say what it made is: "
               & To_String (Said));
@@ -2161,6 +2187,15 @@ package body Tests.CLI_Cases is
              "# Shell" & LF & LF & "## REQ-SHELL-001 Quoting" & LF
              & "Arguments SHALL be quoted." & LF & "Acceptance: a space survives" & LF & LF
              & "- DEC-001: We use posix_spawn." & LF & LF & "It SHOULD retry twice." & LF);
+      Run ("bootstrap");
+      --  Its words changed, and nothing else like them: its new wording, the
+      --  same requirement revised -- not a second one beside it.
+      Assert (Shows ("revised REQ-SPEC-001") and then Shows ("made: 0"),
+              "a sentence reworded was not taken as the requirement revised: " & To_String (Said));
+      Write (Root & "/g/docs/spec.md",
+             "# Shell" & LF & LF & "## REQ-SHELL-001 Quoting" & LF
+             & "Arguments SHALL be quoted." & LF & "Acceptance: a space survives" & LF & LF
+             & "- DEC-001: We use posix_spawn." & LF & LF & "Output MUST be flushed at exit." & LF);
       Run ("bootstrap");
       Assert (Shows ("no longer says it"), "what a document stopped saying was not named: " & To_String (Said));
 
@@ -2213,7 +2248,7 @@ package body Tests.CLI_Cases is
       --  11. A second round of what a person meets.
       --  A project already there is not started again.
       Run ("init|generic");
-      Assert (Code /= 0 and then Shows ("already holds") and then Shows ("next: reconfigure"),
+      Assert (Code /= 0 and then Shows ("already holds") and then Shows ("next: /reconfigure"),
               "init over a project did not refuse first: " & To_String (Said));
       --  A setting that is none is refused with what was meant; -= takes
       --  out, and += adds nothing twice.
@@ -2239,7 +2274,7 @@ package body Tests.CLI_Cases is
       Run ("reconfigure|profile.checks=check: true|confirm=yes");
       --  A requirement not verified says what it lacks.
       Run ("req|new|Shouts|text=It SHALL shout.");
-      Assert (Shows ("next: req accept REQ-001"), "a new requirement gave no next step: " & To_String (Said));
+      Assert (Shows ("next: /req accept REQ-001"), "a new requirement gave no next step: " & To_String (Said));
       Run ("req|accept|REQ-001");
       Run ("req|show|REQ-001");
       Assert (Shows ("not verified: "), "a requirement not verified did not say why: " & To_String (Said));
@@ -2282,8 +2317,9 @@ package body Tests.CLI_Cases is
              "# Shell" & LF & LF & "## REQ-FS-001 Case" & LF & "Paths differing in case are one." & LF
              & "Acceptance: a and A are equal" & LF & LF & "It SHOULD log every step." & LF);
       Run ("bootstrap");
-      Assert (Shows ("most like it") and then Shows ("req reject"),
-              "an edited line was not paired with what it became: " & To_String (Said));
+      --  An edited line is the requirement it was, revised to its new words.
+      Assert (Shows ("revised REQ-SPEC-") and then Shows ("made: 0"),
+              "an edited line was not taken as the requirement it was, revised: " & To_String (Said));
 
       --  12. A third round.
       --  A heading's statement may follow a blank line.
@@ -2347,7 +2383,7 @@ package body Tests.CLI_Cases is
          Assert (Code /= 0 and then Shows ("accepted first"),
                  "completing a candidate did not say to accept it first: " & To_String (Said));
          Run ("task|accept|" & Two);
-         Assert (Shows ("next: work " & Two), "an accepted task gave no next step");
+         Assert (Shows ("next: /work " & Two), "an accepted task gave no next step");
       end;
       --  check of a setting that is none, and a profile that is none.
       Run ("reconfigure|scalar.work.agnt=x|confirm=yes");

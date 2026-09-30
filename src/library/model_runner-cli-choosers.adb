@@ -312,12 +312,29 @@ package body Model_Runner.CLI.Choosers is
 
       end if;
 
-      --  The title, the list, a blank, the details, the keys.
-      Room := Rows - 3 - Integer (Details.Length)
-        - (if Details.Is_Empty then 0 else 1);
-      Room := Integer'Max (1, Room);
-
-      Result.Append (Fit (To_String (Words.Title), Columns));
+      --  The title -- a line or several, as a plan shown above its
+      --  question -- the list, a blank, the details, the keys.
+      declare
+         Title : constant Framework.Name_Lists.Vector :=
+           Framework.Lines_Of (To_String (Words.Title));
+         Extra : constant Integer :=
+           Integer (Details.Length) + (if Details.Is_Empty then 0 else 1);
+         --  A title too long for the window keeps its last lines, the
+         --  question, and room for a few choices.
+         Shown : constant Integer :=
+           Integer'Max (1, Integer'Min (Integer (Title.Length),
+                                        Rows - 2 - Extra - Integer'Min (Visible_Count (Item), 4)));
+      begin
+         Room := Integer'Max (1, Rows - 2 - Shown - Extra);
+         if Title.Is_Empty then
+            Result.Append ("");
+         end if;
+         for Index in Integer (Title.Length) - Shown + 1 .. Integer (Title.Length) loop
+            if Index >= 1 then
+               Result.Append (Fit (Title (Index), Columns));
+            end if;
+         end loop;
+      end;
       if Visible_Count (Item) = 0 then
          Result.Append (Fit ("    " & To_String (Words.Nothing), Columns));
       end if;
@@ -674,6 +691,30 @@ package body Model_Runner.CLI.Choosers is
          Finalize (Guard);
          return (if Gave_Up then "" else To_String (Typed));
       end Hidden_Line;
+      procedure Put_Question is
+         Shown : constant String := (if Secret then "" else Default);
+      begin
+         --  A question is asked however quiet: without it the answer is
+         --  waited for unasked.
+         Pres.Put_Aside
+           (Screen,
+            (if Detail /= "" and then Shown /= "" then "cli.choose.field"
+             elsif Detail /= "" then "cli.choose.field.no_default"
+             elsif Shown /= "" then "cli.choose.field.no_detail"
+             else "cli.choose.field.bare"),
+            [Loc.Named ("name", Label), Loc.Named ("detail", Detail),
+             Loc.Named ("value", Shown)]);
+      end Put_Question;
+
+      --  Whether what was typed is a session's command, as /accept: one
+      --  word after its slash. Typed where a value is asked for, it is not
+      --  the value -- the question is given up and the command left alone.
+      function Is_Command (Typed : String) return Boolean
+      is (Typed'Length > 1 and then Typed (Typed'First) = '/'
+          and then (for all C of Typed (Typed'First + 1 .. Typed'Last) =>
+                      C in 'a' .. 'z' | ' ' | '-' | 'A' .. 'Z' | '0' .. '9' | '_' | '.' | '='
+                           | '"' | ''')
+          and then Ada.Strings.Fixed.Index (Typed (Typed'First + 1 .. Typed'Last), "/") = 0);
    begin
       Answer := Null_Unbounded_String;
       Given := False;
@@ -704,20 +745,7 @@ package body Model_Runner.CLI.Choosers is
 
       --  The question, with what it is for and what Enter takes where
       --  there are such: no empty brackets.
-      declare
-         Shown : constant String := (if Secret then "" else Default);
-      begin
-         --  A question is asked however quiet: without it the answer is
-         --  waited for unasked.
-         Pres.Put_Aside
-           (Screen,
-            (if Detail /= "" and then Shown /= "" then "cli.choose.field"
-             elsif Detail /= "" then "cli.choose.field.no_default"
-             elsif Shown /= "" then "cli.choose.field.no_detail"
-             else "cli.choose.field.bare"),
-            [Loc.Named ("name", Label), Loc.Named ("detail", Detail),
-             Loc.Named ("value", Shown)]);
-      end;
+      Put_Question;
 
       if Length (Options) > 0 then
          declare
@@ -742,6 +770,10 @@ package body Model_Runner.CLI.Choosers is
          begin
             if Gave_Up then
                return;
+            elsif not Secret and then Is_Command (Typed) then
+               Pres.Put_Note (Screen, "cli.choose.command_typed",
+                              [Loc.Named ("name", Label), Loc.Named ("value", Typed)]);
+               return;
             elsif Typed /= "" then
                Answer := To_Unbounded_String (Typed);
                Given := True;
@@ -753,8 +785,10 @@ package body Model_Runner.CLI.Choosers is
             elsif not Required then
                return;
             end if;
-            --  Nothing typed where something must be: asked again.
+            --  Nothing typed where something must be: asked again, the
+            --  question with it.
             Pres.Put_Note (Screen, "cli.choose.needed", [Loc.Named ("name", Label)]);
+            Put_Question;
          end;
       end loop;
    end Ask;

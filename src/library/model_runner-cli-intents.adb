@@ -203,7 +203,7 @@ package body Model_Runner.CLI.Intents is
       Kept  : Unbounded_String;
    begin
       if Equal = 0 then
-         return "decision govern " & Other & " SETTING RULING";
+         return "/decision govern " & Other & " SETTING RULING";
       end if;
       if Over > 0 then
          for Name of Model_Runner.Framework.Lines_Of
@@ -222,7 +222,7 @@ package body Model_Runner.CLI.Intents is
             end;
          end loop;
       end if;
-      return "decision govern " & Other & " " & Governed (Governed'First .. Equal - 1) & " "
+      return "/decision govern " & Other & " " & Governed (Governed'First .. Equal - 1) & " "
         & Governed (Equal + 3 .. (if Over = 0 then Governed'Last else Over - 1))
         & (if Kept = Null_Unbounded_String then "" else " overrides=" & To_String (Kept));
    end Carried_On;
@@ -377,6 +377,38 @@ package body Model_Runner.CLI.Intents is
          end loop;
       end if;
 
+      --  Several named, or all: each moved as if named alone, in turn.
+      --  all is every one waiting to be decided.
+      if Action in "accept" | "reject" | "reconsider" | "obsolete" | "block" | "unblock"
+        and then (Natural (Plain.Length) > 2 or else Lower (Word (2)) = "all")
+      then
+         declare
+            Named : Names.Vector;
+         begin
+            if Lower (Word (2)) = "all" then
+               Named := Nt.List (Store, Kind, Nt.First_State (Kind));
+               if Named.Is_Empty then
+                  Pres.Put_Note (Screen, "cli.project.no_pending");
+                  return;
+               end if;
+            else
+               for Index in 2 .. Natural (Plain.Length) loop
+                  Named.Append (Plain (Index));
+               end loop;
+            end if;
+            for Id of Named loop
+               declare
+                  One : Names.Vector;
+               begin
+                  One.Append (Word (1));
+                  One.Append (Id);
+                  Run (Store, Kind, One, Screen);
+               end;
+            end loop;
+         end;
+         return;
+      end if;
+
       if Action = "" or else Action = "list" then
          declare
             Held : Nt.Entity;
@@ -421,7 +453,7 @@ package body Model_Runner.CLI.Intents is
                   E.Add_Text (Status, "name", "scope");
                   E.Add_Text (Status, "value", Scope);
                   E.Add_Text (Status, "detail", "a scope is project or one of the project's components ("
-                              & Joined_Components (Store) & "); reconfigure map.component." & Scope
+                              & Joined_Components (Store) & "); /reconfigure map.component." & Scope
                               & "=roots=DIR makes it one");
                   Pres.Report (Screen, Status);
                   return;
@@ -969,7 +1001,7 @@ package body Model_Runner.CLI.Intents is
                     (Screen, "cli.intent.link_doubtful",
                      [Loc.Named ("name", Word (2)), Loc.Named ("value", From (4)),
                       Loc.Named ("detail", From (4) & " is " & Nt.State_Of (Store, Nt.Requirement, From (4))
-                                           & "; req unlink " & Word (2) & " dependency " & From (4)
+                                           & "; /req unlink " & Word (2) & " dependency " & From (4)
                                            & " takes it off")]);
                elsif E.Is_Ok (Status) and then Nt."=" (Relation, Nt.Dependency) then
                   declare
@@ -995,7 +1027,7 @@ package body Model_Runner.CLI.Intents is
                           (Screen, "cli.intent.link_doubtful",
                            [Loc.Named ("name", Word (2)), Loc.Named ("value", From (4)),
                             Loc.Named ("detail", From (4) & " depends on " & Word (2)
-                                                 & " already, so each waits for the other; req unlink "
+                                                 & " already, so each waits for the other; /req unlink "
                                                  & Word (2) & " dependency " & From (4)
                                                  & " takes it off")]);
                      end if;
@@ -1007,8 +1039,8 @@ package body Model_Runner.CLI.Intents is
                   Pres.Put_Note
                     (Screen, "cli.intent.link_doubtful",
                      [Loc.Named ("name", Word (2)), Loc.Named ("value", From (4)),
-                      Loc.Named ("detail", "no evidence is called " & From (4) & "; result lists what is"
-                                           & " kept, and req unlink " & Word (2) & " verification "
+                      Loc.Named ("detail", "no evidence is called " & From (4) & "; /result lists what is"
+                                           & " kept, and /req unlink " & Word (2) & " verification "
                                            & From (4) & " takes it off")]);
                end if;
 
@@ -1093,13 +1125,20 @@ package body Model_Runner.CLI.Intents is
                   E.Add_Text (Status, "value", Was);
                   E.Add_Text (Status, "expected", "the replacement of " & Word (2));
                   E.Add_Text (Status, "detail", Word (3) & " is " & Was & " already, and replacing "
-                              & Word (2) & " would have it judged again; req supersede " & Word (2) & " "
-                              & Word (3) & " anyway does it, or req obsolete " & Word (2)
+                              & Word (2) & " would have it judged again; /req supersede " & Word (2) & " "
+                              & Word (3) & " anyway does it, or /req obsolete " & Word (2)
                               & " retires it alone");
                   Pres.Report (Screen, Status);
                   return;
                end if;
                Nt.Supersede (Store, Change, Kind, Word (2), Word (3), Status);
+
+               --  A candidate replacing one accepted takes its place, and so
+               --  is accepted with it: said, not done unsaid.
+               if E.Is_Ok (Status) and then Was = Nt.First_State (Kind) then
+                  Pres.Put_Note (Screen, "cli.intent.superseded_accepted",
+                                 [Loc.Named ("name", Word (3)), Loc.Named ("value", Word (2))]);
+               end if;
 
                --  The work open for the one replaced is the replacement's
                --  now: moved to it, not left for a task derived beside it.

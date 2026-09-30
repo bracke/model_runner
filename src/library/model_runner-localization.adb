@@ -20,7 +20,7 @@ package body Model_Runner.Localization is
    -----------
 
    function Named (Name, Value : String) return Argument
-   is (Name => T.To_Bounded (Name), Value => T.To_Bounded (Value));
+   is (Name => T.To_Bounded (Name), Value => Ada.Strings.Unbounded.To_Unbounded_String (Value));
 
    --  Reduce a locale such as "de_AT.UTF-8" to the identifier the catalog
    --  understands. The catalog performs its own fallback from a region to a
@@ -209,8 +209,7 @@ package body Model_Runner.Localization is
             --  A value cut to fit says so: what follows it was not shown.
             Messages.Arguments.Set
               (Values, T.To_String (Entry_Value.Name),
-               T.To_String (Entry_Value.Value)
-               & (if Entry_Value.Value.Truncated then " [...]" else ""));
+               Ada.Strings.Unbounded.To_String (Entry_Value.Value));
          end if;
       end loop;
 

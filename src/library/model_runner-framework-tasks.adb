@@ -755,12 +755,12 @@ package body Model_Runner.Framework.Tasks is
          E.Add_Text (Status, "expected", Next);
          E.Add_Text (Status, "detail",
                      (if Next = "complete"
-                      then "the harness makes this move: work " & Id & " does it, or task complete "
+                      then "the harness makes this move: /work " & Id & " does it, or /task complete "
                            & Id & " once it is done by hand"
                       elsif Next in "running" | "verification"
-                      then "the harness makes this move: work " & Id & " starts it, and its checks"
+                      then "the harness makes this move: /work " & Id & " starts it, and its checks"
                            & " take it to verification and completion"
-                      else "a task at work is stopped by cancelling it: task cancel " & Id));
+                      else "a task at work is stopped by cancelling it: /task cancel " & Id));
          return;
       end if;
 
@@ -945,20 +945,20 @@ package body Model_Runner.Framework.Tasks is
                     & " to be taken in: "
                     & (if Workspaces.Conflict_Files
                             (Item, Records.Get (Runtime_Value, "current_workspace")).Is_Empty
-                       then "task integrate " & Id
+                       then "/task integrate " & Id
                        else "it conflicts with the project in "
                             & Joined (Workspaces.Conflict_Files
                                         (Item, Records.Get (Runtime_Value, "current_workspace")),
                                       ", ")
-                            & "; settle them in the workspace, then task integrate " & Id
+                            & "; settle them in the workspace, then /task integrate " & Id
                             & " resolved")
                elsif State = "verification" then "it is being verified"
                elsif State = "complete" then "it is complete already"
-               elsif State = "cancelled" then "it is cancelled: task reopen " & Id
+               elsif State = "cancelled" then "it is cancelled: /task reopen " & Id
                                               & " makes it workable again"
-               elsif State = "rejected" then "it is rejected: task reconsider " & Id
+               elsif State = "rejected" then "it is rejected: /task reconsider " & Id
                                              & " makes it a candidate again"
-               elsif State = "candidate" then "it is a candidate: task accept " & Id
+               elsif State = "candidate" then "it is a candidate: /task accept " & Id
                                               & " accepts it first"
                else "it is " & State_Said (State)
                     & (if Why = Null_Unbounded_String then "" else ": " & To_String (Why)));
@@ -1845,6 +1845,11 @@ package body Model_Runner.Framework.Tasks is
       Status   : E.Error_Info;
    begin
       Configurations.Read (Item, Settings, Status);
+      return Components_Of (Settings);
+   end Components;
+
+   function Components_Of (Settings : Records.Item) return Name_Lists.Vector is
+   begin
       declare
          Listed : Name_Lists.Vector := Split (Records.Get (Settings, "set.components"));
       begin
@@ -1867,7 +1872,7 @@ package body Model_Runner.Framework.Tasks is
          end if;
          return Listed;
       end;
-   end Components;
+   end Components_Of;
 
    function Component_Of_Task (Item : Stores.Store; Id : String) return String is
       Defined : Records.Item;
@@ -1961,14 +1966,14 @@ package body Model_Runner.Framework.Tasks is
          E.Add_Text (Status, "expected", "being revised");
          E.Add_Text (Status, "detail",
                      (if Now = "rejected"
-                      then "a rejected task is not revised; task reconsider " & Id & " first"
+                      then "a rejected task is not revised; /task reconsider " & Id & " first"
                       elsif Now in "complete" | "cancelled"
-                      then "a " & Now & " task is not revised; task reopen " & Id & " first"
+                      then "a " & Now & " task is not revised; /task reopen " & Id & " first"
                       elsif Now = "verification"
-                      then "its work waits to be taken in or checked; task integrate " & Id
-                           & " takes it in, or task cancel " & Id & " anyway gives it up"
+                      then "its work waits to be taken in or checked; /task integrate " & Id
+                           & " takes it in, or /task cancel " & Id & " anyway gives it up"
                       else "a task is revised only while it is not being worked; wait for its"
-                           & " work to end, or task cancel " & Id));
+                           & " work to end, or /task cancel " & Id));
          return;
       end if;
 
@@ -2158,6 +2163,11 @@ package body Model_Runner.Framework.Tasks is
                Fields.Include ("parent", Parent);
                if Records.Get (Defined, "component") /= "" then
                   Fields.Include ("component", Records.Get (Defined, "component"));
+               end if;
+               --  What the whole waits for, its parts wait for: a part is
+               --  not ready before the work it builds on is done.
+               if Records.Get (Defined, "depends_on") /= "" then
+                  Fields.Include ("depends_on", Records.Get (Defined, "depends_on"));
                end if;
                Create (Item, Change, Fields, "user", "decomposition of " & Parent, Child, Status);
                if E.Is_Error (Status) then

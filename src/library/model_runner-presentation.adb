@@ -219,13 +219,11 @@ package body Model_Runner.Presentation is
       for One of Arguments loop
          Ada.Strings.Unbounded.Append
            (Line, ", " & Quoted (Model_Runner.Text.To_String (One.Name)) & ": "
-                  & Quoted (Model_Runner.Text.To_String (One.Value)));
+                  & Quoted (Ada.Strings.Unbounded.To_String (One.Value)));
       end loop;
       Ada.Strings.Unbounded.Append (Line, ", ""text"": " & Quoted (Text) & "}");
       Put_Line (Item, Ada.Strings.Unbounded.To_String (Line));
    end Put_Record;
-
-   function As_Typed_In_Session (Text : String) return String;
 
    procedure Put_Message
      (Item      : in out Console;
@@ -236,13 +234,7 @@ package body Model_Runner.Presentation is
          Put_Record (Item, "message", Key, Arguments, Message (Item, Key, Arguments));
          return;
       end if;
-      --  A finding or a field in a session: the ways on it names are
-      --  said as the session types them.
-      Put_Line (Item, (if Item.Session
-                         and then Key in "cli.task.item" | "cli.task.field" | "cli.work.issue_kept"
-                                       | "cli.work.kept_back" | "cli.project.config_none"
-                       then As_Typed_In_Session (Message (Item, Key, Arguments))
-                       else Message (Item, Key, Arguments)));
+      Put_Line (Item, Message (Item, Key, Arguments));
    end Put_Message;
 
    --  Write one line to standard error, tolerating a closed destination.
@@ -353,81 +345,11 @@ package body Model_Runner.Presentation is
    -- Put_Note --
    ----------------
 
-   --  A next step as a session types it: each command it names as its
-   --  slash command.
-   function As_Typed_In_Session (Text : String) return String is
-      Result : Ada.Strings.Unbounded.Unbounded_String;
-
-      --  Whether a command's words start at a place in the text.
-      function Names_A_Command (At_Index : Positive) return Boolean is
-         function Here (Phrase : String) return Boolean
-         is (At_Index + Phrase'Length - 1 <= Text'Last
-             and then Text (At_Index .. At_Index + Phrase'Length - 1) = Phrase);
-      begin
-         return Here ("task accept") or else Here ("task complete") or else Here ("task integrate")
-           or else Here ("task new") or else Here ("task move") or else Here ("task verify")
-           or else Here ("task list") or else Here ("req accept") or else Here ("req new")
-           or else Here ("req reject") or else Here ("req obsolete") or else Here ("req lists")
-           or else Here ("bootstrap FILE") or else Here ("reconfigure ")
-           or else Here ("check consistency") or else Here ("work TASK-") or else Here ("result RES-")
-           or else Here ("task cancel") or else Here ("task reject") or else Here ("task depend")
-           or else Here ("task show") or else Here ("task audit") or else Here ("req show")
-           or else Here ("req unlink") or else Here ("req supersede") or else Here ("req revise")
-           or else Here ("decision revise") or else Here ("decision reject")
-           or else Here ("spec revise") or else Here ("check REQ-") or else Here ("check full")
-           or else Here ("config shows") or else Here ("decision accept") or else Here ("spec accept")
-           or else Here ("decision supersede") or else Here ("task split") or else Here ("task edit")
-           or else Here ("task rehome") or else Here ("req link") or else Here ("sandbox off")
-           or else Here ("decision govern") or else Here ("decision obsolete")
-           or else Here ("decision new") or else Here ("spec new") or else Here ("result dismiss")
-           or else Here ("task reopen") or else Here ("task reconsider") or else Here ("task derive")
-           or else Here ("req reconsider") or else Here ("req verify") or else Here ("decision link")
-           or else Here ("task verify") or else Here ("task resolve") or else Here ("result lists")
-           or else Here ("config lists");
-      end Names_A_Command;
-
-      --  Whether the word before a place is one a noun follows -- a
-      --  decision governs, one config shows -- not a command.
-      function After_Article (At_Index : Positive) return Boolean is
-         Stop  : Natural := At_Index - 1;
-         Start : Natural;
-      begin
-         while Stop >= Text'First and then Text (Stop) = ' ' loop
-            Stop := Stop - 1;
-         end loop;
-         Start := Stop;
-         while Start > Text'First and then Text (Start - 1) not in ' ' | '(' loop
-            Start := Start - 1;
-         end loop;
-         return Stop >= Text'First
-           and then Text (Start .. Stop) in "a" | "an" | "the" | "one" | "its" | "which" | "that"
-                                          | "A" | "The" | "One" | "each" | "every";
-      end After_Article;
-   begin
-      for Index in Text'Range loop
-         if (Index = Text'First or else Text (Index - 1) in ' ' | '(')
-           and then Names_A_Command (Index)
-           and then (Index = Text'First or else not After_Article (Index))
-         then
-            Ada.Strings.Unbounded.Append (Result, "/");
-         end if;
-         Ada.Strings.Unbounded.Append (Result, Text (Index));
-      end loop;
-      return Ada.Strings.Unbounded.To_String (Result);
-   end As_Typed_In_Session;
-
    ----------------
    -- In_Session --
    ----------------
 
    function In_Session (Item : Console) return Boolean is (Item.Session);
-
-   ------------------
-   -- Session_Form --
-   ------------------
-
-   function Session_Form (Item : Console; Text : String) return String
-   is (if Item.Session then As_Typed_In_Session (Text) else Text);
 
    ---------------------
    -- Next_Step_Value --
@@ -437,17 +359,14 @@ package body Model_Runner.Presentation is
      (Item      : Console;
       Key       : String;
       Arguments : Loc.Argument_List) return String
-   is (if Item.Session then As_Typed_In_Session (Message (Item, Key, Arguments))
-       else Message (Item, Key, Arguments));
+   is (Message (Item, Key, Arguments));
 
    procedure Put_Note
      (Item      : in out Console;
       Key       : String;
       Arguments : Loc.Argument_List := Loc.Empty_Arguments)
    is
-      Said : constant String :=
-        (if Item.Session then As_Typed_In_Session (Message (Item, Key, Arguments))
-         else Message (Item, Key, Arguments));
+      Said : constant String := Message (Item, Key, Arguments);
    begin
       if Item.Structured then
          Put_Record (Item, "note", Key, Arguments, Said);
@@ -619,11 +538,9 @@ package body Model_Runner.Presentation is
          then "error"
          else Loc.Severity_Label (Item.Catalog.all, Condition.Severity));
 
-      --  In a session, the commands it names as typed there.
       Detail : constant String :=
         (if Item.Catalog = null
          then E.Message_Key (Condition.Code)
-         elsif Item.Session then As_Typed_In_Session (Loc.Describe (Item.Catalog.all, Condition))
          else Loc.Describe (Item.Catalog.all, Condition));
    begin
       if E.Is_Ok (Condition) then

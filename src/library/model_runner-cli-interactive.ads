@@ -115,6 +115,9 @@ package Model_Runner.CLI.Interactive is
      (Held,        --  added to the turn, which is not finished
       Submits,     --  a blank line: the turn, if any, is complete
       Is_Command,  --  a slash command, to be read with Parse
+      Command_Mid_Message,
+                   --  a project command, typed while a turn is:
+                   --  run, and the turn kept to go on with
       Too_Long);   --  the line would push the turn past Max_Turn_Bytes
 
    --  A turn being typed. Release with Close, which is idempotent.

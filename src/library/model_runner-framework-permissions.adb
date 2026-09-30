@@ -104,10 +104,11 @@ package body Model_Runner.Framework.Permissions is
                null;
             elsif Equal = 0 then
                return Key & " is no constraint: they are roots=, deny=, profiles=, max_depth= and"
-                 & " max_children=";
+                 & " max_children=; on grants a capability with none, off takes it away, and inherit"
+                 & " follows the level above";
             elsif Key not in "roots" | "deny" | "profiles" | "max_depth" | "max_children" then
                return "no constraint is called " & Key & "; they are roots, deny, profiles,"
-                 & " max_depth and max_children";
+                 & " max_depth and max_children -- and on, off or inherit stand alone";
             elsif Key in "max_depth" | "max_children"
               and then (Value'Length not in 1 .. 9
                         or else (for some C of Value => C not in '0' .. '9'))
@@ -856,6 +857,30 @@ package body Model_Runner.Framework.Permissions is
          then
             return Path (Path'First + Base'Length .. Path'Last);
          end if;
+         --  The longest tail of it the project holds -- /x/project/src/a.adb
+         --  is src/a.adb, not a.adb -- or, for a file not there yet, the
+         --  longest whose directory is.
+         for Pass in 1 .. 2 loop
+            for Cut in Path'Range loop
+               if Path (Cut) = '/' and then Cut < Path'Last then
+                  declare
+                     Tail  : constant String := Path (Cut + 1 .. Path'Last);
+                     Whole : constant String := Base & Tail;
+                  begin
+                     if (Pass = 1 and then Ada.Directories.Exists (Whole))
+                       or else (Pass = 2 and then Ada.Strings.Fixed.Index (Tail, "/") > 0
+                                and then Ada.Directories.Exists
+                                           (Ada.Directories.Containing_Directory (Whole)))
+                     then
+                        return Tail;
+                     end if;
+                  exception
+                     when others =>
+                        null;
+                  end;
+               end if;
+            end loop;
+         end loop;
          return (if Slash = 0 or else Slash = Path'Last then "" else Path (Slash + 1 .. Path'Last));
       end Last_Part;
 

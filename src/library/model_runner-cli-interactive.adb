@@ -113,6 +113,19 @@ package body Model_Runner.CLI.Interactive is
          return;
       end if;
 
+      --  A project command, typed while a message is: run, and the message
+      --  kept to go on with -- not taken into it as its text. The
+      --  session's own commands, and a path, are still the text they are.
+      if Item.Used > 0
+        and then Model_Runner.CLI.Project_Commands.Is_Project_Command
+                   (Trimmed (Trimmed'First
+                             .. (if Ada.Strings.Fixed.Index (Trimmed, " ") = 0 then Trimmed'Last
+                                 else Ada.Strings.Fixed.Index (Trimmed, " ") - 1)))
+      then
+         Effect := Command_Mid_Message;
+         return;
+      end if;
+
       if Trimmed = "" then
          Effect := Submits;
          return;
@@ -423,6 +436,18 @@ package body Model_Runner.CLI.Interactive is
             begin
                if Named /= "" and then Ada.Strings.Fixed.Index (Known, " " & Named & " ") > 0 then
                   Pres.Put_Aside (Screen, "cli.interactive.help." & Named);
+                  --  And how it is used, where that takes more than a line.
+                  if Named = "init" then
+                     Pres.Put_Aside (Screen, "cli.interactive.usage.init");
+                  elsif Named = "task" then
+                     Pres.Put_Aside (Screen, "cli.interactive.usage.task");
+                  elsif Named = "work" then
+                     Pres.Put_Aside (Screen, "cli.interactive.usage.work");
+                  elsif Named = "req" then
+                     Pres.Put_Aside (Screen, "cli.interactive.usage.req");
+                  elsif Named = "reconfigure" then
+                     Pres.Put_Aside (Screen, "cli.project.reconfigure.usage");
+                  end if;
                else
                   Pres.Put_Message (Screen, "cli.interactive.help_unknown",
                                     [Loc.Named ("value", T.Escape_Controls (Named))]);
@@ -913,9 +938,9 @@ package body Model_Runner.CLI.Interactive is
                end if;
                Model_Runner.Platform.Signals.Set_Waiting_For_Input
                  (True, Note => Pres.Message_Value (Screen, "cli.interactive.dropped") & ASCII.LF
-                                & Pres.Message_Value
-                                    (Screen, (if Pending (Typing) = "" then "cli.interactive.prompt"
-                                              else "cli.interactive.continuation")) & " ");
+                                --  What was typed is dropped: the prompt is
+                                --  the first line's again.
+                                & Pres.Message_Value (Screen, "cli.interactive.prompt") & " ");
                Ada.Text_IO.Get_Line (Ada.Text_IO.Current_Input, Room, Stop);
                Model_Runner.Platform.Signals.Set_Waiting_For_Input (False);
             exception
@@ -994,6 +1019,11 @@ package body Model_Runner.CLI.Interactive is
                         --  consulted.
                         Handled := Handle_Command (T.Trim (Line));
                         After_Command := True;
+
+                     when Command_Mid_Message =>
+                        Handled := Handle_Command (T.Trim (Line));
+                        After_Command := True;
+                        Pres.Put_Note (Screen, "cli.interactive.message_kept");
 
                      when Submits =>
                         --  A blank line submits; an empty submission is

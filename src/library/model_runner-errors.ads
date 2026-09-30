@@ -396,6 +396,10 @@ package Model_Runner.Errors is
       --  A project's checks that ran and did not pass.
       Framework_Verification_Failed,
 
+      --  An agent's process that did not finish: it crashed, or never
+      --  started -- not an answer that broke the contract.
+      Framework_Agent_Failed,
+
       --  Internal invariants.
       Internal_Invariant_Violated,
       Internal_Unexpected_Exception,

@@ -1,4 +1,6 @@
 with Ada.Characters.Handling;
+with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 
 with Hostkit.Fs;
 
@@ -419,7 +421,10 @@ package body Model_Runner.Framework.Templates is
               or else Parts (3) not in "fact" | "input"
             then
                Refuse ("a discovery is: discover PATH fact|input KEY = VALUE");
-            elsif not Is_Project_Path (Parts (2)) then
+            --  A pattern -- *.gpr -- is a path whose * stands for a name.
+            elsif not Is_Project_Path
+                        (Ada.Strings.Fixed.Translate (Parts (2), Ada.Strings.Maps.To_Mapping ("*", "x")))
+            then
                Refuse (Parts (2) & " is not a path inside the project");
             elsif not Is_Key (Parts (4)) then
                Refuse (Parts (4) & " is not a key");
@@ -584,6 +589,9 @@ package body Model_Runner.Framework.Templates is
    -------------
    -- Details --
    -------------
+
+   function Category (Value : Template) return String
+   is (To_String (Value.Category));
 
    function Details (Value : Template) return String is
       Result : Unbounded_String;

@@ -165,6 +165,15 @@ package body Model_Runner.Framework.Stores is
       end Release;
    end Parsed_Lock;
 
+   --  A directory as its whole path, for saying where: . is no place.
+   function Whole (Directory : String) return String is
+   begin
+      return (if Dirs.Exists (Directory) then Dirs.Full_Name (Directory) else Directory);
+   exception
+      when others =>
+         return Directory;
+   end Whole;
+
    procedure Read_Record
      (Path   : String;
       Origin : String;
@@ -1206,7 +1215,7 @@ package body Model_Runner.Framework.Stores is
          E.Add_Text (Status, "path", Root, E.Param_Path);
          E.Add_Text (Status, "detail", Holder_Of (Lock_Path)
                      & "; one command changes a project at a time, work in workspaces too, so"
-                     & " this one stops: run it again once that ends -- task list and state read"
+                     & " this one stops: run it again once that ends -- /task list and state read"
                      & " the project meanwhile");
       elsif Outcome = Hostkit.Locks.Lock_Error then
          Write_Failed (Lock_Path, Status);
@@ -1392,7 +1401,7 @@ package body Model_Runner.Framework.Stores is
 
       if not Dirs.Exists (Format_Path) then
          Status := E.Make (E.Framework_Not_Initialized);
-         E.Add_Text (Status, "path", Project_Directory, E.Param_Path);
+         E.Add_Text (Status, "path", Whole (Project_Directory), E.Param_Path);
          return;
       end if;
 
@@ -1471,7 +1480,7 @@ package body Model_Runner.Framework.Stores is
       Close (Item);
       if not Dirs.Exists (Join (State, Format_File)) then
          Status := E.Make (E.Framework_Not_Initialized);
-         E.Add_Text (Status, "path", Project_Directory, E.Param_Path);
+         E.Add_Text (Status, "path", Whole (Project_Directory), E.Param_Path);
          return;
       end if;
       Item.Root := To_Unbounded_String (State);

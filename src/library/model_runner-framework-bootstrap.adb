@@ -94,6 +94,7 @@ package body Model_Runner.Framework.Bootstrap is
       Seen    : Name_Lists.Vector;
       Titled  : Boolean := False;
       Start   : Natural := Text'First;
+      In_Fence : Boolean := False;
 
       --  The requirement a heading names, whose section is its statement
       --  until the next heading: the output it is, or zero.
@@ -227,34 +228,28 @@ package body Model_Runner.Framework.Bootstrap is
             return;
          end if;
 
-         if Colon > Item'First
-           and then Identifiers.Is_Valid (Item (Item'First .. Colon - 1))
-           and then Item'Length > 4
-           and then Item (Item'First .. Item'First + 3) = "REQ-"
-         then
-            declare
-               Id : constant String := Item (Item'First .. Colon - 1);
-               Said : constant String := Trim (Item (Colon + 1 .. Item'Last));
-            begin
-               Found (Imported_Item, Path & "#" & Id, Headline (Said), Said, Given => Id);
-            end;
-            return;
-         end if;
-
-         --  DEC-001: text -- a decision the document names.
-         if Colon > Item'First
-           and then Item'Length > 4
-           and then Item (Item'First .. Item'First + 3) = "DEC-"
-           and then Identifiers.Is_Valid (Item (Item'First .. Colon - 1))
-         then
-            declare
-               Id   : constant String := Item (Item'First .. Colon - 1);
-               Said : constant String := Trim (Item (Colon + 1 .. Item'Last));
-            begin
-               Found (Decision_Candidate, Path & "#" & Id, Headline (Said), Said, Given => Id);
-            end;
-            return;
-         end if;
+         --  REQ-IO-003: text, or REQ-IO-003 text -- in a list item too: a
+         --  requirement the document names; DEC-001 the same for a
+         --  decision.
+         declare
+            Blank : constant Natural := Ada.Strings.Fixed.Index (Item, " ");
+            Word  : constant String :=
+              (if Blank = 0 then Item else Item (Item'First .. Blank - 1));
+            Id    : constant String :=
+              (if Word'Length > 1 and then Word (Word'Last) = ':'
+               then Word (Word'First .. Word'Last - 1) else Word);
+            Said  : constant String :=
+              (if Blank = 0 then "" else Trim (Item (Blank + 1 .. Item'Last)));
+         begin
+            if Id'Length > 4 and then Id (Id'First .. Id'First + 3) in "REQ-" | "DEC-"
+              and then Identifiers.Is_Valid (Id) and then Said /= ""
+            then
+               Found ((if Id (Id'First .. Id'First + 3) = "REQ-" then Imported_Item
+                       else Decision_Candidate),
+                      Path & "#" & Id, Headline (Said), Said, Given => Id);
+               return;
+            end if;
+         end;
 
          if Item'Length > 9 and then Item (Item'First .. Item'First + 8) = "Decision:"
          then
@@ -301,7 +296,17 @@ package body Model_Runner.Framework.Bootstrap is
    begin
       for Index in Text'First .. Text'Last + 1 loop
          if Index > Text'Last or else Text (Index) = ASCII.LF then
-            Line_Of (Text (Start .. Index - 1));
+            --  What a fenced block holds is code or an example, not what
+            --  the document says the project must be.
+            declare
+               Raw : constant String := Trim (Text (Start .. Index - 1));
+            begin
+               if Raw'Length >= 3 and then Raw (Raw'First .. Raw'First + 2) in "```" | "~~~" then
+                  In_Fence := not In_Fence;
+               elsif not In_Fence then
+                  Line_Of (Text (Start .. Index - 1));
+               end if;
+            end;
             Start := Index + 1;
          end if;
       end loop;
@@ -475,6 +480,21 @@ package body Model_Runner.Framework.Bootstrap is
       Made_Texts   : Name_Lists.Vector;
       Made_Sources : Name_Lists.Vector;
 
+      --  Entries an output without an identifier was found to be the new
+      --  wording of: each taken by one output only.
+      Rewritten    : Name_Lists.Vector;
+
+      --  Whether the documents read now still say what a provenance is of.
+      function Still_Said (Provenance : String) return Boolean is
+      begin
+         for Other of Found.Outputs loop
+            if Field (Other.Provenance) = Provenance then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Still_Said;
+
       --  An issue, kept as a diagnostic result -- the same issue found
       --  again being the same result -- and said once, when it is new.
       --  What an issue says, before the ways on it names: two about the same
@@ -602,13 +622,23 @@ package body Model_Runner.Framework.Bootstrap is
                              (Kind       => Results.Diagnostic,
                               Producer   => To_Unbounded_String ("bootstrap"),
                               Summary    => To_Unbounded_String
-                                              (Field (Next.Source) & " still says " & Known
+                                              (Field (Next.Source) & " still says "
+                                               --  Quoted where the document names no
+                                               --  identifier: that is what it says.
+                                               & (if Field (Next.Given_Id) = "" then
+                                                     """" & Field (Next.Text) & """ (what "
+                                                     & Known & " was read from)"
+                                                  else Known)
                                                & ", which is " & To_String (Held.State)
                                                & (if Held.Superseded_By = Null_Unbounded_String
                                                   then ""
                                                   else ", replaced by "
                                                        & To_String (Held.Superseded_By))
                                                & (if Held.Superseded_By /= Null_Unbounded_String
+                                                    and then Field (Next.Given_Id) = ""
+                                                  then "; take that line out, or write there what "
+                                                       & To_String (Held.Superseded_By) & " says"
+                                                  elsif Held.Superseded_By /= Null_Unbounded_String
                                                   then "; change it to "
                                                        & To_String (Held.Superseded_By)
                                                        & ", which is read from there then, or take"
@@ -754,6 +784,58 @@ package body Model_Runner.Framework.Bootstrap is
                   return;
                elsif Adopted (Kind, Given) then
                   return;
+               end if;
+
+               --  Said without an identifier, where the document said
+               --  something much like it before and no longer does: its new
+               --  wording, revised in place -- not a second entry beside it.
+               if Given = "" then
+                  declare
+                     Best  : Unbounded_String;
+                     Score : Float := 0.5;
+                  begin
+                     for Other of Intent.List (Item, Kind) loop
+                        declare
+                           Held : Intent.Entity;
+                           Read : E.Error_Info;
+                        begin
+                           Intent.Read (Item, Kind, Other, Held, Read);
+                           if E.Is_Ok (Read)
+                             and then To_String (Held.Source) = Field (Next.Source)
+                             and then Length (Held.Provenance) > 0
+                             and then not Still_Said (To_String (Held.Provenance))
+                             and then not Rewritten.Contains (Other)
+                             and then To_String (Held.State) not in "obsolete" | "superseded" | "rejected"
+                             and then Likeness (To_String (Held.Text), Field (Next.Text)) > Score
+                           then
+                              Score := Likeness (To_String (Held.Text), Field (Next.Text));
+                              Best := To_Unbounded_String (Other);
+                           end if;
+                        end;
+                     end loop;
+                     if Best /= Null_Unbounded_String then
+                        declare
+                           Value  : Records.Item;
+                           Read   : E.Error_Info;
+                           Staged : Boolean;
+                        begin
+                           Rewritten.Append (To_String (Best));
+                           Again (Kind, To_String (Best), Settled => False);
+                           if E.Is_Error (Status) then
+                              return;
+                           end if;
+                           --  Read from where the document says it now.
+                           Stores.Pending (Change, Area_Of (Kind), To_String (Best), Value, Staged);
+                           if not Staged then
+                              Stores.Read (Item, Area_Of (Kind), To_String (Best), Value, Read);
+                              Records.Set_Revision (Value, Records.Revision (Value) + 1);
+                           end if;
+                           Records.Set (Value, "provenance", Provenance);
+                           Stores.Put (Change, Area_Of (Kind), To_String (Best), Value);
+                        end;
+                        return;
+                     end if;
+                  end;
                end if;
                Intent.Propose
                  (Item, Change, Kind, Field (Next.Key), Field (Next.Title),
@@ -971,6 +1053,7 @@ package body Model_Runner.Framework.Bootstrap is
                     and then Read_From.Contains (To_String (Held.Source))
                     and then Length (Held.Provenance) > 0
                     and then not Said_Now.Contains (To_String (Held.Provenance))
+                    and then not Rewritten.Contains (Known)
                     and then To_String (Held.State) not in "obsolete" | "superseded" | "rejected"
                   then
                      declare
@@ -1031,7 +1114,7 @@ package body Model_Runner.Framework.Bootstrap is
                                                then "reject " else "obsolete ")
                                             & Known & " retires it, or keep it as it is -- nothing"
                                             & " needs doing then, this is not raised again, and"
-                                            & " result dismiss ID takes it off the list"
+                                            & " /result dismiss ID takes it off the list"
                                             & (if Instead = Null_Unbounded_String then ""
                                                else "; made from the document now: "
                                                     & To_String (Instead))),

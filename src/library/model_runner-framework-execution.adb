@@ -12,7 +12,6 @@ with Hostkit.Signals;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Leases;
-with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Templates;
 with Model_Runner.Platform;
@@ -38,6 +37,20 @@ package body Model_Runner.Framework.Execution is
       Config : Records.Item;
       Status : E.Error_Info;
       Result : Policy;
+   begin
+      Configurations.Read (Item, Config, Status);
+      if E.Is_Error (Status) then
+         return Result;
+      end if;
+      return Policy_From (Config);
+   end Policy_Of;
+
+   -----------------
+   -- Policy_From --
+   -----------------
+
+   function Policy_From (Config : Records.Item) return Policy is
+      Result : Policy;
 
       function Count (Text : String; Default : Positive) return Positive
       is (if Text'Length in 1 .. 9 and then (for all Char of Text => Char in '0' .. '9')
@@ -48,10 +61,6 @@ package body Model_Runner.Framework.Execution is
       is (if Text'Length in 1 .. 7 and then (for all Char of Text => Char in '0' .. '9')
           then Natural'Value (Text) else 0);
    begin
-      Configurations.Read (Item, Config, Status);
-      if E.Is_Error (Status) then
-         return Result;
-      end if;
       Result.Allowed := Lines_Of (Records.Get (Config, "set.execution.allowed"));
       Result.Shell_Allowed :=
         Records.Get (Config, "scalar.execution.shell") = "allowed";
@@ -69,7 +78,7 @@ package body Model_Runner.Framework.Execution is
       Result.File_MB := Amount (Records.Get (Config, "scalar.execution.max_file_mb"));
       Result.Process_Slots := Amount (Records.Get (Config, "scalar.execution.process_slots"));
       return Result;
-   end Policy_Of;
+   end Policy_From;
 
    -----------
    -- Watch --
@@ -388,13 +397,13 @@ package body Model_Runner.Framework.Execution is
          return "there is nothing to run";
       elsif Needs_Shell (Command) then
          return (if Rules.Shell_Allowed then ""
-                 else "it needs a shell, and the policy does not allow one; reconfigure"
+                 else "it needs a shell, and the policy does not allow one; /reconfigure"
                       & " scalar.execution.shell=allowed lets checks use one");
       elsif not Rules.Allowed.Contains (Words.First_Element)
         and then not Rules.Allowed.Contains (Ada.Directories.Simple_Name (Words.First_Element))
       then
          return Words.First_Element & " is not a program the policy allows; allow it with"
-           & " reconfigure set.execution.allowed+=" & Ada.Directories.Simple_Name (Words.First_Element);
+           & " /reconfigure set.execution.allowed+=" & Ada.Directories.Simple_Name (Words.First_Element);
       elsif (Rules.Memory_MB > 0 or else Rules.CPU_Seconds > 0 or else Rules.Processes > 0
              or else Rules.File_MB > 0)
         and then Hostkit.Process.Locate ("prlimit") = ""

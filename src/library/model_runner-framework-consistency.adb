@@ -178,7 +178,7 @@ package body Model_Runner.Framework.Consistency is
          loop
             if not Stores.Exists (Item, Requirements_Area, Target) then
                Found (Undefined_Requirement, Id,
-                      "it depends on " & Target & ", which is not there; req unlink " & Id
+                      "it depends on " & Target & ", which is not there; /req unlink " & Id
                       & " dependency " & Target & " takes the link off");
             end if;
          end loop;
@@ -230,10 +230,10 @@ package body Model_Runner.Framework.Consistency is
                                           & " makes the configuration agree, or "
                                      else "")
                                   & (if Ada.Strings.Fixed.Index (Mine, "DEC-") = 1
-                                     then "decision govern " & Mine & " " & Subject & " " & Ruling
+                                     then "/decision govern " & Mine & " " & Subject & " " & Ruling
                                           & " overrides=" & Over & " says " & Mine & " holds over "
                                           & Theirs
-                                     else "decision supersede, or a ruling that says which holds"));
+                                     else "/decision supersede, or a ruling that says which holds"));
                         end;
                      end if;
                   end;
@@ -385,7 +385,7 @@ package body Model_Runner.Framework.Consistency is
                   end loop;
                   Found (Missing_Component, Component,
                          "the component of " & To_String (Held) & ", which is neither listed nor"
-                         & " found in the repository: task rehome " & Component
+                         & " found in the repository: /task rehome " & Component
                          & " NAME places them in one that is");
                end;
             end loop;
@@ -418,11 +418,11 @@ package body Model_Runner.Framework.Consistency is
                                   "it is in " & Records.Get (Defined, "component") & ", and "
                                   & Requirement & " it serves belongs to " & Linked.First_Element
                                   & (if Tasks.Components (Item).Contains (Linked.First_Element)
-                                     then ": task edit " & Id & " component="
+                                     then ": /task edit " & Id & " component="
                                           & Linked.First_Element & " places it there"
-                                     else ", which is none of the project's components: req unlink "
+                                     else ", which is none of the project's components: /req unlink "
                                           & Requirement & " component " & Linked.First_Element
-                                          & ", or reconfigure map.component." & Linked.First_Element
+                                          & ", or /reconfigure map.component." & Linked.First_Element
                                           & "=roots=DIR makes it one"));
                         end if;
                      end;
@@ -442,7 +442,7 @@ package body Model_Runner.Framework.Consistency is
                then
                   Found (Undefined_Requirement, Id,
                          "it depends on " & Target & ", which is "
-                         & Intent.State_Of (Item, Intent.Requirement, Target) & "; req unlink " & Id
+                         & Intent.State_Of (Item, Intent.Requirement, Target) & "; /req unlink " & Id
                          & " dependency " & Target & " takes it off");
                end if;
             end loop;
@@ -465,14 +465,14 @@ package body Model_Runner.Framework.Consistency is
             begin
                if Back (Id) then
                   Found (Cyclic_Dependency, Id,
-                         "its dependencies lead back to it, so it waits for itself; req unlink " & Id
+                         "its dependencies lead back to it, so it waits for itself; /req unlink " & Id
                          & " dependency ID takes one off");
                end if;
             end;
             for Target of Intent.Links (Item, Intent.Requirement, Id, Intent.Verification) loop
                if not Stores.Exists (Item, Verification_Area, Target) then
                   Found (Missing_Symbol, Id,
-                         "it is linked to evidence " & Target & ", which is not kept; req unlink " & Id
+                         "it is linked to evidence " & Target & ", which is not kept; /req unlink " & Id
                          & " verification " & Target & " takes it off");
                end if;
             end loop;
@@ -511,16 +511,16 @@ package body Model_Runner.Framework.Consistency is
                       (if E.Is_Ok (Read) and then To_String (Held.Scope) not in "" | "project"
                          and then not Tasks.Components (Item).Contains (To_String (Held.Scope))
                        then "it is accepted and no task serves it, as its scope "
-                            & To_String (Held.Scope) & " is none of the project's components; req link "
+                            & To_String (Held.Scope) & " is none of the project's components; /req link "
                             & Id & " component NAME places it, and a task is derived for it"
                        elsif Ended /= Null_Unbounded_String
                        then "it is accepted and no task serves it: " & To_String (Ended) & " was "
                             & Tasks.State_Of (Item, To_String (Ended)) & ", and "
                             & (if Tasks.State_Of (Item, To_String (Ended)) = "rejected"
-                               then "task reconsider " else "task reopen ")
-                            & To_String (Ended) & " takes it back, or task new TITLE kind=KIND"
+                               then "/task reconsider " else "/task reopen ")
+                            & To_String (Ended) & " takes it back, or /task new TITLE kind=KIND"
                             & " requirements=" & Id & " makes another"
-                       else "it is accepted and no task serves it: task derive makes one, or task"
+                       else "it is accepted and no task serves it: /task derive makes one, or task"
                             & " new TITLE kind=KIND requirements=" & Id));
             end if;
          end;
@@ -590,7 +590,7 @@ package body Model_Runner.Framework.Consistency is
                         Found (Missing_Symbol, Id,
                                (if Intent."=" (Relation, Intent.Test) then "it is tested by "
                                 else "it is implemented by ")
-                               & Target & ", which the repository does not hold; req unlink "
+                               & Target & ", which the repository does not hold; /req unlink "
                                & Id & " " & (if Intent."=" (Relation, Intent.Test) then "test"
                                              else "implementation")
                                & " " & Target & " takes it off");
@@ -602,7 +602,7 @@ package body Model_Runner.Framework.Consistency is
                if not Tasks.Components (Item).Contains (Target) then
                   Found (Missing_Component, Id,
                          "it belongs to the component " & Target
-                         & ", which is not one of the project's: reconfigure map.component."
+                         & ", which is not one of the project's: /reconfigure map.component."
                          & Target & "=roots=DIR makes it one, placed where its files are, or req"
                          & " unlink " & Id & " component " & Target
                          & " takes the link away");
@@ -634,7 +634,7 @@ package body Model_Runner.Framework.Consistency is
                                "it serves " & Requirement & ", which is "
                                & Ada.Strings.Unbounded.To_String (Held.State)
                                & (if Tasks.State_Of (Item, Id) = "candidate"
-                                  then "; task reject " else "; task cancel ")
+                                  then "; /task reject " else "; /task cancel ")
                                & Id & " lets it go");
                      end if;
                   end;

@@ -190,6 +190,13 @@ package Model_Runner.Framework.Templates is
    --  @return Its version.
    function Version (Value : Template) return String;
 
+   --  A template's category: existing for one that takes a repository as
+   --  it is.
+   --
+   --  @param Value The template.
+   --  @return Its category, or the empty string.
+   function Category (Value : Template) return String;
+
    --  A template's category, language and tags, joined for a listing.
    --
    --  @param Value The template.

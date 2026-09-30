@@ -341,6 +341,22 @@ package body Model_Runner.Framework.Configurations is
       end if;
    end Check_Input;
 
+   --  Whether a file at the top of a directory matches a pattern, as
+   --  *.gpr: what a discovery rule that names no one file looks for.
+   function Matches_Any (Directory, Pattern : String) return Boolean is
+      use Ada.Directories;
+      Search : Search_Type;
+      Found  : Boolean;
+   begin
+      Start_Search (Search, Directory, Pattern, [Ordinary_File => True, others => False]);
+      Found := More_Entries (Search);
+      End_Search (Search);
+      return Found;
+   exception
+      when others =>
+         return False;
+   end Matches_Any;
+
    -------------
    -- Prepare --
    -------------
@@ -409,6 +425,24 @@ package body Model_Runner.Framework.Configurations is
                         Invalid ("the secret " & Name
                                  & " would be written into the configuration");
                         return "";
+                     elsif Name'Length > 8
+                       and then Name (Name'Last - 7 .. Name'Last) = ".program"
+                       and then Known.Contains (Name (Name'First .. Name'Last - 8))
+                     then
+                        --  The program a command runs: its first word, by
+                        --  its simple name.
+                        declare
+                           Command : constant String :=
+                             Ada.Strings.Fixed.Trim (Known (Name (Name'First .. Name'Last - 8)),
+                                                     Ada.Strings.Both);
+                           Blank   : constant Natural := Ada.Strings.Fixed.Index (Command, " ");
+                           First   : constant String :=
+                             (if Blank = 0 then Command else Command (Command'First .. Blank - 1));
+                        begin
+                           Append (Output, (if First = "" then "" else Ada.Directories.Simple_Name (First)));
+                        end;
+                        Index := Close + 1;
+                        goto Next_Character;
                      elsif not Known.Contains (Name) then
                         Invalid ("${" & Name & "} names no input declared"
                                  & " before it");
@@ -438,8 +472,10 @@ package body Model_Runner.Framework.Configurations is
             Rule : constant Templates.Discovery_Rule :=
               Templates.Rule_At (Composed, Index);
          begin
-            if Ada.Directories.Exists
-                 (Hostkit.Fs.Join (Project_Directory, To_String (Rule.Path)))
+            if (if Ada.Strings.Fixed.Index (To_String (Rule.Path), "*") > 0
+                then Matches_Any (Project_Directory, To_String (Rule.Path))
+                else Ada.Directories.Exists
+                       (Hostkit.Fs.Join (Project_Directory, To_String (Rule.Path))))
             then
                if Rule.To_Input then
                   Found.Include (To_String (Rule.Key), To_String (Rule.Value));
@@ -463,10 +499,27 @@ package body Model_Runner.Framework.Configurations is
                  (Templates.Input_At (Composed, Index).Id) = Name;
             end loop;
             if not Asked then
-               Status := E.Make (E.Framework_Input_Invalid);
-               E.Add_Text (Status, "name", Name);
-               E.Add_Text (Status, "value", Value_Maps.Element (Position));
-               E.Add_Text (Status, "detail", "no template composed asks for it");
+               --  Named as the input it is not, with the ones there are.
+               declare
+                  Inputs : Name_Lists.Vector;
+                  Listed : Unbounded_String;
+               begin
+                  for Index in 1 .. Templates.Input_Count (Composed) loop
+                     Inputs.Append (To_String (Templates.Input_At (Composed, Index).Id));
+                     Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ")
+                                     & To_String (Templates.Input_At (Composed, Index).Id));
+                  end loop;
+                  Status := E.Make (E.Framework_Input_Invalid);
+                  E.Add_Text (Status, "name", "the template's inputs");
+                  E.Add_Text (Status, "value", Name & "=" & Value_Maps.Element (Position));
+                  E.Add_Text
+                    (Status, "detail",
+                     "it has no input " & Name
+                     & (if Nearest (Name, Inputs) /= "" then "; did you mean " & Nearest (Name, Inputs) & "?"
+                        else "")
+                     & (if Listed = Null_Unbounded_String then "; it takes none"
+                        else "; its inputs: " & To_String (Listed)));
+               end;
                return;
             end if;
          end;
@@ -479,11 +532,36 @@ package body Model_Runner.Framework.Configurations is
             Id       : constant String := To_String (Declared.Id);
             Value    : Unbounded_String;
             Has      : Boolean := True;
+            Deferred : Boolean := False;
+
+            --  Whether a default names the program of an input not known
+            --  yet: ${check_command.program} before check_command is given.
+            function Waits_On_Missing (Default : String) return Boolean is
+               Open  : constant Natural := Ada.Strings.Fixed.Index (Default, "${");
+               Close : constant Natural := Ada.Strings.Fixed.Index (Default, "}");
+            begin
+               if Open = 0 or else Close <= Open + 10 then
+                  return False;
+               end if;
+               declare
+                  Name : constant String := Default (Open + 2 .. Close - 1);
+               begin
+                  return Name'Length > 8 and then Name (Name'Last - 7 .. Name'Last) = ".program"
+                    and then not Known.Contains (Name (Name'First .. Name'Last - 8));
+               end;
+            end Waits_On_Missing;
          begin
             if Given.Contains (Id) then
                Value := To_Unbounded_String (Given (Id));
             elsif Found.Contains (Id) then
                Value := To_Unbounded_String (Found (Id));
+            elsif Declared.Default /= Null_Unbounded_String
+              and then Waits_On_Missing (To_String (Declared.Default))
+            then
+               --  Its default is read from an input still to be given: it is
+               --  worked out once that is, and not asked for itself.
+               Has := False;
+               Deferred := True;
             elsif Declared.Default /= Null_Unbounded_String then
                Value := To_Unbounded_String
                  (Substitute (To_String (Declared.Default)));
@@ -512,6 +590,14 @@ package body Model_Runner.Framework.Configurations is
                      if E.Is_Ok (Again) then
                         Value := To_Unbounded_String (Near);
                         Status := E.Success;
+                     else
+                        --  Too short a name -- a directory called p1 -- as one
+                        --  that is long enough: p1_app.
+                        Check_Input (Declared, Near & "_app", Again);
+                        if E.Is_Ok (Again) then
+                           Value := To_Unbounded_String (Near & "_app");
+                           Status := E.Success;
+                        end if;
                      end if;
                   end;
                end if;
@@ -537,7 +623,7 @@ package body Model_Runner.Framework.Configurations is
                if Declared.Secret then
                   Secrets.Append (Id);
                end if;
-            elsif Declared.Required then
+            elsif Declared.Required and then not Deferred then
                Result.Missing.Append (Id);
             end if;
          end;
@@ -902,7 +988,7 @@ package body Model_Runner.Framework.Configurations is
    --  The settings the harness reads, by their whole names: where a name
    --  is given without its kind and the configuration holds none of it
    --  yet, the one of these it is.
-   Known_Settings : constant array (1 .. 48) of access constant String :=
+   Known_Settings : constant array (1 .. 49) of access constant String :=
      [new String'("list.automation.rules"),
       new String'("list.verification.full"),
       new String'("scalar.agents.max_active"),
@@ -910,6 +996,7 @@ package body Model_Runner.Framework.Configurations is
       new String'("scalar.agents.max_depth"),
       new String'("scalar.agents.max_invocations"),
       new String'("scalar.agents.max_steps"),
+      new String'("scalar.agents.max_tool_calls"),
       new String'("scalar.agents.max_seconds"),
       new String'("scalar.agents.on_child_failure"),
       new String'("scalar.agents.token_budget"),
@@ -951,6 +1038,65 @@ package body Model_Runner.Framework.Configurations is
       new String'("set.task.forbidden"),
       new String'("set.task.gates"),
       new String'("set.task.transitions")];
+
+   -----------------
+   -- Default_Of --
+   -----------------
+
+   function Default_Of (Name : String) return String is
+   begin
+      if Name = "scalar.agents.max_depth" then
+         return "2";
+      elsif Name = "scalar.agents.max_children" then
+         return "3";
+      elsif Name = "scalar.agents.max_active" then
+         return "4";
+      elsif Name = "scalar.agents.token_budget" then
+         return "200000";
+      elsif Name = "scalar.agents.max_steps" then
+         return "24";
+      elsif Name in "scalar.agents.max_tool_calls" | "scalar.agents.max_invocations"
+                  | "scalar.work.max_workspaces"
+      then
+         return "no limit";
+      elsif Name = "scalar.agents.max_seconds" then
+         return "the lease, scalar.work.lease";
+      elsif Name = "scalar.agents.on_child_failure" then
+         return "block: the task is blocked once a required helper fails twice";
+      elsif Name = "scalar.work.lease" then
+         return "3600 seconds";
+      elsif Name = "scalar.work.isolation" then
+         return "project: agents work in the project itself";
+      elsif Name = "scalar.execution.timeout" then
+         return "600 seconds";
+      elsif Name = "scalar.execution.output_limit" then
+         return "1048576 bytes";
+      elsif Name = "scalar.execution.shell" then
+         return "not allowed";
+      elsif Name = "scalar.execution.network" then
+         return "as the host has it";
+      elsif Name in "scalar.execution.max_cpu_seconds" | "scalar.execution.max_file_mb"
+                  | "scalar.execution.max_memory_mb" | "scalar.execution.max_processes"
+                  | "scalar.execution.process_slots"
+      then
+         return "no limit";
+      elsif Name = "set.execution.allowed" then
+         return "none: checks may run no program";
+      elsif Name = "scalar.verification.toolchain" then
+         return "the tools' versions are recorded, not held to";
+      elsif Name = "scalar.init.confirm" then
+         return "no";
+      elsif Name = "scalar.bootstrap.import" then
+         return "accepted: an item a document names by its own identifier is imported accepted";
+      elsif Name = "set.bootstrap.sources" then
+         return "the Markdown at the top and in docs";
+      elsif Name = "set.bootstrap.propose" then
+         return "everything bootstrap finds";
+      elsif Name = "set.components" then
+         return "one: the project itself";
+      end if;
+      return "";
+   end Default_Of;
 
    function Starts (Text, Prefix : String) return Boolean
    is (Text'Length > Prefix'Length
@@ -1420,7 +1566,7 @@ package body Model_Runner.Framework.Configurations is
          then
             return "";
          elsif Starts (Level, "task.") then
-            return "a task's permissions are its own field: task edit "
+            return "a task's permissions are its own field: /task edit "
               & Level (Level'First + 5 .. Level'Last) & " permissions=... sets them";
          else
             return Level & " is no level permissions are read at: they are project, kind.KIND and"
@@ -1576,7 +1722,20 @@ package body Model_Runner.Framework.Configurations is
             end Full_Name;
 
             Name  : constant String := Full_Name;
-            Given : constant String := Value_Maps.Element (Position);
+            Raw   : constant String := Value_Maps.Element (Position);
+
+            --  One capability of a permission level: NAME= takes its entry
+            --  out, as it does any setting's -- not granted there -- and on
+            --  grants it with nothing more.
+            One_Capability : constant Boolean :=
+              Starts (Name, "map.permission.")
+              and then Is_Capability
+                         (Name (Ada.Strings.Fixed.Index (Name, ".", Ada.Strings.Backward) + 1 .. Name'Last))
+              and then Ada.Strings.Fixed.Index (Name (Name'First + 15 .. Name'Last), ".") > 0;
+            Given : constant String :=
+              (if One_Capability and then Raw = "" then "off"
+               elsif One_Capability and then Raw = "on" then ""
+               else Raw);
             Old   : constant String := Records.Get (Result.Before, Name);
             --  A set of names -- components, programs -- is taken apart at
             --  spaces as at commas: none of them holds a space.
@@ -1786,7 +1945,9 @@ package body Model_Runner.Framework.Configurations is
                      --  project, which has none above it.
                      Records.Set (Result.After, Name, "inherit");
                      Result.Changed.Append
-                       (Name & ": " & (if Old = "" then "(not granted here)" else Old) & " -> inherit, "
+                       (Name & ": " & (if Old /= "" then Old
+                                       elsif Rest (Rest'First .. Dot - 1) = "project" then "(the default)"
+                                       else "(as the level above has it)") & " -> inherit, "
                         & (if Rest (Rest'First .. Dot - 1) = "project" then "the project's default"
                            else "as the level above gives it"));
                   end if;
@@ -1850,15 +2011,22 @@ package body Model_Runner.Framework.Configurations is
                               if Field /= Name and then not Records.Has (Result.After, Field)
                                 and then (Level /= "project" or else Permissions.Project_Default (One).Granted)
                               then
-                                 Records.Set (Result.After, Field, "inherit");
+                                 --  The project has nothing above it: its
+                                 --  defaults are written out as they are.
+                                 Records.Set
+                                   (Result.After, Field,
+                                    (if Level = "project"
+                                     then Permissions.Grant_Text (Permissions.Project_Default (One))
+                                     else "inherit"));
                                  Any := True;
                               end if;
                            end;
                         end loop;
                         if Any then
                            Result.Changed.Append
-                             ("map.permission." & Level & ": its other capabilities -> inherit, "
-                              & (if Level = "project" then "the defaults" else "following the level above"));
+                             ("map.permission." & Level & ": its other capabilities -> "
+                              & (if Level = "project" then "the defaults, written out"
+                                 else "inherit, following the level above"));
                         end if;
                      end;
                   end if;

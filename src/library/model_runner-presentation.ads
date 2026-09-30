@@ -137,16 +137,7 @@ package Model_Runner.Presentation is
    --  @return Rendered text.
    function Message_Value (Item : Console; Key : String) return String;
 
-   --  Text that names commands, as it reads where it is shown: in a
-   --  session, each command as its slash command.
-   --
-   --  @param Item Console to read through.
-   --  @param Text The text.
-   --  @return It, as shown.
-   function Session_Form (Item : Console; Text : String) return String;
-
-   --  Look up a next step for embedding in other text: with its values,
-   --  and in a session with the commands it names as typed there.
+   --  Look up a next step for embedding in other text, with its values.
    --
    --  @param Item Console to read through.
    --  @param Key Stable message identifier.

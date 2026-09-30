@@ -347,6 +347,13 @@ package Model_Runner.Framework.Tasks is
    --  @return Their names; none when the project has no name either.
    function Components (Item : Stores.Store) return Name_Lists.Vector;
 
+   --  The components a configuration names, as Components reads them: for
+   --  a change not yet made.
+   --
+   --  @param Settings The configuration record.
+   --  @return Their names.
+   function Components_Of (Settings : Records.Item) return Name_Lists.Vector;
+
    --  The component a task is placed in.
    --
    --  @param Item The store.

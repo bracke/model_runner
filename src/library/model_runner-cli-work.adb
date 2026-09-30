@@ -291,8 +291,8 @@ package body Model_Runner.CLI.Work is
       elsif Model_Runner.Framework.Execution.Cancel_Requested then
          Status := E.Make (E.Generation_Cancelled);
       elsif not Happened.Started or else Happened.Exit_Status /= 0 then
-         Status := E.Make (E.Framework_Contract_Violation);
-         E.Add_Text (Status, "name", "the work contract");
+         Status := E.Make (E.Framework_Agent_Failed);
+         E.Add_Text (Status, "name", "the agent");
          E.Add_Text (Status, "detail", Ended_Because (Happened.Started, Happened.Exit_Status,
                                                       To_String (Happened.Output)));
       end if;
@@ -422,8 +422,8 @@ package body Model_Runner.CLI.Work is
          Status := E.Make (E.Framework_Limit_Exceeded);
          E.Add_Text (Status, "name", "time");
       elsif E.Is_Ok (Status) and then (not Ran.Started or else Ran.Exit_Status /= 0) then
-         Status := E.Make (E.Framework_Contract_Violation);
-         E.Add_Text (Status, "name", "the work contract");
+         Status := E.Make (E.Framework_Agent_Failed);
+         E.Add_Text (Status, "name", "the agent");
          E.Add_Text (Status, "detail", Ended_Because (Ran.Started, Ran.Exit_Status,
                                                       To_String (Ran.Output)));
       end if;
@@ -523,8 +523,8 @@ package body Model_Runner.CLI.Work is
                               (if Model_Runner.Framework.Workspaces.Conflict_Files
                                     (Store, Model_Runner.Framework.Workspaces.Active_For (Store, Id))
                                     .Is_Empty
-                               then "task integrate " & Id
-                               else "it conflicts with the project; task integrate " & Id
+                               then "/task integrate " & Id
+                               else "it conflicts with the project; /task integrate " & Id
                                     & " resolved once settled"))]);
             end if;
          end loop;
@@ -571,14 +571,14 @@ package body Model_Runner.CLI.Work is
          for Child of Tk.Children (Store, Id) loop
             if Tk.State_Of (Store, Child) not in "complete" | "cancelled" | "rejected" then
                Append (Waiting, (if Waiting = Null_Unbounded_String then "" else "; ")
-                       & (if Tk.State_Of (Store, Child) = "candidate" then "task accept " & Child
+                       & (if Tk.State_Of (Store, Child) = "candidate" then "/task accept " & Child
                           elsif Tk.State_Of (Store, Child) = "verification"
                             and then Model_Runner.Framework.Workspaces.Active_For (Store, Child) /= ""
-                          then "task integrate " & Child
+                          then "/task integrate " & Child
                           elsif Tk.State_Of (Store, Child) = "running" then Child & " is being worked"
                           elsif Tk.State_Of (Store, Child) in "blocked" | "failed"
-                          then "task accept " & Child & " (" & Tk.State_Of (Store, Child) & ")"
-                          elsif Tk.Ready (Store, Child).Ready then "work " & Child
+                          then "/task accept " & Child & " (" & Tk.State_Of (Store, Child) & ")"
+                          elsif Tk.Ready (Store, Child).Ready then "/work " & Child
                           else Child & " waits"));
             end if;
          end loop;
@@ -614,8 +614,8 @@ package body Model_Runner.CLI.Work is
                [Loc.Named ("name", Id), Loc.Named ("value", To_String (First)),
                 Loc.Named ("detail",
                            (if Tk.State_Of (Store, To_String (First)) = "candidate"
-                            then "task accept " & To_String (First)
-                            else "work " & To_String (First)))]);
+                            then "/task accept " & To_String (First)
+                            else "/work " & To_String (First)))]);
          elsif State in "blocked" | "failed" then
             return Pres.Next_Step_Value (Screen, "cli.next.retry", [Loc.Named ("name", Id)]);
          end if;
@@ -902,6 +902,16 @@ package body Model_Runner.CLI.Work is
                Offer_All (Ready);
                Offer_All (Waiting);
             end;
+
+            --  Nothing workable: said, with what makes something so --
+            --  not a list to choose from that takes nothing.
+            if Ready.Is_Empty then
+               Pres.Put_Note (Screen, "cli.work.nothing_ready");
+               Say_What_Is_Ready;
+               Status := E.Exit_Cancelled;
+               S.Close (Store);
+               return;
+            end if;
 
             declare
                Picked : constant Natural :=
@@ -1205,7 +1215,7 @@ package body Model_Runner.CLI.Work is
                         else "cli.work.ended_because"),
                [Loc.Named ("name", (if To_String (Done.Final_State) = "verification"
                                     then "in verification" else To_String (Done.Final_State))),
-                Loc.Named ("detail", Pres.Session_Form (Screen, To_String (Done.Reason)))]);
+                Loc.Named ("detail", To_String (Done.Reason))]);
          end if;
 
          --  And what a person does next, where it did not complete.
@@ -1237,7 +1247,12 @@ package body Model_Runner.CLI.Work is
             begin
                Tk.Definition (Store, To_String (Done.Task_Id), Defined, Read);
                Kind := To_Unbounded_String (R.Get (Defined, "kind"));
-               if R.Get (Defined, "permissions") /= "" then
+               --  The session's sandbox refused it: that is what to widen,
+               --  not the project's permissions.
+               if Ada.Strings.Fixed.Index (To_String (Done.Reason), "sandbox") > 0 then
+                  Pres.Put_Note (Screen, "cli.next.sandbox_refused",
+                                 [Loc.Named ("name", To_String (Done.Task_Id))]);
+               elsif R.Get (Defined, "permissions") /= "" then
                   Pres.Put_Note (Screen, "cli.next.own_permissions_refused",
                                  [Loc.Named ("name", To_String (Done.Task_Id))]);
                else
@@ -1431,14 +1446,14 @@ package body Model_Runner.CLI.Work is
                                   then Pm.Sandbox_Source & " withholds propose_tasks or"
                                        & " create_children"
                                   elsif R.Get (Defined, "permissions") /= ""
-                                  then "its own permissions limit it: task edit "
+                                  then "its own permissions limit it: /task edit "
                                        & To_String (Done.Task_Id) & " permissions=... widens them"
                                   elsif Ada.Strings.Fixed.Index (To_String (Why), "max_depth") > 0
                                     or else Ada.Strings.Fixed.Index (To_String (Why), "max_children") > 0
-                                  then "reconfigure map.permission." & Level
+                                  then "/reconfigure map.permission." & Level
                                        & ".create_children=""max_depth=N max_children=N"" raises the"
                                        & " limit that stopped them"
-                                  else "reconfigure map.permission." & Propose_Level
+                                  else "/reconfigure map.permission." & Propose_Level
                                        & ".propose_tasks= lets its agent propose them"
                                        & (if Propose_Level = "project" and then Said_Kind
                                             and then not Of_Kind (Pm.Propose_Tasks).Granted

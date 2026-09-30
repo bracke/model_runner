@@ -1782,6 +1782,63 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Twelfth usability round:**
+  - Every hint names its command as a session types it -- with the slash
+    -- in the catalog and the code alike; the guess that added slashes as
+    text was shown is gone.
+  - `/init` shows its plan -- inputs, files to write and to keep, facts, and
+    checks the policy would refuse -- above its confirmation, asks whenever
+    it would write into a directory that holds a project, offers the
+    existing-repository template first there, offers to allow what the
+    checks need, and hides a secret input. The generic template takes the
+    check program from the command and finds `gprbuild` from a `.gpr`; a
+    name too short for a crate becomes NAME_app; a mistyped template or
+    input gets a "did you mean", and the inputs are listed.
+  - `/reconfigure` says what a change leaves without a component before it
+    asks, prints its usage when given nothing or --help, and takes
+    `NAME = VALUE` spaced. `NAME=` on a permission's capability takes it
+    away; `on` grants it; a project level's defaults are written out, not
+    as inherit; the before-value is what `/config` shows.
+  - `/config` gives every known setting's real default, the agents' bounds
+    with the grant that holds below them, and marks `input.` values as
+    given at `/init`. `/help init|task|work|req|reconfigure` says how each
+    is used; `/scan` and `/task rehome` are listed.
+  - `/state` names the next step and refuses a stray word; its last full
+    test is a run on the project, not in a workspace; a session opening
+    says what work waits to be taken in.
+  - `/req accept A B`, `/decision reject A B` and `/accept all` decide
+    several; a bare `/accept` lists each candidate on its own line.
+    `/req verify` falls back to the default profile. Bootstrap reads
+    `- REQ-X text`, skips fenced code, takes a reworded line as the
+    requirement revised, quotes what a document still says of a retired
+    decision, and supersede says when it accepts a candidate.
+  - `/users` and `/deps` answer for a symbol; `/tree DIR` lists that
+    directory.
+  - An answer that breaks the work contract, or an agent that crashes --
+    now its own error, MR-FRAMEWORK-0034 -- keeps what it changed: waiting
+    in its workspace to be taken in, or the task blocked with the files
+    where they are. `/task integrate ID discard` gives work up and accepts
+    the task afresh; conflicts show pasteable diffs; a failed re-check says
+    so and lists as `checks failed`; the audit records conflicts and how
+    they were got past; hints are never cut short.
+  - `/task list` checks its filters and says when none match; `/task new`
+    refuses a misspelt kind or component with the nearest, and asks no
+    field in their place; parts inherit their parent's dependencies;
+    `/work` with nothing ready says so; `/task plan` names the task it
+    means; the path a model is steered to is the longest that exists.
+  - Permissions: a sandbox refusal points at `/sandbox` and blocks rather
+    than fails; `/task show` says where its permissions come from and what
+    a sandbox withholds, `/state` shows the sandbox; the delegate tool
+    offers only the project's roles; `/instruct` refuses words without
+    `=`, names a subject that is no setting, and says it changes no
+    setting; permissions that leave a task nothing are refused; a read-only
+    task is told to answer, not to write.
+  - A project command typed while a message is being written runs, and the
+    message is kept; Ctrl-C's prompt is the first line's again. A helper's
+    tool lines carry its identifier, and a repeated answer is not written
+    twice. `/cancel` asks first and names what the work left behind.
+  - On Linux an agent and everything it started die with the session,
+    `kill -9` included (hostkit 2e9d94d).
 - **`/check` on a large project, 0.41 s to 0.20 s:** the state snapshot a
   check is guarded by holds its texts shared rather than copied, and files
   are read whole rather than a small block at a time; the remembered graph
@@ -19253,7 +19310,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 220 diagnostic
+- Localization through `messages`, with a catalog entry for all 221 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

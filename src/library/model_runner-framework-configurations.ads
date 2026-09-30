@@ -245,4 +245,11 @@ package Model_Runner.Framework.Configurations is
    --  @return The names.
    function Known_Names return Name_Lists.Vector;
 
+   --  What a known setting means when the configuration does not set it.
+   --
+   --  @param Name Its whole name.
+   --  @return The value it takes, said as it holds; empty where the
+   --    harness has no one default.
+   function Default_Of (Name : String) return String;
+
 end Model_Runner.Framework.Configurations;

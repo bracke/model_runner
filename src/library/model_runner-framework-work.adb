@@ -43,8 +43,26 @@ package body Model_Runner.Framework.Work is
    -- Instructions --
    ------------------
 
-   function Instructions_For (May_Propose : Boolean; May_Split : Boolean := True) return String
-   is ("## What to do" & ASCII.LF
+   --  A task its agent may write nothing for is one to answer: read what
+   --  it needs, and say what it found -- not told to change files it may
+   --  not, which would only fail it.
+   Read_Only_Opening : constant String :=
+     "## What to do" & ASCII.LF
+     & "Do the task now by reading: read_file reads a file, list_directory"
+     & " lists a directory; paths are relative to the project. This task is"
+     & " answered, not written: you may change no file, and a change to any"
+     & " file fails the work. Put what you found in summary:, and more of it,"
+     & " a finding a line, under findings:." & ASCII.LF & ASCII.LF
+     & "When you have the answer, finish with a short report in these lines:"
+     & ASCII.LF & ASCII.LF
+     & "status: done" & ASCII.LF
+     & "summary: one line on what you found" & ASCII.LF
+     & "changed_files: none" & ASCII.LF & ASCII.LF;
+
+   function Instructions_For
+     (May_Propose : Boolean; May_Split : Boolean := True; May_Write : Boolean := True) return String
+   is ((if not May_Write then Read_Only_Opening
+        else "## What to do" & ASCII.LF
        & "Do the task now, with the tools: read_file reads a file, write_file"
        & " writes the whole new content of a file, list_directory lists a"
        & " directory. Paths are relative to the project. Make each change by"
@@ -57,7 +75,7 @@ package body Model_Runner.Framework.Work is
        & ASCII.LF & ASCII.LF
        & "status: done" & ASCII.LF
        & "summary: one line on what you did" & ASCII.LF
-       & "changed_files: the files you wrote" & ASCII.LF & ASCII.LF
+       & "changed_files: the files you wrote" & ASCII.LF & ASCII.LF)
        & "If you could not do it, the status is failed and the summary says"
        & " why. Two other statuses are for rare cases: issue, for a problem"
        & " found outside the task, and blocked, for a decision only a person"
@@ -84,8 +102,20 @@ package body Model_Runner.Framework.Work is
    --  The same, for an agent that is a command: it works on the files
    --  itself, in the directory it is started in, and answers on its
    --  standard output; it has no tools to call.
-   function Command_Instructions (May_Propose : Boolean; May_Split : Boolean := True) return String
-   is ("## What to do" & ASCII.LF
+   function Command_Instructions
+     (May_Propose : Boolean; May_Split : Boolean := True; May_Write : Boolean := True) return String
+   is ((if not May_Write
+        then "## What to do" & ASCII.LF
+             & "Do the task now by reading the files: you are started in the"
+             & " project's directory, and paths are relative to it. This task is"
+             & " answered, not written: change no file -- a change to any file fails"
+             & " the work." & ASCII.LF & ASCII.LF
+             & "When you have the answer, print a short report on standard output,"
+             & " in these lines:" & ASCII.LF & ASCII.LF
+             & "status: done" & ASCII.LF
+             & "summary: one line on what you found" & ASCII.LF
+             & "changed_files: none" & ASCII.LF & ASCII.LF
+        else "## What to do" & ASCII.LF
        & "Do the task now, working on the files yourself: you are started in"
        & " the project's directory, and paths are relative to it. Change the"
        & " files the task needs changed; describing a change does not make it."
@@ -94,7 +124,7 @@ package body Model_Runner.Framework.Work is
        & " in these lines:" & ASCII.LF & ASCII.LF
        & "status: done" & ASCII.LF
        & "summary: one line on what you did" & ASCII.LF
-       & "changed_files: the files you wrote, one a line" & ASCII.LF & ASCII.LF
+       & "changed_files: the files you wrote, one a line" & ASCII.LF & ASCII.LF)
        & "If you could not do it, the status is failed and the summary says"
        & " why; issue is for a problem found outside the task, and blocked for"
        & " a decision only a person can make."
@@ -402,10 +432,16 @@ package body Model_Runner.Framework.Work is
 
    --  What a run stopped part way left in the project, and the ways on,
    --  said alike however it stopped.
-   function Left_Words (Files_Named, Task_Id : String) return String
+   function Left_Words (Item : Stores.Store; Files_Named, Task_Id : String) return String
    is ("; what it changed is still in the project: " & Files_Named
-       & " -- undo it with the project's version control, removing files it made,"
-       & " or task complete " & Task_Id & " once it is done by hand");
+       --  Undone by the project's version control where it has one; where
+       --  it has none, nothing keeps what was there before.
+       & (if Ada.Directories.Exists
+               (Hostkit.Fs.Join (Ada.Directories.Containing_Directory (Stores.Root (Item)), ".git"))
+          then " -- git checkout -- FILE undoes a change, and removing a file it made undoes that,"
+          else " -- the project has no version control to undo it from: look at each, and put"
+               & " back what should not be,")
+       & " or /task complete " & Task_Id & " once it is done by hand");
 
    --  A task's kind, as its definition says.
    function Kind_Of_Task (Item : Stores.Store; Task_Id : String) return String is
@@ -511,7 +547,7 @@ package body Model_Runner.Framework.Work is
                      return "";
                   end if;
                   Annotate (Item, Change, Id, "changed_files", To_String (Lines));
-                  return Left_Words (To_String (Named), Id);
+                  return Left_Words (Item, To_String (Named), Id);
                end Left_In_Project;
 
                function Given_Up return String is
@@ -1008,7 +1044,7 @@ package body Model_Runner.Framework.Work is
                & Natural'Image (Consistency.Length (Wrong)) & ", first "
                & To_String (Consistency.Element (Wrong, 1).Subject) & ": "
                & To_String (Consistency.Element (Wrong, 1).Detail)
-               & "; check consistency lists it all");
+               & "; /check consistency lists it all");
          end if;
       end;
    end Recover_On_Opening;
@@ -1386,6 +1422,12 @@ package body Model_Runner.Framework.Work is
             else "its gates passed on " & Records.Get (State, "current_verification")));
       if Records.Get (State, "replaced_by") /= "" then
          Say ("replaced", Records.Get (State, "replaced_by"));
+      end if;
+      for Line of Lines_Of (Records.Get (State, "conflicts")) loop
+         Say ("conflict", Line);
+      end loop;
+      if Records.Get (State, "resolution") /= "" then
+         Say ("resolution", Records.Get (State, "resolution"));
       end if;
       Say ("integration",
            (if Records.Get (State, "current_workspace") = ""
@@ -2153,6 +2195,18 @@ package body Model_Runner.Framework.Work is
          return "";
       end Sandbox_Said;
 
+      --  Whether its agent may write anything at all: a task it may not is
+      --  one to answer, and it is told so.
+      function May_Write_Here return Boolean is
+         Held_Agent : Agents.Agent;
+         Read       : E.Error_Info;
+      begin
+         Agents.Read (Item, To_String (Result.Agent_Id), Held_Agent, Read);
+         return E.Is_Error (Read)
+           or else Held_Agent.Allowed (Permissions.Write_Source).Granted
+           or else Held_Agent.Allowed (Permissions.Write_Specs).Granted;
+      end May_Write_Here;
+
       --  Whether its agent may propose work: what it is told to answer
       --  with follows.
       function May_Propose_Here return Boolean is
@@ -2366,7 +2420,7 @@ package body Model_Runner.Framework.Work is
             for Path of Result.Changed_Files loop
                Append (Named, (if Named = Null_Unbounded_String then "" else ", ") & Path);
             end loop;
-            return Left_Words (To_String (Named), Task_Id);
+            return Left_Words (Item, To_String (Named), Task_Id);
          end Left_Behind;
 
          --  Not done, where it worked apart: its workspace is given up --
@@ -2458,6 +2512,32 @@ package body Model_Runner.Framework.Work is
          end if;
          Result.Final_State := To_Unbounded_String (Tasks.State_Of (Item, Task_Id));
       end Conclude;
+
+      --  Work that did not end as it should -- an answer that broke the
+      --  contract, an agent that crashed -- and changed files: kept for a
+      --  person. Apart, it waits in its workspace to be taken in as any
+      --  finished work does; in the project, the task is set aside with
+      --  the files where they are.
+      procedure Keep_Work (Why : String) is
+      begin
+         if Isolated and then Result.Workspace_Id /= Null_Unbounded_String
+           and then not Result.Changed_Files.Is_Empty
+         then
+            Conclude ("verification",
+                      Why & "; what it changed is kept in its workspace "
+                      & To_String (Result.Workspace_Id) & ": " & Comma_Separated (Result.Changed_Files)
+                      & " -- /task integrate " & Task_Id & " checks it and takes it in, /task cancel "
+                      & Task_Id & " gives it up",
+                      "failed");
+         elsif not Result.Changed_Files.Is_Empty then
+            Conclude ("blocked",
+                      Why & " -- where what it changed does the task, /task complete " & Task_Id
+                      & " takes it as done, its checks passing",
+                      "failed");
+         else
+            Conclude ("blocked", Why, "failed");
+         end if;
+      end Keep_Work;
 
       --  Hold the task -- and, writing in the project itself, its component
       --  and the project -- for so long; taken again by the same agent, a
@@ -2562,8 +2642,8 @@ package body Model_Runner.Framework.Work is
       Context.Build
         (Item, Task_Id, Model, Built, Held,
          Instructions => (if Ada.Strings.Fixed.Index (Runner_Named, "the command ") = 1
-                          then Command_Instructions (May_Propose_Here, May_Split_Here)
-                          else Instructions_For (May_Propose_Here, May_Split_Here))
+                          then Command_Instructions (May_Propose_Here, May_Split_Here, May_Write_Here)
+                          else Instructions_For (May_Propose_Here, May_Split_Here, May_Write_Here))
                          & Allowed_Here & Its_Parts);
       if E.Is_Error (Held) then
          Conclude ("blocked", "its context cannot be built: "
@@ -2930,6 +3010,11 @@ package body Model_Runner.Framework.Work is
          Stop_Children (Item, Change, To_String (Result.Agent_Id), "the work ran out of time");
          Conclude ("blocked", "its work ran out of time", "failed");
          return;
+      elsif E.Is_Error (Ran) and then Ran.Code = E.Framework_Agent_Failed then
+         --  A crash is not wrong work: what it changed is kept to be
+         --  looked at, and the task set aside.
+         Keep_Work (Why_Of (Ran));
+         return;
       elsif E.Is_Error (Ran) then
          Conclude ("failed", Why_Of (Ran), "failed");
          return;
@@ -2959,7 +3044,7 @@ package body Model_Runner.Framework.Work is
                       & To_String (Named)
                       & (if Beyond_Permissions = "" then ""
                          else "; and it changed files it may not write, which are still there:"
-                              & " " & Beyond_Permissions & " -- take them out before task complete"
+                              & " " & Beyond_Permissions & " -- take them out before /task complete"
                               & Sandbox_Said (Beyond_Permissions))
                       & (if Put_Back_Files.Is_Empty then ""
                          else "; and it changed files it may not write, which were put back as"
@@ -2993,7 +3078,13 @@ package body Model_Runner.Framework.Work is
             if Isolated then
                Workspaces.Abandon (Item, Change, To_String (Result.Workspace_Id), Held);
             end if;
-            Conclude ("failed", "it changed files it may not write: "
+            --  Refused by the session's sandbox alone, the work is not
+            --  wrong: set aside until the sandbox lets it.
+            Conclude ((if Sandbox_Said (Comma_Separated (Put_Back_Files)
+                                        & (if Denied = Null_Unbounded_String then ""
+                                           else "," & To_String (Denied))) /= ""
+                       then "blocked" else "failed"),
+                      "it changed files it may not write: "
                       & (if Put_Back_Files.Is_Empty then ""
                          else Comma_Separated (Put_Back_Files) & ", which were put back as they"
                               & " were" & (if Denied = Null_Unbounded_String then "" else "; "))
@@ -3001,7 +3092,7 @@ package body Model_Runner.Framework.Work is
                          else To_String (Denied)
                               & (if Isolated then ""
                                  else ", which are still in the project -- take them out before"
-                                      & " task complete"))
+                                      & " /task complete"))
                       & Sandbox_Said (Comma_Separated (Put_Back_Files)
                                       & (if Denied = Null_Unbounded_String then ""
                                          else "," & To_String (Denied)))
@@ -3014,17 +3105,28 @@ package body Model_Runner.Framework.Work is
       Invocations.Hold (Invocations.Work_Claim, To_String (Answer), Said, Held);
       if E.Is_Error (Held) then
          Keep_Proposals_Aside;
-         Conclude ("failed", "its answer did not keep to the work contract: "
-                   & E.Text_Of (Held, "name") & ": " & E.Text_Of (Held, "detail")
-                   --  A call written out as text is no call: said, since the
-                   --  model meant one and nothing ran.
-                   & (if Index (Answer, """name""") > 0 and then Index (Answer, """arguments""") > 0
-                      then "; the answer looks like a tool call written as text, which runs"
-                           & " nothing -- a model that writes its calls so needs the model's own"
-                           & " call format, or a larger model"
-                      else "")
-                   & "; the answer is kept as "
-                   & To_String (Last_Result), "failed");
+         declare
+            Why : constant String :=
+              "its answer did not keep to the work contract: "
+              & E.Text_Of (Held, "name") & ": " & E.Text_Of (Held, "detail")
+              --  A call written out as text is no call: said, since the
+              --  model meant one and nothing ran.
+              & (if Index (Answer, """name""") > 0 and then Index (Answer, """arguments""") > 0
+                 then "; the answer looks like a tool call written as text, which runs"
+                      & " nothing -- a model that writes its calls so needs the model's own"
+                      & " call format, or a larger model"
+                 else "")
+              & "; the answer is kept as "
+              & To_String (Last_Result);
+         begin
+            --  Files it did change are work, whatever it said of them: kept
+            --  to be looked at, not thrown away with the answer.
+            if not Result.Changed_Files.Is_Empty then
+               Keep_Work (Why);
+            else
+               Conclude ("failed", Why, "failed");
+            end if;
+         end;
          return;
       end if;
       Result.Claimed := To_Unbounded_String (Invocations.Claim (Said, "status"));
@@ -3497,7 +3599,7 @@ package body Model_Runner.Framework.Work is
          --  Split again into parts all done: nothing is left to wait for,
          --  and waiting would only bring it back here.
          Conclude ("blocked", "its parts " & Comma_Separated (Split_Into) & " are complete and it"
-                   & " asked for them again; task complete " & Task_Id & " takes it as done",
+                   & " asked for them again; /task complete " & Task_Id & " takes it as done",
                    "completed");
          return;
       elsif To_String (Result.Claimed) in "blocked" | "issue" then
@@ -3509,7 +3611,7 @@ package body Model_Runner.Framework.Work is
                    & (if Parts_Proposed.Is_Empty then ""
                       else "; its agent may not make children, so the parts it asked for are"
                            & " proposals of their own (" & Comma_Separated (Parts_Proposed)
-                           & "): task split " & Task_Id & " makes parts of it by hand"),
+                           & "): /task split " & Task_Id & " makes parts of it by hand"),
                    "completed");
          return;
       elsif To_String (Result.Claimed) = "failed" then
@@ -3934,14 +4036,14 @@ package body Model_Runner.Framework.Work is
                 elsif Tasks.State_Of (Item, Task_Id) = "complete"
                 then To_String (Had) & " was taken in already"
                 elsif Tasks.State_Of (Item, Task_Id) = "cancelled"
-                then To_String (Had) & " was given up when it was cancelled; task reopen " & Task_Id
+                then To_String (Had) & " was given up when it was cancelled; /task reopen " & Task_Id
                      & " makes it ready again"
                 elsif Tasks.State_Of (Item, Task_Id) = "blocked"
                   and then not Tasks.Children (Item, Task_Id).Is_Empty
                 then To_String (Had) & " was given up when it split into parts; it goes on once they"
                      & " are done"
                 else To_String (Had) & " was given up when it " & Tasks.State_Of (Item, Task_Id)
-                     & "; task accept " & Task_Id & " does its work again"));
+                     & "; /task accept " & Task_Id & " does its work again"));
          end;
          return;
       end if;
@@ -4056,18 +4158,45 @@ package body Model_Runner.Framework.Work is
                for Other of Whose loop
                   Annotate (Item, Change, Other, "replaced_by",
                             Task_Id & "'s taking in replaced its change to "
-                            & Comma_Separated (Unsettled) & "; task reopen " & Other
+                            & Comma_Separated (Unsettled) & "; /task reopen " & Other
                             & " does it again");
                end loop;
                if not Whose.Is_Empty then
-                  Append (Result.Reason, "; task reopen " & Comma_Separated (Whose)
+                  Append (Result.Reason, "; /task reopen " & Comma_Separated (Whose)
                           & " does that work again");
                end if;
             end;
          end if;
       end;
+      --  How a conflict was got past, in the task's history.
+      if Text_Resolved or else Semantic_Accepted then
+         Annotate (Item, Change, Task_Id, "resolution",
+                   (if Text_Resolved and then Semantic_Accepted then "settled by hand and taken in anyway"
+                    elsif Text_Resolved then "settled by hand in " & Id
+                    else "taken in anyway, past what the code joins"));
+      end if;
       Workspaces.Integrate (Item, Change, Id, True, Taken, Status, Semantic_Accepted,
                             Text_Resolved);
+
+      --  A conflict found: kept in the task's history, each time, apart
+      --  from the change that did not happen.
+      if Status.Code = E.Framework_Integration_Conflict then
+         declare
+            Noted  : Stores.Transaction;
+            Kept   : E.Error_Info;
+            State  : Records.Item;
+            Read   : E.Error_Info;
+         begin
+            Stores.Read (Item, Tasks_Area, Task_Id & ".state", State, Read);
+            Annotate (Item, Noted, Task_Id, "conflicts",
+                      (if Records.Get (State, "conflicts") = "" then ""
+                       else Records.Get (State, "conflicts") & ASCII.LF)
+                      & Timestamp & " " & Id & ": "
+                      & (if Workspaces.Conflict_Files (Item, Id).Is_Empty then E.Text_Of (Status, "detail")
+                         else Comma_Separated (Workspaces.Conflict_Files (Item, Id))));
+            Stores.Commit (Item, Noted, Kept);
+         end;
+      end if;
 
       if E.Is_Ok (Status) then
          Report_Integration (Item, Change, Id, Task_Id, Taken, Status);
