@@ -1782,6 +1782,11 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A session is the default:** `model_runner` alone at a terminal opens
+  one, offering the models on hand to choose from, and `model_runner MODEL
+  [options]` -- a model named first, with no command word -- is `run MODEL`,
+  a session when standard input and output are terminals. A word that names
+  no model is still an unknown command.
 - **The project's commands are a session's alone.** `init`, `task`, `work`,
   `repo` and the project words (`req`, `state`, `bootstrap`, `config`,
   `reconfigure`, `check`, `decision`, `spec`, `result`, `sandbox`,

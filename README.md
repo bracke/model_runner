@@ -56,6 +56,8 @@ $ model_runner run tiny-model.gguf --raw --prompt "ab" --seed 42 --temperature 0
 ## Commands
 
 ```
+model_runner [MODEL]         a session on a terminal: the model named, or
+                             one chosen from the models directory
 model_runner run MODEL       generate text from a model file
 model_runner embed MODEL     reduce a text to one vector
 model_runner inspect MODEL   report what a model file contains
@@ -65,11 +67,11 @@ model_runner version         show version information
 ```
 
 The project's commands -- /init, /task, /work, /req, /check, /tree and the
-rest -- are a session's: `model_runner run MODEL --interactive`, then
+rest -- are a session's: `model_runner MODEL`, then
 `/help project` lists them.
 
-The model path is explicit. No registry, short name, tag or manifest is
-resolved.
+A model is a path, a file in the models directory, an alias from the
+settings file, or a Hugging Face reference offered for download.
 
 Run `model_runner help run` for the full option list. Options are validated
 with the same typed path as environment variables, repeated options are a usage
@@ -89,7 +91,7 @@ transaction that an interrupted session finishes or undoes on the next
 open; nothing is kept in a conversation.
 
 The commands are typed in the conversation, between turns, in the project
-directory: `model_runner run MODEL --interactive`, then
+directory: `model_runner MODEL`, then
 
 ```
 /init ada-cli project_name=hello        start from a template

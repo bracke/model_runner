@@ -1,5 +1,6 @@
 with Ada.Characters.Handling;
 with Ada.Containers.Indefinite_Vectors;
+with Ada.Directories;
 with Ada.Strings.Fixed;
 
 with Model_Runner.CLI.Execute;
@@ -81,7 +82,8 @@ package body Model_Runner.CLI.Driver is
       --  Fill Tokens with the command word, the settings the command takes
       --  and the command line did not give (a true/false setting as its
       --  --flag or --no-flag), and the arguments as typed. Left empty when
-      --  there is no command word, so the parser sees the source unchanged.
+      --  there is no command word, so the parser sees the source unchanged;
+      --  run when there is none at a terminal or a model is named first.
       procedure Compose is
          Kind : Opt.Command_Kind;
          function Lower (Item : String) return String
@@ -90,12 +92,42 @@ package body Model_Runner.CLI.Driver is
            is (V = "true" or else V = "yes" or else V = "on");
          function Falsy (V : String) return Boolean
            is (V = "false" or else V = "no" or else V = "off");
+         --  What a word names: a model -- an alias the settings give, a
+         --  file here or in the models directory, a .gguf name, a path or a
+         --  hub reference -- rather than a mistyped command.
+         function Names_A_Model (Word : String) return Boolean is
+            Path : constant String := Model_Runner.Platform.Resolve_Model_Path (Word);
+         begin
+            return Model_Runner.Config.Has ("alias." & Word)
+              or else Ada.Strings.Fixed.Index (Word, "/") > 0
+              or else (Word'Length > 5
+                       and then Lower (Word (Word'Last - 4 .. Word'Last)) = ".gguf")
+              or else (Ada.Directories.Exists (Path)
+                       and then Ada.Directories."=" (Ada.Directories.Kind (Path),
+                                                     Ada.Directories.Ordinary_File));
+         exception
+            when others =>
+               return False;
+         end Names_A_Model;
+
+         --  A session is the default: nothing typed at a terminal is run,
+         --  choosing the model, and a model named first is run with it.
+         Session : constant Boolean :=
+           (if Source.Count = 0
+            then Model_Runner.Platform.Is_Terminal (0) and then Model_Runner.Platform.Is_Terminal (1)
+            else Opt.Command_Of (Source.Value (1)) = Opt.Command_None
+                 and then Ada.Strings.Fixed.Head (Source.Value (1), 1) /= "-"
+                 and then Names_A_Model (Source.Value (1)));
       begin
-         if Source.Count = 0 then
+         if Session then
+            Tokens.Append ("run");
+            Kind := Opt.Command_Run;
+         elsif Source.Count = 0 then
             return;
+         else
+            Tokens.Append (Source.Value (1));
+            Kind := Opt.Command_Of (Source.Value (1));
          end if;
-         Tokens.Append (Source.Value (1));
-         Kind := Opt.Command_Of (Source.Value (1));
 
          for Index in 1 .. Model_Runner.Config.Count loop
             declare
@@ -120,7 +152,7 @@ package body Model_Runner.CLI.Driver is
             end;
          end loop;
 
-         for Index in 2 .. Source.Count loop
+         for Index in (if Session then 1 else 2) .. Source.Count loop
             Tokens.Append (Source.Value (Index));
          end loop;
       end Compose;

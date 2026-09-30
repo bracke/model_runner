@@ -3113,10 +3113,16 @@ package body Tests.CLI_Cases is
 
       Model : constant String := "obj/grammar-model.gguf";
 
-      function Under (Rules : String; Status : out Natural) return String is
+      --  Model_First: the model named first, as a session is started, with
+      --  no command word -- the same run.
+      function Under (Rules : String; Status : out Natural; Model_First : Boolean := False)
+        return String
+      is
          Source : Fixed_Arguments;
       begin
-         Add (Source, "run");
+         if not Model_First then
+            Add (Source, "run");
+         end if;
          Add (Source, Model);
          Add (Source, "--raw");
          Add (Source, "--prompt");
@@ -3150,6 +3156,17 @@ package body Tests.CLI_Cases is
                     "the run produced a character the grammar forbids: "
                     & Letter & " in <" & Text & ">");
          end loop;
+      end;
+
+      --  A model named first is run: running is the default command.
+      declare
+         Worded_Status : Natural;
+         Worded : constant String := Under ("root ::= [abc]+", Worded_Status);
+         Bare   : constant String := Under ("root ::= [abc]+", Status, Model_First => True);
+      begin
+         Assert (Worded_Status = 0 and then Status = 0 and then Bare = Worded,
+                 "a model named first was not run as run runs it: <" & Bare & "> for <"
+                 & Worded & ">");
       end;
 
       --  A different set gives different text, so the constraint is being
