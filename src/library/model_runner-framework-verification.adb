@@ -672,7 +672,7 @@ package body Model_Runner.Framework.Verification is
          end;
 
          Passed := True;
-         State := Stores.Snapshot_State (Item);
+         Stores.Snapshot_State (Item, State);
          for Index in 1 .. Length (Checks) loop
             declare
                Next    : constant Check := Element (Checks, Index);

@@ -1,4 +1,5 @@
 with Ada.Directories;
+with Ada.Streams;
 with Ada.Streams.Stream_IO;
 with Ada.Unchecked_Deallocation;
 
@@ -66,7 +67,28 @@ package body Model_Runner.Framework.Files is
       end;
 
       Stream_IO.Open (File, Stream_IO.In_File, Path);
-      String'Read (Stream_IO.Stream (File), Buffer.all);
+
+      --  Read whole, as bytes: String'Read goes a small block at a time,
+      --  and the state's indexes are megabytes.
+      if Buffer'Length > 0 then
+         declare
+            use type Ada.Streams.Stream_Element_Offset;
+            Bytes : Ada.Streams.Stream_Element_Array
+              (1 .. Ada.Streams.Stream_Element_Offset (Buffer'Length))
+            with Import, Address => Buffer.all'Address;
+            Last  : Ada.Streams.Stream_Element_Offset := 0;
+            Got   : Ada.Streams.Stream_Element_Offset;
+         begin
+            while Last < Bytes'Last loop
+               Stream_IO.Read (File, Bytes (Last + 1 .. Bytes'Last), Got);
+               exit when Got <= Last;
+               Last := Got;
+            end loop;
+            if Last < Bytes'Last then
+               raise Stream_IO.End_Error;
+            end if;
+         end;
+      end if;
       Stream_IO.Close (File);
       Text := To_Unbounded_String (Buffer.all);
       Free (Buffer);

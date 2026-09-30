@@ -1782,6 +1782,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **`/check` on a large project, 0.41 s to 0.20 s:** the state snapshot a
+  check is guarded by holds its texts shared rather than copied, and files
+  are read whole rather than a small block at a time; the remembered graph
+  is brought up to date in place, copied only where it changed; and an
+  index is written only where what it lists changed, one small record
+  saying what they were all built from -- so the command after a `/check`
+  no longer rebuilds megabytes of indexes (`/scan` after it 0.88 s to
+  0.3 s). The tests index gathers what each test file depends on in one
+  walk of the relations.
 - **A project with a large tree opens fast:** keeping the repository graph
   set each of its hundred thousand fields by walking the record, so `/init`
   on this repository's sources ran past six minutes; a record's fields are

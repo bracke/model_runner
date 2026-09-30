@@ -1548,9 +1548,14 @@ package body Model_Runner.Framework.Repository is
       Key   : Unbounded_String;
       Found : Graph;
       Kept  : Unbounded_String;
+
+      --  When it was last remembered: the oldest makes room. Entries are
+      --  never moved, since a graph moved is a graph copied.
+      Used  : Natural := 0;
    end record;
 
    Memory : array (1 .. Remembered_Count) of Remembered;
+   Uses   : Natural := 0;
 
    --  Held while Memory is read or written, should two tasks scan at once.
    protected Memory_Lock is
@@ -1620,23 +1625,69 @@ package body Model_Runner.Framework.Repository is
    --  Remember a graph for a key, most recent first, with the kept graph's
    --  fingerprint where Kept says it; an empty one keeps what was known.
    procedure Remember (Key : String; Found : Graph; Kept : String := "") is
-      Last  : Positive := Memory'Last;
-      Known : Unbounded_String := To_Unbounded_String (Kept);
+      Slot : Positive := Memory'First;
+      Held : Boolean := False;
    begin
       Memory_Lock.Seize;
       for Index in Memory'Range loop
          if Memory (Index).Key = Key then
-            Last := Index;
-            if Kept = "" then
-               Known := Memory (Index).Kept;
-            end if;
+            Slot := Index;
+            Held := True;
+            exit;
+         elsif Memory (Index).Used < Memory (Slot).Used then
+            Slot := Index;
+         end if;
+      end loop;
+      Uses := Uses + 1;
+      Memory (Slot).Found := Found;
+      Memory (Slot).Used := Uses;
+      if not Held then
+         Memory (Slot).Key := To_Unbounded_String (Key);
+         Memory (Slot).Kept := To_Unbounded_String (Kept);
+      elsif Kept /= "" then
+         Memory (Slot).Kept := To_Unbounded_String (Kept);
+      end if;
+      Memory_Lock.Release;
+   end Remember;
+
+   --  Bring the graph Memory holds for a key up to date, in place: the
+   --  graph is copied out once, and into Memory only where it changed.
+   procedure Refresh_Remembered
+     (Key               : String;
+      Project_Directory : String;
+      Within            : Roots;
+      Found             : out Graph;
+      Held              : out Boolean;
+      Kept              : out Unbounded_String)
+   is
+      Read_Again : Natural;
+   begin
+      Held := False;
+      Kept := Null_Unbounded_String;
+      Memory_Lock.Seize;
+      for Index in Memory'Range loop
+         if Memory (Index).Key = Key then
+            begin
+               Found := Refresh (Project_Directory, Memory (Index).Found, Read_Again, Within);
+               if Read_Again > 0
+                 or else Natural (Found.Files.Length) /= Natural (Memory (Index).Found.Files.Length)
+               then
+                  Memory (Index).Found := Found;
+               end if;
+               Uses := Uses + 1;
+               Memory (Index).Used := Uses;
+               Kept := Memory (Index).Kept;
+               Held := True;
+            exception
+               when others =>
+                  Memory_Lock.Release;
+                  raise;
+            end;
             exit;
          end if;
       end loop;
-      Memory (2 .. Last) := Memory (1 .. Last - 1);
-      Memory (1) := (To_Unbounded_String (Key), Found, Known);
       Memory_Lock.Release;
-   end Remember;
+   end Refresh_Remembered;
 
    ---------
    -- Now --
@@ -1650,16 +1701,16 @@ package body Model_Runner.Framework.Repository is
       Read       : E.Error_Info;
       Read_Again : Natural;
    begin
-      Recall (Key, Kept, Held, Kept_Print);
-      if not Held then
-         Load (Item, Kept, Read);
-      end if;
-      return Result : constant Graph :=
-        Refresh (Ada.Directories.Containing_Directory (Stores.Root (Item)), Kept, Read_Again,
-                 Roots_Of (Item))
-      do
-         Remember (Key, Result,
-                   (if not Held and then E.Is_Ok (Read) then Graph_Fingerprint (Kept) else ""));
+      return Result : Graph do
+         Refresh_Remembered
+           (Key, Ada.Directories.Containing_Directory (Stores.Root (Item)), Roots_Of (Item),
+            Result, Held, Kept_Print);
+         if not Held then
+            Load (Item, Kept, Read);
+            Result := Refresh (Ada.Directories.Containing_Directory (Stores.Root (Item)), Kept,
+                               Read_Again, Roots_Of (Item));
+            Remember (Key, Result, (if E.Is_Ok (Read) then Graph_Fingerprint (Kept) else ""));
+         end if;
       end return;
    end Now;
 
@@ -1684,17 +1735,15 @@ package body Model_Runner.Framework.Repository is
 
       --  Known here: brought up to date from what this process holds, and
       --  kept where that is not what the state keeps.
-      Recall (Key, Kept, Held, Kept_Print);
+      Refresh_Remembered
+        (Key, Ada.Directories.Containing_Directory (Stores.Root (Item)), Roots_Of (Item),
+         Found, Held, Kept_Print);
       if Held and then Kept_Print /= Null_Unbounded_String then
-         Found := Refresh (Ada.Directories.Containing_Directory (Stores.Root (Item)), Kept,
-                           Read_Again, Roots_Of (Item));
          if Graph_Fingerprint (Found) /= To_String (Kept_Print) then
             Keep (Item, Change, Found, Status);
             if E.Is_Ok (Status) then
                Stores.Commit (Item, Change, Status);
             end if;
-         else
-            Remember (Key, Found);
          end if;
          return;
       end if;
@@ -1743,17 +1792,15 @@ package body Model_Runner.Framework.Repository is
       Within            : Roots := Default_Roots) return Graph
    is
       Key        : constant String := Key_Of (Project_Directory, Within);
-      Kept       : Graph;
       Held       : Boolean;
       Kept_Print : Unbounded_String;
-      Read_Again : Natural;
    begin
-      Recall (Key, Kept, Held, Kept_Print);
-      return Result : constant Graph :=
-        (if Held then Refresh (Project_Directory, Kept, Read_Again, Within)
-         else Scan_All (Project_Directory, Within))
-      do
-         Remember (Key, Result);
+      return Result : Graph do
+         Refresh_Remembered (Key, Project_Directory, Within, Result, Held, Kept_Print);
+         if not Held then
+            Result := Scan_All (Project_Directory, Within);
+            Remember (Key, Result);
+         end if;
       end return;
    end Scan;
 

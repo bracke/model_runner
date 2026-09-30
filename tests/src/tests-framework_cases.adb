@@ -8087,9 +8087,10 @@ package body Tests.Framework_Cases is
 
       --  Left alone, nothing is put back.
       declare
-         Taken   : constant S.State_Snapshot := S.Snapshot_State (Store);
+         Taken   : S.State_Snapshot;
          Changed : Model_Runner.Framework.Name_Lists.Vector;
       begin
+         S.Snapshot_State (Store, Taken);
          S.Restore_State (Store, Taken, Changed);
          Assert (Changed.Is_Empty, "a state left alone was put back");
       end;
@@ -8097,10 +8098,11 @@ package body Tests.Framework_Cases is
       --  What the harness commits meanwhile -- by this process or another --
       --  is not put back; only what was written behind its back.
       declare
-         Taken   : constant S.State_Snapshot := S.Snapshot_State (Store);
+         Taken   : S.State_Snapshot;
          Changed : Model_Runner.Framework.Name_Lists.Vector;
          Other   : Unbounded_String;
       begin
+         S.Snapshot_State (Store, Taken);
          Tk.Create (Store, Change, Fields ("Meanwhile", "analysis"), "user", "", Other, Status);
          S.Commit (Store, Change, Status);
          Put_File (Fresh_Root (Store) & "/.model_runner/sneaked.rec", "x");

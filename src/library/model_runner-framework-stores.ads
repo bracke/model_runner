@@ -383,11 +383,12 @@ package Model_Runner.Framework.Stores is
    --  the lock, and the workspaces' trees, with what it held.
    type State_Snapshot is private;
 
-   --  Take the state as it is.
+   --  Take the state as it is: into a snapshot the caller holds, since a
+   --  large state's texts are not to be copied again on the way out.
    --
    --  @param Item The store.
-   --  @return The snapshot.
-   function Snapshot_State (Item : Store) return State_Snapshot;
+   --  @param Into The snapshot.
+   procedure Snapshot_State (Item : Store; Into : out State_Snapshot);
 
    --  Put back what something outside the harness changed in the state:
    --  a file it wrote is written back as it was, one it removed is made
@@ -406,8 +407,11 @@ private
 
    use Ada.Strings.Unbounded;
 
+   --  Each text held as an unbounded string, which is shared rather than
+   --  copied as a snapshot is built and compared: a state's indexes are
+   --  megabytes.
    package Text_Maps is new Ada.Containers.Indefinite_Ordered_Maps
-     (Key_Type => String, Element_Type => String);
+     (Key_Type => String, Element_Type => Unbounded_String);
 
    type State_Snapshot is record
       Files : Text_Maps.Map;

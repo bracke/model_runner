@@ -2739,8 +2739,9 @@ package body Model_Runner.Framework.Work is
                  (Prompt, To_String (Place), Host, Answer, Ran);
             else
                declare
-                  State : constant Stores.State_Snapshot := Stores.Snapshot_State (Item);
+                  State : Stores.State_Snapshot;
                begin
+                  Stores.Snapshot_State (Item, State);
                   if Starting /= null then
                      Starting (To_String (Result.Agent_Id), To_String (Result.Manifest_Id),
                                To_String (Result.Invocation_Id));

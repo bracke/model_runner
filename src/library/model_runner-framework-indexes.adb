@@ -1,5 +1,7 @@
+with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
+with Ada.Strings.Hash;
 with Ada.Strings.Unbounded;
 
 with Model_Runner.Framework.Configurations;
@@ -31,6 +33,13 @@ package body Model_Runner.Framework.Indexes is
       return Full (Full'First .. Full'Last - 6);
    end Name_Of;
 
+   --  The record that says what the indexes were last built from.
+   Built_Name : constant String := "built";
+
+   package Unit_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => Unbounded_String,
+      Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
+
    function Six (Value : Natural) return String is
       Plain : constant String := Image (Value);
    begin
@@ -60,17 +69,35 @@ package body Model_Runner.Framework.Indexes is
    is
       Source : constant String := Source_Of (Item, Found);
 
+      --  An index is written only where what it lists changed: most
+      --  changes touch one of them, and the others are megabytes.
       procedure Keep (Which : Index_Name; Lines : Name_Lists.Vector) is
-         Value : Records.Item :=
-           Records.Create
-             (Schemas.Derived_Index_Schema, 1, "INDEX-" & Ada.Characters.Handling.To_Upper (Name_Of (Which)),
-              Stores.Current_Revision (Item, Indexes_Area, Name_Of (Which)) + 1);
+         Held : Records.Item;
+         Read : E.Error_Info;
       begin
-         Records.Set (Value, "source", Source);
-         for Index in 1 .. Natural (Lines.Length) loop
-            Records.Set (Value, "entry." & Six (Index), Lines (Index));
-         end loop;
-         Stores.Put (Change, Indexes_Area, Name_Of (Which), Value);
+         if Stores.Exists (Item, Indexes_Area, Name_Of (Which)) then
+            Stores.Read (Item, Indexes_Area, Name_Of (Which), Held, Read);
+            if E.Is_Ok (Read)
+              and then not Records.Has (Held, "entry." & Six (Natural (Lines.Length) + 1))
+              and then (for all Index in 1 .. Natural (Lines.Length) =>
+                          Records.Get (Held, "entry." & Six (Index)) = Lines (Index))
+            then
+               return;
+            end if;
+         end if;
+         declare
+            Value : Records.Item :=
+              Records.Create
+                (Schemas.Derived_Index_Schema, 1,
+                 "INDEX-" & Ada.Characters.Handling.To_Upper (Name_Of (Which)),
+                 (if E.Is_Ok (Read) then Records.Revision (Held) else 0) + 1);
+         begin
+            Records.Set (Value, "source", Source);
+            for Index in 1 .. Natural (Lines.Length) loop
+               Records.Set (Value, "entry." & Six (Index), Lines (Index));
+            end loop;
+            Stores.Put (Change, Indexes_Area, Name_Of (Which), Value);
+         end;
       end Keep;
 
       function Register (Kind : Intent.Intent_Kind) return Name_Lists.Vector is
@@ -148,29 +175,47 @@ package body Model_Runner.Framework.Indexes is
       end loop;
       Keep (Symbols_Index, Lines);
 
-      --  A test file, and the units it depends on.
+      --  A test file, and the units it depends on: what each file depends
+      --  on gathered in one walk of the relations.
       Lines.Clear;
-      for Index in 1 .. Repository.File_Count (Found) loop
-         declare
-            use type Repository.File_Role;
-            use type Repository.Relation_Kind;
-            File  : constant Repository.File_Entry := Repository.File_At (Found, Index);
-            Units : Unbounded_String;
-         begin
-            if File.Role = Repository.Test then
-               for At_Index in 1 .. Repository.Relation_Count (Found) loop
-                  declare
-                     Link : constant Repository.Relation := Repository.Relation_At (Found, At_Index);
-                  begin
-                     if Link.Kind = Repository.Depends_On and then Link.Origin = File.Path then
-                        Append (Units, (if Units = Null_Unbounded_String then "" else " ") & Link.To);
-                     end if;
-                  end;
-               end loop;
-               Lines.Append (To_String (File.Path) & Tab & To_String (Units));
+      declare
+         use type Repository.File_Role;
+         use type Repository.Relation_Kind;
+         Tests_Of : Unit_Maps.Map;
+      begin
+         for Index in 1 .. Repository.File_Count (Found) loop
+            if Repository.File_At (Found, Index).Role = Repository.Test then
+               Tests_Of.Include (To_String (Repository.File_At (Found, Index).Path),
+                                 Null_Unbounded_String);
             end if;
-         end;
-      end loop;
+         end loop;
+         if not Tests_Of.Is_Empty then
+            for At_Index in 1 .. Repository.Relation_Count (Found) loop
+               declare
+                  Link : constant Repository.Relation := Repository.Relation_At (Found, At_Index);
+                  Place : constant Unit_Maps.Cursor := Tests_Of.Find (To_String (Link.Origin));
+               begin
+                  if Link.Kind = Repository.Depends_On and then Unit_Maps.Has_Element (Place) then
+                     declare
+                        Units : Unbounded_String renames Tests_Of.Reference (Place);
+                     begin
+                        Append (Units, (if Units = Null_Unbounded_String then "" else " ") & Link.To);
+                     end;
+                  end if;
+               end;
+            end loop;
+         end if;
+         for Index in 1 .. Repository.File_Count (Found) loop
+            declare
+               File : constant Repository.File_Entry := Repository.File_At (Found, Index);
+            begin
+               if File.Role = Repository.Test then
+                  Lines.Append (To_String (File.Path) & Tab
+                                & To_String (Tests_Of.Element (To_String (File.Path))));
+               end if;
+            end;
+         end loop;
+      end;
       Keep (Tests_Index, Lines);
 
       Lines.Clear;
@@ -211,6 +256,17 @@ package body Model_Runner.Framework.Indexes is
          end;
       end loop;
       Keep (Search_Index, Lines);
+
+      --  What they were built from, said once for them all.
+      declare
+         Built : Records.Item :=
+           Records.Create
+             (Schemas.Derived_Index_Schema, 1, "INDEX-BUILT",
+              Stores.Current_Revision (Item, Indexes_Area, Built_Name) + 1);
+      begin
+         Records.Set (Built, "source", Source);
+         Stores.Put (Change, Indexes_Area, Built_Name, Built);
+      end;
    end Build;
 
    -------------
@@ -218,23 +274,19 @@ package body Model_Runner.Framework.Indexes is
    -------------
 
    function Current (Item : Stores.Store; Found : Repository.Graph) return Boolean is
-      Source : constant String := Source_Of (Item, Found);
+      Value : Records.Item;
+      Read  : E.Error_Info;
    begin
       for Which in Index_Name loop
-         declare
-            Value : Records.Item;
-            Read  : E.Error_Info;
-         begin
-            if not Stores.Exists (Item, Indexes_Area, Name_Of (Which)) then
-               return False;
-            end if;
-            Stores.Read (Item, Indexes_Area, Name_Of (Which), Value, Read);
-            if E.Is_Error (Read) or else Records.Get (Value, "source") /= Source then
-               return False;
-            end if;
-         end;
+         if not Stores.Exists (Item, Indexes_Area, Name_Of (Which)) then
+            return False;
+         end if;
       end loop;
-      return True;
+      if not Stores.Exists (Item, Indexes_Area, Built_Name) then
+         return False;
+      end if;
+      Stores.Read (Item, Indexes_Area, Built_Name, Value, Read);
+      return E.Is_Ok (Read) and then Records.Get (Value, "source") = Source_Of (Item, Found);
    end Current;
 
    -------------

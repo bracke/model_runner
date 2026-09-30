@@ -1556,7 +1556,7 @@ package body Model_Runner.Framework.Stores is
                begin
                   Files.Read_Text (Ada.Directories.Full_Name (Found), Text, Read);
                   if E.Is_Ok (Read) then
-                     Into.Include (Relative, To_String (Text));
+                     Into.Include (Relative, Text);
                   end if;
                end;
             end if;
@@ -1565,16 +1565,16 @@ package body Model_Runner.Framework.Stores is
       Ada.Directories.End_Search (Search);
    end Gather;
 
-   function Snapshot_State (Item : Store) return State_Snapshot is
-      Result : State_Snapshot;
+   procedure Snapshot_State (Item : Store; Into : out State_Snapshot) is
    begin
+      Into.Files.Clear;
+      Into.Logged := 0;
       if Ada.Directories.Exists (Root (Item)) then
-         Gather (Root (Item), "", Result.Files);
+         Gather (Root (Item), "", Into.Files);
          if Ada.Directories.Exists (Written_Log (Root (Item))) then
-            Result.Logged := Natural (Ada.Directories.Size (Written_Log (Root (Item))));
+            Into.Logged := Natural (Ada.Directories.Size (Written_Log (Root (Item))));
          end if;
       end if;
-      return Result;
    end Snapshot_State;
 
    -------------------
@@ -1586,7 +1586,7 @@ package body Model_Runner.Framework.Stores is
       From    : State_Snapshot;
       Changed : out Name_Lists.Vector)
    is
-      Now    : constant State_Snapshot := Snapshot_State (Item);
+      Now    : State_Snapshot;
       Status : E.Error_Info;
 
       --  What commits wrote since: the harness's own changes, by this
@@ -1594,6 +1594,7 @@ package body Model_Runner.Framework.Stores is
       --  back.
       Committed : Name_Lists.Vector;
    begin
+      Snapshot_State (Item, Now);
       Changed.Clear;
       declare
          Log  : Unbounded_String;
@@ -1618,7 +1619,7 @@ package body Model_Runner.Framework.Stores is
             then
                Changed.Append (Name);
                if Files.Make_Directory (Ada.Directories.Containing_Directory (Path)) then
-                  Files.Write_Text (Path, Text_Maps.Element (Position), Status);
+                  Files.Write_Text (Path, To_String (Text_Maps.Element (Position)), Status);
                end if;
             end if;
          end;
