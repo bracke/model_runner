@@ -188,7 +188,7 @@ project does not have and one held ready while what it depends on is open --
 and opening a project says how much there is.
 
 A task is revised with `/task edit TASK NAME=VALUE ...` -- a new revision of
-its definition; its kind, parent and dependencies have their own commands --
+its definition, and `/task link TASK REQ-001 ...` adds requirements it serves; its kind, parent and dependencies have their own commands --
 made to wait with `/task depend TASK ON`, and split with `/task split TASK
 First part; Second part`: the parts are its children, and the parent waits
 on them, blocked, unless the project's `scalar task.coordination` (or

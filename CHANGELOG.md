@@ -1809,6 +1809,9 @@ Keep a Changelog and the project uses semantic versioning.
   - Ctrl-C says the whole message is dropped; `/work` says what is typed
     meanwhile waits.
   - The repository scan includes dotfiles, except tool and VCS directories.
+  - `/task link TASK REQ...` adds requirements a task serves; `/task show`
+    lists them on one line and leaves out the derivation fingerprints, a
+    move its acceptance already says, and where a baseline rule is kept.
 - **Twelfth usability round:**
   - Every hint names its command as a session types it -- with the slash
     -- in the catalog and the code alike; the guess that added slashes as

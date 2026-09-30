@@ -1035,8 +1035,11 @@ package body Model_Runner.CLI.Tasks is
       end Depend;
 
       --  A task revised: task edit TASK with NAME=VALUE for each field.
-      procedure Edit is
-         Fields : Tk.Field_Map;
+      procedure Edit
+        (Id    : String := Argument;
+         Given : Tk.Field_Map := Model_Runner.Framework.Configurations.Value_Maps.Empty_Map)
+      is
+         Fields : Tk.Field_Map := Given;
       begin
          if not Needs_Task then
             return;
@@ -1074,7 +1077,7 @@ package body Model_Runner.CLI.Tasks is
          --  Nothing asked of it: said what edit takes.
          if Fields.Is_Empty then
             Outcome := E.Make (E.Framework_Input_Missing);
-            E.Add_Text (Outcome, "name", "what to change: /task edit " & Argument
+            E.Add_Text (Outcome, "name", "what to change: /task edit " & Id
                         & " FIELD=VALUE, as title=, notes=, component= or requirements=");
             Fail (Outcome);
             return;
@@ -1085,7 +1088,7 @@ package body Model_Runner.CLI.Tasks is
             Read    : E.Error_Info;
             Same    : Boolean := True;
          begin
-            Tk.Definition (Store, Argument, Defined, Read);
+            Tk.Definition (Store, Id, Defined, Read);
             for Position in Fields.Iterate loop
                declare
                   Name  : constant String :=
@@ -1100,7 +1103,7 @@ package body Model_Runner.CLI.Tasks is
                end;
             end loop;
             if E.Is_Ok (Read) and then Same then
-               Pres.Put_Note (Screen, "cli.task.unchanged", [Loc.Named ("name", Argument)]);
+               Pres.Put_Note (Screen, "cli.task.unchanged", [Loc.Named ("name", Id)]);
                return;
             end if;
          end;
@@ -1115,7 +1118,7 @@ package body Model_Runner.CLI.Tasks is
                    (Ada.Strings.Fixed.Translate
                       (Fields ("requirements"), Ada.Strings.Maps.To_Mapping (",", [1 => ASCII.LF])));
             begin
-               Tk.Definition (Store, Argument, Defined, Read);
+               Tk.Definition (Store, Id, Defined, Read);
                declare
                   Title : constant String := R.Get (Defined, "title");
                   Colon : constant Natural := Ada.Strings.Fixed.Index (Title, ": ");
@@ -1151,7 +1154,7 @@ package body Model_Runner.CLI.Tasks is
                Read    : E.Error_Info;
                Asked   : Pm.Permission_Set;
             begin
-               Tk.Definition (Store, Argument, Defined, Read);
+               Tk.Definition (Store, Id, Defined, Read);
                Pm.Restriction (Fields ("permissions"), Asked, Read);
                if E.Is_Ok (Read) then
                   declare
@@ -1164,7 +1167,7 @@ package body Model_Runner.CLI.Tasks is
                         E.Add_Text (Outcome, "name", "permissions");
                         E.Add_Text (Outcome, "value", Fields ("permissions"));
                         E.Add_Text (Outcome, "detail",
-                                    "they leave " & Argument & " nothing its kind "
+                                    "they leave " & Id & " nothing its kind "
                                     & R.Get (Defined, "kind") & " allows ("
                                     & Joined (Model_Runner.Framework.Lines_Of
                                                 (Pm.Image (Pm.Effective (Store, R.Get (Defined, "kind"), "",
@@ -1177,7 +1180,7 @@ package body Model_Runner.CLI.Tasks is
                end if;
             end;
          end if;
-         Tk.Revise (Store, Change, Argument, Fields, Outcome);
+         Tk.Revise (Store, Change, Id, Fields, Outcome);
          if E.Is_Ok (Outcome) then
             Commit;
          end if;
@@ -1185,7 +1188,7 @@ package body Model_Runner.CLI.Tasks is
             Fail (Outcome);
             return;
          end if;
-         Pres.Put_Message (Screen, "cli.task.revised", [Loc.Named ("name", Argument)]);
+         Pres.Put_Message (Screen, "cli.task.revised", [Loc.Named ("name", Id)]);
 
          --  Its permissions asking for more than its kind allows: what it
          --  gets, as a new task is told.
@@ -1196,7 +1199,7 @@ package body Model_Runner.CLI.Tasks is
                Read    : E.Error_Info;
                Asked   : Pm.Permission_Set;
             begin
-               Tk.Definition (Store, Argument, Defined, Read);
+               Tk.Definition (Store, Id, Defined, Read);
                Pm.Restriction (Fields ("permissions"), Asked, Read);
                if E.Is_Ok (Read) then
                   declare
@@ -1207,15 +1210,57 @@ package body Model_Runner.CLI.Tasks is
                      if Clipped /= "" then
                         Pres.Put_Note
                           (Screen, "cli.task.clipped",
-                           [Loc.Named ("name", Argument), Loc.Named ("other", R.Get (Defined, "kind")),
+                           [Loc.Named ("name", Id), Loc.Named ("other", R.Get (Defined, "kind")),
                             Loc.Named ("detail", Clipped)]);
                      end if;
-                     Say_Narrowing (Screen, Argument, R.Get (Defined, "kind"), Asked, Allowed);
+                     Say_Narrowing (Screen, Id, R.Get (Defined, "kind"), Asked, Allowed);
                   end;
                end if;
             end;
          end if;
       end Edit;
+
+      --  /task link TASK REQ...: the requirements it serves, added to
+      --  those it names -- an edit of its requirements field.
+      procedure Link is
+         Given   : Tk.Field_Map;
+         Defined : R.Item;
+         Read    : E.Error_Info;
+         Serves  : Unbounded_String;
+      begin
+         if not Needs_Task then
+            return;
+         end if;
+         if After_First = "" then
+            Outcome := E.Make (E.Framework_Input_Missing);
+            E.Add_Text (Outcome, "name", "a requirement to link: /task link " & First_Word & " REQ-ID...");
+            Fail (Outcome);
+            return;
+         end if;
+         Tk.Definition (Store, First_Word, Defined, Read);
+         Serves := To_Unbounded_String (R.Get (Defined, "requirements"));
+         for Word of Model_Runner.Framework.Lines_Of
+           (Ada.Strings.Fixed.Translate (After_First, Ada.Strings.Maps.To_Mapping (" ,", [ASCII.LF, ASCII.LF])))
+         loop
+            declare
+               Held : Model_Runner.Framework.Intent.Entity;
+               Got  : E.Error_Info;
+            begin
+               Model_Runner.Framework.Intent.Read
+                 (Store, Model_Runner.Framework.Intent.Requirement, Word, Held, Got);
+               if E.Is_Error (Got) then
+                  Fail (Got);
+                  return;
+               end if;
+               if not Model_Runner.Framework.Lines_Of (To_String (Serves)).Contains (Word) then
+                  Serves := (if Serves = Null_Unbounded_String then To_Unbounded_String (Word)
+                             else Serves & ASCII.LF & Word);
+               end if;
+            end;
+         end loop;
+         Given.Include ("requirements", To_String (Serves));
+         Edit (First_Word, Given);
+      end Link;
 
       --  A task decomposed: task split TASK FIRST TITLE; SECOND TITLE.
       procedure Split_Task is
@@ -1554,16 +1599,40 @@ package body Model_Runner.CLI.Tasks is
                    elsif Starts ("runtime.") then Name (Name'First + 8 .. Name'Last)
                    elsif Starts ("authority.") then "rule " & Name (Name'First + 10 .. Name'Last)
                    else Name);
+               --  A rule's text without where the baseline keeps it.
+               function Shown_Value return String is
+                  Held  : constant String := R.Get (View, Name);
+                  --  A list of identifiers on one line.
+                  Value : constant String :=
+                    (if Name in "definition.requirements" | "definition.depends_on"
+                     then Ada.Strings.Fixed.Trim
+                            (Joined (Model_Runner.Framework.Lines_Of (Held)),
+                             Ada.Strings.Both)
+                     else Held);
+                  Mark  : constant String := "project_baseline CONFIG: ";
+                  Found : constant Natural := Ada.Strings.Fixed.Index (Value, Mark);
+               begin
+                  return (if Found = 0 then Value
+                          else Value (Value'First .. Found - 1) & Value (Found + Mark'Length .. Value'Last));
+               end Shown_Value;
             begin
+               --  Also left out: what a derived task was made from, kept to
+               --  know it again, and a move said already by its acceptance.
                if R.Get (View, Name) = ""
                  or else Name in "fingerprint" | "runtime.generation" | "definition.revision"
                                | "definition.created_by" | "definition.origin"
+                               | "definition.derivation_key"
+                 or else Ada.Strings.Fixed.Index (Shown_Name, "requirement.") = 1
+                 or else (Shown_Name = "moved_by"
+                          and then R.Get (View, Name)
+                              = R.Get (View, (if R.Has (View, "runtime.accepted_by") then "runtime.accepted_by"
+                                              else "accepted_by")))
                then
                   return;
                end if;
                Pres.Put_Message
                  (Screen, "cli.task.field",
-                  [Loc.Named ("name", Shown_Name), Loc.Named ("value", R.Get (View, Name))]);
+                  [Loc.Named ("name", Shown_Name), Loc.Named ("value", Shown_Value)]);
             end Line;
 
             function Leading (Name : String) return Boolean
@@ -2836,6 +2905,8 @@ package body Model_Runner.CLI.Tasks is
          Depend;
       elsif Action = "edit" then
          Edit;
+      elsif Action = "link" then
+         Link;
       elsif Action = "rehome" then
          Rehome;
       elsif Action = "split" then
@@ -2926,7 +2997,7 @@ package body Model_Runner.CLI.Tasks is
          begin
             for One of Model_Runner.Framework.Lines_Of
               ("list" & ASCII.LF & "new" & ASCII.LF & "accept" & ASCII.LF & "reject" & ASCII.LF
-               & "cancel" & ASCII.LF & "move" & ASCII.LF & "edit" & ASCII.LF & "depend" & ASCII.LF
+               & "cancel" & ASCII.LF & "move" & ASCII.LF & "edit" & ASCII.LF & "link" & ASCII.LF & "depend" & ASCII.LF
                & "split" & ASCII.LF & "rehome" & ASCII.LF & "reopen" & ASCII.LF & "reconsider"
                & ASCII.LF & "complete" & ASCII.LF & "verify" & ASCII.LF & "diff" & ASCII.LF & "integrate" & ASCII.LF
                & "show" & ASCII.LF & "audit" & ASCII.LF & "derive" & ASCII.LF & "plan")

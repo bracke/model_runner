@@ -1273,7 +1273,7 @@ package body Model_Runner.CLI.Project_Commands is
                         or else (Command = "/task" and then Index = 3
                                  and then Action in "show" | "audit" | "accept" | "reject" | "cancel"
                                                   | "complete" | "verify" | "integrate" | "diff"
-                                                  | "edit" | "depend" | "split" | "reopen"
+                                                  | "edit" | "link" | "depend" | "split" | "reopen"
                                                   | "reconsider" | "move" | "rehome"))
             then
                Result.Append ("TASK-" & Padded (Word));

@@ -2636,6 +2636,9 @@ package body Tests.CLI_Cases is
               and then Ada.Strings.Fixed.Index (Last_Output, "kind") > 0
               and then Ada.Strings.Fixed.Index (Last_Output, "fingerprint") = 0,
               "the effective task was not shown, or shown with its bookkeeping: " & Last_Output);
+      Assert (Task_Run ("link", "TASK-001", "") /= 0
+              and then Task_Run ("link", "TASK-001 REQ-404", "") /= 0,
+              "a link naming no requirement, or one not there, was taken: " & Last_Output);
       Assert (Task_Run ("reject", "TASK-001", "") = 2,
               "an accepted task was rejected");
       Assert (Task_Run ("cancel", "TASK-001", "") = 0,
