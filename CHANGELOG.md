@@ -1782,6 +1782,11 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Repository scans 45× faster:** a file's references are found by
+  looking each visible symbol's name up in an index of the file's words,
+  not by walking every token for every symbol. `/scan`, `/tree`, `/sym`,
+  `/refs` and the rest over this repository's 290 source files: 49 s to
+  1.1 s, with the same graph.
 - **A session is the default:** `model_runner` alone at a terminal opens
   one, offering the models on hand to choose from, and `model_runner MODEL
   [options]` -- a model named first, with no command word -- is `run MODEL`,

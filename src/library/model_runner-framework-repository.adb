@@ -1,7 +1,10 @@
 with Ada.Calendar;
 with Ada.Characters.Handling;
+with Ada.Containers.Indefinite_Hashed_Maps;
+with Ada.Containers.Indefinite_Hashed_Sets;
 with Ada.Directories;
 with Ada.Strings.Fixed;
+with Ada.Strings.Hash;
 with Ada.Strings.Maps;
 
 with Hostkit.Fs;
@@ -523,6 +526,17 @@ package body Model_Runner.Framework.Repository is
    package Token_Vectors is new Ada.Containers.Vectors
      (Index_Type => Positive, Element_Type => Token);
 
+   --  Where each word of a file is, by its lower-case spelling: a symbol's
+   --  uses are looked up rather than every token walked for every symbol.
+   package Place_Vectors is new Ada.Containers.Vectors
+     (Index_Type => Positive, Element_Type => Positive);
+   package Word_Places is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => Place_Vectors.Vector,
+      Hash => Ada.Strings.Hash, Equivalent_Keys => "=",
+      "=" => Place_Vectors."=");
+   package Name_Sets is new Ada.Containers.Indefinite_Hashed_Sets
+     (Element_Type => String, Hash => Ada.Strings.Hash, Equivalent_Elements => "=");
+
    --  The tokens of Ada text: words, and each other mark on its own, with
    --  comments left out and literals kept whole.
    function Tokens_Of (Text : String) return Token_Vectors.Vector is
@@ -960,6 +974,8 @@ package body Model_Runner.Framework.Repository is
       Tokens : constant Token_Vectors.Vector := Tokens_Of (Text);
       Unit   : constant String := Unit_Of (Tokens);
       Seen   : Name_Lists.Vector;
+      Visible : Name_Sets.Set;
+      Places : Word_Places.Map;
 
       --  Whether the name at a place -- its whole dotted name -- is being
       --  declared or ended there, not used.
@@ -1028,6 +1044,24 @@ package body Model_Runner.Framework.Repository is
          end;
       end loop;
 
+      for Name of Seen loop
+         Visible.Include (Name);
+      end loop;
+      for At_Index in 1 .. Natural (Tokens.Length) loop
+         if Tokens (At_Index).Kind = Word then
+            declare
+               Spelled  : constant String := Lower (To_String (Tokens (At_Index).Text));
+               Position : constant Word_Places.Cursor := Places.Find (Spelled);
+            begin
+               if Word_Places.Has_Element (Position) then
+                  Places.Reference (Position).Append (At_Index);
+               else
+                  Places.Insert (Spelled, Place_Vectors.To_Vector (At_Index, 1));
+               end if;
+            end;
+         end if;
+      end loop;
+
       for Item of Into.Symbols loop
          declare
             Full  : constant String := To_String (Item.Name);
@@ -1037,9 +1071,10 @@ package body Model_Runner.Framework.Repository is
               (if Dot = 0 then Full else Full (Full'First .. Dot - 1));
             Last  : constant String :=
               Lower (if Dot = 0 then Full else Full (Dot + 1 .. Full'Last));
+            Found : constant Word_Places.Cursor := Places.Find (Last);
          begin
-            if Seen.Contains (Owner) then
-               for At_Index in 1 .. Natural (Tokens.Length) loop
+            if Word_Places.Has_Element (Found) and then Visible.Contains (Owner) then
+               for At_Index of Places.Constant_Reference (Found) loop
                   declare
                      Here : constant Token := Tokens (At_Index);
                      Own  : constant Boolean := To_String (Item.Path) = Path;
