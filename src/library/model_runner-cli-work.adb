@@ -11,7 +11,6 @@ with Hostkit;
 with Hostkit.Fs;
 with Hostkit.Process;
 
-with Model_Runner.Cancellation;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.Errors;
 with Model_Runner.Framework;
@@ -432,7 +431,7 @@ package body Model_Runner.CLI.Work is
 
    --  The command, with the agent given or chosen from the configuration.
    procedure Drive
-     (Item   : Model_Runner.CLI.Options.Command;
+     (Item   : Model_Runner.CLI.Project_Requests.Request;
       Screen : in out Model_Runner.Presentation.Console;
       Given_Runner : access constant W.Agent_Runner'Class;
       Status : out Natural)
@@ -1474,43 +1473,12 @@ package body Model_Runner.CLI.Work is
       S.Close (Store);
    end Drive;
 
-   ---------
-   -- Run --
-   ---------
-
-   procedure Run
-     (Item   : Model_Runner.CLI.Options.Command;
-      Screen : in out Model_Runner.Presentation.Console;
-      Status : out Natural)
-   is
-      --  Ctrl-C stops the agent and whatever it runs, as a session's does:
-      --  the task is set aside, said so, and the command ends cancelled.
-      Cancel   : aliased Model_Runner.Cancellation.Token;
-      Attached : Boolean;
-   begin
-      Model_Runner.Platform.Signals.Install (Cancel'Unchecked_Access, Attached);
-      Model_Runner.Framework.Execution.Watch (Cancel'Unchecked_Access);
-      begin
-         Drive (Item, Screen, null, Status);
-      exception
-         when others =>
-            Model_Runner.Framework.Execution.Watch (null);
-            Model_Runner.Platform.Signals.Remove;
-            raise;
-      end;
-      Model_Runner.Framework.Execution.Watch (null);
-      Model_Runner.Platform.Signals.Remove;
-      if Model_Runner.Cancellation.Is_Cancelled (Cancel'Unchecked_Access) then
-         Status := E.Exit_Cancelled;
-      end if;
-   end Run;
-
    --------------
    -- Run_With --
    --------------
 
    procedure Run_With
-     (Item   : Model_Runner.CLI.Options.Command;
+     (Item   : Model_Runner.CLI.Project_Requests.Request;
       Screen : in out Model_Runner.Presentation.Console;
       Runner : Model_Runner.Framework.Work.Agent_Runner'Class;
       Status : out Natural) is

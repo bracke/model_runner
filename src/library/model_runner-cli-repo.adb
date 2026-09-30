@@ -6,6 +6,7 @@ with Ada.Strings.Unbounded;
 
 with Hostkit.Fs;
 
+with Model_Runner.CLI.Options;
 with Model_Runner.Errors;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Events;
@@ -65,7 +66,7 @@ package body Model_Runner.CLI.Repo is
    ---------
 
    procedure Run
-     (Item   : Model_Runner.CLI.Options.Command;
+     (Item   : Model_Runner.CLI.Project_Requests.Request;
       Screen : in out Model_Runner.Presentation.Console;
       Status : out Natural)
    is

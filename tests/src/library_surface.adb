@@ -34,6 +34,10 @@ package body Library_Surface is
       --  having none of them.
       new String'("Run_Without_Model"),
 
+      --  Writing for a program: --format json went with the project's
+      --  shell commands, and the suite still reads their messages so.
+      new String'("Use_Structured"),
+
       --  How a schema's records are carried to its next version. Every
       --  schema is still at its first, so nothing registers a step yet;
       --  the first that changes does, and the suite registers one to show

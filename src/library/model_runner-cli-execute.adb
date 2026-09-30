@@ -1925,11 +1925,6 @@ package body Model_Runner.CLI.Execute is
       --  already named exactly those four, so a fifth command would have
       --  compiled, dispatched, taken options -- and had no help.
       case Opt.Command_Of (Topic) is
-         --  The project's commands are a session's, and so is their help.
-         when Opt.Command_Init | Opt.Command_Task | Opt.Command_Repo
-            | Opt.Command_Work | Opt.Command_Project =>
-            Screen.Put_Message ("help.session_command", [Loc.Named ("value", Topic)]);
-
          when Opt.Command_Run | Opt.Command_Embed | Opt.Command_Inspect =>
             declare
                Kind : constant Opt.Command_Kind := Opt.Command_Of (Topic);
@@ -1978,15 +1973,12 @@ package body Model_Runner.CLI.Execute is
             Screen.Put_Message ("cli.general.commands");
 
             for Kind in Opt.Command_Kind loop
-               if Opt.Is_Shell_Command (Kind) then
+               if Kind /= Opt.Command_None then
                   Screen.Put_Option
                     ("cli.general.command." & Opt.Command_Word (Kind),
                      [Loc.Named ("value", "")]);
                end if;
             end loop;
-            --  The project's commands, where they are.
-            Screen.Put_Line ("");
-            Screen.Put_Message ("cli.general.session_commands");
 
             Screen.Put_Line ("");
             Screen.Put_Message ("cli.general.more");
@@ -5654,12 +5646,6 @@ package body Model_Runner.CLI.Execute is
 
          when Opt.Command_Models =>
             Do_Models (Item, Screen, Status);
-
-         --  The project's commands are a session's: never parsed from the
-         --  command line, so never here.
-         when Opt.Command_Init | Opt.Command_Task | Opt.Command_Repo | Opt.Command_Work
-            | Opt.Command_Project =>
-            Status := E.Exit_Usage;
 
          when Opt.Command_Run =>
             if T.Is_Empty (Item.Model_Path) then

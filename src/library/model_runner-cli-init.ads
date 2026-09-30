@@ -1,7 +1,7 @@
-with Model_Runner.CLI.Options;
+with Model_Runner.CLI.Project_Requests;
 with Model_Runner.Presentation;
 
---  The init command: start a project's state from an installed template.
+--  A session's /init: start a project's state from an installed template.
 --
 --  Everything particular to a kind of project is in its template; this
 --  knows only the steps -- find the templates, let the caller pick one,
@@ -10,13 +10,13 @@ with Model_Runner.Presentation;
 --  anywhere else it takes what it was given and says by name what was not.
 package Model_Runner.CLI.Init is
 
-   --  Run the init command.
+   --  Run /init.
    --
-   --  @param Item The parsed command.
+   --  @param Item The request.
    --  @param Screen Where to write.
    --  @param Status The exit status.
    procedure Run
-     (Item   : Model_Runner.CLI.Options.Command;
+     (Item   : Model_Runner.CLI.Project_Requests.Request;
       Screen : in out Model_Runner.Presentation.Console;
       Status : out Natural);
 

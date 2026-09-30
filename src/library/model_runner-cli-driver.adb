@@ -234,7 +234,6 @@ package body Model_Runner.CLI.Driver is
 
       Pres.Open
         (Screen, Catalog'Unchecked_Access, Item.Color, Capabilities, Item.Level);
-      Pres.Use_Structured (Screen, Item.Structured);
 
       if not Loc.Is_Ready (Catalog) then
          --  The emergency path: say so once, in the invariant form, and carry

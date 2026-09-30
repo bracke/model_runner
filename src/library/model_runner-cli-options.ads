@@ -64,24 +64,8 @@ package Model_Runner.CLI.Options is
       Command_Embed,
       Command_Inspect,
       Command_Models,
-      Command_Init,
-      Command_Task,
-      Command_Repo,
-      Command_Work,
-
-      --  One of the project commands a session has, run from the shell:
-      --  req, state, bootstrap, config, reconfigure, check, decision,
-      --  spec, result, sandbox, instruct, accept or reject -- the word in
-      --  Action, the rest in Action_Argument.
-      Command_Project,
       Command_Help,
       Command_Version);
-
-   --  Whether a word is one of the project commands run as Command_Project.
-   --
-   --  @param Word The command's word.
-   --  @return True when it is.
-   function Is_Project_Word (Word : String) return Boolean;
 
    --  How the positions of a text are reduced to one vector.
    --
@@ -149,16 +133,6 @@ package Model_Runner.CLI.Options is
    --  @param Kind Command to name.
    --  @return The word, or an empty string for no command.
    function Command_Word (Kind : Command_Kind) return String;
-
-   --  Whether a command is typed at the shell. The project's commands --
-   --  init, task, work, repo and the rest -- are a session's, typed there
-   --  with a slash, and the command line has none of them.
-   --
-   --  @param Kind Command to ask of.
-   --  @return True for the command line's own.
-   function Is_Shell_Command (Kind : Command_Kind) return Boolean
-   is (Kind not in Command_None | Command_Init | Command_Task | Command_Repo | Command_Work
-                 | Command_Project);
 
    --  The command a word names.
    --
@@ -278,19 +252,6 @@ package Model_Runner.CLI.Options is
 
       --  Topic of a help request, or an empty value for the general help.
       Help_Topic : Model_Runner.Text.Bounded;
-
-      --  init: the template to start the project from, empty to choose one;
-      --  the inputs given as --set NAME=VALUE; and the project's directory,
-      --  empty for the current one.
-      Template_Name     : Model_Runner.Text.Bounded;
-      Inputs            : Guard_List := [others => Model_Runner.Text.Empty];
-      Input_Count       : Natural := 0;
-      Project_Directory : Model_Runner.Text.Bounded;
-
-      --  task and repo: what to do, and what it is done with -- a task, a
-      --  new task's title, a symbol, a unit.
-      Action          : Model_Runner.Text.Bounded;
-      Action_Argument : Model_Runner.Text.Bounded;
 
       Prompt_Kind : Prompt_Source := Prompt_Unset;
 
@@ -593,11 +554,6 @@ package Model_Runner.CLI.Options is
       Show_Stats : Boolean := False;
       Stats_Set  : Boolean := False;
       Color      : Color_Mode := Color_Auto;
-
-      --  Whether init, task, repo and work write one JSON object a line --
-      --  each message's stable key and its values -- rather than text:
-      --  --format json.
-      Structured : Boolean := False;
 
       --  What to decode the weight matrices into at load, if anything.
       Repack     : Model_Runner.Llama.Repack_Mode :=

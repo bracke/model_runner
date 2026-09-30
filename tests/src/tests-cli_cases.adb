@@ -2399,9 +2399,9 @@ package body Tests.CLI_Cases is
               "the permissions a project is given unasked were not shown: " & To_String (Said));
 
       --  10. What the steps above rest on, asked directly.
-      Assert (Model_Runner.CLI.Options.Is_Project_Word ("req")
-              and then not Model_Runner.CLI.Options.Is_Project_Word ("run"),
-              "the project commands were not told from the others");
+      Assert (Model_Runner.CLI.Options."=" (Model_Runner.CLI.Options.Command_Of ("task"),
+                                              Model_Runner.CLI.Options.Command_None),
+              "the command line knew a project command");
       Assert (Model_Runner.Text.Escape_Controls ("a" & LF & "b", Keep_Line_Breaks => True)
               = "a" & LF & "    b"
               and then Model_Runner.Text.Escape_Controls

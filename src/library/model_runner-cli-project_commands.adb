@@ -12,6 +12,7 @@ with Model_Runner.Agent;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Init;
 with Model_Runner.CLI.Intents;
+with Model_Runner.CLI.Project_Requests;
 with Model_Runner.CLI.Repo;
 with Model_Runner.CLI.Tasks;
 with Model_Runner.CLI.Work;
@@ -48,7 +49,6 @@ package body Model_Runner.CLI.Project_Commands is
    use Ada.Strings.Unbounded;
    use type Model_Runner.Agent.Stop_Reason;
    use type Model_Runner.Conversation.Role;
-   use type Model_Runner.CLI.Options.Command_Kind;
 
    package E renames Model_Runner.Errors;
    package Conv renames Model_Runner.Conversation;
@@ -1052,7 +1052,8 @@ package body Model_Runner.CLI.Project_Commands is
       Open_Quote : constant Boolean := Left_Open;
       Word       : constant String := All_Words.First_Element;
       Positional : Names.Vector;
-      Command    : Opt.Command;
+      Command    : Model_Runner.CLI.Project_Requests.Request;
+      To_Task    : Boolean := False;
       Status     : Natural := 0;
       Outcome    : E.Error_Info;
 
@@ -2758,7 +2759,7 @@ package body Model_Runner.CLI.Project_Commands is
             if Tasks_Waiting.Contains (Argument (1)) then
                Command.Action := T.To_Bounded (if Word = "/accept" then "accept" else "reject");
                Command.Action_Argument := T.To_Bounded (Argument (1));
-               Command.Kind := Opt.Command_Task;
+               To_Task := True;
                return;
             end if;
             for Which of Intent_Waiting loop
@@ -2816,7 +2817,7 @@ package body Model_Runner.CLI.Project_Commands is
          elsif Intent_Waiting.Is_Empty then
             Command.Action := T.To_Bounded (if Word = "/accept" then "accept" else "reject");
             Command.Action_Argument := T.To_Bounded (Waiting.First_Element);
-            Command.Kind := Opt.Command_Task;
+            To_Task := True;
          else
             --  A requirement, specification or decision: decided here.
             Model_Runner.CLI.Intents.Decide
@@ -2878,7 +2879,6 @@ package body Model_Runner.CLI.Project_Commands is
       end if;
 
       if Word = "/init" then
-         Command.Kind := Opt.Command_Init;
          --  --directory DIR as the shell takes it: the project started
          --  there, the template the word that is neither.
          declare
@@ -2913,7 +2913,6 @@ package body Model_Runner.CLI.Project_Commands is
          Last_Status := Status;
 
       elsif Word = "/task" then
-         Command.Kind := Opt.Command_Task;
          --  /task TASK-X is the task shown.
          if Ada.Strings.Fixed.Index (Argument (1), "TASK-") = 1 then
             Command.Action := T.To_Bounded ("show");
@@ -2927,7 +2926,7 @@ package body Model_Runner.CLI.Project_Commands is
 
       elsif Word in "/accept" | "/reject" then
          With_Store (Decide'Access);
-         if Command.Kind = Opt.Command_Task then
+         if To_Task then
             Model_Runner.CLI.Tasks.Run (Command, Screen, Status);
             Last_Status := Status;
          end if;
@@ -2936,7 +2935,6 @@ package body Model_Runner.CLI.Project_Commands is
          if Argument (1) = "" then
             Pres.Put_Note (Screen, "cli.project.nothing_running");
          else
-            Command.Kind := Opt.Command_Task;
             Command.Action := T.To_Bounded ("cancel");
             Command.Action_Argument := T.To_Bounded (Argument (1));
             Model_Runner.CLI.Tasks.Run (Command, Screen, Status);
@@ -2944,13 +2942,11 @@ package body Model_Runner.CLI.Project_Commands is
          end if;
 
       elsif Word = "/work" then
-         Command.Kind := Opt.Command_Work;
          Command.Action_Argument := T.To_Bounded (Rest (1));
          Model_Runner.CLI.Work.Run_With (Command, Screen, Agent, Status);
          Last_Status := Status;
 
       elsif Word in "/scan" | "/tree" | "/sym" | "/refs" | "/deps" | "/users" | "/impact" | "/trace" then
-         Command.Kind := Opt.Command_Repo;
          Command.Action := T.To_Bounded (Word (Word'First + 1 .. Word'Last));
          --  --verbose among the words: all of it, as the shell's option.
          Command.Action_Argument :=

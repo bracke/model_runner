@@ -110,7 +110,7 @@ package body Model_Runner.CLI.Tasks is
    ---------
 
    procedure Run
-     (Item   : Model_Runner.CLI.Options.Command;
+     (Item   : Model_Runner.CLI.Project_Requests.Request;
       Screen : in out Model_Runner.Presentation.Console;
       Status : out Natural)
    is
@@ -2089,7 +2089,7 @@ package body Model_Runner.CLI.Tasks is
                           (Argument, Ada.Strings.Maps.To_Mapping (" ", [1 => ASCII.LF])))
          loop
             declare
-               One  : Model_Runner.CLI.Options.Command := Item;
+               One  : Model_Runner.CLI.Project_Requests.Request := Item;
                Went : Natural;
             begin
                One.Action_Argument := T.To_Bounded (Word);

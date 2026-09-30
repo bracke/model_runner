@@ -17,6 +17,7 @@ with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Intents;
 with Model_Runner.CLI.Options;
 with Model_Runner.CLI.Project_Commands;
+with Model_Runner.CLI.Project_Requests;
 with Model_Runner.CLI.Work;
 with Model_Runner.Errors;
 with Model_Runner.Framework;
@@ -5179,7 +5180,7 @@ package body Tests.Framework_Cases is
       Root    : Unbounded_String;
       Catalog : aliased Model_Runner.Localization.Catalog;
       Screen  : Model_Runner.Presentation.Console;
-      Options : Model_Runner.CLI.Options.Command;
+      Options : Model_Runner.CLI.Project_Requests.Request;
       Exit_Status : Natural;
       Report  : S.Recovery_Report;
    begin

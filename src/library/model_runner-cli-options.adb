@@ -269,11 +269,6 @@ package body Model_Runner.CLI.Options is
          when Command_Embed   => "embed",
          when Command_Inspect => "inspect",
          when Command_Models  => "models",
-         when Command_Init    => "init",
-         when Command_Task    => "task",
-         when Command_Repo    => "repo",
-         when Command_Work    => "work",
-         when Command_Project => "project",
          when Command_Help    => "help",
          when Command_Version => "version");
 
@@ -385,15 +380,8 @@ package body Model_Runner.CLI.Options is
    -- Command_Of --
    ----------------
 
-   function Is_Project_Word (Word : String) return Boolean
-   is (Word in "req" | "state" | "bootstrap" | "config" | "reconfigure" | "check" | "decision"
-              | "spec" | "result" | "sandbox" | "instruct" | "accept" | "reject");
-
    function Command_Of (Word : String) return Command_Kind is
    begin
-      if Is_Project_Word (Word) then
-         return Command_Project;
-      end if;
       for Kind in Command_Kind loop
          if Kind /= Command_None and then Command_Word (Kind) = Word then
             return Kind;
@@ -2650,17 +2638,6 @@ package body Model_Runner.CLI.Options is
                      Result.Kind := Command_Help;
                   elsif Argument = "version" then
                      Result.Kind := Command_Version;
-                  elsif Argument in "init" | "task" | "work" | "repo" | "project"
-                                  | "trace" | "refs" | "impact" | "tree" | "sym" | "deps" | "users"
-                                  | "cancel" | "complete" | "split" | "verify" | "integrate" | "reopen"
-                                  | "audit" | "derive" | "rehome" | "depend" | "edit"
-                    or else Is_Project_Word (Argument)
-                  then
-                     --  The project's commands are a session's, typed there.
-                     Fail (E.CLI_Unknown_Command, "",
-                           Argument & "; the project's commands are typed in a session: model_runner run"
-                           & " MODEL --interactive, then /help project");
-                     return;
                   else
                      Fail (E.CLI_Unknown_Command, "", Argument);
                      return;

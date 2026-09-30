@@ -4,6 +4,7 @@ with Ada.Strings.Unbounded;
 
 with Model_Runner.Errors;
 with Model_Runner.CLI.Choosers;
+with Model_Runner.CLI.Options;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Execution;
@@ -35,7 +36,7 @@ package body Model_Runner.CLI.Init is
    ---------
 
    procedure Run
-     (Item   : Model_Runner.CLI.Options.Command;
+     (Item   : Model_Runner.CLI.Project_Requests.Request;
       Screen : in out Model_Runner.Presentation.Console;
       Status : out Natural)
    is
