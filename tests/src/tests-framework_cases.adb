@@ -1187,22 +1187,6 @@ package body Tests.Framework_Cases is
                  & Code_Of (Status));
       end;
 
-      --  The agent command's prompt marker is no input, and passes through.
-      declare
-         Holding : Tp.Registry;
-         Made    : Tp.Composition;
-         Planned : Cf.Plan;
-         Given   : Cf.Value_Maps.Map;
-      begin
-         Tp.Add (Holding, Parsed ("template = agent" & LF & "name = A" & LF
-                                  & "description = D" & LF & "version = 1" & LF
-                                  & "scalar work.agent = my-agent ${prompt}" & LF));
-         Tp.Compose (Holding, "agent", Made, Status);
-         Cf.Prepare (Made, Fresh ("agent-marker"), Given, Planned, Status);
-         Assert (E.Is_Ok (Status)
-                 and then R.Get (Planned.Configuration, "scalar.work.agent") = "my-agent ${prompt}",
-                 "a template's agent command lost its prompt marker: " & Code_Of (Status));
-      end;
       Tp.Parse ("template = x" & LF & "name = X" & LF & "description = D" & LF & "version = 1" & LF
                 & "baseline tests = yes" & LF, "memory", Value, Status);
       Assert (Status.Code = E.Framework_Template_Invalid,
@@ -8561,14 +8545,14 @@ package body Tests.Framework_Cases is
                  "what an entry governs was not said: "
                  & Nt.Governs (Store, Nt.Requirement, To_String (R1)));
          --  A second setting kept beside the first, not over it.
-         Nt.Govern (Store, Change, Nt.Requirement, To_String (R1), "scalar.work.agent",
-                    "scripted", "", Status);
+         Nt.Govern (Store, Change, Nt.Requirement, To_String (R1), "scalar.work.lease",
+                    "90", "", Status);
          S.Commit (Store, Change, Status);
-         Assert (Nt.Governs (Store, Nt.Requirement, To_String (R1)) = "scalar.work.agent = scripted"
+         Assert (Nt.Governs (Store, Nt.Requirement, To_String (R1)) = "scalar.work.lease = 90"
                  and then Nt.Also_Governs (Store, Nt.Requirement, To_String (R1)).Contains
                             ("scalar.work.isolation = workspace"),
                  "governing a second setting dropped the first");
-         Assert (Model_Runner.Framework.Configurations.Known_Names.Contains ("scalar.work.agent"),
+         Assert (Model_Runner.Framework.Configurations.Known_Names.Contains ("scalar.work.lease"),
                  "the settings the harness reads were not known");
       end;
 

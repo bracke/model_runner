@@ -146,4 +146,17 @@ package Model_Runner.CLI.Project_Commands is
       Screen : in out Model_Runner.Presentation.Console;
       Status : out Natural);
 
+   --  The same, with the agent /work runs supplied: a test's own, in
+   --  place of a model.
+   --
+   --  @param Line The command as a session takes it, its slash first.
+   --  @param Screen Where to write.
+   --  @param Agent What /work runs.
+   --  @param Status The exit status, as Run_Without_Model sets it.
+   procedure Run_With_Agent
+     (Line   : String;
+      Screen : in out Model_Runner.Presentation.Console;
+      Agent  : Model_Runner.Framework.Work.Agent_Runner'Class;
+      Status : out Natural);
+
 end Model_Runner.CLI.Project_Commands;

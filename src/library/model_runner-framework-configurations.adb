@@ -415,13 +415,7 @@ package body Model_Runner.Framework.Configurations is
                   declare
                      Name : constant String := Text (Index + 2 .. Close - 1);
                   begin
-                     if Name = "prompt" then
-                        --  Not an input: the agent command's marker for its
-                        --  prompt file, filled in when the command runs.
-                        Append (Output, "${prompt}");
-                        Index := Close + 1;
-                        goto Next_Character;
-                     elsif Secrets.Contains (Name) then
+                     if Secrets.Contains (Name) then
                         Invalid ("the secret " & Name
                                  & " would be written into the configuration");
                         return "";
@@ -994,7 +988,7 @@ package body Model_Runner.Framework.Configurations is
    --  The settings the harness reads, by their whole names: where a name
    --  is given without its kind and the configuration holds none of it
    --  yet, the one of these it is.
-   Known_Settings : constant array (1 .. 49) of access constant String :=
+   Known_Settings : constant array (1 .. 48) of access constant String :=
      [new String'("list.automation.rules"),
       new String'("list.verification.full"),
       new String'("scalar.agents.max_active"),
@@ -1030,7 +1024,6 @@ package body Model_Runner.Framework.Configurations is
       new String'("scalar.verification.escalation"),
       new String'("scalar.verification.requirements"),
       new String'("scalar.verification.toolchain"),
-      new String'("scalar.work.agent"),
       new String'("scalar.work.isolation"),
       new String'("scalar.work.lease"),
       new String'("scalar.work.max_workspaces"),
@@ -1100,7 +1093,7 @@ package body Model_Runner.Framework.Configurations is
          return "everything bootstrap finds";
       elsif Name = "set.components" then
          return "one: the project itself";
-      elsif Name in "scalar.work.agent" | "scalar.model.default" then
+      elsif Name = "scalar.model.default" then
          return "/work uses this session's model";
       elsif Name = "scalar.verification.default" then
          return "the check /init set";
@@ -1701,7 +1694,7 @@ package body Model_Runner.Framework.Configurations is
                else Written);
 
             --  A name without its kind is the setting of that name there
-            --  is: work.agent is scalar.work.agent when that is the one.
+            --  is: work.lease is scalar.work.lease when that is the one.
             function Full_Name return String is
                Found : Unbounded_String;
                Count : Natural := 0;
@@ -1840,6 +1833,17 @@ package body Model_Runner.Framework.Configurations is
                  (Name, Name & " is what /init was given, kept as it was; what it set is changed by"
                   & " the setting's own name -- /config lists them, as scalar.work.isolation for"
                   & " input.work_isolation");
+               return;
+            --  An outside program as the agent is out of scope: refused,
+            --  and one an earlier version kept can only be taken out.
+            elsif Name in "scalar.work.agent" | "work.agent"
+              and then not (Given = "off" and then Records.Has (Result.Before, "scalar.work.agent"))
+            then
+               Status := Refused
+                 (Name, "an outside program as the agent is out of scope: /work uses this session's"
+                  & " model, or the one work model=PATH names"
+                  & (if Records.Has (Result.Before, "scalar.work.agent") then "; work.agent=off takes it out"
+                     else ""));
                return;
             elsif not (for some Prefix of Changeable => Starts (Name, Prefix.all)) then
                Status := Refused (Name, "there is no setting " & Name & Near

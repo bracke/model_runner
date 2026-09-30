@@ -5,6 +5,17 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Removed
+
+- **Outside programs as the agent:** `work.agent` -- a script or another
+  coding agent run by `/work` -- is gone and out of scope. The harness could
+  only compare files after such a program ran, not confine it: writes to
+  `.git` or outside the project and network use went unseen. `/work` runs a
+  model, the session's own or the one `model=PATH` names; `/reconfigure`
+  refuses `work.agent`, and a project that still names one is told it is
+  not run and how to take it out. The tests drive `/work` with an agent of
+  their own, in the process.
+
 ### Added
 
 - **The session's project commands run from the shell:** `model_runner req`,

@@ -125,12 +125,13 @@ TASK-HELLO-001  ready  implementation  Greets by name
    then `/req accept` the candidates worth keeping.
 2. **A task done by hand:** `/task complete ID` runs its checks and closes
    it.
-3. **A script instead of the model:** `/reconfigure
-   work.agent="sh ./agent.sh ${prompt}" set.execution.allowed+=sh` --
-   `${prompt}` is the path of a file holding the task's context, there
-   while the agent runs.
-4. **Stuck:** `/help project` lists every project command, and most
+3. **Stuck:** `/help project` lists every project command, and most
    commands end with a `next:` line naming the likely step.
+
+Out of scope: an outside program -- a script, another coding agent -- as
+the agent. The harness can only compare files after such a program ran, not
+confine it, so `/work` runs a model: the session's own, or one `model=PATH`
+names.
 
 `/work` gives the session's own model the task in a conversation of its
 own, built from the project state, with the file tools and nothing else;

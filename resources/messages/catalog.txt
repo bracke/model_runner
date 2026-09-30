@@ -284,7 +284,7 @@ en.cli.interactive.help.reconfigure = /reconfigure NAME=VALUE ...  change settin
 en.cli.interactive.help.task = /task [ACTION]     list and manage tasks: list, new, accept, reject, cancel, move, edit, depend, split, rehome, reopen, reconsider, complete, verify, diff, integrate, show, audit, derive, plan
 en.cli.interactive.help.accept = /accept           accept the one candidate waiting
 en.cli.interactive.help.reject = /reject           reject the one candidate waiting
-en.cli.interactive.help.work = /work [TASK]      run a ready task with the project's agent (work.agent) or else this model, verify and complete it
+en.cli.interactive.help.work = /work [TASK]      run a ready task with this session's model, verify and complete it
 en.cli.interactive.help.cancel = /cancel TASK      cancel a task
 en.cli.interactive.help.check = /check [PROFILE | full | REQ-ID | consistency]  verify the project now, all of it, or one requirement, or check its state holds together
 en.cli.interactive.help.req = /req [ID | ACTION]  requirements: list, show, new TITLE "text=...", accept, reject, move ID STATE, verify ID, revise, link, unlink, supersede OLD NEW, obsolete
@@ -303,7 +303,7 @@ en.cli.interactive.usage.init = /init TEMPLATE NAME=VALUE ...  starts the projec
 en.cli.interactive.usage.task = /task list [state=S kind=K component=C requirement=REQ origin=O parent=P] -- /task new TITLE kind=KIND [component=C requirements=REQ-... notes=... permissions=...] -- /task accept|reject|cancel|reopen|reconsider|complete|verify|integrate ID -- /task show|audit ID, /task plan -- /task edit ID NAME=VALUE, link ID REQ..., depend ID ON [remove], split ID First; Second, rehome OLD NEW, move ID STATE, derive
 en.cli.interactive.usage.work = /work TASK-ID, or words of a task's title, or nothing to choose among the ready ones: its context, the agent's call, the files changed, verification, and where the task ended
 en.cli.interactive.usage.req = /req [list] -- /req new TITLE text=... criteria=... scope=... -- /req accept|reject|reconsider|obsolete|verify ID ... -- /req revise ID text=... -- /req link ID RELATION TARGET, unlink -- /req supersede OLD NEW -- /req show ID
-en.cli.interactive.usage.config = /config lists every setting; /config NAME shows those whose name holds NAME -- /config work.agent, /config permission.kind -- and a setting not set says what holds then
+en.cli.interactive.usage.config = /config lists every setting; /config NAME shows those whose name holds NAME -- /config work.lease, /config permission.kind -- and a setting not set says what holds then
 en.cli.interactive.usage.state = /state counts what stands -- requirements, and of them the candidates and the verified; tasks by state, and of the accepted the ready and the waiting -- then what waits on a person, and names the next step
 en.cli.interactive.setting.temperature = temperature
 en.cli.interactive.setting.top_k = top-k
@@ -517,7 +517,7 @@ en.cli.next.init_documents = next: /bootstrap reads what the documents here say 
 en.cli.next.requirements = no requirements yet; /req new TITLE text=... says one, /bootstrap FILE reads a document's in
 en.cli.next.tasks = no tasks yet; /task new TITLE kind=KIND makes one
 en.cli.next.task_list = /task list shows the tasks there are
-en.cli.next.model = next: model=PATH runs a model file as the agent, or /reconfigure work.agent="COMMAND $PROMPT" names a command
+en.cli.next.model = next: /work in a session with a model loaded runs it, or model=PATH names a model file as the agent
 en.cli.next.confirm = next: add confirm=yes to the same command, which applies it without being asked
 en.cli.next.confirm_init = next: add confirm=yes, which initializes without being asked
 en.cli.next.confirm_init_also = next: give those above as NAME=VALUE, and confirm=yes with them, which initializes without being asked
@@ -581,11 +581,11 @@ en.cli.work.nothing_ready = no task is ready to work on
 en.cli.work.session_ending = the session ends, told to (SIGTERM or SIGHUP): what follows is typed at the shell
 en.cli.work.agent = {name} works on {value}
 en.cli.work.runner = {value}: the agent is {name}
-en.cli.work.no_prompt = the agent command names no $PROMPT, so it is given none of its context: /reconfigure scalar.work.agent="CMD $PROMPT" hands it the file
 en.cli.work.runner.session = the session's model
 en.cli.work.only_ready = {name} is the one task ready
 en.cli.work.one_accepted = {name} is the only accepted one of the {count} tasks it matches
 en.cli.work.time_allowed = it may work {count} seconds (agents.max_seconds, and execution.timeout for a command); Ctrl-C stops it sooner, and what is typed meanwhile waits until it ends
+en.cli.work.agent_ignored = work.agent names {value}, which is not run: an outside program as the agent is out of scope; /reconfigure work.agent=off takes it out
 en.cli.work.sandboxed = its agent is confined to {value}, by {name}
 en.cli.work.context = context {name}, call {value}
 en.cli.work.changed = changed {name}
@@ -1384,7 +1384,7 @@ da.cli.interactive.help.reconfigure = /reconfigure NAVN=VÆRDI ...  ændr indsti
 da.cli.interactive.help.task = /task [HANDLING]   vis og styr opgaver: list, new, accept, reject, cancel, move, edit, depend, split, rehome, reopen, reconsider, complete, verify, diff, integrate, show, audit, derive, plan
 da.cli.interactive.help.accept = /accept           accepter den ene ventende kandidat
 da.cli.interactive.help.reject = /reject           afvis den ene ventende kandidat
-da.cli.interactive.help.work = /work [OPGAVE]    kør en klar opgave med projektets agent (work.agent) ellers denne model, verificér og fuldfør den
+da.cli.interactive.help.work = /work [OPGAVE]    kør en klar opgave med sessionens model, verificér og fuldfør den
 da.cli.interactive.help.cancel = /cancel OPGAVE    annullér en opgave
 da.cli.interactive.help.check = /check [PROFIL | full | REQ-ID | consistency]  verificér projektet nu, det hele eller ét krav, eller tjek at dets tilstand hænger sammen
 da.cli.interactive.help.req = /req [ID | HANDLING]  krav: list, vis, new TITEL "text=...", accept, reject, move ID TILSTAND, verify ID, revise, link, unlink, supersede GAMMEL NY, obsolete
@@ -1403,7 +1403,7 @@ da.cli.interactive.usage.init = /init SKABELON NAVN=VÆRDI ...  starter projekte
 da.cli.interactive.usage.task = /task list [state=S kind=K component=C requirement=REQ origin=O parent=P] -- /task new TITEL kind=ART [component=C requirements=REQ-... notes=... permissions=...] -- /task accept|reject|cancel|reopen|reconsider|complete|verify|integrate ID -- /task show|audit ID, /task plan -- /task edit ID NAVN=VÆRDI, link ID REQ..., depend ID PÅ [remove], split ID Første; Anden, rehome GAMMEL NY, move ID TILSTAND, derive
 da.cli.interactive.usage.work = /work OPGAVE-ID, eller ord fra en opgaves titel, eller intet for at vælge blandt de klare: dens kontekst, agentens kald, de ændrede filer, verifikation, og hvor opgaven endte
 da.cli.interactive.usage.req = /req [list] -- /req new TITEL text=... criteria=... scope=... -- /req accept|reject|reconsider|obsolete|verify ID ... -- /req revise ID text=... -- /req link ID RELATION MÅL, unlink -- /req supersede GAMMEL NY -- /req show ID
-da.cli.interactive.usage.config = /config viser alle indstillinger; /config NAVN viser dem hvis navn indeholder NAVN -- /config work.agent, /config permission.kind -- og en indstilling der ikke er sat siger hvad der gælder så
+da.cli.interactive.usage.config = /config viser alle indstillinger; /config NAVN viser dem hvis navn indeholder NAVN -- /config work.lease, /config permission.kind -- og en indstilling der ikke er sat siger hvad der gælder så
 da.cli.interactive.usage.state = /state tæller hvad der står -- krav, og heraf kandidater og verificerede; opgaver efter tilstand, og af de accepterede de klare og de ventende -- så hvad der venter på en person, og nævner næste skridt
 da.cli.interactive.system_cleared = systembeskeden er fjernet; konteksten ryddet
 da.cli.interactive.no_tools = ingen værktøjer tilbydes; start med --tools for at tilbyde nogle
@@ -1605,7 +1605,7 @@ da.cli.next.init_documents = næste: /bootstrap læser hvad dokumenterne her sig
 da.cli.next.requirements = ingen krav endnu; /req new TITEL text=... siger et, /bootstrap FIL læser et dokuments ind
 da.cli.next.tasks = ingen opgaver endnu; /task new TITEL kind=ART laver en
 da.cli.next.task_list = /task list viser de opgaver der er
-da.cli.next.model = næste: model=STI kører en modelfil som agent, eller /reconfigure work.agent="KOMMANDO $PROMPT" angiver en kommando
+da.cli.next.model = næste: /work i en session med en indlæst model kører den, eller model=STI angiver en modelfil som agent
 da.cli.next.confirm = næste: tilføj confirm=yes til samme kommando, som så anvender det uden at spørge
 da.cli.next.confirm_init = næste: tilføj confirm=yes, som initialiserer uden at spørge
 da.cli.next.confirm_init_also = næste: giv dem ovenfor som NAVN=VÆRDI, og confirm=yes sammen med dem, som initialiserer uden at spørge
@@ -1669,11 +1669,11 @@ da.cli.work.nothing_ready = ingen opgave er klar til at arbejde på
 da.cli.work.session_ending = sessionen slutter, som den blev bedt om (SIGTERM eller SIGHUP): det følgende skrives i skallen
 da.cli.work.agent = {name} arbejder på {value}
 da.cli.work.runner = {value}: agenten er {name}
-da.cli.work.no_prompt = agentkommandoen nævner ingen $PROMPT, så den får intet af sin kontekst: /reconfigure scalar.work.agent="KMD $PROMPT" giver den filen
 da.cli.work.runner.session = sessionens model
 da.cli.work.only_ready = {name} er den eneste klare opgave
 da.cli.work.one_accepted = {name} er den eneste accepterede af de {count} opgaver den matcher
 da.cli.work.time_allowed = den må arbejde {count} sekunder (agents.max_seconds, og execution.timeout for en kommando); Ctrl-C stopper den før, og det der skrives imens venter til det slutter
+da.cli.work.agent_ignored = work.agent nævner {value}, som ikke køres: et eksternt program som agent er uden for rammerne; /reconfigure work.agent=off fjerner det
 da.cli.work.sandboxed = dens agent er begrænset til {value}, af {name}
 da.cli.work.context = kontekst {name}, kald {value}
 da.cli.work.changed = ændrede {name}
@@ -2241,7 +2241,7 @@ qps.cli.interactive.help.reconfigure = ⟦/reconfigure NAME=VALUE ...  çháñg�
 qps.cli.interactive.help.task = ⟦/ŧáßk [AÇŦION]     ĺíßŧ áñð máñágé ŧáßkß: ĺíßŧ, ñéw, áççépŧ, ŕéjéçŧ, çáñçéĺ, móvé, éðíŧ, ðépéñð, ßpĺíŧ, ŕéhómé, ŕéópéñ, ŕéçóñßíðéŕ, çómpĺéŧé, véŕífý, ðíff, íñŧégŕáŧé, ßhów, áúðíŧ, ðéŕívé, pĺáñ⟧
 qps.cli.interactive.help.accept = ⟦/accept           áççépŧ ŧhé óñé çáñðíðáŧé wáíŧíñg⟧
 qps.cli.interactive.help.reject = ⟦/reject           ŕéjéçŧ ŧhé óñé çáñðíðáŧé wáíŧíñg⟧
-qps.cli.interactive.help.work = ⟦/work [TASK]      ŕúñ á ŕéáðý ŧáßk wíŧh ŧhé pŕójéçŧ'ß ágéñŧ (wóŕk.ágéñŧ) óŕ éĺßé ŧhíß móðéĺ, véŕífý áñð çómpĺéŧé íŧ⟧
+qps.cli.interactive.help.work = ⟦/wóŕk [ŦASK]      ŕúñ á ŕéáðý ŧáßk wíŧh ŧhíß ßéßßíóñ'ß móðéĺ, véŕífý áñð çómpĺéŧé íŧ⟧
 qps.cli.interactive.help.cancel = ⟦/cancel TASK      çáñçéĺ á ŧáßk⟧
 qps.cli.interactive.help.check = ⟦/çhéçk [PROFILE | fúĺĺ | REQ-ID | çóñßíßŧéñçý]  véŕífý ŧhé pŕójéçŧ ñów, áĺĺ óf íŧ, óŕ óñé ŕéqúíŕéméñŧ, óŕ çhéçk íŧß ßŧáŧé hóĺðß ŧógéŧhéŕ⟧
 qps.cli.interactive.help.req = ⟦/ŕéq [ID | AÇŦION]  ŕéqúíŕéméñŧß: ĺíßŧ, ßhów, ñéw ŦIŦLE "ŧéxŧ=...", áççépŧ, ŕéjéçŧ, móvé ID SŦAŦE, véŕífý ID, ŕévíßé, ĺíñk, úñĺíñk, ßúpéŕßéðé OLD NEW, óbßóĺéŧé⟧
@@ -2260,7 +2260,7 @@ qps.cli.interactive.usage.init = ⟦/íñíŧ ŦEMPLAŦE NAME=VALÚE ...  ßŧá
 qps.cli.interactive.usage.task = ⟦/ŧáßk ĺíßŧ [ßŧáŧé=S kíñð=K çómpóñéñŧ=Ç ŕéqúíŕéméñŧ=REQ óŕígíñ=O páŕéñŧ=P] -- /ŧáßk ñéw ŦIŦLE kíñð=KIND [çómpóñéñŧ=Ç ŕéqúíŕéméñŧß=REQ-... ñóŧéß=... péŕmíßßíóñß=...] -- /ŧáßk áççépŧ|ŕéjéçŧ|çáñçéĺ|ŕéópéñ|ŕéçóñßíðéŕ|çómpĺéŧé|véŕífý|íñŧégŕáŧé ID -- /ŧáßk ßhów|áúðíŧ ID, /ŧáßk pĺáñ -- /ŧáßk éðíŧ ID NAME=VALÚE, ĺíñk ID REQ..., ðépéñð ID ON [ŕémóvé], ßpĺíŧ ID Fíŕßŧ; Séçóñð, ŕéhómé OLD NEW, móvé ID SŦAŦE, ðéŕívé⟧
 qps.cli.interactive.usage.work = ⟦/wóŕk ŦASK-ID, óŕ wóŕðß óf á ŧáßk'ß ŧíŧĺé, óŕ ñóŧhíñg ŧó çhóóßé ámóñg ŧhé ŕéáðý óñéß: íŧß çóñŧéxŧ, ŧhé ágéñŧ'ß çáĺĺ, ŧhé fíĺéß çháñgéð, véŕífíçáŧíóñ, áñð whéŕé ŧhé ŧáßk éñðéð⟧
 qps.cli.interactive.usage.req = ⟦/ŕéq [ĺíßŧ] -- /ŕéq ñéw ŦIŦLE ŧéxŧ=... çŕíŧéŕíá=... ßçópé=... -- /ŕéq áççépŧ|ŕéjéçŧ|ŕéçóñßíðéŕ|óbßóĺéŧé|véŕífý ID ... -- /ŕéq ŕévíßé ID ŧéxŧ=... -- /ŕéq ĺíñk ID RELAŦION ŦARGEŦ, úñĺíñk -- /ŕéq ßúpéŕßéðé OLD NEW -- /ŕéq ßhów ID⟧
-qps.cli.interactive.usage.config = ⟦/çóñfíg ĺíßŧß évéŕý ßéŧŧíñg; /çóñfíg NAME ßhówß ŧhóßé whóßé ñámé hóĺðß NAME -- /çóñfíg wóŕk.ágéñŧ, /çóñfíg péŕmíßßíóñ.kíñð -- áñð á ßéŧŧíñg ñóŧ ßéŧ ßáýß wháŧ hóĺðß ŧhéñ⟧
+qps.cli.interactive.usage.config = ⟦/çóñfíg ĺíßŧß évéŕý ßéŧŧíñg; /çóñfíg NAME ßhówß ŧhóßé whóßé ñámé hóĺðß NAME -- /çóñfíg wóŕk.ĺéáßé, /çóñfíg péŕmíßßíóñ.kíñð -- áñð á ßéŧŧíñg ñóŧ ßéŧ ßáýß wháŧ hóĺðß ŧhéñ⟧
 qps.cli.interactive.usage.state = ⟦/ßŧáŧé çóúñŧß wháŧ ßŧáñðß -- ŕéqúíŕéméñŧß, áñð óf ŧhém ŧhé çáñðíðáŧéß áñð ŧhé véŕífíéð; ŧáßkß bý ßŧáŧé, áñð óf ŧhé áççépŧéð ŧhé ŕéáðý áñð ŧhé wáíŧíñg -- ŧhéñ wháŧ wáíŧß óñ á péŕßóñ, áñð ñáméß ŧhé ñéxŧ ßŧép⟧
 qps.cli.interactive.setting.temperature = ⟦ŧémpéŕáŧúŕé⟧
 qps.cli.interactive.setting.top_k = ⟦ŧóp-k⟧
@@ -2474,7 +2474,7 @@ qps.cli.next.init_documents = ⟦ñéxŧ: /bóóŧßŧŕáp ŕéáðß wháŧ ŧ
 qps.cli.next.requirements = ⟦ñó ŕéqúíŕéméñŧß ýéŧ; /ŕéq ñéw ŦIŦLE ŧéxŧ=... ßáýß óñé, /bóóŧßŧŕáp FILE ŕéáðß á ðóçúméñŧ'ß íñ⟧
 qps.cli.next.tasks = ⟦ñó ŧáßkß ýéŧ; /ŧáßk ñéw ŦIŦLE kíñð=KIND mákéß óñé⟧
 qps.cli.next.task_list = ⟦/ŧáßk ĺíßŧ ßhówß ŧhé ŧáßkß ŧhéŕé áŕé⟧
-qps.cli.next.model = ⟦ñéxŧ: móðéĺ=PAŦH ŕúñß á móðéĺ fíĺé áß ŧhé ágéñŧ, óŕ /ŕéçóñfígúŕé wóŕk.ágéñŧ="ÇOMMAND $PROMPŦ" ñáméß á çómmáñð⟧
+qps.cli.next.model = ⟦ñéxŧ: /wóŕk íñ á ßéßßíóñ wíŧh á móðéĺ ĺóáðéð ŕúñß íŧ, óŕ móðéĺ=PAŦH ñáméß á móðéĺ fíĺé áß ŧhé ágéñŧ⟧
 qps.cli.next.confirm = ⟦ñéxŧ: áðð çóñfíŕm=ýéß ŧó ŧhé ßámé çómmáñð, whíçh áppĺíéß íŧ wíŧhóúŧ béíñg áßkéð⟧
 qps.cli.next.confirm_init = ⟦ñéxŧ: áðð çóñfíŕm=ýéß, whíçh íñíŧíáĺízéß wíŧhóúŧ béíñg áßkéð⟧
 qps.cli.next.confirm_init_also = ⟦ñéxŧ: gívé ŧhóßé ábóvé áß NAME=VALÚE, áñð çóñfíŕm=ýéß wíŧh ŧhém, whíçh íñíŧíáĺízéß wíŧhóúŧ béíñg áßkéð⟧
@@ -2538,11 +2538,11 @@ qps.cli.work.nothing_ready = ⟦ñó ŧáßk íß ŕéáðý ŧó wóŕk óñ⟧
 qps.cli.work.session_ending = ⟦ŧhé ßéßßíóñ éñðß, ŧóĺð ŧó (SIGŦERM óŕ SIGHÚP): wháŧ fóĺĺówß íß ŧýpéð áŧ ŧhé ßhéĺĺ⟧
 qps.cli.work.agent = ⟦{name} wóŕkß óñ {value}⟧
 qps.cli.work.runner = ⟦{value}: ŧhé ágéñŧ íß {name}⟧
-qps.cli.work.no_prompt = ⟦ŧhé ágéñŧ çómmáñð ñáméß ñó $PROMPŦ, ßó íŧ íß gívéñ ñóñé óf íŧß çóñŧéxŧ: /ŕéçóñfígúŕé ßçáĺáŕ.wóŕk.ágéñŧ="ÇMD $PROMPŦ" háñðß íŧ ŧhé fíĺé⟧
 qps.cli.work.runner.session = ⟦ŧhé ßéßßíóñ'ß móðéĺ⟧
 qps.cli.work.only_ready = ⟦{name} íß ŧhé óñé ŧáßk ŕéáðý⟧
 qps.cli.work.one_accepted = ⟦{name} íß ŧhé óñĺý áççépŧéð óñé óf ŧhé {count} ŧáßkß íŧ máŧçhéß⟧
 qps.cli.work.time_allowed = ⟦íŧ máý wóŕk {count} ßéçóñðß (ágéñŧß.máx_ßéçóñðß, áñð éxéçúŧíóñ.ŧíméóúŧ fóŕ á çómmáñð); Çŧŕĺ-Ç ßŧópß íŧ ßóóñéŕ, áñð wháŧ íß ŧýpéð méáñwhíĺé wáíŧß úñŧíĺ íŧ éñðß⟧
+qps.cli.work.agent_ignored = ⟦wóŕk.ágéñŧ ñáméß {value}, whíçh íß ñóŧ ŕúñ: áñ óúŧßíðé pŕógŕám áß ŧhé ágéñŧ íß óúŧ óf ßçópé; /ŕéçóñfígúŕé wóŕk.ágéñŧ=óff ŧákéß íŧ óúŧ⟧
 qps.cli.work.sandboxed = ⟦íŧß ágéñŧ íß çóñfíñéð ŧó {value}, bý {name}⟧
 qps.cli.work.context = ⟦çóñŧéxŧ {name}, çáĺĺ {value}⟧
 qps.cli.work.changed = ⟦çháñgéð {name}⟧

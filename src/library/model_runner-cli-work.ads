@@ -7,9 +7,8 @@ with Model_Runner.Presentation;
 --  /work TASK runs that task; /work alone offers the accepted tasks to
 --  choose from on a terminal, ready ones first and blocked ones shown with
 --  why, and anywhere else says it must be named. The agent is the
---  session's own model, or a command the configuration names as scalar
---  work.agent, run through the execution policy with ${prompt} standing
---  for its context's file. What happened is said step by step: the agent,
+--  session's own model, or one named with model=PATH; an outside program
+--  as the agent is out of scope. What happened is said step by step: the agent,
 --  the context, the call, the files that changed, the verification, and
 --  where the task ended.
 package Model_Runner.CLI.Work is

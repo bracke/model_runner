@@ -34,6 +34,10 @@ package body Library_Surface is
       --  having none of them.
       new String'("Run_Without_Model"),
 
+      --  The same with an agent the suite supplies: how /work is driven
+      --  now that an outside program is no agent.
+      new String'("Run_With_Agent"),
+
       --  Writing for a program: --format json went with the project's
       --  shell commands, and the suite still reads their messages so.
       new String'("Use_Structured"),

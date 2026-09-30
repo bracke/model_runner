@@ -99,47 +99,6 @@ package body Model_Runner.Framework.Work is
 
    function Instructions return String is (Instructions_For (May_Propose => True));
 
-   --  The same, for an agent that is a command: it works on the files
-   --  itself, in the directory it is started in, and answers on its
-   --  standard output; it has no tools to call.
-   function Command_Instructions
-     (May_Propose : Boolean; May_Split : Boolean := True; May_Write : Boolean := True) return String
-   is ((if not May_Write
-        then "## What to do" & ASCII.LF
-             & "Do the task now by reading the files: you are started in the"
-             & " project's directory, and paths are relative to it. This task is"
-             & " answered, not written: change no file -- a change to any file fails"
-             & " the work." & ASCII.LF & ASCII.LF
-             & "When you have the answer, print a short report on standard output,"
-             & " in these lines:" & ASCII.LF & ASCII.LF
-             & "status: done" & ASCII.LF
-             & "summary: one line on what you found" & ASCII.LF
-             & "changed_files: none" & ASCII.LF & ASCII.LF
-        else "## What to do" & ASCII.LF
-       & "Do the task now, working on the files yourself: you are started in"
-       & " the project's directory, and paths are relative to it. Change the"
-       & " files the task needs changed; describing a change does not make it."
-       & ASCII.LF & ASCII.LF
-       & "When the files are written, print a short report on standard output,"
-       & " in these lines:" & ASCII.LF & ASCII.LF
-       & "status: done" & ASCII.LF
-       & "summary: one line on what you did" & ASCII.LF
-       & "changed_files: the files you wrote, one a line" & ASCII.LF & ASCII.LF)
-       & "If you could not do it, the status is failed and the summary says"
-       & " why; issue is for a problem found outside the task, and blocked for"
-       & " a decision only a person can make."
-       & (if May_Propose
-          then " Further work you found goes in"
-               & " proposed_tasks:, one a line, as TITLE; kind=K; component=C."
-               & (if May_Split
-                  then " If the task is too large to do as one, say blocked and name its"
-                       & " parts under parts:, one a line."
-                  else " It is split as far as it may be: if it is still too large, say"
-                       & " blocked and say so in the summary.")
-          else " Further work you found goes under issues:, one a line; if the task is"
-               & " too large to do as one, say blocked and say so in the summary.")
-       & ASCII.LF);
-
    --  Names a comma apart.
    function Comma_Separated (Names : Name_Lists.Vector) return String is
       Text : Unbounded_String;
@@ -2160,16 +2119,6 @@ package body Model_Runner.Framework.Work is
 
       Earlier_Changed : constant Name_Lists.Vector := Changed_Before;
 
-      --  What the runner says it is.
-      function Runner_Said return String is
-         Named : Unbounded_String;
-      begin
-         Runner.Describe (Named);
-         return To_String (Named);
-      end Runner_Said;
-
-      Runner_Named : constant String := Runner_Said;
-
       --  What it changed that its permissions do not let it write.
       function Beyond_Permissions return String is
          Held_Agent : Agents.Agent;
@@ -2671,9 +2620,7 @@ package body Model_Runner.Framework.Work is
       --  What it is told, and the call, recorded before it is made.
       Context.Build
         (Item, Task_Id, Model, Built, Held,
-         Instructions => (if Ada.Strings.Fixed.Index (Runner_Named, "the command ") = 1
-                          then Command_Instructions (May_Propose_Here, May_Split_Here, May_Write_Here)
-                          else Instructions_For (May_Propose_Here, May_Split_Here, May_Write_Here))
+         Instructions => Instructions_For (May_Propose_Here, May_Split_Here, May_Write_Here)
                          & Allowed_Here & Its_Parts);
       if E.Is_Error (Held) then
          Conclude ("blocked", "its context cannot be built: "
@@ -2683,21 +2630,16 @@ package body Model_Runner.Framework.Work is
       Result.Manifest_Id := To_Unbounded_String (Context.Manifest_Id (Built));
       Context.Keep (Item, Change, Built, Status);
       if E.Is_Ok (Status) then
-         --  A command is its own agent: recorded as that, with the tools it
-         --  has its own, not those a model would be offered.
          Invocations.Start
            (Item, Change, To_String (Result.Agent_Id), Task_Id,
             Generation_Of (Item, Task_Id),
-            (if Ada.Strings.Fixed.Index (Runner_Named, "the command ") = 1 then Runner_Named
-             else To_String (Model.Id)),
+            To_String (Model.Id),
             To_String (Result.Manifest_Id),
-            (if Ada.Strings.Fixed.Index (Runner_Named, "the command ") = 1
-             then "tools: its own, as a command run under the execution policy"
-             else Tool_Policy
-                    (Item, To_String (Result.Agent_Id),
-                     Number_Of ((if Tasks.Kind_Policy (Item, Kind, "max_tool_calls") /= ""
-                                 then Tasks.Kind_Policy (Item, Kind, "max_tool_calls")
-                                 else Scalar (Item, "agents.max_tool_calls")), 0))),
+            Tool_Policy
+              (Item, To_String (Result.Agent_Id),
+               Number_Of ((if Tasks.Kind_Policy (Item, Kind, "max_tool_calls") /= ""
+                           then Tasks.Kind_Policy (Item, Kind, "max_tool_calls")
+                           else Scalar (Item, "agents.max_tool_calls")), 0)),
             Invocations.Work_Claim,
             Result.Invocation_Id, Status, Resource_Class => To_String (Model.Resource_Class));
          if E.Is_Ok (Status) then

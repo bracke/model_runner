@@ -16,9 +16,9 @@ with Captured_Output;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Project_Commands;
 with Model_Runner.Framework;
-with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Stores;
+with Model_Runner.Framework.Work;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Templates;
 with Project_Tools.Files;
@@ -367,6 +367,86 @@ package body Tests.CLI_Cases is
               | "config" | "reconfigure" | "check" | "decision" | "spec" | "result" | "sandbox"
               | "instruct" | "accept" | "reject");
 
+   --  The agent /work runs here, in place of a model: it writes what it
+   --  is told to, answers as given, or ends as a crash does. With nothing
+   --  given, there is none -- as a session without a model has none.
+   type Test_Agent is new Model_Runner.Framework.Work.Agent_Runner with record
+      Answer : Ada.Strings.Unbounded.Unbounded_String;
+      Writes : Ada.Strings.Unbounded.Unbounded_String;
+      Crash  : Boolean := False;
+   end record;
+
+   overriding procedure Run
+     (Self        : Test_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Ada.Strings.Unbounded.Unbounded_String;
+      Status      : out Model_Runner.Errors.Error_Info);
+
+   overriding procedure Check_Start
+     (Self   : Test_Agent;
+      Item   : Model_Runner.Framework.Stores.Store;
+      Status : in out Model_Runner.Errors.Error_Info);
+
+   overriding procedure Describe
+     (Self : Test_Agent;
+      Text : in out Ada.Strings.Unbounded.Unbounded_String);
+
+   overriding procedure Run
+     (Self        : Test_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Ada.Strings.Unbounded.Unbounded_String;
+      Status      : out Model_Runner.Errors.Error_Info)
+   is
+      pragma Unreferenced (Prompt_Path);
+      use Ada.Strings.Unbounded;
+   begin
+      Status := Model_Runner.Errors.Success;
+      Answer := Self.Answer;
+      if Self.Writes /= Null_Unbounded_String then
+         declare
+            File : Ada.Text_IO.File_Type;
+         begin
+            Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Project & "/" & To_String (Self.Writes));
+            Ada.Text_IO.Put_Line (File, "written by the test agent");
+            Ada.Text_IO.Close (File);
+         end;
+      end if;
+      if Self.Crash then
+         Answer := Null_Unbounded_String;
+         Status := Model_Runner.Errors.Make (Model_Runner.Errors.Framework_Agent_Failed);
+         Model_Runner.Errors.Add_Text (Status, "name", "the agent");
+         Model_Runner.Errors.Add_Text (Status, "detail", "the agent ended with 139: segfault here");
+      end if;
+   end Run;
+
+   overriding procedure Check_Start
+     (Self   : Test_Agent;
+      Item   : Model_Runner.Framework.Stores.Store;
+      Status : in out Model_Runner.Errors.Error_Info)
+   is
+      pragma Unreferenced (Item);
+      use Ada.Strings.Unbounded;
+   begin
+      if Self.Answer = Null_Unbounded_String and then not Self.Crash then
+         Status := Model_Runner.Errors.Make (Model_Runner.Errors.Framework_Input_Missing);
+         Model_Runner.Errors.Add_Text (Status, "name", "model");
+      end if;
+   end Check_Start;
+
+   overriding procedure Describe
+     (Self : Test_Agent;
+      Text : in out Ada.Strings.Unbounded.Unbounded_String)
+   is
+      pragma Unreferenced (Self);
+   begin
+      Text := Ada.Strings.Unbounded.To_Unbounded_String ("the test agent");
+   end Describe;
+
+   --  What /work runs in the commands that follow.
+   Working : Test_Agent;
+
    procedure Ran_In_Session (Source : Opt.Arguments'Class; Status : out Natural) is
       Catalog   : aliased Model_Runner.Localization.Catalog;
       Screen    : Model_Runner.Presentation.Console;
@@ -452,8 +532,8 @@ package body Tests.CLI_Cases is
       end if;
       Ada.Directories.Set_Directory (Ada.Strings.Unbounded.To_String (Directory));
       begin
-         Model_Runner.CLI.Project_Commands.Run_Without_Model
-           (Ada.Strings.Unbounded.To_String (Line), Screen, Status);
+         Model_Runner.CLI.Project_Commands.Run_With_Agent
+           (Ada.Strings.Unbounded.To_String (Line), Screen, Working, Status);
       exception
          when others =>
             Ada.Directories.Set_Directory (Here);
@@ -1891,71 +1971,6 @@ package body Tests.CLI_Cases is
       Ada.Directories.Delete_Tree (Project);
    end Init_Starts_A_Project;
 
-   --  task manages the project's work from the command line: new creates
-   --  a candidate from --set fields, accept and cancel move it, list and
-   --  show say where it stands, derive makes what accepted requirements
-   --  imply, and what is not a task or a legal move is refused.
-   --  An agent the configuration names, run as a command, that runs out
-   --  of time sets its task aside, as the session's agent does -- not
-   --  failed; and what it said on its error stream is kept.
-   procedure Agent_Command_Out_Of_Time
-     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
-   is
-      pragma Unreferenced (T2);
-      package S renames Model_Runner.Framework.Stores;
-      package Cf renames Model_Runner.Framework.Configurations;
-      Project : constant String := "obj/agent-timeout";
-
-      function Command (Words : String) return Natural is
-         Source : Fixed_Arguments;
-         Status : Natural;
-         Start  : Natural := Words'First;
-      begin
-         for Index in Words'First .. Words'Last + 1 loop
-            if Index > Words'Last or else Words (Index) = '|' then
-               Add (Source, Words (Start .. Index - 1));
-               Start := Index + 1;
-            end if;
-         end loop;
-         Add (Source, "--directory");
-         Add (Source, Project);
-         Ran (Source, Status);
-         return Status;
-      end Command;
-
-      Store   : S.Store;
-      Report  : S.Recovery_Report;
-      Status  : E.Error_Info;
-      Changes : Cf.Value_Maps.Map;
-      Planned : Cf.Change_Plan;
-      Revision : Natural;
-   begin
-      if Ada.Directories.Exists (Project) then
-         Ada.Directories.Delete_Tree (Project);
-      end if;
-      Assert (Command ("init|ada-cli|--set|project_name=demo") = 0, "no project was made");
-      S.Open (Store, Project, Report, Status);
-      Changes.Include ("scalar.work.agent", "sleep 30");
-      Changes.Include ("set.execution.allowed", "alr" & ASCII.LF & "sleep");
-      Changes.Include ("scalar.execution.timeout", "1");
-      Cf.Plan_Change (Store, Changes, Planned, Status);
-      Cf.Reconfigure (Store, Planned, Revision, Status);
-      S.Close (Store);
-      Assert (E.Is_Ok (Status), "the agent command was not configured: "
-              & E.Error_Code'Image (Status.Code));
-      Assert (Command ("task|new|Slow|--set|kind=analysis") = 0
-              and then Command ("task|accept|TASK-001") = 0,
-              "the task was not made");
-      Assert (Command ("work|TASK-001") /= 0, "work that ran out of time succeeded");
-      S.Open (Store, Project, Report, Status);
-      declare
-         Now : constant String := Model_Runner.Framework.Tasks.State_Of (Store, "TASK-001");
-      begin
-         S.Close (Store);
-         Assert (Now = "blocked", "an agent command out of time left its task " & Now);
-      end;
-   end Agent_Command_Out_Of_Time;
-
    --  The workflows as a person walks them, from the shell: each step says
    --  what happened and what comes next; what cannot be done is said
    --  before anything is spent on it; a task can always be finished; and
@@ -2018,12 +2033,6 @@ package body Tests.CLI_Cases is
          end if;
       end Write;
 
-      --  An agent that answers as given, whatever it is asked.
-      procedure Agent (Name, Answer : String) is
-      begin
-         Write (Root & "/" & Name, "#!/bin/sh" & LF & "printf '" & Answer & "'" & LF,
-                Executable => True);
-      end Agent;
    begin
       if Ada.Directories.Exists (Root) then
          Ada.Directories.Delete_Tree (Root);
@@ -2068,36 +2077,36 @@ package body Tests.CLI_Cases is
       Assert (Code = 0 and then Shows ("scalar.work.lease"),
               "a setting named without its kind was not found: " & To_String (Said));
 
-      --  3. An agent the policy would not run is said before the task is
-      --     touched; allowed, it works, and the record says what it was.
-      Agent ("done.sh", "status: done\nsummary: looked\n");
-      Run ("reconfigure|work.agent=" & Root & "/done.sh $PROMPT|confirm=yes");
+      --  3. With no agent to run, that is said before the task is touched;
+      --     with one, it works, and the record says what it was. An outside
+      --     program as the agent is out of scope.
+      Run ("reconfigure|work.agent=sh ./agent.sh|confirm=yes");
+      Assert (Code /= 0 and then Shows ("out of scope"),
+              "an outside program was taken as the agent: " & To_String (Said));
       Run ("task|new|Look|--set|kind=analysis");
       Run ("task|accept|TASK-001");
       Run ("work|TASK-001");
-      Assert (Code /= 0 and then Shows ("is not a program the policy allows")
-              and then Shows ("set.execution.allowed+=done.sh"),
-              "an agent the policy refuses was not said so: " & To_String (Said));
+      Assert (Code /= 0, "work with no agent to run succeeded: " & To_String (Said));
       Run ("task|list");
       Assert (Shows ("TASK-001  [ready]"),
               "a task whose agent could not start was not left ready: " & To_String (Said));
-      Run ("reconfigure|execution.allowed+=done.sh,bad.sh,split.sh|confirm=yes");
-      Assert (Shows ("true, done.sh, bad.sh, split.sh"), "+= did not add to the set: " & To_String (Said));
+      Run ("reconfigure|execution.allowed+=make,cmake,ninja|confirm=yes");
+      Assert (Shows ("true, make, cmake, ninja"), "+= did not add to the set: " & To_String (Said));
       Run ("config");
-      Assert (Shows ("true, done.sh, bad.sh, split.sh"),
+      Assert (Shows ("true, make, cmake, ninja"),
               "a set was not shown its items a comma apart: " & To_String (Said));
+      Working := (Answer => To_Unbounded_String ("status: done" & LF & "summary: looked" & LF), others => <>);
       Run ("work|TASK-001");
       Assert (Code = 0 and then Shows ("the agent is") and then Shows ("the task is complete"),
-              "work with an allowed agent did not complete: " & To_String (Said));
+              "work with an agent did not complete: " & To_String (Said));
       Run ("task|audit|TASK-001");
-      Assert (Shows ("agent: the command") and then Shows ("answer: RES-"),
+      Assert (Shows ("agent: the test agent") and then Shows ("answer: RES-"),
               "the audit did not say which agent ran and what it answered: " & To_String (Said));
       Run ("result|INV-000001");
       Assert (Shows ("result: RES-"), "result did not show an invocation: " & To_String (Said));
 
       --  4. What goes wrong says why and what next.
-      Agent ("bad.sh", "hello\n");
-      Run ("reconfigure|work.agent=" & Root & "/bad.sh $PROMPT|confirm=yes");
+      Working := (Answer => To_Unbounded_String ("hello" & LF), others => <>);
       Run ("task|new|Bad|--set|kind=analysis");
       Run ("task|accept|TASK-002");
       Run ("work|TASK-002");
@@ -2107,9 +2116,7 @@ package body Tests.CLI_Cases is
 
       --  An agent that crashes is said as one -- it did not finish -- not as
       --  an answer that broke the contract, and the task is set aside.
-      Write (Root & "/crash.sh", "#!/bin/sh" & LF & "echo 'segfault here' >&2" & LF & "exit 139" & LF,
-             Executable => True);
-      Run ("reconfigure|work.agent=" & Root & "/crash.sh $PROMPT|execution.allowed+=crash.sh|confirm=yes");
+      Working := (Crash => True, others => <>);
       Run ("task|accept|TASK-002");
       Run ("work|TASK-002");
       --  Said in words where the catalog is found from here, and by its
@@ -2123,7 +2130,7 @@ package body Tests.CLI_Cases is
       Run ("task|list");
       Assert (Shows ("TASK-002  [blocked]"),
               "a crashed agent's task was not set aside, blocked: " & To_String (Said));
-      Run ("reconfigure|work.agent=" & Root & "/bad.sh $PROMPT|confirm=yes");
+      Working := (Answer => To_Unbounded_String ("hello" & LF), others => <>);
       Run ("task|accept|TASK-404");
       Assert (Code /= 0 and then Shows ("TASK-404") and then Shows ("is not in the project state")
               and then not Shows (".state"),
@@ -2143,8 +2150,10 @@ package body Tests.CLI_Cases is
 
       --  6. Split into parts, a task waits for them and goes back to work
       --     once they are done.
-      Agent ("split.sh", "status: blocked\nsummary: too large\nparts:\nFirst part\nSecond part\n");
-      Run ("reconfigure|work.agent=" & Root & "/split.sh $PROMPT|confirm=yes");
+      Working := (Answer => To_Unbounded_String
+                             ("status: blocked" & LF & "summary: too large" & LF & "parts:" & LF
+                              & "First part" & LF & "Second part" & LF),
+                  others => <>);
       --  Of a kind whose agent may make children: its parts are children.
       Run ("task|new|Big|--set|kind=implementation");
       Run ("task|accept|TASK-003");
@@ -2252,13 +2261,13 @@ package body Tests.CLI_Cases is
               "init over a project did not refuse first: " & To_String (Said));
       --  A setting that is none is refused with what was meant; -= takes
       --  out, and += adds nothing twice.
-      Run ("reconfigure|agent=x|confirm=yes");
-      Assert (Code /= 0 and then Shows ("did you mean scalar.work.agent"),
+      Run ("reconfigure|leas=x|confirm=yes");
+      Assert (Code /= 0 and then Shows ("did you mean scalar.work.lease"),
               "a setting that is none was not refused with the one meant: " & To_String (Said));
-      Run ("reconfigure|execution.allowed+=done.sh|confirm=yes");
+      Run ("reconfigure|execution.allowed+=make|confirm=yes");
       Assert (Shows ("nothing would change"), "+= added what the set holds");
-      Run ("reconfigure|execution.allowed-=bad.sh|confirm=yes");
-      Assert (Code = 0 and then Shows ("-> true, done.sh, split.sh"), "-= did not take out: " & To_String (Said));
+      Run ("reconfigure|execution.allowed-=cmake|confirm=yes");
+      Assert (Code = 0 and then Shows ("-> true, make, ninja"), "-= did not take out: " & To_String (Said));
       Run ("reconfigure|work.lease=120");
       Assert (Shows ("add confirm=yes"), "a missing confirm did not say how: " & To_String (Said));
       Run ("task|list|--set|bogus=1");
@@ -2280,15 +2289,11 @@ package body Tests.CLI_Cases is
       Assert (Shows ("not verified: "), "a requirement not verified did not say why: " & To_String (Said));
       --  An answer's list written as a list is read as one.
       Write (Root & "/g/src/listed.txt", "before" & LF);
-      Write (Root & "/listed.sh",
-             "#!/bin/sh" & LF
-             --  Told as a command is: to work on the files itself.
-             & "grep -q 'working on the files yourself' ""$1"" || exit 3" & LF
-             & "echo after > src/listed.txt" & LF
-             & "printf 'status: done\nsummary: wrote it\nchanged_files:\n  - src/listed.txt\n'" & LF,
-             Executable => True);
-      Run ("reconfigure|work.agent=" & Root & "/listed.sh $PROMPT|execution.allowed+=listed.sh"
-           & "|confirm=yes");
+      Working := (Answer => To_Unbounded_String
+                             ("status: done" & LF & "summary: wrote it" & LF & "changed_files:" & LF
+                              & "  - src/listed.txt" & LF),
+                  Writes => To_Unbounded_String ("src/listed.txt"),
+                  others => <>);
       Run ("task|new|Listed|--set|kind=implementation");
       Run ("task|list");
       declare
@@ -2393,8 +2398,8 @@ package body Tests.CLI_Cases is
          end;
       end;
       --  check of a setting that is none, and a profile that is none.
-      Run ("reconfigure|scalar.work.agnt=x|confirm=yes");
-      Assert (Code /= 0 and then Shows ("did you mean scalar.work.agent"),
+      Run ("reconfigure|scalar.work.leas=x|confirm=yes");
+      Assert (Code /= 0 and then Shows ("did you mean scalar.work.lease"),
               "a misspelled setting with its kind was taken: " & To_String (Said));
       Run ("check|nope");
       Assert (Code /= 0 and then Shows ("it is a profile ("),
@@ -2517,11 +2522,12 @@ package body Tests.CLI_Cases is
          Assert (Model_Runner.Framework.Execution.Refusal
                    (Model_Runner.Framework.Execution.Policy_Of (Store), "nonesuch --now") /= ""
                  and then Model_Runner.Framework.Execution.Refusal
-                            (Model_Runner.Framework.Execution.Policy_Of (Store), "done.sh x") = ""
+                            (Model_Runner.Framework.Execution.Policy_Of (Store), "make x") = ""
                  and then not Model_Runner.Framework.Execution.Cancel_Requested,
                  "the policy's refusal was not said before running");
          S.Close (Store);
       end;
+      Working := (others => <>);
    end Workflows_Say_What_Comes_Next;
 
    procedure Task_Command_Manages_Work
@@ -13206,9 +13212,6 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Selector_Behaves'Access,
          "the shared selector moves, filters, explains and fits its window");
-      Register_Routine
-        (T, Agent_Command_Out_Of_Time'Access,
-         "an agent command out of time sets its task aside");
       Register_Routine
         (T, Workflows_Say_What_Comes_Next'Access,
          "the workflows say what happened and what comes next");

@@ -9,7 +9,6 @@ with Ada.Text_IO;
 
 with Hostkit;
 with Hostkit.Fs;
-with Hostkit.Process;
 
 with Model_Runner.CLI.Choosers;
 with Model_Runner.Errors;
@@ -298,137 +297,6 @@ package body Model_Runner.CLI.Work is
       end if;
    end Run;
 
-   --  A command the configuration names, run through the execution
-   --  policy like any other.
-   type Command_Agent (Store : not null access S.Store) is new W.Agent_Runner with record
-      Command : Unbounded_String;
-
-      --  How long it may work, as its task allows: past it, it is stopped
-      --  and the task set aside.
-      Timeout : Natural := 0;
-   end record;
-
-   overriding procedure Run
-     (Self        : Command_Agent;
-      Prompt_Path : String;
-      Project     : String;
-      Answer      : out Unbounded_String;
-      Status      : out E.Error_Info);
-
-   overriding procedure Describe (Self : Command_Agent; Text : in out Unbounded_String);
-
-   overriding procedure Check_Start
-     (Self   : Command_Agent;
-      Item   : S.Store;
-      Status : in out E.Error_Info);
-
-   overriding procedure Describe (Self : Command_Agent; Text : in out Unbounded_String) is
-   begin
-      Text := "the command " & Self.Command;
-   end Describe;
-
-   --  The command must be one the policy runs, and its program there.
-   overriding procedure Check_Start
-     (Self   : Command_Agent;
-      Item   : S.Store;
-      Status : in out E.Error_Info)
-   is
-      package Ex renames Model_Runner.Framework.Execution;
-      Written : constant String := To_String (Self.Command);
-
-      --  As it will run: its prompt file's place filled in.
-      function Filled (Text, Mark : String) return String is
-         At_Mark : constant Natural := Ada.Strings.Fixed.Index (Text, Mark);
-      begin
-         return (if At_Mark = 0 then Text
-                 else Filled (Text (Text'First .. At_Mark - 1) & "prompt.txt"
-                              & Text (At_Mark + Mark'Length .. Text'Last), Mark));
-      end Filled;
-
-      Command : constant String := Filled (Filled (Written, "${prompt}"), "$PROMPT");
-      Words   : constant Model_Runner.Framework.Name_Lists.Vector := Ex.Words_Of (Command);
-      Why     : constant String := Ex.Refusal (Ex.Policy_Of (Item), Command);
-      Program : constant String := (if Words.Is_Empty then "" else Words.First_Element);
-   begin
-      if Why /= "" then
-         Status := E.Make (E.Framework_Execution_Refused);
-         E.Add_Text (Status, "name", Command);
-         E.Add_Text (Status, "detail", Why);
-      elsif not Ex.Needs_Shell (Command)
-        and then (if Ada.Strings.Fixed.Index (Program, "/") > 0
-                  then not Ada.Directories.Exists
-                             (Hostkit.Fs.Join
-                                (Ada.Directories.Containing_Directory (S.Root (Item)), Program))
-                       and then not Ada.Directories.Exists (Program)
-                  else Hostkit.Process.Locate (Program) = "")
-      then
-         Status := E.Make (E.Framework_Execution_Refused);
-         E.Add_Text (Status, "name", Command);
-         E.Add_Text (Status, "detail", Program & " is not there to run");
-      end if;
-   end Check_Start;
-
-   overriding procedure Run
-     (Self        : Command_Agent;
-      Prompt_Path : String;
-      Project     : String;
-      Answer      : out Unbounded_String;
-      Status      : out E.Error_Info)
-   is
-      Change  : S.Transaction;
-      Project_Root : constant String :=
-        Ada.Directories.Containing_Directory (S.Root (Self.Store.all));
-      Ran     : Model_Runner.Framework.Execution.Outcome;
-      Written : constant String := To_String (Self.Command);
-      --  Where the command names its prompt file: $PROMPT, or ${prompt}.
-      Braced  : constant Natural := Ada.Strings.Fixed.Index (Written, "${prompt}");
-      Plain   : constant Natural := Ada.Strings.Fixed.Index (Written, "$PROMPT");
-      Command : constant String :=
-        (if Braced > 0
-         then Written (Written'First .. Braced - 1) & Prompt_Path
-              & Written (Braced + 9 .. Written'Last)
-         elsif Plain > 0
-         then Written (Written'First .. Plain - 1) & Prompt_Path
-              & Written (Plain + 7 .. Written'Last)
-         else Written);
-   begin
-      --  The command is the agent: off the network unless it may use it.
-      declare
-         Rules : Model_Runner.Framework.Execution.Policy :=
-           Model_Runner.Framework.Execution.Policy_Of (Self.Store.all);
-      begin
-         if Self.Timeout > 0 then
-            Rules.Timeout := Self.Timeout;
-         end if;
-         Rules.No_Network := Rules.No_Network
-           or else not Model_Runner.Framework.Permissions.Allows
-                         (Model_Runner.Framework.Permissions.Value
-                            (Whole (Model_Runner.Framework.Permissions.Permissions_Beside
-                                      (Prompt_Path))),
-                          Model_Runner.Framework.Permissions.Use_Network);
-         Model_Runner.Framework.Execution.Run
-           (Self.Store.all, Change, Rules, Command, "", Ran, Status,
-            Base => (if Project = Project_Root then "" else Project));
-      end;
-      if E.Is_Ok (Status) then
-         S.Commit (Self.Store.all, Change, Status);
-      end if;
-      Answer := Ran.Output;
-      if E.Is_Ok (Status)
-        and then (Ran.Cancelled or else Model_Runner.Framework.Execution.Cancel_Requested)
-      then
-         Status := E.Make (E.Generation_Cancelled);
-      elsif E.Is_Ok (Status) and then Ran.Timed_Out then
-         Status := E.Make (E.Framework_Limit_Exceeded);
-         E.Add_Text (Status, "name", "time");
-      elsif E.Is_Ok (Status) and then (not Ran.Started or else Ran.Exit_Status /= 0) then
-         Status := E.Make (E.Framework_Agent_Failed);
-         E.Add_Text (Status, "name", "the agent");
-         E.Add_Text (Status, "detail", Ended_Because (Ran.Started, Ran.Exit_Status,
-                                                      To_String (Ran.Output)));
-      end if;
-   end Run;
-
    --  The command, with the agent given or chosen from the configuration.
    procedure Drive
      (Item   : Model_Runner.CLI.Project_Requests.Request;
@@ -648,7 +516,7 @@ package body Model_Runner.CLI.Work is
                E.Add_Text (Outcome, "name", "what work takes");
                E.Add_Text (Outcome, "value", Name);
                E.Add_Text (Outcome, "detail", "work takes model=PATH, steps=N, profile=NAME"
-                           & " and all=yes; the agent is the setting work.agent");
+                           & " and all=yes");
                Fail (Outcome);
                return;
             end if;
@@ -961,25 +829,22 @@ package body Model_Runner.CLI.Work is
                  and then Setting ("profile", "") = ""
                then W.Parenting_Runner'Class (Given_Runner.all).Profile
                else Model_Runner.Framework.Context.Profile (Store, Setting ("profile", "")));
-            --  The configured agent, unless a model is named for this run:
-            --  what is asked for now is what runs.
-            Command : constant String :=
-              (if Given.Contains ("model") or else R.Get (Config, "scalar.work.agent") = "off" then ""
-               else R.Get (Config, "scalar.work.agent"));
             Path    : constant String := Setting ("model", "");
 
-            --  How long a command agent may run: its task's time, and no
-            --  longer than any command the policy runs.
-            Agent_Seconds : constant Natural :=
-              (if Command = "" then W.Time_Allowed (Store, To_String (Chosen))
-               else Natural'Min (W.Time_Allowed (Store, To_String (Chosen)),
-                                 Model_Runner.Framework.Execution.Policy_Of (Store).Timeout));
+            --  How long the agent may work: its task's time.
+            Agent_Seconds : constant Natural := W.Time_Allowed (Store, To_String (Chosen));
          begin
             --  Which agent does the work, said before it starts: the one the
             --  project configures, wherever the work is started from.
             --  Said only for a task that can start: one that cannot is
             --  refused with why, and nothing is announced for it.
             if Tk.Ready (Store, To_String (Chosen)).Ready then
+               --  An outside program an earlier version was told to run
+               --  is not run: said, with how to take it out.
+               if R.Get (Config, "scalar.work.agent") not in "" | "off" then
+                  Pres.Put_Note (Screen, "cli.work.agent_ignored",
+                                 [Loc.Named ("value", R.Get (Config, "scalar.work.agent"))]);
+               end if;
                --  And how long it has, which is how a hung one ends.
                Pres.Put_Note
                  (Screen, "cli.work.time_allowed",
@@ -1000,33 +865,17 @@ package body Model_Runner.CLI.Work is
                          Loc.Named ("name", Pm.Sandbox_Source)]);
                   end;
                end if;
-               if Command /= "" then
-                  Say ("cli.work.runner", Command, To_String (Chosen));
-                  --  A command that names no place for its context is given
-                  --  none: said, as what its answer will lack.
-                  if Ada.Strings.Fixed.Index (Command, "$PROMPT") = 0
-                    and then Ada.Strings.Fixed.Index (Command, "${prompt}") = 0
-                  then
-                     Pres.Put_Note (Screen, "cli.work.no_prompt");
-                  end if;
-               elsif Given_Runner /= null then
+               if Given_Runner /= null then
                   Say ("cli.work.runner", Pres.Message_Value (Screen, "cli.work.runner.session"),
                        To_String (Chosen));
                elsif Path /= "" then
                   Say ("cli.work.runner", Path, To_String (Chosen));
                end if;
             end if;
-            if Given_Runner /= null and then Command = "" then
+            if Given_Runner /= null then
                W.Execute
                  (Store, To_String (Chosen), Given_Runner.all, Model, Done, Outcome,
                   Starting => Announce'Access);
-            elsif Command /= "" then
-               W.Execute
-                 (Store, To_String (Chosen),
-                  Command_Agent'(Store   => Store'Access,
-                                 Command => To_Unbounded_String (Command),
-                                 Timeout => Agent_Seconds),
-                  Model, Done, Outcome, Starting => Announce'Access);
             elsif Path /= "" then
                W.Execute
                  (Store, To_String (Chosen),

@@ -3934,4 +3934,22 @@ package body Model_Runner.CLI.Project_Commands is
       Status := Natural'Max (Pres.First_Failure (Screen), Last_Status);
    end Run_Without_Model;
 
+   --------------------
+   -- Run_With_Agent --
+   --------------------
+
+   procedure Run_With_Agent
+     (Line   : String;
+      Screen : in out Model_Runner.Presentation.Console;
+      Agent  : Model_Runner.Framework.Work.Agent_Runner'Class;
+      Status : out Natural)
+   is
+      Ignored : constant Natural := Pres.First_Failure (Screen);
+      pragma Unreferenced (Ignored);
+   begin
+      Last_Status := 0;
+      Run (Line, Screen, Agent);
+      Status := Natural'Max (Pres.First_Failure (Screen), Last_Status);
+   end Run_With_Agent;
+
 end Model_Runner.CLI.Project_Commands;
