@@ -207,9 +207,7 @@ parameters, and no longer applies once the environment its checks were
 given has changed -- or, with `scalar verification.toolchain = strict`, once
 a tool answers with another version.
 
-`init`, `task`, `repo` and `work` take `--format json`, which writes one
-object a line -- each message's stable key and its values, errors with
-their code -- for a program to read. `/task list` narrows with
+`/task list` narrows with
 `state=`, `kind=`, `component=`, `requirement=`, `origin=` and `parent=`;
 `/work` takes text as well as an identifier, running the one accepted task
 it names and offering, or listing, the ones when it names several;
@@ -297,12 +295,12 @@ a deadline -- and each run is a line in `.model_runner/runtime/harness.log`.
 person's word above every decision, specification and setting on that
 subject until `/instruct withdraw INSTR-001`. What `/bootstrap` reads and
 may make is the project's bootstrap policy (`set bootstrap.sources`,
-`set bootstrap.propose`, `scalar bootstrap.import`). A template can ask for confirmation before `init` writes anything
-(`scalar init.confirm = yes`; the generic template does): a terminal is
-asked, and a script passes `--set confirm=yes`. `/reconfigure` checks the
-whole new configuration, says which derived state it invalidates, and
-commits the new revision together with the requirements it takes
-verification from. `init` builds the derived indexes -- requirements, decisions, tasks,
+`set bootstrap.propose`, `scalar bootstrap.import`). A template can ask
+for confirmation before `/init` writes anything (`scalar init.confirm =
+yes`; the generic template does). `/reconfigure` checks the whole new
+configuration, says which derived state it invalidates, and commits the
+new revision together with the requirements it takes verification from.
+`/init` builds the derived indexes -- requirements, decisions, tasks,
 components, symbols, tests, traceability, dependencies and a search index
 of names -- and opening a session builds them again when what they were
 built from has moved on. `/sandbox RESTRICTION` confines every agent the
@@ -311,7 +309,7 @@ session starts, below every other permission level, written as a task's
 shell; `/sandbox off` frees it). Integration refuses a semantic conflict as
 it refuses a textual one: no file changed on both sides, but a unit changed
 on both, or one side's changed unit depending on the other's;
-`task integrate ID anyway` takes the work in once someone has looked. The repository graph reads Ada, C and C++, Rust and Python: each file's
+`/task integrate ID anyway` takes the work in once someone has looked. The repository graph reads Ada, C and C++, Rust and Python: each file's
 unit, what it brings in (`with`, `#include "..."`, `use`, `import`), what it
 declares at its outer level, what it extends or implements, and where the
 names it can see are used and called -- each relation saying whether it is
@@ -332,7 +330,7 @@ has none of them.
 
 Kinds of project, task kinds, verification profiles, execution policy,
 permissions and automation rules are all the project's configuration,
-resolved from templates at `init` and never looked up again. A model is
+resolved from templates at `/init` and never looked up again. A model is
 asked only for the work itself: selection, readiness, verification,
 completion, traceability and scheduling are the harness's.
 
