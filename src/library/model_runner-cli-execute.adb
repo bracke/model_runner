@@ -3532,9 +3532,15 @@ package body Model_Runner.CLI.Execute is
                      --  model renders with writes them -- the one named on
                      --  the command line, or the one that stood in for a
                      --  template that would not compile.
+                     --  Where that is the JSON envelope, the bare or fenced
+                     --  object too, as a session's /work reads it: models
+                     --  asked for a call often write it without the envelope.
                      Tool_Syntax =>
-                       Model_Runner.Templates.Syntax_Of
-                         (L.Template_Format (Prepared)),
+                       (if Model_Runner.Tools."="
+                             (Model_Runner.Templates.Syntax_Of (L.Template_Format (Prepared)),
+                              Model_Runner.Tools.Tool_Call_JSON)
+                        then Model_Runner.Tools.Open_JSON
+                        else Model_Runner.Templates.Syntax_Of (L.Template_Format (Prepared))),
                      Compact     => Item.Compact,
                      Answer_Schema =>
                        (if Answer /= null then Answer.all else ""),

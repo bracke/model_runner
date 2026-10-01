@@ -1,6 +1,8 @@
+with Ada.Calendar.Formatting;
 with Ada.Characters.Handling;
 with Ada.Containers.Vectors;
 with Ada.Directories;
+with Ada.Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Unchecked_Deallocation;
 
@@ -1191,6 +1193,163 @@ package body Model_Runner.Framework.Workspaces is
         (Hostkit.Fs.Join (Stores.Root (Item), "runtime"),
          "given-up-" & (if E.Is_Ok (Got) then To_String (Held.Task_Id) & "-" else "") & Id);
    end Kept_Copy;
+
+   -----------------
+   -- Kept_Copies --
+   -----------------
+
+   function Runtime_Of (Item : Stores.Store) return String
+   is (Hostkit.Fs.Join (Stores.Root (Item), "runtime"));
+
+   function Is_Kept_Name (Name : String) return Boolean
+   is (Name /= "" and then Ada.Strings.Fixed.Index (Name, "/") = 0 and then Name /= ".."
+       and then (for some Prefix of Name_Lists.Vector'(["given-up-", "overwritten-", "replaced-"])
+                 => Name'Length > Prefix'Length
+                    and then Name (Name'First .. Name'First + Prefix'Length - 1) = Prefix));
+
+   function Kept_Copies (Item : Stores.Store) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+      Stamps : Name_Lists.Vector;
+      Search : Dirs.Search_Type;
+      Found  : Dirs.Directory_Entry_Type;
+   begin
+      if not Dirs.Exists (Runtime_Of (Item)) then
+         return Result;
+      end if;
+      Dirs.Start_Search (Search, Runtime_Of (Item), "", [Dirs.Directory => True, others => False]);
+      while Dirs.More_Entries (Search) loop
+         Dirs.Get_Next_Entry (Search, Found);
+         if Is_Kept_Name (Dirs.Simple_Name (Found))
+           and then not Hostkit.Fs.Is_Link (Dirs.Full_Name (Found))
+         then
+            --  Newest first: by when each was made, then by name.
+            declare
+               Stamp : constant String :=
+                 Ada.Calendar.Formatting.Image (Dirs.Modification_Time (Found)) & " " & Dirs.Simple_Name (Found);
+               Place : Natural := 0;
+            begin
+               for Index in 1 .. Natural (Stamps.Length) loop
+                  if Stamp > Stamps (Index) then
+                     Place := Index;
+                     exit;
+                  end if;
+               end loop;
+               if Place = 0 then
+                  Stamps.Append (Stamp);
+                  Result.Append (Dirs.Simple_Name (Found));
+               else
+                  Stamps.Insert (Place, Stamp);
+                  Result.Insert (Place, Dirs.Simple_Name (Found));
+               end if;
+            end;
+         end if;
+      end loop;
+      Dirs.End_Search (Search);
+      return Result;
+   exception
+      when others =>
+         return Result;
+   end Kept_Copies;
+
+   ----------------
+   -- Kept_Files --
+   ----------------
+
+   function Kept_Files (Item : Stores.Store; Name : String) return Name_Lists.Vector is
+      package Name_Sorting is new Name_Lists.Generic_Sorting;
+      Result : Name_Lists.Vector;
+
+      procedure Walk (Directory, Prefix : String) is
+         Search : Dirs.Search_Type;
+         Found  : Dirs.Directory_Entry_Type;
+         Below  : Name_Lists.Vector;
+      begin
+         Dirs.Start_Search (Search, Directory, "");
+         while Dirs.More_Entries (Search) loop
+            Dirs.Get_Next_Entry (Search, Found);
+            declare
+               Simple   : constant String := Dirs.Simple_Name (Found);
+               Relative : constant String := (if Prefix = "" then Simple else Prefix & "/" & Simple);
+            begin
+               if Simple not in "." | ".." and then not Hostkit.Fs.Is_Link (Dirs.Full_Name (Found)) then
+                  if Dirs."=" (Dirs.Kind (Found), Dirs.Directory) then
+                     Below.Append (Simple);
+                  elsif Dirs."=" (Dirs.Kind (Found), Dirs.Ordinary_File) then
+                     Result.Append (Relative);
+                  end if;
+               end if;
+            end;
+         end loop;
+         Dirs.End_Search (Search);
+         for Simple of Below loop
+            Walk (Hostkit.Fs.Join (Directory, Simple), (if Prefix = "" then Simple else Prefix & "/" & Simple));
+         end loop;
+      end Walk;
+      Where : constant String := Hostkit.Fs.Join (Runtime_Of (Item), Name);
+   begin
+      if Is_Kept_Name (Name) and then Dirs.Exists (Where) then
+         Walk (Where, "");
+      end if;
+      Name_Sorting.Sort (Result);
+      return Result;
+   exception
+      when others =>
+         return Result;
+   end Kept_Files;
+
+   ------------------
+   -- Restore_Kept --
+   ------------------
+
+   procedure Restore_Kept
+     (Item   : Stores.Store;
+      Name   : String;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Project : constant String := Dirs.Containing_Directory (Stores.Root (Item));
+      Where   : constant String := Hostkit.Fs.Join (Runtime_Of (Item), Name);
+      Listed  : constant Name_Lists.Vector := Kept_Files (Item, Name);
+   begin
+      if Listed.Is_Empty then
+         Status := E.Make (E.Framework_Not_Found);
+         E.Add_Text (Status, "name", "a kept copy called " & Name);
+         return;
+      end if;
+      for Path of Listed loop
+         declare
+            Target : constant String := Hostkit.Fs.Join (Project, Path);
+         begin
+            Dirs.Create_Path (Dirs.Containing_Directory (Target));
+            Dirs.Copy_File (Hostkit.Fs.Join (Where, Path), Target);
+         end;
+      end loop;
+      Status := E.Success;
+   exception
+      when Occurrence : others =>
+         Status := E.Make (E.Framework_Transaction_Failed);
+         E.Add_Text (Status, "name", Name);
+         E.Add_Text (Status, "detail", Ada.Exceptions.Exception_Message (Occurrence));
+   end Restore_Kept;
+
+   ---------------
+   -- Drop_Kept --
+   ---------------
+
+   procedure Drop_Kept
+     (Item   : Stores.Store;
+      Name   : String;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Where : constant String := Hostkit.Fs.Join (Runtime_Of (Item), Name);
+   begin
+      if not Is_Kept_Name (Name) or else not Dirs.Exists (Where) then
+         Status := E.Make (E.Framework_Not_Found);
+         E.Add_Text (Status, "name", "a kept copy called " & Name);
+         return;
+      end if;
+      Files.Remove_Tree (Where);
+      Status := E.Success;
+   end Drop_Kept;
 
    procedure Abandon
      (Item   : Stores.Store;

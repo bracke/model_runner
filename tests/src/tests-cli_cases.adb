@@ -1959,7 +1959,10 @@ package body Tests.CLI_Cases is
       declare
          Build : Ada.Text_IO.File_Type;
       begin
+         --  One with a test rule: that is what checks it.
          Ada.Text_IO.Create (Build, Ada.Text_IO.Out_File, Project & "/Makefile");
+         Ada.Text_IO.Put_Line (Build, "test:");
+         Ada.Text_IO.Put_Line (Build, ASCII.HT & "true");
          Ada.Text_IO.Close (Build);
       end;
       Assert (Init ("generic", "confirm=yes") = 0

@@ -2,6 +2,7 @@ with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
+with Hostkit.Fs;
 
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Facts;
@@ -102,7 +103,46 @@ package body Model_Runner.Framework.Bootstrap is
       while Index <= Item'Last and then Item (Index) in 'A' .. 'Z' loop
          Index := Index + 1;
       end loop;
-      if Index - First_Letter not in 1 .. 8 or else Index > Item'Last or else Item (Index) /= '-' then
+      if Index - First_Letter not in 1 .. 8 or else Index > Item'Last then
+         return;
+      end if;
+      --  R1. and A1: a short label without its dash, letters then digits,
+      --  closed by a mark -- . : ) -- or bold or brackets.
+      if Item (Index) in '0' .. '9' then
+         declare
+            Digits_End : Natural := Index;
+         begin
+            while Digits_End < Item'Last and then Item (Digits_End + 1) in '0' .. '9' loop
+               Digits_End := Digits_End + 1;
+            end loop;
+            if Digits_End - Index > 3 or else Digits_End >= Item'Last
+              or else Item (Digits_End + 1) not in '.' | ':' | ')' | '*' | ']' | ' '
+            then
+               return;
+            end if;
+            Index := Digits_End + 1;
+            Skip (".:)*]`_");
+            if Index <= Item'Last and then Item (Index) /= ' ' then
+               return;
+            end if;
+            Skip (" :-");
+            --  An em dash or an en dash after it.
+            while Index + 2 <= Item'Last and then Item (Index) = Character'Val (16#E2#)
+              and then Item (Index + 1) = Character'Val (16#80#)
+              and then Item (Index + 2) in Character'Val (16#93#) | Character'Val (16#94#)
+            loop
+               Index := Index + 3;
+               Skip (" ");
+            end loop;
+            if Index > Item'Last then
+               return;
+            end if;
+            Label := To_Unbounded_String (Item (First_Letter .. Digits_End));
+            Rest := To_Unbounded_String (Item (Index .. Item'Last));
+            return;
+         end;
+      end if;
+      if Item (Index) /= '-' then
          return;
       end if;
       Dash := Index;
@@ -125,6 +165,14 @@ package body Model_Runner.Framework.Bootstrap is
          return;
       end if;
       Skip (" :-");
+      --  An em dash or an en dash after it: **CACHE-INV-001** -- Put then Get.
+      while Index + 2 <= Item'Last and then Item (Index) = Character'Val (16#E2#)
+        and then Item (Index + 1) = Character'Val (16#80#)
+        and then Item (Index + 2) in Character'Val (16#93#) | Character'Val (16#94#)
+      loop
+         Index := Index + 3;
+         Skip (" ");
+      end loop;
       if Index > Item'Last then
          return;
       end if;
@@ -197,6 +245,41 @@ package body Model_Runner.Framework.Bootstrap is
 
       --  The requirement an Acceptance: line is about: the last one found.
       Last_Requirement : Natural := 0;
+
+      --  A document of requirements, by its name or its first heading:
+      --  each labelled line in it is one, whatever words it uses.
+      function Of_Requirements return Boolean is
+         Lower_Path : constant String := Ada.Characters.Handling.To_Lower (Path);
+         Heading_At : constant Natural := Ada.Strings.Fixed.Index (Text, "# ");
+         Heading_End : constant Natural :=
+           (if Heading_At = 0 then 0 else Ada.Strings.Fixed.Index (Text (Heading_At .. Text'Last), [1 => ASCII.LF]));
+         Heading : constant String :=
+           (if Heading_At = 0 then ""
+            else Ada.Characters.Handling.To_Lower
+                   (Text (Heading_At .. (if Heading_End = 0 then Text'Last else Heading_End - 1))));
+      begin
+         return (for some Word of Name_Lists.Vector'
+                   (["requirement", "invariant", "acceptance", "srs", "criteria", "specification"])
+                 => Ada.Strings.Fixed.Index (Lower_Path, Word) > 0
+                    or else Ada.Strings.Fixed.Index (Heading, Word) > 0);
+      exception
+         when others =>
+            return False;
+      end Of_Requirements;
+      Requirements_Here : constant Boolean := Of_Requirements;
+
+      --  A document about how the project is worked on, or what it decided,
+      --  is not a specification of it.
+      Lower_Name : constant String := Ada.Characters.Handling.To_Lower (Ada.Directories.Simple_Name (Path));
+      Process_Document : constant Boolean :=
+        (for some Word of Name_Lists.Vector'
+           (["decision", "adr", "contributing", "code_of_conduct", "conduct", "security", "process",
+             "workflow", "release", "governance", "support", "maintain", "style"])
+         => Ada.Strings.Fixed.Index (Lower_Name, Word) > 0)
+        or else Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Path), "/adr/") > 0;
+
+      --  Under a heading of decisions: each listed line is one.
+      Decisions_Here : Boolean := False;
 
       --  A heading a document's own label opens -- ### FR-001 Capacity --
       --  whose first line stating a requirement is that requirement.
@@ -341,8 +424,13 @@ package body Model_Runner.Framework.Bootstrap is
             begin
                if not Titled then
                   Titled := True;
-                  Found (Specification_Candidate, Path, Heading, Text);
+                  if not Process_Document then
+                     Found (Specification_Candidate, Path, Heading, Text);
+                  end if;
                end if;
+               Decisions_Here :=
+                 Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Heading), "decision") > 0
+                 and then Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Heading), "decision ") = 0;
 
                --  ## REQ-SHELL-001 Quoting: the requirement, at once, with
                --  its identifier and title; what its section says is its
@@ -446,7 +534,8 @@ package body Model_Runner.Framework.Bootstrap is
          Label_Split (Item, Label, Rest);
          if Label /= Null_Unbounded_String
            and then not (Length (Label) > 4 and then Slice (Label, 1, 4) in "REQ-" | "DEC-")
-           and then Says_Requirement (To_String (Rest), True)
+           and then (Says_Requirement (To_String (Rest), True)
+                     or else (Requirements_Here and then Listed))
          then
             Found (Requirement_Candidate, Path & "#" & To_String (Label),
                    To_String (Label) & ": " & Headline (To_String (Rest)), To_String (Rest));
@@ -454,6 +543,27 @@ package body Model_Runner.Framework.Bootstrap is
                Lead := Length (Result);
             end if;
             return;
+         end if;
+
+         --  A listed line an ADR- or DEC- label begins, or any listed line
+         --  under a heading of decisions, is a decision.
+         if Listed then
+            Label_Split (Item, Label, Rest);
+            if (Length (Label) > 4 and then Slice (Label, 1, 4) = "ADR-") or else Decisions_Here then
+               declare
+                  Said : constant String :=
+                    (if Label = Null_Unbounded_String then Item else Trim (To_String (Rest)));
+                  Mark : constant String :=
+                    (if Label = Null_Unbounded_String then Headline (Item) else To_String (Label));
+               begin
+                  if Said /= "" then
+                     Found (Decision_Candidate, Path & "#" & Mark,
+                            (if Label = Null_Unbounded_String then Headline (Said)
+                             else Mark & ": " & Headline (Said)), Said);
+                     return;
+                  end if;
+               end;
+            end if;
          end if;
 
          --  In a document of decisions, a listed D1: text is one.
@@ -539,7 +649,7 @@ package body Model_Runner.Framework.Bootstrap is
             return;
          end if;
 
-         if Says_Requirement (Item, Listed) then
+         if Says_Requirement (Item, Listed or else Requirements_Here) then
             declare
                Print : constant String := Fingerprint (Item);
             begin
@@ -612,7 +722,7 @@ package body Model_Runner.Framework.Bootstrap is
          Count : Natural := 0;
       begin
          for Part of Parts loop
-            if Says_Requirement (Part, False) then
+            if Says_Requirement (Part, Requirements_Here) then
                Count := Count + 1;
             end if;
          end loop;
@@ -674,6 +784,14 @@ package body Model_Runner.Framework.Bootstrap is
          Lower    : constant String := Ada.Characters.Handling.To_Lower (Path);
          Heading  : Unbounded_String;
          Has_Status : Boolean := False;
+         Links    : Natural := 0;
+         Labelled : Natural := 0;
+         Content  : Natural := 0;
+
+         --  A line without its list mark.
+         function Bare (Line : String) return String
+         is (if Line'Length > 2 and then Line (Line'First) in '*' | '-' | '+' and then Line (Line'First + 1) = ' '
+             then Trim (Line (Line'First + 2 .. Line'Last)) else Line);
       begin
          for Line of Every loop
             if Heading = Null_Unbounded_String and then Line'Length > 2 and then Line (Line'First) = '#'
@@ -681,8 +799,34 @@ package body Model_Runner.Framework.Bootstrap is
             then
                Heading := To_Unbounded_String (Trim (Line (Line'First + 2 .. Line'Last)));
             end if;
-            Has_Status := Has_Status or else Starts_With (Line, "Status:") or else Starts_With (Line, "## Status");
+            Has_Status := Has_Status or else Starts_With (Bare (Line), "Status:")
+              or else Starts_With (Line, "## Status");
+            if Line /= "" and then Line (Line'First) /= '#' then
+               Content := Content + 1;
+               if Bare (Line) /= Line and then Ada.Strings.Fixed.Index (Line, "](") > 0 then
+                  Links := Links + 1;
+               end if;
+               declare
+                  Label : Unbounded_String;
+                  Rest  : Unbounded_String;
+               begin
+                  Label_Split (Bare (Line), Label, Rest);
+                  if Label /= Null_Unbounded_String then
+                     Labelled := Labelled + 1;
+                  end if;
+               end;
+            end if;
          end loop;
+         --  An index of decision records -- links to them, and nothing else:
+         --  the records themselves are read, not it.
+         if Links > 0 and then Links * 2 >= Content then
+            return True;
+         end if;
+         --  Several decisions listed, each by its label: read a line each,
+         --  as a document of decisions is.
+         if Labelled >= 2 then
+            return False;
+         end if;
          declare
             Title : constant String := To_String (Heading);
             Upper : constant String := Ada.Characters.Handling.To_Upper (Title);
@@ -705,14 +849,22 @@ package body Model_Runner.Framework.Bootstrap is
                Status   : Unbounded_String;
                In_Part  : Unbounded_String;
                Decision : Unbounded_String;
+               --  Its number, from its title or its file's name: ADR-0002.
+               Base     : constant String := Ada.Directories.Base_Name (Path);
+               Past     : constant Natural :=
+                 Ada.Strings.Fixed.Index (Base, Ada.Strings.Maps.To_Set ("0123456789"), Ada.Strings.Outside);
+               Base_End : constant Natural :=
+                 (if Base = "" or else Base (Base'First) not in '0' .. '9' then Base'First - 1
+                  elsif Past = 0 then Base'Last else Past - 1);
                Label    : constant String :=
                  (if Ada.Strings.Fixed.Index (Upper, "ADR") = Upper'First
                   then Ada.Strings.Fixed.Trim
                          (Title (Title'First .. (if Ada.Strings.Fixed.Index (Title, ":") > 0
                                                  then Ada.Strings.Fixed.Index (Title, ":") - 1
                                                  else Title'First + 2)), Ada.Strings.Both)
+                  elsif Base_End >= Base'First then "ADR-" & Base (Base'First .. Base_End)
                   elsif Digits_End >= Title'First then "ADR-" & Title (Title'First .. Digits_End)
-                  else Ada.Directories.Base_Name (Path));
+                  else "ADR-" & Base);
                Name     : constant String :=
                  (if Ada.Strings.Fixed.Index (Title, ":") > 0
                   then Trim (Title (Ada.Strings.Fixed.Index (Title, ":") + 1 .. Title'Last))
@@ -722,6 +874,7 @@ package body Model_Runner.Framework.Bootstrap is
                Mark     : constant String :=
                  Ada.Strings.Fixed.Translate (Label, Ada.Strings.Maps.To_Mapping (" ", "-"));
                After_Status : Boolean := False;
+               Replaces     : Unbounded_String;
             begin
                for Line of Every loop
                   if Line'Length > 3 and then Line (Line'First .. Line'First + 2) = "## " then
@@ -729,23 +882,43 @@ package body Model_Runner.Framework.Bootstrap is
                        (Ada.Characters.Handling.To_Lower (Trim (Line (Line'First + 3 .. Line'Last))));
                      After_Status := To_String (In_Part) = "status";
                   elsif Line /= "" and then Line (Line'First) /= '#' then
-                     if Starts_With (Line, "Status:") then
-                        Status := To_Unbounded_String (Trim (Line (Line'First + 7 .. Line'Last)));
+                     if Starts_With (Bare (Line), "Status:") then
+                        Status := To_Unbounded_String (Trim (Bare (Line) (Bare (Line)'First + 7 .. Bare (Line)'Last)));
+                     elsif Starts_With (Bare (Line), "Supersedes:") then
+                        Replaces := To_Unbounded_String
+                          (Trim (Bare (Line) (Bare (Line)'First + 11 .. Bare (Line)'Last)));
+                     elsif Starts_With (Bare (Line), "Deciders:") or else Starts_With (Bare (Line), "Date:") then
+                        null;
                      elsif After_Status and then Status = Null_Unbounded_String then
                         Status := To_Unbounded_String (Line);
-                     elsif To_String (In_Part) = "decision" then
+                     elsif To_String (In_Part) in "decision" | "decision outcome" then
                         Append (Decision, (if Decision = Null_Unbounded_String then "" else " ") & Line);
                      elsif not After_Status then
                         Append (Said, (if Said = Null_Unbounded_String then "" else " ") & Line);
                      end if;
                   end if;
                end loop;
+               --  One no longer in force -- superseded, deprecated, rejected --
+               --  is not proposed: said, as what the record says of itself.
+               declare
+                  Lower_Status : constant String := Ada.Characters.Handling.To_Lower (To_String (Status));
+               begin
+                  if Ada.Strings.Fixed.Index (Lower_Status, "supersede") > 0
+                    or else Ada.Strings.Fixed.Index (Lower_Status, "deprecate") > 0
+                    or else Ada.Strings.Fixed.Index (Lower_Status, "reject") > 0
+                  then
+                     Found (Issue, Path & "#" & Mark,
+                            Mark & " is " & To_String (Status) & ", so it is not proposed: " & Headline (Name),
+                            To_String (Status));
+                     return True;
+                  end if;
+               end;
                Found (Decision_Candidate, Path & "#" & Mark, Mark & ": " & Headline (Name),
                       (if Decision /= Null_Unbounded_String then To_String (Decision)
                        elsif Said /= Null_Unbounded_String then To_String (Said)
                        else Name)
-                      & (if Status = Null_Unbounded_String then ""
-                         else " (status: " & To_String (Status) & ")"));
+                      & (if Replaces = Null_Unbounded_String then ""
+                         else " (it replaces " & To_String (Replaces) & ")"));
                return True;
             end;
          end;
@@ -1696,8 +1869,18 @@ package body Model_Runner.Framework.Bootstrap is
                   Read : E.Error_Info;
                begin
                   Intent.Read (Item, Kind, Known, Held, Read);
+                  --  Its document read now, or gone altogether -- deleted,
+                  --  or moved without this part of it -- either way no
+                  --  longer saying it.
                   if E.Is_Ok (Read)
-                    and then Read_From.Contains (To_String (Held.Source))
+                    and then (Read_From.Contains (To_String (Held.Source))
+                              or else (Length (Held.Source) > 0
+                                       and then not Ada.Directories.Exists
+                                                      (Hostkit.Fs.Join
+                                                         (Ada.Directories.Containing_Directory (Stores.Root (Item)),
+                                                          To_String (Held.Source)))
+                                       and then not (for some Line of Result.Moved =>
+                                                       Ada.Strings.Fixed.Index (Line, Known & " ") = Line'First)))
                     and then Length (Held.Provenance) > 0
                     and then not Said_Now.Contains (To_String (Held.Provenance))
                     and then not Rewritten.Contains (Known)

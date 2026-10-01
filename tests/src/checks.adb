@@ -948,7 +948,7 @@ package body Checks is
          --  weaker as a project grows, which is the opposite of what a
          --  check is for -- the same lesson the operation registry
          --  learned, and this is the same failure written down here.
-         Room  : constant := 1_000;
+         Room  : constant := 2_000;
          Width : constant := 96;
 
          Overflowed : Boolean := False;

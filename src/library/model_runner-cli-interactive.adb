@@ -4,6 +4,9 @@ with Ada.Strings.Fixed;
 with Ada.Text_IO;
 with Ada.Unchecked_Deallocation;
 
+with Hostkit.Descriptors;
+with Hostkit.Terminal_Control;
+
 with Model_Runner.CLI.Checkpoint;
 with Model_Runner.CLI.Project_Commands;
 with Model_Runner.Clocks;
@@ -270,6 +273,9 @@ package body Model_Runner.CLI.Interactive is
       Condition    : E.Error_Info;
       Leaving      : Boolean := False;
 
+      --  Whether this session hid the echo of control keys, to show again.
+      Keys_Hidden  : Boolean := False;
+
       --  The pictures the conversation shows, gathered before every turn
       --  from the turns as they stand; a picture named with /image goes
       --  into the next turn typed, as a part beside its words.
@@ -458,6 +464,8 @@ package body Model_Runner.CLI.Interactive is
                      Pres.Put_Aside (Screen, "cli.interactive.usage.config");
                   elsif Named = "state" then
                      Pres.Put_Aside (Screen, "cli.interactive.usage.state");
+                  elsif Named = "check" then
+                     Pres.Put_Aside (Screen, "cli.interactive.usage.check");
                   end if;
                else
                   Pres.Put_Message (Screen, "cli.interactive.help_unknown",
@@ -906,6 +914,10 @@ package body Model_Runner.CLI.Interactive is
       --  Next steps are said as they are typed here.
       Pres.Use_Session (Screen, True);
 
+      --  Esc is a key here -- it drops what is typed -- not text: the
+      --  terminal is not to show it as ^[.
+      Keys_Hidden := Hostkit.Terminal_Control.Show_Control_Keys (Hostkit.Descriptors.Standard_Input, False);
+
       Read_Loop :
       while not Leaving loop
          --  The prompt marker goes to standard error so that a redirected
@@ -948,7 +960,9 @@ package body Model_Runner.CLI.Interactive is
                   Cancel.Reset;
                end if;
                Model_Runner.Platform.Signals.Set_Waiting_For_Input
-                 (True, Note => Pres.Message_Value (Screen, "cli.interactive.dropped") & ASCII.LF
+                 (True, Note => Pres.Message_Value
+                                  (Screen, (if Pending (Typing) = "" then "cli.interactive.dropped_line"
+                                            else "cli.interactive.dropped")) & ASCII.LF
                                 --  What was typed is dropped: the prompt is
                                 --  the first line's again.
                                 & Pres.Message_Value (Screen, "cli.interactive.prompt") & " ");
@@ -976,7 +990,7 @@ package body Model_Runner.CLI.Interactive is
                   --  Typed while a /work ran, unshown then: there at once
                   --  now, and shown as what is run.
                   if Model_Runner.CLI.Project_Commands.Typed_During_Work
-                    and then Ada.Calendar.Clock - Asked_At < 0.05 and then Stop >= Room'First
+                    and then Ada.Calendar.Clock - Asked_At < 0.3 and then Stop >= Room'First
                   then
                      Pres.Put_After_Prompt (Screen, "cli.interactive.typed_during_work",
                                     [Loc.Named ("value", T.Escape_Controls (Room (Room'First .. Stop)))]);
@@ -1087,6 +1101,9 @@ package body Model_Runner.CLI.Interactive is
             exit Read_Loop;
          end if;
       end loop Read_Loop;
+      if Keys_Hidden then
+         Keys_Hidden := Hostkit.Terminal_Control.Show_Control_Keys (Hostkit.Descriptors.Standard_Input, True);
+      end if;
 
       --  At end of file a pending prompt is submitted, then the session ends.
       if not Leaving then

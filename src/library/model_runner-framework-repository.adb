@@ -691,8 +691,11 @@ package body Model_Runner.Framework.Repository is
       Next : Positive;
    begin
       for Index in 1 .. Natural (Tokens.Length) loop
-         if Is_Word (Tokens (Index), "package") or else Is_Word (Tokens (Index), "procedure")
-           or else Is_Word (Tokens (Index), "function")
+         --  Not a generic's formal subprogram or package: with function
+         --  Hash (...) names no unit.
+         if (Is_Word (Tokens (Index), "package") or else Is_Word (Tokens (Index), "procedure")
+             or else Is_Word (Tokens (Index), "function"))
+           and then not (Index > 1 and then Is_Word (Tokens (Index - 1), "with"))
          then
             declare
                At_Name : constant Positive :=
@@ -733,6 +736,7 @@ package body Model_Runner.Framework.Repository is
       Depth  : Integer := 0;
       Name   : Unbounded_String;
       Next   : Positive;
+      Header_Seen : Boolean := False;
    begin
       if Unit = "" then
          return;
@@ -1059,7 +1063,12 @@ package body Model_Runner.Framework.Repository is
                              (Lower (To_String (Tokens (Index + 2).Text))),
                    Path => To_Unbounded_String (Path),
                    Line => Here.Line));
-            elsif Depth = 0 and then Spelled = "is" then
+            elsif Depth = 0 and then Spelled in "package" | "procedure" | "function"
+              and then not (Index > 1 and then Is_Word (Tokens (Index - 1), "with"))
+            then
+               --  The unit's own header, past a generic's formal part.
+               Header_Seen := True;
+            elsif Depth = 0 and then Spelled = "is" and then Header_Seen then
                --  The unit's own declarations begin.
                Depth := 1;
             end if;
@@ -1621,8 +1630,9 @@ package body Model_Runner.Framework.Repository is
    end Refresh;
 
    --  How source is read into the graph: a graph kept by another is read
-   --  again. 2: Ada bodies declare their subprograms too.
-   Reader_Version : constant String := "2";
+   --  again. 2: Ada bodies declare their subprograms too. 3: a generic's
+   --  formal part is not its unit.
+   Reader_Version : constant String := "4";
 
    ------------
    -- Memory --

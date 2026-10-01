@@ -9,6 +9,7 @@ with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Facts;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Intent;
+with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Results;
@@ -254,6 +255,17 @@ package body Model_Runner.Framework.Context is
          end if;
       end Offer;
 
+      --  Whether its agent may write anything: one that may not is told
+      --  no rule for writing.
+      function Writes return Boolean is
+         Allowed : constant Permissions.Permission_Set :=
+           Permissions.Effective (Item, Records.Get (View, "definition.kind"), "",
+                                  Task_Level => Records.Get (View, "definition.permissions"));
+      begin
+         return Permissions.Allows (Allowed, Permissions.Write_Source)
+           or else Permissions.Allows (Allowed, Permissions.Write_Specs);
+      end Writes;
+
       --  The fields of a record whose names start with a prefix, one a
       --  line.
       function Fields_Of (Value : Records.Item; Prefix : String) return String is
@@ -279,7 +291,7 @@ package body Model_Runner.Framework.Context is
       --  came from -- project_baseline CONFIG: -- is the harness's to know,
       --  and costs the model tokens for nothing. A ruling a person or a
       --  decision made keeps its source: it says why it stands above.
-      function Without_Baseline_Source (Lines : String) return String is
+      function Without_Baseline_Source (Lines : String; Baselines : Boolean := True) return String is
          Result : Unbounded_String;
       begin
          --  SUBJECT: LEVEL SOURCE: TEXT, as the task's record keeps it, is
@@ -295,7 +307,11 @@ package body Model_Runner.Framework.Context is
                Level  : constant String := (if Space = 0 then "" else Header (Header'First .. Space - 1));
                Source : constant String := (if Space = 0 then "" else Header (Space + 1 .. Header'Last));
             begin
-               if Level'Length > 0 and then (for all C of Level => C in 'a' .. 'z' | '_') then
+               --  A rule for writing, to a task that writes nothing, is not
+               --  one it can keep or break: left out.
+               if not Baselines and then Level in "project_baseline" | "language_baseline" then
+                  null;
+               elsif Level'Length > 0 and then (for all C of Level => C in 'a' .. 'z' | '_') then
                   Append (Result, Line (Line'First .. First + 1) & Line (Second + 2 .. Line'Last)
                           & (if Level in "project_baseline" | "language_baseline" then ""
                              else " (" & Source & ")")
@@ -396,6 +412,44 @@ package body Model_Runner.Framework.Context is
          Offer (Task_Id & "#effective", "task", Mandatory, To_String (Text));
       end;
 
+      --  A part is one piece of a larger task: that task -- what it is for,
+      --  and its other parts -- so the piece is done as part of it.
+      declare
+         Parent : constant String := Records.Get (View, "definition.parent");
+      begin
+         if Parent /= "" then
+            declare
+               Defined : Records.Item;
+               Read    : E.Error_Info;
+               Text    : Unbounded_String;
+            begin
+               Tasks.Definition (Item, Parent, Defined, Read);
+               if E.Is_Ok (Read) then
+                  Append (Text, "title: " & Records.Get (Defined, "title") & ASCII.LF);
+                  if Records.Get (Defined, "notes") /= "" then
+                     Append (Text, "notes: " & Records.Get (Defined, "notes") & ASCII.LF);
+                  end if;
+                  if Records.Get (Defined, "requirements") /= "" then
+                     Append (Text, "serves: " & Records.Get (Defined, "requirements") & ASCII.LF);
+                  end if;
+                  for Sibling of Tasks.Children (Item, Parent) loop
+                     if Sibling /= Task_Id then
+                        declare
+                           Other : Records.Item;
+                           Got   : E.Error_Info;
+                        begin
+                           Tasks.Definition (Item, Sibling, Other, Got);
+                           Append (Text, "another part: " & Sibling & " " & Records.Get (Other, "title")
+                                   & " (" & Tasks.State_Of (Item, Sibling) & ")" & ASCII.LF);
+                        end;
+                     end if;
+                  end loop;
+                  Offer (Parent & "#whole", "parent", Mandatory, To_String (Text));
+               end if;
+            end;
+         end if;
+      end;
+
       --  The requirements it serves, at their revisions.
       for Index in 1 .. Records.Field_Count (View) loop
          declare
@@ -441,7 +495,7 @@ package body Model_Runner.Framework.Context is
       --  What governs the work, above the configuration, and every override
       --  and conflict: the model is told what holds, not left to guess.
       Offer (Task_Id & "#authority", "authority", Mandatory,
-             Without_Baseline_Source (Fields_Of (View, "authority."))
+             Without_Baseline_Source (Fields_Of (View, "authority."), Baselines => Writes)
              & Fields_Of (View, "override.") & Fields_Of (View, "conflict."));
 
       --  How the project is configured, as far as work on it goes.
@@ -495,8 +549,20 @@ package body Model_Runner.Framework.Context is
          --  A file the task names in its title or notes is what it is
          --  about: offered first, whatever component it is in.
          declare
+            --  And the task it is a part of: a part's files are its whole's.
+            function Parent_Words return String is
+               Defined : Records.Item;
+               Read    : E.Error_Info;
+            begin
+               if Records.Get (View, "definition.parent") = "" then
+                  return "";
+               end if;
+               Tasks.Definition (Item, Records.Get (View, "definition.parent"), Defined, Read);
+               return " " & Records.Get (Defined, "title") & " " & Records.Get (Defined, "notes");
+            end Parent_Words;
             Said  : constant String :=
-              Records.Get (View, "definition.title") & " " & Records.Get (View, "definition.notes");
+              Records.Get (View, "definition.title") & " " & Records.Get (View, "definition.notes")
+              & Parent_Words;
             Start : Positive := Said'First;
          begin
             for Index in Said'First .. Said'Last + 1 loop
@@ -809,6 +875,8 @@ package body Model_Runner.Framework.Context is
             return "The test " & Id (Id'First + 5 .. Id'Last);
          elsif Kind = "results" then
             return "What the last attempt left";
+         elsif Kind = "parent" then
+            return "The task this is a part of, " & Id (Id'First .. Ada.Strings.Fixed.Index (Id, "#") - 1);
          elsif Kind = "helped" then
             return "The task it works on, " & Id (Id'First .. Ada.Strings.Fixed.Index (Id, "#") - 1);
          elsif Kind = "brief" then
@@ -819,12 +887,43 @@ package body Model_Runner.Framework.Context is
             return "The " & Kind & " " & Id;
          end if;
       end Heading;
+      --  The files given whole: their symbols are there to read already.
+      Quoted : Name_Lists.Vector;
+
+      --  A section's text: one blank line after it, however it ends, and
+      --  a symbol of a file given whole left out.
+      function Said (Next : Context.Item) return String is
+         Body_Text : Unbounded_String;
+      begin
+         if To_String (Next.Kind) = "symbols" then
+            for Line of Lines_Of (To_String (Next.Text)) loop
+               if not (for some Path of Quoted => Ada.Strings.Fixed.Index (Line, "  " & Path & ":") > 0) then
+                  Append (Body_Text, Line & ASCII.LF);
+               end if;
+            end loop;
+         else
+            Body_Text := Next.Text;
+         end if;
+         declare
+            Whole : constant String := To_String (Body_Text);
+            Last  : Natural := Whole'Last;
+         begin
+            while Last >= Whole'First and then Whole (Last) in ASCII.LF | ASCII.CR | ' ' loop
+               Last := Last - 1;
+            end loop;
+            return Whole (Whole'First .. Last);
+         end;
+      end Said;
    begin
       for Next of From.Included loop
+         if To_String (Next.Kind) in "source" | "test" and then Length (Next.Id) > 5 then
+            Quoted.Append (Slice (Next.Id, 6, Length (Next.Id)));
+         end if;
+      end loop;
+      for Next of From.Included loop
          --  A section with nothing in it is no section.
-         if Ada.Strings.Fixed.Trim (To_String (Next.Text), Ada.Strings.Both) /= "" then
-            Append (Text, "## " & Heading (Next) & ASCII.LF
-                    & To_String (Next.Text) & ASCII.LF & ASCII.LF);
+         if Ada.Strings.Fixed.Trim (Said (Next), Ada.Strings.Both) /= "" then
+            Append (Text, "## " & Heading (Next) & ASCII.LF & Said (Next) & ASCII.LF & ASCII.LF);
          end if;
       end loop;
       return To_String (Text & From.Instructions);

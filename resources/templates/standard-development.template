@@ -70,6 +70,11 @@ set repository.generated = generated *.pb.go *_pb2.py *.pb.h *.pb.cc
 # only proposed.
 set bootstrap.sources = *.md
 set bootstrap.sources = docs/**/*.md
+set bootstrap.sources = docs/**/*.txt
+set bootstrap.sources = docs/**/*.rst
+set bootstrap.sources = docs/**/*.adoc
+set bootstrap.sources = *.rst
+set bootstrap.sources = *.adoc
 set bootstrap.propose = facts, imports, requirements, decisions, specifications, issues
 scalar bootstrap.import = accepted
 

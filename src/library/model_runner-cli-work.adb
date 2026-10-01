@@ -142,6 +142,31 @@ package body Model_Runner.CLI.Work is
          E.Add_Text (Status, "name", "model");
          E.Add_Text (Status, "value", Named);
          E.Add_Text (Status, "detail", "there is no such model file here or among the models");
+      else
+         --  A model file is a GGUF one, by its first four bytes: anything
+         --  else is refused before the task is touched.
+         declare
+            use Ada.Streams.Stream_IO;
+            File  : File_Type;
+            Magic : String (1 .. 4) := [others => ' '];
+         begin
+            Open (File, In_File, Model_Runner.Platform.Resolve_Model_Path (Named));
+            if Size (File) >= 4 then
+               String'Read (Stream (File), Magic);
+            end if;
+            Close (File);
+            if Magic /= "GGUF" then
+               Status := E.Make (E.Framework_Input_Invalid);
+               E.Add_Text (Status, "name", "model");
+               E.Add_Text (Status, "value", Named);
+               E.Add_Text (Status, "detail", "it is not a model file: a model is a .gguf file");
+            end if;
+         exception
+            when others =>
+               if Is_Open (File) then
+                  Close (File);
+               end if;
+         end;
       end if;
    end Check_Start;
 
@@ -857,6 +882,23 @@ package body Model_Runner.CLI.Work is
 
             --  How long the agent may work: its task's time.
             Agent_Seconds : constant Natural := W.Time_Allowed (Store, To_String (Chosen));
+
+            --  The setting that time is: its kind's, the agents', or the
+            --  lease where neither is set.
+            function Time_Source return String is
+               Defined : R.Item;
+               Read    : E.Error_Info;
+            begin
+               Tk.Definition (Store, To_String (Chosen), Defined, Read);
+               declare
+                  Kind : constant String := R.Get (Defined, "kind");
+               begin
+                  return (if Kind /= "" and then Tk.Kind_Policy (Store, Kind, "max_seconds") /= ""
+                          then "task.max_seconds." & Kind
+                          elsif R.Get (Config, "scalar.agents.max_seconds") /= "" then "agents.max_seconds"
+                          else "work.lease, as agents.max_seconds is not set");
+               end;
+            end Time_Source;
          begin
             --  Which agent does the work, said before it starts: the one the
             --  project configures, wherever the work is started from.
@@ -872,7 +914,8 @@ package body Model_Runner.CLI.Work is
                --  And how long it has, which is how a hung one ends.
                Pres.Put_Note
                  (Screen, "cli.work.time_allowed",
-                  [Loc.Named ("count", T.Image (Long_Long_Integer (Agent_Seconds)))]);
+                  [Loc.Named ("count", T.Image (Long_Long_Integer (Agent_Seconds))),
+                   Loc.Named ("name", Time_Source)]);
                --  Confined below the project's permissions: said before it
                --  starts, not first at what it refuses.
                if Pm."/=" (Pm.Sandbox, Pm.Unrestricted) then
@@ -957,10 +1000,14 @@ package body Model_Runner.CLI.Work is
                   Tree := Place.Path;
                end if;
             end if;
-            for Path of Done.Changed_Files loop
-               Say ((if Ada.Directories.Exists (Hostkit.Fs.Join (To_String (Tree), Path))
-                     then "cli.work.changed" else "cli.work.removed"), Path, "");
-            end loop;
+            --  A workspace given up took its files with it: what it
+            --  changed is said with where it is kept, not as removed.
+            if Length (Done.Workspace_Id) = 0 or else Ada.Directories.Exists (To_String (Tree)) then
+               for Path of Done.Changed_Files loop
+                  Say ((if Ada.Directories.Exists (Hostkit.Fs.Join (To_String (Tree), Path))
+                        then "cli.work.changed" else "cli.work.removed"), Path, "");
+               end loop;
+            end if;
          end;
          --  Each helper's end was said as it came, where the session ran
          --  the work; a model run apart is summed up here.
@@ -1218,6 +1265,18 @@ package body Model_Runner.CLI.Work is
                   end;
                end if;
             end;
+         elsif To_String (Done.Final_State) in "failed" | "blocked"
+           and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "on the way it was refused") > 0
+         then
+            --  It went round a refusal until it stopped: trying again meets
+            --  the same one, so what refused it is the step before.
+            if Ada.Strings.Fixed.Index (To_String (Done.Reason), "sandbox") > 0 then
+               Pres.Put_Note (Screen, "cli.next.sandbox_refused",
+                              [Loc.Named ("name", To_String (Done.Task_Id))]);
+            else
+               Pres.Put_Note (Screen, "cli.next.refused_first",
+                              [Loc.Named ("name", To_String (Done.Task_Id))]);
+            end if;
          elsif To_String (Done.Final_State) in "failed" | "blocked"
            and then not (for some Line of Done.Kept_Back =>
                            Ada.Strings.Fixed.Index (Line, "children") > 0

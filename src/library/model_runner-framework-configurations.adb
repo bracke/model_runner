@@ -420,6 +420,107 @@ package body Model_Runner.Framework.Configurations is
          return False;
    end Matches_Any;
 
+   --  A profile's LABEL in DIR: COMMAND parts moved to where the crate
+   --  is, where DIR holds no alire.toml and exactly one directory in it
+   --  does.
+   function Crate_Located (Project_Directory, Profile : String) return String is
+      Output : Unbounded_String;
+      Start  : Natural := Profile'First;
+   begin
+      while Start <= Profile'Last loop
+         declare
+            Semicolon : constant Natural := Ada.Strings.Fixed.Index (Profile (Start .. Profile'Last), ";");
+            Part_End  : constant Natural := (if Semicolon = 0 then Profile'Last else Semicolon - 1);
+            Part      : constant String := Profile (Start .. Part_End);
+            In_At     : constant Natural := Ada.Strings.Fixed.Index (Part, " in ");
+            Colon     : constant Natural := Ada.Strings.Fixed.Index (Part, ":");
+            Moved     : Unbounded_String := To_Unbounded_String (Part);
+         begin
+            if In_At > 0 and then Colon > In_At then
+               declare
+                  Dir   : constant String := Ada.Strings.Fixed.Trim (Part (In_At + 4 .. Colon - 1), Ada.Strings.Both);
+                  Where : constant String := Hostkit.Fs.Join (Project_Directory, Dir);
+                  Found : Unbounded_String;
+                  Count : Natural := 0;
+               begin
+                  if Dir /= "" and then Ada.Directories.Exists (Where)
+                    and then Ada.Directories."=" (Ada.Directories.Kind (Where), Ada.Directories.Directory)
+                    and then not Ada.Directories.Exists (Hostkit.Fs.Join (Where, "alire.toml"))
+                  then
+                     declare
+                        Search : Ada.Directories.Search_Type;
+                        Next   : Ada.Directories.Directory_Entry_Type;
+                     begin
+                        Ada.Directories.Start_Search
+                          (Search, Where, "", [Ada.Directories.Directory => True, others => False]);
+                        while Ada.Directories.More_Entries (Search) loop
+                           Ada.Directories.Get_Next_Entry (Search, Next);
+                           declare
+                              Simple : constant String := Ada.Directories.Simple_Name (Next);
+                           begin
+                              if Simple (Simple'First) /= '.'
+                                and then Ada.Directories.Exists
+                                           (Hostkit.Fs.Join (Hostkit.Fs.Join (Where, Simple), "alire.toml"))
+                              then
+                                 Count := Count + 1;
+                                 Found := To_Unbounded_String (Simple);
+                              end if;
+                           end;
+                        end loop;
+                        Ada.Directories.End_Search (Search);
+                     end;
+                     if Count = 1 then
+                        Moved := To_Unbounded_String
+                          (Part (Part'First .. In_At + 3) & Dir & "/" & To_String (Found)
+                           & Part (Colon .. Part'Last));
+                     end if;
+                  end if;
+               end;
+            end if;
+            Append (Output, Moved & (if Semicolon = 0 then "" else ";"));
+            exit when Semicolon = 0;
+            Start := Semicolon + 1;
+         end;
+      end loop;
+      return To_String (Output);
+   exception
+      when others =>
+         return Profile;
+   end Crate_Located;
+
+   --  Whether a Makefile there has a rule for Target.
+   function Make_Rule (Directory, Target : String) return Boolean is
+      Text  : Unbounded_String;
+      Read  : E.Error_Info;
+      Start : Natural := 1;
+   begin
+      Files.Read_Text (Hostkit.Fs.Join (Directory, "Makefile"), Text, Read);
+      if E.Is_Error (Read) then
+         return False;
+      end if;
+      declare
+         Whole : constant String := To_String (Text);
+      begin
+         while Start <= Whole'Last loop
+            declare
+               Stop : constant Natural := Ada.Strings.Fixed.Index (Whole (Start .. Whole'Last), [1 => ASCII.LF]);
+               Line : constant String := Whole (Start .. (if Stop = 0 then Whole'Last else Stop - 1));
+            begin
+               if Line'Length > Target'Length
+                 and then Line (Line'First .. Line'First + Target'Length - 1) = Target
+                 and then Line (Line'First + Target'Length) in ':' | ' '
+                 and then Ada.Strings.Fixed.Index (Line, ":") > 0
+               then
+                  return True;
+               end if;
+               exit when Stop = 0;
+               Start := Stop + 1;
+            end;
+         end loop;
+      end;
+      return False;
+   end Make_Rule;
+
    -------------
    -- Prepare --
    -------------
@@ -530,7 +631,13 @@ package body Model_Runner.Framework.Configurations is
                 else Ada.Directories.Exists
                        (Hostkit.Fs.Join (Project_Directory, To_String (Rule.Path))))
             then
-               if Rule.To_Input then
+               if Rule.To_Input and then To_String (Rule.Value) = "make test"
+                 and then not Make_Rule (Project_Directory, "test")
+               then
+                  --  The rule a Makefile has: check, or its first one.
+                  Found.Include (To_String (Rule.Key),
+                                 (if Make_Rule (Project_Directory, "check") then "make check" else "make"));
+               elsif Rule.To_Input then
                   Found.Include (To_String (Rule.Key), To_String (Rule.Value));
                else
                   Result.Discovered_Facts.Include
@@ -842,6 +949,7 @@ package body Model_Runner.Framework.Configurations is
                         --  layout: no stub sources or test scaffold beside
                         --  it -- only the dotfiles a template keeps tidy.
                         if Own_Sources and then Path'Length > 0 and then Path (Path'First) /= '.' then
+                           Result.Skipped_Files.Append (Path);
                            goto Next_Setting;
                         end if;
                         Result.Files.Include (Path, Value);
@@ -880,6 +988,19 @@ package body Model_Runner.Framework.Configurations is
                  and then Result.Inputs.Contains (Id)
                then
                   Records.Set (Config, "input." & Id, Result.Inputs (Id));
+               end if;
+            end;
+         end loop;
+
+         --  A check run in a directory of the project that is there already
+         --  runs where its crate is: tests/cache_tests, when tests holds no
+         --  alire.toml of its own and one directory below it does.
+         for Index in 1 .. Records.Field_Count (Config) loop
+            declare
+               Field : constant String := Records.Field_Name (Config, Index);
+            begin
+               if Field'Length > 8 and then Field (Field'First .. Field'First + 7) = "profile." then
+                  Records.Set (Config, Field, Crate_Located (Project_Directory, Records.Get (Config, Field)));
                end if;
             end;
          end loop;
@@ -1214,7 +1335,7 @@ package body Model_Runner.Framework.Configurations is
       elsif Name = "scalar.model.default" then
          return "/work uses this session's model";
       elsif Name = "scalar.verification.default" then
-         return "the check /init set";
+         return "none: it must name a profile";
       end if;
       return "";
    end Default_Of;
@@ -1997,6 +2118,14 @@ package body Model_Runner.Framework.Configurations is
                         end if;
                      end;
                   end loop;
+                  --  The project's own name is what its state is kept under:
+                  --  fixed once the project is made.
+                  if Input = "input.project_name" then
+                     Status := Refused
+                       (Name, "the project's name is fixed when /init makes it; a project under another"
+                        & " name is a new /init");
+                     return;
+                  end if;
                   Status := Refused
                     (Name, Input & " is what /init was given, kept as it was; what it set is changed by"
                      & " the setting's own name"
@@ -2007,6 +2136,28 @@ package body Model_Runner.Framework.Configurations is
                                 else "")));
                end;
                return;
+            --  The profile tasks are checked by has no default to fall back
+            --  to: changed, not taken away.
+            elsif Name in "scalar.verification.default" | "verification.default"
+              and then Given in "" | "off"
+            then
+               declare
+                  Profiles : Unbounded_String;
+               begin
+                  for Index in 1 .. Records.Field_Count (Result.Before) loop
+                     if Starts (Records.Field_Name (Result.Before, Index), "profile.") then
+                        Append (Profiles, (if Profiles = Null_Unbounded_String then "" else ", ")
+                                & Records.Field_Name (Result.Before, Index)
+                                    (Records.Field_Name (Result.Before, Index)'First + 8
+                                     .. Records.Field_Name (Result.Before, Index)'Last));
+                     end if;
+                  end loop;
+                  Status := Refused
+                    (Name, "it names the profile tasks are checked by, and there is nothing to fall back"
+                     & " to; /reconfigure verification.default=PROFILE names another"
+                     & (if Profiles = Null_Unbounded_String then "" else " -- of " & To_String (Profiles)));
+                  return;
+               end;
             --  An outside program as the agent is out of scope: refused,
             --  and one an earlier version kept can only be taken out.
             elsif Name in "scalar.work.agent" | "work.agent"
@@ -2144,17 +2295,27 @@ package body Model_Runner.Framework.Configurations is
                         --  it now has: said, as it is what changes.
                         Above : constant Permissions.Permission_Set :=
                           Permissions.Effective (Item, "", "", Within_Sandbox => False);
+                        Project_Level : constant Boolean := Rest (Rest'First .. Dot - 1) = "project";
+                        --  For the project, inherit is the harness's default
+                        --  grant; for a level below, what the project gives.
                         Granted_Above : constant Boolean :=
+                          (for some One in Permissions.Capability =>
+                             Permissions.Word (One) = Rest (Dot + 1 .. Rest'Last)
+                             and then (if Project_Level then Permissions.Project_Default (One).Granted
+                                       else Above (One).Granted));
+                        --  What it is now, as it holds: off where the level
+                        --  names others and not this one.
+                        Had_It : constant Boolean :=
                           (for some One in Permissions.Capability =>
                              Permissions.Word (One) = Rest (Dot + 1 .. Rest'Last) and then Above (One).Granted);
                      begin
                         Result.Changed.Append
                           (Name & ": " & (if Old /= "" then Old
-                                          elsif Rest (Rest'First .. Dot - 1) = "project" then "(the default)"
+                                          elsif Project_Level then (if Had_It then "(granted)" else "off")
                                           elsif Level_Said (Name)
                                           then "(not granted: this level grants only what it names)"
                                           else "(as the level above has it)") & " -> inherit, "
-                           & (if Rest (Rest'First .. Dot - 1) = "project" then "the project's default"
+                           & (if Project_Level then "the harness's default"
                               else "as the level above gives it")
                            & (if Granted_Above then ": granted" else ": not granted"));
                      end;
@@ -2232,9 +2393,9 @@ package body Model_Runner.Framework.Configurations is
                         end loop;
                         if Any then
                            Result.Changed.Append
-                             ("map.permission." & Level & ": its other capabilities -> "
-                              & (if Level = "project" then "the defaults, written out"
-                                 else "inherit, following the level above"));
+                             ("map.permission." & Level & ": the capabilities not named keep "
+                              & (if Level = "project" then "the defaults they had, now written out"
+                                 else "following the level above, now written out as inherit"));
                         end if;
                      end;
                   end if;

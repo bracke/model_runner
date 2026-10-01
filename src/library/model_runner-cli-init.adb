@@ -512,6 +512,7 @@ package body Model_Runner.CLI.Init is
             Files_Said  : Unbounded_String;
             Dirs_Said   : Unbounded_String;
             Kept_Said   : Unbounded_String;
+            Skipped_Said : Unbounded_String;
             Warned      : Unbounded_String;
 
             --  What an input is for, as its template says.
@@ -649,6 +650,36 @@ package body Model_Runner.CLI.Init is
                   end if;
                end;
             end loop;
+            --  Left out, because the project has code of its own: said, and
+            --  a manifest of its own that names another crate warned of.
+            for Path of Planned.Skipped_Files loop
+               --  One there already is kept, as any file there is.
+               if Ada.Directories.Exists (Hostkit.Fs.Join (Directory, Path)) then
+                  Append (Kept_Said, (if Kept_Said = Null_Unbounded_String then "" else ", ") & Path);
+               else
+                  Append (Skipped_Said, (if Skipped_Said = Null_Unbounded_String then "" else ", ") & Path);
+               end if;
+               if Ada.Directories.Simple_Name (Path) = "alire.toml"
+                 and then Ada.Directories.Exists (Hostkit.Fs.Join (Directory, Path))
+                 and then Planned.Inputs.Contains ("project_name")
+                 and then Crate_Named (Hostkit.Fs.Join (Directory, Path)) /= ""
+                 and then Crate_Named (Hostkit.Fs.Join (Directory, Path)) /= Planned.Inputs ("project_name")
+               then
+                  Say ("cli.init.kept_differs",
+                       [Loc.Named ("path", Path),
+                        Loc.Named ("name", Crate_Named (Hostkit.Fs.Join (Directory, Path))),
+                        Loc.Named ("value", Planned.Inputs ("project_name"))]);
+                  Append (Warned, Pres.Next_Step_Value
+                                    (Screen, "cli.init.kept_differs",
+                                     [Loc.Named ("path", Path),
+                                      Loc.Named ("name", Crate_Named (Hostkit.Fs.Join (Directory, Path))),
+                                      Loc.Named ("value", Planned.Inputs ("project_name"))])
+                                  & ASCII.LF);
+               end if;
+            end loop;
+            if Skipped_Said /= Null_Unbounded_String then
+               Say ("cli.init.short.skips", [Loc.Named ("detail", To_String (Skipped_Said))]);
+            end if;
             for Position in Planned.Template_Facts.Iterate loop
                if not Planned.Discovered_Facts.Contains (Cf.Value_Maps.Key (Position)) then
                   Say ("cli.init.fact", [Loc.Named ("name", Cf.Value_Maps.Key (Position)),
@@ -816,6 +847,10 @@ package body Model_Runner.CLI.Init is
                        & (if Kept_Said = Null_Unbounded_String then ""
                           else Pres.Next_Step_Value (Screen, "cli.init.short.keeps",
                                                      [Loc.Named ("detail", To_String (Kept_Said))])
+                               & ASCII.LF)
+                       & (if Skipped_Said = Null_Unbounded_String then ""
+                          else Pres.Next_Step_Value (Screen, "cli.init.short.skips",
+                                                     [Loc.Named ("detail", To_String (Skipped_Said))])
                                & ASCII.LF)
                        & To_String (Warned)
                        & Pres.Message_Value (Screen, "cli.init.confirm");

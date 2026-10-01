@@ -62,12 +62,16 @@ package body Model_Runner.Framework.Tasks is
      (Status  : out E.Error_Info;
       Name    : String;
       Kind    : String;
-      Allowed : Name_Lists.Vector)
+      Allowed : Name_Lists.Vector;
+      Editing : Boolean := False)
    is
       Fields : Unbounded_String;
    begin
       for Field of Core loop
-         Append (Fields, (if Fields = Null_Unbounded_String then "" else ", ") & Field.all);
+         --  What an edit does not change is not offered to it.
+         if not (Editing and then Field.all in "kind" | "parent" | "depends_on") then
+            Append (Fields, (if Fields = Null_Unbounded_String then "" else ", ") & Field.all);
+         end if;
       end loop;
       for Field of Allowed loop
          if not Is_Core (Field) then
@@ -1989,8 +1993,9 @@ package body Model_Runner.Framework.Tasks is
                       elsif Now in "complete" | "cancelled"
                       then "a " & Now & " task is not revised; /task reopen " & Id & " first"
                       elsif Now = "verification"
-                      then "its work waits to be taken in or checked; /task integrate " & Id
-                           & " takes it in, or /task cancel " & Id & " anyway gives it up"
+                      then "its work waits to be taken in or checked; /task diff " & Id & " shows it, /task"
+                           & " integrate " & Id & " takes it in, and /task integrate " & Id & " discard sets"
+                           & " it aside, kept as a copy, so that the task is revised and worked again"
                       else "a task is revised only while it is not being worked; wait for its"
                            & " work to end, or /task cancel " & Id));
          return;
@@ -2020,16 +2025,16 @@ package body Model_Runner.Framework.Tasks is
             begin
                if Name in "kind" | "parent" | "depends_on" then
                   Status := E.Make (E.Framework_Input_Invalid);
-                  E.Add_Text (Status, "name", Name);
-                  E.Add_Text (Status, "value", Given);
-                  E.Add_Text (Status, "detail", "it is not revised; "
+                  E.Add_Text (Status, "name", "a field /task edit changes");
+                  E.Add_Text (Status, "value", Name);
+                  E.Add_Text (Status, "detail", "it is set another way: "
                               & (if Name = "kind" then "/task new TITLE kind=KIND makes a task of the other kind"
                                  elsif Name = "parent" then "/task split PARENT A; B makes parts of a task"
                                  else "/task depend " & Id & " ON adds a dependency, and /task depend "
                                       & Id & " ON remove takes one away"));
                   return;
                elsif not Is_Core (Name) and then not Allowed.Contains (Name) then
-                  No_Such_Field (Status, Name, Kind, Allowed);
+                  No_Such_Field (Status, Name, Kind, Allowed, Editing => True);
                   return;
                elsif Given = "" and then (Name = "title" or else Required_Here.Contains (Name)) then
                   Status := E.Make (E.Framework_Input_Invalid);
@@ -2100,7 +2105,8 @@ package body Model_Runner.Framework.Tasks is
          if E.Is_Error (Checked) then
             Status := E.Make (E.Framework_Input_Invalid);
             E.Add_Text (Status, "name", "a field of " & Id);
-            E.Add_Text (Status, "value", "what gave");
+            E.Add_Text (Status, "value", (if E.Text_Of (Checked, "value") /= "" then E.Text_Of (Checked, "value")
+                                          else "what was given"));
             E.Add_Text (Status, "detail", E.Text_Of (Checked, "detail"));
             return;
          end if;

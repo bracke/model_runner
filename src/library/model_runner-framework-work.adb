@@ -1,6 +1,7 @@
 with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 
 with Hostkit.Fs;
 
@@ -48,10 +49,9 @@ package body Model_Runner.Framework.Work is
    --  not, which would only fail it.
    Read_Only_Opening : constant String :=
      "## What to do" & ASCII.LF
-     & "Do the task now by reading: read_file reads a file, list_directory"
-     & " lists a directory; paths are relative to the project. This task is"
-     & " answered, not written: you may change no file, and a change to any"
-     & " file fails the work. Put what you found in summary:, and more of it,"
+     & "Do the task now by reading, with paths relative to the project. This"
+     & " task is answered, not written: you may change no file, and a change to"
+     & " any file fails the work. Put what you found in summary:, and more of it,"
      & " a finding a line, under findings:." & ASCII.LF & ASCII.LF
      & "When you have the answer, finish with a short report in these lines:"
      & ASCII.LF & ASCII.LF
@@ -69,15 +69,14 @@ package body Model_Runner.Framework.Work is
       May_Check    : Boolean := True) return String
    is ((if not May_Write then Read_Only_Opening
         else "## What to do" & ASCII.LF
-       & "Do the task now, with the tools: read_file reads a file, write_file"
-       & " writes the whole new content of a file, list_directory lists a"
-       & " directory. Paths are relative to the project. Make each change by"
-       & " calling write_file; describing a change does not make it."
+       & "Do the task now with your tools, paths relative to the project. Make each"
+       & " change by calling write_file with the whole new content; describing a"
+       & " change does not make it."
        & (if May_Delegate
-          then " delegate hands a part better done apart -- a review, an investigation --"
-               & " to a helper, who reports back."
+          then " Hand a part better done apart -- a review, an investigation -- to a helper"
+               & " with delegate."
           else "")
-       & (if May_Check then " run_checks runs the project's checks on what you wrote." else "")
+       & (if May_Check then " Check what you wrote with run_checks." else "")
        & ASCII.LF & ASCII.LF
        & "When the files are written, finish with a short report in these lines:"
        & ASCII.LF & ASCII.LF
@@ -1077,7 +1076,8 @@ package body Model_Runner.Framework.Work is
    --  where its permissions let it -- what those permissions are, and how
    --  many calls it may make.
    function Tool_Policy
-     (Item : Stores.Store; Agent_Id : String; Max_Calls : Natural; Task_Id : String; Apart : Boolean)
+     (Item : Stores.Store; Agent_Id : String; Max_Calls : Natural; Task_Id : String; Apart : Boolean;
+      Hosted : Boolean := True)
       return String
    is
       Held : Agents.Agent;
@@ -1088,13 +1088,13 @@ package body Model_Runner.Framework.Work is
       if E.Is_Error (Read) then
          return To_String (Said);
       end if;
-      if Offers_Checks (Item, Held.Allowed, Task_Id, Apart) then
+      if Hosted and then Offers_Checks (Item, Held.Allowed, Task_Id, Apart) then
          Append (Said, ", run_checks");
       end if;
       if Permissions.Allows (Held.Allowed, Permissions.Write_Source) then
          Append (Said, ", write_file");
       end if;
-      if Permissions.Allows (Held.Allowed, Permissions.Create_Children)
+      if Hosted and then Permissions.Allows (Held.Allowed, Permissions.Create_Children)
         and then Held.Allowed (Permissions.Create_Children).Max_Children > 0
         and then Held.Depth + 1 <= Held.Allowed (Permissions.Create_Children).Max_Depth
       then
@@ -1510,6 +1510,126 @@ package body Model_Runner.Framework.Work is
    function Current (Host : Child_Host) return String
    is (if Host.Open.Is_Empty then "" else Host.Open.Last_Element);
 
+   ------------------------
+   -- Instructions_With --
+   ------------------------
+
+   --  What a task's root agent is told after its context, from what it may
+   --  do: the tools it holds, how to answer, its permissions and its parts.
+   --  The one text /work gives and /task context shows.
+   function Instructions_With
+     (Item    : Stores.Store;
+      Task_Id : String;
+      Allowed : Permissions.Permission_Set;
+      Apart   : Boolean;
+      Helpers : Boolean := True) return String
+   is
+      May_Write   : constant Boolean :=
+        Allowed (Permissions.Write_Source).Granted or else Allowed (Permissions.Write_Specs).Granted;
+      --  Helpers only where the runner can make them: a model run apart
+      --  has no delegate tool.
+      May_Delegate : constant Boolean :=
+        Helpers and then Allowed (Permissions.Create_Children).Granted
+        and then Allowed (Permissions.Create_Children).Max_Children > 0
+        and then Allowed (Permissions.Create_Children).Max_Depth >= 1;
+      May_Check   : constant Boolean := Helpers and then Offers_Checks (Item, Allowed, Task_Id, Apart);
+      May_Propose : constant Boolean := Permissions.Allows (Allowed, Permissions.Propose_Tasks);
+
+      function May_Split return Boolean is
+         Depth : Natural := 0;
+         Up    : Unbounded_String := To_Unbounded_String (Task_Id);
+         Limit : constant Permissions.Grant :=
+           (if Allowed (Permissions.Create_Children).Granted then Allowed (Permissions.Create_Children)
+            else Permissions.Effective (Item, "", "", Within_Sandbox => False) (Permissions.Create_Children));
+         Bounds : constant Agents.Limits := Agents.Limits_Of (Item);
+      begin
+         loop
+            declare
+               Defined_Up : Records.Item;
+               Read_Up    : E.Error_Info;
+            begin
+               Tasks.Definition (Item, To_String (Up), Defined_Up, Read_Up);
+               exit when E.Is_Error (Read_Up) or else Records.Get (Defined_Up, "parent") = ""
+                 or else Depth > 64;
+               Up := To_Unbounded_String (Records.Get (Defined_Up, "parent"));
+               Depth := Depth + 1;
+            end;
+         end loop;
+         return Limit.Granted and then Depth + 1 <= Natural'Min (Limit.Max_Depth, Bounds.Max_Depth);
+      end May_Split;
+
+      --  The permissions it has a tool for, in plain words.
+      function Said_Permissions return String is
+         Said : Unbounded_String;
+         procedure Add (Text : String) is
+         begin
+            Append (Said, (if Said = Null_Unbounded_String then "" else "; ") & Text);
+         end Add;
+      begin
+         if Allowed (Permissions.Read_Source).Granted then
+            Add ("read the source");
+         end if;
+         if Allowed (Permissions.Write_Source).Granted then
+            Add ("write " & (if Allowed (Permissions.Write_Source).Roots.Is_Empty then "files"
+                             else "files under " & Comma_Separated (Allowed (Permissions.Write_Source).Roots)));
+         end if;
+         if Allowed (Permissions.Write_Specs).Granted then
+            Add ("write specifications");
+         end if;
+         if May_Check then
+            Add ("run the project's checks");
+         end if;
+         if May_Delegate then
+            Add ("hand parts to helpers (at most"
+                 & Natural'Image (Allowed (Permissions.Create_Children).Max_Children) & ")");
+         end if;
+         return (if Said = Null_Unbounded_String then "read only what you are given" else To_String (Said));
+      end Said_Permissions;
+
+      Parts : Unbounded_String;
+   begin
+      for Child of Tasks.Children (Item, Task_Id) loop
+         declare
+            Defined : Records.Item;
+            Read    : E.Error_Info;
+         begin
+            Tasks.Definition (Item, Child, Defined, Read);
+            Append (Parts, "- " & Child & " " & Records.Get (Defined, "title") & ": "
+                    & Tasks.State_Of (Item, Child) & ASCII.LF);
+         end;
+      end loop;
+      return Instructions_For (May_Propose, May_Split, May_Write,
+                               May_Delegate => May_Delegate, May_Check => May_Check)
+        & ASCII.LF & "## What you may do" & ASCII.LF
+        & "You may " & Said_Permissions & "."
+        & (if May_Write then " Change only the files you may write; a change to any other file fails the work."
+           else "")
+        & (if May_Propose then "" else " You may not propose tasks or parts.")
+        & ASCII.LF
+        & (if Parts = Null_Unbounded_String then ""
+           else ASCII.LF & "## Your parts" & ASCII.LF & To_String (Parts)
+                & "Those complete are done: do what is left of the task itself, and do not split"
+                & " it into them again." & ASCII.LF);
+   end Instructions_With;
+
+   -----------------------
+   -- Instructions_Of --
+   -----------------------
+
+   function Instructions_Of (Item : Stores.Store; Task_Id : String) return String is
+      Defined : Records.Item;
+      Read    : E.Error_Info;
+   begin
+      Tasks.Definition (Item, Task_Id, Defined, Read);
+      return Instructions_With
+        (Item, Task_Id,
+         Permissions.Effective (Item, Records.Get (Defined, "kind"), "worker",
+                                Task_Level => Records.Get (Defined, "permissions")),
+         Apart => (if Tasks.Kind_Policy (Item, Records.Get (Defined, "kind"), "isolation") /= ""
+                   then Tasks.Kind_Policy (Item, Records.Get (Defined, "kind"), "isolation")
+                   else Work_Setting (Item, "isolation")) = "workspace");
+   end Instructions_Of;
+
    -------------------
    -- Unable_Reason --
    -------------------
@@ -1548,16 +1668,39 @@ package body Model_Runner.Framework.Work is
          if Lacks = "" then
             return "";
          end if;
-         return "it would not be let " & Lacks
-           & (if Lacks = "write a file" then ", which its gate implementation_present needs" else "")
-           & (if Elsewhere then " (" & Comma_Separated (Homes) & ")" else "")
-           & (if Permissions."/=" (Permissions.Sandbox, Permissions.Unrestricted)
-              then "; " & Permissions.Sandbox_Source & " confines it -- /sandbox off lifts that"
-              else "")
-           & (if Records.Get (View, "definition.permissions") /= ""
-              then "; its own permissions narrow it -- /task edit " & Task_Id
-                   & " permissions=inherit takes its kind's"
-              else "");
+         --  The level that withholds it, and the setting that grants it.
+         declare
+            Kind   : constant String := Records.Get (View, "definition.kind");
+            Config : Records.Item;
+            Got    : E.Error_Info;
+            Kind_Named : Boolean := False;
+            Capability : constant String :=
+              (if Lacks = "write a file" then "write_source"
+               elsif Lacks = "read the source" then "read_source" else "");
+         begin
+            Configurations.Read (Item, Config, Got);
+            for Index in 1 .. Records.Field_Count (Config) loop
+               Kind_Named := Kind_Named
+                 or else Ada.Strings.Fixed.Index (Records.Field_Name (Config, Index),
+                                                  "map.permission.kind." & Kind & ".") = 1;
+            end loop;
+            return "it would not be let " & Lacks
+              & (if Lacks = "write a file" then ", which its gate implementation_present needs" else "")
+              & (if Capability = "" or else Permissions."/=" (Permissions.Sandbox, Permissions.Unrestricted)
+                   or else Records.Get (View, "definition.permissions") /= ""
+                 then ""
+                 else "; /reconfigure map.permission."
+                      & (if Kind_Named then "kind." & Kind else "project") & "." & Capability
+                      & "=on grants it")
+              & (if Elsewhere then " (" & Comma_Separated (Homes) & ")" else "")
+              & (if Permissions."/=" (Permissions.Sandbox, Permissions.Unrestricted)
+                 then "; " & Permissions.Sandbox_Source & " confines it -- /sandbox off lifts that"
+                 else "")
+              & (if Records.Get (View, "definition.permissions") /= ""
+                 then "; its own permissions narrow it -- /task edit " & Task_Id
+                      & " permissions=inherit takes its kind's"
+                 else "");
+         end;
       end;
    end Unable_Reason;
 
@@ -1651,6 +1794,12 @@ package body Model_Runner.Framework.Work is
    ---------------
    -- Time_Left --
    ---------------
+
+   function Time_Is_Up (Host : Child_Host) return Boolean is
+      use type Ada.Calendar.Time;
+   begin
+      return Host.Bounded and then Ada.Calendar.Clock >= Host.Deadline;
+   end Time_Is_Up;
 
    function Time_Left (Host : Child_Host) return Duration is
       use type Ada.Calendar.Time;
@@ -1755,9 +1904,17 @@ package body Model_Runner.Framework.Work is
          Before  : constant Configurations.Value_Maps.Map := Snapshot (Project, Repository.Roots_Of (Host.Item.all));
       begin
          --  Off the network unless the agent may use it.
+         --  Within the time the work has left: a check does not carry it
+         --  past its bound.
+         if Time_Is_Up (Host) then
+            Status := E.Make (E.Framework_Limit_Exceeded);
+            E.Add_Text (Status, "name", "time");
+            return;
+         end if;
          Verification.Run_Profile
            (Host.Item.all, Change, Profile, "", Evidence, Passed, Status,
-            Offline => not May (Host, Permissions.Use_Network, ""));
+            Offline => not May (Host, Permissions.Use_Network, ""),
+            Within  => (if Host.Bounded then Natural (Duration'Max (1.0, Time_Left (Host))) else 0));
          if E.Is_Ok (Status) then
             Stores.Commit (Host.Item.all, Change, Status);
          end if;
@@ -1974,7 +2131,29 @@ package body Model_Runner.Framework.Work is
                               or else Ada.Strings.Fixed.Index (Word, "run_") = Word'First
                               or else Ada.Strings.Fixed.Index (Word, "create_children") = Word'First)
                   then
-                     Append (Said, (if Said = Null_Unbounded_String then "" else "; ") & Word);
+                     declare
+                        Space : constant Natural := Ada.Strings.Fixed.Index (Word & " ", " ");
+                        Name  : constant String := Word (Word'First .. Space - 1);
+                        Roots : constant Natural := Ada.Strings.Fixed.Index (Word, "roots=");
+                        Where : constant String :=
+                          (if Roots = 0 then ""
+                           else " in " & Ada.Strings.Fixed.Translate
+                                           (Trim (Word (Roots + 6 .. Word'Last)),
+                                            Ada.Strings.Maps.To_Mapping ("|", ",")));
+                        --  Said in words, not by the permission's own name.
+                        Plain : constant String :=
+                          (if Name = "read_source" then "read the source"
+                           elsif Name = "read_specs" then "read the specifications"
+                           elsif Name = "write_source" then "write files" & Where
+                           elsif Name = "write_specs" then "write specifications" & Where
+                           elsif Name = "run_build" then "build it"
+                           elsif Name = "run_tests" then "run its tests"
+                           elsif Name = "run_static_analysis" then "run its static analysis"
+                           elsif Name = "create_children" then "make helpers"
+                           else Name);
+                     begin
+                        Append (Said, (if Said = Null_Unbounded_String then "" else ", ") & Plain);
+                     end;
                   end if;
                end;
             end loop;
@@ -1988,11 +2167,12 @@ package body Model_Runner.Framework.Work is
                  & "Your tools -- these and no others: "
                  & (if Tools_End > 7 then Policy (Policy'First + 7 .. Tools_End - 1) else "read_file, list_directory")
                  & "." & ASCII.LF
-                 & "Your permissions: " & (if Said = Null_Unbounded_String then "none" else To_String (Said))
+                 & "You may " & (if Said = Null_Unbounded_String then "only read what you are given"
+                                 else To_String (Said))
                  & "." & ASCII.LF
                  & (if Permissions.Allows (Held.Allowed, Permissions.Write_Source)
                       or else Permissions.Allows (Held.Allowed, Permissions.Write_Specs)
-                    then "Change only files write_source or write_specs lets you write."
+                    then "Change only the files you may write."
                     else "Change no file: read, and report.")
                  & (if Permissions.Allows (Held.Allowed, Permissions.Create_Children) then ""
                     else " You may not make helpers of your own.")
@@ -2340,143 +2520,20 @@ package body Model_Runner.Framework.Work is
          return "";
       end Sandbox_Said;
 
-      --  Whether its agent may write anything at all: a task it may not is
-      --  one to answer, and it is told so.
-      function May_Write_Here return Boolean is
+      --  What its agent is told after its context, from what it holds.
+      function Instructions_Here return String is
          Held_Agent : Agents.Agent;
          Read       : E.Error_Info;
       begin
          Agents.Read (Item, To_String (Result.Agent_Id), Held_Agent, Read);
-         return E.Is_Error (Read)
-           or else Held_Agent.Allowed (Permissions.Write_Source).Granted
-           or else Held_Agent.Allowed (Permissions.Write_Specs).Granted;
-      end May_Write_Here;
-
-      --  Whether its agent holds delegate, and run_checks: what it is told
-      --  of them follows.
-      function May_Delegate_Here return Boolean is
-         Held_Agent : Agents.Agent;
-         Read       : E.Error_Info;
-      begin
-         Agents.Read (Item, To_String (Result.Agent_Id), Held_Agent, Read);
-         return E.Is_Error (Read) or else Held_Agent.Allowed (Permissions.Create_Children).Granted;
-      end May_Delegate_Here;
-
-      function May_Check_Here return Boolean is
-         Held_Agent : Agents.Agent;
-         Read       : E.Error_Info;
-      begin
-         Agents.Read (Item, To_String (Result.Agent_Id), Held_Agent, Read);
-         return E.Is_Ok (Read)
-           and then Offers_Checks
-             (Item, Held_Agent.Allowed, Task_Id,
-              Apart => (if Tasks.Kind_Policy (Item, Kind_Of (Item, Task_Id), "isolation") /= ""
-                        then Tasks.Kind_Policy (Item, Kind_Of (Item, Task_Id), "isolation")
-                        else Work_Setting (Item, "isolation")) = "workspace");
-      end May_Check_Here;
-
-      --  Whether its agent may propose work: what it is told to answer
-      --  with follows.
-      function May_Propose_Here return Boolean is
-         Held_Agent : Agents.Agent;
-         Read       : E.Error_Info;
-      begin
-         Agents.Read (Item, To_String (Result.Agent_Id), Held_Agent, Read);
-         return E.Is_Error (Read)
-           or else Permissions.Allows (Held_Agent.Allowed, Permissions.Propose_Tasks);
-      end May_Propose_Here;
-
-      --  Whether its task may be split one level more: parts are bounded
-      --  by create_children's max_depth, and agents.max_depth, as helpers
-      --  are.
-      function May_Split_Here return Boolean is
-         Held_Agent : Agents.Agent;
-         Read       : E.Error_Info;
-         Depth      : Natural := 0;
-         Up         : Unbounded_String := To_Unbounded_String (Task_Id);
-      begin
-         Agents.Read (Item, To_String (Result.Agent_Id), Held_Agent, Read);
-         declare
-            Own   : constant Permissions.Grant :=
-              (if E.Is_Ok (Read) then Held_Agent.Allowed (Permissions.Create_Children)
-               else Permissions.Nothing (Permissions.Create_Children));
-            Limit : constant Permissions.Grant :=
-              (if Own.Granted then Own
-               else Permissions.Effective (Item, "", "", Within_Sandbox => False)
-                      (Permissions.Create_Children));
-            Bounds : constant Agents.Limits := Agents.Limits_Of (Item);
-         begin
-            loop
-               declare
-                  Defined_Up : Records.Item;
-                  Read_Up    : E.Error_Info;
-               begin
-                  Tasks.Definition (Item, To_String (Up), Defined_Up, Read_Up);
-                  exit when E.Is_Error (Read_Up) or else Records.Get (Defined_Up, "parent") = ""
-                    or else Depth > 64;
-                  Up := To_Unbounded_String (Records.Get (Defined_Up, "parent"));
-                  Depth := Depth + 1;
-               end;
-            end loop;
-            return Limit.Granted
-              and then Depth + 1 <= Natural'Min (Limit.Max_Depth, Bounds.Max_Depth);
-         end;
-      end May_Split_Here;
-
-      --  A permissions image, its lines a semicolon apart.
-      function On_One_Line (Text : String) return String is
-         Joined : Unbounded_String;
-      begin
-         for Line of Lines_Of (Text) loop
-            if Trim (Line) /= "" then
-               Append (Joined, (if Joined = Null_Unbounded_String then "" else "; ") & Trim (Line));
-            end if;
-         end loop;
-         return To_String (Joined);
-      end On_One_Line;
-
-      --  What its agent may do, said before it does anything: where it may
-      --  write, and whether it may propose work.
-      function Allowed_Here return String is
-         Held_Agent : Agents.Agent;
-         Read       : E.Error_Info;
-      begin
-         Agents.Read (Item, To_String (Result.Agent_Id), Held_Agent, Read);
-         if E.Is_Error (Read) then
-            return "";
-         end if;
-         return ASCII.LF & "## What you may do" & ASCII.LF
-           & "Your permissions: " & On_One_Line (Permissions.Image (Held_Agent.Allowed)) & "."
-           & ASCII.LF
-           & "Change only files write_source or write_specs lets you write; a change"
-           & " to any other file fails the work."
-           & (if Permissions.Allows (Held_Agent.Allowed, Permissions.Propose_Tasks) then ""
-              else " You may not propose tasks or parts.")
-           & ASCII.LF;
-      end Allowed_Here;
-
-      --  Its parts, where an earlier answer split it: each as it stands, so
-      --  that work coming back to it knows what they did.
-      function Its_Parts return String is
-         Text : Unbounded_String;
-      begin
-         for Child of Tasks.Children (Item, Task_Id) loop
-            declare
-               Defined : Records.Item;
-               Read    : E.Error_Info;
-            begin
-               Tasks.Definition (Item, Child, Defined, Read);
-               Append (Text, "- " & Child & " " & Records.Get (Defined, "title") & ": "
-                       & Tasks.State_Of (Item, Child) & ASCII.LF);
-            end;
-         end loop;
-         if Text = Null_Unbounded_String then
-            return "";
-         end if;
-         return ASCII.LF & "## Your parts" & ASCII.LF & To_String (Text)
-           & "Those complete are done: do what is left of the task itself, and do not split"
-           & " it into them again." & ASCII.LF;
-      end Its_Parts;
+         return (if E.Is_Error (Read) then Instructions_Of (Item, Task_Id)
+                 else Instructions_With
+                        (Item, Task_Id, Held_Agent.Allowed,
+                         (if Tasks.Kind_Policy (Item, Kind_Of (Item, Task_Id), "isolation") /= ""
+                          then Tasks.Kind_Policy (Item, Kind_Of (Item, Task_Id), "isolation")
+                          else Work_Setting (Item, "isolation")) = "workspace",
+                         Helpers => Runner in Parenting_Runner'Class));
+      end Instructions_Here;
 
       --  Whether it went over its token budget.
       Over_Budget : Boolean := False;
@@ -2811,9 +2868,7 @@ package body Model_Runner.Framework.Work is
       --  What it is told, and the call, recorded before it is made.
       Context.Build
         (Item, Task_Id, Model, Built, Held,
-         Instructions => Instructions_For (May_Propose_Here, May_Split_Here, May_Write_Here,
-                                           May_Delegate => May_Delegate_Here, May_Check => May_Check_Here)
-                         & Allowed_Here & Its_Parts);
+         Instructions => Instructions_Here);
       if E.Is_Error (Held) then
          Conclude ("blocked", "its context cannot be built: "
                    & Why_Of (Held), "failed");
@@ -2832,7 +2887,7 @@ package body Model_Runner.Framework.Work is
                Number_Of ((if Tasks.Kind_Policy (Item, Kind, "max_tool_calls") /= ""
                            then Tasks.Kind_Policy (Item, Kind, "max_tool_calls")
                            else Scalar (Item, "agents.max_tool_calls")), 0),
-               Task_Id, Isolated),
+               Task_Id, Isolated, Hosted => Runner in Parenting_Runner'Class),
             Invocations.Work_Claim,
             Result.Invocation_Id, Status, Resource_Class => To_String (Model.Resource_Class));
          if E.Is_Ok (Status) then
@@ -3360,6 +3415,22 @@ package body Model_Runner.Framework.Work is
             end if;
             if Missing /= Null_Unbounded_String then
                Keep_Proposals_Aside;
+               --  Kept as an issue, as what an attempt reports is: found
+               --  again by /result beside the rest.
+               declare
+                  Claimed : Results.Result :=
+                    (Kind       => Results.Diagnostic,
+                     Producer   => Result.Agent_Id,
+                     Summary    => To_Unbounded_String
+                                     (Task_Id & " failed: its answer says it changed " & To_String (Missing)
+                                      & ", which is not there"),
+                     Payload    => To_Unbounded_String (Invocations.Claim (Said, "changed_files")),
+                     Provenance => Result.Invocation_Id,
+                     others     => <>);
+                  Held : E.Error_Info;
+               begin
+                  Results.Add (Item, Change, Claimed, Held);
+               end;
                Conclude ("failed", "it says it changed " & To_String (Missing)
                          & ", which is not there", "failed");
                return;
@@ -4232,6 +4303,10 @@ package body Model_Runner.Framework.Work is
             E.Add_Text
               (Status, "detail",
                (if Id /= "" then "only work that waits to be taken in is taken in"
+                elsif Had = Null_Unbounded_String
+                  and then Tasks.State_Of (Item, Task_Id) in "candidate" | "accepted" | "ready"
+                then "it has not been worked on yet, so nothing of it waits to be taken in; /work " & Task_Id
+                     & " does it"
                 elsif Had = Null_Unbounded_String
                 then "it has no workspace -- it wrote in the project itself -- so there is nothing"
                      & " to take in"

@@ -53,6 +53,10 @@ package Model_Runner.Framework.Configurations is
       Directories   : Name_Lists.Vector;
       Files         : Value_Maps.Map;
 
+      --  Files the templates have that are left out because the project
+      --  has sources of its own, by path.
+      Skipped_Files : Name_Lists.Vector;
+
       --  The configuration, at revision 1.
       Configuration : Records.Item;
    end record;

@@ -162,6 +162,15 @@ package Model_Runner.Framework.Work is
       Arguments : String;
       Answer    : String);
 
+   --  What a task's agent is told after its context -- how to answer, the
+   --  tools it holds and what it may do -- as /work would tell it now: the
+   --  text /task context shows.
+   --
+   --  @param Item The store.
+   --  @param Task_Id The task.
+   --  @return The text.
+   function Instructions_Of (Item : Stores.Store; Task_Id : String) return String;
+
    --  Why a task's agent would be left unable to do it, by its own
    --  permissions or the session's sandbox: nothing to do at all, no file
    --  to write where its gate wants one, nothing to read, or no write where
@@ -180,6 +189,12 @@ package Model_Runner.Framework.Work is
    --  @param Host The host.
    --  @param Path The file, relative to the project.
    procedure Keep_Before_Write (Host : in out Child_Host; Path : String);
+
+   --  Whether the work's time is up: past it, no tool call is run.
+   --
+   --  @param Host The host.
+   --  @return True once a bounded work's deadline has passed.
+   function Time_Is_Up (Host : Child_Host) return Boolean;
 
    --  The agent now working: the root, or the innermost open child.
    --

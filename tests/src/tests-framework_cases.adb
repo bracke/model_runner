@@ -6546,6 +6546,9 @@ package body Tests.Framework_Cases is
                     and then To_String (Held.Criteria) = "It reads a file and standard input.",
                     "a requirement was not revised");
          end;
+         --  A test linked by its path is a file the project has.
+         Dirs.Create_Path (Dirs.Containing_Directory (S.Root (Store)) & "/tests");
+         Put_File (Dirs.Containing_Directory (S.Root (Store)) & "/tests/input", "input" & LF);
          Say (Nt.Requirement, "link|" & Req & "|test|tests/input");
          Assert (Nt.Links (Store, Nt.Requirement, Req, Nt.Test).Contains ("tests/input"),
                  "a requirement was not linked");
@@ -8905,6 +8908,33 @@ package body Tests.Framework_Cases is
                   Dirs.End_Search (Search);
                   Assert (Kept, "a file written in the project was not kept as it was before");
                end;
+               --  The copy is listed, put back over the project's file, and
+               --  removed.
+               declare
+                  Kept_Store : S.Store;
+                  Got        : E.Error_Info;
+                  Copies     : Model_Runner.Framework.Name_Lists.Vector;
+               begin
+                  S.Open_To_Read (Kept_Store, Project, Got);
+                  Copies := Model_Runner.Framework.Workspaces.Kept_Copies (Kept_Store);
+                  Assert (not Copies.Is_Empty
+                          and then Model_Runner.Framework.Workspaces.Kept_Files
+                                     (Kept_Store, Copies.First_Element).Contains ("src/kept.txt"),
+                          "a kept copy was not listed with its file");
+                  Model_Runner.Framework.Workspaces.Restore_Kept (Kept_Store, Copies.First_Element, Got);
+                  Assert (E.Is_Ok (Got)
+                          and then Ada.Strings.Fixed.Trim
+                                     (Read_Whole (Project & "/src/kept.txt"), Ada.Strings.Both) = "before",
+                          "a kept copy was not put back");
+                  Model_Runner.Framework.Workspaces.Drop_Kept (Kept_Store, Copies.First_Element, Got);
+                  Assert (E.Is_Ok (Got)
+                          and then not Model_Runner.Framework.Workspaces.Kept_Copies (Kept_Store)
+                                         .Contains (Copies.First_Element),
+                          "a kept copy was not removed");
+                  Model_Runner.Framework.Workspaces.Drop_Kept (Kept_Store, "../escape", Got);
+                  Assert (E.Is_Error (Got), "a name outside the kept copies was removed");
+                  S.Close (Kept_Store);
+               end;
             end if;
             Dirs.Delete_File (Project & "/src/kept.txt");
          when Fails_Twice =>
@@ -9382,11 +9412,12 @@ package body Tests.Framework_Cases is
       S.Commit (Store, Change, Status);
 
       Cx.Build (Store, To_String (Id), Cx.Profile (Store, ""), Built, Status);
-      Assert (E.Is_Ok (Status) and then Holds ("What its files declare")
-              and then Holds ("Parser.Next_Token")
+      --  A file given whole is not listed again by its symbols.
+      Assert (E.Is_Ok (Status) and then Holds ("The file src/parser.ads")
+              and then not Holds ("Parser.Next_Token  src/parser.ads")
               and then Holds ("The tests that bear on it")
               and then Holds ("tests/parser_tests.adb"),
-              "the context does not say what the files declare or which tests bear on them");
+              "the context does not give the files, or repeats their symbols, or names no tests");
       Assert (not Holds ("What the last attempt left"), "a first attempt was told of a last");
 
       --  An attempt whose verification fails; the next is told why.

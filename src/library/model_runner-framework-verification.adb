@@ -483,7 +483,8 @@ package body Model_Runner.Framework.Verification is
       Given    : Name_Lists.Vector := Name_Lists.Empty_Vector;
       Stands_For : String := "";
       Offline  : Boolean := False;
-      Workspace : String := "")
+      Workspace : String := "";
+      Within   : Natural := 0)
    is
       Settings : constant Records.Item := Config (Item);
       Text     : constant String := Records.Get (Settings, "profile." & Profile);
@@ -696,6 +697,16 @@ package body Model_Runner.Framework.Verification is
                      Prior : Records.Item;
                      Read  : E.Error_Info;
                      Same  : Boolean;
+
+                     --  Whether a value given to the checks is one a command
+                     --  names: one none names changes nothing they do.
+                     function Used (Field : String) return Boolean is
+                        Name : constant String := Field (Field'First + 6 .. Field'Last);
+                     begin
+                        return Name = "scope" or else (for some Index in 1 .. Length (Checks) =>
+                                  Ada.Strings.Fixed.Index
+                                    (To_String (Element (Checks, Index).Command), "${" & Name & "}") > 0);
+                     end Used;
                   begin
                      Stores.Read (Item, Verification_Area, Id, Prior, Read);
                      Same := E.Is_Ok (Read)
@@ -712,13 +723,17 @@ package body Model_Runner.Framework.Verification is
                      --  The same values given to its commands, none more.
                      if Same then
                         for Index in 1 .. Records.Field_Count (Prior) loop
-                           if Starts (Records.Field_Name (Prior, Index), "given.") then
+                           if Starts (Records.Field_Name (Prior, Index), "given.")
+                             and then Used (Records.Field_Name (Prior, Index))
+                           then
                               Same := Same and then Records.Get (Value, Records.Field_Name (Prior, Index))
                                                     = Records.Get (Prior, Records.Field_Name (Prior, Index));
                            end if;
                         end loop;
                         for Index in 1 .. Records.Field_Count (Value) loop
-                           if Starts (Records.Field_Name (Value, Index), "given.") then
+                           if Starts (Records.Field_Name (Value, Index), "given.")
+                             and then Used (Records.Field_Name (Value, Index))
+                           then
                               Same := Same and then Records.Has (Prior, Records.Field_Name (Value, Index));
                            end if;
                         end loop;
@@ -766,6 +781,10 @@ package body Model_Runner.Framework.Verification is
                --  have.
                if Next.Timeout > 0 then
                   Own.Timeout := Next.Timeout;
+               end if;
+               --  Not past the time the run has left.
+               if Within > 0 then
+                  Own.Timeout := Positive'Max (1, Natural'Min (Own.Timeout, Within));
                end if;
                Own.Keep_Whole := Next.Keep_Whole;
                loop
@@ -1098,6 +1117,7 @@ package body Model_Runner.Framework.Verification is
       Held   : Records.Item;
       Read   : E.Error_Info;
       Result : Name_Lists.Vector;
+      Tails  : Name_Lists.Vector;
 
       function Split_On (Text : String; Separator : Character) return Name_Lists.Vector is
          Found : Name_Lists.Vector;
@@ -1151,9 +1171,18 @@ package body Model_Runner.Framework.Verification is
                begin
                   Results.Read (Item, Parts (7), Log, Got);
                   if E.Is_Ok (Got) and then Length (Log.Payload) > 0 then
-                     Append (Text, ":" & ASCII.LF
-                             & Ada.Strings.Fixed.Trim (Last_Lines (To_String (Log.Payload)),
-                                                       Ada.Strings.Right));
+                     declare
+                        Tail : constant String :=
+                          Ada.Strings.Fixed.Trim (Last_Lines (To_String (Log.Payload)), Ada.Strings.Right);
+                     begin
+                        --  The same ending as a check's above: said once.
+                        if Tails.Contains (Tail) then
+                           Append (Text, ", ending as the one above");
+                        else
+                           Tails.Append (Tail);
+                           Append (Text, ":" & ASCII.LF & Tail);
+                        end if;
+                     end;
                   end if;
                   Result.Append (To_String (Text));
                end;
@@ -1880,6 +1909,18 @@ package body Model_Runner.Framework.Verification is
       end loop;
       return True;
    end Ran_Tests;
+
+   --------------------
+   -- Found_No_Tests --
+   --------------------
+
+   function Found_No_Tests (Item : Stores.Store; Evidence : String) return Boolean is
+      Value : Records.Item;
+      Read  : E.Error_Info;
+   begin
+      Stores.Read (Item, Verification_Area, Evidence, Value, Read);
+      return E.Is_Ok (Read) and then Showing (Item, Value) = Found_None;
+   end Found_No_Tests;
 
    -------------
    -- Support --

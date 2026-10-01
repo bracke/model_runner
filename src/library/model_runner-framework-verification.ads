@@ -161,6 +161,8 @@ package Model_Runner.Framework.Verification is
    --  @param Workspace A workspace's tree to run it in rather than the
    --    project: the work before it is taken in. Its evidence says so and
    --    names the tree's own revision, and never counts as the project's.
+   --  @param Within Seconds left for the whole run where it is bounded --
+   --    an agent's own time -- no check running past them; 0 for no bound.
    procedure Run_Profile
      (Item     : Stores.Store;
       Change   : in out Stores.Transaction;
@@ -172,7 +174,8 @@ package Model_Runner.Framework.Verification is
       Given    : Name_Lists.Vector := Name_Lists.Empty_Vector;
       Stands_For : String := "";
       Offline  : Boolean := False;
-      Workspace : String := "");
+      Workspace : String := "";
+      Within   : Natural := 0);
 
    --  How widely a task's work is verified, and with what.
    type Choice is record
@@ -223,6 +226,14 @@ package Model_Runner.Framework.Verification is
    --  @param Requirement The requirement.
    --  @return Why, or the empty string when the evidence verifies it.
    function Why_Not_Verified (Item : Stores.Store; Requirement : String) return String;
+
+   --  Whether a piece of evidence ran tests and the runner found none to
+   --  run, as its log says: a pass that shows nothing.
+   --
+   --  @param Item The store.
+   --  @param Evidence The evidence.
+   --  @return True when it found none.
+   function Found_No_Tests (Item : Stores.Store; Evidence : String) return Boolean;
 
    --  Why a piece of evidence did not pass, a line each required check
    --  that failed: what it ran, how it ended, the result its log is kept

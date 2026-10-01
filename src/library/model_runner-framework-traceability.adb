@@ -537,7 +537,14 @@ package body Model_Runner.Framework.Traceability is
                         then Weaker (Weaker (Sure, Next.Sure), Repository.Probable)
                         else Weaker (Sure, Next.Sure));
                   begin
-                     if Forward (Kind) and then To_String (Next.From) = Node then
+                     --  A unit only probably reached -- one that uses what
+                     --  changed -- is reached itself, not every symbol beside
+                     --  the use: those are reached through what they use.
+                     if Kind = "declares" and then To_String (Next.From) = Node
+                       and then not Repository."=" (Sure, Repository.Certain)
+                     then
+                        null;
+                     elsif Forward (Kind) and then To_String (Next.From) = Node then
                         if Reach (To_String (Next.To), Along) then
                            Queue.Append (To_String (Next.To));
                         end if;

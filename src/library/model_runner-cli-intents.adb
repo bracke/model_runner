@@ -7,6 +7,7 @@ with Ada.Text_IO;
 
 with Hostkit.Fs;
 
+with Model_Runner.CLI.Choosers;
 with Model_Runner.Errors;
 with Model_Runner.Framework.Bootstrap;
 with Model_Runner.Framework.Configurations;
@@ -168,7 +169,8 @@ package body Model_Runner.CLI.Intents is
      (Store  : in out S.Store;
       Kind   : Nt.Intent_Kind;
       Id     : String;
-      Screen : in out Pres.Console)
+      Screen : in out Pres.Console;
+      Said   : Boolean := True)
    is
       package Cf renames Model_Runner.Framework.Configurations;
       Rulings : Names.Vector := Nt.Also_Governs (Store, Kind, Id);
@@ -187,6 +189,20 @@ package body Model_Runner.CLI.Intents is
             Equal : constant Natural := Ada.Strings.Fixed.Index (One, " = ");
             Over  : constant Natural := Ada.Strings.Fixed.Index (One, " (over ");
          begin
+            --  Ruling without holding over it, and the configuration says
+            --  otherwise: the disagreement said now, with both ways out.
+            if Equal > One'First and then Over = 0 and then E.Is_Ok (Read)
+              and then Model_Runner.Framework.Records.Has (Config, One (One'First .. Equal - 1))
+              and then Model_Runner.Framework.Records.Get (Config, One (One'First .. Equal - 1))
+                         /= One (Equal + 3 .. One'Last)
+            then
+               Pres.Put_Note (Screen, "cli.intent.ruling_disagrees",
+                              [Loc.Named ("name", Id),
+                               Loc.Named ("value", One (One'First .. Equal - 1)),
+                               Loc.Named ("detail", One (Equal + 3 .. One'Last)),
+                               Loc.Named ("other", Model_Runner.Framework.Records.Get
+                                                     (Config, One (One'First .. Equal - 1)))]);
+            end if;
             if Equal > One'First and then Over > Equal
               and then Ada.Strings.Fixed.Index (One (Over .. One'Last), "CONFIG") > 0
             then
@@ -204,7 +220,9 @@ package body Model_Runner.CLI.Intents is
                      if E.Is_Ok (Done) then
                         Cf.Reconfigure (Store, Planned, Revision, Done);
                      end if;
-                     if E.Is_Ok (Done) then
+                     if E.Is_Ok (Done) and then not Said then
+                        null;
+                     elsif E.Is_Ok (Done) then
                         Pres.Put_Message (Screen, "cli.intent.ruling_applied",
                                           [Loc.Named ("name", Id), Loc.Named ("value", Setting & " = " & Ruling)]);
                      else
@@ -332,6 +350,33 @@ package body Model_Runner.CLI.Intents is
    -- Run --
    ---------
 
+   --  A yes or no read from the person: anything else asked again, a
+   --  command typed in its place said and not run, and no answer a no.
+   function Answered_Yes (Screen : in out Pres.Console) return Boolean is
+   begin
+      for Asked in 1 .. 3 loop
+         declare
+            Answer : constant String :=
+              Ada.Characters.Handling.To_Lower (Ada.Strings.Fixed.Trim (Ada.Text_IO.Get_Line, Ada.Strings.Both));
+         begin
+            if Answer'Length > 1 and then Answer (Answer'First) = '/' then
+               Pres.Put_Note (Screen, "cli.choose.command_typed",
+                              [Loc.Named ("value", Answer), Loc.Named ("name", "a yes or no")]);
+               return False;
+            elsif Answer in "y" | "yes" | "j" | "ja" then
+               return True;
+            elsif Answer in "" | "n" | "no" | "nej" or else Asked = 3 then
+               return False;
+            end if;
+            Pres.Put_Note (Screen, "cli.choose.yes_or_no", [Loc.Named ("value", Answer)]);
+         end;
+      end loop;
+      return False;
+   exception
+      when Ada.Text_IO.End_Error =>
+         return False;
+   end Answered_Yes;
+
    procedure Run
      (Store  : in out Model_Runner.Framework.Stores.Store;
       Kind   : Model_Runner.Framework.Intent.Intent_Kind;
@@ -354,7 +399,11 @@ package body Model_Runner.CLI.Intents is
             if Pair'Length > Name'Length
               and then Pair (Pair'First .. Pair'First + Name'Length) = Name & "="
             then
-               return Pair (Pair'First + Name'Length + 1 .. Pair'Last);
+               --  What it overrides is named as the project names it --
+               --  config is CONFIG, dec-1 is DEC-1 -- in any case typed.
+               return (if Name = "overrides"
+                       then Ada.Characters.Handling.To_Upper (Pair (Pair'First + Name'Length + 1 .. Pair'Last))
+                       else Pair (Pair'First + Name'Length + 1 .. Pair'Last));
             end if;
          end loop;
          return "";
@@ -619,7 +668,7 @@ package body Model_Runner.CLI.Intents is
                   Granted (Tr.Reconsideration) := True;
                end if;
                --  Retired and replaced: the replacement is the one to act on.
-               if Next in "accepted" | "rejected"
+               if Next /= "obsolete"
                  and then Nt.State_Of (Store, Kind, Word (2)) in "obsolete" | "superseded"
                then
                   declare
@@ -648,6 +697,23 @@ package body Model_Runner.CLI.Intents is
                   Pres.Put_Note (Screen, "cli.intent.already", [Loc.Named ("name", Word (2)),
                                                                 Loc.Named ("value", Next)]);
                   return;
+               end if;
+               --  Obsolete is final: asked first, where there is someone to ask.
+               if Next = "obsolete" and then Nt.State_Of (Store, Kind, Word (2)) /= ""
+                 and then Model_Runner.CLI.Choosers.Is_Available (Screen)
+               then
+                  declare
+                     Held : Nt.Entity;
+                     Got  : E.Error_Info;
+                  begin
+                     Nt.Read (Store, Kind, Word (2), Held, Got);
+                     Pres.Put_Message (Screen, "cli.intent.obsolete_confirm",
+                                       [Loc.Named ("name", Word (2)), Loc.Named ("detail", To_String (Held.Title))]);
+                     if not Answered_Yes (Screen) then
+                        Pres.Put_Message (Screen, "cli.project.cancel.kept", [Loc.Named ("name", Word (2))]);
+                        return;
+                     end if;
+                  end;
                end if;
                Nt.Move (Store, Change, Kind, Word (2), Next, Granted, Status, Actor => Tr.User);
                if E.Is_Ok (Status) then
@@ -974,8 +1040,69 @@ package body Model_Runner.CLI.Intents is
          end if;
 
       elsif Action = "link" then
+         --  The relation as /trace says it -- implemented_by, tested_by --
+         --  is the one it names; left out before a file or a symbol, it is
+         --  implementation.
+         if Natural (Plain.Length) >= 3 then
+            declare
+               Said : constant String := Lower (Word (3));
+            begin
+               if Said in "implemented_by" | "implements" | "implemented" then
+                  Plain.Replace_Element (3, "implementation");
+               elsif Said in "tested_by" | "tests" | "tested" then
+                  Plain.Replace_Element (3, "test");
+               elsif Said in "depends_on" | "depends" then
+                  Plain.Replace_Element (3, "dependency");
+               elsif Said in "served_by" | "tasks" then
+                  Plain.Replace_Element (3, "task");
+               elsif Natural (Plain.Length) = 3
+                 and then Said not in "dependency" | "component" | "implementation" | "task" | "test"
+                                    | "verification"
+               then
+                  Plain.Insert (3, "implementation");
+               end if;
+            end;
+         end if;
+         --  A place as /refs gives it, src/x.py:20, is its file.
+         if Natural (Plain.Length) = 4 and then Lower (Word (3)) in "implementation" | "test" then
+            declare
+               Target : constant String := Word (4);
+               Colon  : constant Natural := Ada.Strings.Fixed.Index (Target, ":", Ada.Strings.Backward);
+            begin
+               if Colon > Target'First and then Colon < Target'Last
+                 and then (for all C of Target (Colon + 1 .. Target'Last) => C in '0' .. '9')
+               then
+                  Plain.Replace_Element (4, Target (Target'First .. Colon - 1));
+               end if;
+            end;
+         end if;
          Needs (4, "link ID RELATION TARGET, whose RELATION is dependency, component,"
-                & " implementation, task, test or verification");
+                & " implementation, task, test or verification -- as /req link REQ-001 implementation"
+                & " src/parser.c");
+         --  A directory, or a path that is no file here, is nothing to
+         --  point at: refused, as a name nothing is called is.
+         if E.Is_Ok (Status) and then Lower (Word (3)) in "implementation" | "test"
+           and then Ada.Strings.Fixed.Index (From (4), "/") > 0
+         then
+            declare
+               Project : constant String := Ada.Directories.Containing_Directory (S.Root (Store));
+               Path    : constant String :=
+                 Hostkit.Fs.Join (Project, Model_Runner.Framework.Repository.Relative_Path (Project, From (4)));
+            begin
+               if not Ada.Directories.Exists (Path) then
+                  Status := E.Make (E.Framework_Input_Invalid);
+                  E.Add_Text (Status, "name", "what implements it");
+                  E.Add_Text (Status, "value", From (4));
+                  E.Add_Text (Status, "detail", "there is no such file here; a file is named by its path"
+                              & " in the project, and /sym NAME finds a symbol");
+               elsif Ada.Directories."=" (Ada.Directories.Kind (Path), Ada.Directories.Directory) then
+                  Status := E.Make (E.Framework_Input_Invalid);
+                  E.Add_Text (Status, "name", "what implements it");
+                  E.Add_Text (Status, "value", From (4));
+                  E.Add_Text (Status, "detail", "it is a directory: a link names a file in it, or a symbol");
+               end if;
+            end;
+         end if;
          if E.Is_Ok (Status) then
             declare
                Relation : Nt.Link_Kind := Nt.Dependency;
@@ -1445,7 +1572,7 @@ package body Model_Runner.CLI.Intents is
                      Status := E.Make (E.Framework_Input_Invalid);
                      E.Add_Text (Status, "name", "the setting a decision governs");
                      E.Add_Text (Status, "value", Setting);
-                     E.Add_Text (Status, "detail", "no setting is called so; a decision governs one config"
+                     E.Add_Text (Status, "detail", "no setting is called so; a decision governs one /config"
                                  & " shows" & (if Near = Null_Unbounded_String then ""
                                                else ", as " & To_String (Near)));
                   elsif Model_Runner.Framework.Records.Has (Config, Setting)
@@ -1496,7 +1623,8 @@ package body Model_Runner.CLI.Intents is
                                  [Loc.Named ("name", Word (2)),
                                   Loc.Named ("value", Nt.Governs (Store, Kind, Word (2))),
                                   Loc.Named ("other", Word_Of_Command (Kind))]);
-               Apply_Rulings (Store, Kind, Word (2), Screen);
+               --  Its governing just said is not said again as applied.
+               Apply_Rulings (Store, Kind, Word (2), Screen, Said => False);
                --  What else it rules on stays: said, so nothing seems lost.
                for Other of Nt.Also_Governs (Store, Kind, Word (2)) loop
                   Pres.Put_Message (Screen, "cli.intent.governs_still",
@@ -1590,7 +1718,9 @@ package body Model_Runner.CLI.Intents is
                Field ("revision", Ada.Strings.Fixed.Trim (Natural'Image (Held.Revision), Ada.Strings.Both));
                Field ("scope", To_String (Held.Scope));
                Field ("text", To_String (Held.Text));
-               Field ("criteria", To_String (Held.Criteria));
+               if Length (Held.Criteria) > 0 then
+                  Field ("criteria", To_String (Held.Criteria));
+               end if;
                if Nt.Governs (Store, Kind, Named) /= "" then
                   Field ((if To_String (Held.State) in "obsolete" | "superseded" | "rejected"
                           then "governed" else "governs"),

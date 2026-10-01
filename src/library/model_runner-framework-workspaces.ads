@@ -166,6 +166,41 @@ package Model_Runner.Framework.Workspaces is
    --  @return The directory; there only where the work changed something.
    function Kept_Copy (Item : Stores.Store; Id : String) return String;
 
+   --  The copies kept of work given up or overwritten, by name: each a
+   --  directory under the project's runtime -- given-up-*, overwritten-*,
+   --  replaced-* -- newest first.
+   --
+   --  @param Item The store.
+   --  @return Their names.
+   function Kept_Copies (Item : Stores.Store) return Name_Lists.Vector;
+
+   --  The files a kept copy holds, as paths within the project.
+   --
+   --  @param Item The store.
+   --  @param Name The copy, as Kept_Copies names it.
+   --  @return The paths, sorted; none when there is no such copy.
+   function Kept_Files (Item : Stores.Store; Name : String) return Name_Lists.Vector;
+
+   --  Put a kept copy's files back in the project, each over what is there.
+   --
+   --  @param Item The store.
+   --  @param Name The copy.
+   --  @param Status Framework_Not_Found when there is no such copy.
+   procedure Restore_Kept
+     (Item   : Stores.Store;
+      Name   : String;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  Remove a kept copy.
+   --
+   --  @param Item The store.
+   --  @param Name The copy.
+   --  @param Status Framework_Not_Found when there is no such copy.
+   procedure Drop_Kept
+     (Item   : Stores.Store;
+      Name   : String;
+      Status : out Model_Runner.Errors.Error_Info);
+
    --  Give a workspace up: what it changed copied to Kept_Copy, its files
    --  removed and its record marked abandoned.
    --

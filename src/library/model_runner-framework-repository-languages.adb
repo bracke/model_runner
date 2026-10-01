@@ -278,10 +278,33 @@ package body Model_Runner.Framework.Repository.Languages is
       end Visible;
 
       Found : Relation_Vectors.Vector;
+
+      --  Where this file declares a name, as NAME@LINE: a declaration is
+      --  not a use of it, nor of another of the same name.
+      Declared : Name_Lists.Vector;
+
+      function Declaring (Name : String; Line : Positive) return Boolean
+      is (Declared.Contains (Name & "@" & Image (Line)));
+
+      --  A method called on something, as x.name (: whatever x is, a
+      --  probable use of every method so called.
+      function Called_On (At_Index : Positive) return Boolean
+      is (At_Index > 1 and then At_Index < Count and then Is_Mark (Tokens (At_Index - 1), ".")
+          and then Is_Mark (Tokens (At_Index + 1), "("));
    begin
       if Unit = "" then
          return;
       end if;
+      for Item of Into.Symbols loop
+         if To_String (Item.Path) = Path then
+            declare
+               Full : constant String := To_String (Item.Name);
+               Dot  : constant Natural := Ada.Strings.Fixed.Index (Full, ".", Ada.Strings.Backward);
+            begin
+               Declared.Append ((if Dot = 0 then Full else Full (Dot + 1 .. Full'Last)) & "@" & Image (Item.Line));
+            end;
+         end if;
+      end loop;
       Seen.Append (Unit);
       for Link of Into.Relations loop
          if Link.Kind = Depends_On and then To_String (Link.From) = Unit then
@@ -296,9 +319,13 @@ package body Model_Runner.Framework.Repository.Languages is
             Owner : constant String := (if Dot = 0 then "" else Full (Full'First .. Dot - 1));
             Last  : constant String := (if Dot = 0 then Full else Full (Dot + 1 .. Full'Last));
          begin
-            if Dot > 0 and then To_String (Item.Path) /= Path and then Visible (Owner) then
+            if Dot > 0 then
                for At_Index in 1 .. Count loop
-                  if Is_Word (Tokens (At_Index), Last) then
+                  if Is_Word (Tokens (At_Index), Last)
+                    and then not Declaring (Last, Tokens (At_Index).Line)
+                    and then (Visible (Owner) or else To_String (Item.Path) = Path
+                              or else (To_String (Item.Kind) = "method" and then Called_On (At_Index)))
+                  then
                      Found.Append
                        (Relation'(Kind => References, From => U (Path), To => Item.Name,
                          Source => Heuristic, Sure => Probable,
