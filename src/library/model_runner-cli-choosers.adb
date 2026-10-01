@@ -641,6 +641,16 @@ package body Model_Runner.CLI.Choosers is
       Before : constant Natural := Model_Runner.Platform.Signals.Interrupts;
    begin
       Ended := False;
+      --  At a terminal, read raw: Escape and Ctrl-C give up at once.
+      declare
+         Ending : Line_End;
+         Raw    : constant String := Typed_Line (Ending);
+      begin
+         if Ending /= Unavailable then
+            Ended := Ending /= Entered;
+            return Raw;
+         end if;
+      end;
       declare
          Typed : constant String := Ada.Text_IO.Get_Line;
       begin

@@ -1,5 +1,6 @@
 with Ada.Directories;
 with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
@@ -631,7 +632,7 @@ package body Model_Runner.CLI.Init is
                                        & (if Secret then Pres.Message_Value (Screen, "cli.init.secret")
                                           else Cf.Value_Maps.Element (Position))
                                        --  The command true is a check of nothing, not a yes.
-                                       & (if Id in "check_command" | "check_program"
+                                       & (if Id = "check_command"
                                             and then Cf.Value_Maps.Element (Position) = "true"
                                           then " (the command true: nothing is checked yet)" else ""));
                end;
@@ -698,21 +699,62 @@ package body Model_Runner.CLI.Init is
             --  Inside a repository whose root is further up: said, as what
             --  lies above -- its documents, its version control's view -- is
             --  outside this project.
+            --  Projects inside this one -- a monorepo's packages started
+            --  apart -- keep their own state: their documents would be read
+            --  twice, by each, so said.
             declare
-               Up : Unbounded_String := To_Unbounded_String (Ada.Directories.Full_Name (Directory));
-            begin
-               if not Ada.Directories.Exists (Hostkit.Fs.Join (To_String (Up), ".git")) then
-                  for Level in 1 .. 6 loop
-                     exit when To_String (Up) = "/" or else To_String (Up) = "";
-                     Up := To_Unbounded_String (Ada.Directories.Containing_Directory (To_String (Up)));
-                     if Ada.Directories.Exists (Hostkit.Fs.Join (To_String (Up), ".git")) then
-                        Say ("cli.init.inside_repository", [Loc.Named ("path", To_String (Up))]);
-                        Append (Warned, Pres.Next_Step_Value
-                                          (Screen, "cli.init.inside_repository", [Loc.Named ("path", To_String (Up))])
-                                        & ASCII.LF);
-                        exit;
-                     end if;
+               Nested : Unbounded_String;
+
+               procedure Look (Under : String; Relative : String; Depth : Natural) is
+                  use Ada.Directories;
+                  Search : Search_Type;
+                  Next   : Directory_Entry_Type;
+               begin
+                  Start_Search (Search, Under, "", [Ada.Directories.Directory => True, others => False]);
+                  while More_Entries (Search) loop
+                     Get_Next_Entry (Search, Next);
+                     declare
+                        Name : constant String := Simple_Name (Next);
+                        Path : constant String := (if Relative = "" then Name else Relative & "/" & Name);
+                     begin
+                        if Name not in "." | ".." | ".git" | ".model_runner" | "node_modules" | "target"
+                          | "obj" | "bin" | "alire" | "build" | "dist" | ".venv" | "venv"
+                        then
+                           if Exists (Hostkit.Fs.Join (Full_Name (Next), ".model_runner")) then
+                              Append (Nested, (if Nested = Null_Unbounded_String then "" else ", ") & Path);
+                           elsif Depth > 1 then
+                              Look (Full_Name (Next), Path, Depth - 1);
+                           end if;
+                        end if;
+                     end;
                   end loop;
+                  End_Search (Search);
+               exception
+                  when others =>
+                     null;
+               end Look;
+            begin
+               Look (Ada.Directories.Full_Name (Directory), "", 3);
+               if Nested /= Null_Unbounded_String then
+                  Say ("cli.init.nested_projects", [Loc.Named ("detail", To_String (Nested))]);
+                  Append (Warned, Pres.Next_Step_Value
+                                    (Screen, "cli.init.nested_projects", [Loc.Named ("detail", To_String (Nested))])
+                                  & ASCII.LF);
+               end if;
+            end;
+
+            --  Found as Git finds it, so /init and /git agree.
+            declare
+               Here : constant String := Ada.Directories.Full_Name (Directory);
+               Top  : constant String :=
+                 (if Ada.Directories.Exists (Hostkit.Fs.Join (Here, ".git")) then ""
+                  else Model_Runner.Framework.Git.Top_Level (Here));
+            begin
+               if Top /= "" and then Ada.Directories.Full_Name (Top) /= Here then
+                  Say ("cli.init.inside_repository", [Loc.Named ("path", Top)]);
+                  Append (Warned, Pres.Next_Step_Value
+                                    (Screen, "cli.init.inside_repository", [Loc.Named ("path", Top)])
+                                  & ASCII.LF);
                end if;
             exception
                when others =>
@@ -775,17 +817,44 @@ package body Model_Runner.CLI.Init is
                                 and then not Refused.Contains (Command)
                               then
                                  Refused.Append (Command);
-                                 Say ("cli.init.check_no_crate",
-                                      [Loc.Named ("name", To_String (One.Label)), Loc.Named ("value", Command),
-                                       Loc.Named ("path", To_String (One.Directory)),
-                                       Loc.Named ("other", Name)]);
-                                 Append (Warned, Pres.Next_Step_Value
-                                                   (Screen, "cli.init.check_no_crate",
-                                                    [Loc.Named ("name", To_String (One.Label)),
-                                                     Loc.Named ("value", Command),
-                                                     Loc.Named ("path", To_String (One.Directory)),
-                                                     Loc.Named ("other", Name)])
-                                                 & ASCII.LF);
+                                 declare
+                                    --  The whole profile again, the checks that
+                                    --  work kept and the ones in that directory
+                                    --  one check to be given: the setting is
+                                    --  replaced whole, so none is lost by it.
+                                    Kept : Unbounded_String;
+                                 begin
+                                    for Other in 1 .. Vf.Length (Checks) loop
+                                       declare
+                                          That : constant Vf.Check := Vf.Element (Checks, Other);
+                                       begin
+                                          if To_String (That.Directory) /= To_String (One.Directory) then
+                                             Append (Kept, To_String (That.Label)
+                                                           & (if To_String (That.Directory) in "" | "." then ""
+                                                              else " in " & To_String (That.Directory))
+                                                           & ": " & To_String (That.Command) & "; ");
+                                          end if;
+                                       end;
+                                    end loop;
+                                    --  Offered with the plan, too: the checks
+                                    --  that work, without the one that cannot.
+                                    if Length (Kept) > 2 then
+                                       Fixes.Include (Name, Slice (Kept, 1, Length (Kept) - 2));
+                                    end if;
+                                    Append (Kept, To_String (One.Label) & ": COMMAND");
+                                    Say ("cli.init.check_no_crate",
+                                         [Loc.Named ("name", To_String (One.Label)), Loc.Named ("value", Command),
+                                          Loc.Named ("path", To_String (One.Directory)),
+                                          Loc.Named ("other", Name), Loc.Named ("detail", To_String (Kept))]);
+                                    Append (Warned, Pres.Next_Step_Value
+                                                      (Screen, "cli.init.check_no_crate",
+                                                       [Loc.Named ("name", To_String (One.Label)),
+                                                        Loc.Named ("value", Command),
+                                                        Loc.Named ("path", To_String (One.Directory)),
+                                                        Loc.Named ("other", Name),
+                                                        Loc.Named ("detail", To_String (Kept))])
+                                                    & ASCII.LF);
+                                 end;
                               end if;
                               if Why = "" and then Missing /= "" and then not Refused.Contains (Command) then
                                  Refused.Append (Command);
@@ -873,9 +942,18 @@ package body Model_Runner.CLI.Init is
                   Allow   : Unbounded_String;
                begin
                   for Position in Fixes.Iterate loop
-                     Append (Allow, (if Allow = Null_Unbounded_String then "" else " ")
-                                    & Cf.Value_Maps.Key (Position) & "="
-                                    & Cf.Value_Maps.Element (Position));
+                     declare
+                        Key : constant String := Cf.Value_Maps.Key (Position);
+                     begin
+                        --  Added to a set: said as /reconfigure says it.
+                        Append (Allow, (if Allow = Null_Unbounded_String then "" else "; ")
+                                       & (if Key (Key'Last) = '+'
+                                          then "add " & Key (Key'First .. Key'Last - 1) & " "
+                                               & Ada.Strings.Fixed.Translate
+                                                   (Cf.Value_Maps.Element (Position),
+                                                    Ada.Strings.Maps.To_Mapping (",", " "))
+                                          else Key & "=" & Cf.Value_Maps.Element (Position)));
+                     end;
                   end loop;
                   Choosers.Append
                     (Answers, (Label      => To_Unbounded_String

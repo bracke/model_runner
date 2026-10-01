@@ -233,6 +233,11 @@ package body Model_Runner.Framework.Permissions is
       Result : Permission_Set := Nothing;
    begin
       Present := False;
+      --  A level said to grant none: nothing, not the level above's grant.
+      if Records.Get (Config, "map.permission." & Level) = "none" then
+         Present := True;
+         return Nothing;
+      end if;
       for Item_Kind in Capability loop
          declare
             Field : constant String := "map.permission." & Level & "." & Word (Item_Kind);
@@ -935,9 +940,37 @@ package body Model_Runner.Framework.Permissions is
          end;
       end Last_Part;
 
+      --  The path to try: for a file to be written, one under the roots it
+      --  may write -- docs/x.md, not x.md where only docs/ is granted.
+      function Suggested return String is
+         Tail  : constant String := Last_Part;
+         Roots : constant Name_Lists.Vector := Allowed (Write_Source).Roots;
+      begin
+         if not Writing or else Tail = "" or else Roots.Is_Empty
+           or else (for some Root of Roots =>
+                      Tail = Root
+                      or else (Root'Length > 0 and then Tail'Length > Root'Length
+                               and then Tail (Tail'First .. Tail'First + Root'Length - 1) = Root
+                               and then (Root (Root'Last) = '/' or else Tail (Tail'First + Root'Length) = '/')))
+         then
+            return Tail;
+         end if;
+         declare
+            First : constant String := Roots.First_Element;
+            Slash : constant Natural := Ada.Strings.Fixed.Index (Tail, "/", Ada.Strings.Backward);
+            Leaf  : constant String := (if Slash = 0 then Tail else Tail (Slash + 1 .. Tail'Last));
+         begin
+            --  A root that is a file is the file to write; a directory, the
+            --  name under it.
+            return (if First (First'Last) = '/' then First & Leaf
+                    elsif Ada.Strings.Fixed.Index (First, ".") > 0 then First
+                    else First & "/" & Leaf);
+         end;
+      end Suggested;
+
       Outside : constant String :=
         Path & " is outside the project; paths are relative to it"
-        & (if Last_Part = "" then "" else ": try " & Last_Part & ", or list_directory . to see them");
+        & (if Suggested = "" then "" else ": try " & Suggested & ", or list_directory . to see them");
       Parts   : Name_Lists.Vector;
       Start   : Natural := Path'First;
 
@@ -1080,5 +1113,19 @@ package body Model_Runner.Framework.Permissions is
       return (if Ada.Strings.Unbounded.Length (Said) = 0 then "nothing"
               else Ada.Strings.Unbounded.To_String (Said));
    end In_Words;
+
+   ----------------
+   -- Value_Said --
+   ----------------
+
+   function Value_Said (Subject, Value : String) return String is
+   begin
+      if Value = "" and then Subject'Length > 15
+        and then Subject (Subject'First .. Subject'First + 14) = "map.permission."
+      then
+         return "granted (no limits)";
+      end if;
+      return Value;
+   end Value_Said;
 
 end Model_Runner.Framework.Permissions;

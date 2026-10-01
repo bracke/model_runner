@@ -1,5 +1,6 @@
 with Ada.Characters.Handling;
 with Ada.Containers.Indefinite_Hashed_Maps;
+with Ada.Directories;
 with Ada.Strings.Hash;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
@@ -78,6 +79,16 @@ package body Model_Runner.Framework.Traceability is
          return not Repository.Find_Symbols (Files, Target).Is_Empty;
       end Held_By_Repository;
 
+      --  Whether the document an entry was read from is still there.
+      function Source_Here (Source : String) return Boolean is
+      begin
+         return Ada.Directories.Exists
+                  (Ada.Directories.Containing_Directory (Stores.Root (Item)) & "/" & Source);
+      exception
+         when others =>
+            return True;
+      end Source_Here;
+
       procedure Component (Name : String) is
       begin
          if Name /= "" and then Name /= "project"
@@ -144,8 +155,11 @@ package body Model_Runner.Framework.Traceability is
                   if To_String (Held.Source) not in "" | "user"
                     and then To_String (Held.State) not in "rejected" | "obsolete" | "superseded"
                   then
-                     Link (Result, "file:" & To_String (Held.Source), Node, "sources",
-                           Repository.Explicit, Repository.Certain, Id);
+                     Link (Result, "file:" & To_String (Held.Source), Node,
+                           (if Source_Here (To_String (Held.Source)) then "sources" else "sources, missing"),
+                           Repository.Explicit,
+                           (if Source_Here (To_String (Held.Source)) then Repository.Certain
+                            else Repository.Uncertain), Id);
                   end if;
                   --  One the repository does not hold is linked all the same,
                   --  and said to be missing: not a certainty.
@@ -304,7 +318,10 @@ package body Model_Runner.Framework.Traceability is
                   then
                      Link (Result, "file:" & To_String (Held.Source),
                            Id & "@" & Image (Held.Revision),
-                           "sources", Repository.Explicit, Repository.Certain, Id);
+                           (if Source_Here (To_String (Held.Source)) then "sources" else "sources, missing"),
+                           Repository.Explicit,
+                           (if Source_Here (To_String (Held.Source)) then Repository.Certain
+                            else Repository.Uncertain), Id);
                   end if;
                end;
             end loop;

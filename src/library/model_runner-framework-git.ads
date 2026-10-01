@@ -48,4 +48,11 @@ package Model_Runner.Framework.Git is
    --    no git.
    function Status_Of (Project_Directory : String) return Status_Report;
 
+   --  The root of the repository a directory is in, as Git finds it.
+   --
+   --  @param Directory The directory asked about.
+   --  @return The repository's top directory; "" where Git finds none, or
+   --    there is no git.
+   function Top_Level (Directory : String) return String;
+
 end Model_Runner.Framework.Git;

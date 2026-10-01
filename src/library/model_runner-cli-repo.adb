@@ -117,6 +117,14 @@ package body Model_Runner.CLI.Repo is
             Pres.Put_Message (Screen, "cli.repo.unread_language", [Loc.Named ("name", Argument)]);
          else
             Pres.Put_Message (Screen, "cli.repo.none", [Loc.Named ("name", Argument)]);
+            --  A file, where a symbol was asked for: what takes a file.
+            if Action in "refs" | "sym"
+              and then (for some Index in 1 .. Rp.File_Count (Found) =>
+                          To_String (Rp.File_At (Found, Index).Path) = Argument)
+            then
+               Pres.Put_Note (Screen, "cli.repo.file_not_symbol", [Loc.Named ("name", Argument)]);
+               return;
+            end if;
             --  An entry of the project's state is traced, not looked up in
             --  the code; and code in a language not read may hold it.
             if (for some Prefix of Model_Runner.Framework.Name_Lists.Vector'(["REQ-", "DEC-", "SPEC-", "TASK-"])
@@ -311,10 +319,13 @@ package body Model_Runner.CLI.Repo is
         and then Argument = "" and then not (Action = "impact" and then Typed /= "")
       then
          Outcome := E.Make (E.Framework_Input_Missing);
-         E.Add_Text (Outcome, "name", (if Action in "deps" | "users" then "unit"
-                                       elsif Action = "impact" then "file or symbol"
-                                       elsif Action = "trace" then "node"
-                                       else "symbol"));
+         --  Named with how it is given: the command and what it takes.
+         E.Add_Text (Outcome, "name", (if Action in "deps" | "users" then "a unit: /" & Action & " UNIT, as /tree lists"
+                                                                          & " them"
+                                       elsif Action = "impact" then "a file or a symbol: /impact FILE-or-SYMBOL"
+                                       elsif Action = "trace" then "what to trace: /trace ID-or-FILE-or-SYMBOL, as"
+                                                                   & " /trace REQ-001 or /trace src/main.c"
+                                       else "a symbol: /" & Action & " NAME, as /sym finds it"));
          Fail (Outcome);
          return;
       end if;
@@ -421,6 +432,7 @@ package body Model_Runner.CLI.Repo is
                elsif Argument (Argument'Last) = '/' then Argument else Argument & "/");
             Shown    : Natural := 0;
             Last_Dir : Unbounded_String;
+            Rows     : Model_Runner.Framework.Name_Lists.Vector;
          begin
             for Index in 1 .. Rp.File_Count (Found) loop
                declare
@@ -449,15 +461,11 @@ package body Model_Runner.CLI.Repo is
                                           Ada.Characters.Handling.To_Lower
                                             (Rp.File_Role'Image (File.Role)))]);
                         else
-                           if Dir /= To_String (Last_Dir) then
-                              Pres.Put_Header (Screen, "cli.repo.directory", [Loc.Named ("path", Dir)]);
-                              Last_Dir := To_Unbounded_String (Dir);
-                           end if;
-                           Pres.Put_Row (Screen, Leaf,
-                                         To_String (File.Language)
-                                         & (if Length (File.Language) > 0 then ", " else "")
-                                         & Ada.Characters.Handling.To_Lower (Rp.File_Role'Image (File.Role)),
-                                         Indent => 2);
+                           --  Gathered, to be said by directory in order.
+                           Rows.Append (Dir & ASCII.HT & Leaf & ASCII.HT
+                                        & To_String (File.Language)
+                                        & (if Length (File.Language) > 0 then ", " else "")
+                                        & Ada.Characters.Handling.To_Lower (Rp.File_Role'Image (File.Role)));
                         end if;
                      end;
                   end if;
@@ -467,6 +475,27 @@ package body Model_Runner.CLI.Repo is
                Not_Found;
                return;
             end if;
+            --  One title a directory, the directories in order, each one's
+            --  files in order under it.
+            declare
+               package Sorting is new Model_Runner.Framework.Name_Lists.Generic_Sorting;
+            begin
+               Sorting.Sort (Rows);
+               for Row of Rows loop
+                  declare
+                     First  : constant Natural := Ada.Strings.Fixed.Index (Row, [1 => ASCII.HT]);
+                     Second : constant Natural :=
+                       Ada.Strings.Fixed.Index (Row (First + 1 .. Row'Last), [1 => ASCII.HT]);
+                     Dir    : constant String := Row (Row'First .. First - 1);
+                  begin
+                     if Dir /= To_String (Last_Dir) then
+                        Pres.Put_Header (Screen, "cli.repo.directory", [Loc.Named ("path", Dir)]);
+                        Last_Dir := To_Unbounded_String (Dir);
+                     end if;
+                     Pres.Put_Row (Screen, Row (First + 1 .. Second - 1), Row (Second + 1 .. Row'Last), Indent => 2);
+                  end;
+               end loop;
+            end;
          end;
 
       elsif Action = "sym" then
@@ -713,7 +742,68 @@ package body Model_Runner.CLI.Repo is
                            [Loc.Named ("count", Image (Natural (Code_Edges.Length) - 30)),
                             Loc.Named ("name", "edges")]);
                      end if;
-                     if Shown.Is_Empty then
+                     if Shown.Is_Empty
+                       and then (for some Prefix of Model_Runner.Framework.Name_Lists.Vector'(["REQ-", "DEC-", "SPEC-"])
+                                   => Ada.Strings.Fixed.Index (Argument, Prefix) = Argument'First)
+                       and then Model_Runner.Framework.Intent.State_Of
+                                  (Store, Model_Runner.Framework.Intent.Requirement, Argument) = ""
+                       and then Model_Runner.Framework.Intent.State_Of
+                                  (Store, Model_Runner.Framework.Intent.Decision, Argument) = ""
+                       and then Model_Runner.Framework.Intent.State_Of
+                                  (Store, Model_Runner.Framework.Intent.Specification, Argument) = ""
+                     then
+                        --  Not an entry at all: said so, with the code that
+                        --  names it all the same.
+                        declare
+                           Naming : Unbounded_String;
+                           Count  : Natural := 0;
+                        begin
+                           for Index in 1 .. Rp.File_Count (Found) loop
+                              exit when Count >= 5;
+                              declare
+                                 Path : constant String := To_String (Rp.File_At (Found, Index).Path);
+                                 Text : Unbounded_String;
+                                 Read : E.Error_Info := E.Success;
+                                 At_Word : Natural;
+                              begin
+                                 declare
+                                    use Ada.Streams.Stream_IO;
+                                    File : File_Type;
+                                 begin
+                                    Open (File, In_File, Hostkit.Fs.Join (Directory, Path));
+                                    if Size (File) < 2_000_000 then
+                                       declare
+                                          Whole : String (1 .. Natural (Size (File)));
+                                       begin
+                                          String'Read (Stream (File), Whole);
+                                          Text := To_Unbounded_String (Whole);
+                                       end;
+                                    end if;
+                                    Close (File);
+                                 exception
+                                    when others =>
+                                       if Is_Open (File) then
+                                          Close (File);
+                                       end if;
+                                       Read := E.Make (E.Framework_Not_Found);
+                                 end;
+                                 At_Word := (if E.Is_Ok (Read) then Ada.Strings.Unbounded.Index (Text, Argument)
+                                             else 0);
+                                 if At_Word > 0
+                                   and then (At_Word + Argument'Length > Length (Text)
+                                             or else Element (Text, At_Word + Argument'Length) not in '0' .. '9')
+                                 then
+                                    Append (Naming, (if Count = 0 then "" else ", ") & Path);
+                                    Count := Count + 1;
+                                 end if;
+                              end;
+                           end loop;
+                           Pres.Put_Message (Screen, "cli.repo.trace_unknown",
+                                             [Loc.Named ("name", Argument),
+                                              Loc.Named ("detail", (if Count = 0 then "nothing in the code names it"
+                                                                    else To_String (Naming) & " names it"))]);
+                        end;
+                     elsif Shown.Is_Empty then
                         Pres.Put_Message (Screen, "cli.repo.no_edges", [Loc.Named ("name", Argument)]);
                      end if;
 
@@ -793,9 +883,12 @@ package body Model_Runner.CLI.Repo is
                                       and then (Names_It (Argument) or else Names_It (To_String (Label)))
                                     then
                                        Said := Said + 1;
+                                       --  Named by the document's label only: said by it.
                                        Pres.Put_Note
-                                         (Screen, "cli.repo.mentioned",
+                                         (Screen, (if Names_It (Argument) then "cli.repo.mentioned"
+                                                   else "cli.repo.mentioned_label"),
                                           [Loc.Named ("name", Path), Loc.Named ("value", Argument),
+                                           Loc.Named ("other", To_String (Label)),
                                            Loc.Named ("detail",
                                                       (if Ada.Strings.Fixed.Index
                                                             (Ada.Characters.Handling.To_Lower (Path), "test") > 0

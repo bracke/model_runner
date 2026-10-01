@@ -1338,8 +1338,13 @@ package body Model_Runner.Framework.Workspaces is
    -- Restore_Kept --
    ------------------
 
+   --  Putting back what a restore replaced swaps the two again: the files
+   --  go back to the copy that was restored, not to a replaced-replaced-.
    function Replaced_Copy (Name : String) return String
-   is ("replaced-" & Name);
+   is (if Name'Length > 9 and then Name (Name'First .. Name'First + 8) = "replaced-"
+          and then Is_Kept_Name (Name (Name'First + 9 .. Name'Last))
+       then Name (Name'First + 9 .. Name'Last)
+       else "replaced-" & Name);
 
    function Changed_Since_Kept (Item : Stores.Store; Name : String) return Name_Lists.Vector is
       Project : constant String := Dirs.Containing_Directory (Stores.Root (Item));
@@ -1389,11 +1394,15 @@ package body Model_Runner.Framework.Workspaces is
             Dirs.Copy_File (Hostkit.Fs.Join (Where, Path), Target);
          end;
       end loop;
-      --  Marked as put back, for what is said of the task afterwards.
+      --  Marked as put back, for what is said of the task afterwards; the
+      --  copy that took what the project held is not put back any more.
       declare
          Ignored : E.Error_Info;
       begin
          Files.Write_Text (Hostkit.Fs.Join (Where, Restored_Mark), "restored", Ignored);
+         if Dirs.Exists (Hostkit.Fs.Join (Aside, Restored_Mark)) then
+            Dirs.Delete_File (Hostkit.Fs.Join (Aside, Restored_Mark));
+         end if;
       end;
       Status := E.Success;
    exception

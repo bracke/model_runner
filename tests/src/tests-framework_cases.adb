@@ -3286,20 +3286,20 @@ package body Tests.Framework_Cases is
       end;
 
       --  Rust.
-      Named := Rp.Symbol_Of (Found, "crate::io::reader.Reader", Here);
+      Named := Rp.Symbol_Of (Found, "crate::io::reader::Reader", Here);
       Assert (Here and then To_String (Named.Kind) = "type",
               "a Rust struct was not a symbol of its module");
-      Named := Rp.Symbol_Of (Found, "crate::io::reader.Reader.new", Here);
+      Named := Rp.Symbol_Of (Found, "crate::io::reader::Reader::new", Here);
       Assert (Here and then To_String (Named.Kind) = "method",
               "a function in an impl was not its type's");
-      Named := Rp.Symbol_Of (Found, "crate::io::reader.gone", Here);
+      Named := Rp.Symbol_Of (Found, "crate::io::reader::gone", Here);
       Assert (not Here, "a commented Rust function was taken for one");
-      Assert (Has_Relation (Rp.Implements_Interface, "crate::io::reader.Reader", "Count")
-              and then Has_Relation (Rp.Overrides, "crate::io::reader.Reader.count", "count"),
+      Assert (Has_Relation (Rp.Implements_Interface, "crate::io::reader::Reader", "Count")
+              and then Has_Relation (Rp.Overrides, "crate::io::reader::Reader::count", "count"),
               "impl Trait for Type did not take the trait on");
       Assert (Has_Relation (Rp.Depends_On, "crate", "crate::io::reader"),
               "a use of a type was not a dependency on its module");
-      Assert (not Rp.References_To (Found, "crate::io::reader.Reader").Is_Empty,
+      Assert (not Rp.References_To (Found, "crate::io::reader::Reader").Is_Empty,
               "a Rust type's use was missed");
 
       --  Python.

@@ -5,6 +5,7 @@ with Model_Runner.Framework.Agents;
 with Model_Runner.Framework.Authority;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Events;
+with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Verification;
@@ -222,6 +223,25 @@ package body Model_Runner.Framework.Orchestration is
       Running  : Natural := 0;
       Taken    : Name_Lists.Vector;
 
+      --  Whether a task's agent may write at all: one that only reads is
+      --  no writer the project waits on.
+      function Writes (Id : String) return Boolean is
+         Defined : Records.Item;
+         Read    : E.Error_Info;
+      begin
+         Tasks.Definition (Item, Id, Defined, Read);
+         declare
+            Allowed : constant Permissions.Permission_Set :=
+              Permissions.Effective (Item, Records.Get (Defined, "kind"), "",
+                                     Task_Level => Records.Get (Defined, "permissions"),
+                                     Within_Sandbox => False);
+         begin
+            return Allowed (Permissions.Write_Source).Granted or else Allowed (Permissions.Write_Specs).Granted;
+         end;
+      end Writes;
+      Writer_Running : Unbounded_String;
+      Writer_Planned : Unbounded_String;
+
       type Candidate is record
          Id        : Unbounded_String;
          Priority  : Natural := 0;
@@ -232,6 +252,9 @@ package body Model_Runner.Framework.Orchestration is
    begin
       for Id of Tasks.List (Item, "running") loop
          Running := Running + 1;
+         if Writer_Running = Null_Unbounded_String and then Writes (Id) then
+            Writer_Running := To_Unbounded_String (Id);
+         end if;
          declare
             Defined : Records.Item;
             Read    : E.Error_Info;
@@ -282,13 +305,15 @@ package body Model_Runner.Framework.Orchestration is
 
             --  In the project itself, one writer at a time: two in one tree
             --  would have each other's changes taken for their own.
-            elsif not Isolated and then (Running > 0 or else not Result.Start.Is_Empty) then
+            --  A task that only reads waits for no writer, nor holds one.
+            elsif not Isolated and then Writes (To_String (Next.Id))
+              and then (Writer_Running /= Null_Unbounded_String or else Writer_Planned /= Null_Unbounded_String)
+            then
                Result.Held.Append
                  (To_String (Next.Id) & ": "
-                  & (if Result.Start.Is_Empty
-                     then Tasks.List (Item, "running").First_Element
-                          & " is writing in the project"
-                     else "would wait for " & Result.Start.First_Element
+                  & (if Writer_Running /= Null_Unbounded_String
+                     then To_String (Writer_Running) & " is writing in the project"
+                     else "would wait for " & To_String (Writer_Planned)
                           & ", planned before it, to write in the project first")
                   & "; one task writes in it at a time");
             elsif not Isolated and then Component /= "" and then Taken.Contains (Component)
@@ -297,6 +322,9 @@ package body Model_Runner.Framework.Orchestration is
                  (To_String (Next.Id) & ": another task is writing " & Component);
             else
                Result.Start.Append (To_String (Next.Id));
+               if Writer_Planned = Null_Unbounded_String and then Writes (To_String (Next.Id)) then
+                  Writer_Planned := Next.Id;
+               end if;
                if Component /= "" then
                   Taken.Append (Component);
                end if;

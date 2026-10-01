@@ -29,6 +29,25 @@ package body Model_Runner.Framework.Tasks is
       end if;
       return Title;
    end Unlabelled;
+
+   --  A derived task's title: the requirement's identifier, the document's
+   --  own label beside it where it had one -- REQ-003 (FR-1) -- and its
+   --  title without that label.
+   function Derived_Title (Requirement, Title : String) return String is
+      Bare : constant String := Unlabelled (Title);
+   begin
+      if Bare'Length < Title'Length then
+         declare
+            Label : constant String := Title (Title'First .. Title'Last - Bare'Length - 2);
+         begin
+            if Label /= Requirement then
+               return Requirement & " (" & Label & "): " & Bare;
+            end if;
+         end;
+      end if;
+      return Requirement & ": " & Bare;
+   end Derived_Title;
+
    use Ada.Strings.Unbounded;
    use type Model_Runner.Errors.Error_Code;
 
@@ -1459,10 +1478,17 @@ package body Model_Runner.Framework.Tasks is
                      To_String (One.Governing.Source) & " overrides "
                      & To_String (One.Other.Source));
                elsif One.Relation = Authority.Conflict then
+                  --  Said as the ruling says it: what the configuration
+                  --  holds is what runs, until a ruling holds over it.
                   Records.Set
                     (Value, "conflict." & Subject,
-                     To_String (One.Governing.Source) & " and " & To_String (One.Other.Source)
-                     & " disagree, and nothing says which holds");
+                     (if To_String (One.Other.Source) = "CONFIG" or else To_String (One.Governing.Source) = "CONFIG"
+                      then (if To_String (One.Governing.Source) = "CONFIG" then To_String (One.Other.Source)
+                            else To_String (One.Governing.Source))
+                           & " and CONFIG disagree, and CONFIG holds, which is what runs, until a ruling says"
+                           & " overrides=CONFIG"
+                      else To_String (One.Governing.Source) & " and " & To_String (One.Other.Source)
+                           & " disagree, and nothing says which holds"));
                end if;
             end;
          end loop;
@@ -1658,7 +1684,7 @@ package body Model_Runner.Framework.Tasks is
                            Stores.Put (Change, Tasks_Area, To_String (Earlier), Value);
                            Done.Append (Key);
                         elsif not Done.Contains (Key) then
-                           Fields.Include ("title", Requirement & ": " & Unlabelled (To_String (Held.Title)));
+                           Fields.Include ("title", Derived_Title (Requirement, To_String (Held.Title)));
                            Fields.Include ("kind", Kind);
                            Fields.Include ("requirements", Requirement);
                            --  The component it is linked to, where it is linked
@@ -1711,7 +1737,7 @@ package body Model_Runner.Framework.Tasks is
                               Got     : E.Error_Info;
                               Stem    : constant String := "derive:" & Requirement & "#";
                               Title   : constant String :=
-                                Requirement & ": " & Unlabelled (To_String (Held.Title));
+                                Derived_Title (Requirement, To_String (Held.Title));
                               Key_Of  : Unbounded_String;
                            begin
                               Stores.Pending (Change, Tasks_Area, Other, Defined, Staged);

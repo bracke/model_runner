@@ -82,6 +82,10 @@ package body Model_Runner.Framework.Git is
       Arguments.Append ("status");
       Arguments.Append ("--porcelain=v1");
       Arguments.Append ("--branch");
+      --  What is in the project only, where it is part of a larger
+      --  repository: the rest is no task's work.
+      Arguments.Append ("--");
+      Arguments.Append (".");
       Execution.Run_Harness
         (Project_Directory, "git", Arguments, Project_Directory, Output, 60, Happened);
       if Ada.Directories.Exists (Output) then
@@ -102,5 +106,36 @@ package body Model_Runner.Framework.Git is
       end loop;
       return Result;
    end Status_Of;
+
+   ---------------
+   -- Top_Level --
+   ---------------
+
+   function Top_Level (Directory : String) return String is
+      Arguments : Name_Lists.Vector;
+      Output    : constant String :=
+        Hostkit.Fs.Join (Hostkit.Fs.Temp_Directory,
+                         "model_runner-git-top-" & Fingerprint (Directory) & ".txt");
+      Happened  : Execution.Outcome;
+      Text      : Unbounded_String;
+      Read      : E.Error_Info;
+   begin
+      Arguments.Append ("rev-parse");
+      Arguments.Append ("--show-toplevel");
+      Execution.Run_Harness (Directory, "git", Arguments, Directory, Output, 60, Happened);
+      if Ada.Directories.Exists (Output) then
+         Files.Read_Text (Output, Text, Read);
+         Files.Discard (Output);
+      end if;
+      if not (Happened.Started and then not Happened.Timed_Out and then Happened.Exit_Status = 0) then
+         return "";
+      end if;
+      for Line of Lines_Of (To_String (Text)) loop
+         if Line /= "" then
+            return Line;
+         end if;
+      end loop;
+      return "";
+   end Top_Level;
 
 end Model_Runner.Framework.Git;

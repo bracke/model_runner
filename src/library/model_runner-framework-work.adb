@@ -651,12 +651,17 @@ package body Model_Runner.Framework.Work is
    --  Why a task stopped for a required helper that failed: the helper's
    --  failure, with the root's own only when it says something more,
    --  and the setting that decides what such a failure does.
-   function Child_Failure (Child_Why, Own_Why : String) return String is
+   function Child_Failure (Child_Why, Own_Why : String; Policy : String := "") return String is
       Said : constant String :=
         (if Ada.Strings.Fixed.Index (Child_Why, Own_Why) > 0 then Child_Why
          else Child_Why & "; and then " & Own_Why);
    begin
-      return Said & " (agents.on_child_failure decides what a failed helper does: block, fail or continue)";
+      --  continue set already, and not gone on: why, not the setting again.
+      return Said
+        & (if Policy = "continue"
+           then " (agents.on_child_failure is continue, which goes on only once the agent finishes and says"
+                & " instead: how it did the failed part; this run ended before that)"
+           else " (agents.on_child_failure decides what a failed helper does: block, fail or continue)");
    end Child_Failure;
 
    --  The first few diagnostics a piece of evidence recorded, said after
@@ -1561,7 +1566,9 @@ package body Model_Runner.Framework.Work is
       May_Delegate : constant Boolean :=
         Helpers and then Allowed (Permissions.Create_Children).Granted
         and then Allowed (Permissions.Create_Children).Max_Children > 0
-        and then Allowed (Permissions.Create_Children).Max_Depth >= 1;
+        and then Allowed (Permissions.Create_Children).Max_Depth >= 1
+        --  None allowed by the agents' own bound: no helpers either.
+        and then Agents.Limits_Of (Item).Max_Children > 0;
       May_Check   : constant Boolean := Helpers and then Offers_Checks (Item, Allowed, Task_Id, Apart);
       May_Propose : constant Boolean := Permissions.Allows (Allowed, Permissions.Propose_Tasks);
 
@@ -3391,7 +3398,8 @@ package body Model_Runner.Framework.Work is
          begin
             if not Agents.May_Complete (Item, To_String (Result.Agent_Id), Child_Why) then
                Conclude ((if Scalar (Item, "agents.on_child_failure") = "fail" then "failed" else "blocked"),
-                         Child_Failure (To_String (Child_Why), Why_Of (Ran)), "failed");
+                         Child_Failure (To_String (Child_Why), Why_Of (Ran),
+                                        Scalar (Item, "agents.on_child_failure")), "failed");
                return;
             end if;
          end;
@@ -4032,6 +4040,10 @@ package body Model_Runner.Framework.Work is
             then
                if Going_On then
                   Why := Still;
+               elsif Scalar (Item, "agents.on_child_failure") = "continue" then
+                  --  continue set, and no instead: said why it did not go on.
+                  Append (Why, " (agents.on_child_failure is continue, which goes on only when the agent says"
+                               & " instead: how it did the failed part; it said nothing of it)");
                end if;
                Conclude ((if Scalar (Item, "agents.on_child_failure") = "fail" then "failed"
                           else "blocked"),

@@ -478,8 +478,12 @@ package body Model_Runner.CLI.Interactive is
                      Pres.Put_Usage (Screen, "cli.interactive.usage.decision");
                   elsif Named = "spec" then
                      Pres.Put_Usage (Screen, "cli.interactive.usage.spec");
-                  elsif Named in "accept" | "reject" then
+                  elsif Named = "accept" then
                      Pres.Put_Usage (Screen, "cli.interactive.usage.accept");
+                  elsif Named = "reject" then
+                     Pres.Put_Usage (Screen, "cli.interactive.usage.reject");
+                  elsif Named = "git" then
+                     Pres.Put_Usage (Screen, "cli.interactive.usage.git");
                   elsif Named = "reconfigure" then
                      Pres.Put_Usage (Screen, "cli.project.reconfigure.usage");
                   elsif Named = "config" then

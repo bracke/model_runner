@@ -403,7 +403,7 @@ package body Model_Runner.Framework.Execution is
         and then not Rules.Allowed.Contains (Ada.Directories.Simple_Name (Words.First_Element))
       then
          return Words.First_Element & " is not a program the policy allows; allow it with"
-           & " /reconfigure set.execution.allowed+=" & Ada.Directories.Simple_Name (Words.First_Element);
+           & " /reconfigure add set.execution.allowed " & Ada.Directories.Simple_Name (Words.First_Element);
       elsif (Rules.Memory_MB > 0 or else Rules.CPU_Seconds > 0 or else Rules.Processes > 0
              or else Rules.File_MB > 0)
         and then Hostkit.Process.Locate ("prlimit") = ""

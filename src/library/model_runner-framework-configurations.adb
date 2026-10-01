@@ -1435,7 +1435,8 @@ package body Model_Runner.Framework.Configurations is
       elsif Name = "set.components" then
          return "one: the project itself";
       elsif Name = "scalar.model.default" then
-         return "/work uses this session's model";
+         return "default: the profile map.model.default, the limits a run's context is planned with; the model"
+           & " /work runs is this session's, or model=PATH";
       elsif Name = "scalar.verification.default" then
          return "none: it must name a profile";
       end if;
@@ -1790,6 +1791,61 @@ package body Model_Runner.Framework.Configurations is
               and then Value not in "run_build" | "run_tests" | "run_static_analysis"
             then
                return Name & " is one of run_build, run_tests, run_static_analysis, not " & Value;
+            end if;
+            --  A per-kind limit under the agents' family, where it is not
+            --  read: said, with where one is.
+            if Starts (Name, "scalar.agents.max_steps.") or else Starts (Name, "scalar.agents.token_budget.")
+              or else Starts (Name, "scalar.agents.max_tool_calls.")
+              or else Starts (Name, "scalar.agents.max_seconds.")
+            then
+               declare
+                  Rest : constant String := Name (Name'First + 14 .. Name'Last);
+                  Dot  : constant Natural := Ada.Strings.Fixed.Index (Rest, ".");
+               begin
+                  return Name & " is not read: a limit for one kind of task is scalar.task."
+                    & Rest (Rest'First .. Dot - 1) & "." & Rest (Dot + 1 .. Rest'Last);
+               end;
+            end if;
+            --  A limit for one kind of task is a count as the whole one is.
+            if (Starts (Name, "scalar.task.max_seconds.") or else Starts (Name, "scalar.task.max_tool_calls.")
+                or else Starts (Name, "scalar.task.max_steps.") or else Starts (Name, "scalar.task.token_budget."))
+              and then (Value'Length not in 1 .. 9
+                        or else (for some C of Value => C not in '0' .. '9'))
+            then
+               return Name & " is a whole number"
+                 & (if Starts (Name, "scalar.task.max_seconds.") then " of seconds"
+                    elsif Starts (Name, "scalar.task.token_budget.") then " of tokens" else "")
+                 & ", not " & Value;
+            end if;
+            --  The model profile used names one the configuration has: a
+            --  file name there is no profile, and nothing would read it.
+            if Name = "scalar.model.default" and then Value not in "" | "default"
+              and then not Records.Has (Config, "map.model." & Value)
+            then
+               declare
+                  Known : Unbounded_String;
+               begin
+                  for Other in 1 .. Records.Field_Count (Config) loop
+                     if Starts (Records.Field_Name (Config, Other), "map.model.") then
+                        Append (Known, (if Known = Null_Unbounded_String then "" else ", ")
+                                & Records.Field_Name (Config, Other)
+                                    (Records.Field_Name (Config, Other)'First + 10
+                                     .. Records.Field_Name (Config, Other)'Last));
+                     end if;
+                  end loop;
+                  return Name & " names a model profile, map.model.ID -- the limits a run's context is"
+                    & " planned with, not the model file -- and there is no map.model." & Value
+                    & (if Known = Null_Unbounded_String then "" else "; there are " & To_String (Known))
+                    & "; /work model=PATH runs a model file";
+               end;
+            end if;
+            --  A lease of nothing would end every run as it starts: not
+            --  taken for the default it would fall back to.
+            if Name = "scalar.work.lease" and then Value'Length in 1 .. 9
+              and then (for all C of Value => C = '0')
+            then
+               return Name & " is at least 1 second, not " & Value
+                 & " -- a run is ended when its lease runs out";
             end if;
             if (Starts (Name, "scalar.agents.max_") or else Starts (Name, "scalar.execution.max_")
                 or else Starts (Name, "scalar.retention.")
@@ -2189,9 +2245,27 @@ package body Model_Runner.Framework.Configurations is
               and then Is_Capability
                          (Name (Ada.Strings.Fixed.Index (Name, ".", Ada.Strings.Backward) + 1 .. Name'Last))
               and then Ada.Strings.Fixed.Index (Name (Name'First + 15 .. Name'Last), ".") > 0;
+            --  The roots a capability holds now, as roots=...; "" where
+            --  it holds none.
+            function Roots_Held return String is
+               Held : constant String := Records.Get (Result.Before, Name);
+               At_Roots : constant Natural := Ada.Strings.Fixed.Index (Held, "roots=");
+               Stop : Natural;
+            begin
+               if At_Roots = 0 then
+                  return "";
+               end if;
+               Stop := Ada.Strings.Fixed.Index (Held (At_Roots .. Held'Last), " ");
+               return Held (At_Roots .. (if Stop = 0 then Held'Last else Stop - 1));
+            end Roots_Held;
             Given : constant String :=
               (if One_Capability and then Raw = "" then "off"
                elsif One_Capability and then Raw = "on" then ""
+               --  A deny alone adds to the roots held: it takes out of
+               --  them, it does not open the rest of the project.
+               elsif One_Capability and then Starts (Raw, "deny=")
+                 and then Ada.Strings.Fixed.Index (Raw, "roots=") = 0 and then Roots_Held /= ""
+               then Roots_Held & " " & Raw
                else Raw);
             --  A set's items however they were written -- a space apart
             --  in a template, a line apart once changed: one a line.
@@ -2387,7 +2461,8 @@ package body Model_Runner.Framework.Configurations is
             elsif (Adding or else Taking)
               and then not (Starts (Name, "set.") or else Starts (Name, "list."))
             then
-               Status := Refused (Name, "+= and -= change a set. or a list.; this is one value");
+               Status := Refused (Name, "/reconfigure add and remove change a set. or a list.; this is one value,"
+                                 & " set as " & Name & "=VALUE");
                return;
             elsif Taking
               and then (for some Taken of Lines_Of (Lines_From (Given)) =>
@@ -2645,6 +2720,49 @@ package body Model_Runner.Framework.Configurations is
                else
                   Records.Set (Result.After, Name, Value);
                end if;
+               declare
+                  --  A kind's own limit, not set: the agents' one holds, as
+                  --  it stands now.
+                  Limit : constant String :=
+                    (if Starts (Name, "scalar.task.max_steps.") then "max_steps"
+                     elsif Starts (Name, "scalar.task.token_budget.") then "token_budget"
+                     elsif Starts (Name, "scalar.task.max_tool_calls.") then "max_tool_calls"
+                     elsif Starts (Name, "scalar.task.max_seconds.") then "max_seconds"
+                     else "");
+                  Kind  : constant String :=
+                    (if Limit = "" then "" else Name (Name'First + 13 + Limit'Length .. Name'Last));
+                  Whole_Limit : constant String :=
+                    (if Limit = "" then ""
+                     elsif Records.Get (Result.Before, "scalar.agents." & Limit) /= ""
+                     then Records.Get (Result.Before, "scalar.agents." & Limit)
+                     else Default_Of ("scalar.agents." & Limit));
+                  Reached : Unbounded_String;
+               begin
+                  if Limit /= "" and then Old = "" then
+                     Result.Changed.Append
+                       (Name & ": (not set: agents." & Limit
+                        & (if Whole_Limit = "" then "" else ", " & Whole_Limit & " now") & ") -> "
+                        & (if Value = "" then "(none)" else On_One_Line (Value)));
+                     --  The open tasks of that kind it reaches, by name.
+                     for Id of Tasks.List (Item) loop
+                        declare
+                           Defined : Records.Item;
+                           Got     : E.Error_Info;
+                        begin
+                           Tasks.Definition (Item, Id, Defined, Got);
+                           if E.Is_Ok (Got) and then Records.Get (Defined, "kind") = Kind
+                             and then Tasks.State_Of (Item, Id) not in "complete" | "cancelled" | "rejected"
+                           then
+                              Append (Reached, (if Reached = Null_Unbounded_String then "" else ", ") & Id);
+                           end if;
+                        end;
+                     end loop;
+                     if Reached /= Null_Unbounded_String then
+                        Result.Impact.Append ("tasks of kind " & Kind & ": " & To_String (Reached));
+                     end if;
+                     goto Changed_Said;
+                  end if;
+               end;
                Result.Changed.Append
                  (Name & ": "
                   & (if Old = "" and then (for some Known of Known_Settings => Known.all = Name)
@@ -2653,6 +2771,7 @@ package body Model_Runner.Framework.Configurations is
                   & (if Value = "" and then (for some Known of Known_Settings => Known.all = Name)
                      then Not_Set (Name)
                      elsif Value = "" then "(none)" else On_One_Line (Value)));
+               <<Changed_Said>>
                if not Result.Impact.Contains (Reach (Name)) then
                   Result.Impact.Append (Reach (Name));
                end if;
@@ -2683,6 +2802,38 @@ package body Model_Runner.Framework.Configurations is
          if not (for some Line of Result.Changed => Starts (Line, Name & ":")) then
             Result.Changed.Append (Name & ": granted -> (not granted)");
          end if;
+      end loop;
+
+      --  A kind or role left with nothing named would take the level
+      --  above's whole grant: what was taken away is kept taken, as a
+      --  level that grants none.
+      for Name of Taken_Away loop
+         declare
+            Dot   : constant Natural := Ada.Strings.Fixed.Index (Name, ".", Ada.Strings.Backward);
+            Level : constant String := Name (Name'First .. Dot - 1);
+         begin
+            if Level /= "map.permission.project"
+              and then not (for some Index in 1 .. Records.Field_Count (Result.After) =>
+                              Starts (Records.Field_Name (Result.After, Index), Level & "."))
+              and then not Records.Has (Result.After, Level)
+            then
+               Records.Set (Result.After, Level, "none");
+               Result.Changed.Append (Level & ": -> none, nothing granted (not the level above's grant)");
+            end if;
+         end;
+      end loop;
+      --  A level granted something again is no longer one that grants none.
+      for Index in reverse 1 .. Records.Field_Count (Result.After) loop
+         declare
+            Name : constant String := Records.Field_Name (Result.After, Index);
+         begin
+            if Starts (Name, "map.permission.") and then Records.Get (Result.After, Name) = "none"
+              and then (for some Other in 1 .. Records.Field_Count (Result.After) =>
+                          Starts (Records.Field_Name (Result.After, Other), Name & "."))
+            then
+               Records.Remove (Result.After, Name);
+            end if;
+         end;
       end loop;
 
       --  The whole of it, as it would be.

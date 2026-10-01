@@ -201,8 +201,10 @@ package body Model_Runner.CLI.Intents is
                               [Loc.Named ("name", Id),
                                Loc.Named ("value", One (One'First .. Equal - 1)),
                                Loc.Named ("detail", One (Equal + 3 .. One'Last)),
-                               Loc.Named ("other", Model_Runner.Framework.Records.Get
-                                                     (Config, One (One'First .. Equal - 1)))]);
+                               Loc.Named ("other", Model_Runner.Framework.Permissions.Value_Said
+                                                     (One (One'First .. Equal - 1),
+                                                      Model_Runner.Framework.Records.Get
+                                                        (Config, One (One'First .. Equal - 1))))]);
             end if;
             --  Held over the configuration -- or ruling on a setting it
             --  does not set, with nothing there to hold over: the ruling
@@ -459,8 +461,10 @@ package body Model_Runner.CLI.Intents is
                    Loc.Named ("detail",
                               Setting & " = "
                               & (if Model_Runner.Framework.Records.Get (Config, Setting) = ""
+                                   and then not Model_Runner.Framework.Records.Has (Config, Setting)
                                  then "(its default)"
-                                 else Model_Runner.Framework.Records.Get (Config, Setting)))]);
+                                 else Model_Runner.Framework.Permissions.Value_Said
+                                        (Setting, Model_Runner.Framework.Records.Get (Config, Setting))))]);
                <<Ruling_Said>>
             end;
          end if;
@@ -664,11 +668,19 @@ package body Model_Runner.CLI.Intents is
                  (Screen, "cli.task.item",
                   [Loc.Named ("name", Id),
                    --  Replaced, in every register alike: by what.
+                   --  An accepted requirement is not done yet: said, so
+                   --  its colour reads as waiting, not as a fault.
                    Loc.Named ("value", (if Length (Held.Superseded_By) > 0
                                         then "superseded by " & To_String (Held.Superseded_By)
+                                        elsif Nt."=" (Kind, Nt.Requirement)
+                                          and then To_String (Held.State) = "accepted"
+                                        then "accepted, not verified"
                                         else To_String (Held.State))),
                    Loc.Named ("detail", To_String (Held.Title))],
-                  (if Length (Held.Superseded_By) > 0 then "superseded" else To_String (Held.State)),
+                  (if Length (Held.Superseded_By) > 0 then "superseded"
+                   elsif Nt."=" (Kind, Nt.Requirement) and then To_String (Held.State) = "accepted"
+                   then "accepted, not verified"
+                   else To_String (Held.State)),
                   (if Length (Held.Superseded_By) > 0 then Pres.Bad
                    elsif To_String (Held.State) = "accepted" and then not Nt."=" (Kind, Nt.Requirement)
                    then Pres.Good
@@ -718,7 +730,7 @@ package body Model_Runner.CLI.Intents is
                                    or else Ada.Strings.Fixed.Index (Scope, "DEC-") = Scope'First
                                  then "; " & Scope & " is an entry, which " & Word_Of_Command (Kind)
                                       & " link ID dependency " & Scope & " relates this one to, once made"
-                                 else "; /reconfigure set.components+=" & Scope & " makes it one, and"
+                                 else "; /reconfigure add set.components " & Scope & " makes it one, and"
                                       & " /reconfigure map.component." & Scope & "=roots=DIR places it"
                                       & " once its files are there"));
                   Pres.Report (Screen, Status);
@@ -754,6 +766,12 @@ package body Model_Runner.CLI.Intents is
                         end if;
                      end;
                   end loop;
+
+                  --  A requirement stating no criteria: only its words judge
+                  --  what serves it, said where criteria are given.
+                  if Nt."=" (Kind, Nt.Requirement) and then Given ("criteria") = "" then
+                     Pres.Put_Note (Screen, "cli.req.no_criteria", [Loc.Named ("name", To_String (Id))]);
+                  end if;
 
                   --  A candidate: how it comes to count.
                   if Nt.State_Of (Store, Kind, To_String (Id)) = Nt.First_State (Kind) then
@@ -1788,6 +1806,14 @@ package body Model_Runner.CLI.Intents is
                   if not Model_Runner.Framework.Records.Has (Config, Setting)
                     and then not Model_Runner.Framework.Configurations.Known_Names.Contains (Setting)
                     and then Ada.Strings.Fixed.Index (Setting, "baseline.") /= 1
+                    --  A limit for a kind of task the project has is one
+                    --  whether set or not, as reconfigure takes it.
+                    and then not (for some Prefix of Names.Vector'
+                                    (["scalar.task.max_steps.", "scalar.task.token_budget.",
+                                      "scalar.task.max_tool_calls.", "scalar.task.max_seconds."]) =>
+                                    Ada.Strings.Fixed.Index (Setting, Prefix) = 1
+                                    and then Model_Runner.Framework.Tasks.Kinds (Store).Contains
+                                               (Setting (Setting'First + Prefix'Length .. Setting'Last)))
                     --  A level's capability is one whether set or not.
                     and then not (Ada.Strings.Fixed.Index (Setting, "map.permission.") = 1
                                   and then (for some One in Model_Runner.Framework.Permissions.Capability =>
@@ -1799,7 +1825,11 @@ package body Model_Runner.CLI.Intents is
                         declare
                            Name : constant String := Model_Runner.Framework.Records.Field_Name (Config, Index);
                         begin
+                           --  Only names a decision could govern: not one under
+                           --  the agents' family a kind is not read by.
                            if Setting'Length >= 4
+                             and then not (Ada.Strings.Fixed.Index (Name, "scalar.agents.") = 1
+                                           and then Ada.Strings.Fixed.Count (Name, ".") > 2)
                              and then (Ada.Strings.Fixed.Index (Name, Setting) > 0
                                        or else Ada.Strings.Fixed.Index
                                                  (Name, Setting (Setting'First .. Setting'First + 3))
@@ -1818,6 +1848,7 @@ package body Model_Runner.CLI.Intents is
                                                else ", as " & To_String (Near)));
                   elsif Model_Runner.Framework.Records.Has (Config, Setting)
                     or else Model_Runner.Framework.Configurations.Known_Names.Contains (Setting)
+                    or else Ada.Strings.Fixed.Index (Setting, "scalar.task.") = 1
                   then
                      --  A ruling is a value the setting takes: held to what a
                      --  change to it would be held to, and nothing is changed.
@@ -2051,6 +2082,8 @@ package body Model_Runner.CLI.Intents is
                   Item ("state", (if Length (Held.Superseded_By) > 0
                                   then "superseded by " & To_String (Held.Superseded_By)
                                        & " (" & To_String (Held.State) & ")"
+                                  elsif Is_Requirement and then To_String (Held.State) = "accepted"
+                                  then "accepted, not verified"
                                   else To_String (Held.State)),
                         (if Length (Held.Superseded_By) > 0 then Pres.Bad
                          elsif To_String (Held.State) = "accepted" and then not Is_Requirement
@@ -2060,6 +2093,18 @@ package body Model_Runner.CLI.Intents is
                   Item ("scope", To_String (Held.Scope));
                   if Nt.Blocked_Because (Store, Kind, Named) /= "" then
                      Item ("blocked because", Nt.Blocked_Because (Store, Kind, Named), Pres.Bad);
+                  end if;
+                  --  Who decided it, as /task show has it; and for one
+                  --  undecided, how it comes to count.
+                  if To_String (Held.State) = "rejected" and then Nt.Moved_By (Store, Kind, Named, "rejected") /= ""
+                  then
+                     Item ("rejected by", Nt.Moved_By (Store, Kind, Named, "rejected"));
+                  elsif Nt.Moved_By (Store, Kind, Named, "accepted") /= "" then
+                     Item ("accepted by", Nt.Moved_By (Store, Kind, Named, "accepted"));
+                  end if;
+                  if To_String (Held.State) = Nt.First_State (Kind) then
+                     Item ("to start", "it is a candidate: " & Word_Of_Command (Kind) & " accept " & Named
+                                       & " accepts it first", Pres.Pending);
                   end if;
 
                   --  Its work, and what shows it done.
@@ -2106,7 +2151,19 @@ package body Model_Runner.CLI.Intents is
                   end if;
                   for Relation in Nt.Link_Kind loop
                      for Target of Nt.Links (Store, Kind, Named, Relation) loop
-                        Item ("link." & Lower (Nt.Link_Kind'Image (Relation)), Target);
+                        --  A file it names that is not there: marked.
+                        if Ada.Strings.Fixed.Index (Target, "/") > 0
+                          and then Ada.Strings.Fixed.Index (Target, ":") = 0
+                          and then Ada.Strings.Fixed.Index (Target, "#") = 0
+                          and then not Ada.Directories.Exists
+                                         (Hostkit.Fs.Join (Ada.Directories.Containing_Directory (S.Root (Store)),
+                                                           Target))
+                        then
+                           Item ("link." & Lower (Nt.Link_Kind'Image (Relation)),
+                                 Target & " (missing: the repository does not hold it)", Pres.Bad);
+                        else
+                           Item ("link." & Lower (Nt.Link_Kind'Image (Relation)), Target);
+                        end if;
                      end loop;
                   end loop;
                end;

@@ -2200,6 +2200,7 @@ package body Model_Runner.Framework.Verification is
                               or else (Mine'Length > Path'Length
                                        and then Mine (Mine'Last - Path'Length + 1 .. Mine'Last) = Path)));
       end Failed_Elsewhere;
+
       --  Whether a task serves the requirement.
       function Serves_It (Id : String) return Boolean is
          Defined : Records.Item;
@@ -2208,6 +2209,18 @@ package body Model_Runner.Framework.Verification is
          Tasks.Definition (Item, Id, Defined, Read);
          return E.Is_Ok (Read) and then Lines_Of (Records.Get (Defined, "requirements")).Contains (Requirement);
       end Serves_It;
+
+      --  A task serving it that failed, and how it is tried again: what a
+      --  failed run of the suite does not say.
+      function Failed_Server return String is
+      begin
+         for Id of Everything loop
+            if Tasks.State_Of (Item, Id) = "failed" and then Serves_It (Id) then
+               return "; " & Id & ", which serves it, failed: /task accept " & Id & " tries it again";
+            end if;
+         end loop;
+         return "";
+      end Failed_Server;
    begin
       Find_Project_Runs;
       --  A suite that ran nothing passed nothing: said as that, with the
@@ -2265,7 +2278,8 @@ package body Model_Runner.Framework.Verification is
                                 else " (for " & To_String (For_Task)
                                      & (if Serves = Null_Unbounded_String then ""
                                         else ", which serves " & To_String (Serves)) & ")")
-                             & ", did not pass; fix what failed, then /check full");
+                             & ", did not pass; fix what failed, then /check full"
+                             & Failed_Server);
             end if;
          end;
       end if;

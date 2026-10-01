@@ -11,6 +11,7 @@ with Hostkit;
 with Hostkit.Fs;
 
 with Model_Runner.CLI.Choosers;
+with Model_Runner.CLI.Intents;
 with Model_Runner.CLI.Project_Commands;
 with Model_Runner.Errors;
 with Model_Runner.Framework;
@@ -506,6 +507,16 @@ package body Model_Runner.CLI.Work is
             Pres.Put_Note
               (Screen, "cli.next.accept",
                [Loc.Named ("count", T.Image (Long_Long_Integer (Candidate)))]);
+         --  What there is, before making more: a failed task to try again,
+         --  entries waiting to be accepted.
+         elsif Ready = 0 and then not Tk.List (Store, "failed").Is_Empty then
+            Pres.Put_Note (Screen, "cli.next.retry_only",
+                           [Loc.Named ("name", Tk.List (Store, "failed").First_Element)]);
+         elsif Ready = 0 and then not Model_Runner.CLI.Intents.Pending (Store).Is_Empty then
+            Pres.Put_Note
+              (Screen, "cli.next.entries_wait",
+               [Loc.Named ("count", T.Image (Long_Long_Integer
+                                               (Model_Runner.CLI.Intents.Pending (Store).Length)))]);
          elsif Ready = 0 and then Integrating = 0 then
             Pres.Put_Note (Screen, "cli.next.create");
          end if;
@@ -602,6 +613,14 @@ package body Model_Runner.CLI.Work is
                [Loc.Named ("name", Id), Loc.Named ("value", To_String (First)),
                 Loc.Named ("other", (if Tk.State_Of (Store, To_String (First)) = "rejected"
                                      then "reconsider" else "reopen"))]);
+         elsif First /= Null_Unbounded_String
+           and then Tk.State_Of (Store, To_String (First)) in "blocked" | "failed"
+         then
+            --  Stopped or failed, it cannot be worked as it is.
+            return Pres.Next_Step_Value
+              (Screen, "cli.next.waits_on_stopped",
+               [Loc.Named ("name", Id), Loc.Named ("value", To_String (First)),
+                Loc.Named ("state", Model_Runner.Framework.State_Said (Tk.State_Of (Store, To_String (First))))]);
          elsif First /= Null_Unbounded_String then
             return Pres.Next_Step_Value
               (Screen, "cli.next.waits_first",
@@ -646,6 +665,24 @@ package body Model_Runner.CLI.Work is
             end if;
          end;
       end loop;
+      --  steps= is a count of a run apart's steps: checked before anything
+      --  starts, and refused where nothing would read it.
+      if Given.Contains ("steps") then
+         declare
+            Steps : constant String := Given ("steps");
+         begin
+            if Steps'Length not in 1 .. 6 or else (for some C of Steps => C not in '0' .. '9')
+              or else Natural'Value (Steps) = 0
+            then
+               Outcome := E.Make (E.Framework_Input_Invalid);
+               E.Add_Text (Outcome, "name", "steps");
+               E.Add_Text (Outcome, "value", Steps);
+               E.Add_Text (Outcome, "detail", "it is a whole number of steps, at least 1");
+               Fail (Outcome);
+               return;
+            end if;
+         end;
+      end if;
       if Model_Runner.Framework.Permissions.Sandbox_Problem /= "" then
          Outcome := E.Make (E.Framework_Input_Invalid);
          E.Add_Text (Outcome, "name", "MODEL_RUNNER_SANDBOX");
@@ -661,6 +698,17 @@ package body Model_Runner.CLI.Work is
          return;
       end if;
       Model_Runner.Framework.Configurations.Read (Store, Config, Outcome);
+      if Given.Contains ("steps") and then Setting ("model", "") = "" then
+         Outcome := E.Make (E.Framework_Input_Invalid);
+         E.Add_Text (Outcome, "name", "steps");
+         E.Add_Text (Outcome, "value", Given ("steps"));
+         E.Add_Text (Outcome, "detail", "steps= applies only with model=PATH, a model run apart; the"
+                     & " session's model takes its steps from agents.max_steps, or task.max_steps.KIND"
+                     & " -- /reconfigure scalar.task.max_steps.KIND=N sets one");
+         S.Close (Store);
+         Fail (Outcome);
+         return;
+      end if;
 
       --  What an interruption left is put right first, so a task whose
       --  agent stopped can be chosen again.
@@ -1050,7 +1098,10 @@ package body Model_Runner.CLI.Work is
                   --  missed, with the run that has the rest.
                   Pres.Put_Note (Screen, "cli.work.runner_apart");
                elsif Given_Runner /= null then
-                  Say ("cli.work.runner", Pres.Message_Value (Screen, "cli.work.runner.session"),
+                  --  Which model that is, by the profile it is planned with.
+                  Say ("cli.work.runner", Pres.Message_Value (Screen, "cli.work.runner.session")
+                                          & (if Length (Model.Id) = 0 then ""
+                                             else " (" & To_String (Model.Id) & ")"),
                        To_String (Chosen));
                end if;
             end if;
@@ -1448,11 +1499,16 @@ package body Model_Runner.CLI.Work is
                   Pres.Put_Note (Screen, "cli.next.refused_outside",
                                  [Loc.Named ("name", To_String (Done.Task_Id)),
                                   Loc.Named ("value",
-                                             (if Ada.Strings.Fixed.Index (To_String (Done.Reason), "read_file") > 0
-                                                or else Ada.Strings.Fixed.Index
-                                                          (To_String (Done.Reason), "list_directory") > 0
+                                             --  By the call refused, not by the hint
+                                             --  beside it, which names list_directory.
+                                             (if (for some Call of Model_Runner.Framework.Name_Lists.Vector'
+                                                    (["write_file", "edit_file", "replace_in_file", "delete_file"]) =>
+                                                    Ada.Strings.Fixed.Index (To_String (Done.Reason), Call) > 0)
+                                              then "write"
+                                              elsif Ada.Strings.Fixed.Index (To_String (Done.Reason), "read_file") > 0
                                                 or else Ada.Strings.Fixed.Index (To_String (Done.Reason), " read ") > 0
-                                              then "read" else "write"))]);
+                                              then "read"
+                                              else "reach"))]);
                elsif Ada.Strings.Fixed.Index (To_String (Done.Reason), "sandbox") > 0 then
                   Pres.Put_Note (Screen, "cli.next.sandbox_refused",
                                  [Loc.Named ("name", To_String (Done.Task_Id))]);

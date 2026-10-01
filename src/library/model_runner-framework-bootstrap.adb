@@ -552,6 +552,9 @@ package body Model_Runner.Framework.Bootstrap is
          if Line'Length > 6 and then Line (Line'First) in '-' | '*' | '+'
            and then Ada.Characters.Handling.To_Lower (Line (Line'First + 1 .. Line'First + 5)) = " [x] "
            and then Label /= Null_Unbounded_String
+           --  Only what is made a requirement has a task to take as done.
+           and then (Says_Requirement (Item, True) or else Requirements_Here
+                     or else (Length (Label) > 4 and then Slice (Label, 1, 4) = "REQ-"))
          then
             Found (Issue, Path & "#" & (if Label /= Null_Unbounded_String then To_String (Label)
                                         else Fingerprint (Item)) & "#done",
@@ -1108,7 +1111,11 @@ package body Model_Runner.Framework.Bootstrap is
                Heading := To_Unbounded_String (Trim (Line (Line'First + 2 .. Line'Last)));
             end if;
             Has_Status := Has_Status or else Starts_With (Bare (Line), "Status:")
-              or else Line = "## Status" or else Starts_With (Line, "## Status");
+              or else Line = "## Status" or else Starts_With (Line, "## Status")
+              --  | Status | Date |: a table of its particulars.
+              or else (Line'Length > 1 and then Line (Line'First) = '|'
+                       and then Ada.Strings.Fixed.Index
+                                  (Ada.Characters.Handling.To_Lower (Line), "| status |") > 0);
             Has_Decision := Has_Decision
               or else Ada.Characters.Handling.To_Lower (Line) in "## decision" | "## decision outcome";
             if Line /= "" and then Line (Line'First) /= '#' then
@@ -1187,9 +1194,54 @@ package body Model_Runner.Framework.Bootstrap is
                  Ada.Strings.Fixed.Translate (Label, Ada.Strings.Maps.To_Mapping (" ", "-"));
                After_Status : Boolean := False;
                Replaces     : Unbounded_String;
+               --  The column a table's Status heads, 0 where none does.
+               Status_Column : Natural := 0;
+               --  Where the last line said ended a paragraph or a table row:
+               --  the break kept, not run into one line.
+               Broken        : Boolean := False;
+
+               --  A table row's cells, trimmed.
+               function Cells (Row : String) return Name_Lists.Vector is
+                  Result : Name_Lists.Vector;
+                  Start  : Natural := Row'First + 1;
+               begin
+                  for Index in Row'First + 1 .. Row'Last loop
+                     if Row (Index) = '|' then
+                        Result.Append (Trim (Row (Start .. Index - 1)));
+                        Start := Index + 1;
+                     end if;
+                  end loop;
+                  if Start <= Row'Last and then Trim (Row (Start .. Row'Last)) /= "" then
+                     Result.Append (Trim (Row (Start .. Row'Last)));
+                  end if;
+                  return Result;
+               end Cells;
             begin
                for Line of Every loop
-                  if Line'Length > 3 and then Line (Line'First .. Line'First + 2) = "## " then
+                  if Line = "" then
+                     Broken := Said /= Null_Unbounded_String;
+                  elsif Line'Length > 1 and then Line (Line'First) = '|' and then Status = Null_Unbounded_String
+                    and then (Status_Column > 0
+                              or else Ada.Strings.Fixed.Index
+                                        (Ada.Characters.Handling.To_Lower (Line), "| status |") > 0)
+                  then
+                     declare
+                        Row : constant Name_Lists.Vector := Cells (Line);
+                     begin
+                        if Status_Column = 0 then
+                           for Index in 1 .. Natural (Row.Length) loop
+                              if Ada.Characters.Handling.To_Lower (Row (Index)) = "status" then
+                                 Status_Column := Index;
+                              end if;
+                           end loop;
+                        elsif Natural (Row.Length) >= Status_Column
+                          and then Row (Status_Column) /= ""
+                          and then (for some C of Row (Status_Column) => C not in '-' | ':' | ' ')
+                        then
+                           Status := To_Unbounded_String (Row (Status_Column));
+                        end if;
+                     end;
+                  elsif Line'Length > 3 and then Line (Line'First .. Line'First + 2) = "## " then
                      In_Part := To_Unbounded_String
                        (Ada.Characters.Handling.To_Lower (Trim (Line (Line'First + 3 .. Line'Last))));
                      After_Status := To_String (In_Part) = "status";
@@ -1206,7 +1258,11 @@ package body Model_Runner.Framework.Bootstrap is
                      elsif To_String (In_Part) in "decision" | "decision outcome" then
                         Append (Decision, (if Decision = Null_Unbounded_String then "" else " ") & Line);
                      elsif not After_Status then
-                        Append (Said, (if Said = Null_Unbounded_String then "" else " ") & Line);
+                        Append (Said, (if Said = Null_Unbounded_String then ""
+                                       elsif Broken then ASCII.LF & ASCII.LF
+                                       elsif Line (Line'First) = '|' then [1 => ASCII.LF]
+                                       else " ") & Line);
+                        Broken := Line (Line'First) = '|';
                      end if;
                   end if;
                end loop;
@@ -1725,6 +1781,7 @@ package body Model_Runner.Framework.Bootstrap is
       --  The texts of what it made, as Result.Made has them.
       Made_Texts   : Name_Lists.Vector;
       Made_Sources : Name_Lists.Vector;
+      Made_Provenances : Name_Lists.Vector;
 
       --  Entries an output without an identifier was found to be the new
       --  wording of: each taken by one output only.
@@ -2248,6 +2305,7 @@ package body Model_Runner.Framework.Bootstrap is
                   Result.Made.Append (To_String (Id));
                   Made_Texts.Append (Field (Next.Text));
                   Made_Sources.Append (Field (Next.Source));
+                  Made_Provenances.Append (Field (Next.Provenance));
                end if;
                --  Its identifier held by another: made under its own, and
                --  said, as a requirement's is.
@@ -2384,6 +2442,7 @@ package body Model_Runner.Framework.Bootstrap is
                            Result.Made.Append (To_String (Id));
                            Made_Texts.Append (Field (Next.Text));
                            Made_Sources.Append (Field (Next.Source));
+                           Made_Provenances.Append (Field (Next.Provenance));
                         end if;
                         if Moved then
                            declare
@@ -2620,6 +2679,54 @@ package body Model_Runner.Framework.Bootstrap is
                           & (if Retired_As = "" then " no longer says it"
                              else " now marks it " & Retired_As);
 
+                        --  The decision made of the record it says replaced it
+                        --  -- superseded by ADR-0003 -- now or before; "".
+                        function Replaced_By return String is
+                           Said_As : constant String := Retired_As;
+                           By      : constant Natural := Ada.Strings.Fixed.Index (Said_As, "superseded by ");
+                           Label   : Unbounded_String;
+                        begin
+                           if By = 0 or else not Intent."=" (Kind, Intent.Decision) then
+                              return "";
+                           end if;
+                           for C of Said_As (By + 14 .. Said_As'Last) loop
+                              exit when C in ' ' | '(' | ',' | ';';
+                              Append (Label, C);
+                           end loop;
+                           if Length (Label) = 0 then
+                              return "";
+                           end if;
+                           for Index in 1 .. Natural (Result.Made.Length) loop
+                              declare
+                                 Mark : constant String := Made_Provenances (Index);
+                              begin
+                                 if Mark'Length > Length (Label)
+                                   and then Mark (Mark'Last - Length (Label) .. Mark'Last) = "#" & To_String (Label)
+                                 then
+                                    return Result.Made (Index);
+                                 end if;
+                              end;
+                           end loop;
+                           for Other of Intent.List (Item, Intent.Decision) loop
+                              declare
+                                 That : Intent.Entity;
+                                 Got  : E.Error_Info;
+                                 Mark : Unbounded_String;
+                              begin
+                                 Intent.Read (Item, Intent.Decision, Other, That, Got);
+                                 Mark := That.Provenance;
+                                 if E.Is_Ok (Got) and then Other /= Known and then Length (Mark) > Length (Label)
+                                   and then Slice (Mark, Length (Mark) - Length (Label), Length (Mark))
+                                            = "#" & To_String (Label)
+                                 then
+                                    return Other;
+                                 end if;
+                              end;
+                           end loop;
+                           return "";
+                        end Replaced_By;
+                        Successor : constant String := Replaced_By;
+
                         --  Of its own register: a decision is not replaced by
                         --  a requirement.
                         function Same_Kind (Made : String) return Boolean
@@ -2674,7 +2781,12 @@ package body Model_Runner.Framework.Bootstrap is
                           (Kind       => Results.Diagnostic,
                            Producer   => To_Unbounded_String ("bootstrap"),
                            Summary    => To_Unbounded_String
-                                           (Why & "; "
+                                           (if Successor /= ""
+                                            then Why & "; /decision supersede " & Known & " " & Successor
+                                                 & " records it replaced by " & Successor
+                                                 & ", the decision made of that record -- or keep it as it is,"
+                                                 & " and /result dismiss ID takes this off the list"
+                                            else Why & "; "
                                             & (if Intent."=" (Kind, Intent.Decision) then "/decision "
                                                else "/req ")
                                             & (if To_String (Held.State) = Intent.First_State (Kind)

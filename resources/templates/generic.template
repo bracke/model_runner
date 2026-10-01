@@ -29,21 +29,14 @@ discover go.mod fact build_system = Go
 discover pom.xml fact build_system = Maven
 
 # How the repository is checked: found from its build system where there is
-# one, asked for where there is not. Its program is the one checks may run.
+# one, asked for where there is not. Its program -- the command's first word
+# -- is the one checks may run.
 input check_command
   type = text
   label = Check command
   description = the command that builds and tests it, as make test, pytest or npm test -- true where there is nothing to check yet
   required = true
   default = true
-
-# The program checks may run: the one the command starts, unless named.
-input check_program
-  type = text
-  label = Check program
-  description = the program the check command runs, which checks may run
-  required = true
-  default = ${check_command.program}
 
 discover *.gpr input check_command = gprbuild
 discover alire.toml input check_command = alr build
@@ -60,4 +53,4 @@ discover pom.xml input check_command = mvn test
 profile checks = check: ${check_command}
 scalar profile_capability.checks = run_tests
 scalar verification.default = checks
-set execution.allowed = ${check_program}
+set execution.allowed = ${check_command.program}

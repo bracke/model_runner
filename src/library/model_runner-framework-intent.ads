@@ -205,6 +205,15 @@ package Model_Runner.Framework.Intent is
    --  @return The reason, or "" for none given or not blocked.
    function Blocked_Because (Item : Stores.Store; Kind : Intent_Kind; Id : String) return String;
 
+   --  Who last accepted or rejected an entity, as its move recorded it.
+   --
+   --  @param Item The store.
+   --  @param Kind Which register.
+   --  @param Id Its identifier.
+   --  @param Move "accepted" or "rejected".
+   --  @return The one named for that move; "" where nobody is.
+   function Moved_By (Item : Stores.Store; Kind : Intent_Kind; Id : String; Move : String) return String;
+
    --  What else an entity governs, besides the setting Governs gives: a
    --  decision may rule on several, each kept.
    --

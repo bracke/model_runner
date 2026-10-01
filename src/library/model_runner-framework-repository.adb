@@ -2131,7 +2131,11 @@ package body Model_Runner.Framework.Repository is
             if (Full = Wanted
                 or else (Full'Length > Wanted'Length
                          and then Full (Full'Last - Wanted'Length .. Full'Last)
-                                  = "." & Wanted))
+                                  = "." & Wanted)
+                --  Rust's paths: crate::fnv::fnv1a is fnv1a, and fnv::fnv1a.
+                or else (Full'Length > Wanted'Length + 1
+                         and then Full (Full'Last - Wanted'Length - 1 .. Full'Last)
+                                  = "::" & Wanted))
               and then not Result.Contains (To_String (Item.Name))
             then
                Result.Append (To_String (Item.Name));

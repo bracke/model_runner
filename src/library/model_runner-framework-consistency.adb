@@ -223,9 +223,11 @@ package body Model_Runner.Framework.Consistency is
                        Authority.Element (Resolved, Index);
                      Line : constant String :=
                        To_String (Standing.Governing.Source) & " says "
-                       & To_String (Standing.Governing.Value) & " and "
+                       & Permissions.Value_Said (To_String (Standing.Governing.Subject),
+                                                 To_String (Standing.Governing.Value)) & " and "
                        & To_String (Standing.Other.Source) & " says "
-                       & To_String (Standing.Other.Value);
+                       & Permissions.Value_Said (To_String (Standing.Governing.Subject),
+                                                 To_String (Standing.Other.Value));
                   begin
                      if Standing.Relation = Authority.Conflict and then not Said.Contains (Line)
                      then
@@ -323,6 +325,47 @@ package body Model_Runner.Framework.Consistency is
                   if Colon > 0 and then Equal > Colon then
                      Judge (Line (Line'First .. Colon - 1), Line (Colon + 2 .. Equal - 1),
                             Line (Equal + 1 .. Line'Last));
+                     --  An instruction on a limit is told to the agent, not
+                     --  applied: the configuration's value -- or a kind's
+                     --  own -- saying otherwise is what runs, and said.
+                     declare
+                        Id   : constant String := Line (Line'First .. Colon - 1);
+                        Name : constant String :=
+                          Whole (Ada.Strings.Fixed.Trim (Line (Colon + 2 .. Equal - 1), Ada.Strings.Both));
+                        Said : constant String :=
+                          Ada.Strings.Fixed.Trim (Line (Equal + 1 .. Line'Last), Ada.Strings.Both);
+                        Limit : constant String :=
+                          (if Name'Length > 14 and then Name (Name'First .. Name'First + 13) = "scalar.agents."
+                           then Name (Name'First + 14 .. Name'Last) else "");
+                     begin
+                        if Name /= "" and then Records.Has (Config, Name)
+                          and then Records.Get (Config, Name) /= Said
+                        then
+                           Found (Unapplied_Ruling, Name,
+                                  Id & " says " & Name & " = " & Said & ", and the configuration has "
+                                  & Records.Get (Config, Name) & ", which is what runs: an instruction is told"
+                                  & " to the agent, not applied -- /reconfigure " & Name & "=" & Said
+                                  & " makes it hold");
+                        end if;
+                        if Limit /= "" then
+                           for Index in 1 .. Records.Field_Count (Config) loop
+                              declare
+                                 Field : constant String := Records.Field_Name (Config, Index);
+                                 Stem  : constant String := "scalar.task." & Limit & ".";
+                              begin
+                                 if Field'Length > Stem'Length
+                                   and then Field (Field'First .. Field'First + Stem'Length - 1) = Stem
+                                   and then Records.Get (Config, Field) /= Said
+                                 then
+                                    Found (Unapplied_Ruling, Field,
+                                           Id & " says " & Name & " = " & Said & ", and " & Field & " is "
+                                           & Records.Get (Config, Field) & ", which is what runs for that kind:"
+                                           & " /reconfigure " & Field & "=" & Said & " makes it hold");
+                                 end if;
+                              end;
+                           end loop;
+                        end if;
+                     end;
                      --  An instruction and an accepted decision on one setting,
                      --  saying different things: which holds is a person's.
                      declare
@@ -572,7 +615,7 @@ package body Model_Runner.Framework.Consistency is
                                           & Linked.First_Element & " places it there"
                                      else ", which is none of the project's components: /req unlink "
                                           & Requirement & " component " & Linked.First_Element
-                                          & ", or /reconfigure set.components+=" & Linked.First_Element
+                                          & ", or /reconfigure add set.components " & Linked.First_Element
                                           & " makes it one"));
                         end if;
                      end;
@@ -780,31 +823,54 @@ package body Model_Runner.Framework.Consistency is
             for Relation in Intent.Implementation .. Intent.Test loop
                if Intent."/=" (Relation, Intent.Task_Link) then
                   for Target of Intent.Links (Item, Intent.Requirement, Id, Relation) loop
-                     if (if Ada.Strings.Fixed.Index (Target, "/") > 0 then not Holds_File (Target)
-                         else Repository.Find_Symbols (Graph, Target).Is_Empty
-                              and then not Holds_File (Target))
-                     then
-                        Found ((if Ada.Strings.Fixed.Index (Target, "/") > 0 then Missing_File
-                                else Missing_Symbol), Id,
-                               (if Intent."=" (Relation, Intent.Test) then "it is tested by "
-                                else "it is implemented by ")
-                               & Target & ", which the repository does not hold; "
-                               & (if Renamed_To (Target) = "" and then Naming (Id, Target) /= ""
-                                  then Naming (Id, Target) & " names " & Id & ", and may be where it went: /req link "
-                                       & Id & " " & (if Intent."=" (Relation, Intent.Test) then "test"
-                                                     else "implementation")
-                                       & " " & Naming (Id, Target) & " follows it, and "
-                                  elsif Renamed_To (Target) /= ""
-                                  then "git shows it renamed to " & Renamed_To (Target) & ": /req link " & Id
-                                       & " " & (if Intent."=" (Relation, Intent.Test) then "test"
+                     declare
+                        --  Where it went, linked already: only the unlink is
+                        --  left to do, and only that is said.
+                        Went : constant String :=
+                          (if Renamed_To (Target) /= "" then Renamed_To (Target) else Naming (Id, Target));
+                        Followed : constant Boolean :=
+                          Went /= "" and then Intent.Links (Item, Intent.Requirement, Id, Relation).Contains (Went);
+                     begin
+                        if Followed and then (if Ada.Strings.Fixed.Index (Target, "/") > 0 then not Holds_File (Target)
+                                              else Repository.Find_Symbols (Graph, Target).Is_Empty
+                                                   and then not Holds_File (Target))
+                        then
+                           Found ((if Ada.Strings.Fixed.Index (Target, "/") > 0 then Missing_File
+                                   else Missing_Symbol), Id,
+                                  (if Intent."=" (Relation, Intent.Test) then "it is tested by "
+                                   else "it is implemented by ")
+                                  & Target & ", which the repository does not hold, and by " & Went
+                                  & ", which followed it: /req unlink "
+                                  & Id & " " & (if Intent."=" (Relation, Intent.Test) then "test"
                                                 else "implementation")
-                                       & " " & Renamed_To (Target) & " follows it, and "
-                                  else "")
-                               & "/req unlink "
-                               & Id & " " & (if Intent."=" (Relation, Intent.Test) then "test"
-                                             else "implementation")
-                               & " " & Target & " takes it off");
-                     end if;
+                                  & " " & Target & " takes the old one off");
+                        elsif (if Ada.Strings.Fixed.Index (Target, "/") > 0 then not Holds_File (Target)
+                            else Repository.Find_Symbols (Graph, Target).Is_Empty
+                                 and then not Holds_File (Target))
+                        then
+                           Found ((if Ada.Strings.Fixed.Index (Target, "/") > 0 then Missing_File
+                                   else Missing_Symbol), Id,
+                                  (if Intent."=" (Relation, Intent.Test) then "it is tested by "
+                                   else "it is implemented by ")
+                                  & Target & ", which the repository does not hold; "
+                                  & (if Renamed_To (Target) = "" and then Naming (Id, Target) /= ""
+                                     then Naming (Id, Target) & " names " & Id
+                                          & ", and may be where it went: /req link "
+                                          & Id & " " & (if Intent."=" (Relation, Intent.Test) then "test"
+                                                        else "implementation")
+                                          & " " & Naming (Id, Target) & " follows it, and "
+                                     elsif Renamed_To (Target) /= ""
+                                     then "git shows it renamed to " & Renamed_To (Target) & ": /req link " & Id
+                                          & " " & (if Intent."=" (Relation, Intent.Test) then "test"
+                                                   else "implementation")
+                                          & " " & Renamed_To (Target) & " follows it, and "
+                                     else "")
+                                  & "/req unlink "
+                                  & Id & " " & (if Intent."=" (Relation, Intent.Test) then "test"
+                                                else "implementation")
+                                  & " " & Target & " takes it off");
+                        end if;
+                     end;
                   end loop;
                end if;
             end loop;
@@ -812,7 +878,7 @@ package body Model_Runner.Framework.Consistency is
                if not Tasks.Components (Item).Contains (Target) then
                   Found (Missing_Component, Id,
                          "it belongs to the component " & Target
-                         & ", which is not one of the project's: /reconfigure set.components+="
+                         & ", which is not one of the project's: /reconfigure add set.components "
                          & Target & " makes it one, or /req"
                          & " unlink " & Id & " component " & Target
                          & " takes the link away");

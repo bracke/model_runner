@@ -2070,7 +2070,7 @@ package body Tests.CLI_Cases is
       Run ("init|ada-cli|--set|confirm=yes", "My-App");
       Assert (Code = 0 and then Ada.Directories.Exists (Root & "/My-App/my_app.gpr"),
               "a directory name near a crate's was not made one: " & To_String (Said));
-      Run ("init|1|--set|confirm=yes|--set|check_command=true|--set|check_program=true");
+      Run ("init|1|--set|confirm=yes|--set|check_command=true");
       Assert (Code = 0 and then Shows ("next: /bootstrap"),
               "init by number did not start the project and say what next: " & To_String (Said));
 
@@ -2097,8 +2097,8 @@ package body Tests.CLI_Cases is
       Run ("task|list");
       Assert (Shows ("TASK-001  [ready]"),
               "a task whose agent could not start was not left ready: " & To_String (Said));
-      Run ("reconfigure|execution.allowed+=make,cmake,ninja|confirm=yes");
-      Assert (Shows ("true, make, cmake, ninja"), "+= did not add to the set: " & To_String (Said));
+      Run ("reconfigure|add|execution.allowed|make|cmake|ninja|confirm=yes");
+      Assert (Shows ("true, make, cmake, ninja"), "add did not add to the set: " & To_String (Said));
       Run ("config");
       Assert (Shows ("true, make, cmake, ninja"),
               "a set was not shown its items a comma apart: " & To_String (Said));
@@ -2172,7 +2172,7 @@ package body Tests.CLI_Cases is
          Run ("task|verify|" & Part);
          Run ("task|complete|" & Part);
       end loop;
-      Assert (Shows ("TASK-003, its parent, is ready again"),
+      Assert (Shows ("TASK-003, its parent, has its parts done"),
               "the last part done did not say its parent goes on: " & To_String (Said));
       Run ("task|list");
       Assert (Shows ("TASK-003  [ready]"),
@@ -2189,7 +2189,7 @@ package body Tests.CLI_Cases is
              & "- DEC-001: We use posix_spawn." & LF & LF & "It SHOULD retry once." & LF);
       Run ("bootstrap");
       Assert (Shows ("REQ-SHELL-001") and then Shows ("DEC-001") and then Shows ("next: /accept lists what waits")
-              and then Shows ("made REQ-SHELL-001, accepted"),
+              and then Shows ("made REQ-SHELL-001 ""Quoting"", accepted"),
               "bootstrap did not keep the document's identifiers, or say what it made is: "
               & To_String (Said));
       Run ("req|show|REQ-SHELL-001");
@@ -2266,15 +2266,18 @@ package body Tests.CLI_Cases is
       Run ("init|generic");
       Assert (Code /= 0 and then Shows ("already holds") and then Shows ("next: /reconfigure"),
               "init over a project did not refuse first: " & To_String (Said));
-      --  A setting that is none is refused with what was meant; -= takes
-      --  out, and += adds nothing twice.
+      --  A setting that is none is refused with what was meant; remove
+      --  takes out, add adds nothing twice, and += is pointed to add.
       Run ("reconfigure|leas=x|confirm=yes");
       Assert (Code /= 0 and then Shows ("did you mean scalar.work.lease"),
               "a setting that is none was not refused with the one meant: " & To_String (Said));
+      Run ("reconfigure|add|execution.allowed|make|confirm=yes");
+      Assert (Shows ("nothing would change"), "add added what the set holds");
+      Run ("reconfigure|remove|execution.allowed|cmake|confirm=yes");
+      Assert (Code = 0 and then Shows ("-> true, make, ninja"), "remove did not take out: " & To_String (Said));
       Run ("reconfigure|execution.allowed+=make|confirm=yes");
-      Assert (Shows ("nothing would change"), "+= added what the set holds");
-      Run ("reconfigure|execution.allowed-=cmake|confirm=yes");
-      Assert (Code = 0 and then Shows ("-> true, make, ninja"), "-= did not take out: " & To_String (Said));
+      Assert (Code /= 0 and then Shows ("/reconfigure add execution.allowed make"),
+              "+= was not pointed to add: " & To_String (Said));
       Run ("reconfigure|work.lease=120");
       Assert (Shows ("add confirm=yes"), "a missing confirm did not say how: " & To_String (Said));
       Run ("task|list|--set|bogus=1");
@@ -2283,7 +2286,8 @@ package body Tests.CLI_Cases is
       Assert (Shows ("scalar.work.lease") and then not Shows ("execution.allowed"),
               "config did not keep to the name given: " & To_String (Said));
       --  A check that fails says so, why, and with its status.
-      Run ("reconfigure|profile.checks=check: false|execution.allowed+=false|confirm=yes");
+      Run ("reconfigure|add|execution.allowed|false|confirm=yes");
+      Run ("reconfigure|profile.checks=check: false|confirm=yes");
       Run ("check");
       Assert (Code /= 0 and then Shows ("did not pass: check (false) failed"),
               "a failing check exited well or said nothing: " & To_String (Said));
@@ -2425,9 +2429,9 @@ package body Tests.CLI_Cases is
       Assert (Shows ("task show TASK-001"), "result of a task did not point to it");
 
       --  13. A fourth round.
-      Run ("reconfigure|execution.allowed-=nothing|confirm=yes");
+      Run ("reconfigure|remove|execution.allowed|nothing|confirm=yes");
       Assert (Code /= 0 and then Shows ("nothing is not in set.execution.allowed"),
-              "-= of what a set does not hold was not said so: " & To_String (Said));
+              "remove of what a set does not hold was not said so: " & To_String (Said));
       Run ("decision|govern|DEC-001|nosuch.setting|5");
       Assert (Code /= 0 and then Shows ("no setting is called so"),
               "a decision governing no setting was taken: " & To_String (Said));
@@ -2589,8 +2593,6 @@ package body Tests.CLI_Cases is
          Add (Source, "confirm=yes");
          Add (Source, "--set");
          Add (Source, "check_command=true");
-         Add (Source, "--set");
-         Add (Source, "check_program=true");
          Ran (Source, Status);
          Assert (Status = 0, "a project for tasks was not made");
       end;

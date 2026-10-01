@@ -1,10 +1,15 @@
 with Ada.Characters.Handling;
+with Ada.Containers.Indefinite_Hashed_Sets;
+with Ada.Directories;
 with Ada.Strings.Fixed;
+with Ada.Strings.Hash;
 
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Events;
+with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Records;
+with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Schemas;
 
 package body Model_Runner.Framework.Intent is
@@ -304,6 +309,105 @@ package body Model_Runner.Framework.Intent is
       end;
    end Keep_Earlier;
 
+   --  The labels the project's code names -- REQ-2, DEC-7 -- each as its
+   --  prefix and number, REQ-2 for REQ-002 alike: read once a scan, as
+   --  numbers the project already uses for something.
+   package Label_Sets is new Ada.Containers.Indefinite_Hashed_Sets
+     (String, Ada.Strings.Hash, "=");
+
+   Labels_Of_Scan : Unbounded_String;
+   Labels_Held    : Label_Sets.Set;
+
+   --  A label as its prefix and number without leading zeros; "" where it
+   --  is not one.
+   function Numbered (Label : String) return String is
+      Dash : constant Natural := Ada.Strings.Fixed.Index (Label, "-", Ada.Strings.Backward);
+   begin
+      if Dash = 0 or else Dash = Label'Last
+        or else not (for all C of Label (Dash + 1 .. Label'Last) => C in '0' .. '9')
+        or else Label'Last - Dash > 9
+      then
+         return "";
+      end if;
+      return Label (Label'First .. Dash)
+        & Ada.Strings.Fixed.Trim (Natural'Image (Natural'Value (Label (Dash + 1 .. Label'Last))), Ada.Strings.Both);
+   end Numbered;
+
+   function Code_Labels (Item : Stores.Store) return Label_Sets.Set is
+      Fingerprint : constant String := Repository.Kept_Fingerprint (Item);
+   begin
+      if Fingerprint = "" then
+         return Label_Sets.Empty_Set;
+      elsif To_String (Labels_Of_Scan) = Fingerprint then
+         return Labels_Held;
+      end if;
+      Labels_Held.Clear;
+      declare
+         Graph  : Repository.Graph;
+         Status : E.Error_Info;
+         Root   : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
+      begin
+         Repository.Load (Item, Graph, Status);
+         for Index in 1 .. Repository.File_Count (Graph) loop
+            declare
+               Path : constant String := To_String (Repository.File_At (Graph, Index).Path);
+               Text : Unbounded_String;
+               Read : E.Error_Info;
+            begin
+               if Ada.Directories.Exists (Root & "/" & Path)
+                 and then Ada.Directories."<" (Ada.Directories.Size (Root & "/" & Path), 2_000_000)
+               then
+                  Files.Read_Text (Root & "/" & Path, Text, Read);
+               end if;
+               if E.Is_Ok (Read) then
+                  declare
+                     Whole : constant String := To_String (Text);
+                     At_Char : Natural := Whole'First;
+                  begin
+                     --  Each run of capitals, a dash, and digits.
+                     while At_Char <= Whole'Last loop
+                        if Whole (At_Char) in 'A' .. 'Z'
+                          and then (At_Char = Whole'First or else Whole (At_Char - 1) not in 'A' .. 'Z' | '-')
+                        then
+                           declare
+                              Last : Natural := At_Char;
+                           begin
+                              while Last < Whole'Last and then Whole (Last + 1) in 'A' .. 'Z' loop
+                                 Last := Last + 1;
+                              end loop;
+                              if Last + 1 < Whole'Last and then Whole (Last + 1) = '-'
+                                and then Whole (Last + 2) in '0' .. '9'
+                              then
+                                 declare
+                                    Digit : Natural := Last + 2;
+                                 begin
+                                    while Digit < Whole'Last and then Whole (Digit + 1) in '0' .. '9' loop
+                                       Digit := Digit + 1;
+                                    end loop;
+                                    if Numbered (Whole (At_Char .. Digit)) /= "" then
+                                       Labels_Held.Include (Numbered (Whole (At_Char .. Digit)));
+                                    end if;
+                                    At_Char := Digit;
+                                 end;
+                              else
+                                 At_Char := Last;
+                              end if;
+                           end;
+                        end if;
+                        At_Char := At_Char + 1;
+                     end loop;
+                  end;
+               end if;
+            exception
+               when others =>
+                  null;
+            end;
+         end loop;
+      end;
+      Labels_Of_Scan := To_Unbounded_String (Fingerprint);
+      return Labels_Held;
+   end Code_Labels;
+
    -------------
    -- Propose --
    -------------
@@ -325,6 +429,8 @@ package body Model_Runner.Framework.Intent is
    is
       Event : Unbounded_String;
 
+      In_Code : constant Label_Sets.Set := Code_Labels (Item);
+
       --  Whether something has an identifier already, in the state or in
       --  this transaction.
       function Taken (Name : String) return Boolean is
@@ -334,40 +440,64 @@ package body Model_Runner.Framework.Intent is
          Stores.Pending (Change, Area_Of (Kind), Name, Held, Staged);
          return Staged or else Stores.Exists (Item, Area_Of (Kind), Name);
       end Taken;
+
+      --  Whether a new identifier's number is in use already: by one of
+      --  the register written otherwise -- REQ-3 for REQ-003 -- or by a
+      --  label the code names, which a new one would be mistaken for.
+      function Number_Used (Name : String) return Boolean is
+         Same : constant String := Numbered (Name);
+      begin
+         if Same = "" then
+            return False;
+         elsif In_Code.Contains (Same) then
+            return True;
+         end if;
+         for Held of List (Item, Kind) loop
+            if Held /= Name and then Numbered (Held) = Same then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Number_Used;
       --  The next of a register that holds only unpadded numbers in the
       --  project's namespace -- REQ-1, REQ-2 -- and no others; "" when it
       --  holds none, or any of the harness's own.
       function Unpadded_Next return String is
          Prefix  : constant String := Namespace (Kind) & "-";
          Highest : Natural := 0;
-         Any     : Boolean := False;
+         Plain   : Natural := 0;
+         Padded  : Natural := 0;
       begin
          if Key /= "" and then Key /= Namespace (Kind) then
             return "";
          end if;
+         --  The style most of the register is in: REQ-1 beside one REQ-001
+         --  made before is still a register of REQ-n.
          for Held of List (Item, Kind) loop
             if Held'Length > Prefix'Length and then Held (Held'First .. Held'First + Prefix'Length - 1) = Prefix
               and then (for all C of Held (Held'First + Prefix'Length .. Held'Last) => C in '0' .. '9')
+              and then Held'Length - Prefix'Length <= 9
             then
                declare
                   Number : constant String := Held (Held'First + Prefix'Length .. Held'Last);
                begin
                   if Number'Length >= 3 or else Number (Number'First) = '0' then
-                     return "";
+                     Padded := Padded + 1;
+                  else
+                     Plain := Plain + 1;
                   end if;
-                  Any := True;
                   Highest := Natural'Max (Highest, Natural'Value (Number));
                end;
             end if;
          end loop;
-         if not Any then
+         if Plain = 0 or else Plain < Padded then
             return "";
          end if;
          for Next in Highest + 1 .. Highest + 100 loop
             declare
                Image : constant String := Ada.Strings.Fixed.Trim (Natural'Image (Next), Ada.Strings.Both);
             begin
-               if not Taken (Prefix & Image) then
+               if not Taken (Prefix & Image) and then not Number_Used (Prefix & Image) then
                   return Prefix & Image;
                end if;
             end;
@@ -380,6 +510,8 @@ package body Model_Runner.Framework.Intent is
         and then Given'Length > Namespace (Kind)'Length
         and then Given (Given'First .. Given'First + Namespace (Kind)'Length) = Namespace (Kind) & "-"
         and then not Taken (Given)
+        and then not (Numbered (Given) /= "" and then Number_Used (Given)
+                      and then not In_Code.Contains (Numbered (Given)))
       then
          Id := To_Unbounded_String (Given);
       elsif Unpadded_Next /= "" then
@@ -405,7 +537,7 @@ package body Model_Runner.Framework.Intent is
             if E.Is_Error (Status) then
                return;
             end if;
-            exit when not Taken (To_String (Id));
+            exit when not Taken (To_String (Id)) and then not Number_Used (To_String (Id));
          end loop;
       end if;
 
@@ -445,6 +577,14 @@ package body Model_Runner.Framework.Intent is
       Stores.Read (Item, Area_Of (Kind), Id, Value, Status);
       return (if E.Is_Error (Status) then "" else Records.Get (Value, "blocked_because"));
    end Blocked_Because;
+
+   function Moved_By (Item : Stores.Store; Kind : Intent_Kind; Id : String; Move : String) return String is
+      Value  : Records.Item;
+      Status : E.Error_Info;
+   begin
+      Stores.Read (Item, Area_Of (Kind), Id, Value, Status);
+      return (if E.Is_Error (Status) then "" else Records.Get (Value, Move & "_by"));
+   end Moved_By;
 
    function Governs (Item : Stores.Store; Kind : Intent_Kind; Id : String) return String is
       Value  : Records.Item;

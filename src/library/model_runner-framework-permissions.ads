@@ -302,6 +302,14 @@ package Model_Runner.Framework.Permissions is
    --  @return The permissions; what the text does not name is not granted.
    function Value (Text : String) return Permission_Set;
 
+   --  A setting's value as a person reads it: a capability set with no
+   --  limits -- empty -- is granted with none, not nothing.
+   --
+   --  @param Subject The setting's name.
+   --  @param Value Its value.
+   --  @return The value, or "granted (no limits)".
+   function Value_Said (Subject, Value : String) return String;
+
 private
 
    Unrestricted : constant Permission_Set := [others => (Granted => True, others => <>)];

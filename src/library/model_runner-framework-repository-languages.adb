@@ -270,6 +270,24 @@ package body Model_Runner.Framework.Repository.Languages is
    --  Every use in a file of a name its unit can see: its own unit's, and
    --  those of the units it depends on and what is inside them. A name
    --  followed by its arguments, not declared there, is a call.
+   --  Where a qualified name's last part starts, by . or by Rust's ::,
+   --  whichever comes last; and the owner before it. 0 where unqualified.
+   function Last_Part_At (Full : String) return Natural is
+      Dot    : constant Natural := Ada.Strings.Fixed.Index (Full, ".", Ada.Strings.Backward);
+      Colons : constant Natural := Ada.Strings.Fixed.Index (Full, "::", Ada.Strings.Backward);
+   begin
+      return (if Colons > Dot then Colons + 2 elsif Dot > 0 then Dot + 1 else 0);
+   end Last_Part_At;
+
+   function Last_Part (Full : String) return String
+   is (if Last_Part_At (Full) = 0 then Full else Full (Last_Part_At (Full) .. Full'Last));
+
+   function Owner_Part (Full : String) return String
+   is (if Last_Part_At (Full) = 0 then ""
+       elsif Last_Part_At (Full) >= Full'First + 2 and then Full (Last_Part_At (Full) - 1) = ':'
+       then Full (Full'First .. Last_Part_At (Full) - 3)
+       else Full (Full'First .. Last_Part_At (Full) - 2));
+
    procedure Find_Uses
      (Path   : String;
       Tokens : Token_Vectors.Vector;
@@ -282,7 +300,7 @@ package body Model_Runner.Framework.Repository.Languages is
       function Visible (Owner : String) return Boolean is
       begin
          for One of Seen loop
-            if Owner = One or else Starts (Owner, One & ".") then
+            if Owner = One or else Starts (Owner, One & ".") or else Starts (Owner, One & "::") then
                return True;
             end if;
          end loop;
@@ -313,8 +331,7 @@ package body Model_Runner.Framework.Repository.Languages is
          end if;
          declare
             Receiver   : constant String := To_String (Tokens (At_Index - 2).Text);
-            Owner_Dot  : constant Natural := Ada.Strings.Fixed.Index (Owner, ".", Ada.Strings.Backward);
-            Owner_Last : constant String := (if Owner_Dot = 0 then Owner else Owner (Owner_Dot + 1 .. Owner'Last));
+            Owner_Last : constant String := Last_Part (Owner);
          begin
             return not Known_Units.Contains (Receiver) or else Owner_Last = Receiver;
          end;
@@ -349,9 +366,8 @@ package body Model_Runner.Framework.Repository.Languages is
             if To_String (Item.Kind) in "module" | "unit" | "package" then
                declare
                   Full : constant String := To_String (Item.Name);
-                  Dot  : constant Natural := Ada.Strings.Fixed.Index (Full, ".", Ada.Strings.Backward);
                begin
-                  Known_Units.Include (if Dot = 0 then Full else Full (Dot + 1 .. Full'Last));
+                  Known_Units.Include (Last_Part (Full));
                end;
             end if;
          end loop;
@@ -359,9 +375,8 @@ package body Model_Runner.Framework.Repository.Languages is
             if Link.Kind = Depends_On then
                declare
                   Full : constant String := To_String (Link.To);
-                  Dot  : constant Natural := Ada.Strings.Fixed.Index (Full, ".", Ada.Strings.Backward);
                begin
-                  Known_Units.Include (if Dot = 0 then Full else Full (Dot + 1 .. Full'Last));
+                  Known_Units.Include (Last_Part (Full));
                end;
             end if;
          end loop;
@@ -373,9 +388,8 @@ package body Model_Runner.Framework.Repository.Languages is
          if To_String (Item.Path) = Path then
             declare
                Full : constant String := To_String (Item.Name);
-               Dot  : constant Natural := Ada.Strings.Fixed.Index (Full, ".", Ada.Strings.Backward);
             begin
-               Declared.Append ((if Dot = 0 then Full else Full (Dot + 1 .. Full'Last)) & "@" & Image (Item.Line));
+               Declared.Append (Last_Part (Full) & "@" & Image (Item.Line));
             end;
          end if;
       end loop;
@@ -389,9 +403,9 @@ package body Model_Runner.Framework.Repository.Languages is
       for Item of Into.Symbols loop
          declare
             Full  : constant String := To_String (Item.Name);
-            Dot   : constant Natural := Ada.Strings.Fixed.Index (Full, ".", Ada.Strings.Backward);
-            Owner : constant String := (if Dot = 0 then "" else Full (Full'First .. Dot - 1));
-            Last  : constant String := (if Dot = 0 then Full else Full (Dot + 1 .. Full'Last));
+            Dot   : constant Natural := Last_Part_At (Full);
+            Owner : constant String := Owner_Part (Full);
+            Last  : constant String := Last_Part (Full);
          begin
             --  A module is used by importing it, which is a dependency:
             --  a variable of the same name is not a use of it.
@@ -886,7 +900,7 @@ package body Model_Runner.Framework.Repository.Languages is
               and then Tokens (Index + 1).Kind = Word
             then
                Declare_Symbol
-                 (Into, Unit & "." & To_String (Tokens (Index + 1).Text), "module", Path,
+                 (Into, Unit & "::" & To_String (Tokens (Index + 1).Text), "module", Path,
                   Tokens (Index + 1).Line);
                Next := (U ("mod"), Null_Unbounded_String, Null_Unbounded_String);
                Index := Index + 1;
@@ -926,7 +940,7 @@ package body Model_Runner.Framework.Repository.Languages is
                      end Last_Of;
                   begin
                      if Second /= Null_Unbounded_String then
-                        Relate (Into, Implements_Interface, Unit & "." & Last_Of (Second),
+                        Relate (Into, Implements_Interface, Unit & "::" & Last_Of (Second),
                                 To_String (First), Explicit, Probable, Where (Path, Here.Line));
                         Next := (U ("impl"), U (Last_Of (Second)), First);
                      elsif First /= Null_Unbounded_String then
@@ -946,8 +960,8 @@ package body Model_Runner.Framework.Repository.Languages is
                      elsif Said = "trait" then "trait"
                      else "constant");
                   Full : constant String :=
-                    (if In_Impl then Unit & "." & To_String (Opened.Last_Element.Typed) & "." & Name
-                     else Unit & "." & Name);
+                    (if In_Impl then Unit & "::" & To_String (Opened.Last_Element.Typed) & "::" & Name
+                     else Unit & "::" & Name);
                begin
                   if not (Said in "static" | "const" and then Name in "mut" | "fn") then
                      Declare_Symbol (Into, Full, Kind, Path, Tokens (Index + 1).Line);

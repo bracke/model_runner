@@ -1115,15 +1115,23 @@ package body Model_Runner.Tools.Builtin is
          State   : constant Natural := Ada.Strings.Fixed.Index (Root, "/.model_runner/");
          Project : constant String :=
            Ada.Directories.Simple_Name (if State > Root'First then Root (Root'First .. State - 1) else Root);
-         Given   : constant String := Path (Path'First + 1 .. Path'Last);
+         Bare    : constant String :=
+           (if Path (Path'Last) = '/' then Path (Path'First + 1 .. Path'Last - 1)
+            else Path (Path'First + 1 .. Path'Last));
+         --  /demo, the project itself, is its top: listed as . is.
+         Given   : constant String := (if Bare = Project then Project & "/." else Bare);
+         Named_Project : constant Boolean :=
+           Given'Length > Project'Length + 1
+           and then Given (Given'First .. Given'First + Project'Length) = Project & "/";
          Tail    : constant String :=
-           (if Given'Length > Project'Length + 1
-              and then Given (Given'First .. Given'First + Project'Length) = Project & "/"
-            then Given (Given'First + Project'Length + 1 .. Given'Last) else Given);
+           (if Named_Project then Given (Given'First + Project'Length + 1 .. Given'Last) else Given);
          Whole   : constant String := Root & "/" & Tail;
       begin
          if Ada.Directories.Exists (Whole)
-           or else (Named = "write_file" and then Ada.Strings.Fixed.Index (Tail, "/") > 0
+           --  A file to be written: where its directory is, and -- named
+           --  under the project's own name -- at the top of it too.
+           or else (Named = "write_file"
+                    and then (Ada.Strings.Fixed.Index (Tail, "/") > 0 or else Named_Project)
                     and then Ada.Directories.Exists (Ada.Directories.Containing_Directory (Whole)))
          then
             return Tail;
