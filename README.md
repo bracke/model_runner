@@ -20,34 +20,39 @@ capability it does not have.
 ```
 $ model_runner inspect tiny-model.gguf --threads 4
 Container
-  path                    tiny-model.gguf
-  file size               7648
-  GGUF version            3
-  data alignment          32
-  metadata entries        21
-  tensors                 21
-  parameters              1256
-  tensor formats          F32
-  memory mapped           yes
+  path                            tiny-model.gguf
+  file size                       7.5 KiB (7648 bytes)
+  GGUF version                    3
+  data alignment                  32
+  metadata entries                21
+  tensors                         21
+  parameters                      1256
+  tensor formats                  F32
+  memory mapped                   yes
+
 Architecture
-  name                    tiny
-  architecture            llama
-  context length          16
-  embedding width         8
+  name                            tiny
+  architecture                    llama
+  context length                  16
+  embedding width                 8
   ...
+
 Tokenizer
-  tokenizer model         llama
-  vocabulary              16
-  byte fallback           no
-  beginning token         1
-  end token               2
-  chat template           present and supported
+  tokenizer model                 llama
+  vocabulary                      16
+  byte fallback                   no
+  beginning token                 1
+  end token                       2
+  chat template                   present and supported
+
 Memory
-  model weights           5024
-  session at this context 5880
+  model weights                   4.9 KiB (5024 bytes)
+  session at this context         5.7 KiB (5880 bytes)
+  ...
+
 Execution
-  backend                 cpu
-  worker tasks            4
+  backend                         cpu
+  worker tasks                    4
 
 $ model_runner run tiny-model.gguf --raw --prompt "ab" --seed 42 --temperature 0 --max-tokens 6
  bcaaaa

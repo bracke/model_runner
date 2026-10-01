@@ -1,6 +1,7 @@
 with Ada.Calendar;
 with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
+with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 with Ada.Unchecked_Deallocation;
 
@@ -17,6 +18,7 @@ with Model_Runner.Limits;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Localization;
 with Model_Runner.Platform.Signals;
+with Model_Runner.Sampling;
 with Model_Runner.Stops;
 with Model_Runner.Templates;
 with Model_Runner.Text;
@@ -359,33 +361,50 @@ package body Model_Runner.CLI.Interactive is
       --  Show the sampling settings in use. Option names are protocol and are
       --  printed as written.
       procedure Show_Settings is
+         Default : constant Model_Runner.Sampling.Configuration := (others => <>);
+         use type Model_Runner.Sampling.Real;
+
+         --  A value the session changed from the default stands out.
+         function Tone_Of (Changed : Boolean) return Pres.Tone
+         is (if Changed then Pres.Pending else Pres.Plain);
       begin
+         --  In groups, as /task show is: how a token is chosen, what holds
+         --  repetition back, and how much is said.
+         Pres.Put_Heading (Screen, "cli.interactive.settings.choosing", Pres.Diagnostic);
          Pres.Put_Field
            (Screen, "cli.interactive.setting.temperature",
-            T.Image (Long_Float (Item.Sampling.Temperature), 3), Pres.Diagnostic);
+            T.Image (Long_Float (Item.Sampling.Temperature), 3), Pres.Diagnostic,
+            Tone_Of (Item.Sampling.Temperature /= Default.Temperature));
          Pres.Put_Field
            (Screen, "cli.interactive.setting.top_k",
-            T.Image (Long_Long_Integer (Item.Sampling.Top_K)), Pres.Diagnostic);
+            T.Image (Long_Long_Integer (Item.Sampling.Top_K)), Pres.Diagnostic,
+            Tone_Of (Item.Sampling.Top_K /= Default.Top_K));
          Pres.Put_Field
            (Screen, "cli.interactive.setting.top_p",
-            T.Image (Long_Float (Item.Sampling.Top_P), 3), Pres.Diagnostic);
+            T.Image (Long_Float (Item.Sampling.Top_P), 3), Pres.Diagnostic,
+            Tone_Of (Item.Sampling.Top_P /= Default.Top_P));
          Pres.Put_Field
            (Screen, "cli.interactive.setting.min_p",
-            T.Image (Long_Float (Item.Sampling.Min_P), 3), Pres.Diagnostic);
-         Pres.Put_Field
-           (Screen, "cli.interactive.setting.repeat_penalty",
-            T.Image (Long_Float (Item.Sampling.Repeat_Penalty), 3), Pres.Diagnostic);
-         Pres.Put_Field
-           (Screen, "cli.interactive.setting.repeat_window",
-            T.Image (Long_Long_Integer (Item.Sampling.Repeat_Window)), Pres.Diagnostic);
-         Pres.Put_Field
-           (Screen, "cli.interactive.setting.max_tokens",
-            T.Image (Long_Long_Integer (Item.Max_Tokens)), Pres.Diagnostic);
+            T.Image (Long_Float (Item.Sampling.Min_P), 3), Pres.Diagnostic,
+            Tone_Of (Item.Sampling.Min_P /= Default.Min_P));
          if Item.Has_Seed then
             Pres.Put_Field
               (Screen, "cli.interactive.setting.seed",
-               T.Image (Item.Seed), Pres.Diagnostic);
+               T.Image (Item.Seed), Pres.Diagnostic, Pres.Pending);
          end if;
+         Pres.Put_Heading (Screen, "cli.interactive.settings.repeating", Pres.Diagnostic, Gap => True);
+         Pres.Put_Field
+           (Screen, "cli.interactive.setting.repeat_penalty",
+            T.Image (Long_Float (Item.Sampling.Repeat_Penalty), 3), Pres.Diagnostic,
+            Tone_Of (Item.Sampling.Repeat_Penalty /= Default.Repeat_Penalty));
+         Pres.Put_Field
+           (Screen, "cli.interactive.setting.repeat_window",
+            T.Image (Long_Long_Integer (Item.Sampling.Repeat_Window)), Pres.Diagnostic,
+            Tone_Of (Item.Sampling.Repeat_Window /= Default.Repeat_Window));
+         Pres.Put_Heading (Screen, "cli.interactive.settings.length", Pres.Diagnostic, Gap => True);
+         Pres.Put_Field
+           (Screen, "cli.interactive.setting.max_tokens",
+            T.Image (Long_Long_Integer (Item.Max_Tokens)), Pres.Diagnostic);
       end Show_Settings;
 
       --  Declared here because a command runs one: an answer handed back
@@ -445,34 +464,34 @@ package body Model_Runner.CLI.Interactive is
                  & " users impact trace scan ";
             begin
                if Named /= "" and then Ada.Strings.Fixed.Index (Known, " " & Named & " ") > 0 then
-                  Pres.Put_Aside (Screen, "cli.interactive.help." & Named);
+                  Pres.Put_Help_Line (Screen, "cli.interactive.help." & Named);
                   --  And how it is used, where that takes more than a line.
                   if Named = "init" then
-                     Pres.Put_Aside (Screen, "cli.interactive.usage.init");
+                     Pres.Put_Usage (Screen, "cli.interactive.usage.init");
                   elsif Named = "task" then
-                     Pres.Put_Aside (Screen, "cli.interactive.usage.task");
+                     Pres.Put_Usage (Screen, "cli.interactive.usage.task");
                   elsif Named = "work" then
-                     Pres.Put_Aside (Screen, "cli.interactive.usage.work");
+                     Pres.Put_Usage (Screen, "cli.interactive.usage.work");
                   elsif Named = "req" then
-                     Pres.Put_Aside (Screen, "cli.interactive.usage.req");
+                     Pres.Put_Usage (Screen, "cli.interactive.usage.req");
                   elsif Named = "decision" then
-                     Pres.Put_Aside (Screen, "cli.interactive.usage.decision");
+                     Pres.Put_Usage (Screen, "cli.interactive.usage.decision");
                   elsif Named = "spec" then
-                     Pres.Put_Aside (Screen, "cli.interactive.usage.spec");
+                     Pres.Put_Usage (Screen, "cli.interactive.usage.spec");
                   elsif Named in "accept" | "reject" then
-                     Pres.Put_Aside (Screen, "cli.interactive.usage.accept");
+                     Pres.Put_Usage (Screen, "cli.interactive.usage.accept");
                   elsif Named = "reconfigure" then
-                     Pres.Put_Aside (Screen, "cli.project.reconfigure.usage");
+                     Pres.Put_Usage (Screen, "cli.project.reconfigure.usage");
                   elsif Named = "config" then
-                     Pres.Put_Aside (Screen, "cli.interactive.usage.config");
+                     Pres.Put_Usage (Screen, "cli.interactive.usage.config");
                   elsif Named = "state" then
-                     Pres.Put_Aside (Screen, "cli.interactive.usage.state");
+                     Pres.Put_Usage (Screen, "cli.interactive.usage.state");
                   elsif Named = "check" then
-                     Pres.Put_Aside (Screen, "cli.interactive.usage.check");
+                     Pres.Put_Usage (Screen, "cli.interactive.usage.check");
                   elsif Named = "bootstrap" then
-                     Pres.Put_Aside (Screen, "cli.interactive.usage.bootstrap");
+                     Pres.Put_Usage (Screen, "cli.interactive.usage.bootstrap");
                   elsif Named = "instruct" then
-                     Pres.Put_Aside (Screen, "cli.interactive.usage.instruct");
+                     Pres.Put_Usage (Screen, "cli.interactive.usage.instruct");
                   end if;
                else
                   Pres.Put_Message (Screen, "cli.interactive.help_unknown",
@@ -490,7 +509,7 @@ package body Model_Runner.CLI.Interactive is
                   declare
                      Word : constant String := Command_Word (Kind);
                   begin
-                     Pres.Put_Aside
+                     Pres.Put_Help_Line
                        (Screen,
                         "cli.interactive.help."
                         & Word (Word'First + 1 .. Word'Last));
@@ -510,13 +529,53 @@ package body Model_Runner.CLI.Interactive is
             end if;
 
          elsif Asked.Kind = Context then
-            Pres.Put_Note
-              (Screen, "cli.interactive.context",
-               [Loc.Named
-                  ("used", T.Image (Long_Long_Integer (L.Position (Session)))),
-                Loc.Named
-                  ("capacity",
-                   T.Image (Long_Long_Integer (L.Capacity (Session))))]);
+            --  How full it is, in the colour of how near the end that is,
+            --  and what fills it: the conversation's turns by who said them.
+            declare
+               Used     : constant Natural := L.Position (Session);
+               Capacity : constant Natural := L.Capacity (Session);
+               Percent  : constant Natural := (if Capacity = 0 then 0 else Used * 100 / Capacity);
+               Counts   : array (Conv.Role) of Natural := [others => 0];
+               Pictures : Natural := 0;
+            begin
+               for Index in 1 .. Conv.Length (Messages) loop
+                  Counts (Conv.Sender_At (Messages, Index)) := Counts (Conv.Sender_At (Messages, Index)) + 1;
+                  if Model_Runner.CLI.Pictures.Names_A_Picture (Conv.Parts_At (Messages, Index)) then
+                     Pictures := Pictures + 1;
+                  end if;
+               end loop;
+               Pres.Put_Heading (Screen, "cli.interactive.context.heading", Pres.Diagnostic);
+               Pres.Put_Field
+                 (Screen, "cli.interactive.context.used",
+                  T.Image (Long_Long_Integer (Used)) & " of " & T.Image (Long_Long_Integer (Capacity))
+                  & " tokens (" & T.Image (Long_Long_Integer (Percent)) & "%)",
+                  Pres.Diagnostic,
+                  (if Percent >= 90 then Pres.Bad elsif Percent >= 70 then Pres.Pending else Pres.Good));
+               Pres.Put_Field
+                 (Screen, "cli.interactive.context.free",
+                  T.Image (Long_Long_Integer (Capacity - Natural'Min (Used, Capacity))) & " tokens",
+                  Pres.Diagnostic);
+               Pres.Put_Heading (Screen, "cli.interactive.context.fills", Pres.Diagnostic, Gap => True);
+               Pres.Put_Field
+                 (Screen, "cli.interactive.context.system",
+                  (if Conv.Has_System (Messages) then "set (/system shows how to change it)" else "none"),
+                  Pres.Diagnostic);
+               Pres.Put_Field (Screen, "cli.interactive.context.yours",
+                               T.Image (Long_Long_Integer (Counts (Conv.User_Role))), Pres.Diagnostic);
+               Pres.Put_Field (Screen, "cli.interactive.context.answers",
+                               T.Image (Long_Long_Integer (Counts (Conv.Assistant_Role))), Pres.Diagnostic);
+               if Counts (Conv.Tool_Role) > 0 then
+                  Pres.Put_Field (Screen, "cli.interactive.context.tools",
+                                  T.Image (Long_Long_Integer (Counts (Conv.Tool_Role))), Pres.Diagnostic);
+               end if;
+               if Pictures > 0 then
+                  Pres.Put_Field (Screen, "cli.interactive.context.pictures",
+                                  T.Image (Long_Long_Integer (Pictures)), Pres.Diagnostic);
+               end if;
+               if Percent >= 70 then
+                  Pres.Put_Note (Screen, "cli.interactive.context.nearly_full");
+               end if;
+            end;
 
          elsif Asked.Kind = Set_System then
             declare
@@ -545,15 +604,94 @@ package body Model_Runner.CLI.Interactive is
             then
                Pres.Put_Note (Screen, "cli.interactive.no_tools");
             else
+               --  Each by its name, set apart, with what it does and what it
+               --  takes set in under it -- read from its definition.
                for Index in 1 .. Model_Runner.Tools.Count (Tools.all) loop
-                  Pres.Put_Note
-                    (Screen, "cli.interactive.tool_offered",
-                     [Loc.Named
-                        ("name",
-                         Model_Runner.Tools.Tool_Name (Tools.all, Index)),
-                      Loc.Named
-                        ("definition",
-                         Model_Runner.Tools.Definition (Tools.all, Index))]);
+                  declare
+                     Definition : constant String := Model_Runner.Tools.Definition (Tools.all, Index);
+
+                     --  The first string a key holds: "description": "...".
+                     function String_Of (Key : String) return String is
+                        At_Key : constant Natural := Ada.Strings.Fixed.Index (Definition, '"' & Key & '"');
+                        Open   : Natural;
+                        Stop   : Natural;
+                     begin
+                        if At_Key = 0 then
+                           return "";
+                        end if;
+                        Open := Ada.Strings.Fixed.Index (Definition (At_Key + Key'Length + 2 .. Definition'Last), """");
+                        if Open = 0 then
+                           return "";
+                        end if;
+                        Stop := Open + 1;
+                        while Stop <= Definition'Last
+                          and then (Definition (Stop) /= '"' or else Definition (Stop - 1) = '\')
+                        loop
+                           Stop := Stop + 1;
+                        end loop;
+                        return (if Stop > Definition'Last then "" else Definition (Open + 1 .. Stop - 1));
+                     end String_Of;
+
+                     --  The names of its parameters: the keys of "properties".
+                     function Parameters return String is
+                        At_Props : constant Natural := Ada.Strings.Fixed.Index (Definition, """properties""");
+                        Said     : Ada.Strings.Unbounded.Unbounded_String;
+                        Depth    : Natural := 0;
+                        Index_At : Natural;
+                        In_Text  : Boolean := False;
+                        Start    : Natural := 0;
+                     begin
+                        if At_Props = 0 then
+                           return "";
+                        end if;
+                        Index_At := Ada.Strings.Fixed.Index (Definition (At_Props .. Definition'Last), "{");
+                        if Index_At = 0 then
+                           return "";
+                        end if;
+                        for Here in Index_At .. Definition'Last loop
+                           declare
+                              C : constant Character := Definition (Here);
+                           begin
+                              if In_Text then
+                                 if C = '"' and then Definition (Here - 1) /= '\' then
+                                    In_Text := False;
+                                    --  A key at the first depth, a colon after it.
+                                    if Depth = 1 and then Here < Definition'Last
+                                      and then Ada.Strings.Fixed.Index
+                                                 (Ada.Strings.Fixed.Trim (Definition (Here + 1 .. Definition'Last),
+                                                                          Ada.Strings.Left), ":") = 1
+                                    then
+                                       Ada.Strings.Unbounded.Append
+                                         (Said, (if Ada.Strings.Unbounded.Length (Said) = 0 then "" else ", ")
+                                                & Definition (Start .. Here - 1));
+                                    end if;
+                                 end if;
+                              elsif C = '"' then
+                                 In_Text := True;
+                                 Start := Here + 1;
+                              elsif C = '{' then
+                                 Depth := Depth + 1;
+                              elsif C = '}' then
+                                 Depth := Depth - 1;
+                                 exit when Depth = 0;
+                              end if;
+                           end;
+                        end loop;
+                        return Ada.Strings.Unbounded.To_String (Said);
+                     end Parameters;
+                  begin
+                     Pres.Put_Aside_Marked
+                       (Screen, "cli.interactive.tool_name",
+                        [Loc.Named ("name", Model_Runner.Tools.Tool_Name (Tools.all, Index))],
+                        Model_Runner.Tools.Tool_Name (Tools.all, Index), Pres.Good);
+                     if String_Of ("description") /= "" then
+                        Pres.Put_Aside (Screen, "cli.interactive.tool_does",
+                                        [Loc.Named ("detail", String_Of ("description"))], Indent => 2);
+                     end if;
+                     Pres.Put_Aside (Screen, "cli.interactive.tool_takes",
+                                     [Loc.Named ("detail", (if Parameters = "" then "nothing" else Parameters))],
+                                     Indent => 2);
+                  end;
                end loop;
             end if;
 

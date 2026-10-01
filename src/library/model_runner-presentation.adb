@@ -272,6 +272,30 @@ package body Model_Runner.Presentation is
       end if;
    end Put_Indented;
 
+   ----------------
+   -- Size_Image --
+   ----------------
+
+   function Size_Image (Bytes : Interfaces.Unsigned_64) return String is
+      use type Interfaces.Unsigned_64;
+      Exact : constant String := T.Image (Long_Long_Integer (Bytes));
+   begin
+      if Bytes < 1024 then
+         return Exact & " bytes";
+      end if;
+      declare
+         Units  : constant array (1 .. 4) of String (1 .. 3) := ["KiB", "MiB", "GiB", "TiB"];
+         Amount : Long_Float := Long_Float (Bytes);
+         Unit   : Natural := 0;
+      begin
+         while Amount >= 1024.0 and then Unit < 4 loop
+            Amount := Amount / 1024.0;
+            Unit := Unit + 1;
+         end loop;
+         return T.Image (Amount, 1) & " " & Units (Unit) & " (" & Exact & " bytes)";
+      end;
+   end Size_Image;
+
    -----------------
    -- Put_Section --
    -----------------
@@ -477,10 +501,14 @@ package body Model_Runner.Presentation is
    procedure Put_Heading
      (Item  : in out Console;
       Key   : String;
-      Where : Destination)
+      Where : Destination;
+      Gap   : Boolean := False)
    is
       Label : constant String := Message (Item, Key);
    begin
+      if Gap and then not Item.Structured then
+         Write_Line (Item, Where, "");
+      end if;
       Write_Line
         (Item, Where,
          (if Styles (Item, Where)
@@ -493,10 +521,11 @@ package body Model_Runner.Presentation is
    ----------------
 
    procedure Put_Field
-     (Item  : in out Console;
-      Key   : String;
-      Value : String;
-      Where : Destination)
+     (Item       : in out Console;
+      Key        : String;
+      Value      : String;
+      Where      : Destination;
+      Value_Tone : Tone := Plain)
    is
       Label : constant String := Message (Item, Key);
 
@@ -505,7 +534,7 @@ package body Model_Runner.Presentation is
       --  would break in every locale but English.
       Width : constant Natural := Model_Runner.UTF8.Code_Point_Count (Label);
       Shown : constant Natural := (if Width = 0 then Label'Length else Width);
-      Padding : constant Natural := (if Shown >= 24 then 1 else 24 - Shown);
+      Padding : constant Natural := (if Shown >= 32 then 1 else 32 - Shown);
    begin
       Write_Line
         (Item, Where,
@@ -514,7 +543,8 @@ package body Model_Runner.Presentation is
             then Terminal_Styles.Decorate (Label, Terminal_Styles.Role_Muted)
             else Label)
          & String'(1 .. Padding => ' ')
-         & Value);
+         & (if Value_Tone = Plain or else not Styles (Item, Where) then Value
+            else Terminal_Styles.Decorate (Value, Role_Of (Value_Tone))));
    end Put_Field;
 
    ---------------------
@@ -552,6 +582,106 @@ package body Model_Runner.Presentation is
    ----------------
 
    function In_Session (Item : Console) return Boolean is (Item.Session);
+
+   -------------
+   -- Put_Row --
+   -------------
+
+   procedure Put_Row
+     (Item       : in out Console;
+      Main       : String;
+      Aside      : String;
+      Indent     : Natural := 0;
+      Main_Tone  : Tone := Plain;
+      Mute_Aside : Boolean := True)
+   is
+      Lead   : constant String (1 .. Indent) := [others => ' '];
+      Styled : constant Boolean := Styles (Item, Answer) and then not Item.Structured;
+   begin
+      Put_Line (Item, Lead
+                      & (if Styled and then Main_Tone /= Plain
+                         then Terminal_Styles.Decorate (Main, Role_Of (Main_Tone)) else Main)
+                      & (if Aside = "" then ""
+                         elsif Styled and then Mute_Aside
+                         then "  " & Terminal_Styles.Decorate (Aside, Terminal_Styles.Role_Muted)
+                         else "  " & Aside));
+   end Put_Row;
+
+   -------------------
+   -- Put_Help_Line --
+   -------------------
+
+   --  A line with its first word -- a command -- bold where colour shows.
+   function Command_Bold (Item : Console; Line : String) return String is
+      Space : constant Natural := Ada.Strings.Fixed.Index (Line & " ", " ");
+   begin
+      if not Styles_Diagnostics (Item) or else Line = "" or else Line (Line'First) /= '/' then
+         return Line;
+      end if;
+      return Terminal_Styles.Decorate (Line (Line'First .. Space - 1), Terminal_Styles.Role_Header)
+        & Line (Space .. Line'Last);
+   end Command_Bold;
+
+   procedure Put_Help_Line (Item : in out Console; Key : String) is
+   begin
+      if Item.Structured then
+         Put_Record (Item, "note", Key, Loc.Empty_Arguments, Message (Item, Key));
+         return;
+      end if;
+      Error_Line (Item, Command_Bold (Item, Message (Item, Key)));
+   end Put_Help_Line;
+
+   ---------------
+   -- Put_Usage --
+   ---------------
+
+   procedure Put_Usage (Item : in out Console; Key : String) is
+      Text  : constant String := Message (Item, Key);
+      Start : Positive := Text'First;
+   begin
+      if Item.Structured then
+         Put_Record (Item, "note", Key, Loc.Empty_Arguments, Text);
+         return;
+      end if;
+      loop
+         declare
+            Cut  : constant Natural := Ada.Strings.Fixed.Index (Text (Start .. Text'Last), " -- ");
+            Part : constant String :=
+              Ada.Strings.Fixed.Trim (Text (Start .. (if Cut = 0 then Text'Last else Cut - 1)), Ada.Strings.Both);
+         begin
+            if Part /= "" then
+               Error_Line (Item, "  " & Command_Bold (Item, Part));
+            end if;
+            exit when Cut = 0;
+            Start := Cut + 4;
+         end;
+      end loop;
+   end Put_Usage;
+
+   ----------------------
+   -- Put_Aside_Marked --
+   ----------------------
+
+   procedure Put_Aside_Marked
+     (Item      : in out Console;
+      Key       : String;
+      Arguments : Loc.Argument_List;
+      Mark      : String;
+      Mark_Tone : Tone)
+   is
+      Line    : constant String := Message (Item, Key, Arguments);
+      At_Mark : constant Natural := (if Mark = "" then 0 else Ada.Strings.Fixed.Index (Line, Mark));
+   begin
+      if Item.Structured then
+         Put_Record (Item, "note", Key, Arguments, Line);
+      elsif At_Mark = 0 or else Mark_Tone = Plain or else not Styles_Diagnostics (Item) then
+         Error_Line (Item, Line);
+      else
+         Error_Line (Item, Line (Line'First .. At_Mark - 1)
+                           & Terminal_Styles.Decorate (Mark, Role_Of (Mark_Tone))
+                           & Line (At_Mark + Mark'Length .. Line'Last));
+      end if;
+   end Put_Aside_Marked;
 
    ---------------------
    -- Next_Step_Value --
@@ -613,13 +743,16 @@ package body Model_Runner.Presentation is
    procedure Put_Aside
      (Item      : in out Console;
       Key       : String;
-      Arguments : Loc.Argument_List := Loc.Empty_Arguments) is
+      Arguments : Loc.Argument_List := Loc.Empty_Arguments;
+      Indent    : Natural := 0)
+   is
+      Lead : constant String (1 .. Indent) := [others => ' '];
    begin
       if Item.Structured then
          Put_Record (Item, "note", Key, Arguments, Message (Item, Key, Arguments));
          return;
       end if;
-      Error_Line (Item, Message (Item, Key, Arguments));
+      Error_Line (Item, Lead & Message (Item, Key, Arguments));
    end Put_Aside;
 
    -----------------
@@ -959,17 +1092,22 @@ package body Model_Runner.Presentation is
          return;
       end if;
 
-      Error_Line
-        (Item,
-         Message
-           (Item, "diagnostic.warning_line",
-            [Loc.Named
-               ("severity",
-                (if Styles_Diagnostics (Item)
-                 then Terminal_Styles.Decorate
-                        (Severity, Terminal_Styles.Role_Warning)
-                 else Severity)),
-             Loc.Named ("detail", Message (Item, Key, Arguments))]));
+      --  The label coloured after the line is rendered, as Report does: a
+      --  rendered argument has its control characters escaped, colour too.
+      declare
+         Line     : constant String :=
+           Message (Item, "diagnostic.warning_line",
+                    [Loc.Named ("severity", Severity), Loc.Named ("detail", Message (Item, Key, Arguments))]);
+         At_Label : constant Natural := (if Severity = "" then 0 else Ada.Strings.Fixed.Index (Line, Severity));
+      begin
+         if Styles_Diagnostics (Item) and then At_Label > 0 then
+            Error_Line (Item, Line (Line'First .. At_Label - 1)
+                              & Terminal_Styles.Decorate (Severity, Terminal_Styles.Role_Warning)
+                              & Line (At_Label + Severity'Length .. Line'Last));
+         else
+            Error_Line (Item, Line);
+         end if;
+      end;
    end Warn;
 
    ----------------------
@@ -1009,7 +1147,10 @@ package body Model_Runner.Presentation is
             (Item, "statistics.per_second",
              [Loc.Named ("value", T.Image (Value, 2))]));
    begin
-      Put_Heading (Item, "statistics.heading", Diagnostic);
+      --  Set apart from the answer above it, and in groups: the tokens,
+      --  how fast, where it ran, and how it ended.
+      Put_Heading (Item, "statistics.heading", Diagnostic, Gap => True);
+      Put_Heading (Item, "statistics.heading.tokens", Diagnostic);
       Put_Field
         (Item, "statistics.prompt_tokens",
          T.Image (Long_Long_Integer (Outcome.Prompt_Tokens)), Diagnostic);
@@ -1021,10 +1162,26 @@ package body Model_Runner.Presentation is
          T.Image (Long_Long_Integer (Outcome.Final_Position)), Diagnostic);
       Put_Field
         (Item, "statistics.seed", T.Image (Outcome.Seed), Diagnostic);
+      Put_Heading (Item, "statistics.heading.speed", Diagnostic, Gap => True);
       Put_Field (Item, "statistics.prefill_duration", Seconds (Outcome.Prefill_Ns), Diagnostic);
       Put_Field (Item, "statistics.decode_duration", Seconds (Outcome.Decode_Ns), Diagnostic);
       Put_Field (Item, "statistics.prefill_rate", Rate (Outcome.Prefill_Rate), Diagnostic);
       Put_Field (Item, "statistics.decode_rate", Rate (Outcome.Decode_Rate), Diagnostic);
+      --  What a draft model proposed and how much of it was taken, for a
+      --  run that had one: the one number that says whether the draft was
+      --  worth its own passes, in the colour of how it did.
+      if Outcome.Drafted > 0 then
+         Put_Field
+           (Item, "statistics.drafted",
+            T.Image (Long_Long_Integer (Outcome.Drafted)), Diagnostic);
+         Put_Field
+           (Item, "statistics.accepted",
+            T.Image (Long_Long_Integer (Outcome.Accepted)) & " ("
+            & T.Image (Long_Long_Integer (Outcome.Accepted * 100 / Outcome.Drafted)) & "%)",
+            Diagnostic,
+            (if Outcome.Accepted * 100 / Outcome.Drafted >= 60 then Good else Pending));
+      end if;
+      Put_Heading (Item, "statistics.heading.where", Diagnostic, Gap => True);
       Put_Field
         (Item, "statistics.backend",
          Model_Runner.Backend.Backend_Name (Outcome.Backend), Diagnostic);
@@ -1038,22 +1195,10 @@ package body Model_Runner.Presentation is
             (if Outcome.Weights_Mapped
              then "statistics.weights.mapped"
              else "statistics.weights.read")), Diagnostic);
-      --  What a draft model proposed and how much of it was taken, for a
-      --  run that had one. The only number that says whether the draft was
-      --  worth its own passes.
       if Outcome.Shifted > 0 then
          Put_Field
            (Item, "statistics.shifted",
             T.Image (Long_Long_Integer (Outcome.Shifted)), Diagnostic);
-      end if;
-
-      if Outcome.Drafted > 0 then
-         Put_Field
-           (Item, "statistics.drafted",
-            T.Image (Long_Long_Integer (Outcome.Drafted)), Diagnostic);
-         Put_Field
-           (Item, "statistics.accepted",
-            T.Image (Long_Long_Integer (Outcome.Accepted)), Diagnostic);
       end if;
 
       --  What the device did with the model, for a run that used one. A
@@ -1078,26 +1223,23 @@ package body Model_Runner.Presentation is
            (Item, "statistics.imported",
             T.Image (Long_Long_Integer (Imported)), Diagnostic);
          Put_Field
-           (Item, "statistics.resident_bytes",
-            T.Image (Long_Long_Integer (Resident_Bytes)), Diagnostic);
+           (Item, "statistics.resident_bytes", Size_Image (Resident_Bytes), Diagnostic);
          Put_Field
            (Item, "statistics.given_back",
-            T.Image (Long_Long_Integer (Given_Back)), Diagnostic);
+            T.Image (Long_Long_Integer (Given_Back)), Diagnostic, (if Given_Back > 0 then Pending else Plain));
 
          --  And whether the context is there as well as the weights. A
          --  device holding one and not the other attends on the processor,
          --  and nothing here used to say so.
          Put_Field
-           (Item, "statistics.cached_bytes",
-            T.Image (Long_Long_Integer (Cached_Bytes)), Diagnostic);
+           (Item, "statistics.cached_bytes", Size_Image (Cached_Bytes), Diagnostic);
 
          --  And the rings, for a hybrid: said only where there are any,
          --  since every other architecture would read a nought there and
          --  wonder what it was.
          if Interfaces.">" (State_Bytes, 0) then
             Put_Field
-              (Item, "statistics.state_bytes",
-               T.Image (Long_Long_Integer (State_Bytes)), Diagnostic);
+              (Item, "statistics.state_bytes", Size_Image (State_Bytes), Diagnostic);
          end if;
 
          --  And how much of the model went over as one sequence. A layer
@@ -1145,6 +1287,7 @@ package body Model_Runner.Presentation is
          end if;
       end if;
 
+      Put_Heading (Item, "statistics.heading.ended", Diagnostic, Gap => True);
       Put_Field
         (Item, "statistics.completion_reason",
          Message (Item, "completion." & Gen.Reason_Name (Outcome.Reason)), Diagnostic);

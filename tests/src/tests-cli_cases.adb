@@ -2861,12 +2861,14 @@ package body Tests.CLI_Cases is
       Assert (Repo ("scan", "") = 0
               and then Ada.Strings.Fixed.Index (Last_Output, "files: 2") > 0,
               "the scan did not say what it found: " & Last_Output);
+      --  By directory: src/ once, its files set in under it.
       Assert (Repo ("tree", "") = 0
-              and then Ada.Strings.Fixed.Index (Last_Output, "src/greet.ads") > 0,
-              "the tree did not list the files");
+              and then Ada.Strings.Fixed.Index (Last_Output, "src/") > 0
+              and then Ada.Strings.Fixed.Index (Last_Output, "greet.ads") > 0,
+              "the tree did not list the files: " & Last_Output);
       Assert (Repo ("sym", "hello") = 0
               and then Ada.Strings.Fixed.Index
-                         (Last_Output, "Greet.Hello  procedure  src/greet.ads:2")
+                         (Last_Output, "Greet.Hello  procedure at src/greet.ads:2")
                        > 0,
               "a symbol was not found where it is declared: " & Last_Output);
       Assert (Ada.Strings.Fixed.Index (Last_Output, "src/greet.ads:3") > 0,
@@ -7657,14 +7659,14 @@ package body Tests.CLI_Cases is
          --  differ between two scripts of different lengths whatever the
          --  handlers did. Comparing those was the first version of this and
          --  it passed with the clearing taken out.
-         Marker : constant String := "context tokens used";
+         Marker : constant String := "tokens (";
 
          --  The message alone, without the prompt markers that precede it on
          --  the same line. Those count the turns, so leaving them in made
          --  two sessions of different lengths differ whatever the numbers
          --  said -- which is how the version before this one passed with the
          --  clearing taken out, reporting 48 tokens both times.
-         Prefix : constant String := "model_runner: ";
+         Prefix : constant String := "used";
 
          function Context_Line (Text : String) return String is
             First : Natural := Text'First;

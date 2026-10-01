@@ -419,7 +419,8 @@ package body Model_Runner.CLI.Repo is
             Under : constant String :=
               (if Argument in "" | "." then ""
                elsif Argument (Argument'Last) = '/' then Argument else Argument & "/");
-            Shown : Natural := 0;
+            Shown    : Natural := 0;
+            Last_Dir : Unbounded_String;
          begin
             for Index in 1 .. Rp.File_Count (Found) loop
                declare
@@ -432,13 +433,33 @@ package body Model_Runner.CLI.Repo is
                     or else Path = Argument
                   then
                      Shown := Shown + 1;
-                     Pres.Put_Message
-                       (Screen, "cli.repo.file",
-                        [Loc.Named ("path", Path),
-                         Loc.Named ("value", To_String (File.Language)),
-                         Loc.Named ("detail",
-                                    Ada.Characters.Handling.To_Lower
-                                      (Rp.File_Role'Image (File.Role)))]);
+                     --  By directory: each one's title once, its files set
+                     --  in under it, their language and role muted.
+                     declare
+                        Slash : constant Natural := Ada.Strings.Fixed.Index (Path, "/", Ada.Strings.Backward);
+                        Dir   : constant String := (if Slash = 0 then "./" else Path (Path'First .. Slash));
+                        Leaf  : constant String := (if Slash = 0 then Path else Path (Slash + 1 .. Path'Last));
+                     begin
+                        if Pres.Is_Structured (Screen) then
+                           Pres.Put_Message
+                             (Screen, "cli.repo.file",
+                              [Loc.Named ("path", Path),
+                               Loc.Named ("value", To_String (File.Language)),
+                               Loc.Named ("detail",
+                                          Ada.Characters.Handling.To_Lower
+                                            (Rp.File_Role'Image (File.Role)))]);
+                        else
+                           if Dir /= To_String (Last_Dir) then
+                              Pres.Put_Header (Screen, "cli.repo.directory", [Loc.Named ("path", Dir)]);
+                              Last_Dir := To_Unbounded_String (Dir);
+                           end if;
+                           Pres.Put_Row (Screen, Leaf,
+                                         To_String (File.Language)
+                                         & (if Length (File.Language) > 0 then ", " else "")
+                                         & Ada.Characters.Handling.To_Lower (Rp.File_Role'Image (File.Role)),
+                                         Indent => 2);
+                        end if;
+                     end;
                   end if;
                end;
             end loop;
@@ -476,12 +497,18 @@ package body Model_Runner.CLI.Repo is
                for Name of Names loop
                   for Named of Declared loop
                      if To_String (Named.Name) = Name then
-                        Pres.Put_Message
-                          (Screen, "cli.repo.symbol",
-                           [Loc.Named ("name", Name),
-                            Loc.Named ("value", To_String (Named.Kind)),
-                            Loc.Named ("path", To_String (Named.Path) & ":"
-                                               & Image (Named.Line))]);
+                        --  The name, then its kind and where, muted.
+                        if Pres.Is_Structured (Screen) then
+                           Pres.Put_Message
+                             (Screen, "cli.repo.symbol",
+                              [Loc.Named ("name", Name),
+                               Loc.Named ("value", To_String (Named.Kind)),
+                               Loc.Named ("path", To_String (Named.Path) & ":"
+                                                  & Image (Named.Line))]);
+                        else
+                           Pres.Put_Row (Screen, Name, To_String (Named.Kind) & " at " & To_String (Named.Path)
+                                                       & ":" & Image (Named.Line));
+                        end if;
                      end if;
                   end loop;
                end loop;
@@ -1094,6 +1121,10 @@ package body Model_Runner.CLI.Repo is
                Pres.Put_Note
                  (Screen, (if Action = "users" then "cli.repo.symbol_users" else "cli.repo.symbol_deps"),
                   [Loc.Named ("name", Argument)]);
+            --  What the list is, as its title.
+            elsif not Units.Is_Empty then
+               Pres.Put_Header (Screen, (if Action = "users" then "cli.repo.users_of" else "cli.repo.deps_of"),
+                                [Loc.Named ("name", Argument)]);
             end if;
             for Unit of Units loop
                Pres.Put_Indented

@@ -1490,32 +1490,32 @@ package body Model_Runner.CLI.Project_Commands is
    procedure Help (Screen : in out Model_Runner.Presentation.Console) is
    begin
       --  One key each, spelled out, so the catalog's readers can be found.
-      Pres.Put_Aside (Screen, "cli.interactive.help.init");
-      Pres.Put_Aside (Screen, "cli.interactive.help.bootstrap");
-      Pres.Put_Aside (Screen, "cli.interactive.help.state");
-      Pres.Put_Aside (Screen, "cli.interactive.help.config");
-      Pres.Put_Aside (Screen, "cli.interactive.help.git");
-      Pres.Put_Aside (Screen, "cli.interactive.help.sandbox");
-      Pres.Put_Aside (Screen, "cli.interactive.help.instruct");
-      Pres.Put_Aside (Screen, "cli.interactive.help.reconfigure");
-      Pres.Put_Aside (Screen, "cli.interactive.help.task");
-      Pres.Put_Aside (Screen, "cli.interactive.help.accept");
-      Pres.Put_Aside (Screen, "cli.interactive.help.reject");
-      Pres.Put_Aside (Screen, "cli.interactive.help.work");
-      Pres.Put_Aside (Screen, "cli.interactive.help.cancel");
-      Pres.Put_Aside (Screen, "cli.interactive.help.check");
-      Pres.Put_Aside (Screen, "cli.interactive.help.req");
-      Pres.Put_Aside (Screen, "cli.interactive.help.decision");
-      Pres.Put_Aside (Screen, "cli.interactive.help.spec");
-      Pres.Put_Aside (Screen, "cli.interactive.help.result");
-      Pres.Put_Aside (Screen, "cli.interactive.help.scan");
-      Pres.Put_Aside (Screen, "cli.interactive.help.tree");
-      Pres.Put_Aside (Screen, "cli.interactive.help.sym");
-      Pres.Put_Aside (Screen, "cli.interactive.help.refs");
-      Pres.Put_Aside (Screen, "cli.interactive.help.deps");
-      Pres.Put_Aside (Screen, "cli.interactive.help.users");
-      Pres.Put_Aside (Screen, "cli.interactive.help.impact");
-      Pres.Put_Aside (Screen, "cli.interactive.help.trace");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.init");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.bootstrap");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.state");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.config");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.git");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.sandbox");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.instruct");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.reconfigure");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.task");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.accept");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.reject");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.work");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.cancel");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.check");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.req");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.decision");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.spec");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.result");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.scan");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.tree");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.sym");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.refs");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.deps");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.users");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.impact");
+      Pres.Put_Help_Line (Screen, "cli.interactive.help.trace");
    end Help;
 
    --  Whether a line leaves a quote open: the rest of it taken as quoted.
@@ -4926,12 +4926,16 @@ package body Model_Runner.CLI.Project_Commands is
             Pres.Put_Note (Screen, "cli.project.git.none");
             return;
          end if;
-         Pres.Put_Message
+         Pres.Put_Header
            (Screen, "cli.project.git.branch", [Loc.Named ("name", To_String (Said.Branch))]);
-         for Line of Said.Changes loop
-            declare
-               Path : constant String := Line (Line'First + 3 .. Line'Last);
-               By   : Unbounded_String;
+         --  The changes by the task that made them, each group under its
+         --  title, each change said in a word in its colour.
+         declare
+            Groups : Names.Vector;
+            Of_Each : Names.Vector;
+
+            function Made_By (Path : String) return String is
+               By : Unbounded_String;
             begin
                for Id of Tk.List (Store) loop
                   declare
@@ -4940,20 +4944,51 @@ package body Model_Runner.CLI.Project_Commands is
                   begin
                      S.Read (Store, Model_Runner.Framework.Tasks_Area, Id & ".state", State, Read);
                      if E.Is_Ok (Read)
-                       and then Model_Runner.Framework.Lines_Of
-                                  (R.Get (State, "changed_files")).Contains (Path)
+                       and then Model_Runner.Framework.Lines_Of (R.Get (State, "changed_files")).Contains (Path)
                      then
                         Append (By, (if By = Null_Unbounded_String then "" else ", ") & Id);
                      end if;
                   end;
                end loop;
-               Pres.Put_Message
-                 (Screen, "cli.task.item",
-                  [Loc.Named ("name", Path),
-                   Loc.Named ("value", Line (Line'First .. Line'First + 1)),
-                   Loc.Named ("detail", To_String (By))]);
-            end;
-         end loop;
+               return To_String (By);
+            end Made_By;
+         begin
+            for Line of Said.Changes loop
+               Of_Each.Append (Made_By (Line (Line'First + 3 .. Line'Last)));
+               if not Groups.Contains (Of_Each.Last_Element) then
+                  Groups.Append (Of_Each.Last_Element);
+               end if;
+            end loop;
+            for Group of Groups loop
+               if Group = "" then
+                  Pres.Put_Section (Screen, "cli.project.git.by_no_task");
+               else
+                  Pres.Put_Line (Screen, "");
+                  Pres.Put_Header (Screen, "cli.project.git.by_task", [Loc.Named ("name", Group)]);
+               end if;
+               for Index in 1 .. Natural (Said.Changes.Length) loop
+                  if Of_Each (Index) = Group then
+                     declare
+                        Line : constant String := Said.Changes (Index);
+                        Code : constant String := Ada.Strings.Fixed.Trim (Line (Line'First .. Line'First + 1),
+                                                                          Ada.Strings.Both);
+                        Word : constant String :=
+                          (if Code = "??" then "new"
+                           elsif Ada.Strings.Fixed.Index (Code, "D") > 0 then "deleted"
+                           elsif Ada.Strings.Fixed.Index (Code, "A") > 0 then "added"
+                           elsif Ada.Strings.Fixed.Index (Code, "R") > 0 then "renamed"
+                           else "modified");
+                     begin
+                        Pres.Put_Row (Screen, Ada.Strings.Fixed.Head (Word, 8), Line (Line'First + 3 .. Line'Last),
+                                      Indent => 2,
+                                      Main_Tone => (if Word in "new" | "added" then Pres.Good
+                                                    elsif Word = "deleted" then Pres.Bad else Pres.Pending),
+                                      Mute_Aside => False);
+                     end;
+                  end if;
+               end loop;
+            end loop;
+         end;
          if Said.Changes.Is_Empty then
             Pres.Put_Note (Screen, "cli.project.git.clean");
          end if;

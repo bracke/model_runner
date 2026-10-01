@@ -201,6 +201,55 @@ package Model_Runner.Presentation is
       Mark      : String;
       Mark_Tone : Tone);
 
+   --  Write a localized line to standard error, with no program name before
+   --  it, one word of it in its tone at a terminal that shows colour: a
+   --  choice's warning in a list a person picks from.
+   --
+   --  @param Item Console to write through.
+   --  @param Key Stable message identifier.
+   --  @param Arguments Message arguments.
+   --  @param Mark The words to colour, found in the rendered line.
+   --  @param Mark_Tone Their tone.
+   procedure Put_Aside_Marked
+     (Item      : in out Console;
+      Key       : String;
+      Arguments : Model_Runner.Localization.Argument_List;
+      Mark      : String;
+      Mark_Tone : Tone);
+
+   --  Write a row of data to standard output: what it is about, then what
+   --  is said of it muted at a terminal that shows colour -- a file and its
+   --  language, a symbol and where it is declared.
+   --
+   --  @param Item Console to write through.
+   --  @param Main What the row is about, already escaped.
+   --  @param Aside What is said of it, already escaped.
+   --  @param Indent How many spaces it is set in by.
+   --  @param Main_Tone How what it is about stands, for its colour.
+   --  @param Mute_Aside Whether what is said of it is muted.
+   procedure Put_Row
+     (Item       : in out Console;
+      Main       : String;
+      Aside      : String;
+      Indent     : Natural := 0;
+      Main_Tone  : Tone := Plain;
+      Mute_Aside : Boolean := True);
+
+   --  Write a line of help on standard error: the command it is for --
+   --  its first word -- in bold at a terminal that shows colour.
+   --
+   --  @param Item Console to write through.
+   --  @param Key Stable message identifier of the line.
+   procedure Put_Help_Line (Item : in out Console; Key : String);
+
+   --  Write how a command is used on standard error, a form a line: the
+   --  text's parts, which " -- " parts, each set in on a line of its own
+   --  with its command in bold at a terminal that shows colour.
+   --
+   --  @param Item Console to write through.
+   --  @param Key Stable message identifier of the usage text.
+   procedure Put_Usage (Item : in out Console; Key : String);
+
    --  Write a line of a unified diff to standard output: at a terminal
    --  that shows colour, an added line green, a removed one red, and a
    --  file or hunk header muted.
@@ -259,10 +308,13 @@ package Model_Runner.Presentation is
    --  @param Item Console to write through.
    --  @param Key Stable message identifier of the heading.
    --  @param Where Which stream the heading belongs on.
+   --  @param Gap Whether a blank line sets it apart from what came
+   --    before, as the second and later groups of a record are.
    procedure Put_Heading
      (Item  : in out Console;
       Key   : String;
-      Where : Destination);
+      Where : Destination;
+      Gap   : Boolean := False);
 
    --  Write a labelled value.
    --
@@ -272,11 +324,20 @@ package Model_Runner.Presentation is
    --  @param Key Stable message identifier of the label.
    --  @param Value Value text, already escaped when it came from a model file.
    --  @param Where Which stream the line belongs on.
+   --  @param Value_Tone How the value stands, for its colour at a terminal.
    procedure Put_Field
-     (Item  : in out Console;
-      Key   : String;
-      Value : String;
-      Where : Destination);
+     (Item       : in out Console;
+      Key        : String;
+      Value      : String;
+      Where      : Destination;
+      Value_Tone : Tone := Plain);
+
+   --  A count of bytes as a reader takes it in: 644.4 MiB, the exact
+   --  count beside it in brackets.
+   --
+   --  @param Bytes The count.
+   --  @return The words.
+   function Size_Image (Bytes : Interfaces.Unsigned_64) return String;
 
    --  Write a labelled value whose label is data rather than a message.
    --
@@ -301,11 +362,14 @@ package Model_Runner.Presentation is
    --  @param Item Console to write through.
    --  @param Key Catalog key.
    --  @param Arguments Named arguments.
+   --  @param Indent How many spaces the line is set in by, as a field
+   --    under a name is.
    procedure Put_Aside
      (Item      : in out Console;
       Key       : String;
       Arguments : Model_Runner.Localization.Argument_List :=
-        Model_Runner.Localization.Empty_Arguments);
+        Model_Runner.Localization.Empty_Arguments;
+      Indent    : Natural := 0);
 
    --  Have the console speak for a session: its usage errors point to the
    --  session's help.

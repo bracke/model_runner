@@ -1521,17 +1521,25 @@ package body Model_Runner.CLI.Execute is
             end if;
 
             if not Ok then
-               Pres.Put_Note
-                 (Screen, "cli.download.failed",
-                  [Loc.Named ("detail", T.To_String (Reason))]);
+               --  In the colour of something gone wrong.
+               Pres.Put_Aside_Marked
+                 (Screen, "diagnostic.note",
+                  [Loc.Named ("detail", Pres.Next_Step_Value (Screen, "cli.download.failed",
+                                                            [Loc.Named ("detail", T.To_String (Reason))]))],
+                  Pres.Next_Step_Value (Screen, "cli.download.failed",
+                                      [Loc.Named ("detail", T.To_String (Reason))]),
+                  Pres.Bad);
                return;
             end if;
          end if;
       end loop;
 
-      Pres.Put_Note
-        (Screen, "cli.download.saved",
-         [Loc.Named ("detail", Destination)]);
+      Pres.Put_Aside_Marked
+        (Screen, "diagnostic.note",
+         [Loc.Named ("detail", Pres.Next_Step_Value (Screen, "cli.download.saved",
+                                                   [Loc.Named ("detail", Destination)]))],
+         Pres.Next_Step_Value (Screen, "cli.download.saved", [Loc.Named ("detail", Destination)]),
+         Pres.Good);
       Where   := Model_Runner.Text.To_Bounded (Destination);
       Fetched := True;
    end Offer_Download;
@@ -2006,6 +2014,19 @@ package body Model_Runner.CLI.Execute is
       --  The first refusal this inspection printed, if any. The report goes
       --  on past it; the status does not pretend it did not happen.
       Refused   : E.Error_Info;
+
+      --  A size as a reader takes it in, and exact for a program reading
+      --  the structured report.
+      function Size_Said (Bytes : Interfaces.Unsigned_64) return String
+      is (if Pres.Is_Structured (Screen) then T.Image (Long_Long_Integer (Bytes)) else Pres.Size_Image (Bytes));
+
+      --  The same, without the exact count in brackets.
+      function Short_Size (Bytes : Interfaces.Unsigned_64) return String is
+         Said : constant String := Pres.Size_Image (Bytes);
+         Cut  : constant Natural := Ada.Strings.Fixed.Index (Said, " (");
+      begin
+         return (if Cut = 0 then Said else Said (Said'First .. Cut - 1));
+      end Short_Size;
    begin
       Load
         (Item, Screen, Source, Container, Prepared, False, null, null,
@@ -2051,7 +2072,7 @@ package body Model_Runner.CLI.Execute is
          T.Escape_Controls (T.To_String (Item.Model_Path)), Pres.Answer);
       Pres.Put_Field
         (Screen, "cli.inspect.label.file_size",
-         T.Image (Long_Long_Integer (Containers.File_Size (Container))), Pres.Answer);
+         Size_Said (Interfaces.Unsigned_64 (Containers.File_Size (Container))), Pres.Answer);
       Pres.Put_Field
         (Screen, "cli.inspect.label.gguf_version",
          T.Image (Long_Long_Integer (Containers.Version (Container))), Pres.Answer);
@@ -2097,7 +2118,10 @@ package body Model_Runner.CLI.Execute is
 
          Pres.Put_Field
            (Screen, "cli.inspect.label.parameters",
-            T.Image (Long_Long_Integer (Parameters)), Pres.Answer);
+            (if Pres.Is_Structured (Screen) or else Interfaces."<" (Parameters, 1_000_000)
+             then T.Image (Long_Long_Integer (Parameters))
+             else T.Image (Long_Float (Parameters) / 1.0E6, 1) & " million ("
+                  & T.Image (Long_Long_Integer (Parameters)) & ")"), Pres.Answer);
          Pres.Put_Field
            (Screen, "cli.inspect.label.formats", Listing (1 .. Filled), Pres.Answer);
          Pres.Put_Field
@@ -2124,7 +2148,7 @@ package body Model_Runner.CLI.Execute is
             Pres.Report (Screen, Detail);
             Refused := Detail;
          else
-            Pres.Put_Heading (Screen, "cli.inspect.heading.architecture", Pres.Answer);
+            Pres.Put_Heading (Screen, "cli.inspect.heading.architecture", Pres.Answer, Gap => True);
             Pres.Put_Field
               (Screen, "cli.inspect.label.name",
                T.Escape_Controls
@@ -2221,7 +2245,7 @@ package body Model_Runner.CLI.Execute is
                Kind  : E.Error_Info;
             begin
                Vocab.Load (Words, Container, Model_Bounds (Item), Kind);
-               Pres.Put_Heading (Screen, "cli.inspect.heading.tokenizer", Pres.Answer);
+               Pres.Put_Heading (Screen, "cli.inspect.heading.tokenizer", Pres.Answer, Gap => True);
                if E.Is_Error (Kind) then
                   Pres.Report (Screen, Kind);
                else
@@ -2306,7 +2330,8 @@ package body Model_Runner.CLI.Execute is
                      Screen.Message_Value
                        (if E.Is_Ok (Outcome)
                         then "cli.inspect.value.present_supported"
-                        else "cli.inspect.value.present_unsupported"), Pres.Answer);
+                        else "cli.inspect.value.present_unsupported"), Pres.Answer,
+                     (if E.Is_Ok (Outcome) then Pres.Good else Pres.Bad));
                   if E.Is_Error (Outcome) and then Item.Level = Opt.Verbose then
                      Pres.Report (Screen, Outcome);
                   end if;
@@ -2325,17 +2350,33 @@ package body Model_Runner.CLI.Execute is
                --  saves should be able to say what it saves.
                L.Plan_For (Settings, Item.Context_Size, Plan, Detail2,
                            Cache => Item.Cache, Values => Item.Values);
-               Pres.Put_Heading (Screen, "cli.inspect.heading.memory", Pres.Answer);
+               Pres.Put_Heading (Screen, "cli.inspect.heading.memory", Pres.Answer, Gap => True);
                Pres.Put_Field
                  (Screen, "cli.inspect.label.model_bytes",
-                  T.Image
-                    (Long_Long_Integer
-                       (Containers.Tensor_Data_Bytes (Container))), Pres.Answer);
+                  Size_Said (Containers.Tensor_Data_Bytes (Container)), Pres.Answer);
                if E.Is_Ok (Detail2) then
                   Pres.Put_Field
                     (Screen, "cli.inspect.label.session_bytes",
-                     T.Image (Long_Long_Integer (Plan.Total_Resident)),
+                     Size_Said (Interfaces.Unsigned_64 (Plan.Total_Resident)),
                      Pres.Answer);
+                  --  Whether that fits here: as the model list judges it,
+                  --  two thirds of the machine's memory, the rest left for
+                  --  everything else.
+                  declare
+                     Memory : constant Long_Long_Integer :=
+                       Long_Long_Integer (Model_Runner.Platform.Physical_Memory);
+                     Fits   : constant Boolean :=
+                       Memory = 0 or else Long_Long_Integer (Plan.Total_Resident) <= Memory * 2 / 3;
+                  begin
+                     if Memory > 0 then
+                        Pres.Put_Field
+                          (Screen, "cli.inspect.label.fits",
+                           Screen.Message_Value (if Fits then "cli.inspect.value.fits"
+                                                 else "cli.inspect.value.too_big")
+                           & " (" & Short_Size (Interfaces.Unsigned_64 (Memory)) & " here)",
+                           Pres.Answer, (if Fits then Pres.Good else Pres.Bad));
+                     end if;
+                  end;
                end if;
 
                --  What --repack would need, which is the one number a caller
@@ -2412,24 +2453,15 @@ package body Model_Runner.CLI.Execute is
                   --  will run needs the moment when both are there.
                   Pres.Put_Field
                     (Screen, "cli.inspect.label.repacked_exact",
-                     T.Image
-                       (Long_Long_Integer
-                          (Exact
-                           + Containers.Tensor_Data_Bytes (Container))),
+                     Size_Said (Exact + Containers.Tensor_Data_Bytes (Container)),
                      Pres.Answer);
                   Pres.Put_Field
                     (Screen, "cli.inspect.label.repacked_bytes",
-                     T.Image
-                       (Long_Long_Integer
-                          (Repacked
-                           + Containers.Tensor_Data_Bytes (Container))),
+                     Size_Said (Repacked + Containers.Tensor_Data_Bytes (Container)),
                      Pres.Answer);
                   Pres.Put_Field
                     (Screen, "cli.inspect.label.repacked_rows",
-                     T.Image
-                       (Long_Long_Integer
-                          (Panels
-                           + Containers.Tensor_Data_Bytes (Container))),
+                     Size_Said (Panels + Containers.Tensor_Data_Bytes (Container)),
                      Pres.Answer);
                end;
             end;
@@ -2441,7 +2473,7 @@ package body Model_Runner.CLI.Execute is
       --  answer stopped being obvious when a second backend arrived: --backend
       --  reference takes one worker whatever --threads says, and a caller who
       --  cannot see that has no way to tell a slow run from a wrong one.
-      Pres.Put_Heading (Screen, "cli.inspect.heading.execution", Pres.Answer);
+      Pres.Put_Heading (Screen, "cli.inspect.heading.execution", Pres.Answer, Gap => True);
       Pres.Put_Field
         (Screen, "cli.inspect.label.backend",
          Model_Runner.Backend.Backend_Name (Item.Backend), Pres.Answer);
@@ -2451,7 +2483,7 @@ package body Model_Runner.CLI.Execute is
 
       --  Optional detail listings. Neither dumps a vocabulary by default.
       if Item.Show_Metadata then
-         Pres.Put_Heading (Screen, "cli.inspect.heading.metadata", Pres.Answer);
+         Pres.Put_Heading (Screen, "cli.inspect.heading.metadata", Pres.Answer, Gap => True);
          for Index in 1 .. Containers.Metadata_Count (Container) loop
             declare
                Key : constant String :=
@@ -2466,7 +2498,7 @@ package body Model_Runner.CLI.Execute is
       end if;
 
       if Item.Show_Tensors then
-         Pres.Put_Heading (Screen, "cli.inspect.heading.tensors", Pres.Answer);
+         Pres.Put_Heading (Screen, "cli.inspect.heading.tensors", Pres.Answer, Gap => True);
          for Index in 1 .. Containers.Tensor_Count (Container) loop
             declare
                Shape : String (1 .. 64) := [others => ' '];
@@ -3506,6 +3538,8 @@ package body Model_Runner.CLI.Execute is
                     US.To_Unbounded_String
                       (T.To_String (Item.Checkpoint_File_Path));
 
+                  --  In groups, as /work is: the run, then how it came out.
+                  Pres.Put_Heading (Screen, "cli.work.section.run", Pres.Diagnostic);
                   Model_Runner.Agent.Run
                     (Source     => Prepared,
                      Session    => Session,
@@ -3549,6 +3583,7 @@ package body Model_Runner.CLI.Execute is
                      Result     => Loop_Out);
 
                   Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Output);
+                  Pres.Put_Heading (Screen, "cli.work.section.outcome", Pres.Diagnostic, Gap => True);
 
                   --  The calls and their results were shown as they happened
                   --  by the watcher; here only the outcome is left to note --
@@ -5454,16 +5489,24 @@ package body Model_Runner.CLI.Execute is
       Pres.Put_Note (Screen, "cli.choose.header");
       for I in 1 .. Count loop
          declare
-            Name : constant String := Model_Runner.Text.To_String (Shown (I));
+            Label : constant String := Model_Runner.Text.To_String (Shown (I));
+            --  A model on disk with its size, as an offered one has it.
+            Name : constant String :=
+              (if Sizes (I) > 0 and then Ada.Strings.Fixed.Index (Label, "download ") /= Label'First
+               then Label & " (" & Giga (Sizes (I)) & ")" else Label);
             Note : constant String :=
               (if Too_Big (Sizes (I))
                then " -- " & Pres.Message_Value (Screen, "cli.choose.too_big")
                else "");
          begin
-            Pres.Put_Note
+            --  Its size beside it, and one too big for here in the colour
+            --  of something that will not do.
+            Pres.Put_Aside_Marked
               (Screen, "cli.choose.item",
                [Loc.Named ("index", T.Image (Long_Long_Integer (I))),
-                Loc.Named ("name", Name & Note)]);
+                Loc.Named ("name", Name & Note)],
+               (if Note = "" then "" else Pres.Message_Value (Screen, "cli.choose.too_big")),
+               Pres.Bad);
          end;
       end loop;
       Pres.Put_Note

@@ -8716,6 +8716,20 @@ package body Tests.Framework_Cases is
            (Screen, "cli.task.field",
             [Model_Runner.Localization.Named ("name", "kind"),
              Model_Runner.Localization.Named ("value", "analysis")]);
+         --  A row of data, a line of help, a usage set out, and a note with
+         --  one word in its tone: plain, where nothing shows colour.
+         Model_Runner.Presentation.Put_Row (Screen, "calc.py", "Python, source", Indent => 2);
+         Model_Runner.Presentation.Put_Help_Line (Screen, "cli.interactive.help.task");
+         Model_Runner.Presentation.Put_Usage (Screen, "cli.interactive.usage.task");
+         Model_Runner.Presentation.Put_Aside_Marked
+           (Screen, "cli.choose.item",
+            [Model_Runner.Localization.Named ("index", "1"),
+             Model_Runner.Localization.Named ("name", "big.gguf -- too big")],
+            "too big", Model_Runner.Presentation.Bad);
+         Assert (Model_Runner.Presentation.Size_Image (2048) = "2.0 KiB (2048 bytes)"
+                 and then Model_Runner.Presentation.Size_Image (10) = "10 bytes",
+                 "a size was not said as a reader takes it in: "
+                 & Model_Runner.Presentation.Size_Image (2048));
          Model_Runner.Presentation.Put_Diff_Line (Screen, "+added");
          Model_Runner.Presentation.Put_Diff_Line (Screen, "-removed");
          Set_Output (Standard_Output);
