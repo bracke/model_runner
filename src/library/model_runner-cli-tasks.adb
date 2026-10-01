@@ -1718,7 +1718,9 @@ package body Model_Runner.CLI.Tasks is
                if R.Get (View, Name) = ""
                  or else Name in "fingerprint" | "runtime.generation" | "definition.revision"
                                | "definition.created_by" | "definition.origin"
-                               | "definition.derivation_key"
+                               | "definition.derivation_key" | "kind.fields"
+                 or else Ada.Strings.Fixed.Index (Name, "resource.") = Name'First
+                 or else (Name = "definition.acceptance" and then R.Get (View, "definition.requirements") = "")
                  or else Ada.Strings.Fixed.Index (Shown_Name, "requirement.") = 1
                  or else (Shown_Name = "moved_by"
                           and then R.Get (View, Name)
@@ -1752,6 +1754,24 @@ package body Model_Runner.CLI.Tasks is
                   Line (R.Field_Name (View, Index));
                end if;
             end loop;
+            --  What it is judged by, where it serves nothing: itself.
+            if R.Get (View, "definition.requirements") = ""
+              and then R.Get (View, "definition.acceptance") in "" | "from_requirements"
+            then
+               Pres.Put_Message
+                 (Screen, "cli.task.field",
+                  [Loc.Named ("name", "acceptance"),
+                   Loc.Named ("value", "its title and notes -- it serves no requirement; /task link "
+                                       & Argument & " REQ-ID ties it to one")]);
+            end if;
+            --  Its bounds on one line.
+            if R.Get (View, "resource.max_steps") /= "" or else R.Get (View, "resource.token_budget") /= "" then
+               Pres.Put_Message
+                 (Screen, "cli.task.field",
+                  [Loc.Named ("name", "limits"),
+                   Loc.Named ("value", R.Get (View, "resource.max_steps") & " steps, "
+                                       & R.Get (View, "resource.token_budget") & " tokens")]);
+            end if;
             for Index in 1 .. R.Field_Count (View) loop
                if Governing (R.Field_Name (View, Index)) then
                   Line (R.Field_Name (View, Index));

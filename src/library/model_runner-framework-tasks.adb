@@ -647,7 +647,9 @@ package body Model_Runner.Framework.Tasks is
                end if;
             end;
          end loop;
-         if not Records.Has (Defined, "acceptance") then
+         --  Judged by what it serves where it serves something; one that
+         --  serves nothing is judged by what it says itself.
+         if not Records.Has (Defined, "acceptance") and then Records.Get (Defined, "requirements") /= "" then
             Records.Set (Defined, "acceptance", "from_requirements");
          end if;
          Records.Set (Defined, "created_by", Created_By);

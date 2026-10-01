@@ -1837,6 +1837,9 @@ Keep a Changelog and the project uses semantic versioning.
     also as the JSON it wrote; a rooted path where nothing on the host is
     -- /src/c.txt, / -- is the project's, and write_file makes a new file's
     directory. A delegate role is one the project names, never a tool.
+  - A task that serves no requirement is not marked judged by requirements;
+    `/task show` says it is judged by its title and notes and how to link
+    one, puts its limits on one line, and leaves out its kind's field list.
   - A state is said in words ("waiting in verification", "a candidate"); a
     lead-in repeated with another list is a requirement of its own; /init
     names a project from its alire.toml, Cargo.toml, pyproject.toml or
