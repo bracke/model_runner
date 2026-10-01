@@ -1760,6 +1760,37 @@ package body Model_Runner.CLI.Tasks is
                then
                   return;
                end if;
+               --  Not ready: blocked_by says that, and why, already.
+               if Name = "ready" and then R.Get (View, Name) /= "true" and then R.Get (View, "blocked_by") /= "" then
+                  return;
+               end if;
+               --  The checks it is verified by, said once: the profile, then
+               --  what it runs -- not profile, label and command stacked.
+               if Name = "verification_profile" then
+                  declare
+                     Held  : constant String := R.Get (View, Name);
+                     Colon : constant Natural := Ada.Strings.Fixed.Index (Held, ": ");
+                     Checks : constant Model_Runner.Framework.Verification.Check_List :=
+                       Model_Runner.Framework.Verification.Parse_Profile
+                         (if Colon = 0 then "" else Held (Colon + 2 .. Held'Last));
+                     Runs   : Unbounded_String;
+                  begin
+                     for Index in 1 .. Model_Runner.Framework.Verification.Length (Checks) loop
+                        Append (Runs, (if Runs = Null_Unbounded_String then "" else ", ")
+                                      & To_String (Model_Runner.Framework.Verification.Element
+                                                     (Checks, Index).Command));
+                     end loop;
+                     Pres.Put_Message
+                       (Screen, "cli.task.field",
+                        [Loc.Named ("name", "checked by"),
+                         Loc.Named ("value",
+                                    (if Colon = 0 then Held
+                                     else "profile " & Held (Held'First .. Colon - 1)
+                                          & (if Runs = Null_Unbounded_String then ""
+                                             else ", which runs " & To_String (Runs))))]);
+                     return;
+                  end;
+               end if;
                --  Ready as its state goes, and yet its agent left unable:
                --  said as not ready, with why.
                if Name = "ready" and then R.Get (View, Name) = "true"
