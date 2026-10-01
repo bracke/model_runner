@@ -985,6 +985,9 @@ package body Model_Runner.CLI.Work is
                --  session too.
                if Path /= "" then
                   Say ("cli.work.runner", Path, To_String (Chosen));
+                  --  Run apart, it has file tools only: said before it is
+                  --  missed, with the run that has the rest.
+                  Pres.Put_Note (Screen, "cli.work.runner_apart");
                elsif Given_Runner /= null then
                   Say ("cli.work.runner", Pres.Message_Value (Screen, "cli.work.runner.session"),
                        To_String (Chosen));
@@ -1370,6 +1373,11 @@ package body Model_Runner.CLI.Work is
             if To_String (Done.Claimed) = "blocked" then
                Pres.Put_Note (Screen, "cli.next.answer_blocked",
                               [Loc.Named ("name", To_String (Done.Task_Id))]);
+            elsif (for some One of Model_Runner.Framework.Workspaces.Kept_Copies (Store) =>
+                     Ada.Strings.Fixed.Index (One, "given-up-" & To_String (Done.Task_Id) & "-") = One'First)
+            then
+               --  What it changed is kept: putting that in is a way on too.
+               Pres.Put_Note (Screen, "cli.next.retry_kept", [Loc.Named ("name", To_String (Done.Task_Id))]);
             else
                Pres.Put_Note (Screen, "cli.next.retry", [Loc.Named ("name", To_String (Done.Task_Id))]);
             end if;

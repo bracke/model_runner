@@ -1,6 +1,7 @@
 with Ada.Calendar.Formatting;
 with Ada.Characters.Handling;
 with Ada.Directories;
+with Ada.Strings.Fixed;
 with Ada.Environment_Variables;
 with Ada.Streams.Stream_IO;
 with Ada.Unchecked_Deallocation;
@@ -1093,6 +1094,37 @@ package body Model_Runner.Tools.Builtin is
             else Pm.Nothing));
    end Confinement;
 
+   --  Where an agent the harness started names a path from the root --
+   --  /src/a.adb -- that is a place in the project, or for a file to be
+   --  written one whose directory is: that place, relative; "" otherwise.
+   function Rooted (Named, Args : String) return String is
+      package Pm renames Model_Runner.Framework.Permissions;
+      package Env renames Ada.Environment_Variables;
+      Have : Boolean;
+      Path : constant String := Text_Argument (Args, "path", Have);
+   begin
+      if not Env.Exists (Pm.Agent_Root_Variable) or else Path'Length < 2 or else Path (Path'First) /= '/'
+        or else Ada.Strings.Fixed.Index (Path, "..") > 0
+      then
+         return "";
+      end if;
+      declare
+         Tail  : constant String := Path (Path'First + 1 .. Path'Last);
+         Whole : constant String := Env.Value (Pm.Agent_Root_Variable) & "/" & Tail;
+      begin
+         if Ada.Directories.Exists (Whole)
+           or else (Named = "write_file" and then Ada.Strings.Fixed.Index (Tail, "/") > 0
+                    and then Ada.Directories.Exists (Ada.Directories.Containing_Directory (Whole)))
+         then
+            return Tail;
+         end if;
+         return "";
+      end;
+   exception
+      when others =>
+         return "";
+   end Rooted;
+
    function Read_File (Args : String) return String is
       Have : Boolean;
       Path : constant String := Text_Argument (Args, "path", Have);
@@ -1948,6 +1980,31 @@ package body Model_Runner.Tools.Builtin is
             return Memory_Put (Self, Arguments);
          elsif Named = "memory_get" then
             return Memory_Get (Self, Arguments);
+         elsif Named in "read_file" | "write_file" | "list_directory"
+           and then Rooted (Named, Arguments) /= ""
+         then
+            --  A path from the root that names a place in the project, as
+            --  the session's agent has it: taken as that place, and said.
+            declare
+               Have  : Boolean;
+               Given : constant String := Text_Argument (Arguments, "path", Have);
+               Taken : constant String := Rooted (Named, Arguments);
+               At_Path : constant Natural := Ada.Strings.Fixed.Index (Arguments, """" & Given & """");
+               Moved : constant String :=
+                 Arguments (Arguments'First .. At_Path) & Taken
+                 & Arguments (At_Path + Given'Length + 1 .. Arguments'Last);
+               Said  : constant String := "(" & Given & " is taken as the project's " & Taken & ") ";
+            begin
+               if Confinement (Named, Moved) /= "" then
+                  return "error: " & Confinement (Named, Moved);
+               elsif Named = "read_file" then
+                  return Said & Read_File (Moved);
+               elsif Named = "write_file" then
+                  return Said & Write_File (Moved);
+               else
+                  return Said & List_Directory (Moved);
+               end if;
+            end;
          elsif Confinement (Named, Arguments) /= "" then
             return "error: " & Confinement (Named, Arguments);
          elsif Named = "read_file" then

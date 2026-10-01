@@ -624,6 +624,28 @@ package body Model_Runner.Framework.Tasks is
          Component : constant String := Given ("component");
          Key       : String :=
            Ada.Characters.Handling.To_Upper (Component);
+
+         --  Whether the component's tasks are numbered plainly already --
+         --  TASK-001, from when it was the only one: its next is too, so
+         --  one component keeps one way of numbering.
+         function Plainly_Numbered (Name : String) return Boolean is
+         begin
+            for Other of List (Item) loop
+               declare
+                  Defined : Records.Item;
+                  Read    : E.Error_Info;
+               begin
+                  Definition (Item, Other, Defined, Read);
+                  if E.Is_Ok (Read) and then Records.Get (Defined, "component") = Name
+                    and then Other'Length > 5
+                    and then (for all C of Other (Other'First + 5 .. Other'Last) => C in '0' .. '9')
+                  then
+                     return True;
+                  end if;
+               end;
+            end loop;
+            return False;
+         end Plainly_Numbered;
       begin
          for Char of Key loop
             if Char not in 'A' .. 'Z' | '0' .. '9' then
@@ -636,6 +658,7 @@ package body Model_Runner.Framework.Tasks is
            (Item, Change, "TASK",
             (if Component /= "" and then Identifiers.Is_Valid (Key)
                and then Natural (Components (Item).Length) > 1
+               and then not Plainly_Numbered (Component)
              then Key else ""),
             Id, Status);
          if E.Is_Error (Status) then
@@ -1496,6 +1519,8 @@ package body Model_Runner.Framework.Tasks is
       Project_Component : constant String :=
         (if not Split (Records.Get (Settings, "set.components")).Is_Empty
          then Split (Records.Get (Settings, "set.components")).First_Element
+         --  As the component list names it: Hi There is Hi-There.
+         elsif not Components_Of (Settings).Is_Empty then Components_Of (Settings).First_Element
          else Records.Get (Settings, "input.project_name"));
 
       --  The keys of the derivations already made.
@@ -1689,8 +1714,13 @@ package body Model_Runner.Framework.Tasks is
                                  Definition (Item, Other, Defined, Got);
                               end if;
                               Key_Of := To_Unbounded_String (Records.Get (Defined, "derivation_key"));
-                              if Length (Key_Of) > Stem'Length
-                                and then Slice (Key_Of, 1, Stem'Length) = Stem
+                              --  Derived from it, or serving it alone under its
+                              --  name: its title follows the requirement's.
+                              if ((Length (Key_Of) > Stem'Length
+                                   and then Slice (Key_Of, 1, Stem'Length) = Stem)
+                                  or else (Natural (Split (Records.Get (Defined, "requirements")).Length) = 1
+                                           and then Split (Records.Get (Defined, "requirements")).First_Element
+                                                    = Requirement))
                                 and then State_In (Item, Change, Other)
                                            in "candidate" | "accepted" | "blocked" | "failed"
                                 and then Records.Get (Defined, "title") /= Title

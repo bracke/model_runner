@@ -903,7 +903,15 @@ package body Model_Runner.Framework.Permissions is
             Tail : constant String :=
               (if Slash = 0 or else Slash = Path'Last then "" else Path (Slash + 1 .. Path'Last));
          begin
-            return (if Writing or else (Tail /= "" and then Ada.Directories.Exists (Base & Tail)) then Tail
+            --  A file to be written: the path as given, its root taken off --
+            --  /docs/usage.md is docs/usage.md, its directory kept.
+            return (if Writing and then Path (Path'First) = '/' and then Path'Length > 1
+                      and then Ada.Strings.Fixed.Index (Path, "..") = 0
+                      --  A short one -- /dir/file -- not a whole path of the
+                      --  machine's, which names no place of the project's.
+                      and then Ada.Strings.Fixed.Count (Path, "/") <= 2
+                    then Path (Path'First + 1 .. Path'Last)
+                    elsif Writing or else (Tail /= "" and then Ada.Directories.Exists (Base & Tail)) then Tail
                     else "");
          exception
             when others =>
@@ -1023,13 +1031,16 @@ package body Model_Runner.Framework.Permissions is
            (if Name = "read_source" then "read the source"
             elsif Name = "read_specs" then "read the specifications"
             elsif Name = "write_source" then "write files" & Where
-            elsif Name = "write_specs" then "write specifications" & Where
+            elsif Name = "write_specs"
+            then "write specifications" & (if Where = "" then " (in " & Specification_Places & ")" else Where)
             elsif Name = "run_build" then "build it"
             elsif Name = "run_tests" then "run its tests"
             elsif Name = "run_static_analysis" then "run its static analysis"
             elsif Name = "create_children" then "make helpers" & (if Most = "" then "" else " (at most " & Most & ")")
             elsif Name = "propose_tasks" then "propose tasks"
             elsif Name = "use_network" then "use the network"
+            elsif Name = "execute_external_process" then "run other programs (no tool uses this yet)"
+            elsif Name = "request_integration" then "ask for integration (no tool uses this yet)"
             else Line);
       begin
          if Line /= "" then

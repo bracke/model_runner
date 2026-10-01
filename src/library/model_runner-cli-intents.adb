@@ -366,7 +366,8 @@ package body Model_Runner.CLI.Intents is
             procedure Waiting (On : Boolean) is
             begin
                Model_Runner.Platform.Signals.Set_Waiting_For_Input
-                 (On, Note => (if On then Pres.Message_Value (Screen, "cli.choose.interrupted") else ""));
+                 (On, Note => (if On then ASCII.LF & Pres.Message_Value (Screen, "cli.choose.interrupted")
+                               else ""));
             end Waiting;
             function Read return String is
             begin
@@ -385,6 +386,7 @@ package body Model_Runner.CLI.Intents is
             then
                if Ada.Strings.Fixed.Index (Typed, [1 => ASCII.ESC]) > 0 then
                   Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CAN);
+                  Pres.Put_Note (Screen, "cli.choose.escaped");
                end if;
                return False;
             end if;
@@ -468,6 +470,47 @@ package body Model_Runner.CLI.Intents is
 
       --  What was asked, read once the words are split.
       function Action return String is (Lower (Word (1)));
+
+      --  What a retired decision governed is governed no more: said, with
+      --  what the setting is now, or what governs it still.
+      procedure Say_Ruling_Gone (Id, Governed : String) is
+      begin
+         if Governed /= "" and then Ada.Strings.Fixed.Index (Governed, " = ") > 0 then
+            declare
+               Setting : constant String :=
+                 Governed (Governed'First .. Ada.Strings.Fixed.Index (Governed, " = ") - 1);
+               Config  : Model_Runner.Framework.Records.Item;
+               Read    : E.Error_Info;
+            begin
+               Model_Runner.Framework.Configurations.Read (Store, Config, Read);
+               --  Another decision governing it still: that one says.
+               for Other of Nt.List (Store, Nt.Decision, "accepted") loop
+                  if Other /= Id
+                    and then (Ada.Strings.Fixed.Index
+                                (Nt.Governs (Store, Nt.Decision, Other), Setting & " = ") = 1
+                              or else (for some Line of Nt.Also_Governs (Store, Nt.Decision, Other) =>
+                                         Ada.Strings.Fixed.Index (Line, Setting & " = ") = 1))
+                  then
+                     Pres.Put_Note
+                       (Screen, "cli.intent.ruling_passed",
+                        [Loc.Named ("name", Id), Loc.Named ("value", Governed),
+                         Loc.Named ("other", Other),
+                         Loc.Named ("detail", Nt.Governs (Store, Nt.Decision, Other))]);
+                     goto Ruling_Said;
+                  end if;
+               end loop;
+               Pres.Put_Note
+                 (Screen, "cli.intent.ruling_gone",
+                  [Loc.Named ("name", Id), Loc.Named ("value", Governed),
+                   Loc.Named ("detail",
+                              Setting & " = "
+                              & (if Model_Runner.Framework.Records.Get (Config, Setting) = ""
+                                 then "(its default)"
+                                 else Model_Runner.Framework.Records.Get (Config, Setting)))]);
+               <<Ruling_Said>>
+            end;
+         end if;
+      end Say_Ruling_Gone;
 
       --  Where a moved one was, for saying where it went from.
       From_State : Unbounded_String;
@@ -558,6 +601,19 @@ package body Model_Runner.CLI.Intents is
             else
                for Index in 2 .. Natural (Plain.Length) loop
                   Named.Append (Plain (Index));
+               end loop;
+               --  Every one named is one there is, or nothing is moved: a
+               --  word that is none -- a reason typed bare -- is said.
+               for Id of Named loop
+                  if Nt.State_Of (Store, Kind, Id) = "" then
+                     Status := E.Make (E.Framework_Input_Invalid);
+                     E.Add_Text (Status, "name", "the " & Word_Of (Kind) & "s to " & Action);
+                     E.Add_Text (Status, "value", Id);
+                     E.Add_Text (Status, "detail", "it is no " & Word_Of (Kind) & " there is, and nothing is "
+                                 & "moved; a reason is given as reason=...");
+                     Pres.Report (Screen, Status);
+                     return;
+                  end if;
                end loop;
             end if;
             --  The way on said once, after the last: not after each.
@@ -691,6 +747,16 @@ package body Model_Runner.CLI.Intents is
 
       elsif Action in "accept" | "reject" | "reconsider" | "obsolete" | "block" | "unblock" then
          Needs (2, "the " & Word_Of (Kind));
+         --  A field a move takes: reason=, for a block. Any other is said,
+         --  not dropped.
+         for Pair of Settings loop
+            if E.Is_Ok (Status) and then Ada.Strings.Fixed.Index (Pair, "reason=") /= Pair'First then
+               Status := E.Make (E.Framework_Input_Invalid);
+               E.Add_Text (Status, "name", "a field of " & Word_Of_Command (Kind) & " " & Action);
+               E.Add_Text (Status, "value", Pair);
+               E.Add_Text (Status, "detail", "it takes reason=... alone");
+            end if;
+         end loop;
          if E.Is_Ok (Status) then
             declare
                Granted : Tr.Permissions := Tr.Ordinary_Only;
@@ -754,7 +820,8 @@ package body Model_Runner.CLI.Intents is
                      end if;
                   end;
                end if;
-               Nt.Move (Store, Change, Kind, Word (2), Next, Granted, Status, Actor => Tr.User);
+               Nt.Move (Store, Change, Kind, Word (2), Next, Granted, Status, Actor => Tr.User,
+                        Reason => Given ("reason"));
                if E.Is_Ok (Status) then
                   S.Commit (Store, Change, Status);
                end if;
@@ -770,41 +837,7 @@ package body Model_Runner.CLI.Intents is
 
                --  What it governed is governed no more: said, with what the
                --  setting is now.
-               if Governed /= "" and then Ada.Strings.Fixed.Index (Governed, " = ") > 0 then
-                  declare
-                     Setting : constant String :=
-                       Governed (Governed'First .. Ada.Strings.Fixed.Index (Governed, " = ") - 1);
-                     Config  : Model_Runner.Framework.Records.Item;
-                     Read    : E.Error_Info;
-                  begin
-                     Model_Runner.Framework.Configurations.Read (Store, Config, Read);
-                     --  Another decision governing it still: that one says.
-                     for Other of Nt.List (Store, Nt.Decision, "accepted") loop
-                        if Other /= Word (2)
-                          and then (Ada.Strings.Fixed.Index
-                                      (Nt.Governs (Store, Nt.Decision, Other), Setting & " = ") = 1
-                                    or else (for some Line of Nt.Also_Governs (Store, Nt.Decision, Other) =>
-                                               Ada.Strings.Fixed.Index (Line, Setting & " = ") = 1))
-                        then
-                           Pres.Put_Note
-                             (Screen, "cli.intent.ruling_passed",
-                              [Loc.Named ("name", Word (2)), Loc.Named ("value", Governed),
-                               Loc.Named ("other", Other),
-                               Loc.Named ("detail", Nt.Governs (Store, Nt.Decision, Other))]);
-                           goto Ruling_Said;
-                        end if;
-                     end loop;
-                     Pres.Put_Note
-                       (Screen, "cli.intent.ruling_gone",
-                        [Loc.Named ("name", Word (2)), Loc.Named ("value", Governed),
-                         Loc.Named ("detail",
-                                    Setting & " = "
-                                    & (if Model_Runner.Framework.Records.Get (Config, Setting) = ""
-                                       then "(its default)"
-                                       else Model_Runner.Framework.Records.Get (Config, Setting)))]);
-                     <<Ruling_Said>>
-                  end;
-               end if;
+               Say_Ruling_Gone (Word (2), Governed);
 
                --  Retired, with work still open for it: how to let that go.
                if Nt."=" (Kind, Nt.Requirement) and then Next in "rejected" | "obsolete" then
@@ -1044,6 +1077,21 @@ package body Model_Runner.CLI.Intents is
                                  & Joined_Components (Store));
                   else
                      Nt.Rescope (Store, Change, Kind, Word (2), Given ("scope"), Status);
+                     --  An identifier keyed by the component it was made in
+                     --  keeps it: said, so the two are not taken for one.
+                     declare
+                        Upper : constant String := Ada.Characters.Handling.To_Upper (Word (2));
+                        Was   : constant String := Ada.Characters.Handling.To_Upper (To_String (Held.Scope));
+                     begin
+                        if E.Is_Ok (Status) and then Was /= "PROJECT"
+                          and then Ada.Strings.Fixed.Index (Upper, "-" & Was & "-") > 0
+                        then
+                           Pres.Put_Note (Screen, "cli.intent.id_keeps_scope",
+                                          [Loc.Named ("name", Word (2)),
+                                           Loc.Named ("value", Given ("scope")),
+                                           Loc.Named ("other", To_String (Held.Scope))]);
+                        end if;
+                     end;
                   end if;
                   if Given ("title") = "" and then Given ("text") = "" and then Given ("criteria") = "" then
                      Settle (Store, Change, Status, Screen, "cli.task.revised", Word (2));
@@ -1136,12 +1184,24 @@ package body Model_Runner.CLI.Intents is
             end;
          end if;
          Needs (4, "link ID RELATION TARGET, whose RELATION is dependency, component,"
-                & " implementation, task, test or verification -- as /req link REQ-001 implementation"
-                & " src/parser.c");
+                & " implementation, task, test or verification -- as " & Word_Of_Command (Kind) & " link "
+                & (case Kind is
+                      when Nt.Requirement   => "REQ-001",
+                      when Nt.Specification => "SPEC-001",
+                      when Nt.Decision      => "DEC-001")
+                & " implementation src/parser.c");
          --  A directory, or a path that is no file here, is nothing to
          --  point at: refused, as a name nothing is called is.
          if E.Is_Ok (Status) and then Lower (Word (3)) in "implementation" | "test"
-           and then Ada.Strings.Fixed.Index (From (4), "/") > 0
+           and then (Ada.Strings.Fixed.Index (From (4), "/") > 0
+                     or else From (4) in "." | ".."
+                     or else (Ada.Directories.Exists
+                                (Hostkit.Fs.Join (Ada.Directories.Containing_Directory (S.Root (Store)), From (4)))
+                              and then Ada.Directories."="
+                                         (Ada.Directories.Kind
+                                            (Hostkit.Fs.Join
+                                               (Ada.Directories.Containing_Directory (S.Root (Store)), From (4))),
+                                          Ada.Directories.Directory)))
          then
             declare
                Project : constant String := Ada.Directories.Containing_Directory (S.Root (Store));
@@ -1231,8 +1291,14 @@ package body Model_Runner.CLI.Intents is
                      return;
                   elsif Nt."=" (Relation, Nt.Dependency) and then Nt.State_Of (Store, Kind, Target) = "" then
                      --  What it depends on is one of its own register there is.
-                     Status := E.Make (E.Framework_Not_Found);
-                     E.Add_Text (Status, "name", Target & " among the project's " & Word_Of (Kind) & "s");
+                     Status := E.Make (E.Framework_Input_Invalid);
+                     E.Add_Text (Status, "name", "what " & Word (2) & " depends on");
+                     E.Add_Text (Status, "value", Target);
+                     E.Add_Text (Status, "detail", "a " & Word_Of (Kind) & " depends on another " & Word_Of (Kind)
+                                 & ", and " & Target & " is "
+                                 & (if (for some Other in Nt.Intent_Kind => Nt.State_Of (Store, Other, Target) /= "")
+                                    then "of another register"
+                                    else "none the project holds"));
                   elsif Nt."=" (Relation, Nt.Dependency) and then Target = Word (2) then
                      Status := E.Make (E.Framework_Dependency_Cycle);
                      E.Add_Text (Status, "name", Word (2));
@@ -1454,7 +1520,24 @@ package body Model_Runner.CLI.Intents is
                   Pres.Report (Screen, Status);
                   return;
                end if;
-               Nt.Supersede (Store, Change, Kind, Word (2), Word (3), Status);
+               --  Final, as obsolete is: asked first, where someone can be.
+               if Model_Runner.CLI.Choosers.Is_Available (Screen) then
+                  Pres.Put_Message (Screen, "cli.intent.supersede_confirm",
+                                    [Loc.Named ("name", Word (2)), Loc.Named ("value", Word (3))]);
+                  if not Answered_Yes (Screen) then
+                     Pres.Put_Message (Screen, "cli.project.cancel.kept", [Loc.Named ("name", Word (2))]);
+                     return;
+                  end if;
+               end if;
+               declare
+                  Governed_Before : constant String := Nt.Governs (Store, Kind, Word (2));
+               begin
+                  Nt.Supersede (Store, Change, Kind, Word (2), Word (3), Status);
+                  if E.Is_Ok (Status) and then Governed_Before /= "" then
+                     S.Commit (Store, Change, Status);
+                     Say_Ruling_Gone (Word (2), Governed_Before);
+                  end if;
+               end;
 
                --  A candidate replacing one accepted takes its place, and so
                --  is accepted with it: said, not done unsaid.
@@ -1568,6 +1651,54 @@ package body Model_Runner.CLI.Intents is
                Move_Along (Store, Screen);
             end;
          end if;
+
+      elsif Action = "govern"
+        and then (Natural (Plain.Length) = 3 or else (Natural (Plain.Length) = 4 and then Lower (Word (4)) = "off"))
+      then
+         --  A setting named and no ruling, or off: it governs that one no
+         --  more, and what holds then is said.
+         declare
+            Rulings : Names.Vector := Nt.Also_Governs (Store, Kind, Word (2));
+            Found   : Unbounded_String;
+            Listed  : Unbounded_String;
+         begin
+            if Nt.Governs (Store, Kind, Word (2)) /= "" then
+               Rulings.Prepend (Nt.Governs (Store, Kind, Word (2)));
+            end if;
+            for Line of Rulings loop
+               declare
+                  Setting : constant String := Line (Line'First .. Ada.Strings.Fixed.Index (Line & " = ", " = ") - 1);
+               begin
+                  Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ") & Setting);
+                  if Setting = Word (3)
+                    or else (Setting'Length > Word (3)'Length
+                             and then Setting (Setting'Last - Word (3)'Length .. Setting'Last) = "." & Word (3))
+                  then
+                     Found := To_Unbounded_String (Line);
+                  end if;
+               end;
+            end loop;
+            if Found = Null_Unbounded_String then
+               Status := E.Make (E.Framework_Input_Invalid);
+               E.Add_Text (Status, "name", "a setting " & Word (2) & " governs");
+               E.Add_Text (Status, "value", Word (3));
+               E.Add_Text (Status, "detail",
+                           (if Listed = Null_Unbounded_String then Word (2) & " governs none"
+                            else "it governs " & To_String (Listed)));
+               Pres.Report (Screen, Status);
+               return;
+            end if;
+            declare
+               Line    : constant String := To_String (Found);
+               Setting : constant String := Line (Line'First .. Ada.Strings.Fixed.Index (Line, " = ") - 1);
+            begin
+               Nt.Govern (Store, Change, Kind, Word (2), Setting, "", "", Status);
+               Settle (Store, Change, Status, Screen, "", Word (2));
+               if E.Is_Ok (Status) then
+                  Say_Ruling_Gone (Word (2), Line);
+               end if;
+            end;
+         end;
 
       elsif Action = "govern" then
          Needs (4, "what it governs and its ruling: " & Word_Of_Command (Kind) & " govern "
@@ -1793,6 +1924,9 @@ package body Model_Runner.CLI.Intents is
                Field ("text", To_String (Held.Text));
                if Length (Held.Criteria) > 0 then
                   Field ("criteria", To_String (Held.Criteria));
+               end if;
+               if Nt.Blocked_Because (Store, Kind, Named) /= "" then
+                  Field ("blocked because", Nt.Blocked_Because (Store, Kind, Named));
                end if;
                if Nt.Governs (Store, Kind, Named) /= "" then
                   Field ((if To_String (Held.State) in "obsolete" | "superseded" | "rejected"

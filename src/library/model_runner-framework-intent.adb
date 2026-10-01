@@ -394,6 +394,14 @@ package body Model_Runner.Framework.Intent is
    -- Governs --
    -------------
 
+   function Blocked_Because (Item : Stores.Store; Kind : Intent_Kind; Id : String) return String is
+      Value  : Records.Item;
+      Status : E.Error_Info;
+   begin
+      Stores.Read (Item, Area_Of (Kind), Id, Value, Status);
+      return (if E.Is_Error (Status) then "" else Records.Get (Value, "blocked_because"));
+   end Blocked_Because;
+
    function Governs (Item : Stores.Store; Kind : Intent_Kind; Id : String) return String is
       Value  : Records.Item;
       Status : E.Error_Info;
@@ -500,7 +508,8 @@ package body Model_Runner.Framework.Intent is
       Next    : String;
       Granted : Transitions.Permissions;
       Status  : out Model_Runner.Errors.Error_Info;
-      Actor   : String := "") is
+      Actor   : String := "";
+      Reason  : String := "") is
    begin
       --  A person does not make a requirement implemented or verified:
       --  those follow its tasks and their current evidence.
@@ -509,7 +518,7 @@ package body Model_Runner.Framework.Intent is
       then
          Status := E.Make (E.Framework_Transition_Invalid);
          E.Add_Text (Status, "name", Id);
-         E.Add_Text (Status, "value", "");
+         E.Add_Text (Status, "value", State_Of (Item, Kind, Id));
          E.Add_Text (Status, "expected", Next);
          E.Add_Text (Status, "detail",
                      "a requirement is implemented by its tasks and verified by their current"
@@ -519,7 +528,24 @@ package body Model_Runner.Framework.Intent is
       Keep_Earlier (Item, Change, Kind, Id);
       Transitions.Apply
         (Item, Change, Lifecycle_Of (Item, Kind), Area_Of (Kind), Id, Next, Granted,
-         Event_For (Kind, Next), Status, Actor);
+         Event_For (Kind, Next), Status, Actor, Reason => Reason);
+      --  Why it is blocked, kept with it while it is; gone once it is not.
+      if E.Is_Ok (Status) then
+         declare
+            Value  : Records.Item;
+            Staged : Boolean;
+         begin
+            Stores.Pending (Change, Area_Of (Kind), Id, Value, Staged);
+            if Staged then
+               if Next = "blocked" and then Reason /= "" then
+                  Records.Set (Value, "blocked_because", Reason);
+               else
+                  Records.Remove (Value, "blocked_because");
+               end if;
+               Stores.Put (Change, Area_Of (Kind), Id, Value);
+            end if;
+         end;
+      end if;
    end Move;
 
    -------------
@@ -593,9 +619,9 @@ package body Model_Runner.Framework.Intent is
             E.Add_Text (Status, "expected", "a new revision");
             E.Add_Text (Status, "detail", "it is retired, and what is retired is not revised; "
                         & (case Kind is
-                              when Requirement   => "req",
-                              when Specification => "spec",
-                              when Decision      => "decision")
+                              when Requirement   => "/req",
+                              when Specification => "/spec",
+                              when Decision      => "/decision")
                         & " new """ & Records.Get (Value, "title") & """ text=... makes it anew");
             return;
          end if;
@@ -787,6 +813,67 @@ package body Model_Runner.Framework.Intent is
          --  is kept, what it governs is part of what it means, and it is
          --  said.
          Keep_Earlier (Item, Change, Kind, Id);
+         --  No ruling: it governs that setting no more -- another it rules
+         --  on, if any, is the one it governs now.
+         if Ruling = "" then
+            declare
+               Rest_Lines : constant Name_Lists.Vector := Split_Lines (Records.Get (Value, "also_governs"));
+            begin
+               if Records.Get (Value, "governs") = Subject or else Records.Get (Value, "governs") = "" then
+                  if Rest_Lines.Is_Empty then
+                     Records.Remove (Value, "governs");
+                     Records.Remove (Value, "ruling");
+                     Records.Remove (Value, "overrides");
+                  else
+                     declare
+                        Line   : constant String := Rest_Lines.First_Element;
+                        First  : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
+                        Second : constant Natural :=
+                          Ada.Strings.Fixed.Index (Line (First + 1 .. Line'Last), [1 => ASCII.HT]);
+                        Rest   : Unbounded_String;
+                     begin
+                        Records.Set (Value, "governs", Line (Line'First .. First - 1));
+                        Records.Set (Value, "ruling",
+                                     Line (First + 1 .. (if Second = 0 then Line'Last else Second - 1)));
+                        Records.Set (Value, "overrides", (if Second = 0 then "" else Line (Second + 1 .. Line'Last)));
+                        for Index in 2 .. Natural (Rest_Lines.Length) loop
+                           Append (Rest, Rest_Lines (Index) & ASCII.LF);
+                        end loop;
+                        if Rest = Null_Unbounded_String then
+                           Records.Remove (Value, "also_governs");
+                        else
+                           Records.Set (Value, "also_governs", To_String (Rest));
+                        end if;
+                     end;
+                  end if;
+               else
+                  --  One of the others it rules on: that one taken out.
+                  declare
+                     Kept : Unbounded_String;
+                  begin
+                     for Line of Rest_Lines loop
+                        if Ada.Strings.Fixed.Index (Line, Subject & ASCII.HT) /= Line'First then
+                           Append (Kept, Line & ASCII.LF);
+                        end if;
+                     end loop;
+                     if Kept = Null_Unbounded_String then
+                        Records.Remove (Value, "also_governs");
+                     else
+                        Records.Set (Value, "also_governs", To_String (Kept));
+                     end if;
+                  end;
+               end if;
+            end;
+            Stores.Put (Change, Area_Of (Kind), Id, Value);
+            Events.Emit
+              (Item, Change,
+               (case Kind is
+                  when Specification => Events.Specification_Revised,
+                  when Requirement   => Events.Requirement_Revised,
+                  when Decision      => Events.Decision_Revised),
+               Id, "governs " & Subject & " no more", Event, Status);
+            return;
+         end if;
          --  Ruling on another setting than the one it governs: that one is
          --  kept beside it, not dropped; on the same, it is replaced.
          declare

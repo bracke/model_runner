@@ -163,6 +163,37 @@ package body Model_Runner.Agent is
          return 0;
       end Place_Of;
 
+      --  A call's arguments without the spaces between their parts: the
+      --  same call written with other spacing is the same call.
+      function Squeezed (Args : String) return String is
+         Result : String (1 .. Args'Length);
+         Last   : Natural := 0;
+         Quoted : Boolean := False;
+         Escape : Boolean := False;
+      begin
+         for C of Args loop
+            if Quoted then
+               Last := Last + 1;
+               Result (Last) := C;
+               if Escape then
+                  Escape := False;
+               elsif C = '\' then
+                  Escape := True;
+               elsif C = '"' then
+                  Quoted := False;
+               end if;
+            elsif C = '"' then
+               Quoted := True;
+               Last := Last + 1;
+               Result (Last) := C;
+            elsif C not in ' ' | ASCII.HT | ASCII.LF | ASCII.CR then
+               Last := Last + 1;
+               Result (Last) := C;
+            end if;
+         end loop;
+         return Result (1 .. Last);
+      end Squeezed;
+
       function Already_Seen (Key : Interfaces.Unsigned_64) return Boolean is
       begin
          for Index in 1 .. Seen_Used loop
@@ -396,6 +427,7 @@ package body Model_Runner.Agent is
                   Text   : U.Unbounded_String;  --  a note, or a run's answer
                   Failed : Boolean := False;     --  the answer would not fit
                   Done   : Boolean := False;     --  the run has happened
+                  Copy_Of : Natural := 0;        --  the same call earlier this turn
                end record;
 
                Items   : array (1 .. Asked) of Item_Rec;
@@ -417,7 +449,7 @@ package body Model_Runner.Agent is
                      Args  : constant String :=
                        Conv.Call_Arguments (Messages, Turn, Call);
                      Key   : constant Interfaces.Unsigned_64 :=
-                       Digest (Named, Args);
+                       Digest (Named, Squeezed (Args));
                   begin
                      Items (Call).Named := U.To_Unbounded_String (Named);
                      Items (Call).Args  := U.To_Unbounded_String (Args);
@@ -425,7 +457,22 @@ package body Model_Runner.Agent is
                         Watch.On_Call (Named, Args);
                      end if;
 
-                     if Already_Seen (Key) then
+                     --  The same call earlier in this very turn: its answer,
+                     --  once it has one -- not run twice, not told off.
+                     if Already_Seen (Key) and then U.Length (Answered_With (Place_Of (Key))) = 0
+                       and then (for some Earlier in 1 .. Call - 1 =>
+                                   Digest (U.To_String (Items (Earlier).Named),
+                                           Squeezed (U.To_String (Items (Earlier).Args))) = Key)
+                     then
+                        for Earlier in 1 .. Call - 1 loop
+                           if Digest (U.To_String (Items (Earlier).Named),
+                                      Squeezed (U.To_String (Items (Earlier).Args))) = Key
+                             and then Items (Call).Copy_Of = 0
+                           then
+                              Items (Call).Copy_Of := Earlier;
+                           end if;
+                        end loop;
+                     elsif Already_Seen (Key) then
                         --  Where it worked, the same answer again; where it
                         --  was an error, said that it will be again.
                         declare
@@ -600,7 +647,11 @@ package body Model_Runner.Agent is
 
                      declare
                         Reply : constant String :=
-                          (if Items (Call).Failed
+                          (if Items (Call).Copy_Of > 0
+                           then (if Items (Items (Call).Copy_Of).Failed
+                                 then "error: the tool's answer was too large to return"
+                                 else U.To_String (Items (Items (Call).Copy_Of).Text))
+                           elsif Items (Call).Failed
                            then "error: the tool's answer was too large to "
                                 & "return"
                            else U.To_String (Items (Call).Text));
@@ -608,7 +659,7 @@ package body Model_Runner.Agent is
                         --  Kept by the call, for a repeat of it.
                         declare
                            Place : constant Natural :=
-                             Place_Of (Digest (Named, U.To_String (Items (Call).Args)));
+                             Place_Of (Digest (Named, Squeezed (U.To_String (Items (Call).Args))));
                         begin
                            if Place > 0 and then U.Length (Answered_With (Place)) = 0 then
                               Answered_With (Place) := U.To_Unbounded_String (Reply);

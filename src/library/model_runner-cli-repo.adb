@@ -243,6 +243,23 @@ package body Model_Runner.CLI.Repo is
          Fail (Outcome);
          return;
       end if;
+      --  Something given that names nothing -- . for the whole project --
+      --  is said as what it is, not as nothing given.
+      if Action in "sym" | "refs" | "deps" | "users" | "trace"
+        and then Argument = "" and then Typed /= ""
+      then
+         Outcome := E.Make (E.Framework_Input_Invalid);
+         E.Add_Text (Outcome, "name", (if Action in "deps" | "users" then "a unit"
+                                       elsif Action = "trace" then "what to trace"
+                                       else "a symbol"));
+         E.Add_Text (Outcome, "value", Typed);
+         E.Add_Text (Outcome, "detail", (if Action in "deps" | "users" then "a unit is named as /tree lists it"
+                                         elsif Action = "trace" then "it is a requirement, a task, a file or"
+                                                                     & " a symbol"
+                                         else "a symbol is named as /sym finds it"));
+         Fail (Outcome);
+         return;
+      end if;
       if Action in "sym" | "refs" | "deps" | "users" | "impact" | "trace"
         and then Argument = "" and then not (Action = "impact" and then Typed /= "")
       then
@@ -753,8 +770,10 @@ package body Model_Runner.CLI.Repo is
                      Pres.Put_Message
                        (Screen, "cli.repo.selection",
                         [Loc.Named ("value",
-                                    Ada.Characters.Handling.To_Lower
-                                      (Tr.Scope'Image (Chosen.Width))),
+                                    (case Chosen.Width is
+                                        when Tr.Full_Suite      => "the whole suite",
+                                        when Tr.Component_Tests => "its component's tests",
+                                        when Tr.Certain_Tests   => "the tests it certainly reaches")),
                          Loc.Named ("detail", To_String (Chosen.Reason))]);
                   end;
                end if;

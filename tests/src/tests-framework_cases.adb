@@ -1970,6 +1970,23 @@ package body Tests.Framework_Cases is
               and then Tr.Is_State (Nt.Machine_Of (Nt.Requirement),
                                     "implemented"),
               "the registers are not what they should be");
+
+      --  Blocked with a reason, it says why; taken up again, it says
+      --  nothing.
+      Nt.Propose
+        (Store, Change, Nt.Requirement, "PARSER", "Report the line",
+         "The parser SHALL report the line of an error.", "", "user", "", "parser", Id, Status);
+      S.Commit (Store, Change, Status);
+      Move ("accepted");
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Id), "blocked",
+                Tr.Ordinary_Only, Status, Reason => "the lexer keeps no lines");
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status)
+              and then Nt.Blocked_Because (Store, Nt.Requirement, To_String (Id)) = "the lexer keeps no lines",
+              "a requirement blocked with a reason did not say it: " & Code_Of (Status));
+      Move ("accepted");
+      Assert (Nt.Blocked_Because (Store, Nt.Requirement, To_String (Id)) = "",
+              "a requirement taken up again still said why it was blocked");
       S.Close (Store);
    end Requirement_Revisions_Invalidate;
 
@@ -2195,6 +2212,15 @@ package body Tests.Framework_Cases is
       S.Commit (Store, Change, Status);
       Findings := Cn.Check (Store);
       Assert (not Conflicted, "an explicit override was reported as a conflict");
+
+      --  Governing nothing: its ruling is taken off, and governed again.
+      Nt.Govern (Store, Change, Nt.Decision, To_String (Id), "scalar.build.command", "", "", Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then Nt.Governs (Store, Nt.Decision, To_String (Id)) = "",
+              "a decision told to govern nothing still governed: " & Code_Of (Status));
+      Nt.Govern (Store, Change, Nt.Decision, To_String (Id),
+                  "scalar.build.command", "alr build", "CONFIG", Status);
+      S.Commit (Store, Change, Status);
 
       --  A person's instruction outranks the decision while it stands, and
       --  says which it overrides; withdrawn, the decision governs again.

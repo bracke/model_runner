@@ -39,9 +39,10 @@ package body Model_Runner.Framework.Context is
    type Name_Text is access constant String;
 
    --  The task's fields that say what it is.
-   Wanted_Fields : constant array (1 .. 6) of Name_Text :=
+   Wanted_Fields : constant array (1 .. 7) of Name_Text :=
      [new String'("title"), new String'("kind"), new String'("component"),
-      new String'("requirements"), new String'("depends_on"), new String'("notes")];
+      new String'("requirements"), new String'("depends_on"), new String'("notes"),
+      new String'("question")];
 
    function Image (Value : Natural) return String
    is (Ada.Strings.Fixed.Trim (Natural'Image (Value), Ada.Strings.Both));
@@ -566,7 +567,7 @@ package body Model_Runner.Framework.Context is
          Result.Semantic := E.Is_Ok (Read);
          Graph := Repository.Now (Item);
 
-         --  A file the task names in its title or notes is what it is
+         --  A file the task names in its title, notes or question is what it is
          --  about: offered first, whatever component it is in.
          declare
             --  And the task it is a part of: a part's files are its whole's.
@@ -578,11 +579,12 @@ package body Model_Runner.Framework.Context is
                   return "";
                end if;
                Tasks.Definition (Item, Records.Get (View, "definition.parent"), Defined, Read);
-               return " " & Records.Get (Defined, "title") & " " & Records.Get (Defined, "notes");
+               return " " & Records.Get (Defined, "title") & " " & Records.Get (Defined, "notes")
+                 & " " & Records.Get (Defined, "question");
             end Parent_Words;
             Said  : constant String :=
               Records.Get (View, "definition.title") & " " & Records.Get (View, "definition.notes")
-              & Parent_Words;
+              & " " & Records.Get (View, "definition.question") & Parent_Words;
             Start : Positive := Said'First;
          begin
             for Index in Said'First .. Said'Last + 1 loop
@@ -752,8 +754,40 @@ package body Model_Runner.Framework.Context is
                if E.Is_Ok (Read)
                  and then Ada.Strings.Fixed.Trim (To_String (Held.Payload), Ada.Strings.Both) /= ""
                then
-                  Append (Listed, "The last answer (" & Records.Get (State, "last_result") & "):"
-                          & ASCII.LF & To_String (Held.Payload) & ASCII.LF);
+                  --  Its lines once each where it went round -- the same
+                  --  line again and again -- and not past a screenful: a
+                  --  loop told back whole primes the next to loop.
+                  declare
+                     Told   : Unbounded_String;
+                     Last   : Unbounded_String;
+                     Again  : Natural := 0;
+                     Lines  : Natural := 0;
+                     procedure Flush_Again is
+                     begin
+                        if Again > 0 then
+                           Append (Told, "... the same line" & Natural'Image (Again) & " times more" & ASCII.LF);
+                           Again := 0;
+                        end if;
+                     end Flush_Again;
+                  begin
+                     for Line of Lines_Of (To_String (Held.Payload)) loop
+                        if Line = To_String (Last) and then Lines > 0 then
+                           Again := Again + 1;
+                        else
+                           Flush_Again;
+                           Lines := Lines + 1;
+                           exit when Lines > 40;
+                           Append (Told, Line & ASCII.LF);
+                           Last := To_Unbounded_String (Line);
+                        end if;
+                     end loop;
+                     Flush_Again;
+                     if Lines > 40 then
+                        Append (Told, "... (the rest of it left out)" & ASCII.LF);
+                     end if;
+                     Append (Listed, "The last answer (" & Records.Get (State, "last_result") & "):"
+                             & ASCII.LF & To_String (Told));
+                  end;
                   Append (Sources, "," & Records.Get (State, "last_result"));
                end if;
             end;

@@ -115,7 +115,9 @@ package body Model_Runner.Framework.Transitions is
             --  to running, verification and complete -- are said apart.
             for One of From.Moves loop
                if To_String (One.From) = Current and then Granted (One.Requires) then
-                  if To_String (One.To) in "running" | "verification" | "complete"
+                  --  A requirement's implemented and verified as well:
+                  --  its tasks and evidence make those.
+                  if To_String (One.To) in "running" | "verification" | "complete" | "implemented" | "verified"
                   then
                      Harness := True;
                   else

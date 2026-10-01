@@ -454,7 +454,7 @@ package body Model_Runner.Framework.Consistency is
             for Target of Intent.Links (Item, Intent.Requirement, Id, Intent.Dependency) loop
                if Intent.State_Of (Item, Intent.Requirement, Target) in "obsolete" | "rejected" | "superseded"
                then
-                  Found (Undefined_Requirement, Id,
+                  Found (Retired_Requirement, Id,
                          "it depends on " & Target & ", which is "
                          & Intent.State_Of (Item, Intent.Requirement, Target) & "; /req unlink " & Id
                          & " dependency " & Target & " takes it off");
@@ -534,7 +534,7 @@ package body Model_Runner.Framework.Consistency is
                                then "/task reconsider " else "/task reopen ")
                             & To_String (Ended) & " takes it back, or /task new TITLE kind=KIND"
                             & " requirements=" & Id & " makes another"
-                       else "it is accepted and no task serves it: /task derive makes one, or task"
+                       else "it is accepted and no task serves it: /task derive makes one, or /task"
                             & " new TITLE kind=KIND requirements=" & Id));
             end if;
          end;
@@ -618,7 +618,7 @@ package body Model_Runner.Framework.Consistency is
                   Found (Missing_Component, Id,
                          "it belongs to the component " & Target
                          & ", which is not one of the project's: /reconfigure set.components+="
-                         & Target & " makes it one, or req"
+                         & Target & " makes it one, or /req"
                          & " unlink " & Id & " component " & Target
                          & " takes the link away");
                end if;
@@ -645,7 +645,7 @@ package body Model_Runner.Framework.Consistency is
                        and then Ada.Strings.Unbounded.To_String (Held.State)
                                 in "obsolete" | "superseded" | "rejected"
                      then
-                        Found (Undefined_Requirement, Id,
+                        Found (Retired_Requirement, Id,
                                "it serves " & Requirement & ", which is "
                                & Ada.Strings.Unbounded.To_String (Held.State)
                                & (if Tasks.State_Of (Item, Id) = "candidate"

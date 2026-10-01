@@ -283,6 +283,9 @@ package Model_Runner.Framework.Permissions is
    --  @return The text.
    function Image (Set : Permission_Set) return String;
 
+   --  Where write_specs with no roots named lets an agent write, in words.
+   Specification_Places : constant String := "docs/, doc/, specs/, spec/ or a .md file";
+
    --  Permissions as Image writes them -- a line or a ";" apart each --
    --  said in words, a comma apart: write_source roots=docs/ is "write
    --  files in docs/", create_children max_children=2 "make helpers (at

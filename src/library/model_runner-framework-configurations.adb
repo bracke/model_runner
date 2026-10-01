@@ -2009,6 +2009,18 @@ package body Model_Runner.Framework.Configurations is
                      end if;
                   end loop;
                end if;
+               --  A setting a task kind has its own of: task.max_seconds.KIND
+               --  is scalar.task.max_seconds.KIND, as the whole of it is.
+               if Count = 0 then
+                  for Family of Name_Lists.Vector'
+                    (["task.max_seconds.", "task.max_tool_calls.", "task.max_steps.",
+                      "task.token_budget.", "task.coordination.", "task.profile."])
+                  loop
+                     if Starts (Short, Family) and then Short'Length > Family'Length then
+                        return "scalar." & Short;
+                     end if;
+                  end loop;
+               end if;
                return (if Count = 1 then To_String (Found) else Short);
             end Full_Name;
 
@@ -2030,7 +2042,12 @@ package body Model_Runner.Framework.Configurations is
             --  A set's items however they were written -- a space apart
             --  in a template, a line apart once changed: one a line.
             Old   : constant String :=
-              (if Starts (Name, "set.")
+              --  No components listed is one: the project itself, by its
+              --  name -- what one added is added beside.
+              (if Name = "set.components" and then Records.Get (Result.Before, Name) = ""
+                 and then not Tasks.Components_Of (Result.Before).Is_Empty
+               then Tasks.Components_Of (Result.Before).First_Element
+               elsif Starts (Name, "set.")
                then Lines_From (Ada.Strings.Fixed.Translate
                                   (Records.Get (Result.Before, Name),
                                    Ada.Strings.Maps.To_Mapping (" " & ASCII.LF, ",,")))

@@ -1032,6 +1032,27 @@ package body Model_Runner.Framework.Repository is
                          Line => Tokens (At_Name).Line));
                   end if;
 
+                  --  type Kind is (Number, Plus, ...): each literal a name
+                  --  of the unit's, as the type is.
+                  if Spelled = "type" and then At_Name + 2 <= Count
+                    and then Is_Word (Tokens (At_Name + 1), "is")
+                    and then Is_Mark (Tokens (At_Name + 2), '(')
+                  then
+                     for Ahead in At_Name + 3 .. Count loop
+                        exit when Is_Mark (Tokens (Ahead), ')') or else Is_Mark (Tokens (Ahead), ';');
+                        if Tokens (Ahead).Kind = Word
+                          and then (Is_Mark (Tokens (Ahead - 1), '(') or else Is_Mark (Tokens (Ahead - 1), ','))
+                        then
+                           Add_Symbol
+                             (Into,
+                              (Name => To_Unbounded_String (Unit & "." & To_String (Tokens (Ahead).Text)),
+                               Kind => To_Unbounded_String ("literal"),
+                               Path => To_Unbounded_String (Path),
+                               Line => Tokens (Ahead).Line));
+                        end if;
+                     end loop;
+                  end if;
+
                   --  A nested package, task or protected unit opens a
                   --  scope of its own whose declarations are not the
                   --  unit's.
@@ -1292,7 +1313,7 @@ package body Model_Runner.Framework.Repository is
    function Skipped (Name, Relative : String; Within : Roots) return Boolean
    is (Name'Length = 0 or else Name in "." | ".." | ".git" | ".hg" | ".svn" | ".model_runner"
                                        | ".alire" | ".cache" | ".venv" | ".tox" | ".mypy_cache"
-                                       | ".pytest_cache" | ".gradle"
+                                       | ".pytest_cache" | ".gradle" | "__pycache__"
        or else Named_By (Within.Skip, Relative));
 
    ----------
@@ -1303,6 +1324,7 @@ package body Model_Runner.Framework.Repository is
      (Project_Directory : String;
       Within            : Roots) return Graph
    is
+      Skip_File : exception;
       Result   : Graph;
       Texts    : Name_Lists.Vector;
       Paths    : Name_Lists.Vector;
@@ -1343,6 +1365,14 @@ package body Model_Runner.Framework.Repository is
                      if Size <= Largest_Read then
                         Files.Read_Text (Full, Text, Status);
                      end if;
+                     --  A built program or object -- bytes, not text, a NUL
+                     --  among its first -- is no file of the project's.
+                     if Ada.Strings.Unbounded.Index
+                          (Ada.Strings.Unbounded.Head (Text, Natural'Min (8_192, Length (Text))),
+                           [1 => ASCII.NUL]) > 0
+                     then
+                        raise Skip_File;
+                     end if;
                      Result.Reading := To_Unbounded_String (Relative);
                      Add_File
                        (Result,
@@ -1366,6 +1396,8 @@ package body Model_Runner.Framework.Repository is
                   end;
                end if;
             exception
+               when Skip_File =>
+                  null;
                when others =>
                   null;
             end;
@@ -1649,7 +1681,7 @@ package body Model_Runner.Framework.Repository is
    --  How source is read into the graph: a graph kept by another is read
    --  again. 2: Ada bodies declare their subprograms too. 3: a generic's
    --  formal part is not its unit.
-   Reader_Version : constant String := "5";
+   Reader_Version : constant String := "6";
 
    ------------
    -- Memory --
@@ -2084,12 +2116,17 @@ package body Model_Runner.Framework.Repository is
 
    function Find_Symbols (From : Graph; Name : String) return Name_Lists.Vector
    is
-      Wanted : constant String := Lower (Name);
+      Wanted_As : constant String := Name;
       Result : Name_Lists.Vector;
    begin
       for Item of From.Symbols loop
          declare
-            Full : constant String := Lower (To_String (Item.Name));
+            --  Ada's names are the same in any case; other languages'
+            --  are not: Charset is not charset.
+            Folds  : constant Boolean := Language_Of (To_String (Item.Path)) = "Ada";
+            Full   : constant String :=
+              (if Folds then Lower (To_String (Item.Name)) else To_String (Item.Name));
+            Wanted : constant String := (if Folds then Lower (Wanted_As) else Wanted_As);
          begin
             if (Full = Wanted
                 or else (Full'Length > Wanted'Length

@@ -1,6 +1,7 @@
 with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 
 with Hostkit.Fs;
 
@@ -401,8 +402,8 @@ package body Model_Runner.Framework.Work is
        --  Copied aside before they were first written: put back from
        --  there, whatever version control knows of them.
        & (if Ada.Directories.Exists (Before_Copy (Item, Task_Id))
-          then " -- each file it overwrote is kept as it was in " & Before_Copy (Item, Task_Id)
-               & ", and removing a file it made undoes that,"
+          then " -- /task kept restore overwritten-" & Task_Id & " puts back the files it overwrote,"
+               & " and removing a file it made undoes that,"
           elsif Ada.Directories.Exists
                (Hostkit.Fs.Join (Ada.Directories.Containing_Directory (Stores.Root (Item)), ".git"))
           then " -- git checkout -- FILE undoes a change, and removing a file it made undoes that,"
@@ -539,7 +540,8 @@ package body Model_Runner.Framework.Work is
                   return (if E.Is_Error (Held) then ""
                           else "; its workspace " & Space & " is given up"
                                & (if Named = Null_Unbounded_String then ""
-                                  else ", what it changed there kept in " & Workspaces.Kept_Copy (Item, Space)
+                                  else ", what it changed there kept in "
+                                       & Ada.Directories.Simple_Name (Workspaces.Kept_Copy (Item, Space))
                                        & ": " & To_String (Named)));
                end Given_Up;
             begin
@@ -644,6 +646,17 @@ package body Model_Runner.Framework.Work is
       end if;
       return Raw_Why_Of (Condition);
    end Why_Of;
+
+   --  Why a task stopped for a required helper that failed: the helper's
+   --  failure, with the root's own only when it says something more,
+   --  and the setting that decides what such a failure does.
+   function Child_Failure (Child_Why, Own_Why : String) return String is
+      Said : constant String :=
+        (if Ada.Strings.Fixed.Index (Child_Why, Own_Why) > 0 then Child_Why
+         else Child_Why & "; and then " & Own_Why);
+   begin
+      return Said & " (agents.on_child_failure decides what a failed helper does: block, fail or continue)";
+   end Child_Failure;
 
    --  The first few diagnostics a piece of evidence recorded, said after
    --  a colon: what a person looks at first.
@@ -1570,12 +1583,18 @@ package body Model_Runner.Framework.Work is
          if Allowed (Permissions.Read_Source).Granted then
             Add ("read the source");
          end if;
+         if Allowed (Permissions.Read_Specs).Granted then
+            Add ("read the specifications");
+         end if;
          if Allowed (Permissions.Write_Source).Granted then
             Add ("write " & (if Allowed (Permissions.Write_Source).Roots.Is_Empty then "files"
                              else "files under " & Comma_Separated (Allowed (Permissions.Write_Source).Roots)));
          end if;
          if Allowed (Permissions.Write_Specs).Granted then
-            Add ("write specifications");
+            Add ("write specifications "
+                 & (if Allowed (Permissions.Write_Specs).Roots.Is_Empty
+                    then "(in " & Permissions.Specification_Places & ")"
+                    else "under " & Comma_Separated (Allowed (Permissions.Write_Specs).Roots)));
          end if;
          if May_Check then
             Add ("run the project's checks");
@@ -1583,6 +1602,9 @@ package body Model_Runner.Framework.Work is
          if May_Delegate then
             Add ("hand parts to helpers (at most"
                  & Natural'Image (Allowed (Permissions.Create_Children).Max_Children) & ")");
+         end if;
+         if May_Propose then
+            Add ("propose tasks");
          end if;
          return (if Said = Null_Unbounded_String then "read only what you are given" else To_String (Said));
       end Said_Permissions;
@@ -1659,6 +1681,44 @@ package body Model_Runner.Framework.Work is
                            Permissions.Allows (Allowed, Permissions.Write_Source,
                                                (if Home'Length > 0 and then Home (Home'Last) = '/'
                                                 then Home else Home & "/") & "x"));
+         --  The project's files its title or notes name that it may not
+         --  write: work on those it could not do.
+         function Named_Out_Of_Reach return String is
+            Project : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
+            Words   : constant String :=
+              Records.Get (View, "definition.title") & " " & Records.Get (View, "definition.notes")
+              & " " & Records.Get (View, "definition.question");
+            Start   : Natural := Words'First;
+            Out_Of  : Unbounded_String;
+         begin
+            if not Writes then
+               return "";
+            end if;
+            for Index in Words'First .. Words'Last + 1 loop
+               if Index > Words'Last or else Words (Index) in ' ' | ',' | ';' | '"' | '(' | ')' then
+                  declare
+                     Word : constant String :=
+                       Ada.Strings.Fixed.Trim (Words (Start .. Index - 1), Ada.Strings.Maps.To_Set (".:`'"),
+                                               Ada.Strings.Maps.To_Set (".:`'"));
+                  begin
+                     if Ada.Strings.Fixed.Index (Word, "/") > 0
+                       and then Ada.Strings.Fixed.Index (Word, "..") = 0
+                       and then Word (Word'First) /= '/'
+                       and then Ada.Directories.Exists (Hostkit.Fs.Join (Project, Word))
+                       and then not Permissions.Allows (Allowed, Permissions.Write_Source, Word)
+                       and then not Permissions.Allows (Allowed, Permissions.Write_Specs, Word)
+                     then
+                        Append (Out_Of, (if Out_Of = Null_Unbounded_String then "" else ", ") & Word);
+                     end if;
+                  exception
+                     when others =>
+                        null;
+                  end;
+                  Start := Index + 1;
+               end if;
+            end loop;
+            return To_String (Out_Of);
+         end Named_Out_Of_Reach;
          Lacks   : constant String :=
            (if Permissions.Image (Allowed) = "" then "anything"
             elsif Writes and then not Permissions.Allows (Allowed, Permissions.Write_Source)
@@ -1666,6 +1726,7 @@ package body Model_Runner.Framework.Work is
             then "write a file"
             elsif not Permissions.Allows (Allowed, Permissions.Read_Source) then "read the source"
             elsif Elsewhere then "write where its component's files are"
+            elsif Named_Out_Of_Reach /= "" then "write " & Named_Out_Of_Reach & ", which its task names"
             else "");
       begin
          if Lacks = "" then
@@ -1781,7 +1842,9 @@ package body Model_Runner.Framework.Work is
                      end loop;
                      Append (Said, (if Said = Null_Unbounded_String then "" else "; ")
                              & (if Permissions."=" (One, Permissions.Write_Source) then "files" else "specifications")
-                             & (if Roots.Is_Empty then " anywhere in the project"
+                             & (if Roots.Is_Empty and then Permissions."=" (One, Permissions.Write_Specs)
+                                then " in " & Permissions.Specification_Places
+                                elsif Roots.Is_Empty then " anywhere in the project"
                                 else " under " & To_String (Places))
                              & (if Held.Allowed (One).Deny.Is_Empty then ""
                                 else ", not " & Comma_Separated (Held.Allowed (One).Deny)));
@@ -2274,7 +2337,7 @@ package body Model_Runner.Framework.Work is
               ("it was stopped: the work was "
                & (if Execution.Cancel_Asked_From_Outside then "cancelled" else "interrupted"));
          elsif E.Is_Error (Ran) then
-            Why := To_Unbounded_String ("it could not be run: " & Why_Of (Ran));
+            Why := To_Unbounded_String ("it failed: " & Why_Of (Ran));
          else
             Invocations.Hold (Child_Claim, Answer, Said, Held);
             if E.Is_Error (Held) then
@@ -2647,7 +2710,9 @@ package body Model_Runner.Framework.Work is
                     then "; its workspace " & To_String (Result.Workspace_Id) & " is given up"
                          & (if Result.Changed_Files.Is_Empty then ""
                             else ", what it changed there kept in "
-                                 & Workspaces.Kept_Copy (Item, To_String (Result.Workspace_Id)) & ": "
+                                 & Ada.Directories.Simple_Name
+                                     (Workspaces.Kept_Copy (Item, To_String (Result.Workspace_Id)))
+                                 & " (/task kept lists it): "
                                  & Comma_Separated (Result.Changed_Files))
                     else "");
          end Given_Up;
@@ -3195,7 +3260,12 @@ package body Model_Runner.Framework.Work is
         or else Leases.Holder (Item, Lease_Of (Task_Id)) /= To_String (Result.Agent_Id)
       then
          Result.Final_State := To_Unbounded_String (Tasks.State_Of (Item, Task_Id));
-         Result.Reason := To_Unbounded_String ("it was ended elsewhere while it ran");
+         Result.Reason := To_Unbounded_String
+           (if Tasks.State_Of (Item, Task_Id) = "running"
+            then "its hold on the task was taken over elsewhere while it ran -- its lease ran out first;"
+                 & " nothing of this run is kept, and /work " & Task_Id & " runs it again"
+            else "it was " & Tasks.State_Of (Item, Task_Id) & " elsewhere while it ran; nothing of this"
+                 & " run is kept");
          return;
       end if;
 
@@ -3250,7 +3320,7 @@ package body Model_Runner.Framework.Work is
          begin
             if not Agents.May_Complete (Item, To_String (Result.Agent_Id), Child_Why) then
                Conclude ((if Scalar (Item, "agents.on_child_failure") = "fail" then "failed" else "blocked"),
-                         To_String (Child_Why) & "; and then " & Why_Of (Ran), "failed");
+                         Child_Failure (To_String (Child_Why), Why_Of (Ran)), "failed");
                return;
             end if;
          end;

@@ -1,3 +1,4 @@
+with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Intent;
@@ -206,13 +207,14 @@ package body Model_Runner.Framework.Authority is
       Config : Records.Item;
       Status : E.Error_Info;
 
-      --  The settings a statement can be about; inputs, files and facts
-      --  are what the project is, not rules about how it is made.
+      --  The settings a statement can be about; inputs and files are
+      --  what the project is, not rules about how it is made. A fact a
+      --  decision rules on is one it can disagree with.
       type Prefix_Text is access constant String;
-      Governed : constant array (1 .. 6) of Prefix_Text :=
+      Governed : constant array (1 .. 7) of Prefix_Text :=
         [new String'("scalar."), new String'("map."), new String'("adapter."),
          new String'("profile."), new String'("task_kind."),
-         new String'("schema.")];
+         new String'("schema."), new String'("fact.")];
    begin
       --  A person's standing word first: it outranks all that follows.
       for Name of Instruction_Names (Item) loop
@@ -372,7 +374,10 @@ package body Model_Runner.Framework.Authority is
                     (Governing => Rule,
                      Other     => Next,
                      Relation  =>
-                       (if Rule.Value = Next.Value then Agreement
+                       --  The same in any case: Alire is alire.
+                       (if Ada.Characters.Handling.To_Lower (To_String (Rule.Value))
+                           = Ada.Characters.Handling.To_Lower (To_String (Next.Value))
+                        then Agreement
                         elsif Overrides (Rule, Next) then Explicit_Override
                         --  A person's instruction stands above every other
                         --  source by what it is: over one below it, not

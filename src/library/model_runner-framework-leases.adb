@@ -38,14 +38,25 @@ package body Model_Runner.Framework.Leases is
    --  took it -- where it was taken on this machine -- is not known to be
    --  gone. A session that died holding a task lets it go at once; where the
    --  host cannot say, the lease holds until it runs out.
+   --  A process that took it on this machine and is known to be there
+   --  still holds it, run out or not: the time is a bound on a process
+   --  nobody can see, not on one that is plainly working.
    function Running (Value : Records.Item) return Boolean is
       Process : constant String := Records.Get (Value, "process");
+      Here    : constant Boolean :=
+        Process /= "" and then Records.Get (Value, "host") = Hostkit.Host.Node_Name;
+      Alive   : constant Boolean :=
+        Here and then Process'Length in 1 .. 9
+        and then (for all C of Process => C in '0' .. '9')
+        and then Process /= Own_Process
+        and then Hostkit.Process."=" (Hostkit.Process.Presence_Of (Integer'Value (Process)),
+                                     Hostkit.Process.Present);
    begin
-      if Records.Get (Value, "expires_at") <= Timestamp then
+      if Alive then
+         return True;
+      elsif Records.Get (Value, "expires_at") <= Timestamp then
          return False;
-      elsif Process = "" or else Records.Get (Value, "host") /= Hostkit.Host.Node_Name
-        or else Process = Own_Process
-      then
+      elsif not Here or else Process = Own_Process then
          return True;
       end if;
       return Process'Length in 1 .. 9

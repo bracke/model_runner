@@ -320,6 +320,17 @@ package body Model_Runner.Framework.Repository.Languages is
          end;
       end Receiver_Fits;
 
+      --  Whether a name stands on an import -- from m import name --
+      --  which names it for certain, as the dependency does.
+      function On_Import_Line (At_Index : Positive) return Boolean is
+         First : Positive := At_Index;
+      begin
+         while First > 1 and then Tokens (First - 1).Line = Tokens (At_Index).Line loop
+            First := First - 1;
+         end loop;
+         return Is_Word (Tokens (First), "from") or else Is_Word (Tokens (First), "import");
+      end On_Import_Line;
+
       --  A method called on something, as x.name (: whatever x is, a
       --  probable use of every method so called.
       function Called_On (At_Index : Positive) return Boolean
@@ -382,7 +393,9 @@ package body Model_Runner.Framework.Repository.Languages is
             Owner : constant String := (if Dot = 0 then "" else Full (Full'First .. Dot - 1));
             Last  : constant String := (if Dot = 0 then Full else Full (Dot + 1 .. Full'Last));
          begin
-            if Dot > 0 then
+            --  A module is used by importing it, which is a dependency:
+            --  a variable of the same name is not a use of it.
+            if Dot > 0 and then To_String (Item.Kind) not in "module" | "unit" then
                for At_Index in 1 .. Count loop
                   if Is_Word (Tokens (At_Index), Last)
                     and then not Declaring (Last, Tokens (At_Index).Line)
@@ -392,7 +405,8 @@ package body Model_Runner.Framework.Repository.Languages is
                   then
                      Found.Append
                        (Relation'(Kind => References, From => U (Path), To => Item.Name,
-                         Source => Heuristic, Sure => Probable,
+                         Source => (if On_Import_Line (At_Index) then Explicit else Heuristic),
+                         Sure   => (if On_Import_Line (At_Index) then Certain else Probable),
                          Where => Where (Path, Tokens (At_Index).Line), Origin => <>));
                      if To_String (Item.Kind) in "function" | "method" | "macro"
                        and then At_Index < Count and then Is_Mark (Tokens (At_Index + 1), "(")

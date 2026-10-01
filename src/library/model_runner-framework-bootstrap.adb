@@ -69,6 +69,14 @@ package body Model_Runner.Framework.Bootstrap is
    function Says_Requirement (Item : String; Listed : Boolean) return Boolean is
       Lower : constant String := Ada.Characters.Handling.To_Lower (Item);
    begin
+      --  What a document says of itself -- This document states what it
+      --  must do -- is about the document, not a requirement.
+      if (for some Opening of Name_Lists.Vector'(["this document", "this section", "this specification",
+                                                  "this file", "this chapter"]) =>
+            Lower'Length >= Opening'Length and then Lower (Lower'First .. Lower'First + Opening'Length - 1) = Opening)
+      then
+         return False;
+      end if;
       return Has_Word (Item, "SHALL") or else Has_Word (Item, "MUST") or else Has_Word (Item, "SHOULD")
         or else Has_Word (Lower, "shall")
         or else (Listed and then (Has_Word (Lower, "must") or else Has_Word (Lower, "should")));
@@ -223,9 +231,19 @@ package body Model_Runner.Framework.Bootstrap is
          return "DOC";
    end Key_Of;
 
-   function Headline (Text : String) return String
-   is (if Text'Length <= 100 then Text
-       else Text (Text'First .. Text'First + 96) & "...");
+   function Headline (Text : String) return String is
+   begin
+      if Text'Length <= 100 then
+         return Text;
+      end if;
+      --  Cut at a word, not inside one.
+      for Cut in reverse Text'First + 60 .. Text'First + 96 loop
+         if Text (Cut) = ' ' then
+            return Text (Text'First .. Cut - 1) & " ...";
+         end if;
+      end loop;
+      return Text (Text'First .. Text'First + 96) & "...";
+   end Headline;
 
    ----------
    -- Scan --
@@ -245,6 +263,10 @@ package body Model_Runner.Framework.Bootstrap is
 
       --  The requirement an Acceptance: line is about: the last one found.
       Last_Requirement : Natural := 0;
+
+      --  The requirement an "Acceptance criteria for REQ-001:" line named,
+      --  whose criteria the list under it is.
+      Criteria_For : Natural := 0;
 
       --  A document of requirements, by its name or its first heading:
       --  each labelled line in it is one, whatever words it uses.
@@ -388,7 +410,16 @@ package body Model_Runner.Framework.Bootstrap is
          elsif Line'Length > 2 and then Line (Line'First) in '-' | '*' | '+'
            and then Line (Line'First + 1) = ' '
          then
-            return Trim (Line (Line'First + 2 .. Line'Last));
+            --  A task box, - [ ] or - [x], is not what the item says.
+            declare
+               Item : constant String := Trim (Line (Line'First + 2 .. Line'Last));
+            begin
+               return (if Item'Length > 4 and then Item (Item'First) = '['
+                         and then Item (Item'First + 1) in ' ' | 'x' | 'X'
+                         and then Item (Item'First + 2 .. Item'First + 3) = "] "
+                       then Trim (Item (Item'First + 4 .. Item'Last))
+                       else Item);
+            end;
          elsif Line'Length > 0 and then Line (Line'First) = '|' then
             declare
                Cells : Name_Lists.Vector;
@@ -454,7 +485,44 @@ package body Model_Runner.Framework.Bootstrap is
          Listed : constant Boolean := Item /= Line and then Line'Length > 0 and then Line (Line'First) /= '>';
          Label  : Unbounded_String;
          Rest   : Unbounded_String;
+
+         --  A table row's status cell -- superseded, deprecated, rejected:
+         --  what the row says of itself, or "".
+         function Row_Status return String is
+            Start : Natural := Line'First + 1;
+         begin
+            if Line = "" or else Line (Line'First) /= '|' then
+               return "";
+            end if;
+            for Index in Line'First + 1 .. Line'Last loop
+               if Line (Index) = '|' then
+                  declare
+                     Cell : constant String :=
+                       Ada.Characters.Handling.To_Lower (Trim (Line (Start .. Index - 1)));
+                  begin
+                     if Cell in "superseded" | "deprecated" | "rejected" | "withdrawn" | "obsolete" then
+                        return Cell;
+                     end if;
+                  end;
+                  Start := Index + 1;
+               end if;
+            end loop;
+            return "";
+         end Row_Status;
       begin
+         --  A row that marks itself retired: not proposed, and what was made
+         --  of it before is retired with it.
+         if Row_Status /= "" then
+            Label_Split (Item, Label, Rest);
+            if Label /= Null_Unbounded_String then
+               Found (Issue, Path & "#" & To_String (Label) & "#retired",
+                      To_String (Label) & " is " & Row_Status & ", so it is not proposed: "
+                      & Headline (Trim (To_String (Rest))),
+                      Row_Status);
+               return;
+            end if;
+         end if;
+
          --  The items under a requirement that leads into them are what it
          --  says; anything else ends its list.
          if Lead > 0 and then Item /= "" then
@@ -502,6 +570,7 @@ package body Model_Runner.Framework.Bootstrap is
                --  its identifier and title; what its section says is its
                --  statement, and its Acceptance: lines its criteria.
                Section := 0;
+               Criteria_For := 0;
                Pending_Label := Null_Unbounded_String;
                Label_Split (Heading, Label, Rest);
                if First'Length > 4 and then First (First'First .. First'First + 3) = "REQ-"
@@ -512,6 +581,16 @@ package body Model_Runner.Framework.Bootstrap is
                elsif Length (Label) > 4 and then Slice (Label, 1, 4) = "ADR-" then
                   Found (Decision_Candidate, Path & "#" & To_String (Label),
                          To_String (Label) & ": " & To_String (Rest), "");
+                  Section := Length (Result);
+                  return;
+               --  ### REQ-004: Title -- the project's own identifier, at any
+               --  heading level and with a colon: imported, as ## REQ-004 is.
+               elsif Length (Label) > 4 and then Slice (Label, 1, 4) = "REQ-"
+                 and then Identifiers.Is_Valid (To_String (Label))
+               then
+                  Found (Imported_Item, Path & "#" & To_String (Label),
+                         (if Length (Rest) = 0 then To_String (Label) else Trim (To_String (Rest))), "",
+                         Given => To_String (Label));
                   Section := Length (Result);
                   return;
                elsif Label /= Null_Unbounded_String then
@@ -532,6 +611,45 @@ package body Model_Runner.Framework.Bootstrap is
                end if;
             end;
             return;
+         end if;
+
+         --  The criteria of a requirement named: Acceptance criteria for
+         --  REQ-001: and the list under it, its criteria.
+         if Criteria_For > 0 and then Listed then
+            declare
+               Held : Output := Result.Outputs (Criteria_For);
+            begin
+               Held.Criteria :=
+                 (if Held.Criteria = Null_Unbounded_String then To_Unbounded_String (Item)
+                  else Held.Criteria & ASCII.LF & Item);
+               Result.Outputs (Criteria_For) := Held;
+            end;
+            return;
+         end if;
+         Criteria_For := 0;
+         if Starts_With (Item, "Acceptance criteria for ") and then Colon > 0 then
+            declare
+               Named : constant String :=
+                 Trim (Ada.Strings.Fixed.Trim (Item (Item'First + 24 .. Colon - 1),
+                                               Ada.Strings.Maps.To_Set ("*[]` "), Ada.Strings.Maps.To_Set ("*[]` ")));
+            begin
+               for Index in 1 .. Length (Result) loop
+                  if To_String (Result.Outputs (Index).Provenance) = Path & "#" & Named then
+                     Criteria_For := Index;
+                     if Trim (Item (Colon + 1 .. Item'Last)) /= "" then
+                        declare
+                           Held : Output := Result.Outputs (Index);
+                        begin
+                           Held.Criteria := To_Unbounded_String (Trim (Item (Colon + 1 .. Item'Last)));
+                           Result.Outputs (Index) := Held;
+                        end;
+                     end if;
+                  end if;
+               end loop;
+               if Criteria_For > 0 then
+                  return;
+               end if;
+            end;
          end if;
 
          --  Acceptance: what the requirement just stated is judged by.
@@ -594,7 +712,8 @@ package body Model_Runner.Framework.Bootstrap is
                  Length (Pending_Label) > 4 and then Slice (Pending_Label, 1, 4) = "REQ-"
                  and then Identifiers.Is_Valid (To_String (Pending_Label));
             begin
-               Found (Requirement_Candidate, Path & "#" & To_String (Pending_Label),
+               Found ((if Own then Imported_Item else Requirement_Candidate),
+                      Path & "#" & To_String (Pending_Label),
                       (if Own then Headline (To_String (Pending_Title))
                        else To_String (Pending_Label) & ": " & Headline (To_String (Pending_Title))),
                       Item, Given => (if Own then To_String (Pending_Label) else ""));
@@ -604,10 +723,41 @@ package body Model_Runner.Framework.Bootstrap is
             return;
          end if;
 
+         --  A line the project's own identifier begins, however marked --
+         --  **REQ-001**:, [REQ-002], REQ-003 | text, REQ-004: Title --
+         --  statement -- is that requirement, imported under it, as its
+         --  heading form is: the identifier is not its title.
+         Label_Split (Item, Label, Rest);
+         if Length (Label) > 4 and then Slice (Label, 1, 4) = "REQ-"
+           and then Identifiers.Is_Valid (To_String (Label))
+         then
+            declare
+               Said  : constant String :=
+                 Trim (Ada.Strings.Fixed.Trim (To_String (Rest), Ada.Strings.Maps.To_Set ("|:-* "),
+                                               Ada.Strings.Maps.Null_Set));
+               Dash  : constant Natural := Ada.Strings.Fixed.Index (Said, " -- ");
+               Title : constant String := (if Dash > 0 then Trim (Said (Said'First .. Dash - 1)) else "");
+               Body_Text : constant String :=
+                 (if Dash > 0 then Trim (Said (Dash + 4 .. Said'Last)) else Said);
+            begin
+               if Said = "" or else (Dash = 0 and then not Says_Requirement (Said, True)
+                                      and then Said (Said'Last) not in '.' | '!' | '?')
+               then
+                  --  Its title alone: its statement follows.
+                  Pending_Label := Label;
+                  Pending_Title := To_Unbounded_String (Said);
+               else
+                  Found (Imported_Item, Path & "#" & To_String (Label),
+                         (if Title /= "" then Title else Headline (Body_Text)), Body_Text,
+                         Given => To_String (Label));
+               end if;
+               return;
+            end;
+         end if;
+
          --  A line a document's own label begins -- FR-001, [NFR-01],
          --  **R-10** -- is known by it: the label kept in its title, and
          --  what it is found again by when the line is reworded.
-         Label_Split (Item, Label, Rest);
          if Label /= Null_Unbounded_String
            and then not (Length (Label) > 4 and then Slice (Label, 1, 4) in "REQ-" | "DEC-")
            and then (Says_Requirement (To_String (Rest), True)
@@ -1000,9 +1150,34 @@ package body Model_Runner.Framework.Bootstrap is
                   then
                      --  Under a provenance of its own: what was made from the
                      --  record before is no longer said, and retired with it.
-                     Found (Issue, Path & "#" & Mark & "#retired",
-                            Mark & " is " & To_String (Status) & ", so it is not proposed: " & Headline (Name),
-                            To_String (Status));
+                     declare
+                        --  As a sentence reads it: lower case, its link's words,
+                        --  and a record named by number as ADR-0005 (Title).
+                        Plain_Status : constant String := Lead_In (Lower_Status);
+                        By           : constant Natural := Ada.Strings.Fixed.Index (Plain_Status, " by ");
+                        After        : constant String :=
+                          (if By = 0 then "" else Trim (Plain_Status (By + 4 .. Plain_Status'Last)));
+                        Digits_End   : Natural := After'First - 1;
+                     begin
+                        while Digits_End < After'Last and then After (Digits_End + 1) in '0' .. '9' loop
+                           Digits_End := Digits_End + 1;
+                        end loop;
+                        declare
+                           Said : constant String :=
+                             (if Digits_End >= After'First and then Digits_End + 2 <= After'Last
+                                and then After (Digits_End + 1) = '.'
+                              then Plain_Status (Plain_Status'First .. By + 3) & "ADR-"
+                                   & [1 .. Natural'Max (0, 4 - (Digits_End - After'First + 1)) => '0']
+                                   & After (After'First .. Digits_End) & " ("
+                                   & Trim (Lead_In (To_String (Status)) (Lead_In (To_String (Status))'Last
+                                           - (After'Last - Digits_End - 2) .. Lead_In (To_String (Status))'Last))
+                                   & ")"
+                              else Plain_Status);
+                        begin
+                           Found (Issue, Path & "#" & Mark & "#retired",
+                                  Mark & " is " & Said & ", so it is not proposed: " & Headline (Name), Said);
+                        end;
+                     end;
                      return True;
                   end if;
                end;
@@ -1660,6 +1835,31 @@ package body Model_Runner.Framework.Bootstrap is
                return "";
             end Moved_Here;
 
+            --  One bootstrap let go when its document stopped saying it,
+            --  said there again: a candidate again, and said so.
+            procedure Revive (Kind : Intent.Intent_Kind; Known : String) is
+               Value : Records.Item;
+               Read  : E.Error_Info;
+               Moved : E.Error_Info;
+            begin
+               Stores.Read (Item, Area_Of (Kind), Known, Value, Read);
+               if E.Is_Ok (Read) and then Records.Get (Value, "state") = "rejected"
+                 and then Records.Get (Value, "moved_by") = "bootstrap"
+               then
+                  declare
+                     Granted : Transitions.Permissions := Transitions.Ordinary_Only;
+                  begin
+                     Granted (Transitions.Reconsideration) := True;
+                     Intent.Move (Item, Change, Kind, Known, Intent.First_State (Kind), Granted, Moved,
+                                  Actor => "bootstrap");
+                  end;
+                  if E.Is_Ok (Moved) then
+                     Result.Stale.Append (Known & ": " & Field (Next.Source) & " says it again; it is a"
+                                          & " candidate again");
+                  end if;
+               end if;
+            end Revive;
+
             procedure Propose (Kind : Intent.Intent_Kind) is
                Found_Here : constant String := Intent.Find_By_Provenance (Item, Kind, Provenance);
                Known : constant String := (if Found_Here /= "" then Found_Here else Moved_Here (Kind));
@@ -1669,6 +1869,7 @@ package body Model_Runner.Framework.Bootstrap is
                  and then Stores.Exists (Item, Area_Of (Kind), Given);
             begin
                if Known /= "" then
+                  Revive (Kind, Known);
                   Again (Kind, Known, Settled => False);
                   return;
                elsif Adopted (Kind, Given) then
@@ -1685,6 +1886,31 @@ package body Model_Runner.Framework.Bootstrap is
                      begin
                         Intent.Read (Item, Kind, Other, Held, Got);
                         if E.Is_Ok (Got)
+                          and then To_String (Held.State) not in "rejected" | "obsolete" | "superseded"
+                          and then To_String (Held.Source) /= Field (Next.Source)
+                          and then Fingerprint (To_String (Held.Text)) = Fingerprint (Field (Next.Text))
+                          and then Length (Held.Source) > 0
+                          and then not Ada.Directories.Exists
+                                         (Ada.Directories.Containing_Directory (Stores.Root (Item)) & "/"
+                                          & To_String (Held.Source))
+                        then
+                           --  The document it came from is gone, and this one
+                           --  says it too: it is read from here now.
+                           declare
+                              Value  : Records.Item;
+                              Read   : E.Error_Info;
+                           begin
+                              Stores.Read (Item, Area_Of (Kind), Other, Value, Read);
+                              Records.Set_Revision (Value, Records.Revision (Value) + 1);
+                              Records.Set (Value, "provenance", Provenance);
+                              Records.Set (Value, "source", Field (Next.Source));
+                              Stores.Put (Change, Area_Of (Kind), Other, Value);
+                              Result.Moved.Append (Other & " from " & To_String (Held.Source) & " to "
+                                                   & Field (Next.Source));
+                              Result.Existing := Result.Existing + 1;
+                           end;
+                           return;
+                        elsif E.Is_Ok (Got)
                           and then To_String (Held.State) not in "rejected" | "obsolete" | "superseded"
                           and then To_String (Held.Source) /= Field (Next.Source)
                           and then Fingerprint (To_String (Held.Text)) = Fingerprint (Field (Next.Text))
@@ -1876,6 +2102,7 @@ package body Model_Runner.Framework.Bootstrap is
                      --  The same item again: where the policy takes the
                      --  document's word, what its line now says is the next
                      --  revision; otherwise a person decides.
+                     Revive (Intent.Requirement, Intent.Find_By_Provenance (Item, Intent.Requirement, Provenance));
                      Again (Intent.Requirement,
                             Intent.Find_By_Provenance (Item, Intent.Requirement, Provenance),
                             Settled => Document_Rules);
@@ -1964,6 +2191,16 @@ package body Model_Runner.Framework.Bootstrap is
                   Propose (Intent.Specification);
 
                when Issue =>
+                  --  A record that marks itself retired, made into an entry
+                  --  before: what is said of that entry says it, not this.
+                  if Ada.Strings.Fixed.Index (Provenance, "#retired") = Provenance'Last - 7
+                    and then Provenance'Length > 8
+                    and then (for some Kind in Intent.Requirement .. Intent.Decision =>
+                                Intent.Find_By_Provenance
+                                  (Item, Kind, Provenance (Provenance'First .. Provenance'Last - 8)) /= "")
+                  then
+                     goto Next_Output;
+                  end if;
                   --  Kept as a diagnostic result, which is named by what it
                   --  says, so the same issue found again is the same result.
                   declare

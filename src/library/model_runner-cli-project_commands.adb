@@ -1152,6 +1152,34 @@ package body Model_Runner.CLI.Project_Commands is
       if Ada.Strings.Fixed.Index (Summary, "output of ") = Summary'First then
          return True;
       end if;
+      --  A record bootstrap did not propose, for what it says of itself:
+      --  done with once the record is gone, or an entry made of it says it.
+      if Ada.Strings.Fixed.Index (Summary, ", so it is not proposed: ") > 0 then
+         declare
+            Issue : Rs.Result;
+            Got   : E.Error_Info;
+         begin
+            Rs.Read (Store, Issue_Id, Issue, Got);
+            if E.Is_Ok (Got) and then Ada.Strings.Unbounded.Index (Issue.Provenance, "#") > 0 then
+               declare
+                  Whole : constant String := To_String (Issue.Provenance);
+                  Mark  : constant Natural := Ada.Strings.Fixed.Index (Whole, "#");
+                  Path  : constant String := Whole (Whole'First .. Mark - 1);
+                  Entry_Of : constant String :=
+                    (if Whole'Length > 8 and then Whole (Whole'Last - 7 .. Whole'Last) = "#retired"
+                     then Whole (Whole'First .. Whole'Last - 8) else Whole);
+               begin
+                  if not Ada.Directories.Exists
+                           (Hostkit.Fs.Join (Ada.Directories.Containing_Directory (S.Root (Store)), Path))
+                    or else (for some Kind in Nt.Requirement .. Nt.Decision =>
+                               Nt.Find_By_Provenance (Store, Kind, Entry_Of) /= "")
+                  then
+                     return True;
+                  end if;
+               end;
+            end if;
+         end;
+      end if;
       --  A call's failure, or what an agent reported, on work since done:
       --  the work that followed dealt with it.
       declare
@@ -1527,7 +1555,8 @@ package body Model_Runner.CLI.Project_Commands is
             procedure Waiting (On : Boolean) is
             begin
                Model_Runner.Platform.Signals.Set_Waiting_For_Input
-                 (On, Note => (if On then Pres.Message_Value (Screen, "cli.choose.interrupted") else ""));
+                 (On, Note => (if On then ASCII.LF & Pres.Message_Value (Screen, "cli.choose.interrupted")
+                               else ""));
             end Waiting;
             function Read return String is
             begin
@@ -1546,6 +1575,7 @@ package body Model_Runner.CLI.Project_Commands is
             then
                if Ada.Strings.Fixed.Index (Typed, [1 => ASCII.ESC]) > 0 then
                   Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CAN);
+                  Pres.Put_Note (Screen, "cli.choose.escaped");
                end if;
                return False;
             end if;
@@ -2398,7 +2428,11 @@ package body Model_Runner.CLI.Project_Commands is
                begin
                   --  A permission granted with nothing more: said so, not a
                   --  bare colon.
-                  if Ada.Strings.Fixed.Index (Name, "map.permission.") = Name'First and then Value = "" then
+                  if Ada.Strings.Fixed.Index (Name, "map.permission.") = Name'First and then Value = ""
+                    and then Name'Length > 12 and then Name (Name'Last - 11 .. Name'Last) = ".write_specs"
+                  then
+                     return "(granted, in " & Model_Runner.Framework.Permissions.Specification_Places & ")";
+                  elsif Ada.Strings.Fixed.Index (Name, "map.permission.") = Name'First and then Value = "" then
                      return "(granted, no limits)";
                   elsif not (Name'Length > 4 and then Name (Name'First .. Name'First + 3) in "set." | "list")
                   then
@@ -2445,8 +2479,9 @@ package body Model_Runner.CLI.Project_Commands is
                                 then Shown & " (given at /init" & Since_Init (Name, Value) & ")"
                                 elsif Ruled.Contains (Name)
                                 then Shown & " (" & Ruled (Name)
-                                     & (if Ada.Strings.Fixed.Tail (Ruled (Name), Value'Length + 7)
-                                           = " rules " & Value
+                                     & (if Ada.Characters.Handling.To_Lower
+                                             (Ada.Strings.Fixed.Tail (Ruled (Name), Value'Length + 7))
+                                           = " rules " & Ada.Characters.Handling.To_Lower (Value)
                                         then ")"
                                         else "; they disagree -- /check consistency says how to settle it)")
                                 else Shown));
@@ -2650,16 +2685,21 @@ package body Model_Runner.CLI.Project_Commands is
          end Normalized;
          --  A result by the start of its identifier, where one alone
          --  begins so: RES-F510 or F510 is RES-F510869C5653C6C4.
+         --  A start that several results begin with: those, as said.
+         Several : Unbounded_String;
+
          function Unique (Given : String) return String is
             Upper : constant String := Ada.Characters.Handling.To_Upper (Given);
             Whole : constant String :=
-              (if Upper'Length > 4 and then Upper (Upper'First .. Upper'First + 3) = "RES-" then Upper
+              (if Upper'Length >= 4 and then Upper (Upper'First .. Upper'First + 3) = "RES-" then Upper
                else "RES-" & Upper);
             Found : Unbounded_String;
             Count : Natural := 0;
          begin
+            --  Only a start of a result's identifier is looked for: hex
+            --  digits, with RES- or without.
             if Given = "" or else S.Exists (Store, Model_Runner.Framework.Results_Area, Given)
-              or else Given'Length < 3
+              or else not (for all C of Whole (Whole'First + 4 .. Whole'Last) => C in '0' .. '9' | 'A' .. 'F')
             then
                return Given;
             end if;
@@ -2670,12 +2710,24 @@ package body Model_Runner.CLI.Project_Commands is
                   Found := To_Unbounded_String
                     (if Name'Length > 4 and then Name (Name'Last - 3 .. Name'Last) = ".rec"
                      then Name (Name'First .. Name'Last - 4) else Name);
+                  if Count <= 5 then
+                     Append (Several, (if Count = 1 then "" else ", ") & To_String (Found));
+                  end if;
                end if;
             end loop;
+            if Count > 1 then
+               Several := To_Unbounded_String (Given & " is the start of" & Natural'Image (Count)
+                                               & " results -- " & To_String (Several)
+                                               & (if Count > 5 then ", ..." else "")
+                                               & "; give more of the one meant");
+            else
+               Several := Null_Unbounded_String;
+            end if;
             return (if Count = 1 then To_String (Found) else Given);
          end Unique;
 
          Id    : constant String := Unique (Normalized (Argument (1)));
+         Asked_Several : constant Unbounded_String := Several;
 
          --  The task an issue came from: named in it, or the task of the
          --  invocation it names.
@@ -2809,11 +2861,22 @@ package body Model_Runner.CLI.Project_Commands is
             end if;
          end Show_Record;
       begin
+         --  A start several begin with: which, asked.
+         if Asked_Several /= Null_Unbounded_String then
+            Outcome := E.Make (E.Framework_Input_Invalid);
+            E.Add_Text (Outcome, "name", "the result");
+            E.Add_Text (Outcome, "value", Argument (1));
+            E.Add_Text (Outcome, "detail", To_String (Asked_Several));
+            Pres.Report (Screen, Outcome);
+            return;
+         end if;
+
          --  result dismiss ID: an issue a person has taken as read leaves the
          --  listing; the result itself is kept.
          if Id = "dismiss" then
             declare
                Named   : constant String := Unique (Argument (2));
+               Ambiguous : constant Unbounded_String := Several;
                Kept    : constant String :=
                  Hostkit.Fs.Join (Hostkit.Fs.Join (S.Root (Store), "runtime"), "dismissed");
                Got     : Rs.Result;
@@ -2823,6 +2886,7 @@ package body Model_Runner.CLI.Project_Commands is
                if Ada.Characters.Handling.To_Lower (Argument (2)) = "all" then
                   declare
                      Count : Natural := 0;
+                     Counted : Names.Vector;
                      File  : Ada.Text_IO.File_Type;
                      Dismissed : constant Names.Vector := Dismissed_List (Store);
                   begin
@@ -2839,22 +2903,40 @@ package body Model_Runner.CLI.Project_Commands is
                            One : Rs.Result;
                            Had : E.Error_Info;
                         begin
-                           Rs.Read (Store, Result_Id, One, Had, With_Payload => False);
+                           Rs.Read (Store, Result_Id, One, Had);
+                           --  What the listing shows, counted as it shows it:
+                           --  one said twice in the same words is one.
                            if E.Is_Ok (Had) and then Rs."=" (One.Kind, Rs.Diagnostic)
                              and then not Dismissed.Contains (Result_Id)
+                             and then not Acted_On (Store, Result_Id, To_String (One.Summary))
+                             and then not (Task_Of (One) /= ""
+                                           and then Tk.State_Of (Store, Task_Of (One))
+                                                      in "accepted" | "running" | "verification" | "complete"
+                                                       | "cancelled" | "rejected")
                            then
                               Ada.Text_IO.Put_Line (File, Result_Id);
-                              Count := Count + 1;
+                              if not Counted.Contains (To_String (One.Summary) & ASCII.LF & To_String (One.Payload))
+                              then
+                                 Counted.Append (To_String (One.Summary) & ASCII.LF & To_String (One.Payload));
+                                 Count := Count + 1;
+                              end if;
                            end if;
                         end;
                      end loop;
                      Ada.Text_IO.Close (File);
-                     Pres.Put_Message (Screen, "cli.result.dismissed",
-                                       [Loc.Named ("name", Image (Count) & " issues")]);
+                     Pres.Put_Message (Screen, "cli.result.dismissed_all",
+                                       [Loc.Named ("count", Image (Count))]);
                   end;
                   return;
                end if;
-               if Named = "" then
+               if Ambiguous /= Null_Unbounded_String then
+                  Outcome := E.Make (E.Framework_Input_Invalid);
+                  E.Add_Text (Outcome, "name", "the issue to dismiss");
+                  E.Add_Text (Outcome, "value", Argument (2));
+                  E.Add_Text (Outcome, "detail", To_String (Ambiguous));
+                  Pres.Report (Screen, Outcome);
+                  return;
+               elsif Named = "" then
                   Outcome := E.Make (E.Framework_Input_Missing);
                   E.Add_Text (Outcome, "name", "the issue to dismiss: /result dismiss RES-ID, as result"
                               & " lists them");
@@ -3387,72 +3469,97 @@ package body Model_Runner.CLI.Project_Commands is
                   Result.Append (One);
                end if;
             end Add;
+
+            --  Whether a path matches a pattern: * any characters but /,
+            --  ** any directories, none among them.
+            function Matches (Pattern, Path : String) return Boolean is
+            begin
+               if Pattern = "" then
+                  return Path = "";
+               elsif Pattern'Length >= 3 and then Pattern (Pattern'First .. Pattern'First + 2) = "**/" then
+                  if Matches (Pattern (Pattern'First + 3 .. Pattern'Last), Path) then
+                     return True;
+                  end if;
+                  for Cut in Path'Range loop
+                     if Path (Cut) = '/'
+                       and then Matches (Pattern (Pattern'First + 3 .. Pattern'Last), Path (Cut + 1 .. Path'Last))
+                     then
+                        return True;
+                     end if;
+                  end loop;
+                  return False;
+               elsif Pattern (Pattern'First) = '*' then
+                  for Skip in 0 .. Path'Length loop
+                     exit when Skip > 0 and then Path (Path'First + Skip - 1) = '/';
+                     if Matches (Pattern (Pattern'First + 1 .. Pattern'Last), Path (Path'First + Skip .. Path'Last))
+                     then
+                        return True;
+                     end if;
+                  end loop;
+                  return False;
+               elsif Path = "" then
+                  return False;
+               elsif Pattern (Pattern'First) = Path (Path'First) then
+                  return Matches (Pattern (Pattern'First + 1 .. Pattern'Last), Path (Path'First + 1 .. Path'Last));
+               end if;
+               return False;
+            end Matches;
+
+            --  The files under a directory ("" the project's), each a
+            --  document, or each the pattern matches: built output, the
+            --  state and what a dot hides left out.
+            procedure Walk (Dir, Pattern : String) is
+               Search : Ada.Directories.Search_Type;
+               One    : Ada.Directories.Directory_Entry_Type;
+               Below  : Names.Vector;
+            begin
+               Ada.Directories.Start_Search (Search, (if Dir = "" then "." else Dir), "");
+               while Ada.Directories.More_Entries (Search) loop
+                  Ada.Directories.Get_Next_Entry (Search, One);
+                  declare
+                     Simple : constant String := Ada.Directories.Simple_Name (One);
+                     Lower  : constant String := Ada.Characters.Handling.To_Lower (Simple);
+                     Path   : constant String := (if Dir = "" then Simple else Dir & "/" & Simple);
+                  begin
+                     if Simple (Simple'First) = '.'
+                       or else Lower in "obj" | "bin" | "alire" | "node_modules" | "target" | "build" | "_build"
+                                      | "__pycache__" | "venv" | "dist"
+                     then
+                        null;
+                     elsif Ada.Directories."=" (Ada.Directories.Kind (One), Ada.Directories.Directory) then
+                        Below.Append (Path);
+                     elsif (if Pattern /= "" then Matches (Pattern, Path)
+                            else (for some Ending of Names.Vector'([".md", ".txt", ".rst", ".adoc"]) =>
+                                    Lower'Length > Ending'Length
+                                    and then Lower (Lower'Last - Ending'Length + 1 .. Lower'Last) = Ending))
+                     then
+                        Add (Path);
+                     end if;
+                  end;
+               end loop;
+               Ada.Directories.End_Search (Search);
+               for Next of Below loop
+                  Walk (Next, Pattern);
+               end loop;
+            end Walk;
          begin
             for Path of Positional loop
                declare
                   Here : constant String := Model_Runner.Framework.Repository.Relative_Path
                                               (Ada.Directories.Current_Directory, Path);
                begin
-                  --  docs/design/*.md: the files the pattern finds.
+                  --  A pattern -- docs/*.md, docs/**/*.rst, **/*.md -- the
+                  --  files it matches anywhere in the project; a directory --
+                  --  . for the whole project -- the documents in it and below.
                   if Ada.Strings.Fixed.Index (Here, "*") > 0 then
-                     declare
-                        Slash  : constant Natural := Ada.Strings.Fixed.Index (Here, "/", Ada.Strings.Backward);
-                        Dir    : constant String := (if Slash = 0 then "" else Here (Here'First .. Slash - 1));
-                        Search : Ada.Directories.Search_Type;
-                        One    : Ada.Directories.Directory_Entry_Type;
-                     begin
-                        if Ada.Strings.Fixed.Index (Dir, "*") = 0
-                          and then Ada.Directories.Exists (if Dir = "" then "." else Dir)
-                        then
-                           Ada.Directories.Start_Search
-                             (Search, (if Dir = "" then "." else Dir), Here (Slash + 1 .. Here'Last),
-                              [Ada.Directories.Ordinary_File => True, others => False]);
-                           while Ada.Directories.More_Entries (Search) loop
-                              Ada.Directories.Get_Next_Entry (Search, One);
-                              Add ((if Dir = "" then "" else Dir & "/") & Ada.Directories.Simple_Name (One));
-                           end loop;
-                           Ada.Directories.End_Search (Search);
-                        end if;
-                     end;
-                  elsif Here /= "" and then Ada.Directories.Exists (Here)
-                    and then Ada.Directories."=" (Ada.Directories.Kind (Here), Ada.Directories.Directory)
+                     Walk ("", Here);
+                  elsif Here in "" | "." | "./"
+                    or else (Ada.Directories.Exists (Here)
+                             and then Ada.Directories."=" (Ada.Directories.Kind (Here), Ada.Directories.Directory))
                   then
-                     --  A directory: the documents in it, and in those
-                     --  below it -- Markdown and text.
-                     declare
-                        procedure Walk (Dir : String) is
-                           Search : Ada.Directories.Search_Type;
-                           One    : Ada.Directories.Directory_Entry_Type;
-                           Below  : Names.Vector;
-                        begin
-                           Ada.Directories.Start_Search (Search, Dir, "");
-                           while Ada.Directories.More_Entries (Search) loop
-                              Ada.Directories.Get_Next_Entry (Search, One);
-                              declare
-                                 Simple : constant String := Ada.Directories.Simple_Name (One);
-                                 Lower  : constant String := Ada.Characters.Handling.To_Lower (Simple);
-                              begin
-                                 if Simple (Simple'First) = '.' then
-                                    null;
-                                 elsif Ada.Directories."=" (Ada.Directories.Kind (One), Ada.Directories.Directory)
-                                 then
-                                    Below.Append (Dir & "/" & Simple);
-                                 elsif (for some Ending of Names.Vector'([".md", ".txt", ".rst", ".adoc"]) =>
-                                          Lower'Length > Ending'Length
-                                          and then Lower (Lower'Last - Ending'Length + 1 .. Lower'Last) = Ending)
-                                 then
-                                    Add (Dir & "/" & Simple);
-                                 end if;
-                              end;
-                           end loop;
-                           Ada.Directories.End_Search (Search);
-                           for Next of Below loop
-                              Walk (Next);
-                           end loop;
-                        end Walk;
-                     begin
-                        Walk (if Here (Here'Last) = '/' then Here (Here'First .. Here'Last - 1) else Here);
-                     end;
+                     Walk ((if Here in "" | "." | "./" then ""
+                            elsif Here (Here'Last) = '/' then Here (Here'First .. Here'Last - 1) else Here),
+                           "");
                   else
                      Add (Here);
                   end if;
@@ -3617,6 +3724,15 @@ package body Model_Runner.CLI.Project_Commands is
                return (if Dash = 0 then Id else Id (Id'First .. Dash));
             end Stem;
 
+            function Number_In (Id : String) return Natural is
+               Dash : constant Natural := Ada.Strings.Fixed.Index (Id, "-", Ada.Strings.Backward);
+            begin
+               return Natural'Value (Id (Dash + 1 .. Id'Last));
+            exception
+               when others =>
+                  return 0;
+            end Number_In;
+
             First_Of : Unbounded_String;
             Last_Of  : Unbounded_String;
             Count    : Natural := 0;
@@ -3643,6 +3759,9 @@ package body Model_Runner.CLI.Project_Commands is
             for Id of Report.Made loop
                if Natural (Report.Made.Length) > 12 and then Count > 0
                  and then Stem (Id) = Stem (To_String (First_Of))
+                 --  A run is numbers that follow one another: one taken out
+                 --  of it and said apart is not in it.
+                 and then Number_In (Id) = Number_In (To_String (Last_Of)) + 1
                  and then Nt.State_Of (Store, Kind_Of (Id), Id)
                           = Nt.State_Of (Store, Kind_Of (To_String (First_Of)), To_String (First_Of))
                then
@@ -4120,6 +4239,39 @@ package body Model_Runner.CLI.Project_Commands is
             end loop;
          end;
 
+         --  A lease shorter than the time work may take: said, as such a
+         --  lease runs out under a run that is still working.
+         declare
+            function Number (Name : String) return Natural is
+            begin
+               return Natural'Value (R.Get (Planned.After, Name));
+            exception
+               when others =>
+                  return 0;
+            end Number;
+            Lease   : constant Natural := Number ("scalar.work.lease");
+            Longest : Natural := Number ("scalar.agents.max_seconds");
+            Named   : Unbounded_String := To_Unbounded_String ("agents.max_seconds");
+         begin
+            for Index in 1 .. R.Field_Count (Planned.After) loop
+               declare
+                  Field : constant String := R.Field_Name (Planned.After, Index);
+               begin
+                  if Ada.Strings.Fixed.Index (Field, "scalar.task.max_seconds.") = Field'First
+                    and then Number (Field) > Longest
+                  then
+                     Longest := Number (Field);
+                     Named := To_Unbounded_String (Field (Field'First + 7 .. Field'Last));
+                  end if;
+               end;
+            end loop;
+            if Lease > 0 and then Longest > Lease then
+               Pres.Put_Note (Screen, "cli.project.lease_short",
+                              [Loc.Named ("count", Image (Lease)), Loc.Named ("name", To_String (Named)),
+                               Loc.Named ("total", Image (Longest))]);
+            end if;
+         end;
+
          --  Confirmed by confirm=yes among the words, or asked -- but only
          --  on a terminal: a script's next line is not an answer.
          if All_Words.Contains ("confirm=yes") then
@@ -4439,6 +4591,23 @@ package body Model_Runner.CLI.Project_Commands is
                   end if;
                end;
             end if;
+            --  One on the same subject stands already: named, with how to
+            --  take it back -- two that say different things both stand.
+            for Line of Au.Standing_Instructions (Store) loop
+               declare
+                  Colon : constant Natural := Ada.Strings.Fixed.Index (Line, ": ");
+                  Equal : constant Natural := Ada.Strings.Fixed.Index (Line, " = ");
+               begin
+                  if Colon > 0 and then Equal > Colon
+                    and then Line (Colon + 2 .. Equal - 1) = Subject
+                  then
+                     Pres.Put_Note (Screen, "cli.project.instruct.same_subject",
+                                    [Loc.Named ("name", Line (Line'First .. Colon - 1)),
+                                     Loc.Named ("value", Line (Equal + 3 .. Line'Last)),
+                                     Loc.Named ("other", Subject)]);
+                  end if;
+               end;
+            end loop;
             Au.Instruct (Store, Change, Subject, Value, Over,
                          Model_Runner.Framework.Transitions.User, Id, Outcome);
             if E.Is_Ok (Outcome) then
@@ -4484,7 +4653,34 @@ package body Model_Runner.CLI.Project_Commands is
          --  task named: the same question.
          Accepting : constant Boolean :=
            Word = "/accept" or else (Word = "/task" and then Argument (1) = "accept");
-         Tasks_Waiting : constant Names.Vector := Tk.List (Store, "candidate");
+         --  A candidate serving only requirements since retired can never
+         --  be worked: not offered to be decided, but let go of.
+         function Live_Candidates return Names.Vector is
+            Result : Names.Vector;
+         begin
+            for Id of Tk.List (Store, "candidate") loop
+               declare
+                  Defined : R.Item;
+                  Read    : E.Error_Info;
+               begin
+                  Tk.Definition (Store, Id, Defined, Read);
+                  declare
+                     Serves : constant Names.Vector :=
+                       Model_Runner.Framework.Lines_Of (R.Get (Defined, "requirements"));
+                  begin
+                     if Serves.Is_Empty
+                       or else (for some Req of Serves =>
+                                  Nt.State_Of (Store, Nt.Requirement, Req)
+                                    not in "obsolete" | "rejected" | "superseded")
+                     then
+                        Result.Append (Id);
+                     end if;
+                  end;
+               end;
+            end loop;
+            return Result;
+         end Live_Candidates;
+         Tasks_Waiting : constant Names.Vector := Live_Candidates;
          Intent_Waiting : constant Names.Vector := Model_Runner.CLI.Intents.Pending (Store);
 
          --  A number alone is the candidate of that number, in whichever
@@ -5075,9 +5271,23 @@ package body Model_Runner.CLI.Project_Commands is
                   Typed_Ahead := True;
                end if;
             end Restore;
+            Before_Run : constant Natural := Model_Runner.Platform.Signals.Interrupts;
          begin
             Model_Runner.CLI.Work.Run_With (Command, Screen, Agent, Status);
             Restore;
+            --  Stopped with Ctrl-C: what was typed meanwhile is dropped,
+            --  as Ctrl-C at the prompt drops it -- not left to become a
+            --  message the next command is read into.
+            if Model_Runner.Platform.Signals.Interrupts /= Before_Run then
+               declare
+                  Ignored : Boolean := Hostkit.Terminal_Control.Discard_Input (Hostkit.Descriptors.Standard_Input);
+               begin
+                  if Typed_Ahead then
+                     Typed_Ahead := False;
+                     Pres.Put_Note (Screen, "cli.work.typed_dropped");
+                  end if;
+               end;
+            end if;
          exception
             when others =>
                Restore;

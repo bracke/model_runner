@@ -1687,7 +1687,7 @@ package body Model_Runner.Framework.Verification is
       if By_Hand then
          if Was /= "accepted" then
             Tasks.Move (Item, Change, Task_Id, "accepted", "completed by hand",
-                        Status => Status, Actor => "user");
+                        Status => Status, Actor => Transitions.User);
          end if;
          if E.Is_Ok (Status) or else Was = "accepted" then
             Tasks.Move (Item, Change, Task_Id, "running", "completed by hand", Status => Status);

@@ -21,6 +21,7 @@ package Model_Runner.Framework.Consistency is
       Index_Mismatch,
       Stale_Lease,
       Undefined_Requirement,
+      Retired_Requirement,
       Conflicting_Authority,
       Unknown_Task_Reference,
       Cyclic_Dependency,

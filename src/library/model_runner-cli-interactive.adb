@@ -921,9 +921,8 @@ package body Model_Runner.CLI.Interactive is
       --  Next steps are said as they are typed here.
       Pres.Use_Session (Screen, True);
 
-      --  Esc is a key here -- it drops what is typed -- not text: the
-      --  terminal is not to show it as ^[.
-      Keys_Hidden := Hostkit.Terminal_Control.Show_Control_Keys (Hostkit.Descriptors.Standard_Input, False);
+      --  Esc is left for the terminal to show as ^[: hidden, it echoes
+      --  as the key itself, which swallows the next one typed.
 
       Read_Loop :
       while not Leaving loop

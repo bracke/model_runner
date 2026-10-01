@@ -286,7 +286,7 @@ en.cli.interactive.help.reconfigure = /reconfigure NAME=VALUE ...  change settin
 en.cli.interactive.help.task = /task [ACTION]      list and manage tasks: list, new, accept, reject, cancel, move, edit, link, depend, split, rehome, reopen, reconsider, complete, verify, diff, integrate, kept, show, context, audit, derive, plan
 en.cli.interactive.help.accept = /accept             accept the one candidate waiting
 en.cli.interactive.help.reject = /reject             reject the one candidate waiting
-en.cli.interactive.help.work = /work [TASK]        run a ready task with this session's model, verify and complete it
+en.cli.interactive.help.work = /work [TASK]        run a ready task with this session's model (model=PATH names a model file instead), verify and complete it
 en.cli.interactive.help.cancel = /cancel TASK        cancel a task
 en.cli.interactive.help.check = /check [PROFILE | full | REQ-ID | consistency]  verify the project now, all of it, or one requirement, or check its state holds together
 en.cli.interactive.help.req = /req [ID | ACTION]  requirements: list, show, new TITLE "text=...", accept, reject, move ID STATE, block, unblock, verify ID, revise, link, unlink, supersede OLD NEW, obsolete
@@ -302,8 +302,8 @@ en.cli.interactive.help.users = /users UNIT         the units that depend on a u
 en.cli.interactive.help.impact = /impact FILE        what a change to a file reaches
 en.cli.interactive.help.trace = /trace NODE         the traceability of a requirement, task or file
 en.cli.interactive.usage.init = /init TEMPLATE NAME=VALUE ...  starts the project from TEMPLATE, each input as NAME=VALUE; /init alone offers the templates and asks for what is needed. The plan -- inputs, files, facts, and checks the policy would refuse -- is shown before anything is written
-en.cli.interactive.usage.task = /task list [state=S kind=K component=C requirement=REQ origin=O parent=P] -- /task new TITLE kind=KIND [component=C requirements=REQ-... notes=... permissions=...] -- /task accept|reject|cancel|reopen|reconsider|complete|verify|integrate ID -- /task show|audit|context ID [--verbose], /task plan -- /task edit ID NAME=VALUE (kind too), link ID REQ..., depend ID ON [remove], split ID First; Second, rehome OLD NEW, move ID STATE, derive -- /task diff ID, /task integrate ID [resolved|anyway|resolved anyway|discard] -- /task kept [restore|drop NAME, a task's ID, or all]
-en.cli.interactive.usage.work = /work TASK-ID, or words of a task's title, or nothing to choose among the ready ones: its context, the agent's call, the files changed, verification, and where the task ended
+en.cli.interactive.usage.task = /task list [state=S kind=K component=C requirement=REQ origin=TASK (the task it was proposed from) parent=P] -- /task new TITLE kind=KIND [component=C requirements=REQ-... notes=... permissions=...] -- /task accept|reject|reopen|reconsider|complete|verify|integrate ID, /task cancel ID [anyway] -- /task show|audit|context ID [--verbose], /task plan -- /task edit ID NAME=VALUE (kind too), link ID REQ..., depend ID ON [remove], split ID First; Second, rehome OLD NEW, move ID STATE, derive -- /task diff ID, /task integrate ID [resolved|anyway|resolved anyway|discard] -- /task kept [restore|drop NAME, a task's ID, or all]
+en.cli.interactive.usage.work = /work TASK-ID, or words of a task's title, or nothing to choose among the ready ones [model=PATH: a model file runs it apart, with file tools only; steps=N; profile=NAME]: its context, the agent's call, the files changed, verification, and where the task ended
 en.cli.interactive.usage.req = /req [list] -- /req new TITLE text=... criteria=... scope=... -- /req accept|reject|reconsider|obsolete|verify ID ... (or all) -- /req move ID STATE, /req block ID, /req unblock ID -- /req revise ID text=... -- /req link ID [RELATION] TARGET, unlink, where RELATION is dependency, component, implementation (a file or a symbol, the default), task, test or verification: /req link REQ-001 src/parser.c -- /req supersede OLD NEW -- /req show ID
 en.cli.interactive.usage.decision = /decision [list] -- /decision new TITLE text=... -- /decision accept|reject|reconsider|obsolete ID ... (or all) -- /decision govern ID SETTING RULING [overrides=CONFIG] -- /decision revise ID text=... -- /decision link ID RELATION TARGET, unlink, where RELATION is dependency, component, implementation, task, test or verification -- /decision supersede OLD NEW -- /decision show ID
 en.cli.interactive.usage.spec = /spec [list] -- /spec new TITLE text=... scope=COMPONENT -- /spec accept|reject|reconsider|obsolete ID ... (or all) -- /spec govern ID SETTING RULING [overrides=CONFIG] -- /spec revise ID text=... -- /spec link ID RELATION TARGET, unlink, where RELATION is dependency, component, implementation, task, test or verification -- /spec supersede OLD NEW -- /spec show ID
@@ -358,6 +358,7 @@ en.cli.choose.needed = {name} needs a value; Esc gives up, as in a list (Esc the
 en.cli.choose.command_typed = {value} is a command, not a value for {name}: nothing was taken, and the command was not run -- type it again
 en.cli.choose.yes_or_no = {value} is neither yes nor no; answer yes or no
 en.cli.choose.interrupted = Ctrl-C: that is a no -- Enter goes on
+en.cli.choose.escaped = Esc: that is a no
 en.cli.choose.optional = (optional; Enter skips)
 en.cli.choose.only = {name}: {value}, the only one there is
 en.cli.choose.picked = {name}: {value}
@@ -422,6 +423,7 @@ en.cli.task.parts_added = {name} has parts already ({detail}): these are added t
 en.cli.task.checked_in = checked in {name}, where its work waits: the project itself is not checked
 en.cli.task.given_up_by_hand = {value}, where its agent worked, was given up, so nothing of that work is in the project; {name} is completed on what the project holds now, as done by hand
 en.cli.task.given_up_restored = {value}, where its agent worked, was given up, and its kept copy was put back; {name} is completed on what the project holds now
+en.cli.task.complete_without_kept = complete {name} on what the project holds, without its work kept in {detail}? /task kept restore {name} puts that in first (yes/no)
 en.cli.task.accepted_waits = {name} is not ready yet: {detail}; it becomes ready once that is done
 en.cli.task.serves_retired = {name} will not become ready: {detail}, which is never done -- /task reject {name} lets it go, or /task edit {name} requirements=ID has it serve another
 en.cli.task.unchanged = {name} already says that; nothing is revised
@@ -436,6 +438,7 @@ en.cli.result.elsewhere = {name} is shown by {value}
 en.cli.result.none = no open issues
 en.cli.project.config_none = no setting's name holds {value}; /config lists them all
 en.cli.result.dismissed = {name} is dismissed: /result no longer lists it, and it is kept
+en.cli.result.dismissed_all = issues dismissed: {count} -- /result no longer lists them, and they are kept
 en.cli.result.dismissed_already = {name} is dismissed already
 en.cli.intent.unlinked = {name}'s link is taken off
 en.cli.intent.unchanged = {name} already says that; nothing was revised
@@ -446,6 +449,8 @@ en.cli.intent.link_component = {name} is not one of the project's components ({v
 en.cli.intent.link_doubtful = {name}'s link to {value} is kept, and consistency will name it until it is put right: {detail}
 en.cli.intent.already = {name} is {value} already; nothing to do
 en.cli.intent.obsolete_confirm = make {name} obsolete ({detail})? it is final: what is obsolete is not accepted, revised or reconsidered again (yes/no)
+en.cli.intent.supersede_confirm = replace {name} by {value}? it is final: what is replaced is not accepted, revised or reconsidered again (yes/no)
+en.cli.intent.id_keeps_scope = {name} is in {value} now; its identifier keeps the name of {other}, where it was made, as identifiers do not change
 en.cli.intent.only_one = {name} is the one waiting
 en.cli.intent.superseded_accepted = {name} was a candidate, and replacing {value} accepts it: it stands where {value} stood
 en.cli.intent.ruling_dropped = {name} governed {value}, and {other} governs nothing: {detail} carries it on
@@ -458,7 +463,7 @@ en.cli.intent.governs_still = {name} still governs {value}
 en.cli.intent.ruling_passed = {name} governed {value}; {other} governs it now: {detail}
 en.cli.intent.already_governs = {name} governs {value} already; nothing changed
 en.cli.intent.moved = {name} moved from {other} to {value}
-en.cli.intent.superseded = {name} is {value} now, replaced by {other}
+en.cli.intent.superseded = {name} is superseded by {other} now ({value})
 en.cli.intent.work_moved = {name} serves {value} now, in {other}'s place
 en.cli.intent.work_kept = {name} still serves {other}: {value} is served by {detail} already, so it is not moved there; /task cancel {name} lets it go
 en.cli.task.field = {name}: {value}
@@ -487,12 +492,16 @@ en.cli.task.requirement = {name} is {value}
 en.cli.task.requirement_unverified = {name} stays {value}, not verified: {detail}
 en.cli.task.diff_none = no work of {name} waits in a workspace -- it is {value}: {detail}
 en.cli.task.kept_none = no copy of given-up or overwritten work is kept
-en.cli.task.kept_line = {name}  {count} files: {detail}
+en.cli.task.kept_line = {name}  {value}: {detail}
 en.cli.task.kept_restore_confirm = put the files kept in {name} back over the project's -- {detail}? (yes/no)
 en.cli.task.kept_drop_confirm = remove the kept copy {name} -- {detail}? (yes/no)
 en.cli.task.kept_drop_all_confirm = remove every kept copy -- {detail}? (yes/no)
 en.cli.task.kept_restored = {name} is put back in the project: {detail}
 en.cli.task.kept_dropped = the kept copy {name} is removed
+en.cli.task.kept_left = the kept copies are left as they were
+en.cli.task.not_waiting = {name} does not wait for {value}; nothing to do
+en.cli.task.analysis_no_findings = {name} is an analysis, completed with nothing kept of what it found
+en.cli.task.analysis_findings = what did {name} find? A line kept as its notes (Enter keeps none):
 en.cli.task.integrated = {name} took in {detail}
 en.cli.task.diff_file = == {path}
 en.cli.task.diff_project_moved = the project's {path} changed since the work began as well: /task integrate {name} checks the two against each other
@@ -596,7 +605,8 @@ en.cli.project.opening_stuck = tasks set aside: {count} -- {detail}; /state says
 en.cli.project.found_above = the project is at {path}: this session works there
 en.cli.project.quote_open = a quote on the line is not closed: the rest of the line was taken as quoted
 en.cli.project.read_only = another session holds the project -- a run in progress; this is the state as it is now, and nothing is changed
-en.cli.project.held_at_open = another run is working on this project: what only looks -- /state, /task list, /req -- works meanwhile, and what changes it waits until that run ends
+en.cli.project.lease_short = work.lease would be {count} seconds, shorter than the {total} {name} lets work take; a run still working past its lease is kept while its session lives, and only taken back from one that has ended
+en.cli.project.held_at_open = another run is working on this project: what only looks -- /state, /task list, /req -- works meanwhile, and what changes it is refused until that run ends; run it again then
 en.cli.task.stop_asked = the run holding the project was asked to cancel {name}: it stops its work and cancels it within a second or two
 en.cli.task.stop_asked_already = the run holding the project was asked to cancel {name} already; it stops within a second or two
 en.cli.project.git.branch = on {name}
@@ -606,6 +616,7 @@ en.cli.project.sandbox.none = agents are confined only by the project's permissi
 en.cli.project.sandbox.set = agents are confined to {value} (by {name})
 en.cli.project.sandbox.effective = with this project's permissions, its agents may do: {value}
 en.cli.project.instruct.none = no instruction of yours stands
+en.cli.project.instruct.same_subject = {name} says {other} = {value} already, and stands beside this one; /instruct withdraw {name} takes it back
 en.cli.project.instruct.unknown = {name} is no setting the project has{detail}: the instruction stands, and agents are told it as it is written
 en.cli.project.instruct.advisory = an instruction is what agents are told above every decision, specification and setting; it changes no setting itself -- /reconfigure NAME=VALUE changes {name} for the harness too
 en.cli.project.consistency = what does not hold together in the project's state: {count}
@@ -616,7 +627,7 @@ en.cli.repo.symbol = {name}  {value}  {path}
 en.cli.repo.reference = {path}  {name}  ({detail})
 en.cli.repo.unit = {name}
 en.cli.repo.reached = {value}  {name}  {detail}
-en.cli.repo.selection = test {value}: {detail}
+en.cli.repo.selection = tests to run: {value} -- {detail}
 en.cli.repo.none = nothing in the repository is called {name}
 en.cli.repo.no_refs = nothing uses {name}
 en.cli.repo.no_deps = {name} depends on nothing the repository holds
@@ -633,9 +644,11 @@ en.cli.work.session_ending = the session ends, told to (SIGTERM or SIGHUP): what
 en.cli.work.agent = {name} works on {value}
 en.cli.work.runner = {value}: the agent is {name}
 en.cli.work.runner.session = the session's model
+en.cli.work.runner_apart = a model named by model=PATH runs apart, with file tools only: it runs no checks and makes no helpers -- /work without model= runs the session's model, which does
 en.cli.work.only_ready = {name} is the one task ready
 en.cli.work.one_accepted = {name} is the only accepted one of the {count} tasks it matches
 en.cli.work.time_allowed = it may work {value} ({name}; execution.timeout bounds a command); Ctrl-C stops it sooner, and what is typed meanwhile waits until it ends
+en.cli.work.typed_dropped = anything typed while it worked is dropped with the Ctrl-C that stopped it
 en.cli.work.agent_ignored = work.agent names {value}, which is not run: an outside program as the agent is out of scope; /reconfigure work.agent=off takes it out
 en.cli.work.sandboxed = its agent is confined to {value}, by {name}
 en.cli.work.context = context {name}, call {value}
@@ -658,6 +671,7 @@ en.cli.work.ended = the task is {name}
 en.cli.work.ended_because = the task is {name}: {detail}
 en.cli.work.failed_because = the task failed: {detail}
 en.cli.next.retry = next: /task accept {name} to try it again, or /task complete {name} once it is done by hand
+en.cli.next.retry_kept = next: /task accept {name} tries it again; what it changed is kept -- /task kept restore {name} puts that in the project, and /task complete {name} then takes it as done
 en.cli.next.answer_blocked = next: what its agent needs goes in its notes -- /task edit {name} notes="..." -- which the next attempt is told, and /task accept {name} then tries again
 en.cli.next.write_refused = next: trying again is refused the same way; /reconfigure map.permission.{value}.write_source=roots={detail} lets agents of that level write there too, or /task complete {name} once it is done by hand
 en.cli.next.sandbox_refused = next: the session's sandbox refused it: /sandbox off, or /sandbox with the write it needs (write_source roots=DIR/), lets agents this session starts write there; /task accept {name} then tries again
@@ -681,7 +695,7 @@ en.cli.next.check_failed = next: put right what it found and run it again -- or,
 en.cli.next.anyway_text = anyway takes in only work that joins to the project's without touching the same lines; files both changed are settled in the workspace first, then /task integrate {name} resolved -- or resolved anyway takes the workspace's copy
 en.cli.next.gates = next: put right what the gates above say, then /task complete {name} again
 en.cli.next.accept_task = next: /task accept {name} accepts it, and /work {name} then does it
-en.cli.next.permissions_first = next: as its permissions stand its agent could not do it -- {detail}; /task edit {name} permissions=inherit gives it what its kind gives, then /task accept {name}
+en.cli.next.permissions_first = next: as its permissions stand its agent could not do it -- {detail}; that done, /task accept {name}
 en.cli.next.accept_tasks = next: /task accept {detail} accepts them, and /work then does each -- or, where the code is there already, /task complete all takes each as done, its checks passing
 en.cli.next.accept_intent = next: {value} accept {name} accepts it; until then it applies to nothing
 en.cli.next.accept_decision = next: /decision accept {name} accepts it, and /decision govern {name} SETTING RULING has it govern a setting
@@ -1451,7 +1465,7 @@ da.cli.interactive.help.reconfigure = /reconfigure NAVN=VÆRDI ...  ændr indsti
 da.cli.interactive.help.task = /task [HANDLING]    vis og styr opgaver: list, new, accept, reject, cancel, move, edit, link, depend, split, rehome, reopen, reconsider, complete, verify, diff, integrate, kept, show, context, audit, derive, plan
 da.cli.interactive.help.accept = /accept             accepter den ene ventende kandidat
 da.cli.interactive.help.reject = /reject             afvis den ene ventende kandidat
-da.cli.interactive.help.work = /work [OPGAVE]      kør en klar opgave med sessionens model, verificér og fuldfør den
+da.cli.interactive.help.work = /work [OPGAVE]      kør en klar opgave med sessionens model (model=STI angiver en modelfil i stedet), verificér og fuldfør den
 da.cli.interactive.help.cancel = /cancel OPGAVE      annullér en opgave
 da.cli.interactive.help.check = /check [PROFIL | full | REQ-ID | consistency]  verificér projektet nu, det hele eller ét krav, eller tjek at dets tilstand hænger sammen
 da.cli.interactive.help.req = /req [ID | HANDLING]  krav: list, vis, new TITEL "text=...", accept, reject, move ID TILSTAND, block, unblock, verify ID, revise, link, unlink, supersede GAMMEL NY, obsolete
@@ -1467,8 +1481,8 @@ da.cli.interactive.help.users = /users ENHED        de enheder der afhænger af 
 da.cli.interactive.help.impact = /impact FIL         hvad en ændring af en fil når
 da.cli.interactive.help.trace = /trace KNUDE        sporbarheden for et krav, en opgave eller en fil
 da.cli.interactive.usage.init = /init SKABELON NAVN=VÆRDI ...  starter projektet fra SKABELON, hvert input som NAVN=VÆRDI; /init alene tilbyder skabelonerne og spørger om det nødvendige. Planen -- input, filer, fakta og kontroller politikken ville afvise -- vises før noget skrives
-da.cli.interactive.usage.task = /task list [state=S kind=K component=C requirement=REQ origin=O parent=P] -- /task new TITEL kind=ART [component=C requirements=REQ-... notes=... permissions=...] -- /task accept|reject|cancel|reopen|reconsider|complete|verify|integrate ID -- /task show|audit|context ID [--verbose], /task plan -- /task edit ID NAVN=VÆRDI (også kind), link ID REQ..., depend ID PÅ [remove], split ID Første; Anden, rehome GAMMEL NY, move ID TILSTAND, derive -- /task diff ID, /task integrate ID [resolved|anyway|resolved anyway|discard] -- /task kept [restore|drop NAVN, en opgaves ID, eller all]
-da.cli.interactive.usage.work = /work OPGAVE-ID, eller ord fra en opgaves titel, eller intet for at vælge blandt de klare: dens kontekst, agentens kald, de ændrede filer, verifikation, og hvor opgaven endte
+da.cli.interactive.usage.task = /task list [state=S kind=K component=C requirement=REQ origin=TASK (opgaven den blev foreslået fra) parent=P] -- /task new TITEL kind=ART [component=C requirements=REQ-... notes=... permissions=...] -- /task accept|reject|reopen|reconsider|complete|verify|integrate ID, /task cancel ID [anyway] -- /task show|audit|context ID [--verbose], /task plan -- /task edit ID NAVN=VÆRDI (også kind), link ID REQ..., depend ID PÅ [remove], split ID Første; Anden, rehome GAMMEL NY, move ID TILSTAND, derive -- /task diff ID, /task integrate ID [resolved|anyway|resolved anyway|discard] -- /task kept [restore|drop NAVN, en opgaves ID, eller all]
+da.cli.interactive.usage.work = /work OPGAVE-ID, eller ord fra en opgaves titel, eller intet for at vælge blandt de klare [model=STI: en modelfil kører den for sig, kun med filværktøjer; steps=N; profile=NAVN]: dens kontekst, agentens kald, de ændrede filer, verifikation, og hvor opgaven endte
 da.cli.interactive.usage.req = /req [list] -- /req new TITEL text=... criteria=... scope=... -- /req accept|reject|reconsider|obsolete|verify ID ... (eller all) -- /req move ID TILSTAND, /req block ID, /req unblock ID -- /req revise ID text=... -- /req link ID [RELATION] MÅL, unlink, hvor RELATION er dependency, component, implementation (en fil eller et symbol, standarden), task, test eller verification: /req link REQ-001 src/parser.c -- /req supersede GAMMEL NY -- /req show ID
 da.cli.interactive.usage.decision = /decision [list] -- /decision new TITEL text=... -- /decision accept|reject|reconsider|obsolete ID ... (eller all) -- /decision govern ID INDSTILLING AFGØRELSE [overrides=CONFIG] -- /decision revise ID text=... -- /decision link ID RELATION MÅL, unlink, hvor RELATION er dependency, component, implementation, task, test eller verification -- /decision supersede GAMMEL NY -- /decision show ID
 da.cli.interactive.usage.spec = /spec [list] -- /spec new TITEL text=... scope=KOMPONENT -- /spec accept|reject|reconsider|obsolete ID ... (eller all) -- /spec govern ID INDSTILLING AFGØRELSE [overrides=CONFIG] -- /spec revise ID text=... -- /spec link ID RELATION MÅL, unlink, hvor RELATION er dependency, component, implementation, task, test eller verification -- /spec supersede GAMMEL NY -- /spec show ID
@@ -1511,6 +1525,7 @@ da.cli.choose.needed = {name} skal have en værdi; Esc opgiver, som i en liste (
 da.cli.choose.command_typed = {value} er en kommando, ikke en værdi for {name}: intet blev taget, og kommandoen blev ikke kørt -- skriv den igen
 da.cli.choose.yes_or_no = {value} er hverken ja eller nej; svar ja eller nej
 da.cli.choose.interrupted = Ctrl-C: det er et nej -- Enter fortsætter
+da.cli.choose.escaped = Esc: det er et nej
 da.cli.choose.optional = (valgfri; Enter springer over)
 da.cli.choose.only = {name}: {value}, den eneste der er
 da.cli.choose.picked = {name}: {value}
@@ -1575,6 +1590,7 @@ da.cli.task.parts_added = {name} har allerede dele ({detail}): disse lægges til
 da.cli.task.checked_in = tjekket i {name}, hvor dets arbejde venter: selve projektet er ikke tjekket
 da.cli.task.given_up_by_hand = {value}, hvor dens agent arbejdede, blev opgivet, så intet af det arbejde er i projektet; {name} fuldføres på det projektet rummer nu, som gjort i hånden
 da.cli.task.given_up_restored = {value}, hvor dens agent arbejdede, blev opgivet, og dens gemte kopi blev lagt tilbage; {name} fuldføres på det projektet rummer nu
+da.cli.task.complete_without_kept = fuldfør {name} på det projektet rummer, uden dens arbejde gemt i {detail}? /task kept restore {name} lægger det ind først (ja/nej)
 da.cli.task.accepted_waits = {name} er ikke klar endnu: {detail}; den bliver klar når det er gjort
 da.cli.task.serves_retired = {name} bliver ikke klar: {detail}, som aldrig bliver gjort -- /task reject {name} giver slip, eller /task edit {name} requirements=ID lader den tjene et andet
 da.cli.task.unchanged = {name} siger allerede det; intet revideres
@@ -1589,6 +1605,7 @@ da.cli.result.elsewhere = {name} vises af {value}
 da.cli.result.none = ingen åbne problemer
 da.cli.project.config_none = ingen indstillings navn indeholder {value}; /config viser dem alle
 da.cli.result.dismissed = {name} er afvist: /result viser den ikke længere, og den gemmes
+da.cli.result.dismissed_all = problemer afvist: {count} -- /result viser dem ikke længere, og de gemmes
 da.cli.result.dismissed_already = {name} er allerede afvist
 da.cli.intent.unlinked = {name}s link er fjernet
 da.cli.intent.unchanged = {name} siger allerede det; intet blev revideret
@@ -1599,6 +1616,8 @@ da.cli.intent.link_component = {name} er ikke en af projektets komponenter ({val
 da.cli.intent.link_doubtful = {name}s link til {value} beholdes, og konsistenstjekket nævner det, indtil det er rettet: {detail}
 da.cli.intent.already = {name} er allerede {value}; intet at gøre
 da.cli.intent.obsolete_confirm = gør {name} forældet ({detail})? det er endeligt: det forældede accepteres, revideres eller genovervejes ikke igen (ja/nej)
+da.cli.intent.supersede_confirm = erstat {name} med {value}? det er endeligt: det erstattede accepteres, revideres eller genovervejes ikke igen (ja/nej)
+da.cli.intent.id_keeps_scope = {name} er i {value} nu; dens identifikator beholder navnet {other}, hvor den blev lavet, da identifikatorer ikke ændres
 da.cli.intent.only_one = {name} er den der venter
 da.cli.intent.superseded_accepted = {name} var en kandidat, og at erstatte {value} accepterer den: den står hvor {value} stod
 da.cli.intent.ruling_dropped = {name} styrede {value}, og {other} styrer intet: {detail} fører den videre
@@ -1611,7 +1630,7 @@ da.cli.intent.governs_still = {name} styrer stadig {value}
 da.cli.intent.ruling_passed = {name} styrede {value}; {other} styrer den nu: {detail}
 da.cli.intent.already_governs = {name} styrer allerede {value}; intet er ændret
 da.cli.intent.moved = {name} flyttet fra {other} til {value}
-da.cli.intent.superseded = {name} er {value} nu, afløst af {other}
+da.cli.intent.superseded = {name} er erstattet af {other} nu ({value})
 da.cli.intent.work_moved = {name} betjener {value} nu, i stedet for {other}
 da.cli.intent.work_kept = {name} betjener stadig {other}: {value} betjenes allerede af {detail}, så den flyttes ikke dertil; /task cancel {name} slipper den
 da.cli.task.field = {name}: {value}
@@ -1640,12 +1659,16 @@ da.cli.task.requirement = {name} er {value}
 da.cli.task.requirement_unverified = {name} forbliver {value}, ikke verificeret: {detail}
 da.cli.task.diff_none = intet arbejde fra {name} venter i et arbejdsområde -- den er {value}: {detail}
 da.cli.task.kept_none = ingen kopi af opgivet eller overskrevet arbejde er gemt
-da.cli.task.kept_line = {name}  {count} filer: {detail}
+da.cli.task.kept_line = {name}  {value}: {detail}
 da.cli.task.kept_restore_confirm = læg filerne gemt i {name} tilbage over projektets -- {detail}? (ja/nej)
 da.cli.task.kept_drop_confirm = fjern den gemte kopi {name} -- {detail}? (ja/nej)
 da.cli.task.kept_drop_all_confirm = fjern alle gemte kopier -- {detail}? (ja/nej)
 da.cli.task.kept_restored = {name} er lagt tilbage i projektet: {detail}
 da.cli.task.kept_dropped = den gemte kopi {name} er fjernet
+da.cli.task.kept_left = de gemte kopier er ladt som de var
+da.cli.task.not_waiting = {name} venter ikke på {value}; intet at gøre
+da.cli.task.analysis_no_findings = {name} er en analyse, afsluttet uden at gemme hvad den fandt
+da.cli.task.analysis_findings = hvad fandt {name}? En linje gemt som dens noter (Enter gemmer ingen):
 da.cli.task.integrated = {name} tog {detail} ind
 da.cli.task.diff_file = == {path}
 da.cli.task.diff_project_moved = projektets {path} er også ændret siden arbejdet begyndte: /task integrate {name} tjekker de to mod hinanden
@@ -1749,7 +1772,8 @@ da.cli.project.opening_stuck = opgaver lagt til side: {count} -- {detail}; /stat
 da.cli.project.found_above = projektet er i {path}: denne session arbejder der
 da.cli.project.quote_open = et citationstegn på linjen er ikke lukket: resten af linjen blev taget som citeret
 da.cli.project.read_only = en anden session holder projektet -- en kørsel i gang; dette er tilstanden som den er nu, og intet ændres
-da.cli.project.held_at_open = en anden kørsel arbejder på projektet: det der kun kigger -- /state, /task list, /req -- virker imens, og det der ændrer det venter til den kørsel slutter
+da.cli.project.lease_short = work.lease ville være {count} sekunder, kortere end de {total} {name} lader arbejdet tage; en kørsel der stadig arbejder ud over sin lease beholdes mens dens session lever, og tages kun tilbage fra en der er sluttet
+da.cli.project.held_at_open = en anden kørsel arbejder på projektet: det der kun kigger -- /state, /task list, /req -- virker imens, og det der ændrer det afvises til den kørsel slutter; kør det igen da
 da.cli.task.stop_asked = kørslen der holder projektet blev bedt om at annullere {name}: den stopper arbejdet og annullerer den inden for et par sekunder
 da.cli.task.stop_asked_already = kørslen, der holder projektet, er allerede bedt om at annullere {name}; den stopper inden for et sekund eller to
 da.cli.project.git.branch = på {name}
@@ -1759,6 +1783,7 @@ da.cli.project.sandbox.none = agenter begrænses kun af projektets tilladelser
 da.cli.project.sandbox.set = agenter er begrænset til {value} (af {name})
 da.cli.project.sandbox.effective = med dette projekts tilladelser må dets agenter: {value}
 da.cli.project.instruct.none = ingen instruks fra dig står ved magt
+da.cli.project.instruct.same_subject = {name} siger {other} = {value} allerede og står ved siden af denne; /instruct withdraw {name} tager den tilbage
 da.cli.project.instruct.unknown = {name} er ingen indstilling projektet har{detail}: instruktionen står, og agenter får den at vide som den er skrevet
 da.cli.project.instruct.advisory = en instruktion er hvad agenter får at vide over enhver beslutning, specifikation og indstilling; den ændrer ingen indstilling selv -- /reconfigure NAVN=VÆRDI ændrer {name} for harnessen også
 da.cli.project.consistency = hvad der ikke hænger sammen i projektets tilstand: {count}
@@ -1769,7 +1794,7 @@ da.cli.repo.symbol = {name}  {value}  {path}
 da.cli.repo.reference = {path}  {name}  ({detail})
 da.cli.repo.unit = {name}
 da.cli.repo.reached = {value}  {name}  {detail}
-da.cli.repo.selection = test {value}: {detail}
+da.cli.repo.selection = test der køres: {value} -- {detail}
 da.cli.repo.none = intet i depotet hedder {name}
 da.cli.repo.no_refs = intet bruger {name}
 da.cli.repo.no_deps = {name} afhænger ikke af noget i depotet
@@ -1786,9 +1811,11 @@ da.cli.work.session_ending = sessionen slutter, som den blev bedt om (SIGTERM el
 da.cli.work.agent = {name} arbejder på {value}
 da.cli.work.runner = {value}: agenten er {name}
 da.cli.work.runner.session = sessionens model
+da.cli.work.runner_apart = en model angivet med model=PATH kører for sig, kun med filværktøjer: den kører ingen tjek og laver ingen hjælpere -- /work uden model= kører sessionens model, som gør
 da.cli.work.only_ready = {name} er den eneste klare opgave
 da.cli.work.one_accepted = {name} er den eneste accepterede af de {count} opgaver den matcher
 da.cli.work.time_allowed = den må arbejde {value} ({name}; execution.timeout begrænser en kommando); Ctrl-C stopper den før, og det der skrives imens venter til den slutter
+da.cli.work.typed_dropped = alt der blev skrevet mens den arbejdede, droppes med det Ctrl-C der stoppede den
 da.cli.work.agent_ignored = work.agent nævner {value}, som ikke køres: et eksternt program som agent er uden for rammerne; /reconfigure work.agent=off fjerner det
 da.cli.work.sandboxed = dens agent er begrænset til {value}, af {name}
 da.cli.work.context = kontekst {name}, kald {value}
@@ -1811,6 +1838,7 @@ da.cli.work.ended = opgaven er {name}
 da.cli.work.ended_because = opgaven er {name}: {detail}
 da.cli.work.failed_because = opgaven mislykkedes: {detail}
 da.cli.next.retry = næste: /task accept {name} for at prøve igen, eller /task complete {name} når den er gjort i hånden
+da.cli.next.retry_kept = næste: /task accept {name} prøver igen; det den ændrede er gemt -- /task kept restore {name} lægger det i projektet, og /task complete {name} tager det så som udført
 da.cli.next.answer_blocked = næste: det dens agent behøver skrives i dens noter -- /task edit {name} notes="..." -- som næste forsøg får at vide, og /task accept {name} prøver så igen
 da.cli.next.write_refused = næste: et nyt forsøg afvises på samme måde; /reconfigure map.permission.{value}.write_source=roots={detail} lader agenter på det niveau skrive der også, eller /task complete {name} når det er gjort i hånden
 da.cli.next.sandbox_refused = næste: sessionens sandkasse afviste det: /sandbox off, eller /sandbox med den skrivning den behøver (write_source roots=MAPPE/), lader agenter denne session starter skrive der; /task accept {name} prøver så igen
@@ -1834,7 +1862,7 @@ da.cli.next.check_failed = næste: ret det den fandt og kør den igen -- eller, 
 da.cli.next.anyway_text = anyway tager kun arbejde ind, der kan forenes med projektets uden at røre de samme linjer; filer begge har ændret afgøres i arbejdsområdet først, så /task integrate {name} resolved -- eller resolved anyway tager arbejdsområdets kopi
 da.cli.next.gates = næste: ret det portene ovenfor siger, og kør så /task complete {name} igen
 da.cli.next.accept_task = næste: /task accept {name} accepterer den, og /work {name} udfører den så
-da.cli.next.permissions_first = næste: som dens tilladelser står, kunne dens agent ikke udføre den -- {detail}; /task edit {name} permissions=inherit giver den hvad dens art giver, og så /task accept {name}
+da.cli.next.permissions_first = næste: som dens tilladelser står, kunne dens agent ikke udføre den -- {detail}; når det er gjort, /task accept {name}
 da.cli.next.accept_tasks = næste: /task accept {detail} accepterer dem, og /work gør så hver -- eller, hvor koden allerede er der, tager /task complete all hver som færdig, når dens kontroller består
 da.cli.next.accept_intent = næste: {value} accept {name} accepterer den; indtil da gælder den intet
 da.cli.next.accept_decision = næste: /decision accept {name} accepterer den, og /decision govern {name} INDSTILLING AFGØRELSE lader den styre en indstilling
@@ -2373,7 +2401,7 @@ qps.cli.interactive.help.reconfigure = ⟦/reconfigure NAME=VALUE ...  çháñg�
 qps.cli.interactive.help.task = ⟦/ŧáßk [AÇŦION]      ĺíßŧ áñð máñágé ŧáßkß: ĺíßŧ, ñéw, áççépŧ, ŕéjéçŧ, çáñçéĺ, móvé, éðíŧ, ĺíñk, ðépéñð, ßpĺíŧ, ŕéhómé, ŕéópéñ, ŕéçóñßíðéŕ, çómpĺéŧé, véŕífý, ðíff, íñŧégŕáŧé, képŧ, ßhów, çóñŧéxŧ, áúðíŧ, ðéŕívé, pĺáñ⟧
 qps.cli.interactive.help.accept = ⟦/áççépŧ             áççépŧ ŧhé óñé çáñðíðáŧé wáíŧíñg⟧
 qps.cli.interactive.help.reject = ⟦/ŕéjéçŧ             ŕéjéçŧ ŧhé óñé çáñðíðáŧé wáíŧíñg⟧
-qps.cli.interactive.help.work = ⟦/wóŕk [ŦASK]        ŕúñ á ŕéáðý ŧáßk wíŧh ŧhíß ßéßßíóñ'ß móðéĺ, véŕífý áñð çómpĺéŧé íŧ⟧
+qps.cli.interactive.help.work = ⟦/wóŕk [ŦASK]        ŕúñ á ŕéáðý ŧáßk wíŧh ŧhíß ßéßßíóñ'ß móðéĺ (móðéĺ=PAŦH ñáméß á móðéĺ fíĺé íñßŧéáð), véŕífý áñð çómpĺéŧé íŧ⟧
 qps.cli.interactive.help.cancel = ⟦/çáñçéĺ ŦASK        çáñçéĺ á ŧáßk⟧
 qps.cli.interactive.help.check = ⟦/çhéçk [PROFILE | fúĺĺ | REQ-ID | çóñßíßŧéñçý]  véŕífý ŧhé pŕójéçŧ ñów, áĺĺ óf íŧ, óŕ óñé ŕéqúíŕéméñŧ, óŕ çhéçk íŧß ßŧáŧé hóĺðß ŧógéŧhéŕ⟧
 qps.cli.interactive.help.req = ⟦/ŕéq [ID | AÇŦION]  ŕéqúíŕéméñŧß: ĺíßŧ, ßhów, ñéw ŦIŦLE "ŧéxŧ=...", áççépŧ, ŕéjéçŧ, móvé ID SŦAŦE, bĺóçk, úñbĺóçk, véŕífý ID, ŕévíßé, ĺíñk, úñĺíñk, ßúpéŕßéðé OLD NEW, óbßóĺéŧé⟧
@@ -2389,8 +2417,8 @@ qps.cli.interactive.help.users = ⟦/úßéŕß ÚNIŦ         ŧhé úñíŧß 
 qps.cli.interactive.help.impact = ⟦/ímpáçŧ FILE        wháŧ á çháñgé ŧó á fíĺé ŕéáçhéß⟧
 qps.cli.interactive.help.trace = ⟦/ŧŕáçé NODE         ŧhé ŧŕáçéábíĺíŧý óf á ŕéqúíŕéméñŧ, ŧáßk óŕ fíĺé⟧
 qps.cli.interactive.usage.init = ⟦/íñíŧ ŦEMPLAŦE NAME=VALÚE ...  ßŧáŕŧß ŧhé pŕójéçŧ fŕóm ŦEMPLAŦE, éáçh íñpúŧ áß NAME=VALÚE; /íñíŧ áĺóñé ófféŕß ŧhé ŧémpĺáŧéß áñð áßkß fóŕ wháŧ íß ñééðéð. Ŧhé pĺáñ -- íñpúŧß, fíĺéß, fáçŧß, áñð çhéçkß ŧhé póĺíçý wóúĺð ŕéfúßé -- íß ßhówñ béfóŕé áñýŧhíñg íß wŕíŧŧéñ⟧
-qps.cli.interactive.usage.task = ⟦/ŧáßk ĺíßŧ [ßŧáŧé=S kíñð=K çómpóñéñŧ=Ç ŕéqúíŕéméñŧ=REQ óŕígíñ=O páŕéñŧ=P] -- /ŧáßk ñéw ŦIŦLE kíñð=KIND [çómpóñéñŧ=Ç ŕéqúíŕéméñŧß=REQ-... ñóŧéß=... péŕmíßßíóñß=...] -- /ŧáßk áççépŧ|ŕéjéçŧ|çáñçéĺ|ŕéópéñ|ŕéçóñßíðéŕ|çómpĺéŧé|véŕífý|íñŧégŕáŧé ID -- /ŧáßk ßhów|áúðíŧ|çóñŧéxŧ ID [--véŕbóßé], /ŧáßk pĺáñ -- /ŧáßk éðíŧ ID NAME=VALÚE (kíñð ŧóó), ĺíñk ID REQ..., ðépéñð ID ON [ŕémóvé], ßpĺíŧ ID Fíŕßŧ; Séçóñð, ŕéhómé OLD NEW, móvé ID SŦAŦE, ðéŕívé -- /ŧáßk ðíff ID, /ŧáßk íñŧégŕáŧé ID [ŕéßóĺvéð|áñýwáý|ŕéßóĺvéð áñýwáý|ðíßçáŕð] -- /ŧáßk képŧ [ŕéßŧóŕé|ðŕóp NAME, á ŧáßk'ß ID, óŕ áĺĺ]⟧
-qps.cli.interactive.usage.work = ⟦/wóŕk ŦASK-ID, óŕ wóŕðß óf á ŧáßk'ß ŧíŧĺé, óŕ ñóŧhíñg ŧó çhóóßé ámóñg ŧhé ŕéáðý óñéß: íŧß çóñŧéxŧ, ŧhé ágéñŧ'ß çáĺĺ, ŧhé fíĺéß çháñgéð, véŕífíçáŧíóñ, áñð whéŕé ŧhé ŧáßk éñðéð⟧
+qps.cli.interactive.usage.task = ⟦/ŧáßk ĺíßŧ [ßŧáŧé=S kíñð=K çómpóñéñŧ=Ç ŕéqúíŕéméñŧ=REQ óŕígíñ=ŦASK (ŧhé ŧáßk íŧ wáß pŕópóßéð fŕóm) páŕéñŧ=P] -- /ŧáßk ñéw ŦIŦLE kíñð=KIND [çómpóñéñŧ=Ç ŕéqúíŕéméñŧß=REQ-... ñóŧéß=... péŕmíßßíóñß=...] -- /ŧáßk áççépŧ|ŕéjéçŧ|ŕéópéñ|ŕéçóñßíðéŕ|çómpĺéŧé|véŕífý|íñŧégŕáŧé ID, /ŧáßk çáñçéĺ ID [áñýwáý] -- /ŧáßk ßhów|áúðíŧ|çóñŧéxŧ ID [--véŕbóßé], /ŧáßk pĺáñ -- /ŧáßk éðíŧ ID NAME=VALÚE (kíñð ŧóó), ĺíñk ID REQ..., ðépéñð ID ON [ŕémóvé], ßpĺíŧ ID Fíŕßŧ; Séçóñð, ŕéhómé OLD NEW, móvé ID SŦAŦE, ðéŕívé -- /ŧáßk ðíff ID, /ŧáßk íñŧégŕáŧé ID [ŕéßóĺvéð|áñýwáý|ŕéßóĺvéð áñýwáý|ðíßçáŕð] -- /ŧáßk képŧ [ŕéßŧóŕé|ðŕóp NAME, á ŧáßk'ß ID, óŕ áĺĺ]⟧
+qps.cli.interactive.usage.work = ⟦/wóŕk ŦASK-ID, óŕ wóŕðß óf á ŧáßk'ß ŧíŧĺé, óŕ ñóŧhíñg ŧó çhóóßé ámóñg ŧhé ŕéáðý óñéß [móðéĺ=PAŦH: á móðéĺ fíĺé ŕúñß íŧ ápáŕŧ, wíŧh fíĺé ŧóóĺß óñĺý; ßŧépß=N; pŕófíĺé=NAME]: íŧß çóñŧéxŧ, ŧhé ágéñŧ'ß çáĺĺ, ŧhé fíĺéß çháñgéð, véŕífíçáŧíóñ, áñð whéŕé ŧhé ŧáßk éñðéð⟧
 qps.cli.interactive.usage.req = ⟦/ŕéq [ĺíßŧ] -- /ŕéq ñéw ŦIŦLE ŧéxŧ=... çŕíŧéŕíá=... ßçópé=... -- /ŕéq áççépŧ|ŕéjéçŧ|ŕéçóñßíðéŕ|óbßóĺéŧé|véŕífý ID ... (óŕ áĺĺ) -- /ŕéq móvé ID SŦAŦE, /ŕéq bĺóçk ID, /ŕéq úñbĺóçk ID -- /ŕéq ŕévíßé ID ŧéxŧ=... -- /ŕéq ĺíñk ID [RELAŦION] ŦARGEŦ, úñĺíñk, whéŕé RELAŦION íß ðépéñðéñçý, çómpóñéñŧ, ímpĺéméñŧáŧíóñ (á fíĺé óŕ á ßýmbóĺ, ŧhé ðéfáúĺŧ), ŧáßk, ŧéßŧ óŕ véŕífíçáŧíóñ: /ŕéq ĺíñk REQ-001 ßŕç/páŕßéŕ.ç -- /ŕéq ßúpéŕßéðé OLD NEW -- /ŕéq ßhów ID⟧
 qps.cli.interactive.usage.decision = ⟦/ðéçíßíóñ [ĺíßŧ] -- /ðéçíßíóñ ñéw ŦIŦLE ŧéxŧ=... -- /ðéçíßíóñ áççépŧ|ŕéjéçŧ|ŕéçóñßíðéŕ|óbßóĺéŧé ID ... (óŕ áĺĺ) -- /ðéçíßíóñ góvéŕñ ID SEŦŦING RÚLING [óvéŕŕíðéß=ÇONFIG] -- /ðéçíßíóñ ŕévíßé ID ŧéxŧ=... -- /ðéçíßíóñ ĺíñk ID RELAŦION ŦARGEŦ, úñĺíñk, whéŕé RELAŦION íß ðépéñðéñçý, çómpóñéñŧ, ímpĺéméñŧáŧíóñ, ŧáßk, ŧéßŧ óŕ véŕífíçáŧíóñ -- /ðéçíßíóñ ßúpéŕßéðé OLD NEW -- /ðéçíßíóñ ßhów ID⟧
 qps.cli.interactive.usage.spec = ⟦/ßpéç [ĺíßŧ] -- /ßpéç ñéw ŦIŦLE ŧéxŧ=... ßçópé=ÇOMPONENŦ -- /ßpéç áççépŧ|ŕéjéçŧ|ŕéçóñßíðéŕ|óbßóĺéŧé ID ... (óŕ áĺĺ) -- /ßpéç góvéŕñ ID SEŦŦING RÚLING [óvéŕŕíðéß=ÇONFIG] -- /ßpéç ŕévíßé ID ŧéxŧ=... -- /ßpéç ĺíñk ID RELAŦION ŦARGEŦ, úñĺíñk, whéŕé RELAŦION íß ðépéñðéñçý, çómpóñéñŧ, ímpĺéméñŧáŧíóñ, ŧáßk, ŧéßŧ óŕ véŕífíçáŧíóñ -- /ßpéç ßúpéŕßéðé OLD NEW -- /ßpéç ßhów ID⟧
@@ -2445,6 +2473,7 @@ qps.cli.choose.needed = ⟦{name} ñééðß á váĺúé; Eßç gívéß úp, �
 qps.cli.choose.command_typed = ⟦{value} íß á çómmáñð, ñóŧ á váĺúé fóŕ {name}: ñóŧhíñg wáß ŧákéñ, áñð ŧhé çómmáñð wáß ñóŧ ŕúñ -- ŧýpé íŧ ágáíñ⟧
 qps.cli.choose.yes_or_no = ⟦{value} íß ñéíŧhéŕ ýéß ñóŕ ñó; áñßwéŕ ýéß óŕ ñó⟧
 qps.cli.choose.interrupted = ⟦Çŧŕĺ-Ç: ŧháŧ íß á ñó -- Eñŧéŕ góéß óñ⟧
+qps.cli.choose.escaped = ⟦Eßç: ŧháŧ íß á ñó⟧
 qps.cli.choose.optional = ⟦(ópŧíóñáĺ; Eñŧéŕ ßkípß)⟧
 qps.cli.choose.only = ⟦{name}: {value}, ŧhé óñĺý óñé ŧhéŕé íß⟧
 qps.cli.choose.picked = ⟦{name}: {value}⟧
@@ -2509,6 +2538,7 @@ qps.cli.task.parts_added = ⟦{name} háß páŕŧß áĺŕéáðý ({detail}): 
 qps.cli.task.checked_in = ⟦çhéçkéð íñ {name}, whéŕé íŧß wóŕk wáíŧß: ŧhé pŕójéçŧ íŧßéĺf íß ñóŧ çhéçkéð⟧
 qps.cli.task.given_up_by_hand = ⟦{value}, whéŕé íŧß ágéñŧ wóŕkéð, wáß gívéñ úp, ßó ñóŧhíñg óf ŧháŧ wóŕk íß íñ ŧhé pŕójéçŧ; {name} íß çómpĺéŧéð óñ wháŧ ŧhé pŕójéçŧ hóĺðß ñów, áß ðóñé bý háñð⟧
 qps.cli.task.given_up_restored = ⟦{value}, whéŕé íŧß ágéñŧ wóŕkéð, wáß gívéñ úp, áñð íŧß képŧ çópý wáß púŧ báçk; {name} íß çómpĺéŧéð óñ wháŧ ŧhé pŕójéçŧ hóĺðß ñów⟧
+qps.cli.task.complete_without_kept = ⟦çómpĺéŧé {name} óñ wháŧ ŧhé pŕójéçŧ hóĺðß, wíŧhóúŧ íŧß wóŕk képŧ íñ {detail}? /ŧáßk képŧ ŕéßŧóŕé {name} púŧß ŧháŧ íñ fíŕßŧ (ýéß/ñó)⟧
 qps.cli.task.accepted_waits = ⟦{name} íß ñóŧ ŕéáðý ýéŧ: {detail}; íŧ béçóméß ŕéáðý óñçé ŧháŧ íß ðóñé⟧
 qps.cli.task.serves_retired = ⟦{name} wíĺĺ ñóŧ béçómé ŕéáðý: {detail}, whíçh íß ñévéŕ ðóñé -- /ŧáßk ŕéjéçŧ {name} ĺéŧß íŧ gó, óŕ /ŧáßk éðíŧ {name} ŕéqúíŕéméñŧß=ID háß íŧ ßéŕvé áñóŧhéŕ⟧
 qps.cli.task.unchanged = ⟦{name} áĺŕéáðý ßáýß ŧháŧ; ñóŧhíñg íß ŕévíßéð⟧
@@ -2523,6 +2553,7 @@ qps.cli.result.elsewhere = ⟦{name} íß ßhówñ bý {value}⟧
 qps.cli.result.none = ⟦ñó ópéñ íßßúéß⟧
 qps.cli.project.config_none = ⟦ñó ßéŧŧíñg'ß ñámé hóĺðß {value}; /çóñfíg ĺíßŧß ŧhém áĺĺ⟧
 qps.cli.result.dismissed = ⟦{name} íß ðíßmíßßéð: /ŕéßúĺŧ ñó ĺóñgéŕ ĺíßŧß íŧ, áñð íŧ íß képŧ⟧
+qps.cli.result.dismissed_all = ⟦íßßúéß ðíßmíßßéð: {count} -- /ŕéßúĺŧ ñó ĺóñgéŕ ĺíßŧß ŧhém, áñð ŧhéý áŕé képŧ⟧
 qps.cli.result.dismissed_already = ⟦{name} íß ðíßmíßßéð áĺŕéáðý⟧
 qps.cli.intent.unlinked = ⟦{name}'ß ĺíñk íß ŧákéñ óff⟧
 qps.cli.intent.unchanged = ⟦{name} áĺŕéáðý ßáýß ŧháŧ; ñóŧhíñg wáß ŕévíßéð⟧
@@ -2533,6 +2564,8 @@ qps.cli.intent.link_component = ⟦{name} íß ñóŧ óñé óf ŧhé pŕójé�
 qps.cli.intent.link_doubtful = ⟦{name}'ß ĺíñk ŧó {value} íß képŧ, áñð çóñßíßŧéñçý wíĺĺ ñámé íŧ úñŧíĺ íŧ íß púŧ ŕíghŧ: {detail}⟧
 qps.cli.intent.already = ⟦{name} íß {value} áĺŕéáðý; ñóŧhíñg ŧó ðó⟧
 qps.cli.intent.obsolete_confirm = ⟦máké {name} óbßóĺéŧé ({detail})? íŧ íß fíñáĺ: wháŧ íß óbßóĺéŧé íß ñóŧ áççépŧéð, ŕévíßéð óŕ ŕéçóñßíðéŕéð ágáíñ (ýéß/ñó)⟧
+qps.cli.intent.supersede_confirm = ⟦ŕépĺáçé {name} bý {value}? íŧ íß fíñáĺ: wháŧ íß ŕépĺáçéð íß ñóŧ áççépŧéð, ŕévíßéð óŕ ŕéçóñßíðéŕéð ágáíñ (ýéß/ñó)⟧
+qps.cli.intent.id_keeps_scope = ⟦{name} íß íñ {value} ñów; íŧß íðéñŧífíéŕ kéépß ŧhé ñámé óf {other}, whéŕé íŧ wáß máðé, áß íðéñŧífíéŕß ðó ñóŧ çháñgé⟧
 qps.cli.intent.only_one = ⟦{name} íß ŧhé óñé wáíŧíñg⟧
 qps.cli.intent.superseded_accepted = ⟦{name} wáß á çáñðíðáŧé, áñð ŕépĺáçíñg {value} áççépŧß íŧ: íŧ ßŧáñðß whéŕé {value} ßŧóóð⟧
 qps.cli.intent.ruling_dropped = ⟦{name} góvéŕñéð {value}, áñð {other} góvéŕñß ñóŧhíñg: {detail} çáŕŕíéß íŧ óñ⟧
@@ -2545,7 +2578,7 @@ qps.cli.intent.governs_still = ⟦{name} ßŧíĺĺ góvéŕñß {value}⟧
 qps.cli.intent.ruling_passed = ⟦{name} góvéŕñéð {value}; {other} góvéŕñß íŧ ñów: {detail}⟧
 qps.cli.intent.already_governs = ⟦{name} góvéŕñß {value} áĺŕéáðý; ñóŧhíñg çháñgéð⟧
 qps.cli.intent.moved = ⟦{name} ḿóvéð fŕóḿ {other} ŧó {value}⟧
-qps.cli.intent.superseded = ⟦{name} íß {value} ñów, ŕépĺáçéð bý {other}⟧
+qps.cli.intent.superseded = ⟦{name} íß ßúpéŕßéðéð bý {other} ñów ({value})⟧
 qps.cli.intent.work_moved = ⟦{name} ßéŕvéß {value} ñów, íñ {other}'ß pĺáçé⟧
 qps.cli.intent.work_kept = ⟦{name} ßŧíĺĺ ßéŕvéß {other}: {value} íß ßéŕvéð bý {detail} áĺŕéáðý, ßó íŧ íß ñóŧ móvéð ŧhéŕé; /ŧáßk çáñçéĺ {name} ĺéŧß íŧ gó⟧
 qps.cli.task.field = ⟦{name}: {value}⟧
@@ -2574,12 +2607,16 @@ qps.cli.task.requirement = ⟦{name} íß {value}⟧
 qps.cli.task.requirement_unverified = ⟦{name} ßŧáýß {value}, ñóŧ véŕífíéð: {detail}⟧
 qps.cli.task.diff_none = ⟦ñó wóŕk óf {name} wáíŧß íñ á wóŕkßpáçé -- íŧ íß {value}: {detail}⟧
 qps.cli.task.kept_none = ⟦ñó çópý óf gívéñ-úp óŕ óvéŕwŕíŧŧéñ wóŕk íß képŧ⟧
-qps.cli.task.kept_line = ⟦{name}  {count} fíĺéß: {detail}⟧
+qps.cli.task.kept_line = ⟦{name}  {value}: {detail}⟧
 qps.cli.task.kept_restore_confirm = ⟦púŧ ŧhé fíĺéß képŧ íñ {name} báçk óvéŕ ŧhé pŕójéçŧ'ß -- {detail}? (ýéß/ñó)⟧
 qps.cli.task.kept_drop_confirm = ⟦ŕémóvé ŧhé képŧ çópý {name} -- {detail}? (ýéß/ñó)⟧
 qps.cli.task.kept_drop_all_confirm = ⟦ŕémóvé évéŕý képŧ çópý -- {detail}? (ýéß/ñó)⟧
 qps.cli.task.kept_restored = ⟦{name} íß púŧ báçk íñ ŧhé pŕójéçŧ: {detail}⟧
 qps.cli.task.kept_dropped = ⟦ŧhé képŧ çópý {name} íß ŕémóvéð⟧
+qps.cli.task.kept_left = ⟦ŧhé képŧ çópíéß áŕé ĺéfŧ áß ŧhéý wéŕé⟧
+qps.cli.task.not_waiting = ⟦{name} ðóéß ñóŧ wáíŧ fóŕ {value}; ñóŧhíñg ŧó ðó⟧
+qps.cli.task.analysis_no_findings = ⟦{name} íß áñ áñáĺýßíß, çómpĺéŧéð wíŧh ñóŧhíñg képŧ óf wháŧ íŧ fóúñð⟧
+qps.cli.task.analysis_findings = ⟦wháŧ ðíð {name} fíñð? A ĺíñé képŧ áß íŧß ñóŧéß (Eñŧéŕ kéépß ñóñé):⟧
 qps.cli.task.integrated = ⟦{name} ŧóók íñ {detail}⟧
 qps.cli.task.diff_file = ⟦== {path}⟧
 qps.cli.task.diff_project_moved = ⟦ŧhé pŕójéçŧ'ß {path} çháñgéð ßíñçé ŧhé wóŕk bégáñ áß wéĺĺ: /ŧáßk íñŧégŕáŧé {name} çhéçkß ŧhé ŧwó ágáíñßŧ éáçh óŧhéŕ⟧
@@ -2683,7 +2720,8 @@ qps.cli.project.opening_stuck = ⟦ŧáßkß ßéŧ áßíðé: {count} -- {deta
 qps.cli.project.found_above = ⟦ŧhé pŕójéçŧ íß áŧ {path}: ŧhíß ßéßßíóñ wóŕkß ŧhéŕé⟧
 qps.cli.project.quote_open = ⟦á qúóŧé óñ ŧhé ĺíñé íß ñóŧ çĺóßéð: ŧhé ŕéßŧ óf ŧhé ĺíñé wáß ŧákéñ áß qúóŧéð⟧
 qps.cli.project.read_only = ⟦áñóŧhéŕ ßéßßíóñ hóĺðß ŧhé pŕójéçŧ -- á ŕúñ íñ pŕógŕéßß; ŧhíß íß ŧhé ßŧáŧé áß íŧ íß ñów, áñð ñóŧhíñg íß çháñgéð⟧
-qps.cli.project.held_at_open = ⟦áñóŧhéŕ ŕúñ íß wóŕkíñg óñ ŧhíß pŕójéçŧ: wháŧ óñĺý ĺóókß -- /ßŧáŧé, /ŧáßk ĺíßŧ, /ŕéq -- wóŕkß méáñwhíĺé, áñð wháŧ çháñgéß íŧ wáíŧß úñŧíĺ ŧháŧ ŕúñ éñðß⟧
+qps.cli.project.lease_short = ⟦wóŕk.ĺéáßé wóúĺð bé {count} ßéçóñðß, ßhóŕŧéŕ ŧháñ ŧhé {total} {name} ĺéŧß wóŕk ŧáké; á ŕúñ ßŧíĺĺ wóŕkíñg páßŧ íŧß ĺéáßé íß képŧ whíĺé íŧß ßéßßíóñ ĺívéß, áñð óñĺý ŧákéñ báçk fŕóm óñé ŧháŧ háß éñðéð⟧
+qps.cli.project.held_at_open = ⟦áñóŧhéŕ ŕúñ íß wóŕkíñg óñ ŧhíß pŕójéçŧ: wháŧ óñĺý ĺóókß -- /ßŧáŧé, /ŧáßk ĺíßŧ, /ŕéq -- wóŕkß méáñwhíĺé, áñð wháŧ çháñgéß íŧ íß ŕéfúßéð úñŧíĺ ŧháŧ ŕúñ éñðß; ŕúñ íŧ ágáíñ ŧhéñ⟧
 qps.cli.task.stop_asked = ⟦ŧhé ŕúñ hóĺðíñg ŧhé pŕójéçŧ wáß áßkéð ŧó çáñçéĺ {name}: íŧ ßŧópß íŧß wóŕk áñð çáñçéĺß íŧ wíŧhíñ á ßéçóñð óŕ ŧwó⟧
 qps.cli.task.stop_asked_already = ⟦ŧhé ŕúñ hóĺðíñg ŧhé pŕójéçŧ wáß áßkéð ŧó çáñçéĺ {name} áĺŕéáðý; íŧ ßŧópß wíŧhíñ á ßéçóñð óŕ ŧwó⟧
 qps.cli.project.git.branch = ⟦óñ {name}⟧
@@ -2693,6 +2731,7 @@ qps.cli.project.sandbox.none = ⟦ágéñŧß áŕé çóñfíñéð óñĺý ƀ
 qps.cli.project.sandbox.set = ⟦ágéñŧß áŕé çóñfíñéð ŧó {value} (bý {name})⟧
 qps.cli.project.sandbox.effective = ⟦wíŧh ŧhíß pŕójéçŧ'ß péŕmíßßíóñß, íŧß ágéñŧß máý ðó: {value}⟧
 qps.cli.project.instruct.none = ⟦ñó íñßŧŕúçŧíóñ óf ýóúŕß ßŧáñðß⟧
+qps.cli.project.instruct.same_subject = ⟦{name} ßáýß {other} = {value} áĺŕéáðý, áñð ßŧáñðß béßíðé ŧhíß óñé; /íñßŧŕúçŧ wíŧhðŕáw {name} ŧákéß íŧ báçk⟧
 qps.cli.project.instruct.unknown = ⟦{name} íß ñó ßéŧŧíñg ŧhé pŕójéçŧ háß{detail}: ŧhé íñßŧŕúçŧíóñ ßŧáñðß, áñð ágéñŧß áŕé ŧóĺð íŧ áß íŧ íß wŕíŧŧéñ⟧
 qps.cli.project.instruct.advisory = ⟦áñ íñßŧŕúçŧíóñ íß wháŧ ágéñŧß áŕé ŧóĺð ábóvé évéŕý ðéçíßíóñ, ßpéçífíçáŧíóñ áñð ßéŧŧíñg; íŧ çháñgéß ñó ßéŧŧíñg íŧßéĺf -- /ŕéçóñfígúŕé NAME=VALÚE çháñgéß {name} fóŕ ŧhé háŕñéßß ŧóó⟧
 qps.cli.project.consistency = ⟦wháŧ ðóéß ñóŧ hóĺð ŧógéŧhéŕ íñ ŧhé pŕójéçŧ'ß ßŧáŧé: {count}⟧
@@ -2703,7 +2742,7 @@ qps.cli.repo.symbol = ⟦{name}  {value}  {path}⟧
 qps.cli.repo.reference = ⟦{path}  {name}  ({detail})⟧
 qps.cli.repo.unit = ⟦{name}⟧
 qps.cli.repo.reached = ⟦{value}  {name}  {detail}⟧
-qps.cli.repo.selection = ⟦ŧéßŧ {value}: {detail}⟧
+qps.cli.repo.selection = ⟦ŧéßŧß ŧó ŕúñ: {value} -- {detail}⟧
 qps.cli.repo.none = ⟦ñóŧhíñg íñ ŧhé ŕépóßíŧóŕý íß çáĺĺéð {name}⟧
 qps.cli.repo.no_refs = ⟦ñóŧhíñg úßéß {name}⟧
 qps.cli.repo.no_deps = ⟦{name} ðépéñðß óñ ñóŧhíñg ŧhé ŕépóßíŧóŕý hóĺðß⟧
@@ -2720,9 +2759,11 @@ qps.cli.work.session_ending = ⟦ŧhé ßéßßíóñ éñðß, ŧóĺð ŧó (S
 qps.cli.work.agent = ⟦{name} wóŕkß óñ {value}⟧
 qps.cli.work.runner = ⟦{value}: ŧhé ágéñŧ íß {name}⟧
 qps.cli.work.runner.session = ⟦ŧhé ßéßßíóñ'ß móðéĺ⟧
+qps.cli.work.runner_apart = ⟦á móðéĺ ñáméð bý móðéĺ=PAŦH ŕúñß ápáŕŧ, wíŧh fíĺé ŧóóĺß óñĺý: íŧ ŕúñß ñó çhéçkß áñð mákéß ñó héĺpéŕß -- /wóŕk wíŧhóúŧ móðéĺ= ŕúñß ŧhé ßéßßíóñ'ß móðéĺ, whíçh ðóéß⟧
 qps.cli.work.only_ready = ⟦{name} íß ŧhé óñé ŧáßk ŕéáðý⟧
 qps.cli.work.one_accepted = ⟦{name} íß ŧhé óñĺý áççépŧéð óñé óf ŧhé {count} ŧáßkß íŧ máŧçhéß⟧
 qps.cli.work.time_allowed = ⟦íŧ máý wóŕk {value} ({name}; éxéçúŧíóñ.ŧíméóúŧ bóúñðß á çómmáñð); Çŧŕĺ-Ç ßŧópß íŧ ßóóñéŕ, áñð wháŧ íß ŧýpéð méáñwhíĺé wáíŧß úñŧíĺ íŧ éñðß⟧
+qps.cli.work.typed_dropped = ⟦áñýŧhíñg ŧýpéð whíĺé íŧ wóŕkéð íß ðŕóppéð wíŧh ŧhé Çŧŕĺ-Ç ŧháŧ ßŧóppéð íŧ⟧
 qps.cli.work.agent_ignored = ⟦wóŕk.ágéñŧ ñáméß {value}, whíçh íß ñóŧ ŕúñ: áñ óúŧßíðé pŕógŕám áß ŧhé ágéñŧ íß óúŧ óf ßçópé; /ŕéçóñfígúŕé wóŕk.ágéñŧ=óff ŧákéß íŧ óúŧ⟧
 qps.cli.work.sandboxed = ⟦íŧß ágéñŧ íß çóñfíñéð ŧó {value}, bý {name}⟧
 qps.cli.work.context = ⟦çóñŧéxŧ {name}, çáĺĺ {value}⟧
@@ -2745,6 +2786,7 @@ qps.cli.work.ended = ⟦ŧhé ŧáßk íß {name}⟧
 qps.cli.work.ended_because = ⟦ŧhé ŧáßk íß {name}: {detail}⟧
 qps.cli.work.failed_because = ⟦ŧhé ŧáßk fáíĺéð: {detail}⟧
 qps.cli.next.retry = ⟦ñéxŧ: /ŧáßk áççépŧ {name} ŧó ŧŕý íŧ ágáíñ, óŕ /ŧáßk çómpĺéŧé {name} óñçé íŧ íß ðóñé bý háñð⟧
+qps.cli.next.retry_kept = ⟦ñéxŧ: /ŧáßk áççépŧ {name} ŧŕíéß íŧ ágáíñ; wháŧ íŧ çháñgéð íß képŧ -- /ŧáßk képŧ ŕéßŧóŕé {name} púŧß ŧháŧ íñ ŧhé pŕójéçŧ, áñð /ŧáßk çómpĺéŧé {name} ŧhéñ ŧákéß íŧ áß ðóñé⟧
 qps.cli.next.answer_blocked = ⟦ñéxŧ: wháŧ íŧß ágéñŧ ñééðß góéß íñ íŧß ñóŧéß -- /ŧáßk éðíŧ {name} ñóŧéß="..." -- whíçh ŧhé ñéxŧ áŧŧémpŧ íß ŧóĺð, áñð /ŧáßk áççépŧ {name} ŧhéñ ŧŕíéß ágáíñ⟧
 qps.cli.next.write_refused = ⟦ñéxŧ: ŧŕýíñg ágáíñ íß ŕéfúßéð ŧhé ßámé wáý; /ŕéçóñfígúŕé máp.péŕmíßßíóñ.{value}.wŕíŧé_ßóúŕçé=ŕóóŧß={detail} ĺéŧß ágéñŧß óf ŧháŧ ĺévéĺ wŕíŧé ŧhéŕé ŧóó, óŕ /ŧáßk çómpĺéŧé {name} óñçé íŧ íß ðóñé bý háñð⟧
 qps.cli.next.sandbox_refused = ⟦ñéxŧ: ŧhé ßéßßíóñ'ß ßáñðbóx ŕéfúßéð íŧ: /ßáñðbóx óff, óŕ /ßáñðbóx wíŧh ŧhé wŕíŧé íŧ ñééðß (wŕíŧé_ßóúŕçé ŕóóŧß=DIR/), ĺéŧß ágéñŧß ŧhíß ßéßßíóñ ßŧáŕŧß wŕíŧé ŧhéŕé; /ŧáßk áççépŧ {name} ŧhéñ ŧŕíéß ágáíñ⟧
@@ -2768,7 +2810,7 @@ qps.cli.next.check_failed = ⟦ñéxŧ: púŧ ŕíghŧ wháŧ íŧ fóúñð á�
 qps.cli.next.anyway_text = ⟦áñýwáý ŧákéß íñ óñĺý wóŕk ŧháŧ jóíñß ŧó ŧhé pŕójéçŧ'ß wíŧhóúŧ ŧóúçhíñg ŧhé ßámé ĺíñéß; fíĺéß bóŧh çháñgéð áŕé ßéŧŧĺéð íñ ŧhé wóŕkßpáçé fíŕßŧ, ŧhéñ /ŧáßk íñŧégŕáŧé {name} ŕéßóĺvéð -- óŕ ŕéßóĺvéð áñýwáý ŧákéß ŧhé wóŕkßpáçé'ß çópý⟧
 qps.cli.next.gates = ⟦ñéxŧ: púŧ ŕíghŧ wháŧ ŧhé gáŧéß ábóvé ßáý, ŧhéñ /ŧáßk çómpĺéŧé {name} ágáíñ⟧
 qps.cli.next.accept_task = ⟦ñéxŧ: /ŧáßk áççépŧ {name} áççépŧß íŧ, áñð /wóŕk {name} ŧhéñ ðóéß íŧ⟧
-qps.cli.next.permissions_first = ⟦ñéxŧ: áß íŧß péŕmíßßíóñß ßŧáñð íŧß ágéñŧ çóúĺð ñóŧ ðó íŧ -- {detail}; /ŧáßk éðíŧ {name} péŕmíßßíóñß=íñhéŕíŧ gívéß íŧ wháŧ íŧß kíñð gívéß, ŧhéñ /ŧáßk áççépŧ {name}⟧
+qps.cli.next.permissions_first = ⟦ñéxŧ: áß íŧß péŕmíßßíóñß ßŧáñð íŧß ágéñŧ çóúĺð ñóŧ ðó íŧ -- {detail}; ŧháŧ ðóñé, /ŧáßk áççépŧ {name}⟧
 qps.cli.next.accept_tasks = ⟦ñéxŧ: /ŧáßk áççépŧ {detail} áççépŧß ŧhém, áñð /wóŕk ŧhéñ ðóéß éáçh -- óŕ, whéŕé ŧhé çóðé íß ŧhéŕé áĺŕéáðý, /ŧáßk çómpĺéŧé áĺĺ ŧákéß éáçh áß ðóñé, íŧß çhéçkß páßßíñg⟧
 qps.cli.next.accept_intent = ⟦ñéxŧ: {value} áççépŧ {name} áççépŧß íŧ; úñŧíĺ ŧhéñ íŧ áppĺíéß ŧó ñóŧhíñg⟧
 qps.cli.next.accept_decision = ⟦ñéxŧ: /ðéçíßíóñ áççépŧ {name} áççépŧß íŧ, áñð /ðéçíßíóñ góvéŕñ {name} SEŦŦING RÚLING háß íŧ góvéŕñ á ßéŧŧíñg⟧
