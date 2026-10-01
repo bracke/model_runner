@@ -236,6 +236,69 @@ package body Model_Runner.Presentation is
       Put_Line (Item, Message (Item, Key, Arguments));
    end Put_Message;
 
+   ----------------
+   -- Put_Header --
+   ----------------
+
+   procedure Put_Header
+     (Item      : in out Console;
+      Key       : String;
+      Arguments : Loc.Argument_List := Loc.Empty_Arguments) is
+   begin
+      if Item.Structured or else not Styles (Item, Answer) then
+         Put_Message (Item, Key, Arguments);
+      else
+         Put_Line (Item, Terminal_Styles.Decorate (Message (Item, Key, Arguments), Terminal_Styles.Role_Header));
+      end if;
+   end Put_Header;
+
+   --------------
+   -- Put_Pair --
+   --------------
+
+   procedure Put_Pair
+     (Item       : in out Console;
+      Key        : String;
+      Name       : String;
+      Value      : String;
+      Value_Tone : Tone := Plain) is
+   begin
+      if Item.Structured or else not Styles (Item, Answer) then
+         Put_Message (Item, Key, [Loc.Named ("name", Name), Loc.Named ("value", Value)]);
+         return;
+      end if;
+      --  Coloured in the line as the catalog words it, not in what it is
+      --  given: a value is escaped as data, and so would its colour be.
+      declare
+         Line    : constant String :=
+           Message (Item, Key, [Loc.Named ("name", Name), Loc.Named ("value", Value)]);
+         Trimmed : constant String := Ada.Strings.Fixed.Trim (Name, Ada.Strings.Both);
+         At_Name : constant Natural :=
+           (if Trimmed = "" then 0 else Ada.Strings.Fixed.Index (Line, Trimmed));
+         At_Value : constant Natural :=
+           (if Value = "" then 0 else Ada.Strings.Fixed.Index (Line, Value, Ada.Strings.Backward));
+         Role    : constant Terminal_Styles.Style_Role :=
+           (case Value_Tone is
+               when Plain | Good => Terminal_Styles.Role_Success,
+               when Pending      => Terminal_Styles.Role_Warning,
+               when Bad          => Terminal_Styles.Role_Error);
+      begin
+         --  Either not found as given -- the catalog changed it -- the line
+         --  is said plain.
+         if At_Name = 0 or else At_Value = 0 or else At_Value < At_Name + Trimmed'Length then
+            Put_Line (Item, Line);
+            return;
+         end if;
+         Put_Line
+           (Item,
+            Line (Line'First .. At_Name - 1)
+            & Terminal_Styles.Decorate (Trimmed, Terminal_Styles.Role_Muted)
+            & Line (At_Name + Trimmed'Length .. At_Value - 1)
+            & (if Value_Tone = Plain then Value else Terminal_Styles.Decorate (Value, Role))
+            & Line (At_Value + Value'Length .. Line'Last));
+      end;
+   end Put_Pair;
+
    --  Write one line to standard error, tolerating a closed destination.
    --
    --  The console is passed and not read. It was read, to close a progress

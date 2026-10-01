@@ -4528,7 +4528,10 @@ package body Model_Runner.CLI.Project_Commands is
          Command.Has_Session_Profile := True;
       end if;
       if All_Words.Contains ("--verbose")
-        and then not (Word = "/task" and then Argument (1) not in "show" | "context" | "audit" | "list" | "plan")
+        --  Read before the words are parsed: the action is the second.
+        and then not (Word = "/task"
+                      and then (Natural (All_Words.Length) < 2
+                                or else All_Words (2) not in "show" | "context" | "audit" | "list" | "plan"))
       then
          Command.Level := Opt.Verbose;
       end if;

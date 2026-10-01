@@ -1742,6 +1742,25 @@ package body Model_Runner.CLI.Tasks is
             --  A field by its own name, the record's grouping left out --
             --  definition.title is title -- and one that says nothing, or
             --  is the harness's own bookkeeping, not shown.
+            --  A field of a group, its value coloured by how it stands
+            --  where the terminal shows colour: a state, what stops it.
+            procedure Grouped (Name, Value : String) is
+               Field : constant String := Ada.Strings.Fixed.Trim (Name, Ada.Strings.Both);
+               First : constant String :=
+                 (if Ada.Strings.Fixed.Index (Value & ",", ",") > 0
+                  then Value (Value'First .. Ada.Strings.Fixed.Index (Value & ",", ",") - 1) else Value);
+            begin
+               Pres.Put_Pair
+                 (Screen, "cli.task.grouped", Name, Value,
+                  (if Field = "state" and then First = "complete" then Pres.Good
+                   elsif Field = "state" and then First in "failed" | "blocked" | "cancelled" | "rejected"
+                     and then Ada.Strings.Fixed.Index (Value, "waiting for its parts") = 0
+                   then Pres.Bad
+                   elsif Field = "state" or else Field = "blocked_by" then Pres.Pending
+                   elsif Field = "ready" and then Value = "true" then Pres.Good
+                   else Pres.Plain));
+            end Grouped;
+
             procedure Line (Name : String) is
                function Starts (Prefix : String) return Boolean
                is (Name'Length > Prefix'Length
@@ -1810,10 +1829,8 @@ package body Model_Runner.CLI.Tasks is
                --  What its agent may do, in words, not by the permissions'
                --  own names.
                if Name = "permissions" then
-                  Pres.Put_Message
-                    (Screen, "cli.task.grouped",
-                     [Loc.Named ("name", "  " & "may"),
-                      Loc.Named ("value", Model_Runner.Framework.Permissions.In_Words (R.Get (View, Name)))]);
+                  Grouped ("  " & "may",
+                    Model_Runner.Framework.Permissions.In_Words (R.Get (View, Name)));
                   return;
                end if;
                --  The checks it is verified by, said once: the profile, then
@@ -1832,11 +1849,8 @@ package body Model_Runner.CLI.Tasks is
                                       & To_String (Model_Runner.Framework.Verification.Element
                                                      (Checks, Index).Command));
                      end loop;
-                     Pres.Put_Message
-                       (Screen, "cli.task.grouped",
-                        [Loc.Named ("name", "  " & "checked by"),
-                         Loc.Named ("value",
-                                    (if Colon = 0 then Held
+                     Grouped ("  " & "checked by",
+                    (if Colon = 0 then Held
                                      else "profile " & Held (Held'First .. Colon - 1)
                                           & (if Runs = Null_Unbounded_String then ""
                                              --  A check that is only true checks nothing yet.
@@ -1844,7 +1858,7 @@ package body Model_Runner.CLI.Tasks is
                                              then ", which checks nothing yet (it runs true); /reconfigure "
                                                   & "profile." & Held (Held'First .. Colon - 1)
                                                   & "=""check: COMMAND"" sets what it runs"
-                                             else ", which runs " & To_String (Runs))))]);
+                                             else ", which runs " & To_String (Runs))));
                      return;
                   end;
                end if;
@@ -1853,15 +1867,12 @@ package body Model_Runner.CLI.Tasks is
                if Name = "ready" and then R.Get (View, Name) = "true"
                  and then Model_Runner.Framework.Work.Unable_Reason (Store, Argument) /= ""
                then
-                  Pres.Put_Message
-                    (Screen, "cli.task.grouped",
-                     [Loc.Named ("name", "  " & "ready"),
-                      Loc.Named ("value", "no -- " & Model_Runner.Framework.Work.Unable_Reason (Store, Argument))]);
+                  Grouped ("  " & "ready",
+                    "no -- " & Model_Runner.Framework.Work.Unable_Reason (Store, Argument));
                   return;
                end if;
-               Pres.Put_Message
-                 (Screen, "cli.task.grouped",
-                  [Loc.Named ("name", "  " & Shown_Name), Loc.Named ("value", Shown_Value)]);
+               Grouped ("  " & Shown_Name,
+                    Shown_Value);
             end Line;
 
             function Governing (Name : String) return Boolean
@@ -1884,14 +1895,14 @@ package body Model_Runner.CLI.Tasks is
             procedure Section (Key : String) is
             begin
                Pres.Put_Line (Screen, "");
-               Pres.Put_Message (Screen, Key);
+               Pres.Put_Header (Screen, Key);
             end Section;
 
             Ended : constant Boolean :=
               R.Get (View, "runtime.state") in "complete" | "cancelled" | "rejected";
          begin
             --  It, by its identifier and title.
-            Pres.Put_Message (Screen, "cli.task.heading",
+            Pres.Put_Header (Screen, "cli.task.heading",
                               [Loc.Named ("name", Argument),
                                Loc.Named ("value", R.Get (View, "definition.title"))]);
             Said.Append ("definition.title");
@@ -1906,11 +1917,9 @@ package body Model_Runner.CLI.Tasks is
             if R.Get (View, "definition.requirements") = ""
               and then R.Get (View, "definition.acceptance") in "" | "from_requirements"
             then
-               Pres.Put_Message
-                 (Screen, "cli.task.grouped",
-                  [Loc.Named ("name", "  " & "acceptance"),
-                   Loc.Named ("value", "its title and notes -- it serves no requirement; /task link "
-                                       & Argument & " REQ-ID ties it to one")]);
+               Grouped ("  " & "acceptance",
+                    "its title and notes -- it serves no requirement; /task link "
+                                       & Argument & " REQ-ID ties it to one");
             end if;
             Once ("definition.notes");
             for Index in 1 .. R.Field_Count (View) loop
@@ -1944,9 +1953,8 @@ package body Model_Runner.CLI.Tasks is
                                  & Child & " " & Tk.State_Of (Store, Child));
                end loop;
                if Parts /= Null_Unbounded_String then
-                  Pres.Put_Message
-                    (Screen, "cli.task.grouped",
-                     [Loc.Named ("name", "  " & "parts"), Loc.Named ("value", To_String (Parts))]);
+                  Grouped ("  " & "parts",
+                    To_String (Parts));
                end if;
             end;
             if Model_Runner.Framework.Workspaces.Active_For (Store, Argument) /= "" then
@@ -1956,11 +1964,9 @@ package body Model_Runner.CLI.Tasks is
                begin
                   Model_Runner.Framework.Workspaces.Read
                     (Store, Model_Runner.Framework.Workspaces.Active_For (Store, Argument), Place, Read);
-                  Pres.Put_Message
-                    (Screen, "cli.task.grouped",
-                     [Loc.Named ("name", "  " & "workspace"),
-                      Loc.Named ("value", Model_Runner.Framework.Workspaces.Active_For (Store, Argument)
-                                          & " " & To_String (Place.Path))]);
+                  Grouped ("  " & "workspace",
+                    Model_Runner.Framework.Workspaces.Active_For (Store, Argument)
+                                          & " " & To_String (Place.Path));
                end;
             end if;
             --  The rest of where it stands: who moved it, what failed.
@@ -2000,14 +2006,11 @@ package body Model_Runner.CLI.Tasks is
                     or else Ada.Strings.Fixed.Index (R.Field_Name (Config, Index),
                                                      "map.permission.kind." & Kind & ".") = 1;
                end loop;
-               Pres.Put_Message
-                 (Screen, "cli.task.grouped",
-                  [Loc.Named ("name", "  " & "permissions from"),
-                   Loc.Named ("value",
-                              (if Own /= "" then "its own permissions field, within "
+               Grouped ("  " & "permissions from",
+                    (if Own /= "" then "its own permissions field, within "
                                else "")
                               & (if Named then "kind." & Kind & " (/config permission.kind." & Kind & ")"
-                                 else "the project's (/config permission.project)"))]);
+                                 else "the project's (/config permission.project)"));
                if Pm.Sandbox_Problem /= "" then
                   Pres.Put_Note (Screen, "cli.task.sandbox_bad", [Loc.Named ("detail", Pm.Sandbox_Problem)]);
                elsif Pm.Sandbox_Source /= "" then
@@ -2024,23 +2027,19 @@ package body Model_Runner.CLI.Tasks is
                                              & Pm.Word (One));
                         end if;
                      end loop;
-                     Pres.Put_Message
-                       (Screen, "cli.task.grouped",
-                        [Loc.Named ("name", "  " & "sandbox"),
-                         Loc.Named ("value", Pm.Sandbox_Source & ": "
+                     Grouped ("  " & "sandbox",
+                    Pm.Sandbox_Source & ": "
                                     & Joined (Model_Runner.Framework.Lines_Of (Pm.Image (Pm.Sandbox)))
                                     & (if Withheld = Null_Unbounded_String then ""
-                                       else " -- withholds " & To_String (Withheld)))]);
+                                       else " -- withholds " & To_String (Withheld)));
                   end;
                end if;
             end;
             Once ("workspace_policy");
             if R.Get (View, "resource.max_steps") /= "" or else R.Get (View, "resource.token_budget") /= "" then
-               Pres.Put_Message
-                 (Screen, "cli.task.grouped",
-                  [Loc.Named ("name", "  " & "limits"),
-                   Loc.Named ("value", R.Get (View, "resource.max_steps") & " steps, "
-                                       & R.Get (View, "resource.token_budget") & " tokens")]);
+               Grouped ("  " & "limits",
+                    R.Get (View, "resource.max_steps") & " steps, "
+                                       & R.Get (View, "resource.token_budget") & " tokens");
             end if;
 
             --  What governs it: the rules above the configuration, and every

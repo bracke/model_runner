@@ -1816,6 +1816,9 @@ package body Tests.CLI_Cases is
               and then Command ("task|show|TASK-002") = 0
               and then Shows ("implementation_present"),
               "a kind was not narrowed, or its gates not what the template says: " & Last_Output);
+      --  --verbose after the task shows the whole text its agent reads.
+      Assert (Command ("task|context|TASK-002|--set|--verbose") = 0 and then Shows ("## Rules"),
+              "task context --verbose did not show the text the agent reads: " & Last_Output);
 
       Assert (Command ("task|split|TASK-001|One; Two") = 0 and then Shows ("is blocked"),
               "task split did not make the parts and block the parent: " & Last_Output);

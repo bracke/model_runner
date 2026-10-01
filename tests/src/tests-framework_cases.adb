@@ -8639,6 +8639,15 @@ package body Tests.Framework_Cases is
          Model_Runner.Presentation.Put_After_Prompt
            (Screen, "cli.interactive.typed_during_work",
             [Model_Runner.Localization.Named ("value", "/state")]);
+         --  A heading and a toned pair, where nothing shows colour: plain.
+         Set_Output (Said);
+         Model_Runner.Presentation.Put_Header
+           (Screen, "cli.task.heading",
+            [Model_Runner.Localization.Named ("name", "TASK-9"),
+             Model_Runner.Localization.Named ("value", "Toned")]);
+         Model_Runner.Presentation.Put_Pair
+           (Screen, "cli.task.grouped", "  state", "failed", Model_Runner.Presentation.Bad);
+         Set_Output (Standard_Output);
          --  A usage error of a command points to that command's help.
          Model_Runner.Presentation.Use_Command (Screen, "task");
          Model_Runner.Presentation.Report
@@ -8656,6 +8665,8 @@ package body Tests.Framework_Cases is
                  "a line put aside was written with the program's name before it");
          Assert (Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"), "TASK-HELD") = 0
                  and then Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"), "/state    (typed") > 0
+                 and then Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"), "TASK-9: Toned") > 0
+                 and then Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"), "  state: failed") > 0
                  and then Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"), [1 => ASCII.ESC]) = 0,
                  "a held next step was said, a line typed during work not shown, or a clear screen"
                  & " written where there is no terminal");

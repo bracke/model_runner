@@ -120,6 +120,38 @@ package Model_Runner.Presentation is
    --  @param Text Line to write.
    procedure Put_Line (Item : in out Console; Text : String);
 
+   --  How a value stands, for its colour at a terminal: done, waiting on
+   --  something, gone wrong, or none of these.
+   type Tone is (Plain, Good, Pending, Bad);
+
+   --  Write a localized line to standard output as a heading: set apart
+   --  at a terminal that shows colour, plain anywhere else.
+   --
+   --  @param Item Console to write through.
+   --  @param Key Stable message identifier.
+   --  @param Arguments Message arguments.
+   procedure Put_Header
+     (Item      : in out Console;
+      Key       : String;
+      Arguments : Model_Runner.Localization.Argument_List :=
+        Model_Runner.Localization.Empty_Arguments);
+
+   --  Write a localized NAME and VALUE line to standard output: at a
+   --  terminal that shows colour, the name muted and the value in its
+   --  tone; anywhere else, and in structured output, as Put_Message.
+   --
+   --  @param Item Console to write through.
+   --  @param Key Stable message identifier, with {name} and {value}.
+   --  @param Name The name.
+   --  @param Value The value.
+   --  @param Value_Tone How the value stands.
+   procedure Put_Pair
+     (Item       : in out Console;
+      Key        : String;
+      Name       : String;
+      Value      : String;
+      Value_Tone : Tone := Plain);
+
    --  Write a localized line to standard output.
    --
    --  @param Item Console to write through.
