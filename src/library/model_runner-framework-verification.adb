@@ -433,11 +433,12 @@ package body Model_Runner.Framework.Verification is
    end Profile_Of;
 
    --  What evidence is checked against: the files as they are now.
-   function Repository_Now (Item : Stores.Store) return String
-   is (Repository.Graph_Fingerprint
-         (Repository.Now (Item)));
-
    function File_Lines (Files : Repository.Graph) return String;
+
+   --  The files checks judge, as they are: a document's words change no
+   --  build or test, so a README edited leaves evidence standing.
+   function Repository_Now (Item : Stores.Store) return String
+   is (Fingerprint (File_Lines (Repository.Now (Item))));
 
    --  What a program says its version is: the first line of its --version,
    --  run as any check is; "unknown" where it will not say.
@@ -873,6 +874,7 @@ package body Model_Runner.Framework.Verification is
          --  its own -- Alire's config/ is one -- and evidence taken before
          --  it would be out of date the moment it was recorded.
          Records.Set (Value, "repository_revision", Repository_Now (Item));
+         Records.Set (Value, "files", File_Lines (Repository.Now (Item)));
          Records.Set
            (Value, "workspace_revision",
             (if Workspace = "" then Repository_Now (Item)
@@ -1004,8 +1006,10 @@ package body Model_Runner.Framework.Verification is
          declare
             One : constant Repository.File_Entry := Repository.File_At (Files, Index);
          begin
-            Append (Result, (if Index = 1 then "" else [1 => ASCII.LF])
-                            & To_String (One.Fingerprint) & Tab & To_String (One.Path));
+            if Repository."/=" (One.Role, Repository.Documentation) then
+               Append (Result, (if Result = Null_Unbounded_String then "" else [1 => ASCII.LF])
+                               & To_String (One.Fingerprint) & Tab & To_String (One.Path));
+            end if;
          end;
       end loop;
       return To_String (Result);
@@ -1185,7 +1189,38 @@ package body Model_Runner.Framework.Verification is
       elsif Records.Get (Value, "repository_revision") /= Repository_Now (Item)
         and then not Outside_Scope (Item, Value)
       then
-         Reasons.Append ("the files have changed since " & Evidence);
+         --  Which, where the evidence kept the files it was taken on.
+         declare
+            Was     : constant Name_Lists.Vector := Lines_Of (Records.Get (Value, "files"));
+            Now     : constant Name_Lists.Vector := Lines_Of (File_Lines (Repository.Now (Item)));
+            Changed : Unbounded_String;
+            Count   : Natural := 0;
+            procedure Add (Line : String) is
+               Stop : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => Tab]);
+               Path : constant String := (if Stop = 0 then Line else Line (Stop + 1 .. Line'Last));
+            begin
+               Count := Count + 1;
+               if Count <= 5 and then Ada.Strings.Fixed.Index (To_String (Changed), Path) = 0 then
+                  Append (Changed, (if Changed = Null_Unbounded_String then "" else ", ") & Path);
+               end if;
+            end Add;
+         begin
+            if not Was.Is_Empty then
+               for Line of Now loop
+                  if not Was.Contains (Line) then
+                     Add (Line);
+                  end if;
+               end loop;
+               for Line of Was loop
+                  if not Now.Contains (Line) then
+                     Add (Line);
+                  end if;
+               end loop;
+            end if;
+            Reasons.Append ("the files have changed since " & Evidence
+                            & (if Changed = Null_Unbounded_String then ""
+                               else ": " & To_String (Changed) & (if Count > 5 then " and others" else "")));
+         end;
       end if;
       --  Only what bears on verification: a change of agent or of its
       --  permissions leaves evidence as it was.
@@ -2022,10 +2057,27 @@ package body Model_Runner.Framework.Verification is
       Empty_Suite : Unbounded_String;
       --  Something implements it: a linked file the project holds -- a
       --  link to one it does not shows nothing.
-      Built : Boolean :=
-        (for some Target of Intent.Links (Item, Intent.Requirement, Requirement, Intent.Implementation) =>
-           Ada.Directories.Exists
-             (Hostkit.Fs.Join (Ada.Directories.Containing_Directory (Stores.Root (Item)), Target)));
+      --  A linked symbol counts where the repository's graph holds it.
+      function Linked_Here return Boolean is
+         Links : constant Name_Lists.Vector :=
+           Intent.Links (Item, Intent.Requirement, Requirement, Intent.Implementation);
+      begin
+         if (for some Target of Links =>
+               Ada.Directories.Exists
+                 (Hostkit.Fs.Join (Ada.Directories.Containing_Directory (Stores.Root (Item)), Target)))
+         then
+            return True;
+         end if;
+         for Target of Links loop
+            if Ada.Strings.Fixed.Index (Target, "/") = 0
+              and then Repository.Find_Symbols (Repository.Now (Item), Target).Contains (Target)
+            then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Linked_Here;
+      Built : Boolean := Linked_Here;
       --  Whether what a run failed on lies wholly outside this
       --  requirement's files -- those linked to it as implementing or
       --  testing it, and those the work serving it changed -- as the run

@@ -293,14 +293,15 @@ and every acceptance, rejection and other move records who made it: the
 person at the terminal, the policy, or the agent. An agent's file tools never read or write the project's state, whatever
 its grants -- it changes only through the harness's transactions -- nor
 write `.git`; links are followed before that is judged. The same guard
-holds an agent the harness starts as a process of its own (`/work` from the
-shell): its tree and permissions go with it, and its file tools refuse the
-rest. Git and that agent process run through the execution layer like a
+holds an agent the harness starts as a process of its own (`/work ID
+model=PATH`): its tree and permissions go with it, and its file tools refuse
+the rest. Git and that agent process run through the execution layer like a
 project's checks -- no standard input, only PATH, HOME and what is passed,
 a deadline -- and each run is a line in `.model_runner/runtime/harness.log`.
-`/instruct build.command = alr build --release overriding DEC-003` puts a
-person's word above every decision, specification and setting on that
-subject until `/instruct withdraw INSTR-001`. What `/bootstrap` reads and
+`/instruct scope = change only src/parser/ overriding DEC-003` puts a
+person's word above every decision, specification and baseline rule on that
+subject, as what agents are told, until `/instruct withdraw INSTR-001`; it
+changes no setting -- `/reconfigure` does that. What `/bootstrap` reads and
 may make is the project's bootstrap policy (`set bootstrap.sources`,
 `set bootstrap.propose`, `scalar bootstrap.import`). A template can ask
 for confirmation before `/init` writes anything (`scalar init.confirm =

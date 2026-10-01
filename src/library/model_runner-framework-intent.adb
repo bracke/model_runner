@@ -73,7 +73,7 @@ package body Model_Runner.Framework.Intent is
    -----------------
 
    function First_State (Kind : Intent_Kind) return String
-   is (if Kind = Decision then "proposed" else "candidate");
+   is ("candidate");
 
    ----------------
    -- Machine_Of --
@@ -347,18 +347,15 @@ package body Model_Runner.Framework.Intent is
          loop
             --  A key that only says the register again -- spec.md's SPEC
             --  among specifications -- is no key: SPEC-001, not SPEC-SPEC-001.
-            --  Not for what a document is read into, though: its own lines
-            --  may number REQ-001 on, and one it gives no number is kept out
-            --  of that sequence, REQ-REQUIREMENTS-001, so the document's next
-            --  number never finds its identifier taken.
+            --  An identifier a document gives that is taken by then is made
+            --  afresh, the document's own kept as its label.
             Stores.Allocate_Identifier
               (Item, Change, Namespace (Kind),
-               (if (Provenance = "" or else Kind = Specification)
-                  and then (Key = Namespace (Kind) or else Key & "S" = Namespace (Kind)
+               (if Key = Namespace (Kind) or else Key & "S" = Namespace (Kind)
                             or else Key = Namespace (Kind) & "S"
                             or else Key = Namespace (Kind) & "IFICATIONS"
                             or else Key = Namespace (Kind) & "UIREMENTS"
-                            or else Key = Namespace (Kind) & "ISIONS")
+                            or else Key = Namespace (Kind) & "ISIONS"
                 then "" else Key),
                Id, Status);
             if E.Is_Error (Status) then
@@ -476,7 +473,10 @@ package body Model_Runner.Framework.Intent is
         (Kind          => Kind,
          Id            => To_Unbounded_String (Records.Entity_Id (Held)),
          Revision      => Records.Revision (Held),
-         State         => Field ("state"),
+         --  A decision waiting was once said proposed: a candidate, as
+         --  every register's waiting entry is now.
+         State         => (if Field ("state") = "proposed" then To_Unbounded_String ("candidate")
+                           else Field ("state")),
          Title         => Field ("title"),
          Text          => Field ("text"),
          Criteria      => Field ("criteria"),
@@ -880,7 +880,9 @@ package body Model_Runner.Framework.Intent is
                   Status : E.Error_Info;
                begin
                   Stores.Read (Item, Area_Of (Kind), Name, Held, Status);
-                  if E.Is_Ok (Status) and then Records.Get (Held, "state") = State
+                  if E.Is_Ok (Status)
+                    and then (Records.Get (Held, "state") = State
+                              or else (State = "candidate" and then Records.Get (Held, "state") = "proposed"))
                   then
                      Result.Append (Name);
                   end if;

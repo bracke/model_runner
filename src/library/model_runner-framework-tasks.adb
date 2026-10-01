@@ -13,6 +13,21 @@ with Model_Runner.Framework.Workspaces;
 
 package body Model_Runner.Framework.Tasks is
 
+   --  A title without the label its document gave it -- FR-001: -- as a
+   --  derived task's title names its requirement already.
+   function Unlabelled (Title : String) return String is
+      Colon : constant Natural := Ada.Strings.Fixed.Index (Title, ": ");
+      Dash  : constant Natural := Ada.Strings.Fixed.Index (Title, "-");
+   begin
+      if Colon > Title'First and then Dash > Title'First and then Dash < Colon
+        and then (for all C of Title (Title'First .. Dash - 1) => C in 'A' .. 'Z')
+        and then (for some C of Title (Dash + 1 .. Colon - 1) => C in '0' .. '9')
+        and then (for all C of Title (Dash + 1 .. Colon - 1) => C in 'A' .. 'Z' | '0' .. '9' | '.' | '-' | '_')
+      then
+         return Title (Colon + 2 .. Title'Last);
+      end if;
+      return Title;
+   end Unlabelled;
    use Ada.Strings.Unbounded;
    use type Model_Runner.Errors.Error_Code;
 
@@ -1568,7 +1583,7 @@ package body Model_Runner.Framework.Tasks is
                            Stores.Put (Change, Tasks_Area, To_String (Earlier), Value);
                            Done.Append (Key);
                         elsif not Done.Contains (Key) then
-                           Fields.Include ("title", Requirement & ": " & To_String (Held.Title));
+                           Fields.Include ("title", Requirement & ": " & Unlabelled (To_String (Held.Title)));
                            Fields.Include ("kind", Kind);
                            Fields.Include ("requirements", Requirement);
                            --  The component it is linked to, where it is linked
@@ -1621,7 +1636,7 @@ package body Model_Runner.Framework.Tasks is
                               Got     : E.Error_Info;
                               Stem    : constant String := "derive:" & Requirement & "#";
                               Title   : constant String :=
-                                Requirement & ": " & To_String (Held.Title);
+                                Requirement & ": " & Unlabelled (To_String (Held.Title));
                               Key_Of  : Unbounded_String;
                            begin
                               Stores.Pending (Change, Tasks_Area, Other, Defined, Staged);

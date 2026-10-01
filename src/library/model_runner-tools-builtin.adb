@@ -1094,7 +1094,7 @@ package body Model_Runner.Tools.Builtin is
       if not Have then
          return "error: read_file needs a path";
       elsif not Ada.Directories.Exists (Path) then
-         return "error: no file at that path";
+         return "error: no file at " & Path;
       end if;
       return Read_Capped (Path);
    end Read_File;
@@ -1107,7 +1107,10 @@ package body Model_Runner.Tools.Builtin is
       File    : Stream_IO.File_Type;
    begin
       if not (Have_P and then Have_C) then
-         return "error: write_file needs a path and content";
+         return "error: write_file needs "
+           & (if not Have_P and then not Have_C then "a path and content"
+              elsif not Have_P then "a path"
+              else "content: the whole new text of " & Path);
       end if;
       --  A new file's directory made with it: a file under src/ is asked
       --  for whether or not src/ is there yet.
@@ -1154,7 +1157,9 @@ package body Model_Runner.Tools.Builtin is
       if not Have then
          return "error: list_directory needs a path";
       elsif not Ada.Directories.Exists (Path) then
-         return "error: no directory at that path";
+         return "error: no directory at " & Path;
+      elsif Ada.Directories."/=" (Ada.Directories.Kind (Path), Ada.Directories.Directory) then
+         return "error: " & Path & " is a file, not a directory: read_file reads it";
       end if;
       Ada.Directories.Start_Search (Search, Path, "");
       while Ada.Directories.More_Entries (Search)

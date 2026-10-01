@@ -360,6 +360,11 @@ package body Model_Runner.Presentation is
       Arguments : Loc.Argument_List) return String
    is (Message (Item, Key, Arguments));
 
+   procedure Hold_Next_Steps (Item : in out Console; Held : Boolean) is
+   begin
+      Item.Next_Held := Held;
+   end Hold_Next_Steps;
+
    procedure Put_Note
      (Item      : in out Console;
       Key       : String;
@@ -367,6 +372,9 @@ package body Model_Runner.Presentation is
    is
       Said : constant String := Message (Item, Key, Arguments);
    begin
+      if Item.Next_Held and then Key'Length > 9 and then Key (Key'First .. Key'First + 8) = "cli.next." then
+         return;
+      end if;
       if Item.Structured then
          Put_Record (Item, "note", Key, Arguments, Said);
          return;
@@ -514,6 +522,29 @@ package body Model_Runner.Presentation is
       when others =>
          null;
    end Put_Prompt;
+
+   procedure Clear_Screen (Item : in out Console) is
+   begin
+      if Item.Capabilities.Error_Is_Terminal then
+         Ada.Text_IO.Put (Ada.Text_IO.Current_Error, ASCII.ESC & "[H" & ASCII.ESC & "[2J");
+         Ada.Text_IO.Flush (Ada.Text_IO.Current_Error);
+      end if;
+   exception
+      when others =>
+         null;
+   end Clear_Screen;
+
+   procedure Put_After_Prompt
+     (Item      : in out Console;
+      Key       : String;
+      Arguments : Loc.Argument_List) is
+   begin
+      Ada.Text_IO.Put_Line (Ada.Text_IO.Current_Error, Message (Item, Key, Arguments));
+      Ada.Text_IO.Flush (Ada.Text_IO.Current_Error);
+   exception
+      when others =>
+         null;
+   end Put_After_Prompt;
 
    ------------------
    -- Put_Option --

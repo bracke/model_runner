@@ -162,6 +162,25 @@ package Model_Runner.Framework.Work is
       Arguments : String;
       Answer    : String);
 
+   --  Why a task's agent would be left unable to do it, by its own
+   --  permissions or the session's sandbox: nothing to do at all, no file
+   --  to write where its gate wants one, nothing to read, or no write where
+   --  its component's files are. "" when it is able.
+   --
+   --  @param Item The store.
+   --  @param Task_Id The task.
+   --  @return What it lacks, and what gives it the rest.
+   function Unable_Reason (Item : Stores.Store; Task_Id : String) return String;
+
+   --  Before an agent first writes a file in the project itself -- not a
+   --  workspace -- the file as it was is copied aside, so a run that fails
+   --  part way can be undone where version control cannot: an untracked
+   --  file, or one with a person's edits not committed.
+   --
+   --  @param Host The host.
+   --  @param Path The file, relative to the project.
+   procedure Keep_Before_Write (Host : in out Child_Host; Path : String);
+
    --  The agent now working: the root, or the innermost open child.
    --
    --  @param Host The host.
@@ -479,6 +498,9 @@ private
 
       --  Whether the agents write in a workspace apart from the project.
       Apart   : Boolean := False;
+
+      --  The files copied aside before their first write.
+      Kept_Before : Name_Lists.Vector;
 
       --  What the checks run for the agents wrote, path and fingerprint
       --  separated by a tab: the agents' changes are what is left.

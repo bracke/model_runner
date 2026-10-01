@@ -60,7 +60,7 @@ scalar task.derived_kind = implementation
 # Where the project's files are: what a scan leaves out, and what is a test
 # or documentation, and what a tool generates. A name is a directory at any
 # depth, a path is one place, and *text is part of a file's name.
-set repository.skip = obj bin lib alire node_modules target build _build
+set repository.skip = obj bin alire node_modules target build _build *.ali/ *.o/ *.a/ *.so/
 set repository.tests = test tests testsuite *_test.
 set repository.documentation = doc docs
 set repository.generated = generated *.pb.go *_pb2.py *.pb.h *.pb.cc

@@ -456,6 +456,20 @@ package body Model_Runner.Framework.Bootstrap is
             return;
          end if;
 
+         --  In a document of decisions, a listed D1: text is one.
+         if Listed and then Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Path), "decision") > 0
+           and then Colon > Item'First + 1
+           and then Item (Item'First) in 'A' .. 'Z'
+           and then not Starts_With (Item, "REQ-")
+           and then (for all C of Item (Item'First .. Colon - 1) => C in 'A' .. 'Z' | '0' .. '9' | '-')
+           and then (for some C of Item (Item'First .. Colon - 1) => C in '0' .. '9')
+         then
+            Found (Decision_Candidate, Path & "#" & Item (Item'First .. Colon - 1),
+                   Item (Item'First .. Colon - 1) & ": " & Headline (Trim (Item (Colon + 1 .. Item'Last))),
+                   Trim (Item (Colon + 1 .. Item'Last)));
+            return;
+         end if;
+
          --  We decided to ...: a decision, as the document tells it.
          if Starts_With (Item, "We decided ") or else Starts_With (Item, "We chose ")
            or else Starts_With (Item, "We will use ")
@@ -567,23 +581,179 @@ package body Model_Runner.Framework.Bootstrap is
          Label : Unbounded_String;
          Rest  : Unbounded_String;
       begin
-         if Raw = "" or else Raw (Raw'First) in '#' | '|' | '>' | '-' | '*' | '+' | '0' .. '9' then
+         if Raw = "" or else Raw (Raw'First) in '#' | '|' | '>' then
             return True;
          end if;
+         --  A list item: its mark and a space -- not a sentence that goes on
+         --  with a number, "200 milliseconds."
+         if Raw'Length > 1 and then Raw (Raw'First) in '-' | '*' | '+' and then Raw (Raw'First + 1) = ' ' then
+            return True;
+         end if;
+         declare
+            Digits_End : Natural := Raw'First - 1;
+         begin
+            while Digits_End < Raw'Last and then Raw (Digits_End + 1) in '0' .. '9' loop
+               Digits_End := Digits_End + 1;
+            end loop;
+            if Digits_End >= Raw'First and then Digits_End + 2 <= Raw'Last
+              and then Raw (Digits_End + 1) in '.' | ')' and then Raw (Digits_End + 2) = ' '
+            then
+               return True;
+            end if;
+         end;
          Label_Split (Raw, Label, Rest);
          return Label /= Null_Unbounded_String
            or else (for some Prefix of Name_Lists.Vector'(["Acceptance", "Fact:", "Decision", "Status:"])
                       => Starts_With (Raw, Prefix));
       end Starts_Own;
 
-      procedure Flush is
+      --  How many of some sentences state a requirement.
+      function Saying (Parts : Name_Lists.Vector) return Natural is
+         Count : Natural := 0;
       begin
-         if Paragraph /= Null_Unbounded_String then
-            Line_Of (To_String (Paragraph));
-            Paragraph := Null_Unbounded_String;
+         for Part of Parts loop
+            if Says_Requirement (Part, False) then
+               Count := Count + 1;
+            end if;
+         end loop;
+         return Count;
+      end Saying;
+
+      procedure Flush is
+         Text : constant String := To_String (Paragraph);
+         Parts : Name_Lists.Vector;
+         Start : Positive := Text'First;
+      begin
+         if Paragraph = Null_Unbounded_String then
+            return;
          end if;
+         Paragraph := Null_Unbounded_String;
+         --  A paragraph of prose that states several requirements is each
+         --  of its sentences: one ends at a full stop a capital follows.
+         if Text (Text'First) not in '#' | '|' | '>' | '-' | '*' | '+' then
+            for Index in Text'First .. Text'Last - 2 loop
+               if Text (Index) = '.' and then Text (Index + 1) = ' ' and then Text (Index + 2) in 'A' .. 'Z' then
+                  Parts.Append (Text (Start .. Index));
+                  Start := Index + 2;
+               end if;
+            end loop;
+            Parts.Append (Text (Start .. Text'Last));
+            if Natural (Parts.Length) > 1
+              and then Saying (Parts) > 1
+            then
+               for Part of Parts loop
+                  Line_Of (Part);
+               end loop;
+               return;
+            end if;
+         end if;
+         Line_Of (Text);
       end Flush;
+
+      --  The document's lines, as they are.
+      function Lines return Name_Lists.Vector is
+         All_Lines : Name_Lists.Vector;
+         From      : Positive := Text'First;
+      begin
+         for Index in Text'First .. Text'Last + 1 loop
+            if Index > Text'Last or else Text (Index) = ASCII.LF then
+               All_Lines.Append (Trim (Text (From .. Index - 1)));
+               From := Index + 1;
+            end if;
+         end loop;
+         return All_Lines;
+      end Lines;
+
+      --  A decision record -- an ADR -- is one decision, read whole: what
+      --  its Decision section says, or else its body, under its title;
+      --  its Status kept with it. It is one by its place (adr/,
+      --  decisions/) or by its first heading: ADR-1, ADR 0001, or the
+      --  numbered "2. Use JSON" adr-tools writes, with a Status section.
+      function Decision_Record return Boolean is
+         Every    : constant Name_Lists.Vector := Lines;
+         Lower    : constant String := Ada.Characters.Handling.To_Lower (Path);
+         Heading  : Unbounded_String;
+         Has_Status : Boolean := False;
+      begin
+         for Line of Every loop
+            if Heading = Null_Unbounded_String and then Line'Length > 2 and then Line (Line'First) = '#'
+              and then Line (Line'First + 1) = ' '
+            then
+               Heading := To_Unbounded_String (Trim (Line (Line'First + 2 .. Line'Last)));
+            end if;
+            Has_Status := Has_Status or else Starts_With (Line, "Status:") or else Starts_With (Line, "## Status");
+         end loop;
+         declare
+            Title : constant String := To_String (Heading);
+            Upper : constant String := Ada.Characters.Handling.To_Upper (Title);
+            Digits_End : Natural := Title'First - 1;
+         begin
+            while Digits_End < Title'Last and then Title (Digits_End + 1) in '0' .. '9' loop
+               Digits_End := Digits_End + 1;
+            end loop;
+            if Title = ""
+              or else not (Ada.Strings.Fixed.Index (Lower, "/adr/") > 0
+                           or else Ada.Strings.Fixed.Index (Lower, "/decisions/") > 0
+                           or else Ada.Strings.Fixed.Index (Upper, "ADR") = Upper'First
+                           or else (Digits_End >= Title'First and then Digits_End < Title'Last
+                                    and then Title (Digits_End + 1) = '.' and then Has_Status))
+            then
+               return False;
+            end if;
+            declare
+               Said     : Unbounded_String;
+               Status   : Unbounded_String;
+               In_Part  : Unbounded_String;
+               Decision : Unbounded_String;
+               Label    : constant String :=
+                 (if Ada.Strings.Fixed.Index (Upper, "ADR") = Upper'First
+                  then Ada.Strings.Fixed.Trim
+                         (Title (Title'First .. (if Ada.Strings.Fixed.Index (Title, ":") > 0
+                                                 then Ada.Strings.Fixed.Index (Title, ":") - 1
+                                                 else Title'First + 2)), Ada.Strings.Both)
+                  elsif Digits_End >= Title'First then "ADR-" & Title (Title'First .. Digits_End)
+                  else Ada.Directories.Base_Name (Path));
+               Name     : constant String :=
+                 (if Ada.Strings.Fixed.Index (Title, ":") > 0
+                  then Trim (Title (Ada.Strings.Fixed.Index (Title, ":") + 1 .. Title'Last))
+                  elsif Digits_End >= Title'First and then Digits_End + 1 < Title'Last
+                  then Trim (Title (Digits_End + 2 .. Title'Last))
+                  else Title);
+               Mark     : constant String :=
+                 Ada.Strings.Fixed.Translate (Label, Ada.Strings.Maps.To_Mapping (" ", "-"));
+               After_Status : Boolean := False;
+            begin
+               for Line of Every loop
+                  if Line'Length > 3 and then Line (Line'First .. Line'First + 2) = "## " then
+                     In_Part := To_Unbounded_String
+                       (Ada.Characters.Handling.To_Lower (Trim (Line (Line'First + 3 .. Line'Last))));
+                     After_Status := To_String (In_Part) = "status";
+                  elsif Line /= "" and then Line (Line'First) /= '#' then
+                     if Starts_With (Line, "Status:") then
+                        Status := To_Unbounded_String (Trim (Line (Line'First + 7 .. Line'Last)));
+                     elsif After_Status and then Status = Null_Unbounded_String then
+                        Status := To_Unbounded_String (Line);
+                     elsif To_String (In_Part) = "decision" then
+                        Append (Decision, (if Decision = Null_Unbounded_String then "" else " ") & Line);
+                     elsif not After_Status then
+                        Append (Said, (if Said = Null_Unbounded_String then "" else " ") & Line);
+                     end if;
+                  end if;
+               end loop;
+               Found (Decision_Candidate, Path & "#" & Mark, Mark & ": " & Headline (Name),
+                      (if Decision /= Null_Unbounded_String then To_String (Decision)
+                       elsif Said /= Null_Unbounded_String then To_String (Said)
+                       else Name)
+                      & (if Status = Null_Unbounded_String then ""
+                         else " (status: " & To_String (Status) & ")"));
+               return True;
+            end;
+         end;
+      end Decision_Record;
    begin
+      if Decision_Record then
+         return Result;
+      end if;
       for Index in Text'First .. Text'Last + 1 loop
          if Index > Text'Last or else Text (Index) = ASCII.LF then
             --  What a fenced block holds is code or an example, not what
@@ -752,6 +922,25 @@ package body Model_Runner.Framework.Bootstrap is
                Collect (Base, Name, Deep, Pattern => Ada.Strings.Fixed.Index (Name, "*") > 0);
             end if;
          end;
+      end loop;
+      --  And every document something was read from before -- one named
+      --  to /bootstrap outside these, a .rst or a .txt -- while it is there:
+      --  what it says now is read again with the rest.
+      for Kind in Intent.Intent_Kind loop
+         for Known of Intent.List (Item, Kind) loop
+            declare
+               Held : Intent.Entity;
+               Got  : E.Error_Info;
+            begin
+               Intent.Read (Item, Kind, Known, Held, Got);
+               if E.Is_Ok (Got) and then Length (Held.Source) > 0
+                 and then not Result.Contains (To_String (Held.Source))
+                 and then Ada.Directories.Exists (Project & "/" & To_String (Held.Source))
+               then
+                  Result.Append (To_String (Held.Source));
+               end if;
+            end;
+         end loop;
       end loop;
       Sorting.Sort (Result);
       return Result;
@@ -1162,7 +1351,7 @@ package body Model_Runner.Framework.Bootstrap is
                            Records.Set (Held, "provenance", Provenance);
                            Records.Set (Held, "source", Field (Next.Source));
                            Stores.Put (Change, Area_Of (Kind), Name, Held);
-                           Result.Moved.Append (Name & " from " & Field (Next.Source));
+                           Result.Moved.Append (Name & " from " & From & " to " & Field (Next.Source));
                            return Name;
                         end if;
                      end;
@@ -1184,6 +1373,30 @@ package body Model_Runner.Framework.Bootstrap is
                   return;
                elsif Adopted (Kind, Given) then
                   return;
+               end if;
+
+               --  Said already, in the same words, by another document: one
+               --  entry, not two -- said, so the second place is known.
+               if Intent."/=" (Kind, Intent.Specification) then
+                  for Other of Intent.List (Item, Kind) loop
+                     declare
+                        Held : Intent.Entity;
+                        Got  : E.Error_Info;
+                     begin
+                        Intent.Read (Item, Kind, Other, Held, Got);
+                        if E.Is_Ok (Got)
+                          and then To_String (Held.State) not in "rejected" | "obsolete" | "superseded"
+                          and then To_String (Held.Source) /= Field (Next.Source)
+                          and then Fingerprint (To_String (Held.Text)) = Fingerprint (Field (Next.Text))
+                        then
+                           Result.Existing := Result.Existing + 1;
+                           Result.Stale.Append
+                             (Other & ": " & Field (Next.Source) & " says it too, in the same words; it is"
+                              & " kept once, as read from " & To_String (Held.Source));
+                           return;
+                        end if;
+                     end;
+                  end loop;
                end if;
 
                --  Said without an identifier, where the document said
@@ -1268,8 +1481,11 @@ package body Model_Runner.Framework.Bootstrap is
                      end if;
                   end;
                end if;
+               --  Numbered as a person's entries are -- REQ-007 -- the
+               --  document it came from kept as its source: a document's
+               --  name is not a component's.
                Intent.Propose
-                 (Item, Change, Kind, Field (Next.Key), Field (Next.Title),
+                 (Item, Change, Kind, Intent.Namespace (Kind), Field (Next.Title),
                   Field (Next.Text), Field (Next.Criteria), Field (Next.Source), Provenance,
                   "project", Id, Status, Given => Field (Next.Given_Id));
                if E.Is_Ok (Status) then
@@ -1385,7 +1601,7 @@ package body Model_Runner.Framework.Bootstrap is
                            Moved := Staged or else Stores.Exists (Item, Requirements_Area, Given);
                         end if;
                         Intent.Propose
-                          (Item, Change, Intent.Requirement, Field (Next.Key),
+                          (Item, Change, Intent.Requirement, Intent.Namespace (Intent.Requirement),
                            Field (Next.Title), Field (Next.Text), Field (Next.Criteria),
                            Field (Next.Source), Provenance, "project", Id, Status,
                            Given => Given);
@@ -1525,6 +1741,24 @@ package body Model_Runner.Framework.Bootstrap is
                                  & " " & Result.Made (Best) & " keeps it as that one's history");
                            end if;
                         end;
+                        --  A candidate no one took up, its document no
+                        --  longer saying it: let go, and said so -- there
+                        --  is nothing for a person to weigh.
+                        if To_String (Held.State) = Intent.First_State (Kind) and then Instead = Null_Unbounded_String
+                        then
+                           declare
+                              Moved   : E.Error_Info;
+                           begin
+                              Intent.Move (Item, Change, Kind, Known, "rejected",
+                                           Model_Runner.Framework.Transitions.Ordinary_Only, Moved,
+                                           Actor => "bootstrap");
+                              if E.Is_Ok (Moved) then
+                                 Result.Stale.Append
+                                   (Why & "; it was a candidate, and is rejected with it");
+                                 goto Next_Known;
+                              end if;
+                           end;
+                        end if;
                         Said :=
                           (Kind       => Results.Diagnostic,
                            Producer   => To_Unbounded_String ("bootstrap"),
@@ -1550,6 +1784,7 @@ package body Model_Runner.Framework.Bootstrap is
                      end;
                   end if;
                end;
+               <<Next_Known>>
             end loop;
          end loop;
       end;

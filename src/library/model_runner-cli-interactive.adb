@@ -1,3 +1,4 @@
+with Ada.Calendar;
 with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 with Ada.Text_IO;
@@ -445,6 +446,12 @@ package body Model_Runner.CLI.Interactive is
                      Pres.Put_Aside (Screen, "cli.interactive.usage.work");
                   elsif Named = "req" then
                      Pres.Put_Aside (Screen, "cli.interactive.usage.req");
+                  elsif Named = "decision" then
+                     Pres.Put_Aside (Screen, "cli.interactive.usage.decision");
+                  elsif Named = "spec" then
+                     Pres.Put_Aside (Screen, "cli.interactive.usage.spec");
+                  elsif Named in "accept" | "reject" then
+                     Pres.Put_Aside (Screen, "cli.interactive.usage.accept");
                   elsif Named = "reconfigure" then
                      Pres.Put_Aside (Screen, "cli.project.reconfigure.usage");
                   elsif Named = "config" then
@@ -945,7 +952,36 @@ package body Model_Runner.CLI.Interactive is
                                 --  What was typed is dropped: the prompt is
                                 --  the first line's again.
                                 & Pres.Message_Value (Screen, "cli.interactive.prompt") & " ");
-               Ada.Text_IO.Get_Line (Ada.Text_IO.Current_Input, Room, Stop);
+               declare
+                  Asked_At : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+                  use type Ada.Calendar.Time;
+               begin
+                  Ada.Text_IO.Get_Line (Ada.Text_IO.Current_Input, Room, Stop);
+                  --  Ctrl-L asks for a clear screen, as a shell's line does:
+                  --  the screen cleared, and the key not part of the line.
+                  if Ada.Strings.Fixed.Index (Room (Room'First .. Stop), [1 => ASCII.FF]) > 0 then
+                     declare
+                        Kept : Natural := Room'First - 1;
+                     begin
+                        for Index in Room'First .. Stop loop
+                           if Room (Index) /= ASCII.FF then
+                              Kept := Kept + 1;
+                              Room (Kept) := Room (Index);
+                           end if;
+                        end loop;
+                        Stop := Kept;
+                     end;
+                     Pres.Clear_Screen (Screen);
+                  end if;
+                  --  Typed while a /work ran, unshown then: there at once
+                  --  now, and shown as what is run.
+                  if Model_Runner.CLI.Project_Commands.Typed_During_Work
+                    and then Ada.Calendar.Clock - Asked_At < 0.05 and then Stop >= Room'First
+                  then
+                     Pres.Put_After_Prompt (Screen, "cli.interactive.typed_during_work",
+                                    [Loc.Named ("value", T.Escape_Controls (Room (Room'First .. Stop)))]);
+                  end if;
+               end;
                Model_Runner.Platform.Signals.Set_Waiting_For_Input (False);
             exception
                when Ada.Text_IO.End_Error =>

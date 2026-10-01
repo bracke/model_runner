@@ -1,6 +1,7 @@
 with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 
 with Hostkit.Fs;
 
@@ -452,9 +453,9 @@ package body Model_Runner.Framework.Context is
             else Records.Get (Config, "scalar.verification.default"));
       begin
          Offer ("CONFIG@" & Image (Result.Config_Revision), "configuration", High,
+                --  Each fact once: the adapters the harness reads them by
+                --  say the same again.
                 Fields_Of (Config, "fact.") & Registry_Facts (Config)
-                & Fields_Of (Config, "scalar.build.")
-                & Fields_Of (Config, "adapter.")
                 & (if Records.Get (Config, "profile." & Profile_Name) = "" then ""
                    else "verification: " & Records.Get (Config, "profile." & Profile_Name)
                         & ASCII.LF));
@@ -490,6 +491,43 @@ package body Model_Runner.Framework.Context is
          Repository.Load (Item, Graph, Read);
          Result.Semantic := E.Is_Ok (Read);
          Graph := Repository.Now (Item);
+
+         --  A file the task names in its title or notes is what it is
+         --  about: offered first, whatever component it is in.
+         declare
+            Said  : constant String :=
+              Records.Get (View, "definition.title") & " " & Records.Get (View, "definition.notes");
+            Start : Positive := Said'First;
+         begin
+            for Index in Said'First .. Said'Last + 1 loop
+               if Index > Said'Last or else Said (Index) in ' ' | ',' | ';' | '"' | ''' | '`' | '(' | ')' then
+                  declare
+                     Word : constant String :=
+                       Ada.Strings.Fixed.Trim (Said (Start .. Index - 1),
+                                               Ada.Strings.Maps.To_Set (":."), Ada.Strings.Maps.To_Set (":."));
+                     Text : Unbounded_String;
+                     Got  : E.Error_Info;
+                  begin
+                     if Word'Length > 2 and then Ada.Strings.Fixed.Index (Word, "..") = 0
+                       and then Word (Word'First) /= '/'
+                       and then Ada.Directories.Exists (Hostkit.Fs.Join (Project, Word))
+                       and then Ada.Directories."=" (Ada.Directories.Kind (Hostkit.Fs.Join (Project, Word)),
+                                                     Ada.Directories.Ordinary_File)
+                       and then Ada.Strings.Fixed.Index (Word, State_Directory) = 0
+                     then
+                        Files.Read_Text (Hostkit.Fs.Join (Project, Word), Text, Got);
+                        if E.Is_Ok (Got) then
+                           Offer ("file:" & Word, "source", High, To_String (Text));
+                        end if;
+                     end if;
+                  exception
+                     when others =>
+                        null;
+                  end;
+                  Start := Index + 1;
+               end if;
+            end loop;
+         end;
 
          if Wanted /= "" then
             for Index in 1 .. Repository.File_Count (Graph) loop
@@ -579,8 +617,15 @@ package body Model_Runner.Framework.Context is
                            Append (Layout, Path & ASCII.LF);
                            Shown := Shown + 1;
                         end if;
+                        --  Its harness file quoted only where the work is to
+                        --  add a test -- a test task, or one serving a
+                        --  requirement -- and the source of it, not its build
+                        --  file.
                         if Base in "tests" | "test_main" | "all_tests" | "test_runner" | "suite"
                                  | "test_suite" | "harness" | "conftest"
+                          and then (Records.Get (View, "definition.kind") = "test"
+                                    or else Records.Get (View, "definition.requirements") /= "")
+                          and then Lower (Ada.Directories.Extension (Path)) not in "gpr" | "toml" | "json" | "cfg"
                         then
                            Files.Read_Text (Hostkit.Fs.Join (Project, Path), Text, Read);
                            if E.Is_Ok (Read) then

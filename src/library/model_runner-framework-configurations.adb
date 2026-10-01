@@ -1,6 +1,7 @@
 with Ada.Characters.Handling;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 with Ada.Directories;
 
 with Hostkit.Fs;
@@ -709,6 +710,58 @@ package body Model_Runner.Framework.Configurations is
 
       --  The configuration itself.
       declare
+         --  Whether the directory holds code of its own already: at its top
+         --  or in src/, a file a compiler or an interpreter reads.
+         function Has_Own_Sources return Boolean is
+            function Holds (Where : String) return Boolean is
+               Search : Ada.Directories.Search_Type;
+               Found  : Ada.Directories.Directory_Entry_Type;
+               Result : Boolean := False;
+            begin
+               if not Ada.Directories.Exists (Where) then
+                  return False;
+               end if;
+               Ada.Directories.Start_Search
+                 (Search, Where, "", [Ada.Directories.Ordinary_File => True, others => False]);
+               while Ada.Directories.More_Entries (Search) and then not Result loop
+                  Ada.Directories.Get_Next_Entry (Search, Found);
+                  Result := Ada.Directories.Extension (Ada.Directories.Simple_Name (Found))
+                    in "adb" | "ads" | "c" | "h" | "cc" | "cpp" | "hpp" | "py" | "rs" | "go" | "js" | "ts"
+                     | "java" | "kt" | "rb" | "cs" | "swift";
+               end loop;
+               Ada.Directories.End_Search (Search);
+               return Result;
+            exception
+               when others =>
+                  return Result;
+            end Holds;
+            --  src/ and the directories in it: src/library, src/main.
+            function Holds_Below (Where : String) return Boolean is
+               Search : Ada.Directories.Search_Type;
+               Found  : Ada.Directories.Directory_Entry_Type;
+               Result : Boolean := Holds (Where);
+            begin
+               if Result or else not Ada.Directories.Exists (Where) then
+                  return Result;
+               end if;
+               Ada.Directories.Start_Search
+                 (Search, Where, "", [Ada.Directories.Directory => True, others => False]);
+               while Ada.Directories.More_Entries (Search) and then not Result loop
+                  Ada.Directories.Get_Next_Entry (Search, Found);
+                  if Ada.Directories.Simple_Name (Found) not in "." | ".." then
+                     Result := Holds (Ada.Directories.Full_Name (Found));
+                  end if;
+               end loop;
+               Ada.Directories.End_Search (Search);
+               return Result;
+            exception
+               when others =>
+                  return Result;
+            end Holds_Below;
+         begin
+            return Holds (Project_Directory) or else Holds_Below (Hostkit.Fs.Join (Project_Directory, "src"));
+         end Has_Own_Sources;
+         Own_Sources : constant Boolean := Has_Own_Sources;
          Config : Records.Item :=
            Records.Create (Schemas.Configuration_Schema, 1, Current_Entity, 1);
          Order  : Unbounded_String;
@@ -785,6 +838,12 @@ package body Model_Runner.Framework.Configurations is
                                        & " file of the templates already is");
                            return;
                         end if;
+                        --  A project that has code of its own keeps its own
+                        --  layout: no stub sources or test scaffold beside
+                        --  it -- only the dotfiles a template keeps tidy.
+                        if Own_Sources and then Path'Length > 0 and then Path (Path'First) /= '.' then
+                           goto Next_Setting;
+                        end if;
                         Result.Files.Include (Path, Value);
                         Records.Set (Config, "file." & Path, Value);
                      end;
@@ -793,6 +852,7 @@ package body Model_Runner.Framework.Configurations is
                      Records.Set (Config, Field, Value);
                end case;
             end;
+            <<Next_Setting>>
          end loop;
 
          --  What the project turned out to be outweighs what a template
@@ -1502,7 +1562,12 @@ package body Model_Runner.Framework.Configurations is
               and then (Value'Length not in 1 .. 9
                         or else (for some C of Value => C not in '0' .. '9'))
             then
-               return Name & " is a whole number, not " & Value;
+               return Name & " is a whole number"
+                 & (if Ada.Strings.Fixed.Index (Name, "seconds") > 0 or else Name in "scalar.work.lease"
+                         | "scalar.execution.timeout"
+                    then " of seconds" elsif Ada.Strings.Fixed.Index (Name, "token") > 0 then " of tokens"
+                    elsif Name = "scalar.execution.output_limit" then " of bytes" else "")
+                 & ", not " & Value;
             end if;
          end;
       end loop;
@@ -1547,6 +1612,11 @@ package body Model_Runner.Framework.Configurations is
    -----------------
    -- Plan_Change --
    -----------------
+
+   --  A setting left unset, as /config says it: what holds then.
+   function Not_Set (Name : String) return String
+   is (if Default_Of (Name) = "" then "(not set: the harness's default)"
+       else "(not set: " & Default_Of (Name) & ")");
 
    procedure Plan_Change
      (Item    : Stores.Store;
@@ -1808,7 +1878,14 @@ package body Model_Runner.Framework.Configurations is
               (if One_Capability and then Raw = "" then "off"
                elsif One_Capability and then Raw = "on" then ""
                else Raw);
-            Old   : constant String := Records.Get (Result.Before, Name);
+            --  A set's items however they were written -- a space apart
+            --  in a template, a line apart once changed: one a line.
+            Old   : constant String :=
+              (if Starts (Name, "set.")
+               then Lines_From (Ada.Strings.Fixed.Translate
+                                  (Records.Get (Result.Before, Name),
+                                   Ada.Strings.Maps.To_Mapping (" " & ASCII.LF, ",,")))
+               else Records.Get (Result.Before, Name));
             --  A set of names -- components, programs -- is taken apart at
             --  spaces as at commas: none of them holds a space.
             function Spaced_As_Commas return String is
@@ -1895,13 +1972,40 @@ package body Model_Runner.Framework.Configurations is
                return (if Found = Null_Unbounded_String then "" else "; did you mean " & To_String (Found));
             end Near;
          begin
-            if Starts (Name, "input.") then
+            if Starts (Name, "input.")
+              or else (not (for some Prefix of Changeable => Starts (Name, Prefix.all))
+                       and then Records.Has (Result.Before, "input." & Name))
+            then
                --  An input is what /init was given, kept as said: the
-               --  settings it made are what is changed.
-               Status := Refused
-                 (Name, Name & " is what /init was given, kept as it was; what it set is changed by"
-                  & " the setting's own name -- /config lists them, as scalar.work.isolation for"
-                  & " input.work_isolation");
+               --  settings it made are what is changed -- named, those whose
+               --  value holds what it was given.
+               declare
+                  Input : constant String := (if Starts (Name, "input.") then Name else "input." & Name);
+                  Given_Value : constant String := Records.Get (Result.Before, Input);
+                  Made  : Unbounded_String;
+               begin
+                  for Index in 1 .. Records.Field_Count (Result.Before) loop
+                     declare
+                        Field : constant String := Records.Field_Name (Result.Before, Index);
+                     begin
+                        if Given_Value'Length > 1 and then not Starts (Field, "input.")
+                          and then not Starts (Field, "file.")
+                          and then (for some Prefix of Changeable => Starts (Field, Prefix.all))
+                          and then Ada.Strings.Fixed.Index (Records.Get (Result.Before, Field), Given_Value) > 0
+                        then
+                           Append (Made, (if Made = Null_Unbounded_String then "" else ", ") & Field);
+                        end if;
+                     end;
+                  end loop;
+                  Status := Refused
+                    (Name, Input & " is what /init was given, kept as it was; what it set is changed by"
+                     & " the setting's own name"
+                     & (if Made = Null_Unbounded_String then " -- /config lists them"
+                        else ": " & To_String (Made)
+                             & (if Ada.Strings.Fixed.Index (To_String (Made), "profile.") > 0
+                                then " -- a profile is written LABEL: COMMAND, as profile.checks=""check: make test"""
+                                else "")));
+               end;
                return;
             --  An outside program as the agent is out of scope: refused,
             --  and one an earlier version kept can only be taken out.
@@ -2165,7 +2269,7 @@ package body Model_Runner.Framework.Configurations is
                   Result.Changed.Append
                     (Name & ": " & On_One_Line (Old) & " -> "
                      & (if (for some Known of Known_Settings => Known.all = Name)
-                        then "(not set: the harness's default)" else "(none)"));
+                        then Not_Set (Name) else "(none)"));
                   if not Result.Impact.Contains (Reach (Name)) then
                      Result.Impact.Append (Reach (Name));
                   end if;
@@ -2179,10 +2283,10 @@ package body Model_Runner.Framework.Configurations is
                Result.Changed.Append
                  (Name & ": "
                   & (if Old = "" and then (for some Known of Known_Settings => Known.all = Name)
-                     then "(not set: the harness's default)"
+                     then Not_Set (Name)
                      elsif Old = "" then "(none)" else On_One_Line (Old)) & " -> "
                   & (if Value = "" and then (for some Known of Known_Settings => Known.all = Name)
-                     then "(not set: the harness's default)"
+                     then Not_Set (Name)
                      elsif Value = "" then "(none)" else On_One_Line (Value)));
                if not Result.Impact.Contains (Reach (Name)) then
                   Result.Impact.Append (Reach (Name));

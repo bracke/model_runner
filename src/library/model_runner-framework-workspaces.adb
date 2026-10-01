@@ -17,6 +17,9 @@ with Model_Runner.Framework.Schemas;
 
 package body Model_Runner.Framework.Workspaces is
 
+   --  What the last Integrate joined, for Last_Joined.
+   Joined_Last : Name_Lists.Vector;
+
    use Ada.Strings.Unbounded;
    use type Model_Runner.Errors.Error_Code;
 
@@ -945,6 +948,7 @@ package body Model_Runner.Framework.Workspaces is
       Event   : Unbounded_String;
    begin
       Taken.Clear;
+      Joined_Last.Clear;
       Read (Item, Id, Held, Status);
       if E.Is_Error (Status) then
          return;
@@ -1124,6 +1128,7 @@ package body Model_Runner.Framework.Workspaces is
                         Joined_File (Item, Held, Path, Joined, Clean);
                      end if;
                      if Clean then
+                        Joined_Last.Append (Path);
                         Files.Write_Text (Target, To_String (Joined), Wrote);
                         if E.Is_Error (Wrote) then
                            Status := Wrote;
@@ -1175,6 +1180,18 @@ package body Model_Runner.Framework.Workspaces is
    -- Abandon --
    -------------
 
+   function Last_Joined return Name_Lists.Vector is (Joined_Last);
+
+   function Kept_Copy (Item : Stores.Store; Id : String) return String is
+      Held : Workspace;
+      Got  : E.Error_Info;
+   begin
+      Read (Item, Id, Held, Got);
+      return Hostkit.Fs.Join
+        (Hostkit.Fs.Join (Stores.Root (Item), "runtime"),
+         "given-up-" & (if E.Is_Ok (Got) then To_String (Held.Task_Id) & "-" else "") & Id);
+   end Kept_Copy;
+
    procedure Abandon
      (Item   : Stores.Store;
       Change : in out Stores.Transaction;
@@ -1187,6 +1204,25 @@ package body Model_Runner.Framework.Workspaces is
       if E.Is_Error (Status) then
          return;
       end if;
+      --  What it changed, kept before its tree goes: given up is not lost.
+      declare
+         Into : constant String := Kept_Copy (Item, Id);
+      begin
+         for Path of Changes (Item, Id) loop
+            declare
+               From : constant String := Hostkit.Fs.Join (To_String (Held.Path), Path);
+               To   : constant String := Hostkit.Fs.Join (Into, Path);
+            begin
+               if Dirs.Exists (From) then
+                  Dirs.Create_Path (Dirs.Containing_Directory (To));
+                  Dirs.Copy_File (From, To);
+               end if;
+            exception
+               when others =>
+                  null;
+            end;
+         end loop;
+      end;
       Remove_Tree (Item, Held);
       Set_Status (Item, Change, Id, "abandoned", "");
       Files.Discard (Conflict_Record (Item, Id));

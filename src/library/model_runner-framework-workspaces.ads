@@ -151,8 +151,23 @@ package Model_Runner.Framework.Workspaces is
       Semantic_Accepted : Boolean := False;
       Text_Resolved     : Boolean := False);
 
-   --  Give a workspace up: its files removed and its record marked
-   --  abandoned.
+   --  The files the last Integrate joined with the project's own change
+   --  -- both changed them, on different lines -- rather than copied over.
+   --
+   --  @return Their paths.
+   function Last_Joined return Name_Lists.Vector;
+
+   --  Where a workspace's work is kept once it is given up: under the
+   --  project's runtime, named by its task and itself, so a later give-up
+   --  of the same task keeps its own.
+   --
+   --  @param Item The store.
+   --  @param Id The workspace.
+   --  @return The directory; there only where the work changed something.
+   function Kept_Copy (Item : Stores.Store; Id : String) return String;
+
+   --  Give a workspace up: what it changed copied to Kept_Copy, its files
+   --  removed and its record marked abandoned.
    --
    --  @param Item The store.
    --  @param Change The transaction.

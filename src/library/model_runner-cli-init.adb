@@ -99,15 +99,50 @@ package body Model_Runner.CLI.Init is
       --  In a directory that already holds a project, the templates that
       --  take one as it is come first, so the one Enter takes writes
       --  nothing over it.
+      --  The templates in the order offered: where the directory has an
+      --  Alire manifest, the Ada ones first -- the application's where it
+      --  names executables; where it holds anything else, the one for any
+      --  language; in an empty one, as installed.
       function Kinds return Model_Runner.Framework.Name_Lists.Vector is
          Result : Model_Runner.Framework.Name_Lists.Vector;
+         Manifest : constant String := Hostkit.Fs.Join (Directory, "alire.toml");
+         Alire    : constant Boolean := Ada.Directories.Exists (Manifest);
+
+         function Executables return Boolean is
+            File : Ada.Text_IO.File_Type;
+            Said : Boolean := False;
+         begin
+            Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Manifest);
+            while not Ada.Text_IO.End_Of_File (File) and then not Said loop
+               Said := Ada.Strings.Fixed.Index (Ada.Text_IO.Get_Line (File), "executables") = 1;
+            end loop;
+            Ada.Text_IO.Close (File);
+            return Said;
+         exception
+            when others =>
+               if Ada.Text_IO.Is_Open (File) then
+                  Ada.Text_IO.Close (File);
+               end if;
+               return False;
+         end Executables;
+         Runs : constant Boolean := Alire and then Executables;
+
+         function Rank (Index : Positive) return Natural is
+            Category : constant String := Tp.Category (Tp.Template_At (Registry, Index));
+         begin
+            if Alire then
+               return (if Category = (if Runs then "application" else "library") then 0
+                       elsif Category in "application" | "library" then 1
+                       else 2);
+            elsif Has_Content then
+               return (if Category = "any" then 0 else 1);
+            end if;
+            return 0;
+         end Rank;
       begin
-         for Pass in Boolean loop
+         for Pass in 0 .. 2 loop
             for Index in 1 .. Tp.Count (Registry) loop
-               if Tp.Is_Standalone (Tp.Template_At (Registry, Index))
-                 and then (Tp.Category (Tp.Template_At (Registry, Index)) = "existing")
-                          = (Pass = not Has_Content)
-               then
+               if Tp.Is_Standalone (Tp.Template_At (Registry, Index)) and then Rank (Index) = Pass then
                   Result.Append (T.Image (Long_Long_Integer (Index)));
                end if;
             end loop;
@@ -124,7 +159,6 @@ package body Model_Runner.CLI.Init is
                Index   : constant Positive := Positive'Value (Place);
                Shown   : constant Tp.Template := Tp.Template_At (Registry, Index);
                Problem : constant E.Error_Info := Tp.Problem (Registry, Index);
-               Details : constant String := Tp.Details (Shown);
             begin
                Shown_Number := Shown_Number + 1;
                Pres.Put_Message
@@ -134,9 +168,9 @@ package body Model_Runner.CLI.Init is
                   [Loc.Named ("index", T.Image (Long_Long_Integer (Shown_Number))),
                    Loc.Named ("name", Tp.Id (Shown)),
                    Loc.Named ("value", Tp.Display_Name (Shown)),
-                   Loc.Named ("detail",
-                              (if Details = "" then Tp.Description (Shown)
-                               else Details))]);
+                   --  What it is for, in its own words: its tags are
+                   --  words to find it by, not a description.
+                   Loc.Named ("detail", Tp.Description (Shown))]);
 
                --  Why it cannot be used, said as the warning it is.
                if E.Is_Error (Problem) then
@@ -215,7 +249,8 @@ package body Model_Runner.CLI.Init is
                    Tag        => Null_Unbounded_String,
                    Details    => To_Unbounded_String
                                    (Tp.Description (Shown) & ASCII.LF
-                                    & Tp.Details (Shown) & ASCII.LF
+                                    & (if Tp.Details (Shown) = "" then ""
+                                       else "found by: " & Tp.Details (Shown) & ASCII.LF)
                                     & (if E.Is_Ok (Problem) then ""
                                        else Pres.Message_Value
                                               (Screen, "cli.init.cannot"))),
@@ -839,10 +874,6 @@ package body Model_Runner.CLI.Init is
                         Changing := True;
                      else
                         Allowing := Picked = 2 and then not Fixes.Is_Empty;
-                        --  Taken: the plan it was, in the scrollback once.
-                        for Line of Model_Runner.Framework.Lines_Of (To_String (Plan_Text)) loop
-                           Pres.Put_Line (Screen, Line);
-                        end loop;
                      end if;
                   end;
                end;

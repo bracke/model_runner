@@ -229,6 +229,7 @@ package body Model_Runner.Framework.Schemas is
        Policy  => Reject_Unknown,
        Rules   => new Rule_List'
          [Rule ("fingerprint", Text_Field, True),
+          Rule ("reader", Text_Field, False),
           Rule ("file.*", Text_Field, False),
           Rule ("symbol.*", Text_Field, False),
           Rule ("relation.*", Text_Field, False)]),

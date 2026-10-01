@@ -455,6 +455,19 @@ package body Model_Runner.CLI.Work is
               (Screen, "cli.next.parts_first", [Loc.Named ("name", Id),
                                                   Loc.Named ("detail", To_String (Waiting))]);
          end if;
+         --  Set aside itself: taken up again first, whatever it waits for.
+         if State in "blocked" | "failed" then
+            return Pres.Next_Step_Value (Screen, "cli.next.retry", [Loc.Named ("name", Id)]);
+         end if;
+         --  A requirement it serves that is not accepted yet holds it back.
+         for Requirement of Model_Runner.Framework.Lines_Of (R.Get (Defined, "requirements")) loop
+            if Model_Runner.Framework.Intent.State_Of (Store, Model_Runner.Framework.Intent.Requirement, Requirement)
+                 = "candidate"
+            then
+               return Pres.Next_Step_Value (Screen, "cli.next.req_first",
+                                            [Loc.Named ("name", Id), Loc.Named ("value", Requirement)]);
+            end if;
+         end loop;
          --  What it waits for: done first, or no longer waited for.
          for Other of Model_Runner.Framework.Lines_Of
            (Ada.Strings.Fixed.Translate (R.Get (Defined, "depends_on"),
@@ -824,51 +837,20 @@ package body Model_Runner.CLI.Work is
          --  An agent left nothing to do its task with -- by the task's own
          --  permissions or the sandbox -- is not started to fail: said, with
          --  what gives it the rest.
-         declare
-            View    : R.Item;
-            Read    : E.Error_Info;
-         begin
-            Tk.Effective (Store, To_String (Chosen), View, Read);
-            if E.Is_Ok (Read) then
-               declare
-                  Allowed : constant Pm.Permission_Set :=
-                    Pm.Effective (Store, R.Get (View, "definition.kind"), "worker",
-                                  Task_Level => R.Get (View, "definition.permissions"));
-                  Writes  : constant Boolean :=
-                    Ada.Strings.Fixed.Index (R.Get (View, "gates"), "implementation_present") > 0;
-                  Lacks   : constant String :=
-                    (if Pm.Image (Allowed) = "" then "anything"
-                     elsif Writes and then not Pm.Allows (Allowed, Pm.Write_Source) then "write a file"
-                     elsif not Pm.Allows (Allowed, Pm.Read_Source) then "read the source"
-                     else "");
-               begin
-                  if Lacks /= "" then
-                     Outcome := E.Make (E.Framework_Permission_Denied);
-                     E.Add_Text (Outcome, "name", "the agent of " & To_String (Chosen));
-                     E.Add_Text (Outcome, "detail",
-                                 "it would not be let " & Lacks
-                                 & (if Lacks = "write a file" then ", which its gate implementation_present needs"
-                                    else "")
-                                 & (if Pm."/=" (Pm.Sandbox, Pm.Unrestricted)
-                                    then "; " & Pm.Sandbox_Source & " confines it -- /sandbox off lifts that"
-                                    else "")
-                                 & (if R.Get (View, "definition.permissions") /= ""
-                                    then "; its own permissions narrow it -- /task edit " & To_String (Chosen)
-                                         & " permissions=inherit takes its kind's"
-                                    else ""));
-                     Fail (Outcome);
-                     S.Close (Store);
-                     return;
-                  end if;
-               end;
-            end if;
-         end;
+         if W.Unable_Reason (Store, To_String (Chosen)) /= "" then
+            Outcome := E.Make (E.Framework_Permission_Denied);
+            E.Add_Text (Outcome, "name", "the agent of " & To_String (Chosen));
+            E.Add_Text (Outcome, "detail", W.Unable_Reason (Store, To_String (Chosen)));
+            Fail (Outcome);
+            S.Close (Store);
+            return;
+         end if;
          declare
             --  A runner that knows its model budgets for it; otherwise the
             --  profile the configuration names.
             Model   : constant Model_Runner.Framework.Context.Model_Profile :=
               (if Given_Runner /= null and then Given_Runner.all in W.Parenting_Runner'Class
-                 and then Setting ("profile", "") = ""
+                 and then Setting ("profile", "") = "" and then Setting ("model", "") = ""
                then W.Parenting_Runner'Class (Given_Runner.all).Profile
                else Model_Runner.Framework.Context.Profile (Store, Setting ("profile", "")));
             Path    : constant String := Setting ("model", "");
@@ -907,14 +889,16 @@ package body Model_Runner.CLI.Work is
                          Loc.Named ("name", Pm.Sandbox_Source)]);
                   end;
                end if;
-               if Given_Runner /= null then
+               --  A model named for this run is the one that runs, in a
+               --  session too.
+               if Path /= "" then
+                  Say ("cli.work.runner", Path, To_String (Chosen));
+               elsif Given_Runner /= null then
                   Say ("cli.work.runner", Pres.Message_Value (Screen, "cli.work.runner.session"),
                        To_String (Chosen));
-               elsif Path /= "" then
-                  Say ("cli.work.runner", Path, To_String (Chosen));
                end if;
             end if;
-            if Given_Runner /= null then
+            if Given_Runner /= null and then Path = "" then
                W.Execute
                  (Store, To_String (Chosen), Given_Runner.all, Model, Done, Outcome,
                   Starting => Announce'Access);
@@ -978,9 +962,13 @@ package body Model_Runner.CLI.Work is
                      then "cli.work.changed" else "cli.work.removed"), Path, "");
             end loop;
          end;
-         for Child of Done.Children loop
-            Say ("cli.work.child", Child, "");
-         end loop;
+         --  Each helper's end was said as it came, where the session ran
+         --  the work; a model run apart is summed up here.
+         if Given_Runner = null or else Setting ("model", "") /= "" then
+            for Child of Done.Children loop
+               Say ("cli.work.child", Child, "");
+            end loop;
+         end if;
          for Candidate of Done.Proposed loop
             Say ("cli.work.proposed", Candidate, "");
          end loop;

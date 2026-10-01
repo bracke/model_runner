@@ -87,7 +87,8 @@ package body Model_Runner.CLI.Repo is
                     else T.To_String (Item.Project_Directory)), Typed)
          else Typed);
       Recovered : Model_Runner.Framework.Name_Lists.Vector;
-      Found     : constant Rp.Graph := Rp.Scan (Directory, Roots_In (Directory, Recovered));
+      Within    : constant Rp.Roots := Roots_In (Directory, Recovered);
+      Found     : constant Rp.Graph := Rp.Scan (Directory, Within);
       Outcome   : E.Error_Info;
 
       procedure Fail (Condition : E.Error_Info) is
@@ -262,6 +263,29 @@ package body Model_Runner.CLI.Repo is
             [Loc.Named ("count", Image (Rp.File_Count (Found))),
              Loc.Named ("total", Image (Rp.Relation_Count (Found))),
              Loc.Named ("value", Rp.Graph_Fingerprint (Found))]);
+         --  The directories left out, said: a source tree under one of
+         --  them would be missed unseen.
+         declare
+            Left : Ada.Strings.Unbounded.Unbounded_String;
+         begin
+            for Skipped of Within.Skip loop
+               declare
+                  Place : constant String := Directory & "/" & Skipped;
+               begin
+                  if Ada.Strings.Fixed.Index (Skipped, "*") = 0 and then Ada.Directories.Exists (Place)
+                    and then Ada.Directories."=" (Ada.Directories.Kind (Place), Ada.Directories.Directory)
+                  then
+                     Ada.Strings.Unbounded.Append
+                       (Left, (if Left = Ada.Strings.Unbounded.Null_Unbounded_String then "" else ", ")
+                              & Skipped & "/");
+                  end if;
+               end;
+            end loop;
+            if Left /= Ada.Strings.Unbounded.Null_Unbounded_String then
+               Pres.Put_Note (Screen, "cli.repo.skipped",
+                              [Loc.Named ("detail", Ada.Strings.Unbounded.To_String (Left))]);
+            end if;
+         end;
 
       elsif Action = "tree" then
          --  Under a directory, when one is named: its files only.

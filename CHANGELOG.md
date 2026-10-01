@@ -1793,6 +1793,50 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Fifteenth usability round:**
+  - Work is not lost: a run that fails or is given up keeps what it changed
+    in `runtime/given-up-TASK-WS`, one per workspace; a file an agent
+    overwrites in the project is kept first in `runtime/overwritten-TASK`,
+    and the undo hint names it; a run that wrote its files and then only
+    repeats itself is asked for its report rather than failed.
+  - A requirement linked to a symbol is linked by the graph's name and
+    counts as implemented; a document's edit no longer un-verifies code,
+    and a stale run names the files that changed; a command that only
+    looks changes no state.
+  - `/init` on a project with code of its own writes no stub sources or
+    test scaffold, offers the Ada templates first for an Alire manifest,
+    and the any-language template defaults its check to `true`.
+  - An accepted decision that overrides CONFIG sets the configuration;
+    `govern` on a candidate says it will govern once accepted;
+    `/reconfigure` refuses a check the new execution policy would not run,
+    with the change that lets it, and warns when it goes against a
+    decision; decisions wait as candidates like every register's entries.
+  - Numbers alone and several IDs work across `/req`, `/spec`,
+    `/decision`, `/task` and `/accept`; a document's own label (FR-001)
+    names its entry; bootstrapped entries are numbered plainly (REQ-007)
+    with their document kept as the source.
+  - Bootstrap: wrapped sentences that go on with a number, several
+    requirements in one paragraph, ADRs in their common forms (with their
+    Decision section, and no duplicate spec), decision lists, candidates a
+    document dropped (rejected), the same words in two documents (kept
+    once), and documents read by name read again; `lib/` is scanned, and
+    `/scan` names what it leaves out; `/sym` lists Ada bodies.
+  - `run_checks` is offered, told and recorded alike; `model=PATH` runs in
+    a session; a failed required helper sets the task aside; a helper is
+    told its tools; a helper's answer is not streamed, and its end said
+    once; a runaway repeated line is counted, not printed fifty times.
+  - Lines typed during `/work` are not echoed into its output and are
+    shown as they run; Ctrl-L clears the screen.
+  - The prompt: facts once, the test harness quoted only for work that
+    adds a test, the rare answer lines on one line, and a file the task
+    names put in its context; `/task context` budgets as `/work` does and
+    `--verbose` shows the whole text.
+  - Clearer: `/task diff` with labels, removals and conflicts; conflicts a
+    project deleted; reopen's real state; checks and permission refusals
+    named where a run ended; `/result` hides issues acted on and takes
+    `dismiss all`; `/config` notes inputs since changed and levels that
+    inherit what is withheld; `/help` usage for spec, decision and accept,
+    aligned.
 - **Fourteenth usability round:**
   - A fault in one project command is said with where it was raised, and
     the session goes on; two that ended sessions are fixed -- accepting a

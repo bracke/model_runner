@@ -220,6 +220,8 @@ package body Model_Runner.Framework.Permissions is
       Result (Create_Children) :=
         (Granted => True, Max_Depth => 1, Max_Children => 2, others => <>);
       Result (Propose_Tasks).Granted := True;
+      --  Static analysis reads and reports, as the tests do.
+      Result (Run_Static_Analysis).Granted := True;
       return Result;
    end Project_Default;
 

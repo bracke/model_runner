@@ -158,6 +158,10 @@ package body Model_Runner.CLI.Project_Commands is
       Held          : Unbounded_String;
       Holding       : Boolean := False;
       At_Line_Start : Boolean := True;
+
+      --  A helper's run: what it writes is its report, which the agent
+      --  that asked reads and the screen shows as that call's answer.
+      Quiet         : Boolean := False;
    end record;
 
    --  What was held back was a call: not written.
@@ -178,6 +182,14 @@ package body Model_Runner.CLI.Project_Commands is
       --  Where the reply is written: told of each call, so the call's own
       --  text is not shown beside it.
       Output : access Watching_Sink := null;
+
+      --  Whether a file was written in this run: a run that then only
+      --  repeats itself has done its work and is asked for its report.
+      Wrote  : Boolean := False;
+
+      --  What its calls were refused, first one of each: said with how
+      --  the work ended, as what likely kept it from going on.
+      Refused : Names.Vector;
 
       --  The arguments of the calls asked for and not yet answered, oldest
       --  first: a reply may ask for several before any is answered.
@@ -242,6 +254,19 @@ package body Model_Runner.CLI.Project_Commands is
          Pres.Put_Tool_Result (Self.Screen.all, Label & Result);
       end if;
       Self.Shown := To_Unbounded_String (Label & Result);
+      if Named = "write_file" and then Result'Length > 5 and then Result (Result'First .. Result'First + 4) = "wrote"
+      then
+         Self.Wrote := True;
+      end if;
+      if Result'Length > 7 and then Result (Result'First .. Result'First + 6) = "error: "
+        and then (Ada.Strings.Fixed.Index (Result, "may not") > 0
+                  or else Ada.Strings.Fixed.Index (Result, "outside the project") > 0
+                  or else Ada.Strings.Fixed.Index (Result, "is not a program") > 0)
+        and then Natural (Self.Refused.Length) < 3
+        and then not Self.Refused.Contains (Result (Result'First + 7 .. Result'Last))
+      then
+         Self.Refused.Append (Result (Result'First + 7 .. Result'Last));
+      end if;
       if Self.Host /= null then
          Self.Host.Note_Call
            (Named, (if Self.Asked.Is_Empty then "" else Self.Asked.First_Element), Result);
@@ -382,6 +407,12 @@ package body Model_Runner.CLI.Project_Commands is
       From : constant Positive := Item'First;
    begin
       Closed := False;
+      if Self.Quiet then
+         if Self.Stop /= null and then Model_Runner.Framework.Execution.Work_Withdrawn then
+            Self.Stop.Request;
+         end if;
+         return;
+      end if;
       if Self.Holding then
          Append (Self.Held, Item);
       else
@@ -418,11 +449,39 @@ package body Model_Runner.CLI.Project_Commands is
    begin
       if Self.Holding and then Self.Held /= Null_Unbounded_String then
          --  Ended on its own line, as a reply streamed whole would be
-         --  before what the harness says next.
-         Pres.Standard_Output_Sink (Self).Write
-           (To_String (Self.Held)
-            & (if Element (Self.Held, Length (Self.Held)) = ASCII.LF then "" else [1 => ASCII.LF]),
-            Closed);
+         --  before what the harness says next; a line said over and over
+         --  -- a model gone round -- shown a few times and then counted.
+         declare
+            Shown   : Unbounded_String;
+            Last    : Unbounded_String;
+            Same    : Natural := 0;
+            Skipped : Natural := 0;
+
+            procedure Flush_Skipped is
+            begin
+               if Skipped > 0 then
+                  Append (Shown, "... the same line" & Natural'Image (Skipped) & " times more" & ASCII.LF);
+                  Skipped := 0;
+               end if;
+            end Flush_Skipped;
+         begin
+            for Line of Model_Runner.Framework.Lines_Of (To_String (Self.Held)) loop
+               if Line = To_String (Last) then
+                  Same := Same + 1;
+               else
+                  Flush_Skipped;
+                  Same := 0;
+                  Last := To_Unbounded_String (Line);
+               end if;
+               if Same < 3 then
+                  Append (Shown, Line & ASCII.LF);
+               else
+                  Skipped := Skipped + 1;
+               end if;
+            end loop;
+            Flush_Skipped;
+            Pres.Standard_Output_Sink (Self).Write (To_String (Shown), Closed);
+         end;
       end if;
       Drop_Held (Self);
    end Release_Held;
@@ -453,6 +512,7 @@ package body Model_Runner.CLI.Project_Commands is
       Request  : Model_Runner.Generation.Request;
       Outcome  : Model_Runner.Agent.Outcome;
       Calls    : Natural := 0;
+      Asked_To_Report : Boolean := False;
 
       --  The template's own shape of call, and where that is the JSON
       --  envelope, the bare or fenced object too: models asked for a call
@@ -469,6 +529,7 @@ package body Model_Runner.CLI.Project_Commands is
       Watcher.Stop := Self.Cancel;
       Sink.Stop := Self.Cancel;
       Watcher.Output := Sink'Unchecked_Access;
+      Sink.Quiet := not Root;
 
       Conv.Open (Messages, Status => Status);
       if E.Is_Ok (Status) then
@@ -519,14 +580,29 @@ package body Model_Runner.CLI.Project_Commands is
          Calls := Calls + Outcome.Calls;
          Tokens := Tokens + Outcome.Generated_Tokens;
          Prompt_Tokens := Natural'Max (Prompt_Tokens, Outcome.Prompt_Tokens);
-         exit when Calls > 0 or else Round = 3
-           or else Outcome.Reason /= Model_Runner.Agent.Answered;
-         Conv.Append
-           (Messages, Conv.User_Role,
-            "You have not called a tool, so no file has changed. If the task"
-            & " needs a change, make it now by calling write_file, then report"
-            & " again.", Status);
-         exit when E.Is_Error (Status);
+         --  Written, then only repeating what is done: the work is there,
+         --  and what is missing is its report -- asked for once, not the
+         --  work failed for it.
+         if Outcome.Reason = Model_Runner.Agent.Repeating and then Watcher.Wrote and then Round < 3
+           and then not Asked_To_Report
+         then
+            Asked_To_Report := True;
+            Conv.Append
+              (Messages, Conv.User_Role,
+               "That call was made already and its file is written; repeating it changes nothing."
+               & " If the task is done, finish now with the report lines: status: done, summary:,"
+               & " changed_files:.", Status);
+            exit when E.Is_Error (Status);
+         else
+            exit when Calls > 0 or else Round = 3
+              or else Outcome.Reason /= Model_Runner.Agent.Answered;
+            Conv.Append
+              (Messages, Conv.User_Role,
+               "You have not called a tool, so no file has changed. If the task"
+               & " needs a change, make it now by calling write_file, then report"
+               & " again.", Status);
+            exit when E.Is_Error (Status);
+         end if;
       end loop;
 
       if Conv.Length (Messages) > 0
@@ -550,8 +626,17 @@ package body Model_Runner.CLI.Project_Commands is
          --  Going round, not a request that was wrong.
          Status := E.Make (E.Framework_Limit_Exceeded);
          E.Add_Text (Status, "name", "the model");
-         E.Add_Text (Status, "detail", "it kept repeating calls it had already made, and got no"
-                     & " further");
+         declare
+            Met : Unbounded_String;
+         begin
+            for One of Watcher.Refused loop
+               Append (Met, (if Met = Null_Unbounded_String then "" else "; ") & One);
+            end loop;
+            E.Add_Text (Status, "detail", "it kept repeating calls it had already made, and got no"
+                        & " further"
+                        & (if Met = Null_Unbounded_String then ""
+                           else " -- on the way it was refused: " & To_String (Met)));
+         end;
       elsif Outcome.Reason = Model_Runner.Agent.Timed_Out then
          Status := E.Make (E.Framework_Limit_Exceeded);
          E.Add_Text (Status, "name", "time");
@@ -673,13 +758,6 @@ package body Model_Runner.CLI.Project_Commands is
             end if;
             Self.Host.Close_Child (To_String (Answer), Tokens, Ran, Now, Retry,
                                    Prompt_Tokens => Prompt);
-            declare
-               Lines : constant Names.Vector := Model_Runner.Framework.Lines_Of (To_String (Now));
-            begin
-               Pres.Put_Aside (Self.Agent.Screen.all, "cli.agent.helper_ends",
-                               [Loc.Named ("name", To_String (Id)),
-                                Loc.Named ("detail", (if Lines.Is_Empty then "" else Lines.First_Element))]);
-            end;
             Told := (if Told = Null_Unbounded_String then Now else Told & ASCII.LF & Now);
             exit when not Retry;
             Retry_Of := Id;
@@ -738,14 +816,39 @@ package body Model_Runner.CLI.Project_Commands is
          while Bare <= Path'Last and then Path (Bare) = '/' loop
             Bare := Bare + 1;
          end loop;
+         --  Rooted where nothing on the host is: meant from the project's
+         --  top, as the model was told paths are -- the longest end of it the
+         --  project holds: /home/user/src/x.adb is src/x.adb where src/ is
+         --  the project's, and never a home/user/ tree made inside it.
+         if Ada.Directories.Exists (Path) then
+            return "";
+         end if;
          declare
-            Tail : constant String := Path (Bare .. Path'Last);
+            Start : Natural := Bare;
          begin
-            --  Rooted where nothing on the host is: meant from the
-            --  project's top, as the model was told paths are.
-            return (if Tail /= "" and then Within_Project (Tail)
-                      and then (Ada.Directories.Exists (Tail) or else not Ada.Directories.Exists (Path))
-                    then Tail else "");
+            loop
+               declare
+                  Tail   : constant String := Path (Start .. Path'Last);
+                  Slash  : constant Natural := Ada.Strings.Fixed.Index (Tail, "/", Ada.Strings.Backward);
+                  Folder : constant String := (if Slash = 0 then "." else Tail (Tail'First .. Slash - 1));
+               begin
+                  if Tail /= "" and then Within_Project (Tail)
+                    and then (Ada.Directories.Exists (Tail)
+                              or else (Named = "write_file" and then Ada.Directories.Exists (Folder)
+                                       and then (Folder /= "." or else Start = Bare)))
+                  then
+                     return Tail;
+                  end if;
+                  Start := Ada.Strings.Fixed.Index (Tail, "/");
+                  exit when Start = 0;
+                  Start := Start + 1;
+               end;
+            end loop;
+            --  Nothing of it is the project's: a new file under a new
+            --  directory, as written from the top.
+            return (if Named = "write_file" and then Within_Project (Path (Bare .. Path'Last))
+                      and then Ada.Strings.Fixed.Count (Path (Bare .. Path'Last), "/") <= 1
+                    then Path (Bare .. Path'Last) else "");
          exception
             when others =>
                return "";
@@ -797,6 +900,10 @@ package body Model_Runner.CLI.Project_Commands is
               & (if Pm.Sandbox_Refuses (Path, True) then " (" & Pm.Sandbox_Source & " confines it)" else "")
               & (if Self.Host = null then "" else "; you may write " & Wk.Where_Writes (Self.Host.all)));
       else
+         --  What it overwrites in the project is kept as it was first.
+         if Named = "write_file" and then Self.Host /= null then
+            Wk.Keep_Before_Write (Self.Host.all, Path);
+         end if;
          Model_Runner.Tools.Builtin.Run
            (Model_Runner.Tools.Builtin.Instance (Self), Named, Arguments, Result, Last,
             Status);
@@ -1390,6 +1497,54 @@ package body Model_Runner.CLI.Project_Commands is
            and then Ada.Directories.Exists (State & "/" & Area & "/" & Id & ".rec");
       end Held_As;
 
+      --  The entry a document's own label was read into: a requirement or
+      --  a decision whose provenance ends #LABEL; "" for none.
+      function Labelled (Label : String) return String is
+         Mark   : constant String := "#" & Label;
+         Search : Ada.Directories.Search_Type;
+         Found  : Ada.Directories.Directory_Entry_Type;
+      begin
+         if State = "" then
+            return "";
+         end if;
+         for Area of Names.Vector'(["requirements", "decisions"]) loop
+            if Ada.Directories.Exists (State & "/" & Area) then
+               Ada.Directories.Start_Search
+                 (Search, State & "/" & Area, "*.rec", [Ada.Directories.Ordinary_File => True, others => False]);
+               while Ada.Directories.More_Entries (Search) loop
+                  Ada.Directories.Get_Next_Entry (Search, Found);
+                  declare
+                     File : Ada.Text_IO.File_Type;
+                     Name : constant String := Ada.Directories.Simple_Name (Found);
+                  begin
+                     Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Ada.Directories.Full_Name (Found));
+                     while not Ada.Text_IO.End_Of_File (File) loop
+                        declare
+                           Line : constant String := Ada.Text_IO.Get_Line (File);
+                        begin
+                           if Line'Length > Mark'Length
+                             and then Line (Line'Last - Mark'Length + 1 .. Line'Last) = Mark
+                           then
+                              Ada.Text_IO.Close (File);
+                              Ada.Directories.End_Search (Search);
+                              return Name (Name'First .. Name'Last - 4);
+                           end if;
+                        end;
+                     end loop;
+                     Ada.Text_IO.Close (File);
+                  exception
+                     when others =>
+                        if Ada.Text_IO.Is_Open (File) then
+                           Ada.Text_IO.Close (File);
+                        end if;
+                  end;
+               end loop;
+               Ada.Directories.End_Search (Search);
+            end if;
+         end loop;
+         return "";
+      end Labelled;
+
       function Kept (Word : String) return String is
          Upper : constant String := Ada.Characters.Handling.To_Upper (Word);
          Dash  : constant Natural := Ada.Strings.Fixed.Index (Upper, "-", Ada.Strings.Backward);
@@ -1397,6 +1552,13 @@ package body Model_Runner.CLI.Project_Commands is
          --  Kept as a document numbered it -- REQ-1 -- it is that one.
          if Held_As (Upper) then
             return Upper;
+         end if;
+         --  A document's own label -- FR-001 -- is the entry read from it.
+         if Dash > Upper'First and then Ada.Strings.Fixed.Index (Upper, "REQ-") /= Upper'First
+           and then Ada.Strings.Fixed.Index (Upper, "TASK-") /= Upper'First
+           and then Labelled (Upper) /= ""
+         then
+            return Labelled (Upper);
          end if;
          if Dash > Upper'First
            and then (Ada.Strings.Fixed.Index (Upper, "TASK-") = Upper'First
@@ -1412,24 +1574,44 @@ package body Model_Runner.CLI.Project_Commands is
       end Kept;
 
       Command : constant String := (if Words.Is_Empty then "" else Words.First_Element);
-      Action  : constant String :=
-        (if Natural (Words.Length) >= 2 then Ada.Characters.Handling.To_Lower (Words (2)) else "");
+
+      --  What a number alone at a place stands for: TASK- where a task is
+      --  named, REQ-, SPEC- or DEC- where the register's entry is.
+      function Number_Kind (Index : Positive) return String;
+
+      function Number_Kind (Index : Positive) return String is
+         Act : constant String :=
+           (if Natural (Words.Length) >= 2 then Ada.Characters.Handling.To_Lower (Words (2)) else "");
+      begin
+         if Command in "/work" | "/cancel" | "/accept" | "/reject" and then Index >= 2 then
+            return "TASK-";
+         elsif Command = "/task" and then Index >= 3
+           and then Act in "show" | "audit" | "accept" | "reject" | "cancel" | "complete" | "verify"
+                         | "integrate" | "diff" | "edit" | "depend" | "split" | "reopen" | "reconsider"
+                         | "move" | "rehome" | "context" | "plan"
+         then
+            return "TASK-";
+         elsif Command = "/task" and then Act = "link" then
+            return (if Index = 3 then "TASK-" elsif Index >= 4 then "REQ-" else "");
+         elsif Command in "/req" | "/spec" | "/decision" and then Index >= 3
+           and then Act in "show" | "accept" | "reject" | "reconsider" | "obsolete" | "block" | "unblock"
+                         | "link" | "unlink" | "govern" | "revise" | "supersede" | "verify" | "trace"
+         then
+            return (if Command = "/req" then "REQ-" elsif Command = "/spec" then "SPEC-" else "DEC-");
+         elsif Command in "/check" | "/trace" and then Index >= 2 then
+            return "REQ-";
+         end if;
+         return "";
+      end Number_Kind;
    begin
       for Index in 1 .. Natural (Words.Length) loop
          declare
             Word : constant String := Words (Index);
          begin
-            --  A number alone where a task is named.
-            if All_Digits (Word)
-              and then ((Command = "/work" and then Index = 2)
-                        or else (Command in "/cancel" | "/accept" | "/reject" and then Index = 2)
-                        or else (Command = "/task" and then Index = 3
-                                 and then Action in "show" | "audit" | "accept" | "reject" | "cancel"
-                                                  | "complete" | "verify" | "integrate" | "diff"
-                                                  | "edit" | "link" | "depend" | "split" | "reopen"
-                                                  | "reconsider" | "move" | "rehome"))
-            then
-               Result.Append ("TASK-" & Padded (Word));
+            --  A number alone where an identifier is named: a task's, or
+            --  the register's the command is about.
+            if All_Digits (Word) and then Number_Kind (Index) /= "" then
+               Result.Append (Number_Kind (Index) & Padded (Word));
             elsif Index > 1 and then Ada.Strings.Fixed.Index (Word, "=") = 0 then
                Result.Append (Kept (Word));
             else
@@ -1467,6 +1649,17 @@ package body Model_Runner.CLI.Project_Commands is
       when others =>
          return False;
    end Waiting_In_Workspace;
+
+   --  Whether a /work just ended with echo held off: a line typed during
+   --  it was not shown, and is shown as it is taken up.
+   Typed_Ahead : Boolean := False;
+
+   function Typed_During_Work return Boolean is
+      Was : constant Boolean := Typed_Ahead;
+   begin
+      Typed_Ahead := False;
+      return Was;
+   end Typed_During_Work;
 
    --  Of a fault's account, what was raised and the first place in the
    --  source it passed: enough to find it, not the whole stack.
@@ -1563,8 +1756,14 @@ package body Model_Runner.CLI.Project_Commands is
          end if;
          Act (Store);
          --  What the command changed follows at once, said under it: a
-         --  requirement no longer verified, a task now ready.
-         if not S.Is_Read_Only (Store) then
+         --  requirement no longer verified, a task now ready. A command that
+         --  only looks changes nothing, and so leaves this to the next that
+         --  does.
+         if not S.Is_Read_Only (Store)
+           and then not (Word in "/state" | "/config" | "/trace" | "/result" | "/help"
+                         or else (Word in "/req" | "/spec" | "/decision" | "/task"
+                                  and then Argument (1) in "" | "show" | "list" | "audit" | "context" | "diff"))
+         then
             declare
                Said : Names.Vector;
                Kept : E.Error_Info;
@@ -1915,6 +2114,25 @@ package body Model_Runner.CLI.Project_Commands is
          --  where they disagree.
          Ruled  : Model_Runner.Framework.Configurations.Value_Maps.Map;
 
+         --  The setting an input made, where it holds something else now:
+         --  input.work_isolation's is scalar.work.isolation.
+         function Since_Init (Name, Given : String) return String is
+            Dotted : constant String :=
+              Ada.Strings.Fixed.Translate (Name (Name'First + 6 .. Name'Last),
+                                           Ada.Strings.Maps.To_Mapping ("_", "."));
+         begin
+            for Kind_Of in 1 .. 2 loop
+               declare
+                  Setting : constant String := (if Kind_Of = 1 then "scalar." else "set.") & Dotted;
+               begin
+                  if R.Has (Config, Setting) and then R.Get (Config, Setting) /= Given then
+                     return "; " & Setting & " is " & R.Get (Config, Setting) & " now";
+                  end if;
+               end;
+            end loop;
+            return "";
+         end Since_Init;
+
          --  A name NAME is asked for by: a word of it, or words of it in
          --  order -- work is scalar.work.lease's, not network's.
          function Asked (Name : String) return Boolean
@@ -1937,9 +2155,12 @@ package body Model_Runner.CLI.Project_Commands is
                   for One of All_Of loop
                      declare
                         Equal : constant Natural := Ada.Strings.Fixed.Index (One, " = ");
+                        Over  : constant Natural := Ada.Strings.Fixed.Index (One, " (over ");
                      begin
                         if Equal > One'First then
-                           Ruled.Include (One (One'First .. Equal - 1), Id & " rules " & One (Equal + 3 .. One'Last));
+                           Ruled.Include (One (One'First .. Equal - 1),
+                                          Id & " rules "
+                                          & One (Equal + 3 .. (if Over > 0 then Over - 1 else One'Last)));
                         end if;
                      end;
                   end loop;
@@ -2002,7 +2223,7 @@ package body Model_Runner.CLI.Project_Commands is
                   --  An input is what /init was given: the settings it made
                   --  may have been changed since, and are shown as they are.
                   Field (Name, (if Name'Length > 6 and then Name (Name'First .. Name'First + 5) = "input."
-                                then Shown & " (given at /init)"
+                                then Shown & " (given at /init" & Since_Init (Name, Value) & ")"
                                 elsif Ruled.Contains (Name)
                                 then Shown & " (" & Ruled (Name)
                                      & (if Ada.Strings.Fixed.Tail (Ruled (Name), Value'Length + 7)
@@ -2039,13 +2260,21 @@ package body Model_Runner.CLI.Project_Commands is
                   Whole     : constant String := "map.permission." & Level;
                   Inherited : Unbounded_String;
                   Withheld  : Unbounded_String;
+                  Above     : constant Pm.Permission_Set := Pm.Effective (Store, "", "", Within_Sandbox => False);
                begin
                   if Asked (Whole) then
                      for One in Pm.Capability loop
                         declare
                            Field : constant String := Whole & "." & Pm.Word (One);
                         begin
-                           if R.Get (Config, Field) = "inherit" then
+                           --  Inherited from a level that withholds it is
+                           --  not had: said apart.
+                           if R.Get (Config, Field) = "inherit" and then Level /= "project"
+                             and then not Above (One).Granted
+                           then
+                              Append (Withheld, (if Withheld = Null_Unbounded_String then "" else ", ")
+                                                & Pm.Word (One) & " (withheld above)");
+                           elsif R.Get (Config, Field) = "inherit" then
                               Append (Inherited, (if Inherited = Null_Unbounded_String then "" else ", ")
                                                  & Pm.Word (One));
                            elsif not R.Has (Config, Field) then
@@ -2371,6 +2600,41 @@ package body Model_Runner.CLI.Project_Commands is
                Got     : Rs.Result;
             begin
                Rs.Read (Store, Named, Got, Read, With_Payload => False);
+               --  all: every issue the listing shows, each as if named.
+               if Ada.Characters.Handling.To_Lower (Argument (2)) = "all" then
+                  declare
+                     Count : Natural := 0;
+                     File  : Ada.Text_IO.File_Type;
+                     Dismissed : constant Names.Vector := Dismissed_List (Store);
+                  begin
+                     if Ada.Directories.Exists (Kept) then
+                        Ada.Text_IO.Open (File, Ada.Text_IO.Append_File, Kept);
+                     else
+                        Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Kept);
+                     end if;
+                     for Name of S.Names (Store, Model_Runner.Framework.Results_Area) loop
+                        declare
+                           Result_Id : constant String :=
+                             (if Name'Length > 4 and then Name (Name'Last - 3 .. Name'Last) = ".rec"
+                              then Name (Name'First .. Name'Last - 4) else Name);
+                           One : Rs.Result;
+                           Had : E.Error_Info;
+                        begin
+                           Rs.Read (Store, Result_Id, One, Had, With_Payload => False);
+                           if E.Is_Ok (Had) and then Rs."=" (One.Kind, Rs.Diagnostic)
+                             and then not Dismissed.Contains (Result_Id)
+                           then
+                              Ada.Text_IO.Put_Line (File, Result_Id);
+                              Count := Count + 1;
+                           end if;
+                        end;
+                     end loop;
+                     Ada.Text_IO.Close (File);
+                     Pres.Put_Message (Screen, "cli.result.dismissed",
+                                       [Loc.Named ("name", Image (Count) & " issues")]);
+                  end;
+                  return;
+               end if;
                if Named = "" then
                   Outcome := E.Make (E.Framework_Input_Missing);
                   E.Add_Text (Outcome, "name", "the issue to dismiss: /result dismiss RES-ID, as result"
@@ -2437,6 +2701,12 @@ package body Model_Runner.CLI.Project_Commands is
                      if E.Is_Ok (Got) and then Rs."=" (One.Kind, Rs.Diagnostic)
                        and then not Dismissed.Contains (Result_Id)
                        and then not Acted_On (Store, Result_Id, To_String (One.Summary))
+                       --  An attempt's issue whose task was taken up again
+                       --  since, or ended: acted on.
+                       and then not (Task_Of (One) /= ""
+                                     and then Tk.State_Of (Store, Task_Of (One))
+                                                in "accepted" | "running" | "verification" | "complete"
+                                                 | "cancelled" | "rejected")
                        --  Said the same, in the same words, once: two attempts
                        --  that report one thing are one issue here.
                        and then not Said_Before.Contains
@@ -2989,7 +3259,22 @@ package body Model_Runner.CLI.Project_Commands is
             end;
          end loop;
          if Files.Is_Empty then
-            Pres.Put_Note (Screen, "cli.next.no_documents");
+            declare
+               Config : R.Item;
+               Got    : E.Error_Info;
+               Shown  : Unbounded_String;
+            begin
+               Model_Runner.Framework.Configurations.Read (Store, Config, Got);
+               for One of Model_Runner.Framework.Lines_Of
+                 (Ada.Strings.Fixed.Translate (R.Get (Config, "set.bootstrap.sources"),
+                                               Ada.Strings.Maps.To_Mapping (", ", [ASCII.LF, ASCII.LF])))
+               loop
+                  Append (Shown, (if Shown = Null_Unbounded_String then "" else ", ") & One);
+               end loop;
+               Pres.Put_Note (Screen, "cli.next.no_documents",
+                              [Loc.Named ("detail", (if Shown = Null_Unbounded_String then "*.md, docs/**/*.md"
+                                                     else To_String (Shown)))]);
+            end;
             return;
          end if;
          --  Items the documents number are theirs, accepted as the documents
@@ -3162,8 +3447,11 @@ package body Model_Runner.CLI.Project_Commands is
          end loop;
 
          --  What it imported as accepted is followed as any accepted
-         --  requirement is: its tasks derived, readiness worked out.
+         --  requirement is: its tasks derived, readiness worked out -- its
+         --  next step said once, with bootstrap's own.
+         Pres.Hold_Next_Steps (Screen, True);
          Model_Runner.CLI.Intents.Move_Along (Store, Screen);
+         Pres.Hold_Next_Steps (Screen, False);
          --  Nothing read from what was named: said, with how a document
          --  says a requirement.
          if Report.Created = 0 and then Report.Existing = 0 and then Report.Revised.Is_Empty
@@ -3291,8 +3579,106 @@ package body Model_Runner.CLI.Project_Commands is
                                     else "cli.project.reconfigure.nothing"));
             return;
          end if;
+         --  A check the new configuration would not let run: refused now,
+         --  with the change that lets it, not found at the next /check.
+         declare
+            package Vf renames Model_Runner.Framework.Verification;
+            package Ex renames Model_Runner.Framework.Execution;
+            Rules   : constant Ex.Policy := Ex.Policy_From (Planned.After);
+            Before  : constant Ex.Policy := Ex.Policy_From (Planned.Before);
+            Missing : Names.Vector;
+            Where   : Unbounded_String;
+         begin
+            for Index in 1 .. R.Field_Count (Planned.After) loop
+               declare
+                  Field : constant String := R.Field_Name (Planned.After, Index);
+               begin
+                  if Ada.Strings.Fixed.Index (Field, "profile.") = Field'First then
+                     declare
+                        Checks : constant Vf.Check_List := Vf.Parse_Profile (R.Get (Planned.After, Field));
+                     begin
+                        for At_Check in 1 .. Vf.Length (Checks) loop
+                           declare
+                              Command : constant String := To_String (Vf.Element (Checks, At_Check).Command);
+                              Words   : constant Names.Vector := Ex.Words_Of (Command);
+                           begin
+                              --  Only what this change stops: a profile it
+                              --  sets, or a program it takes away.
+                              if not Words.Is_Empty and then Ex.Refusal (Rules, Command) /= ""
+                                and then (Ex.Refusal (Before, Command) = "" or else Changes.Contains (Field))
+                                and then Ada.Strings.Fixed.Index (Ex.Refusal (Rules, Command), "not a program") > 0
+                                and then not Missing.Contains (Words.First_Element)
+                              then
+                                 Missing.Append (Words.First_Element);
+                                 Append (Where, (if Where = Null_Unbounded_String then "" else ", ")
+                                                & Field & " runs " & Words.First_Element);
+                              end if;
+                           end;
+                        end loop;
+                     end;
+                  end if;
+               end;
+            end loop;
+            if not Missing.Is_Empty then
+               declare
+                  Allow : Unbounded_String;
+                  Asked : Unbounded_String;
+               begin
+                  for One of Missing loop
+                     Append (Allow, (if Allow = Null_Unbounded_String then "" else ",") & One);
+                  end loop;
+                  for Position in Changes.Iterate loop
+                     declare
+                        Value : constant String := Cf.Value_Maps.Element (Position);
+                     begin
+                        Append (Asked, Cf.Value_Maps.Key (Position) & "="
+                                       & (if Ada.Strings.Fixed.Index (Value, " ") > 0
+                                          then '"' & Value & '"' else Value) & " ");
+                     end;
+                  end loop;
+                  Outcome := E.Make (E.Framework_Input_Invalid);
+                  E.Add_Text (Outcome, "name", "the changed configuration");
+                  E.Add_Text (Outcome, "value", To_String (Where));
+                  E.Add_Text (Outcome, "detail",
+                              "set.execution.allowed would not let it run; add it in the same change:"
+                              & " /reconfigure " & To_String (Asked) & "set.execution.allowed+=" & To_String (Allow));
+                  Pres.Report (Screen, Outcome);
+                  return;
+               end;
+            end if;
+         end;
          for Line of Planned.Changed loop
             Pres.Put_Message (Screen, "cli.project.reconfigure.changed", [Loc.Named ("name", Line)]);
+         end loop;
+         --  A setting an accepted decision rules, changed to another value:
+         --  said before it is asked, as the disagreement it makes.
+         for Id of Nt.List (Store, Nt.Decision) loop
+            if Nt.State_Of (Store, Nt.Decision, Id) = "accepted" then
+               declare
+                  All_Of : Names.Vector := Nt.Also_Governs (Store, Nt.Decision, Id);
+               begin
+                  if Nt.Governs (Store, Nt.Decision, Id) /= "" then
+                     All_Of.Prepend (Nt.Governs (Store, Nt.Decision, Id));
+                  end if;
+                  for One of All_Of loop
+                     declare
+                        Equal : constant Natural := Ada.Strings.Fixed.Index (One, " = ");
+                        Over  : constant Natural := Ada.Strings.Fixed.Index (One, " (over ");
+                        Setting : constant String := (if Equal > One'First then One (One'First .. Equal - 1) else "");
+                        Ruling  : constant String :=
+                          (if Equal = 0 then "" else One (Equal + 3 .. (if Over > 0 then Over - 1 else One'Last)));
+                     begin
+                        if Setting /= "" and then R.Has (Planned.After, Setting)
+                          and then R.Get (Planned.After, Setting) /= R.Get (Planned.Before, Setting)
+                          and then R.Get (Planned.After, Setting) /= Ruling
+                        then
+                           Pres.Put_Note (Screen, "cli.project.reconfigure.against",
+                                          [Loc.Named ("name", Setting), Loc.Named ("value", Id & " rules " & Ruling)]);
+                        end if;
+                     end;
+                  end loop;
+               end;
+            end if;
          end loop;
          for Line of Planned.Impact loop
             Pres.Put_Message (Screen, "cli.project.reconfigure.reaches", [Loc.Named ("name", Line)]);
@@ -3818,18 +4204,33 @@ package body Model_Runner.CLI.Project_Commands is
                Pres.Put_Note (Screen, "cli.project.no_pending");
                return;
             end if;
+            --  What was waiting when it was asked, decided; what that makes
+            --  -- tasks for the requirements accepted -- named once at the
+            --  end, for a person to take up in turn.
+            Pres.Hold_Next_Steps (Screen, True);
             for Which of Intent_Waiting loop
-               Model_Runner.CLI.Intents.Decide (Store, Which, Accepting, Screen, Say_Next => not Accepting);
+               Model_Runner.CLI.Intents.Decide (Store, Which, Accepting, Screen, Say_Next => False);
             end loop;
-            --  The tasks waiting now: those accepting the requirements made
-            --  among them, decided with the rest.
-            if not Tk.List (Store, "candidate").Is_Empty then
+            Pres.Hold_Next_Steps (Screen, False);
+            declare
+               Made_Now : Unbounded_String;
+            begin
+               for Id of Tk.List (Store, "candidate") loop
+                  if not Tasks_Waiting.Contains (Id) then
+                     Append (Made_Now, (if Made_Now = Null_Unbounded_String then "" else " ") & Id);
+                  end if;
+               end loop;
+               if Made_Now /= Null_Unbounded_String and then Tasks_Waiting.Is_Empty then
+                  Pres.Put_Note (Screen, "cli.next.accept_tasks", [Loc.Named ("detail", To_String (Made_Now))]);
+               end if;
+            end;
+            if not Tasks_Waiting.Is_Empty then
                declare
                   Joined : Unbounded_String;
                begin
                   --  A task serving only what is retired is left out, and
                   --  said: accepting it would have it wait for ever.
-                  for Id of Tk.List (Store, "candidate") loop
+                  for Id of Tasks_Waiting loop
                      declare
                         Defined : R.Item;
                         Got     : E.Error_Info;
@@ -3903,13 +4304,20 @@ package body Model_Runner.CLI.Project_Commands is
                declare
                   Colon : constant Natural := Ada.Strings.Fixed.Index (Which, ":");
                   Kind  : constant String := Which (Which'First .. Colon - 1);
+                  Register : constant Nt.Intent_Kind :=
+                    (if Kind = "requirement" then Nt.Requirement
+                     elsif Kind = "decision" then Nt.Decision else Nt.Specification);
+                  Held     : Nt.Entity;
+                  Got      : E.Error_Info;
                begin
+                  Nt.Read (Store, Register, Which (Colon + 1 .. Which'Last), Held, Got);
                   Append (Listed, (if Listed = Null_Unbounded_String then "" else [1 => ASCII.LF])
                           & "/"
                           & (if Kind = "requirement" then "req"
                              elsif Kind = "decision" then "decision" else "spec")
                           & (if Accepting then " accept " else " reject ")
-                          & Which (Colon + 1 .. Which'Last));
+                          & Which (Colon + 1 .. Which'Last)
+                          & (if E.Is_Ok (Got) then "  (" & To_String (Held.Title) & ")" else ""));
                end;
             end loop;
             --  Listed, not refused: asking what waits is what /accept alone
@@ -3948,6 +4356,14 @@ package body Model_Runner.CLI.Project_Commands is
    begin
       --  A usage error of this command points to its own help.
       Pres.Use_Command (Screen, Word (Word'First + 1 .. Word'Last));
+      --  The model /work would run on, for what is budgeted as /work does.
+      if Agent in Wk.Parenting_Runner'Class then
+         Command.Session_Profile := Wk.Parenting_Runner'Class (Agent).Profile;
+         Command.Has_Session_Profile := True;
+      end if;
+      if All_Words.Contains ("--verbose") then
+         Command.Level := Opt.Verbose;
+      end if;
       if Open_Quote then
          Pres.Put_Note (Screen, "cli.project.quote_open");
       end if;
@@ -4026,6 +4442,43 @@ package body Model_Runner.CLI.Project_Commands is
          Model_Runner.CLI.Init.Run (Command, Screen, Status);
          Last_Status := Status;
 
+      --  Several tasks named for one move: each moved as if named alone,
+      --  and the next step said once, after the last.
+      elsif Word = "/task" and then Argument (1) in "accept" | "reject" | "cancel" | "reopen" | "reconsider"
+        and then Argument (3) /= ""
+        and then (for all Index in 2 .. Natural (Positional.Length) =>
+                    Ada.Strings.Fixed.Index (Positional (Index), "TASK-") = 1)
+      then
+         declare
+            Named : constant Names.Vector := Positional;
+         begin
+            for Index in 2 .. Natural (Named.Length) loop
+               Pres.Hold_Next_Steps (Screen, Index < Natural (Named.Length));
+               Command.Action := T.To_Bounded (Named (1));
+               Command.Action_Argument := T.To_Bounded (Named (Index));
+               Model_Runner.CLI.Tasks.Run (Command, Screen, Status);
+               Last_Status := Natural'Max (Last_Status, Status);
+            end loop;
+            Pres.Hold_Next_Steps (Screen, False);
+         end;
+      elsif Word in "/accept" | "/reject" and then Argument (2) /= "" then
+         --  Several named: each decided as if named alone.
+         declare
+            Named : constant Names.Vector := Positional;
+         begin
+            for Index in 1 .. Natural (Named.Length) loop
+               Pres.Hold_Next_Steps (Screen, Index < Natural (Named.Length));
+               Positional.Clear;
+               Positional.Append (Named (Index));
+               With_Store (Decide'Access);
+               if To_Task then
+                  To_Task := False;
+                  Model_Runner.CLI.Tasks.Run (Command, Screen, Status);
+                  Last_Status := Natural'Max (Last_Status, Status);
+               end if;
+            end loop;
+            Pres.Hold_Next_Steps (Screen, False);
+         end;
       elsif Word = "/task" and then Argument (1) = "complete"
         and then (Argument (3) /= "" or else Argument (2) = "all")
       then
@@ -4078,16 +4531,36 @@ package body Model_Runner.CLI.Project_Commands is
             Command.Action_Argument := T.To_Bounded (Argument (1));
          else
             Command.Action := T.To_Bounded (Argument (1));
-            Command.Action_Argument := T.To_Bounded (Rest (2));
+            --  --verbose is how much is said, not what it is said of.
+            declare
+               Said : constant String := Rest (2);
+               At_V : constant Natural := Ada.Strings.Fixed.Index (Said, "--verbose");
+            begin
+               Command.Action_Argument := T.To_Bounded
+                 (if At_V = 0 then Said
+                  else Ada.Strings.Fixed.Trim (Said (Said'First .. At_V - 1) & Said (At_V + 9 .. Said'Last),
+                                               Ada.Strings.Both));
+            end;
          end if;
          Model_Runner.CLI.Tasks.Run (Command, Screen, Status);
          Last_Status := Status;
 
       elsif Word in "/accept" | "/reject" then
          With_Store (Decide'Access);
+         --  The tasks it decides, each in turn -- the next step said once,
+         --  after the last.
          if To_Task then
-            Model_Runner.CLI.Tasks.Run (Command, Screen, Status);
-            Last_Status := Status;
+            declare
+               Each : constant Names.Vector := Split (T.To_String (Command.Action_Argument));
+            begin
+               for Index in 1 .. Natural (Each.Length) loop
+                  Pres.Hold_Next_Steps (Screen, Index < Natural (Each.Length));
+                  Command.Action_Argument := T.To_Bounded (Each (Index));
+                  Model_Runner.CLI.Tasks.Run (Command, Screen, Status);
+                  Last_Status := Natural'Max (Last_Status, Status);
+               end loop;
+               Pres.Hold_Next_Steps (Screen, False);
+            end;
          end if;
 
       elsif Word = "/cancel" then
@@ -4212,23 +4685,32 @@ package body Model_Runner.CLI.Project_Commands is
          --  What is typed while the work runs waits until it ends -- a
          --  Ctrl-C that stops the work included, where the terminal would
          --  otherwise throw it away with the interrupt.
+         --  Nor shown amid the work's own lines as it is typed: it is
+         --  shown when it is taken up, after.
          declare
             Kept : constant Boolean :=
               Hostkit.Terminal_Control.Keep_Input_On_Interrupt (Hostkit.Descriptors.Standard_Input, True);
+            Quiet : constant Boolean :=
+              Hostkit.Terminal_Control.Set_Echo (Hostkit.Descriptors.Standard_Input, False);
+
+            procedure Restore is
+               Ignored : Boolean;
+            begin
+               if Kept then
+                  Ignored := Hostkit.Terminal_Control.Keep_Input_On_Interrupt
+                    (Hostkit.Descriptors.Standard_Input, False);
+               end if;
+               if Quiet then
+                  Ignored := Hostkit.Terminal_Control.Set_Echo (Hostkit.Descriptors.Standard_Input, True);
+                  Typed_Ahead := True;
+               end if;
+            end Restore;
          begin
             Model_Runner.CLI.Work.Run_With (Command, Screen, Agent, Status);
-            if Kept and then not Hostkit.Terminal_Control.Keep_Input_On_Interrupt
-                                   (Hostkit.Descriptors.Standard_Input, False)
-            then
-               null;
-            end if;
+            Restore;
          exception
             when others =>
-               if Kept and then Hostkit.Terminal_Control.Keep_Input_On_Interrupt
-                                  (Hostkit.Descriptors.Standard_Input, False)
-               then
-                  null;
-               end if;
+               Restore;
                raise;
          end;
          Last_Status := Status;

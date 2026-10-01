@@ -146,6 +146,13 @@ package Model_Runner.CLI.Project_Commands is
       Screen : in out Model_Runner.Presentation.Console;
       Status : out Natural);
 
+   --  Whether the /work just run held typing back unshown, and so the next
+   --  line read, taken at once, was typed during it: asked once, it says
+   --  so only the first time.
+   --
+   --  @return True after such a /work.
+   function Typed_During_Work return Boolean;
+
    --  The same, with the agent /work runs supplied: a test's own, in
    --  place of a model.
    --

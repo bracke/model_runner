@@ -4,7 +4,7 @@ template = generic
 name = Any Language
 description = A project in any language, new or already there, checked by a command of its own.
 version = 1
-category = existing
+category = any
 includes = standard-development
 
 # Writing into a repository that is already there is confirmed first, the
@@ -35,6 +35,7 @@ input check_command
   label = Check command
   description = the command that builds and tests it, as make test, pytest or npm test -- true where there is nothing to check yet
   required = true
+  default = true
 
 # The program checks may run: the one the command starts, unless named.
 input check_program

@@ -1546,8 +1546,14 @@ package body Model_Runner.Framework.Stores is
             elsif Ada.Directories.Kind (Found) = Ada.Directories.Directory then
                --  Payloads are the harness's, written as a result is kept --
                --  by name, from what they hold -- not by a commit.
+               --  Nor the copies kept of work given up or files it
+               --  replaced: kept for a person, written by no commit.
                if Relative not in "runtime/exec" | "runtime/slots" | "results/payloads"
                  and then not (Under = "workspaces")
+                 and then not (Under = "runtime"
+                               and then (Ada.Strings.Fixed.Index (Name, "overwritten-") = Name'First
+                                         or else Ada.Strings.Fixed.Index (Name, "given-up-") = Name'First
+                                         or else Ada.Strings.Fixed.Index (Name, "replaced-") = Name'First))
                then
                   Gather (Root, Relative, Into);
                end if;

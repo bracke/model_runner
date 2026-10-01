@@ -1965,7 +1965,7 @@ package body Tests.Framework_Cases is
       Nt.Read (Store, Nt.Requirement, "REQ-NONE-001", Value, Status);
       Assert (Status.Code = E.Framework_Not_Found,
               "a requirement nobody proposed was read");
-      Assert (Nt.First_State (Nt.Decision) = "proposed"
+      Assert (Nt.First_State (Nt.Decision) = "candidate"
               and then Nt.Namespace (Nt.Specification) = "SPEC"
               and then Tr.Is_State (Nt.Machine_Of (Nt.Requirement),
                                     "implemented"),
@@ -8619,6 +8619,16 @@ package body Tests.Framework_Cases is
          Model_Runner.Presentation.Put_Note
            (Screen, "cli.next.retry", [Model_Runner.Localization.Named ("name", "TASK-7")]);
          Model_Runner.Presentation.Put_Aside (Screen, "cli.interactive.help.projects");
+         --  A next step held back is not said, and said again once let go.
+         Model_Runner.Presentation.Hold_Next_Steps (Screen, True);
+         Model_Runner.Presentation.Put_Note
+           (Screen, "cli.next.retry", [Model_Runner.Localization.Named ("name", "TASK-HELD")]);
+         Model_Runner.Presentation.Hold_Next_Steps (Screen, False);
+         --  Not a terminal here: a clear screen writes nothing.
+         Model_Runner.Presentation.Clear_Screen (Screen);
+         Model_Runner.Presentation.Put_After_Prompt
+           (Screen, "cli.interactive.typed_during_work",
+            [Model_Runner.Localization.Named ("value", "/state")]);
          --  A usage error of a command points to that command's help.
          Model_Runner.Presentation.Use_Command (Screen, "task");
          Model_Runner.Presentation.Report
@@ -8634,6 +8644,11 @@ package body Tests.Framework_Cases is
          Assert (Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"),
                                           ASCII.LF & "project commands:") > 0,
                  "a line put aside was written with the program's name before it");
+         Assert (Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"), "TASK-HELD") = 0
+                 and then Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"), "/state    (typed") > 0
+                 and then Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"), [1 => ASCII.ESC]) = 0,
+                 "a held next step was said, a line typed during work not shown, or a clear screen"
+                 & " written where there is no terminal");
          Assert (Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"), "/help task") > 0,
                  "a usage error in a command did not point to that command's help");
          Assert (Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"), "/task accept TASK-7") > 0,
@@ -8867,6 +8882,31 @@ package body Tests.Framework_Cases is
          when Helped | Denied =>
             Ask ("required", Child_Done);
             Children.Note_Call ("read_file", "{""path"": ""src/hello.adb""}", "procedure");
+            --  A file about to be written in the project is kept as it was,
+            --  where the work is not apart in a workspace.
+            Dirs.Create_Path (Project & "/src");
+            Put_File (Project & "/src/kept.txt", "before");
+            Children.Keep_Before_Write ("src/kept.txt");
+            Put_File (Project & "/src/kept.txt", "after");
+            if Dirs.Exists (Project & "/.model_runner")
+              and then Ada.Strings.Fixed.Index (Project, "/workspaces/") = 0
+            then
+               declare
+                  Search : Dirs.Search_Type;
+                  Found  : Dirs.Directory_Entry_Type;
+                  Kept   : Boolean := False;
+               begin
+                  Dirs.Start_Search (Search, Project & "/.model_runner/runtime", "overwritten-*",
+                                     [Dirs.Directory => True, others => False]);
+                  while Dirs.More_Entries (Search) loop
+                     Dirs.Get_Next_Entry (Search, Found);
+                     Kept := Kept or else Dirs.Exists (Dirs.Full_Name (Found) & "/src/kept.txt");
+                  end loop;
+                  Dirs.End_Search (Search);
+                  Assert (Kept, "a file written in the project was not kept as it was before");
+               end;
+            end if;
+            Dirs.Delete_File (Project & "/src/kept.txt");
          when Fails_Twice =>
             Ask ("required", Child_Fails);
             Assert (Retry, "a required child that failed was not run again");

@@ -160,6 +160,63 @@ package body Model_Runner.CLI.Intents is
       end loop;
    end Move_Along;
 
+   --  An accepted entry that rules a setting over the configuration has
+   --  its way: the configuration made to say what it rules, and said so.
+   --  One that rules without saying it holds over the configuration is a
+   --  disagreement /check consistency names, not settled here.
+   procedure Apply_Rulings
+     (Store  : in out S.Store;
+      Kind   : Nt.Intent_Kind;
+      Id     : String;
+      Screen : in out Pres.Console)
+   is
+      package Cf renames Model_Runner.Framework.Configurations;
+      Rulings : Names.Vector := Nt.Also_Governs (Store, Kind, Id);
+      Config  : Model_Runner.Framework.Records.Item;
+      Read    : E.Error_Info;
+   begin
+      if Nt.State_Of (Store, Kind, Id) /= "accepted" then
+         return;
+      end if;
+      if Nt.Governs (Store, Kind, Id) /= "" then
+         Rulings.Prepend (Nt.Governs (Store, Kind, Id));
+      end if;
+      Cf.Read (Store, Config, Read);
+      for One of Rulings loop
+         declare
+            Equal : constant Natural := Ada.Strings.Fixed.Index (One, " = ");
+            Over  : constant Natural := Ada.Strings.Fixed.Index (One, " (over ");
+         begin
+            if Equal > One'First and then Over > Equal
+              and then Ada.Strings.Fixed.Index (One (Over .. One'Last), "CONFIG") > 0
+            then
+               declare
+                  Setting : constant String := One (One'First .. Equal - 1);
+                  Ruling  : constant String := One (Equal + 3 .. Over - 1);
+                  Changes : Cf.Value_Maps.Map;
+                  Planned : Cf.Change_Plan;
+                  Done    : E.Error_Info;
+                  Revision : Natural;
+               begin
+                  if E.Is_Ok (Read) and then Model_Runner.Framework.Records.Get (Config, Setting) /= Ruling then
+                     Changes.Include (Setting, Ruling);
+                     Cf.Plan_Change (Store, Changes, Planned, Done);
+                     if E.Is_Ok (Done) then
+                        Cf.Reconfigure (Store, Planned, Revision, Done);
+                     end if;
+                     if E.Is_Ok (Done) then
+                        Pres.Put_Message (Screen, "cli.intent.ruling_applied",
+                                          [Loc.Named ("name", Id), Loc.Named ("value", Setting & " = " & Ruling)]);
+                     else
+                        Pres.Report (Screen, Done);
+                     end if;
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+   end Apply_Rulings;
+
    --  The project's components, a comma apart.
    function Joined_Components (Store : Model_Runner.Framework.Stores.Store) return String is
       Text : Ada.Strings.Unbounded.Unbounded_String;
@@ -484,9 +541,16 @@ package body Model_Runner.CLI.Intents is
                   Status := E.Make (E.Framework_Input_Invalid);
                   E.Add_Text (Status, "name", "scope");
                   E.Add_Text (Status, "value", Scope);
+                  --  An entry's identifier is no component: what relates
+                  --  this one to it is a link.
                   E.Add_Text (Status, "detail", "a scope is project or one of the project's components ("
-                              & Joined_Components (Store) & "); /reconfigure map.component." & Scope
-                              & "=roots=DIR makes it one");
+                              & Joined_Components (Store) & ")"
+                              & (if Ada.Strings.Fixed.Index (Scope, "REQ-") = Scope'First
+                                   or else Ada.Strings.Fixed.Index (Scope, "SPEC-") = Scope'First
+                                   or else Ada.Strings.Fixed.Index (Scope, "DEC-") = Scope'First
+                                 then "; " & Scope & " is an entry, which " & Word_Of_Command (Kind)
+                                      & " link ID dependency " & Scope & " relates this one to, once made"
+                                 else "; /reconfigure map.component." & Scope & "=roots=DIR makes it one"));
                   Pres.Report (Screen, Status);
                   return;
                end if;
@@ -596,6 +660,7 @@ package body Model_Runner.CLI.Intents is
                Pres.Put_Message
                  (Screen, "cli.task.moved", [Loc.Named ("name", Word (2)),
                                              Loc.Named ("value", Model_Runner.Framework.State_Said (Next))]);
+               Apply_Rulings (Store, Kind, Word (2), Screen);
                Move_Along (Store, Screen);
 
                --  What it governed is governed no more: said, with what the
@@ -927,14 +992,47 @@ package body Model_Runner.CLI.Intents is
                declare
                   --  A path as the project names it: ./src/x and a whole
                   --  path into the project are src/x.
+                  Project : constant String := Ada.Directories.Containing_Directory (S.Root (Store));
+                  --  A symbol by the name the repository's graph gives it:
+                  --  checksum is parse.checksum where that is the one.
+                  Symbols : constant Names.Vector :=
+                    (if Found and then Relation in Nt.Implementation | Nt.Test
+                       and then Ada.Strings.Fixed.Index (From (4), "/") = 0
+                       and then not Ada.Directories.Exists (Hostkit.Fs.Join (Project, From (4)))
+                     then Model_Runner.Framework.Repository.Find_Symbols
+                            (Model_Runner.Framework.Repository.Now (Store), From (4))
+                     else Names.Empty_Vector);
                   Target : constant String :=
                     (if Found and then Relation in Nt.Implementation | Nt.Test
                        and then Ada.Strings.Fixed.Index (From (4), "/") > 0
-                     then Model_Runner.Framework.Repository.Relative_Path
-                            (Ada.Directories.Containing_Directory (S.Root (Store)), From (4))
+                     then Model_Runner.Framework.Repository.Relative_Path (Project, From (4))
+                     elsif Natural (Symbols.Length) = 1 then Symbols.First_Element
                      else From (4));
                begin
-                  if not Found then
+                  if Found and then Relation in Nt.Implementation | Nt.Test
+                    and then Ada.Strings.Fixed.Index (From (4), "/") = 0
+                    and then not Ada.Directories.Exists (Hostkit.Fs.Join (Project, From (4)))
+                    and then Natural (Symbols.Length) /= 1
+                  then
+                     --  None, or several: said, not linked to a name the
+                     --  graph does not know.
+                     declare
+                        Listed : Unbounded_String;
+                     begin
+                        for One of Symbols loop
+                           Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ") & One);
+                        end loop;
+                        Status := E.Make (E.Framework_Input_Invalid);
+                        E.Add_Text (Status, "name", "what implements it");
+                        E.Add_Text (Status, "value", From (4));
+                        E.Add_Text (Status, "detail",
+                                    (if Symbols.Is_Empty
+                                     then "it is no file here and nothing in the repository is called so;"
+                                          & " /sym NAME finds a symbol, and a file is named by its path"
+                                     else "several symbols are called so -- " & To_String (Listed)
+                                          & "; name one whole"));
+                     end;
+                  elsif not Found then
                      Status := E.Make (E.Framework_Input_Invalid);
                      E.Add_Text (Status, "name", "the kind of link");
                      E.Add_Text (Status, "value", Word (3));
@@ -1392,9 +1490,13 @@ package body Model_Runner.CLI.Intents is
                        Status);
             Settle (Store, Change, Status, Screen, "", Word (2));
             if E.Is_Ok (Status) then
-               Pres.Put_Message (Screen, "cli.intent.governs",
+               --  Only an accepted one governs; one waiting will once it is.
+               Pres.Put_Message (Screen, (if Nt.State_Of (Store, Kind, Word (2)) = "accepted"
+                                          then "cli.intent.governs" else "cli.intent.governs_later"),
                                  [Loc.Named ("name", Word (2)),
-                                  Loc.Named ("value", Nt.Governs (Store, Kind, Word (2)))]);
+                                  Loc.Named ("value", Nt.Governs (Store, Kind, Word (2))),
+                                  Loc.Named ("other", Word_Of_Command (Kind))]);
+               Apply_Rulings (Store, Kind, Word (2), Screen);
                --  What else it rules on stays: said, so nothing seems lost.
                for Other of Nt.Also_Governs (Store, Kind, Word (2)) loop
                   Pres.Put_Message (Screen, "cli.intent.governs_still",

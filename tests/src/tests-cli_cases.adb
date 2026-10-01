@@ -1812,7 +1812,7 @@ package body Tests.CLI_Cases is
               "a task named a component the project does not have");
       Assert (Command ("task|show|TASK-001") = 0
               and then Shows ("permissions: read_source; read_specs; run_build; run_tests;"
-                              & " propose_tasks")
+                              & " run_static_analysis; propose_tasks")
               and then Command ("task|show|TASK-002") = 0
               and then Shows ("implementation_present"),
               "a kind was not narrowed, or its gates not what the template says: " & Last_Output);
@@ -2199,7 +2199,7 @@ package body Tests.CLI_Cases is
       Run ("bootstrap");
       --  Its words changed, and nothing else like them: its new wording, the
       --  same requirement revised -- not a second one beside it.
-      Assert (Shows ("revised REQ-SPEC-001") and then Shows ("made: 0"),
+      Assert (Shows ("revised REQ-001") and then Shows ("made: 0"),
               "a sentence reworded was not taken as the requirement revised: " & To_String (Said));
       Write (Root & "/g/docs/spec.md",
              "# Shell" & LF & LF & "## REQ-SHELL-001 Quoting" & LF
@@ -2283,10 +2283,16 @@ package body Tests.CLI_Cases is
       Run ("reconfigure|profile.checks=check: true|confirm=yes");
       --  A requirement not verified says what it lacks.
       Run ("req|new|Shouts|text=It SHALL shout.");
-      Assert (Shows ("next: /req accept REQ-001"), "a new requirement gave no next step: " & To_String (Said));
-      Run ("req|accept|REQ-001");
-      Run ("req|show|REQ-001");
-      Assert (Shows ("not verified: "), "a requirement not verified did not say why: " & To_String (Said));
+      declare
+         Text  : constant String := To_String (Said);
+         Found : constant Natural := Ada.Strings.Fixed.Index (Text, "created REQ-");
+         Made  : constant String := (if Found = 0 then "REQ-?" else Text (Found + 8 .. Found + 14));
+      begin
+         Assert (Shows ("next: /req accept " & Made), "a new requirement gave no next step: " & Text);
+         Run ("req|accept|" & Made);
+         Run ("req|show|" & Made);
+         Assert (Shows ("not verified: "), "a requirement not verified did not say why: " & To_String (Said));
+      end;
       --  An answer's list written as a list is read as one.
       Write (Root & "/g/src/listed.txt", "before" & LF);
       Working := (Answer => To_Unbounded_String
@@ -2323,7 +2329,7 @@ package body Tests.CLI_Cases is
              & "Acceptance: a and A are equal" & LF & LF & "It SHOULD log every step." & LF);
       Run ("bootstrap");
       --  An edited line is the requirement it was, revised to its new words.
-      Assert (Shows ("revised REQ-SPEC-") and then Shows ("made: 0"),
+      Assert (Shows ("revised REQ-") and then Shows ("made: 0"),
               "an edited line was not taken as the requirement it was, revised: " & To_String (Said));
 
       --  12. A third round.

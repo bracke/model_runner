@@ -219,7 +219,7 @@ package body Model_Runner.Framework.Repository is
    -------------------
 
    function Default_Roots return Roots
-   is (Skip          => Split ("obj bin lib alire node_modules target build _build"),
+   is (Skip          => Split ("obj bin alire node_modules target build _build *.ali/ *.o/ *.a/ *.so/"),
        Tests         => Split ("test tests testsuite *_test."),
        Documentation => Split ("doc docs"),
        Generated     => Split ("generated *.pb.go *_pb2.py *.pb.h *.pb.cc"));
@@ -896,7 +896,91 @@ package body Model_Runner.Framework.Repository is
              Line => (if Index <= Count then Tokens (Index).Line else 1)));
       end if;
 
+      --  In a body, each subprogram the unit's outer level gives a body:
+      --  a place it is declared too, so /sym names the body beside the
+      --  spec. Nesting is followed by what opens and closes a body -- a
+      --  header ending in is, declare, and end other than end if, loop,
+      --  case, record, select or return.
       if Is_Body then
+         declare
+            Level : Natural := 0;
+            Where : Positive := Index;
+
+            --  Where a header from At_Token ends: its is, or its ;, at no
+            --  depth of brackets; 0 at neither.
+            function Header_End (At_Token : Positive) return Natural is
+               Brackets : Integer := 0;
+            begin
+               for Ahead in At_Token .. Count loop
+                  if Is_Mark (Tokens (Ahead), '(') then
+                     Brackets := Brackets + 1;
+                  elsif Is_Mark (Tokens (Ahead), ')') then
+                     Brackets := Brackets - 1;
+                  elsif Brackets = 0 and then (Is_Mark (Tokens (Ahead), ';') or else Is_Word (Tokens (Ahead), "is"))
+                  then
+                     return Ahead;
+                  end if;
+               end loop;
+               return 0;
+            end Header_End;
+         begin
+            while Where <= Count loop
+               declare
+                  Spelled : constant String :=
+                    (if Tokens (Where).Kind = Word then Lower (To_String (Tokens (Where).Text)) else "");
+               begin
+                  if Spelled in "procedure" | "function" | "package" | "task" | "protected" | "entry"
+                    and then not (Where > 1 and then Is_Word (Tokens (Where - 1), "access"))
+                  then
+                     declare
+                        Stop : constant Natural := Header_End (Where + 1);
+                        At_Name : Positive := Where + 1;
+                     begin
+                        if At_Name <= Count and then Is_Word (Tokens (At_Name), "body") then
+                           At_Name := At_Name + 1;
+                        end if;
+                        if Stop > 0 and then Is_Word (Tokens (Stop), "is")
+                          and then Stop < Count
+                          and then not Is_Word (Tokens (Stop + 1), "new")
+                          and then not Is_Word (Tokens (Stop + 1), "null")
+                          and then not Is_Word (Tokens (Stop + 1), "abstract")
+                          and then not Is_Word (Tokens (Stop + 1), "separate")
+                          and then not Is_Mark (Tokens (Stop + 1), '(')
+                        then
+                           if Level = 1 and then Spelled in "procedure" | "function"
+                             and then At_Name <= Count and then Tokens (At_Name).Kind = Word
+                           then
+                              Add_Symbol
+                                (Into,
+                                 (Name => To_Unbounded_String (Unit & "." & To_String (Tokens (At_Name).Text)),
+                                  Kind => To_Unbounded_String ("body"),
+                                  Path => To_Unbounded_String (Path),
+                                  Line => Tokens (At_Name).Line));
+                           end if;
+                           Level := Level + 1;
+                           Where := Stop;
+                        elsif Stop > 0 then
+                           Where := Stop;
+                        end if;
+                     end;
+                  elsif Spelled = "declare" then
+                     Level := Level + 1;
+                  elsif Spelled = "end" then
+                     if not (Where < Count
+                             and then (Is_Word (Tokens (Where + 1), "if") or else Is_Word (Tokens (Where + 1), "loop")
+                                       or else Is_Word (Tokens (Where + 1), "case")
+                                       or else Is_Word (Tokens (Where + 1), "record")
+                                       or else Is_Word (Tokens (Where + 1), "select")
+                                       or else Is_Word (Tokens (Where + 1), "return")))
+                       and then Level > 0
+                     then
+                        Level := Level - 1;
+                     end if;
+                  end if;
+               end;
+               Where := Where + 1;
+            end loop;
+         end;
          return;
       end if;
 
@@ -1536,6 +1620,10 @@ package body Model_Runner.Framework.Repository is
       return Result;
    end Refresh;
 
+   --  How source is read into the graph: a graph kept by another is read
+   --  again. 2: Ada bodies declare their subprograms too.
+   Reader_Version : constant String := "2";
+
    ------------
    -- Memory --
    ------------
@@ -1855,6 +1943,7 @@ package body Model_Runner.Framework.Repository is
          end;
       end loop;
       Records.Set (Value, "fingerprint", Graph_Fingerprint (Found));
+      Records.Set (Value, "reader", Reader_Version);
       for Index in 1 .. Natural (Found.Relations.Length) loop
          declare
             Link : Relation renames Found.Relations (Index);
@@ -1898,6 +1987,13 @@ package body Model_Runner.Framework.Repository is
       Found := (others => <>);
       Stores.Read (Item, Indexes_Area, Index_Name, Value, Status);
       if E.Is_Error (Status) then
+         return;
+      end if;
+      --  Kept by another way of reading the source: read again, as if
+      --  nothing were kept.
+      if Records.Get (Value, "reader") /= Reader_Version then
+         Status := E.Make (E.Framework_Not_Found);
+         E.Add_Text (Status, "name", "the repository's graph as this version reads it");
          return;
       end if;
 

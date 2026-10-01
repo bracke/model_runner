@@ -232,6 +232,14 @@ package Model_Runner.Presentation is
    --  @param Word The command, without its slash.
    procedure Use_Command (Item : in out Console; Word : String);
 
+   --  Hold next steps back, or let them through again: a command done for
+   --  several things at once says its next step once, at its end, not one
+   --  for each.
+   --
+   --  @param Item Console to change.
+   --  @param Held Whether notes that name a next step are left unsaid.
+   procedure Hold_Next_Steps (Item : in out Console; Held : Boolean);
+
    --  Whether next steps are said as a session types them.
    --
    --  @param Item Console to ask.
@@ -299,6 +307,23 @@ package Model_Runner.Presentation is
    --  @param Item Console to write through.
    --  @param Key Stable message identifier of the marker.
    procedure Put_Prompt (Item : in out Console; Key : String);
+
+   --  Clear a terminal's screen, its cursor at the top: nothing where
+   --  standard error is no terminal.
+   --
+   --  @param Item Console to clear.
+   procedure Clear_Screen (Item : in out Console);
+
+   --  Finish the prompt's line with what is shown as typed there: a line
+   --  read without its echo, shown as if it had been typed after it.
+   --
+   --  @param Item Console to write to.
+   --  @param Key The message.
+   --  @param Arguments Its values.
+   procedure Put_After_Prompt
+     (Item      : in out Console;
+      Key       : String;
+      Arguments : Model_Runner.Localization.Argument_List);
 
    --  The agent trace: the calls a run makes, their results, and how it ended,
    --  written to standard error as the loop unfolds. These read as a flow --
@@ -507,6 +532,7 @@ private
       Failure       : Natural := 0;
       Error_Count   : Natural := 0;
       Session       : Boolean := False;
+      Next_Held     : Boolean := False;
       Command       : Model_Runner.Text.Bounded;
    end record;
 

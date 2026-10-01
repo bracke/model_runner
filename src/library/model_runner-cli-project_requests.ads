@@ -1,4 +1,5 @@
 with Model_Runner.CLI.Options;
+with Model_Runner.Framework.Context;
 with Model_Runner.Text;
 
 --  What a session's project command asks for, read from the line typed:
@@ -24,6 +25,11 @@ package Model_Runner.CLI.Project_Requests is
 
       --  How much to say.
       Level : Model_Runner.CLI.Options.Verbosity := Model_Runner.CLI.Options.Normal;
+
+      --  The session's own model, where /work would run on it: what a
+      --  context is budgeted for, as /work budgets it.
+      Session_Profile     : Model_Runner.Framework.Context.Model_Profile;
+      Has_Session_Profile : Boolean := False;
    end record;
 
 end Model_Runner.CLI.Project_Requests;
