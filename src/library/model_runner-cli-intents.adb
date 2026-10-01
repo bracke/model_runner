@@ -594,7 +594,8 @@ package body Model_Runner.CLI.Intents is
                   return;
                end if;
                Pres.Put_Message
-                 (Screen, "cli.task.moved", [Loc.Named ("name", Word (2)), Loc.Named ("value", Next)]);
+                 (Screen, "cli.task.moved", [Loc.Named ("name", Word (2)),
+                                             Loc.Named ("value", Model_Runner.Framework.State_Said (Next))]);
                Move_Along (Store, Screen);
 
                --  What it governed is governed no more: said, with what the

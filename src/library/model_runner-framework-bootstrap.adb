@@ -529,7 +529,21 @@ package body Model_Runner.Framework.Bootstrap is
             declare
                Print : constant String := Fingerprint (Item);
             begin
-               if Seen.Contains (Print) then
+               --  A line that leads into a list is said again with another
+               --  list: not the same requirement twice, but one more.
+               if Seen.Contains (Print) and then Item (Item'Last) = ':' then
+                  declare
+                     Again : Natural := 2;
+                  begin
+                     while Seen.Contains (Print & "-" & Image (Again)) loop
+                        Again := Again + 1;
+                     end loop;
+                     Seen.Append (Print & "-" & Image (Again));
+                     Found (Requirement_Candidate, Path & "#" & Print & "-" & Image (Again),
+                            Headline (Item), Item);
+                     Lead := Length (Result);
+                  end;
+               elsif Seen.Contains (Print) then
                   Found (Issue, Path & "#twice-" & Print,
                          "stated twice: " & Headline (Item), Item);
                else

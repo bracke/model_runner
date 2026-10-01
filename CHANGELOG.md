@@ -1833,6 +1833,14 @@ Keep a Changelog and the project uses semantic versioning.
     why the last attempt did not end the task; the prompt describes only
     the tools an agent holds, and rules without their jargon.
   - `/result` names each issue's task and takes an identifier's start.
+  - The model's tool calls are shown once, as the harness's own line, not
+    also as the JSON it wrote; a rooted path where nothing on the host is
+    -- /src/c.txt, / -- is the project's, and write_file makes a new file's
+    directory. A delegate role is one the project names, never a tool.
+  - A state is said in words ("waiting in verification", "a candidate"); a
+    lead-in repeated with another list is a requirement of its own; /init
+    names a project from its alire.toml, Cargo.toml, pyproject.toml or
+    package.json; Esc gives up a typed answer as it does a list.
     `/init` shows its plan in the question and writes it out once, without
     the configuration hash; the generic template is "Any Language".
 - **Thirteenth usability round:**

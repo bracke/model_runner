@@ -887,7 +887,8 @@ package body Model_Runner.CLI.Tasks is
          --  further: accepted with its parts open, it waits for them.
          Pres.Put_Message
            (Screen, "cli.task.moved",
-            [Loc.Named ("name", Argument), Loc.Named ("value", Tk.State_Of (Store, Argument))]);
+            [Loc.Named ("name", Argument),
+             Loc.Named ("value", Model_Runner.Framework.State_Said (Tk.State_Of (Store, Argument)))]);
          if Next in "rejected" | "cancelled" then
             Say_Left_Waiting (Argument);
          elsif Next = "accepted" and then Tk.Ready (Store, Argument).Ready then
@@ -1042,7 +1043,8 @@ package body Model_Runner.CLI.Tasks is
             return;
          end if;
          Pres.Put_Message
-           (Screen, "cli.task.moved", [Loc.Named ("name", Argument), Loc.Named ("value", Next)]);
+           (Screen, "cli.task.moved", [Loc.Named ("name", Argument),
+                                       Loc.Named ("value", Model_Runner.Framework.State_Said (Next))]);
       end Move_Granted;
 
       --  One task waits for another: task depend TASK ON.
@@ -1455,7 +1457,7 @@ package body Model_Runner.CLI.Tasks is
          Pres.Put_Message
            (Screen, "cli.task.moved",
             [Loc.Named ("name", First_Word),
-             Loc.Named ("value", Tk.State_Of (Store, First_Word))]);
+             Loc.Named ("value", Model_Runner.Framework.State_Said (Tk.State_Of (Store, First_Word)))]);
          --  What comes next: a candidate parent is accepted with its parts,
          --  or it is left a candidate once they are done; accepted, the
          --  first part ready is worked.
@@ -2585,7 +2587,7 @@ package body Model_Runner.CLI.Tasks is
          Pres.Put_Message
            (Screen, "cli.task.moved",
             [Loc.Named ("name", First_Word),
-             Loc.Named ("value", To_String (Done.Final_State))]);
+             Loc.Named ("value", Model_Runner.Framework.State_Said (To_String (Done.Final_State)))]);
          if Done.Reason /= Null_Unbounded_String then
             Pres.Put_Message
               (Screen, "cli.task.field",
@@ -3023,7 +3025,8 @@ package body Model_Runner.CLI.Tasks is
             else
                Pres.Put_Message
                  (Screen, "cli.task.moved",
-                  [Loc.Named ("name", First_Word), Loc.Named ("value", After_First)]);
+                  [Loc.Named ("name", First_Word),
+                   Loc.Named ("value", Model_Runner.Framework.State_Said (After_First))]);
                Say_Left_Waiting (First_Word);
             end if;
          else
@@ -3093,7 +3096,7 @@ package body Model_Runner.CLI.Tasks is
                else
                   Pres.Put_Message
                     (Screen, "cli.task.moved",
-                     [Loc.Named ("name", First_Word), Loc.Named ("value", Next)]);
+                     [Loc.Named ("name", First_Word), Loc.Named ("value", Model_Runner.Framework.State_Said (Next))]);
                end if;
             end;
          end if;

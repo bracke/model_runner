@@ -146,10 +146,39 @@ package body Model_Runner.CLI.Project_Commands is
 
    --  What the agent does, shown as it does it and recorded on its
    --  invocation.
+   --  Generated text written as it comes, and between its pieces the work
+   --  asked after: ended elsewhere -- cancelled from another terminal --
+   --  the turn stops there, not at its next call.
+   type Watching_Sink is limited new Pres.Standard_Output_Sink with record
+      Stop : Model_Runner.Cancellation.Token_Reference := null;
+
+      --  A line that may open a call -- {, ``` or <tool_call> -- held back
+      --  from where it starts: dropped when the call is made, as the call
+      --  is shown in its own line; written out when it was only text.
+      Held          : Unbounded_String;
+      Holding       : Boolean := False;
+      At_Line_Start : Boolean := True;
+   end record;
+
+   --  What was held back was a call: not written.
+   procedure Drop_Held (Self : in out Watching_Sink'Class);
+
+   --  What was held back was text: written now.
+   procedure Release_Held (Self : in out Watching_Sink'Class);
+
+   overriding procedure Write
+     (Self   : in out Watching_Sink;
+      Item   : String;
+      Closed : out Boolean);
+
    type Watch
      (Screen : not null access Pres.Console;
       Host   : Host_Access)
    is limited new Model_Runner.Agent.Observer with record
+      --  Where the reply is written: told of each call, so the call's own
+      --  text is not shown beside it.
+      Output : access Watching_Sink := null;
+
       --  The arguments of the calls asked for and not yet answered, oldest
       --  first: a reply may ask for several before any is answered.
       Asked : Names.Vector;
@@ -197,6 +226,9 @@ package body Model_Runner.CLI.Project_Commands is
          Self.Stop.Request;
       end if;
       Self.Asked.Append (Arguments);
+      if Self.Output /= null then
+         Drop_Held (Self.Output.all);
+      end if;
       Pres.Put_Tool_Call (Self.Screen.all, Whose (Self) & Named, Arguments);
    end On_Call;
 
@@ -237,12 +269,11 @@ package body Model_Runner.CLI.Project_Commands is
    --  The roles the project gives permissions to -- map.permission.role.R
    --  -- as the helper's role is offered: one of them, or anything, where
    --  the project names none.
-   function Role_Property return String is
+   function Configured_Roles return Names.Vector is
       Store  : S.Store;
       Status : E.Error_Info;
       Config : R.Item;
       Roles  : Names.Vector;
-      Listed : Unbounded_String;
    begin
       if S.Is_Initialized (".") then
          S.Open_To_Read (Store, ".", Status);
@@ -264,12 +295,20 @@ package body Model_Runner.CLI.Project_Commands is
             begin
                if Role /= "" and then not Roles.Contains (Role) then
                   Roles.Append (Role);
-                  Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ")
-                                  & '"' & Role & '"');
                end if;
             end;
          end loop;
       end if;
+      return Roles;
+   end Configured_Roles;
+
+   function Role_Property return String is
+      Roles  : constant Names.Vector := Configured_Roles;
+      Listed : Unbounded_String;
+   begin
+      for Role of Roles loop
+         Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ") & '"' & Role & '"');
+      end loop;
       return (if Roles.Is_Empty then """role"": {""type"": ""string""}, "
               else """role"": {""type"": ""string"", ""enum"": [" & To_String (Listed) & "]}, ");
    end Role_Property;
@@ -334,30 +373,59 @@ package body Model_Runner.CLI.Project_Commands is
       Last      : out Natural;
       Status    : out Model_Runner.Errors.Error_Info);
 
-   --  Generated text written as it comes, and between its pieces the work
-   --  asked after: ended elsewhere -- cancelled from another terminal --
-   --  the turn stops there, not at its next call.
-   type Watching_Sink is limited new Pres.Standard_Output_Sink with record
-      Stop : Model_Runner.Cancellation.Token_Reference := null;
-   end record;
-
-   overriding procedure Write
-     (Self   : in out Watching_Sink;
-      Item   : String;
-      Closed : out Boolean);
-
    overriding procedure Write
      (Self   : in out Watching_Sink;
       Item   : String;
       Closed : out Boolean)
    is
       use type Model_Runner.Cancellation.Token_Reference;
+      From : constant Positive := Item'First;
    begin
-      Pres.Standard_Output_Sink (Self).Write (Item, Closed);
+      Closed := False;
+      if Self.Holding then
+         Append (Self.Held, Item);
+      else
+         for Index in Item'Range loop
+            if Self.At_Line_Start and then Item (Index) in '{' | '`' | '<' then
+               if Index > From then
+                  Pres.Standard_Output_Sink (Self).Write (Item (From .. Index - 1), Closed);
+               end if;
+               Self.Holding := True;
+               Self.Held := To_Unbounded_String (Item (Index .. Item'Last));
+               exit;
+            end if;
+            Self.At_Line_Start :=
+              Item (Index) = ASCII.LF or else (Self.At_Line_Start and then Item (Index) in ' ' | ASCII.HT);
+         end loop;
+         if not Self.Holding and then From <= Item'Last then
+            Pres.Standard_Output_Sink (Self).Write (Item (From .. Item'Last), Closed);
+         end if;
+      end if;
       if Self.Stop /= null and then Model_Runner.Framework.Execution.Work_Withdrawn then
          Self.Stop.Request;
       end if;
    end Write;
+
+   procedure Drop_Held (Self : in out Watching_Sink'Class) is
+   begin
+      Self.Held := Null_Unbounded_String;
+      Self.Holding := False;
+      Self.At_Line_Start := True;
+   end Drop_Held;
+
+   procedure Release_Held (Self : in out Watching_Sink'Class) is
+      Closed : Boolean;
+   begin
+      if Self.Holding and then Self.Held /= Null_Unbounded_String then
+         --  Ended on its own line, as a reply streamed whole would be
+         --  before what the harness says next.
+         Pres.Standard_Output_Sink (Self).Write
+           (To_String (Self.Held)
+            & (if Element (Self.Held, Length (Self.Held)) = ASCII.LF then "" else [1 => ASCII.LF]),
+            Closed);
+      end if;
+      Drop_Held (Self);
+   end Release_Held;
 
    --  One agent's loop, on the session: the root working on its task, or a
    --  child on what it was asked. A root that answers without calling a tool
@@ -400,6 +468,7 @@ package body Model_Runner.CLI.Project_Commands is
       Prompt_Tokens := 0;
       Watcher.Stop := Self.Cancel;
       Sink.Stop := Self.Cancel;
+      Watcher.Output := Sink'Unchecked_Access;
 
       Conv.Open (Messages, Status => Status);
       if E.Is_Ok (Status) then
@@ -445,6 +514,8 @@ package body Model_Runner.CLI.Project_Commands is
             Approve     => Guard'Unchecked_Access,
             Watch       => Watcher'Unchecked_Access,
             Result      => Outcome);
+         --  Held back and never a call: the reply's own text, written.
+         Release_Held (Sink);
          Calls := Calls + Outcome.Calls;
          Tokens := Tokens + Outcome.Generated_Tokens;
          Prompt_Tokens := Natural'Max (Prompt_Tokens, Outcome.Prompt_Tokens);
@@ -540,6 +611,19 @@ package body Model_Runner.CLI.Project_Commands is
    begin
       if not Found or else Brief = "" then
          return "error: delegate needs a task string";
+      --  A role is one the project names, where it names any; a tool's
+      --  name is never one.
+      elsif Role in "read_file" | "write_file" | "list_directory" | "run_checks" | "delegate" then
+         return "error: " & Role & " is a tool, not a role: a role says what the helper is for, as reviewer";
+      elsif Role /= "" and then not Configured_Roles.Is_Empty and then not Configured_Roles.Contains (Role) then
+         declare
+            Listed : Unbounded_String;
+         begin
+            for One of Configured_Roles loop
+               Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ") & One);
+            end loop;
+            return "error: " & Role & " is no role here; the roles are " & To_String (Listed);
+         end;
       elsif Self.Host = null then
          return "error: no helper can be made here; do the work with the other tools";
       end if;
@@ -645,7 +729,10 @@ package body Model_Runner.CLI.Project_Commands is
       function Inside return String is
          Bare : Natural := Path'First;
       begin
-         if Path'Length < 2 or else Path (Path'First) /= '/' or else Within_Project (Path) then
+         --  / alone, where the host's root is never the project: its top.
+         if Path = "/" then
+            return ".";
+         elsif Path'Length < 2 or else Path (Path'First) /= '/' or else Within_Project (Path) then
             return "";
          end if;
          while Bare <= Path'Last and then Path (Bare) = '/' loop
@@ -653,15 +740,11 @@ package body Model_Runner.CLI.Project_Commands is
          end loop;
          declare
             Tail : constant String := Path (Bare .. Path'Last);
-            Slash : constant Natural := Ada.Strings.Fixed.Index (Tail, "/", Ada.Strings.Backward);
-            --  A file to be written is new: its directory is what must be
-            --  the project's, and nothing at the rooted path itself.
-            Place : constant String := (if Slash = 0 then "." else Tail (Tail'First .. Slash - 1));
          begin
+            --  Rooted where nothing on the host is: meant from the
+            --  project's top, as the model was told paths are.
             return (if Tail /= "" and then Within_Project (Tail)
-                      and then (Ada.Directories.Exists (Tail)
-                                or else (Named = "write_file" and then not Ada.Directories.Exists (Path)
-                                         and then Ada.Directories.Exists (Place)))
+                      and then (Ada.Directories.Exists (Tail) or else not Ada.Directories.Exists (Path))
                     then Tail else "");
          exception
             when others =>

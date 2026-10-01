@@ -1,4 +1,5 @@
 with Ada.Characters.Handling;
+with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 with Ada.Directories;
 
@@ -146,6 +147,67 @@ package body Model_Runner.Framework.Configurations is
    --------------
    -- Resolved --
    --------------
+
+   --  What a project is called where nothing is given: the name its own
+   --  manifest gives it -- alire.toml, Cargo.toml, pyproject.toml,
+   --  package.json -- and else its directory's.
+   function Project_Named (Project_Directory : String) return String is
+      Full : constant String := Ada.Directories.Full_Name (Project_Directory);
+
+      --  The first name = "x" (or "name": "x") line of a manifest.
+      function Named_In (File_Name : String) return String is
+         use Ada.Streams.Stream_IO;
+         Path : constant String := Hostkit.Fs.Join (Full, File_Name);
+         File : File_Type;
+      begin
+         if not Ada.Directories.Exists (Path) then
+            return "";
+         end if;
+         Open (File, In_File, Path);
+         declare
+            Text : String (1 .. Natural'Min (Natural (Size (File)), 65_536));
+         begin
+            String'Read (Stream (File), Text);
+            Close (File);
+            for Raw of Lines_Of (Text) loop
+               declare
+                  Line  : constant String := Ada.Strings.Fixed.Trim (Raw, Ada.Strings.Both);
+                  Key   : constant String := (if File_Name = "package.json" then """name""" else "name");
+                  First : constant Natural :=
+                    (if Line'Length > Key'Length then Ada.Strings.Fixed.Index (Line, """", Line'First + Key'Length)
+                     else 0);
+               begin
+                  if Line'Length > Key'Length + 3 and then Line (Line'First .. Line'First + Key'Length - 1) = Key
+                    and then Line (Line'First + Key'Length) in ' ' | '=' | ':'
+                    and then First > 0
+                  then
+                     declare
+                        Last : constant Natural := Ada.Strings.Fixed.Index (Line (First + 1 .. Line'Last), """");
+                     begin
+                        if Last > First + 1 then
+                           return Line (First + 1 .. Last - 1);
+                        end if;
+                     end;
+                  end if;
+               end;
+            end loop;
+         end;
+         return "";
+      exception
+         when others =>
+            if Is_Open (File) then
+               Close (File);
+            end if;
+            return "";
+      end Named_In;
+   begin
+      for Manifest of Name_Lists.Vector'(["alire.toml", "Cargo.toml", "pyproject.toml", "package.json"]) loop
+         if Named_In (Manifest) /= "" then
+            return Named_In (Manifest);
+         end if;
+      end loop;
+      return Ada.Directories.Simple_Name (Full);
+   end Project_Named;
 
    function Resolved
      (Declared          : Templates.Input_Declaration;
@@ -370,11 +432,7 @@ package body Model_Runner.Framework.Configurations is
    is
       Root_Template : constant Templates.Template := Templates.Root (Composed);
 
-      Directory_Name : constant String :=
-        (declare
-           Full : constant String := Ada.Directories.Full_Name (Project_Directory);
-         begin
-           Ada.Directories.Simple_Name (Full));
+      Directory_Name : constant String := Project_Named (Project_Directory);
 
       --  What ${name} may name: the inputs resolved so far, and the
       --  directory's name.

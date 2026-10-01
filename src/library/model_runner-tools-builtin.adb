@@ -1109,6 +1109,18 @@ package body Model_Runner.Tools.Builtin is
       if not (Have_P and then Have_C) then
          return "error: write_file needs a path and content";
       end if;
+      --  A new file's directory made with it: a file under src/ is asked
+      --  for whether or not src/ is there yet.
+      declare
+         Folder : constant String := Ada.Directories.Containing_Directory (Path);
+      begin
+         if Folder /= "" and then not Ada.Directories.Exists (Folder) then
+            Ada.Directories.Create_Path (Folder);
+         end if;
+      exception
+         when others =>
+            null;
+      end;
       --  Written as bytes, the way the file is read back: a text file
       --  would end the content with a line break the model never wrote.
       Stream_IO.Create (File, Stream_IO.Out_File, Path);
