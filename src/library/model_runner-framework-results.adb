@@ -10,6 +10,20 @@ with Model_Runner.Framework.Schemas;
 
 package body Model_Runner.Framework.Results is
 
+   --  When a result is made, to the hundredth of a second and then in the
+   --  order made: results made in one second are listed in the order they
+   --  were made, not by their names.
+   Made_Count : Natural := 0;
+
+   function Made_At return String is
+      Text : String := Ada.Calendar.Formatting.Image (Ada.Calendar.Clock, Include_Time_Fraction => True);
+      Count : constant String := Natural'Image (10_000 + Made_Count mod 10_000);
+   begin
+      Made_Count := Made_Count + 1;
+      Text (Text'First + 10) := 'T';
+      return Text & Count (Count'Last - 3 .. Count'Last) & "Z";
+   end Made_At;
+
    use Ada.Strings.Unbounded;
 
    package E renames Model_Runner.Errors;
@@ -141,7 +155,7 @@ package body Model_Runner.Framework.Results is
       end if;
 
       declare
-         Stamp  : constant String := Timestamp;
+         Stamp  : constant String := Made_At;
          Stored : Records.Item :=
            Records.Create (Schemas.Result_Schema, 1, Id, 1);
       begin

@@ -96,9 +96,17 @@ package body Model_Runner.Framework.Authority is
       Held : Records.Item;
    begin
       Stores.Read (Item, Project_Area, Instruction_Prefix & Id, Held, Status);
-      if E.Is_Error (Status) or else Records.Get (Held, "state") /= "standing" then
+      if E.Is_Error (Status) then
          Status := E.Make (E.Framework_Not_Found);
          E.Add_Text (Status, "name", Id);
+         return;
+      elsif Records.Get (Held, "state") /= "standing" then
+         --  Withdrawn already: said as what it is, not as nothing there.
+         Status := E.Make (E.Framework_Transition_Invalid);
+         E.Add_Text (Status, "name", Id);
+         E.Add_Text (Status, "value", Records.Get (Held, "state"));
+         E.Add_Text (Status, "expected", "withdrawn");
+         E.Add_Text (Status, "detail", "it is " & Records.Get (Held, "state") & " already; nothing to do");
          return;
       end if;
       Records.Set_Revision (Held, Records.Revision (Held) + 1);

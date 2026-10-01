@@ -880,6 +880,12 @@ package body Model_Runner.Tools.Builtin is
          return Result;
       end As_String;
    begin
+      --  A directory is listed, not read: said so, with the call that does.
+      if Ada.Directories.Exists (Path)
+        and then Ada.Directories."=" (Ada.Directories.Kind (Path), Ada.Directories.Directory)
+      then
+         return "error: " & Path & " is a directory: list_directory " & Path & " lists it";
+      end if;
       Open (File, In_File, Path);
       declare
          Total : constant Natural := Natural (Size (File));

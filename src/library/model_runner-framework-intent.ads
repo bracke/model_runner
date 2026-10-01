@@ -251,6 +251,23 @@ package Model_Runner.Framework.Intent is
       Result   : out Impact;
       Status   : out Model_Runner.Errors.Error_Info);
 
+   --  Place an entity in another scope -- the project, or a component --
+   --  as its next revision.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Kind Which register.
+   --  @param Id Its identifier.
+   --  @param Scope project, or a component's name.
+   --  @param Status Framework_Transition_Invalid for one retired.
+   procedure Rescope
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Kind   : Intent_Kind;
+      Id     : String;
+      Scope  : String;
+      Status : out Model_Runner.Errors.Error_Info);
+
    --  Take a link off an entity, as its next revision.
    --
    --  @param Item The store.

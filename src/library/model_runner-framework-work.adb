@@ -1090,7 +1090,9 @@ package body Model_Runner.Framework.Work is
       if Hosted and then Offers_Checks (Item, Held.Allowed, Task_Id, Apart) then
          Append (Said, ", run_checks");
       end if;
-      if Permissions.Allows (Held.Allowed, Permissions.Write_Source) then
+      if Permissions.Allows (Held.Allowed, Permissions.Write_Source)
+        or else Permissions.Allows (Held.Allowed, Permissions.Write_Specs)
+      then
          Append (Said, ", write_file");
       end if;
       if Hosted and then Permissions.Allows (Held.Allowed, Permissions.Create_Children)
@@ -1659,7 +1661,9 @@ package body Model_Runner.Framework.Work is
                                                 then Home else Home & "/") & "x"));
          Lacks   : constant String :=
            (if Permissions.Image (Allowed) = "" then "anything"
-            elsif Writes and then not Permissions.Allows (Allowed, Permissions.Write_Source) then "write a file"
+            elsif Writes and then not Permissions.Allows (Allowed, Permissions.Write_Source)
+              and then not Permissions.Allows (Allowed, Permissions.Write_Specs)
+            then "write a file"
             elsif not Permissions.Allows (Allowed, Permissions.Read_Source) then "read the source"
             elsif Elsewhere then "write where its component's files are"
             else "");
@@ -2774,7 +2778,12 @@ package body Model_Runner.Framework.Work is
       declare
          Now : constant Tasks.Readiness := Tasks.Ready (Item, Task_Id);
       begin
-         if not Now.Ready then
+         --  Its permissions leaving its agent unable are not a reason not to
+         --  start here: what it is refused is found as it works, and said.
+         if not Now.Ready
+           and then not (Natural (Now.Reasons.Length) = 1
+                         and then Now.Reasons.First_Element = Unable_Reason (Item, Task_Id))
+         then
             Status := E.Make (E.Framework_Task_Not_Ready);
             E.Add_Text (Status, "name", Task_Id);
             E.Add_Text
@@ -4254,7 +4263,8 @@ package body Model_Runner.Framework.Work is
       Result  : out Report;
       Status  : out Model_Runner.Errors.Error_Info;
       Semantic_Accepted : Boolean := False;
-      Text_Resolved     : Boolean := False)
+      Text_Resolved     : Boolean := False;
+      Replaced_Kept     : String := "")
    is
       Change : Stores.Transaction;
       Id     : constant String := Workspaces.Active_For (Item, Task_Id);
@@ -4283,8 +4293,13 @@ package body Model_Runner.Framework.Work is
                (if Id /= "" then "only work that waits to be taken in is taken in"
                 elsif Had = Null_Unbounded_String
                   and then Tasks.State_Of (Item, Task_Id) in "candidate" | "accepted" | "ready"
+                  and then Records.Get (State_Value, "generation") in "" | "0"
                 then "it has not been worked on yet, so nothing of it waits to be taken in; /work " & Task_Id
                      & " does it"
+                elsif Had = Null_Unbounded_String
+                  and then Tasks.State_Of (Item, Task_Id) in "candidate" | "accepted" | "ready"
+                then "no work of it waits to be taken in: what its last attempt wrote is in the project"
+                     & " itself; /work " & Task_Id & " does it again"
                 elsif Had = Null_Unbounded_String
                 then "it has no workspace -- it wrote in the project itself -- so there is nothing"
                      & " to take in"
@@ -4431,7 +4446,10 @@ package body Model_Runner.Framework.Work is
       --  How a conflict was got past, in the task's history.
       if Text_Resolved or else Semantic_Accepted then
          Annotate (Item, Change, Task_Id, "resolution",
-                   (if Text_Resolved and then Semantic_Accepted then "settled by hand and taken in anyway"
+                   (if Replaced_Kept /= ""
+                    then "the workspace's copy replaced the project's (resolved anyway); the project's"
+                         & " copy is kept in " & Replaced_Kept
+                    elsif Text_Resolved and then Semantic_Accepted then "settled by hand and taken in anyway"
                     elsif Text_Resolved then "settled by hand in " & Id
                     else "taken in anyway, past what the code joins"));
       end if;

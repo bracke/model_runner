@@ -107,6 +107,9 @@ package body Model_Runner.CLI.Work is
       --  The context the harness budgets its prompt for, which the model
       --  is run with, so that the two are one; zero leaves it to run.
       Context : Natural := 0;
+
+      --  Where its calls are shown once it ends: it runs apart, quietly.
+      Screen  : access Model_Runner.Presentation.Console := null;
    end record;
 
    overriding procedure Run
@@ -137,7 +140,14 @@ package body Model_Runner.CLI.Work is
       pragma Unreferenced (Item);
       Named : constant String := To_String (Self.Model);
    begin
-      if not Ada.Directories.Exists (Model_Runner.Platform.Resolve_Model_Path (Named)) then
+      --  The program it runs as is this one, started again: gone from where
+      --  it was -- replaced and not yet put back -- it cannot be.
+      if Hostkit.Fs.Own_Executable = "" or else not Ada.Directories.Exists (Hostkit.Fs.Own_Executable) then
+         Status := E.Make (E.Framework_Agent_Failed);
+         E.Add_Text (Status, "name", "the agent");
+         E.Add_Text (Status, "detail", "the model_runner program this session runs was replaced or removed;"
+                     & " start the session again");
+      elsif not Ada.Directories.Exists (Model_Runner.Platform.Resolve_Model_Path (Named)) then
          Status := E.Make (E.Framework_Input_Invalid);
          E.Add_Text (Status, "name", "model");
          E.Add_Text (Status, "value", Named);
@@ -263,6 +273,7 @@ package body Model_Runner.CLI.Work is
                                 & "output_tokens " & Count_Of ("generated_tokens") & ASCII.LF);
          Mark  : constant String := "{" & '"' & "t_ms" & '"' & ":";
          Call  : constant String := '"' & "event" & '"' & ":" & '"' & "call" & '"';
+         Given_Back : constant String := '"' & "event" & '"' & ":" & '"' & "result" & '"';
          From  : Natural := Trace'First;
       begin
          if Trace /= "" then
@@ -280,6 +291,18 @@ package body Model_Runner.CLI.Work is
                        Trace (Start .. (if Next = 0 then Trace'Last else Next - 2));
                      Have : Boolean;
                   begin
+                     --  Each call and what it gave back, shown as a run in the
+                     --  session shows them.
+                     if Self.Screen /= null and then Ada.Strings.Fixed.Index (One, Call) > 0 then
+                        Pres.Put_Tool_Call
+                          (Self.Screen.all, Model_Runner.Tools.Builtin.Text_Argument (One, "name", Have),
+                           Model_Runner.Tools.Builtin.Text_Argument (One, "arguments", Have));
+                     elsif Self.Screen /= null and then Ada.Strings.Fixed.Index (One, Given_Back) > 0 then
+                        Pres.Put_Tool_Result
+                          (Self.Screen.all,
+                           Model_Runner.Tools.Builtin.Text_Argument (One, "name", Have) & ": "
+                           & Model_Runner.Tools.Builtin.Text_Argument (One, "result", Have));
+                     end if;
                      if Ada.Strings.Fixed.Index (One, Call) > 0 then
                         Append (Usage, "call "
                                 & Model_Runner.Tools.Builtin.Text_Argument (One, "name", Have)
@@ -454,6 +477,11 @@ package body Model_Runner.CLI.Work is
          Tk.Definition (Store, Id, Defined, Read);
          if State = "candidate" then
             return Pres.Next_Step_Value (Screen, "cli.next.accept_task", [Loc.Named ("name", Id)]);
+         --  Ended: what takes it up again.
+         elsif State in "complete" | "cancelled" then
+            return Pres.Next_Step_Value (Screen, "cli.next.reopen", [Loc.Named ("name", Id)]);
+         elsif State = "rejected" then
+            return Pres.Next_Step_Value (Screen, "cli.next.reconsider", [Loc.Named ("name", Id)]);
          elsif State = "verification"
            and then Model_Runner.Framework.Workspaces.Active_For (Store, Id) /= ""
          then
@@ -843,7 +871,11 @@ package body Model_Runner.CLI.Work is
       loop
          --  One that cannot be worked is said so before any agent is looked
          --  for: what it waits for comes first.
-         if not Tk.Ready (Store, To_String (Chosen)).Ready then
+         --  Its permissions leaving its agent unable are said below, with
+         --  the setting that grants the rest.
+         if not Tk.Ready (Store, To_String (Chosen)).Ready
+           and then W.Unable_Reason (Store, To_String (Chosen)) = ""
+         then
             Outcome := E.Make (E.Framework_Task_Not_Ready);
             E.Add_Text (Outcome, "name", To_String (Chosen));
             E.Add_Text (Outcome, "detail",
@@ -900,6 +932,22 @@ package body Model_Runner.CLI.Work is
                end;
             end Time_Source;
          begin
+            --  A model named that cannot be run is said before anything is
+            --  announced for it.
+            if Path /= "" then
+               declare
+                  Probe : constant Model_Agent :=
+                    (Model => To_Unbounded_String (Path), others => <>);
+                  Got   : E.Error_Info := E.Success;
+               begin
+                  Probe.Check_Start (Store, Got);
+                  if E.Is_Error (Got) then
+                     Fail (Got);
+                     S.Close (Store);
+                     return;
+                  end if;
+               end;
+            end if;
             --  Which agent does the work, said before it starts: the one the
             --  project configures, wherever the work is started from.
             --  Said only for a task that can start: one that cannot is
@@ -914,7 +962,8 @@ package body Model_Runner.CLI.Work is
                --  And how long it has, which is how a hung one ends.
                Pres.Put_Note
                  (Screen, "cli.work.time_allowed",
-                  [Loc.Named ("count", T.Image (Long_Long_Integer (Agent_Seconds))),
+                  [Loc.Named ("value", T.Image (Long_Long_Integer (Agent_Seconds))
+                                       & (if Agent_Seconds = 1 then " second" else " seconds")),
                    Loc.Named ("name", Time_Source)]);
                --  Confined below the project's permissions: said before it
                --  starts, not first at what it refuses.
@@ -952,7 +1001,8 @@ package body Model_Runner.CLI.Work is
                                Steps   => To_Unbounded_String (Setting ("steps", "")),
                                Timeout => Positive'Max
                                             (60, W.Time_Allowed (Store, To_String (Chosen))),
-                               Context => Model.Context_Limit),
+                               Context => Model.Context_Limit,
+                               Screen  => Screen'Unchecked_Access),
                   Model, Done, Outcome, Starting => Announce'Access);
             else
                Outcome := E.Make (E.Framework_Input_Missing);
@@ -1055,7 +1105,12 @@ package body Model_Runner.CLI.Work is
          for Other of Done.Waits_For loop
             Say ("cli.work.waits_for", Other, To_String (Done.Task_Id));
          end loop;
-         if Done.Claimed /= Null_Unbounded_String then
+         --  Its own word, unless the reason the task ends on says it
+         --  already: not the same failure twice.
+         if Done.Claimed /= Null_Unbounded_String
+           and then not (Done.Summary /= Null_Unbounded_String
+                         and then Ada.Strings.Fixed.Index (To_String (Done.Reason), To_String (Done.Summary)) > 0)
+         then
             Say ("cli.work.claimed", To_String (Done.Claimed),
                  (if Done.Summary = Null_Unbounded_String then "(it gave no summary)"
                   else To_String (Done.Summary)));
@@ -1270,13 +1325,39 @@ package body Model_Runner.CLI.Work is
          then
             --  It went round a refusal until it stopped: trying again meets
             --  the same one, so what refused it is the step before.
-            if Ada.Strings.Fixed.Index (To_String (Done.Reason), "sandbox") > 0 then
-               Pres.Put_Note (Screen, "cli.next.sandbox_refused",
-                              [Loc.Named ("name", To_String (Done.Task_Id))]);
-            else
-               Pres.Put_Note (Screen, "cli.next.refused_first",
-                              [Loc.Named ("name", To_String (Done.Task_Id))]);
-            end if;
+            declare
+               Defined : R.Item;
+               Read    : E.Error_Info;
+               Kind    : Unbounded_String;
+               Kind_Set : Boolean := False;
+            begin
+               Tk.Definition (Store, To_String (Done.Task_Id), Defined, Read);
+               Kind := To_Unbounded_String (R.Get (Defined, "kind"));
+               for Index in 1 .. R.Field_Count (Config) loop
+                  Kind_Set := Kind_Set
+                    or else Ada.Strings.Fixed.Index
+                              (R.Field_Name (Config, Index), "map.permission.kind." & To_String (Kind) & ".") = 1;
+               end loop;
+               --  Which refused it decides the way on: a path outside the
+               --  project no grant reaches; a narrowing is undone where it is.
+               if Ada.Strings.Fixed.Index (To_String (Done.Reason), "outside the project") > 0 then
+                  Pres.Put_Note (Screen, "cli.next.refused_outside",
+                                 [Loc.Named ("name", To_String (Done.Task_Id))]);
+               elsif Ada.Strings.Fixed.Index (To_String (Done.Reason), "sandbox") > 0 then
+                  Pres.Put_Note (Screen, "cli.next.sandbox_refused",
+                                 [Loc.Named ("name", To_String (Done.Task_Id))]);
+               elsif R.Get (Defined, "permissions") /= "" then
+                  Pres.Put_Note (Screen, "cli.next.own_permissions_refused",
+                                 [Loc.Named ("name", To_String (Done.Task_Id))]);
+               elsif Kind_Set then
+                  Pres.Put_Note (Screen, "cli.next.kind_refused",
+                                 [Loc.Named ("name", To_String (Done.Task_Id)),
+                                  Loc.Named ("value", To_String (Kind))]);
+               else
+                  Pres.Put_Note (Screen, "cli.next.refused_first",
+                                 [Loc.Named ("name", To_String (Done.Task_Id))]);
+               end if;
+            end;
          elsif To_String (Done.Final_State) in "failed" | "blocked"
            and then not (for some Line of Done.Kept_Back =>
                            Ada.Strings.Fixed.Index (Line, "children") > 0

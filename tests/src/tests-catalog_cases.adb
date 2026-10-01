@@ -528,7 +528,7 @@ package body Tests.Catalog_Cases is
    procedure Pseudo_Locale (T2 : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T2);
 
-      Room  : constant := 1024;
+      Room  : constant := 2048;
       Width : constant := 96;
 
       type Key_Text is record

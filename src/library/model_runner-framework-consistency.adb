@@ -177,7 +177,7 @@ package body Model_Runner.Framework.Consistency is
       for Id of Tasks.List (Item, "blocked") loop
          for Child of Tasks.Children (Item, Id) loop
             if Tasks.State_Of (Item, Child) in "failed" | "cancelled" | "rejected" then
-               Found (Ready_With_Open_Dependency, Id,
+               Found (Waits_On_Ended_Part, Id,
                       "it waits for its parts, and " & Child & " is " & Tasks.State_Of (Item, Child)
                       & ": /task accept " & Child & " does it again, or /task accept " & Id
                       & " takes the whole up again");
@@ -436,8 +436,8 @@ package body Model_Runner.Framework.Consistency is
                                           & Linked.First_Element & " places it there"
                                      else ", which is none of the project's components: /req unlink "
                                           & Requirement & " component " & Linked.First_Element
-                                          & ", or /reconfigure map.component." & Linked.First_Element
-                                          & "=roots=DIR makes it one"));
+                                          & ", or /reconfigure set.components+=" & Linked.First_Element
+                                          & " makes it one"));
                         end if;
                      end;
                   end loop;
@@ -485,7 +485,7 @@ package body Model_Runner.Framework.Consistency is
             end;
             for Target of Intent.Links (Item, Intent.Requirement, Id, Intent.Verification) loop
                if not Stores.Exists (Item, Verification_Area, Target) then
-                  Found (Missing_Symbol, Id,
+                  Found (Missing_Evidence, Id,
                          "it is linked to evidence " & Target & ", which is not kept; /req unlink " & Id
                          & " verification " & Target & " takes it off");
                end if;
@@ -601,7 +601,8 @@ package body Model_Runner.Framework.Consistency is
                          else Repository.Find_Symbols (Graph, Target).Is_Empty
                               and then not Holds_File (Target))
                      then
-                        Found (Missing_Symbol, Id,
+                        Found ((if Ada.Strings.Fixed.Index (Target, "/") > 0 then Missing_File
+                                else Missing_Symbol), Id,
                                (if Intent."=" (Relation, Intent.Test) then "it is tested by "
                                 else "it is implemented by ")
                                & Target & ", which the repository does not hold; /req unlink "
@@ -616,8 +617,8 @@ package body Model_Runner.Framework.Consistency is
                if not Tasks.Components (Item).Contains (Target) then
                   Found (Missing_Component, Id,
                          "it belongs to the component " & Target
-                         & ", which is not one of the project's: /reconfigure map.component."
-                         & Target & "=roots=DIR makes it one, placed where its files are, or req"
+                         & ", which is not one of the project's: /reconfigure set.components+="
+                         & Target & " makes it one, or req"
                          & " unlink " & Id & " component " & Target
                          & " takes the link away");
                end if;

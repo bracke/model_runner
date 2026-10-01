@@ -9,6 +9,7 @@ with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Leases;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Schemas;
+with Model_Runner.Framework.Work;
 with Model_Runner.Framework.Workspaces;
 
 package body Model_Runner.Framework.Tasks is
@@ -69,7 +70,7 @@ package body Model_Runner.Framework.Tasks is
    begin
       for Field of Core loop
          --  What an edit does not change is not offered to it.
-         if not (Editing and then Field.all in "kind" | "parent" | "depends_on") then
+         if not (Editing and then Field.all in "parent" | "depends_on") then
             Append (Fields, (if Fields = Null_Unbounded_String then "" else ", ") & Field.all);
          end if;
       end loop;
@@ -1068,8 +1069,24 @@ package body Model_Runner.Framework.Tasks is
    -- Ready --
    -----------
 
-   function Ready (Item : Stores.Store; Id : String) return Readiness
-   is (Ready_In (Item, Stores.No_Changes, Id));
+   --  Ready as its state and dependencies go, and its agent able to do
+   --  it: one its permissions leave unable is not ready, wherever that is
+   --  said -- a listing, the state, the work picker.
+   function Ready (Item : Stores.Store; Id : String) return Readiness is
+      Result : Readiness := Ready_In (Item, Stores.No_Changes, Id);
+   begin
+      if Result.Ready then
+         declare
+            Unable : constant String := Work.Unable_Reason (Item, Id);
+         begin
+            if Unable /= "" then
+               Result.Ready := False;
+               Result.Reasons.Append (Unable);
+            end if;
+         end;
+      end if;
+      return Result;
+   end Ready;
 
    -------------------------
    -- Recompute_Readiness --
@@ -1117,6 +1134,30 @@ package body Model_Runner.Framework.Tasks is
                           /= Records.Get (Value, "blocking_reasons")
                   then
                      Set_Reason (Item, Change, Id, Children_Reason & Joined (Open, ", "));
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+
+      --  And one that went back to work as its children were done waits
+      --  for them again when one of them is reopened.
+      for Id of List (Item, "accepted") loop
+         declare
+            Value : Records.Item;
+            Held  : E.Error_Info;
+         begin
+            Stores.Read (Item, Tasks_Area, Id & State_Suffix, Value, Held);
+            if E.Is_Ok (Held) and then Records.Get (Value, "accepted_by") = "its children are done" then
+               declare
+                  Open : constant Name_Lists.Vector := Open_Children (Item, Change, Id);
+               begin
+                  if not Open.Is_Empty then
+                     Move (Item, Change, Id, "blocked", Children_Reason & Joined (Open, ", "),
+                           Status => Status);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
                   end if;
                end;
             end if;
@@ -1297,7 +1338,7 @@ package body Model_Runner.Framework.Tasks is
       end loop;
 
       declare
-         Now : constant Readiness := Ready (Item, Id);
+         Now : constant Readiness := Ready_In (Item, Stores.No_Changes, Id);
       begin
          Records.Set (Value, "ready", (if Now.Ready then "true" else "false"));
          Records.Set
@@ -1890,8 +1931,27 @@ package body Model_Runner.Framework.Tasks is
                end if;
             end;
          end loop;
+         --  As a word a command takes: my project/../x is my-project-x.
          if Listed.Is_Empty and then Records.Get (Settings, "input.project_name") /= "" then
-            Listed.Append (Records.Get (Settings, "input.project_name"));
+            declare
+               Name : constant String := Records.Get (Settings, "input.project_name");
+               Safe : Unbounded_String;
+            begin
+               for Index in Name'Range loop
+                  if Name (Index) in 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '-'
+                    or else (Name (Index) = '.' and then Index < Name'Last and then Name (Index + 1) /= '.'
+                             and then Index > Name'First and then Name (Index - 1) /= '.')
+                  then
+                     Append (Safe, Name (Index));
+                  elsif Length (Safe) > 0 and then Element (Safe, Length (Safe)) /= '-' then
+                     Append (Safe, '-');
+                  end if;
+               end loop;
+               while Length (Safe) > 0 and then Element (Safe, Length (Safe)) in '-' | '.' loop
+                  Delete (Safe, Length (Safe), Length (Safe));
+               end loop;
+               Listed.Append (if Length (Safe) = 0 then "project" else To_String (Safe));
+            end;
          end if;
          return Listed;
       end;
@@ -2011,6 +2071,18 @@ package body Model_Runner.Framework.Tasks is
          Records.Set_Revision (Value, Records.Revision (Value) + 1);
       end if;
 
+      --  Another kind, given: one the project has, and what follows is
+      --  judged by it.
+      if Fields.Contains ("kind") and then Trim (Fields ("kind")) /= "" then
+         if not Kinds (Item).Contains (Trim (Fields ("kind"))) then
+            Status := E.Make (E.Framework_Task_Kind_Unknown);
+            E.Add_Text (Status, "name", Trim (Fields ("kind")));
+            E.Add_Text (Status, "detail", "the project's are " & Joined (Kinds (Item), ", "));
+            return;
+         end if;
+         Records.Set (Value, "kind", Trim (Fields ("kind")));
+      end if;
+
       declare
          Kind    : constant String := Records.Get (Value, "kind");
          Allowed : constant Name_Lists.Vector := Allowed_Fields (Item, Kind);
@@ -2023,13 +2095,15 @@ package body Model_Runner.Framework.Tasks is
                Given : constant String := Trim (Configurations.Value_Maps.Element (Position));
                Field : constant String := (if Is_Core (Name) then Name else "field." & Name);
             begin
-               if Name in "kind" | "parent" | "depends_on" then
+               if Name = "kind" then
+                  --  Set above.
+                  goto Next_Field;
+               elsif Name in "parent" | "depends_on" then
                   Status := E.Make (E.Framework_Input_Invalid);
                   E.Add_Text (Status, "name", "a field /task edit changes");
                   E.Add_Text (Status, "value", Name);
                   E.Add_Text (Status, "detail", "it is set another way: "
-                              & (if Name = "kind" then "/task new TITLE kind=KIND makes a task of the other kind"
-                                 elsif Name = "parent" then "/task split PARENT A; B makes parts of a task"
+                              & (if Name = "parent" then "/task split PARENT A; B makes parts of a task"
                                  else "/task depend " & Id & " ON adds a dependency, and /task depend "
                                       & Id & " ON remove takes one away"));
                   return;
@@ -2093,6 +2167,7 @@ package body Model_Runner.Framework.Tasks is
                       else Given));
                end if;
             end;
+            <<Next_Field>>
          end loop;
       end;
 

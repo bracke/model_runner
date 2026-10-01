@@ -396,11 +396,15 @@ package body Model_Runner.CLI.Choosers is
          end loop;
          Result.Append ("");
       end if;
-      Result.Append
-        (Fit ((if Item.Filtering or else Length (Item.Filter) > 0
-               then To_String (Words.Filter) & " " & To_String (Item.Filter)
-               else To_String (Words.Keys)),
-              Columns));
+      --  The keys, wrapped where the window is narrow -- not cut, so
+      --  what Esc does is always there to read.
+      for Line of Wrapped ((if Item.Filtering or else Length (Item.Filter) > 0
+                            then To_String (Words.Filter) & " " & To_String (Item.Filter)
+                            else To_String (Words.Keys)),
+                           Columns)
+      loop
+         Result.Append (Line);
+      end loop;
 
       while Natural (Result.Length) > Rows loop
          Result.Delete_Last;
@@ -644,6 +648,11 @@ package body Model_Runner.CLI.Choosers is
            or else Ada.Strings.Fixed.Index (Typed, [1 => ASCII.ESC]) > 0
            or else Ada.Strings.Fixed.Index (Typed, [1 => ASCII.ETX]) > 0
          then
+            --  An Esc the terminal echoed as it is: its sequence cancelled,
+            --  not ended by the next output's first character.
+            if Ada.Strings.Fixed.Index (Typed, [1 => ASCII.ESC]) > 0 then
+               Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CAN);
+            end if;
             Ended := True;
             return "";
          end if;
@@ -779,10 +788,8 @@ package body Model_Runner.CLI.Choosers is
          return;
       end if;
 
-      --  The question, with what it is for and what Enter takes where
-      --  there are such: no empty brackets.
-      Put_Question;
-
+      --  A choice among some: the list is the question, and what it came
+      --  to is said after it -- nothing left asked and unanswered.
       if Length (Options) > 0 then
          declare
             Picked : constant Natural :=
@@ -792,10 +799,20 @@ package body Model_Runner.CLI.Choosers is
             if Picked > 0 then
                Answer := Options.Items (Picked).Label;
                Given := True;
+               Pres.Put_Aside (Screen, "cli.choose.picked",
+                               [Loc.Named ("name", Label), Loc.Named ("value", To_String (Answer))]);
+            else
+               Pres.Put_Aside (Screen, "cli.choose.left",
+                               [Loc.Named ("name", Label),
+                                Loc.Named ("value", (if Secret or else Default = "" then "unset" else Default))]);
             end if;
          end;
          return;
       end if;
+
+      --  The question, with what it is for and what Enter takes where
+      --  there are such: no empty brackets.
+      Put_Question;
 
       loop
          declare

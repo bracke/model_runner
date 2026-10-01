@@ -13,6 +13,7 @@ with Hostkit.Terminal_Control;
 
 with Model_Runner.Agent;
 with Model_Runner.CLI.Choosers;
+with Model_Runner.Platform.Signals;
 with Model_Runner.CLI.Init;
 with Model_Runner.CLI.Intents;
 with Model_Runner.CLI.Project_Requests;
@@ -369,7 +370,7 @@ package body Model_Runner.CLI.Project_Commands is
                        & " failing checks reported.",
                        "{""type"": ""object"", ""properties"": {}}")
           else "")
-       & (if Host = null or else Host.May (Pm.Write_Source)
+       & (if Host = null or else Host.May (Pm.Write_Source) or else Host.May (Pm.Write_Specs)
           then ", "
                & Tool ("write_file", "Write text to a file, replacing it.",
                        Strings ("""path"": {""type"": ""string""}, "
@@ -772,7 +773,15 @@ package body Model_Runner.CLI.Project_Commands is
             end if;
             Self.Host.Close_Child (To_String (Answer), Tokens, Ran, Now, Retry,
                                    Prompt_Tokens => Prompt);
-            Told := (if Told = Null_Unbounded_String then Now else Told & ASCII.LF & Now);
+            --  A run that failed and is run again is said now, before the
+            --  next starts; the answer then names it, and says the last.
+            if Retry then
+               Pres.Put_Tool_Result (Self.Agent.Screen.all, To_String (Now));
+               Told := (if Told = Null_Unbounded_String then Null_Unbounded_String else Told & ASCII.LF)
+                 & To_Unbounded_String (To_String (Id) & " failed, and was run once more");
+            else
+               Told := (if Told = Null_Unbounded_String then Now else Told & ASCII.LF & Now);
+            end if;
             exit when not Retry;
             Retry_Of := Id;
          end;
@@ -920,7 +929,7 @@ package body Model_Runner.CLI.Project_Commands is
       Self.Made := Self.Made + 1;
       if Budget > 0 and then Self.Made > Budget then
          Put ("error: the budget of" & Natural'Image (Budget)
-              & " tool calls is spent; give your answer now");
+              & (if Budget = 1 then " tool call" else " tool calls") & " is spent; give your answer now");
       elsif Named = "delegate" then
          Put (Delegate (Self, Arguments));
       elsif Named = "run_checks" then
@@ -1513,12 +1522,37 @@ package body Model_Runner.CLI.Project_Commands is
    begin
       for Asked in 1 .. 3 loop
          declare
-            Answer : constant String :=
-              Ada.Characters.Handling.To_Lower (Ada.Strings.Fixed.Trim (Ada.Text_IO.Get_Line, Ada.Strings.Both));
+            --  Ctrl-C while it is asked: the question answered no, once
+            --  Enter is pressed after it.
+            procedure Waiting (On : Boolean) is
+            begin
+               Model_Runner.Platform.Signals.Set_Waiting_For_Input
+                 (On, Note => (if On then Pres.Message_Value (Screen, "cli.choose.interrupted") else ""));
+            end Waiting;
+            function Read return String is
+            begin
+               Waiting (True);
+               return Line : constant String := Ada.Text_IO.Get_Line do
+                  Waiting (False);
+               end return;
+            end Read;
+            Typed  : constant String := Ada.Strings.Fixed.Trim (Read, Ada.Strings.Both);
+            Answer : constant String := Ada.Characters.Handling.To_Lower (Typed);
          begin
+            --  Esc, or Ctrl-C: no. An Esc the terminal showed as it is
+            --  starts a sequence the next output would end: cancelled.
+            if Ada.Strings.Fixed.Index (Typed, [1 => ASCII.ESC]) > 0
+              or else Model_Runner.Platform.Signals.Interrupt_Noted
+            then
+               if Ada.Strings.Fixed.Index (Typed, [1 => ASCII.ESC]) > 0 then
+                  Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CAN);
+               end if;
+               return False;
+            end if;
+            --  Echoed as typed: a command's identifiers keep their case.
             if Answer'Length > 1 and then Answer (Answer'First) = '/' then
                Pres.Put_Note (Screen, "cli.choose.command_typed",
-                              [Loc.Named ("value", Answer), Loc.Named ("name", "a yes or no")]);
+                              [Loc.Named ("value", Typed), Loc.Named ("name", "a yes or no")]);
                return False;
             elsif Answer in "y" | "yes" | "j" | "ja" then
                return True;
@@ -1665,7 +1699,7 @@ package body Model_Runner.CLI.Project_Commands is
          Act : constant String :=
            (if Natural (Words.Length) >= 2 then Ada.Characters.Handling.To_Lower (Words (2)) else "");
       begin
-         if Command in "/work" | "/cancel" | "/accept" | "/reject" and then Index >= 2 then
+         if Command in "/work" | "/cancel" and then Index >= 2 then
             return "TASK-";
          elsif Command = "/task" and then Index >= 3
            and then Act in "show" | "audit" | "accept" | "reject" | "cancel" | "complete" | "verify"
@@ -1679,11 +1713,29 @@ package body Model_Runner.CLI.Project_Commands is
             return (if Command = "/req" then "REQ-" elsif Command = "/spec" then "SPEC-" else "DEC-");
          elsif Command = "/instruct" and then Index = 3 and then Act = "withdraw" then
             return "INSTR-";
-         elsif Command in "/req" | "/spec" | "/decision" and then Index >= 3
-           and then Act in "show" | "accept" | "reject" | "reconsider" | "obsolete" | "block" | "unblock"
-                         | "link" | "unlink" | "govern" | "revise" | "supersede" | "verify" | "trace"
+         elsif Command in "/req" | "/spec" | "/decision"
+           and then ((Index >= 3
+                      and then Act in "show" | "accept" | "reject" | "reconsider" | "obsolete" | "block"
+                                    | "unblock" | "verify" | "trace")
+                     --  The entry alone: a ruling, a text or a target is not
+                     --  an identifier for being a number.
+                     or else (Index = 3 and then Act in "link" | "unlink" | "govern" | "revise")
+                     or else (Index in 3 .. 4 and then Act = "supersede"))
          then
             return (if Command = "/req" then "REQ-" elsif Command = "/spec" then "SPEC-" else "DEC-");
+         --  A link's target by its relation: a task is TASK-, a dependency
+         --  of the command's own register.
+         elsif Command in "/req" | "/spec" | "/decision" and then Index = 5 and then Act in "link" | "unlink"
+           and then Natural (Words.Length) >= 4
+         then
+            declare
+               Relation : constant String := Ada.Characters.Handling.To_Lower (Words (4));
+            begin
+               return (if Relation in "task" | "served_by" | "tasks" then "TASK-"
+                       elsif Relation in "dependency" | "depends_on" | "depends"
+                       then (if Command = "/req" then "REQ-" elsif Command = "/spec" then "SPEC-" else "DEC-")
+                       else "");
+            end;
          elsif Command in "/check" | "/trace" and then Index >= 2 then
             return "REQ-";
          end if;
@@ -1831,6 +1883,34 @@ package body Model_Runner.CLI.Project_Commands is
          Pres.Put_Message
            (Screen, "cli.task.field", [Loc.Named ("name", Name), Loc.Named ("value", Value)]);
       end Field;
+
+      --  Of tasks named together, the first now ready: what to work on next.
+      procedure Say_First_Ready (Named : Names.Vector; From : Positive) is
+         Store : S.Store;
+         Read  : E.Error_Info;
+      begin
+         if not S.Is_Initialized (Here) then
+            return;
+         end if;
+         S.Open_To_Read (Store, Here, Read);
+         if E.Is_Ok (Read) then
+            for Index in From .. Natural (Named.Length) loop
+               declare
+                  Given : constant String := Ada.Characters.Handling.To_Upper (Named (Index));
+                  Id    : constant String :=
+                    (if Given /= "" and then Given'Length <= 6 and then (for all C of Given => C in '0' .. '9')
+                     then "TASK-" & (if Given'Length >= 3 then Given else [1 .. 3 - Given'Length => '0'] & Given)
+                     else Given);
+               begin
+                  if Ada.Strings.Fixed.Index (Id, "TASK-") = Id'First and then Tk.Ready (Store, Id).Ready then
+                     Pres.Put_Note (Screen, "cli.next.work", [Loc.Named ("name", Id)]);
+                     exit;
+                  end if;
+               end;
+            end loop;
+         end if;
+         S.Close (Store);
+      end Say_First_Ready;
 
       --  Open the project, or say there is none.
       procedure With_Store (Act : not null access procedure (Store : in out S.Store)) is
@@ -2081,6 +2161,18 @@ package body Model_Runner.CLI.Project_Commands is
          Line_Of ("cli.project.blocked", Count ("blocked"));
          Which ("blocked");
          Line_Of ("cli.project.running", Count ("running"));
+         --  Each running, with the agent that runs it.
+         for Id of Tk.List (Store, "running") loop
+            declare
+               Runs_It : constant String := Model_Runner.Framework.Agents.Working_On (Store, Id);
+            begin
+               Pres.Put_Message
+                 (Screen, "cli.project.which",
+                  [Loc.Named ("name", Id),
+                   Loc.Named ("value", (if Runs_It = "" then "running"
+                                        else "its agent " & Runs_It & " is working on it"))]);
+            end;
+         end loop;
          Line_Of ("cli.project.complete", Count ("complete"));
          Line_Of ("cli.project.failed", Count ("failed"));
          Which ("failed");
@@ -3325,19 +3417,41 @@ package body Model_Runner.CLI.Project_Commands is
                   elsif Here /= "" and then Ada.Directories.Exists (Here)
                     and then Ada.Directories."=" (Ada.Directories.Kind (Here), Ada.Directories.Directory)
                   then
+                     --  A directory: the documents in it, and in those
+                     --  below it -- Markdown and text.
                      declare
-                        Search : Ada.Directories.Search_Type;
-                        One    : Ada.Directories.Directory_Entry_Type;
-                        Base   : constant String :=
-                          (if Here (Here'Last) = '/' then Here (Here'First .. Here'Last - 1) else Here);
+                        procedure Walk (Dir : String) is
+                           Search : Ada.Directories.Search_Type;
+                           One    : Ada.Directories.Directory_Entry_Type;
+                           Below  : Names.Vector;
+                        begin
+                           Ada.Directories.Start_Search (Search, Dir, "");
+                           while Ada.Directories.More_Entries (Search) loop
+                              Ada.Directories.Get_Next_Entry (Search, One);
+                              declare
+                                 Simple : constant String := Ada.Directories.Simple_Name (One);
+                                 Lower  : constant String := Ada.Characters.Handling.To_Lower (Simple);
+                              begin
+                                 if Simple (Simple'First) = '.' then
+                                    null;
+                                 elsif Ada.Directories."=" (Ada.Directories.Kind (One), Ada.Directories.Directory)
+                                 then
+                                    Below.Append (Dir & "/" & Simple);
+                                 elsif (for some Ending of Names.Vector'([".md", ".txt", ".rst", ".adoc"]) =>
+                                          Lower'Length > Ending'Length
+                                          and then Lower (Lower'Last - Ending'Length + 1 .. Lower'Last) = Ending)
+                                 then
+                                    Add (Dir & "/" & Simple);
+                                 end if;
+                              end;
+                           end loop;
+                           Ada.Directories.End_Search (Search);
+                           for Next of Below loop
+                              Walk (Next);
+                           end loop;
+                        end Walk;
                      begin
-                        Ada.Directories.Start_Search
-                          (Search, Here, "*.md", [Ada.Directories.Ordinary_File => True, others => False]);
-                        while Ada.Directories.More_Entries (Search) loop
-                           Ada.Directories.Get_Next_Entry (Search, One);
-                           Add (Base & "/" & Ada.Directories.Simple_Name (One));
-                        end loop;
-                        Ada.Directories.End_Search (Search);
+                        Walk (if Here (Here'Last) = '/' then Here (Here'First .. Here'Last - 1) else Here);
                      end;
                   else
                      Add (Here);
@@ -4201,7 +4315,12 @@ package body Model_Runner.CLI.Project_Commands is
             if E.Is_Ok (Outcome) then
                S.Commit (Store, Change, Outcome);
             end if;
-            if E.Is_Error (Outcome) then
+            --  Withdrawn already: nothing to do, and said so.
+            if E."=" (Outcome.Code, E.Framework_Transition_Invalid) then
+               Pres.Put_Note (Screen, "cli.intent.already",
+                              [Loc.Named ("name", Argument (2)), Loc.Named ("value", "withdrawn")]);
+               return;
+            elsif E.Is_Error (Outcome) then
                Pres.Report (Screen, Outcome);
             else
                Pres.Put_Message (Screen, "cli.task.moved",
@@ -4297,6 +4416,29 @@ package body Model_Runner.CLI.Project_Commands is
                Pres.Report (Screen, Outcome);
                return;
             end if;
+            --  What it overrides is an entry there is and stands.
+            if Over /= "" then
+               declare
+                  Upper : constant String := Ada.Characters.Handling.To_Upper (Over);
+                  State : constant String :=
+                    (if Nt.State_Of (Store, Nt.Decision, Upper) /= "" then Nt.State_Of (Store, Nt.Decision, Upper)
+                     elsif Nt.State_Of (Store, Nt.Specification, Upper) /= ""
+                     then Nt.State_Of (Store, Nt.Specification, Upper)
+                     else Nt.State_Of (Store, Nt.Requirement, Upper));
+               begin
+                  if State = "" or else State in "obsolete" | "superseded" | "rejected" then
+                     Outcome := E.Make (E.Framework_Input_Invalid);
+                     E.Add_Text (Outcome, "name", "what it overrides");
+                     E.Add_Text (Outcome, "value", Over);
+                     E.Add_Text (Outcome, "detail",
+                                 (if State = "" then "it is no decision, specification or requirement the"
+                                                     & " project holds"
+                                  else Upper & " is " & State & ", and overrides nothing now"));
+                     Pres.Report (Screen, Outcome);
+                     return;
+                  end if;
+               end;
+            end if;
             Au.Instruct (Store, Change, Subject, Value, Over,
                          Model_Runner.Framework.Transitions.User, Id, Outcome);
             if E.Is_Ok (Outcome) then
@@ -4342,9 +4484,55 @@ package body Model_Runner.CLI.Project_Commands is
          --  task named: the same question.
          Accepting : constant Boolean :=
            Word = "/accept" or else (Word = "/task" and then Argument (1) = "accept");
-         Named_One : constant String := (if Word = "/task" then "" else Argument (1));
          Tasks_Waiting : constant Names.Vector := Tk.List (Store, "candidate");
          Intent_Waiting : constant Names.Vector := Model_Runner.CLI.Intents.Pending (Store);
+
+         --  A number alone is the candidate of that number, in whichever
+         --  register: where several have one, which is asked, not guessed.
+         Ambiguous : Unbounded_String;
+         function Resolved (Given : String) return String is
+            Matches : Names.Vector;
+            function Number_Of (Id : String) return Natural is
+               Dash : constant Natural := Ada.Strings.Fixed.Index (Id, "-", Ada.Strings.Backward);
+            begin
+               return (if Dash > 0 and then Dash < Id'Last
+                         and then (for all C of Id (Dash + 1 .. Id'Last) => C in '0' .. '9')
+                       then Natural'Value (Id (Dash + 1 .. Id'Last)) else 0);
+            exception
+               when others =>
+                  return 0;
+            end Number_Of;
+         begin
+            if Given = "" or else Given'Length > 6
+              or else not (for all C of Given => C in '0' .. '9')
+            then
+               return Given;
+            end if;
+            for Id of Tasks_Waiting loop
+               if Number_Of (Id) = Natural'Value (Given) then
+                  Matches.Append (Id);
+               end if;
+            end loop;
+            for Which of Intent_Waiting loop
+               declare
+                  Id : constant String := Which (Ada.Strings.Fixed.Index (Which, ":") + 1 .. Which'Last);
+               begin
+                  if Number_Of (Id) = Natural'Value (Given) then
+                     Matches.Append (Id);
+                  end if;
+               end;
+            end loop;
+            if Natural (Matches.Length) = 1 then
+               return Matches.First_Element;
+            elsif Natural (Matches.Length) > 1 then
+               for Id of Matches loop
+                  Append (Ambiguous, (if Ambiguous = Null_Unbounded_String then "" else ", ") & Id);
+               end loop;
+               return "";
+            end if;
+            return "TASK-" & (if Given'Length >= 3 then Given else [1 .. 3 - Given'Length => '0'] & Given);
+         end Resolved;
+         Named_One : constant String := (if Word = "/task" then "" else Resolved (Argument (1)));
          Waiting : Names.Vector := Tasks_Waiting;
          Listed  : Unbounded_String;
       begin
@@ -4412,6 +4600,21 @@ package body Model_Runner.CLI.Project_Commands is
                   To_Task := True;
                end;
             end if;
+            return;
+         end if;
+
+         --  A number several registers have a candidate of: which, asked.
+         if Ambiguous /= Null_Unbounded_String then
+            declare
+               Which : E.Error_Info := E.Make (E.Framework_Input_Invalid);
+            begin
+               E.Add_Text (Which, "name", "what to " & (if Accepting then "accept" else "reject"));
+               E.Add_Text (Which, "value", Argument (1));
+               E.Add_Text (Which, "detail", "several candidates have that number -- " & To_String (Ambiguous)
+                           & "; name the one meant");
+               Pres.Report (Screen, Which);
+               Last_Status := E.Exit_Status (Which);
+            end;
             return;
          end if;
 
@@ -4623,14 +4826,18 @@ package body Model_Runner.CLI.Project_Commands is
          declare
             Named : constant Names.Vector := Positional;
          begin
+            --  The way on said once, at the end, for the first of them.
             for Index in 2 .. Natural (Named.Length) loop
-               Pres.Hold_Next_Steps (Screen, Index < Natural (Named.Length));
+               Pres.Hold_Next_Steps (Screen, True);
                Command.Action := T.To_Bounded (Named (1));
                Command.Action_Argument := T.To_Bounded (Named (Index));
                Model_Runner.CLI.Tasks.Run (Command, Screen, Status);
                Last_Status := Natural'Max (Last_Status, Status);
             end loop;
             Pres.Hold_Next_Steps (Screen, False);
+            if Named (1) in "accept" | "reopen" | "reconsider" then
+               Say_First_Ready (Named, 2);
+            end if;
          end;
       elsif Word in "/accept" | "/reject" and then Argument (2) /= "" then
          --  Several named: each decided as if named alone.
@@ -4638,7 +4845,7 @@ package body Model_Runner.CLI.Project_Commands is
             Named : constant Names.Vector := Positional;
          begin
             for Index in 1 .. Natural (Named.Length) loop
-               Pres.Hold_Next_Steps (Screen, Index < Natural (Named.Length));
+               Pres.Hold_Next_Steps (Screen, True);
                Positional.Clear;
                Positional.Append (Named (Index));
                With_Store (Decide'Access);
@@ -4649,6 +4856,9 @@ package body Model_Runner.CLI.Project_Commands is
                end if;
             end loop;
             Pres.Hold_Next_Steps (Screen, False);
+            if Word = "/accept" then
+               Say_First_Ready (Named, 1);
+            end if;
          end;
       elsif Word = "/task" and then Argument (1) = "complete"
         and then (Argument (3) /= "" or else Argument (2) = "all")
@@ -4803,6 +5013,7 @@ package body Model_Runner.CLI.Project_Commands is
                end;
             end if;
             Command.Action := T.To_Bounded ("cancel");
+            Command.Cancel_Confirmed := True;
             Command.Action_Argument := T.To_Bounded
               (Argument (1) & (if Argument (2) = "anyway" then " anyway" else ""));
             Model_Runner.CLI.Tasks.Run (Command, Screen, Status);

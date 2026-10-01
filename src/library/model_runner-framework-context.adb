@@ -257,14 +257,22 @@ package body Model_Runner.Framework.Context is
 
       --  Whether its agent may write anything: one that may not is told
       --  no rule for writing.
-      function Writes return Boolean is
-         Allowed : constant Permissions.Permission_Set :=
-           Permissions.Effective (Item, Records.Get (View, "definition.kind"), "",
-                                  Task_Level => Records.Get (View, "definition.permissions"));
-      begin
-         return Permissions.Allows (Allowed, Permissions.Write_Source)
-           or else Permissions.Allows (Allowed, Permissions.Write_Specs);
-      end Writes;
+      function Allowed return Permissions.Permission_Set
+      is (Permissions.Effective (Item, Records.Get (View, "definition.kind"), "",
+                                 Task_Level => Records.Get (View, "definition.permissions")));
+
+      function Writes return Boolean
+      is (Permissions.Allows (Allowed, Permissions.Write_Source)
+          or else Permissions.Allows (Allowed, Permissions.Write_Specs));
+
+      --  Whether it may write where the tests are, and where the documents
+      --  are: a rule asking for either is told as one it may not keep there.
+      function Writes_Under (Places : Name_Lists.Vector) return Boolean
+      is ((for all Place of Places => Ada.Strings.Fixed.Index (Place, "*") > 0)
+          or else (for some Place of Places =>
+                     Ada.Strings.Fixed.Index (Place, "*") = 0
+                     and then (Permissions.Allows (Allowed, Permissions.Write_Source, Place & "/x")
+                               or else Permissions.Allows (Allowed, Permissions.Write_Specs, Place & "/x"))));
 
       --  The fields of a record whose names start with a prefix, one a
       --  line.
@@ -312,10 +320,22 @@ package body Model_Runner.Framework.Context is
                if not Baselines and then Level in "project_baseline" | "language_baseline" then
                   null;
                elsif Level'Length > 0 and then (for all C of Level => C in 'a' .. 'z' | '_') then
-                  Append (Result, Line (Line'First .. First + 1) & Line (Second + 2 .. Line'Last)
-                          & (if Level in "project_baseline" | "language_baseline" then ""
-                             else " (" & Source & ")")
-                          & ASCII.LF);
+                  declare
+                     Subject : constant String := Line (Line'First .. First - 1);
+                     Roots   : constant Repository.Roots := Repository.Roots_Of (Item);
+                     --  A rule it may not keep where it may write: said so,
+                     --  with what it does instead.
+                     Beyond  : constant Boolean :=
+                       (Subject = "tests" and then not Writes_Under (Roots.Tests))
+                       or else (Subject = "documentation" and then not Writes_Under (Roots.Documentation));
+                  begin
+                     Append (Result, Line (Line'First .. First + 1) & Line (Second + 2 .. Line'Last)
+                             & (if Level in "project_baseline" | "language_baseline" then ""
+                                else " (" & Source & ")")
+                             & (if Beyond then " -- not yours to do here: say what is needed under issues:"
+                                else "")
+                             & ASCII.LF);
+                  end;
                else
                   Append (Result, Line & ASCII.LF);
                end if;

@@ -191,6 +191,13 @@ package Model_Runner.Framework.Workspaces is
       Name   : String;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Whether a kept copy was put back in the project.
+   --
+   --  @param Item The store.
+   --  @param Name The copy.
+   --  @return True once Restore_Kept put it back.
+   function Was_Restored (Item : Stores.Store; Name : String) return Boolean;
+
    --  Remove a kept copy.
    --
    --  @param Item The store.

@@ -1271,7 +1271,8 @@ package body Model_Runner.Framework.Workspaces is
                Simple   : constant String := Dirs.Simple_Name (Found);
                Relative : constant String := (if Prefix = "" then Simple else Prefix & "/" & Simple);
             begin
-               if Simple not in "." | ".." and then not Hostkit.Fs.Is_Link (Dirs.Full_Name (Found)) then
+               --  Its own mark -- .restored -- is not one of the files kept.
+               if Simple (Simple'First) /= '.' and then not Hostkit.Fs.Is_Link (Dirs.Full_Name (Found)) then
                   if Dirs."=" (Dirs.Kind (Found), Dirs.Directory) then
                      Below.Append (Simple);
                   elsif Dirs."=" (Dirs.Kind (Found), Dirs.Ordinary_File) then
@@ -1296,6 +1297,12 @@ package body Model_Runner.Framework.Workspaces is
       when others =>
          return Result;
    end Kept_Files;
+
+   Restored_Mark : constant String := ".restored";
+
+   function Was_Restored (Item : Stores.Store; Name : String) return Boolean
+   is (Is_Kept_Name (Name) and then Dirs.Exists (Hostkit.Fs.Join (Hostkit.Fs.Join (Runtime_Of (Item), Name),
+                                                                  Restored_Mark)));
 
    ------------------
    -- Restore_Kept --
@@ -1323,6 +1330,12 @@ package body Model_Runner.Framework.Workspaces is
             Dirs.Copy_File (Hostkit.Fs.Join (Where, Path), Target);
          end;
       end loop;
+      --  Marked as put back, for what is said of the task afterwards.
+      declare
+         Ignored : E.Error_Info;
+      begin
+         Files.Write_Text (Hostkit.Fs.Join (Where, Restored_Mark), "restored", Ignored);
+      end;
       Status := E.Success;
    exception
       when Occurrence : others =>

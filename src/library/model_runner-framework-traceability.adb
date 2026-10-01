@@ -168,10 +168,14 @@ package body Model_Runner.Framework.Traceability is
                         Read  : E.Error_Info;
                      begin
                         Intent.Read (Item, Intent.Requirement, Target, Other, Read);
-                        Link (Result, Node,
-                              (if E.Is_Ok (Read) then Target & "@" & Image (Other.Revision)
-                               else Target),
-                              "depends_on", Repository.Explicit, Repository.Certain, Id);
+                        --  One the project does not hold is said missing.
+                        if E.Is_Ok (Read) then
+                           Link (Result, Node, Target & "@" & Image (Other.Revision),
+                                 "depends_on", Repository.Explicit, Repository.Certain, Id);
+                        else
+                           Link (Result, Node, Target, "depends_on, missing",
+                                 Repository.Explicit, Repository.Uncertain, Id);
+                        end if;
                      end;
                   end loop;
                   --  A task linked to it by hand serves it as one naming it
@@ -195,6 +199,16 @@ package body Model_Runner.Framework.Traceability is
                               Repository.Explicit, Repository.Certain, Id);
                      else
                         Link (Result, Node, Target_Node (Target), "tested_by, missing",
+                              Repository.Explicit, Repository.Uncertain, Id);
+                     end if;
+                  end loop;
+                  --  Evidence linked by hand, the missing said so.
+                  for Target of Intent.Links (Item, Intent.Requirement, Id, Intent.Verification) loop
+                     if Stores.Exists (Item, Verification_Area, Target) then
+                        Link (Result, Node, Target, "verified_by",
+                              Repository.Explicit, Repository.Certain, Id);
+                     else
+                        Link (Result, Node, Target, "verified_by, missing",
                               Repository.Explicit, Repository.Uncertain, Id);
                      end if;
                   end loop;
@@ -688,10 +702,29 @@ package body Model_Runner.Framework.Traceability is
       elsif Result.Tests.Is_Empty then
          Result.Width := Full_Suite;
          Result.Reason := To_Unbounded_String ("no test is known to cover the change");
+      elsif Partial and then Records.Get (Config, "set.components") = "" then
+         Result.Width := Full_Suite;
+         Result.Reason := To_Unbounded_String
+           ("some tests are only probably affected, and the project names no components, so the whole"
+            & " suite runs");
       elsif Partial then
          Result.Width := Component_Tests;
-         Result.Reason := To_Unbounded_String
-           ("some tests are only probably affected, so the component's run");
+         declare
+            Named : Unbounded_String;
+         begin
+            for Next of From.Items loop
+               if To_String (Next.Kind) = "component" then
+                  Append (Named, (if Named = Null_Unbounded_String then "" else ", ")
+                          & Slice (Next.Id, Ada.Strings.Fixed.Index (To_String (Next.Id), ":") + 1,
+                                   Length (Next.Id)));
+               end if;
+            end loop;
+            Result.Reason := To_Unbounded_String
+              ("some tests are only probably affected, so the tests of "
+               & (if Named = Null_Unbounded_String then "the components it reaches"
+                  else "its component " & To_String (Named))
+               & " run");
+         end;
       else
          Result.Width := Certain_Tests;
          Result.Reason := To_Unbounded_String ("every affected test is certainly so");

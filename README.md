@@ -191,8 +191,9 @@ project does not have and one held ready while what it depends on is open --
 and opening a project says how much there is.
 
 A task is revised with `/task edit TASK NAME=VALUE ...` -- a new revision of
-its definition, and `/task link TASK REQ-001 ...` adds requirements it serves; its kind, parent and dependencies have their own commands --
-made to wait with `/task depend TASK ON`, and split with `/task split TASK
+its definition, its kind among them (`kind=test`), and `/task link TASK
+REQ-001 ...` adds requirements it serves; its parent and dependencies have
+their own commands -- made to wait with `/task depend TASK ON`, and split with `/task split TASK
 First part; Second part`: the parts are its children, and the parent waits
 on them, blocked, unless the project's `scalar task.coordination` (or
 `task.coordination.KIND`) is `parent_runs`. An ended task comes back only by
@@ -236,9 +237,11 @@ and calls.
 What the project is meant to be is managed in the session too. `/req`,
 `/decision` and `/spec` list their register, show an entry by its
 identifier, and take `new TITLE "text=..." "criteria=..." scope=...`,
-`accept`, `reject`, `reconsider`, `obsolete`, `block`, `unblock`, `revise ID
-"text=..."`, `link ID RELATION TARGET` and, for decisions and
-specifications, `govern ID SETTING RULING` and `supersede OLD NEW`. Nothing
+`accept`, `reject`, `reconsider`, `obsolete`, `revise ID "text=..."
+scope=...`, `link ID RELATION TARGET`, `supersede OLD NEW` and, for
+requirements, `block` and `unblock`, and for decisions and
+specifications, `govern ID SETTING RULING`. One superseded is listed as
+superseded by the one that replaced it, in every register. Nothing
 proposed -- by a person, or found by `/bootstrap` -- governs until it is
 accepted, and each change moves the project along at once: an accepted
 requirement derives its task, for the project's own component when the

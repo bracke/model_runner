@@ -1,5 +1,6 @@
 with Ada.Calendar;
 with Ada.Directories;
+with Ada.Environment_Variables;
 with Ada.IO_Exceptions;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
@@ -12,6 +13,7 @@ with Interfaces;
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Drafts;
 with Model_Runner.Framework.Execution;
+with Model_Runner.Framework.Permissions;
 with Model_Runner.GGUF.Shards;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
@@ -3794,6 +3796,57 @@ package body Model_Runner.CLI.Execute is
                      Fail (Condition);
                      return;
                   end if;
+
+                  --  Offered only what can run: a denied tool is not
+                  --  advertised, and an agent the harness started is given
+                  --  its file tools and, where it may, the network -- not a
+                  --  program, a memory or a calculator it never needs.
+                  declare
+                     Harnessed : constant Boolean :=
+                       Ada.Environment_Variables.Exists
+                         (Model_Runner.Framework.Permissions.Agent_Root_Variable);
+                     Named_Grants : constant String :=
+                       Model_Runner.Framework.Permissions.Agent_Permissions_Variable;
+                     Granted   : constant String :=
+                       (if Ada.Environment_Variables.Exists (Named_Grants)
+                        then Ada.Environment_Variables.Value (Named_Grants)
+                        else "");
+                     Kept      : Ada.Strings.Unbounded.Unbounded_String;
+                     Dropped   : Boolean := False;
+
+                     function Offered_Here (Named : String) return Boolean is
+                     begin
+                        for I in 1 .. Item.Deny_Tool_Count loop
+                           if Named = T.To_String (Item.Deny_Tools (I)) then
+                              return False;
+                           end if;
+                        end loop;
+                        return not Harnessed
+                          or else Named in "read_file" | "list_directory" | "write_file"
+                          or else (Named in "http_get" | "web_search"
+                                   and then Ada.Strings.Fixed.Index (Granted, "use_network") > 0);
+                     end Offered_Here;
+                  begin
+                     for Index in 1 .. Model_Runner.Tools.Count (Agent_Tools) loop
+                        if Offered_Here (Model_Runner.Tools.Tool_Name (Agent_Tools, Index)) then
+                           Ada.Strings.Unbounded.Append
+                             (Kept, (if Ada.Strings.Unbounded.Length (Kept) = 0 then "" else ", ")
+                                    & Model_Runner.Tools.Definition (Agent_Tools, Index));
+                        else
+                           Dropped := True;
+                        end if;
+                     end loop;
+                     if Dropped then
+                        Model_Runner.Tools.Close (Agent_Tools);
+                        Model_Runner.Tools.Read
+                          (Agent_Tools, "[" & Ada.Strings.Unbounded.To_String (Kept) & "]", Condition);
+                        if E.Is_Error (Condition) then
+                           Conv.Close (Messages);
+                           Fail (Condition);
+                           return;
+                        end if;
+                     end if;
+                  end;
 
                   --  Open the embedding session -- on the dedicated model
                   --  when one was loaded, else on the model being run -- and

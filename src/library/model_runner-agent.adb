@@ -119,6 +119,14 @@ package body Model_Runner.Agent is
       Seen      : array (1 .. Seen_Max) of Interfaces.Unsigned_64;
       Seen_Used : Natural := 0;
 
+      --  What each call seen answered, by its place in Seen: a repeat of
+      --  one that worked is given the same answer, not told off.
+      Answered_With : array (1 .. Seen_Max) of U.Unbounded_String;
+
+      --  Turns in a row that only repeated calls: going round is the
+      --  second such turn, not the first.
+      Stalled : Natural := 0;
+
       --  Retries left for a generation that ends in a runtime error. Spent
       --  down as they are used; when none are left, such an error stops the
       --  loop as it always did.
@@ -143,6 +151,17 @@ package body Model_Runner.Agent is
          Mix (Args);
          return Hash;
       end Digest;
+
+      --  Where a call is in Seen, or zero.
+      function Place_Of (Key : Interfaces.Unsigned_64) return Natural is
+      begin
+         for Index in 1 .. Seen_Used loop
+            if Seen (Index) = Key then
+               return Index;
+            end if;
+         end loop;
+         return 0;
+      end Place_Of;
 
       function Already_Seen (Key : Interfaces.Unsigned_64) return Boolean is
       begin
@@ -407,8 +426,18 @@ package body Model_Runner.Agent is
                      end if;
 
                      if Already_Seen (Key) then
-                        Items (Call).Text :=
-                          U.To_Unbounded_String (Repeat_Note);
+                        --  Where it worked, the same answer again; where it
+                        --  was an error, said that it will be again.
+                        declare
+                           Earlier : constant String := U.To_String (Answered_With (Place_Of (Key)));
+                        begin
+                           Items (Call).Text := U.To_Unbounded_String
+                             (if Earlier /= "" and then (Earlier'Length < 6
+                                                         or else Earlier (Earlier'First .. Earlier'First + 5)
+                                                                   /= "error:")
+                              then Earlier
+                              else Repeat_Note);
+                        end;
                      else
                         Progressed := True;
                         Remember (Key);
@@ -576,6 +605,15 @@ package body Model_Runner.Agent is
                                 & "return"
                            else U.To_String (Items (Call).Text));
                      begin
+                        --  Kept by the call, for a repeat of it.
+                        declare
+                           Place : constant Natural :=
+                             Place_Of (Digest (Named, U.To_String (Items (Call).Args)));
+                        begin
+                           if Place > 0 and then U.Length (Answered_With (Place)) = 0 then
+                              Answered_With (Place) := U.To_Unbounded_String (Reply);
+                           end if;
+                        end;
                         Conv.Append (Messages, Conv.Tool_Role, Reply, Status);
                         if Watch /= null then
                            Watch.On_Result (Named, Reply);
@@ -601,9 +639,14 @@ package body Model_Runner.Agent is
             --  A turn that only repeated calls it had already made is going
             --  in circles. Stop rather than let it spend the step budget on
             --  the same calls over and over.
-            if not Progressed then
-               Result.Reason := Repeating;
-               exit Step_Loop;
+            if Progressed then
+               Stalled := 0;
+            else
+               Stalled := Stalled + 1;
+               if Stalled >= 2 then
+                  Result.Reason := Repeating;
+                  exit Step_Loop;
+               end if;
             end if;
          end;
 

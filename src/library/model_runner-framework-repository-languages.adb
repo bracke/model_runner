@@ -1,5 +1,7 @@
 with Ada.Characters.Handling;
+with Ada.Containers.Indefinite_Hashed_Sets;
 with Ada.Containers.Vectors;
+with Ada.Strings.Hash;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
 
@@ -34,6 +36,16 @@ package body Model_Runner.Framework.Repository.Languages is
       Text : Unbounded_String;
       Line : Positive := 1;
    end record;
+
+   package Name_Sets is new Ada.Containers.Indefinite_Hashed_Sets
+     (String, Ada.Strings.Hash, "=");
+
+   --  The units' last names, worked out once for a graph -- known by its
+   --  symbols, which reading references does not add to -- not for every
+   --  file it reads the references of.
+   Known_Units   : Name_Sets.Set;
+   Known_Symbols : Natural := Natural'Last;
+   Known_Ends    : Ada.Strings.Unbounded.Unbounded_String;
 
    package Token_Vectors is new Ada.Containers.Vectors
      (Index_Type => Positive, Element_Type => Token);
@@ -286,6 +298,28 @@ package body Model_Runner.Framework.Repository.Languages is
       function Declaring (Name : String; Line : Positive) return Boolean
       is (Declared.Contains (Name & "@" & Image (Line)));
 
+      --  The unit names the graph knows, by their last part: base64mime
+      --  in base64mime.body_encode names that module.
+
+      --  Whether a name qualified by a word that is some unit's name --
+      --  base64mime.body_encode -- is that unit's: not every symbol of the
+      --  same last name. A receiver that is no unit's name fits any.
+      function Receiver_Fits (At_Index : Positive; Owner : String) return Boolean is
+      begin
+         if At_Index <= 2 or else not Is_Mark (Tokens (At_Index - 1), ".")
+           or else Tokens (At_Index - 2).Kind /= Word
+         then
+            return True;
+         end if;
+         declare
+            Receiver   : constant String := To_String (Tokens (At_Index - 2).Text);
+            Owner_Dot  : constant Natural := Ada.Strings.Fixed.Index (Owner, ".", Ada.Strings.Backward);
+            Owner_Last : constant String := (if Owner_Dot = 0 then Owner else Owner (Owner_Dot + 1 .. Owner'Last));
+         begin
+            return not Known_Units.Contains (Receiver) or else Owner_Last = Receiver;
+         end;
+      end Receiver_Fits;
+
       --  A method called on something, as x.name (: whatever x is, a
       --  probable use of every method so called.
       function Called_On (At_Index : Positive) return Boolean
@@ -294,6 +328,35 @@ package body Model_Runner.Framework.Repository.Languages is
    begin
       if Unit = "" then
          return;
+      end if;
+      if Known_Symbols /= Natural (Into.Symbols.Length)
+        or else (not Into.Symbols.Is_Empty
+                 and then Known_Ends /= Into.Symbols.First_Element.Name & "|" & Into.Symbols.Last_Element.Name)
+      then
+         Known_Units.Clear;
+         for Item of Into.Symbols loop
+            if To_String (Item.Kind) in "module" | "unit" | "package" then
+               declare
+                  Full : constant String := To_String (Item.Name);
+                  Dot  : constant Natural := Ada.Strings.Fixed.Index (Full, ".", Ada.Strings.Backward);
+               begin
+                  Known_Units.Include (if Dot = 0 then Full else Full (Dot + 1 .. Full'Last));
+               end;
+            end if;
+         end loop;
+         for Link of Into.Relations loop
+            if Link.Kind = Depends_On then
+               declare
+                  Full : constant String := To_String (Link.To);
+                  Dot  : constant Natural := Ada.Strings.Fixed.Index (Full, ".", Ada.Strings.Backward);
+               begin
+                  Known_Units.Include (if Dot = 0 then Full else Full (Dot + 1 .. Full'Last));
+               end;
+            end if;
+         end loop;
+         Known_Symbols := Natural (Into.Symbols.Length);
+         Known_Ends := (if Into.Symbols.Is_Empty then Ada.Strings.Unbounded.Null_Unbounded_String
+                        else Into.Symbols.First_Element.Name & "|" & Into.Symbols.Last_Element.Name);
       end if;
       for Item of Into.Symbols loop
          if To_String (Item.Path) = Path then
@@ -323,6 +386,7 @@ package body Model_Runner.Framework.Repository.Languages is
                for At_Index in 1 .. Count loop
                   if Is_Word (Tokens (At_Index), Last)
                     and then not Declaring (Last, Tokens (At_Index).Line)
+                    and then Receiver_Fits (At_Index, Owner)
                     and then (Visible (Owner) or else To_String (Item.Path) = Path
                               or else (To_String (Item.Kind) = "method" and then Called_On (At_Index)))
                   then
@@ -1132,6 +1196,30 @@ package body Model_Runner.Framework.Repository.Languages is
                      elsif Module /= "" then
                         Relate (Into, Depends_On, Unit, Module, Explicit, Certain,
                                 Where (Path, Line_Number));
+                        --  from pkg import mod: a module of the package, as
+                        --  likely as not -- its users are found through it.
+                        if Names > 0 then
+                           declare
+                              Listed : constant String := Rest (Names + 8 .. Rest'Last);
+                              Part   : Positive := Listed'First;
+                           begin
+                              for At_Index in Listed'First .. Listed'Last + 1 loop
+                                 if At_Index > Listed'Last or else Listed (At_Index) = ',' then
+                                    declare
+                                       Name : constant String :=
+                                         Name_Of (Ada.Strings.Fixed.Trim
+                                                    (Listed (Part .. At_Index - 1), Ada.Strings.Both));
+                                    begin
+                                       if Name /= "" and then Name (Name'First) in 'a' .. 'z' then
+                                          Relate (Into, Depends_On, Unit, Module & "." & Name,
+                                                  Explicit, Probable, Where (Path, Line_Number));
+                                       end if;
+                                    end;
+                                    Part := At_Index + 1;
+                                 end if;
+                              end loop;
+                           end;
+                        end if;
                      end if;
                   end;
                end;

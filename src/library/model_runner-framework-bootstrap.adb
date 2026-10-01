@@ -290,6 +290,66 @@ package body Model_Runner.Framework.Bootstrap is
       --  -- and so takes the items that follow as part of what it says.
       Lead : Natural := 0;
 
+      --  Text as it reads, its markup off: **bold** and __bold__ marks
+      --  dropped, and a link [words](target) its words.
+      function Plain (Text : String) return String is
+         Output : Unbounded_String;
+         Index  : Natural := Text'First;
+      begin
+         while Index <= Text'Last loop
+            if Index < Text'Last and then Text (Index .. Index + 1) in "**" | "__" then
+               Index := Index + 2;
+            elsif Text (Index) = '['
+              and then Ada.Strings.Fixed.Index (Text (Index .. Text'Last), "](") > 0
+              and then Ada.Strings.Fixed.Index
+                         (Text (Ada.Strings.Fixed.Index (Text (Index .. Text'Last), "](") .. Text'Last), ")") > 0
+            then
+               declare
+                  Close  : constant Natural := Ada.Strings.Fixed.Index (Text (Index .. Text'Last), "](");
+                  Finish : constant Natural := Ada.Strings.Fixed.Index (Text (Close .. Text'Last), ")");
+               begin
+                  Append (Output, Text (Index + 1 .. Close - 1));
+                  Index := Finish + 1;
+               end;
+            else
+               Append (Output, Text (Index));
+               Index := Index + 1;
+            end if;
+         end loop;
+         return To_String (Output);
+      end Plain;
+
+      --  A title that is a bold lead-in, **Title.** and more after it: the
+      --  bold part, not the sentence after it.
+      function Lead_In (Title : String) return String is
+         First  : constant Natural := Ada.Strings.Fixed.Index (Title, "**");
+         Second : constant Natural :=
+           (if First = 0 then 0 else Ada.Strings.Fixed.Index (Title (First + 2 .. Title'Last), "**"));
+         Cut    : constant Natural :=
+           (if Second > 0 then Second
+            elsif First > Title'First + 1 then First
+            else 0);
+         Kept   : constant String :=
+           Trim (Plain (if Cut = 0 then Title else Title (Title'First .. Cut - 1)));
+      begin
+         return (if Kept'Length > 1 and then Kept (Kept'Last) = '.' then Kept (Kept'First .. Kept'Last - 1)
+                 else Kept);
+      end Lead_In;
+
+      --  A requirement's title without the section number a document
+      --  numbers it by: 2.5 The core shall ... is The core shall ...
+      function Unsectioned (Title : String) return String is
+         Stop : Natural := Title'First;
+      begin
+         while Stop <= Title'Last and then Title (Stop) in '0' .. '9' | '.' loop
+            Stop := Stop + 1;
+         end loop;
+         return (if Stop > Title'First + 1 and then Stop < Title'Last and then Title (Stop) = ' '
+                   and then Ada.Strings.Fixed.Index (Title (Title'First .. Stop - 1), ".") > 0
+                   and then Title (Stop + 1) in 'A' .. 'Z' | 'a' .. 'z'
+                 then Title (Stop + 1 .. Title'Last) else Title);
+      end Unsectioned;
+
       procedure Found
         (Kind : Output_Kind; Provenance, Title, Body_Text : String; Given : String := "")
       is
@@ -299,8 +359,12 @@ package body Model_Runner.Framework.Bootstrap is
             (Kind       => Kind,
              Provenance => To_Unbounded_String (Provenance),
              Key        => To_Unbounded_String (Key),
-             Title      => To_Unbounded_String (Title),
-             Text       => To_Unbounded_String (Body_Text),
+             Title      => To_Unbounded_String
+                             (if Kind = Requirement_Candidate then Unsectioned (Lead_In (Title))
+                              else Lead_In (Title)),
+             --  A document read whole keeps its markup; a line, its words.
+             Text       => To_Unbounded_String
+                             (if Kind = Specification_Candidate then Body_Text else Plain (Body_Text)),
              Source     => To_Unbounded_String (Path),
              Criteria   => Null_Unbounded_String,
              Given_Id   => To_Unbounded_String (Given)));
@@ -348,7 +412,9 @@ package body Model_Runner.Framework.Bootstrap is
                      Label : Unbounded_String;
                      After : Unbounded_String;
                   begin
-                     Label_Split (Cell & " x", Label, After);
+                     --  A cell that is a label alone -- FR-1, A1 -- read as
+                     --  one, with a colon after it as a line would have.
+                     Label_Split (Cell & ": x", Label, After);
                      if Id = Null_Unbounded_String and then To_String (Label) = Cell then
                         Id := To_Unbounded_String (Cell);
                      elsif (for some C of Cell => C not in '-' | ':' | ' ')
@@ -521,8 +587,18 @@ package body Model_Runner.Framework.Bootstrap is
          --  Under a heading a document's own label opens, the first line
          --  stating a requirement is it, under that label.
          if Pending_Label /= Null_Unbounded_String and then Says_Requirement (Item, True) then
-            Found (Requirement_Candidate, Path & "#" & To_String (Pending_Label),
-                   To_String (Pending_Label) & ": " & Headline (To_String (Pending_Title)), Item);
+            --  A label that is a requirement's identifier is the one it is
+            --  made under, where the project does not hold it already.
+            declare
+               Own : constant Boolean :=
+                 Length (Pending_Label) > 4 and then Slice (Pending_Label, 1, 4) = "REQ-"
+                 and then Identifiers.Is_Valid (To_String (Pending_Label));
+            begin
+               Found (Requirement_Candidate, Path & "#" & To_String (Pending_Label),
+                      (if Own then Headline (To_String (Pending_Title))
+                       else To_String (Pending_Label) & ": " & Headline (To_String (Pending_Title))),
+                      Item, Given => (if Own then To_String (Pending_Label) else ""));
+            end;
             Pending_Label := Null_Unbounded_String;
             Section := Length (Result);
             return;
@@ -687,6 +763,16 @@ package body Model_Runner.Framework.Bootstrap is
       --  sentence and this one starts nothing of its own.
       Paragraph : Unbounded_String;
 
+      --  A line that is a document's label and a short title, no more.
+      function Labelled_Title (Raw : String) return Boolean is
+         Label : Unbounded_String;
+         Rest  : Unbounded_String;
+      begin
+         Label_Split (Unmarked (Raw), Label, Rest);
+         return Label /= Null_Unbounded_String and then Length (Rest) in 1 .. 80
+           and then Element (Rest, Length (Rest)) not in '.' | '!' | '?';
+      end Labelled_Title;
+
       function Starts_Own (Raw : String) return Boolean is
          Label : Unbounded_String;
          Rest  : Unbounded_String;
@@ -784,6 +870,7 @@ package body Model_Runner.Framework.Bootstrap is
          Lower    : constant String := Ada.Characters.Handling.To_Lower (Path);
          Heading  : Unbounded_String;
          Has_Status : Boolean := False;
+         Has_Decision : Boolean := False;
          Links    : Natural := 0;
          Labelled : Natural := 0;
          Content  : Natural := 0;
@@ -800,7 +887,9 @@ package body Model_Runner.Framework.Bootstrap is
                Heading := To_Unbounded_String (Trim (Line (Line'First + 2 .. Line'Last)));
             end if;
             Has_Status := Has_Status or else Starts_With (Bare (Line), "Status:")
-              or else Starts_With (Line, "## Status");
+              or else Line = "## Status" or else Starts_With (Line, "## Status");
+            Has_Decision := Has_Decision
+              or else Ada.Characters.Handling.To_Lower (Line) in "## decision" | "## decision outcome";
             if Line /= "" and then Line (Line'First) /= '#' then
                Content := Content + 1;
                if Bare (Line) /= Line and then Ada.Strings.Fixed.Index (Line, "](") > 0 then
@@ -840,7 +929,9 @@ package body Model_Runner.Framework.Bootstrap is
                            or else Ada.Strings.Fixed.Index (Lower, "/decisions/") > 0
                            or else Ada.Strings.Fixed.Index (Upper, "ADR") = Upper'First
                            or else (Digits_End >= Title'First and then Digits_End < Title'Last
-                                    and then Title (Digits_End + 1) = '.' and then Has_Status))
+                                    and then Title (Digits_End + 1) = '.' and then Has_Status)
+                           --  Wherever it is, a record by its sections.
+                           or else (Has_Status and then Has_Decision))
             then
                return False;
             end if;
@@ -907,7 +998,9 @@ package body Model_Runner.Framework.Bootstrap is
                     or else Ada.Strings.Fixed.Index (Lower_Status, "deprecate") > 0
                     or else Ada.Strings.Fixed.Index (Lower_Status, "reject") > 0
                   then
-                     Found (Issue, Path & "#" & Mark,
+                     --  Under a provenance of its own: what was made from the
+                     --  record before is no longer said, and retired with it.
+                     Found (Issue, Path & "#" & Mark & "#retired",
                             Mark & " is " & To_String (Status) & ", so it is not proposed: " & Headline (Name),
                             To_String (Status));
                      return True;
@@ -938,7 +1031,24 @@ package body Model_Runner.Framework.Bootstrap is
                   Flush;
                   In_Fence := not In_Fence;
                elsif not In_Fence then
-                  if Paragraph /= Null_Unbounded_String and then not Starts_Own (Raw)
+                  --  LABEL: Title, with its statement on the line after: the
+                  --  label and title the statement's, as under a heading.
+                  if Paragraph /= Null_Unbounded_String and then Raw /= ""
+                    and then Says_Requirement (Raw, True)
+                    and then not Says_Requirement (To_String (Paragraph), True)
+                    and then Labelled_Title (To_String (Paragraph))
+                  then
+                     declare
+                        Label : Unbounded_String;
+                        Rest  : Unbounded_String;
+                     begin
+                        Label_Split (Unmarked (To_String (Paragraph)), Label, Rest);
+                        Paragraph := Null_Unbounded_String;
+                        Pending_Label := Label;
+                        Pending_Title := Rest;
+                        Paragraph := To_Unbounded_String (Raw);
+                     end;
+                  elsif Paragraph /= Null_Unbounded_String and then not Starts_Own (Raw)
                     and then Element (Paragraph, Length (Paragraph)) not in '.' | '!' | '?' | ':'
                     and then Element (Paragraph, 1) not in '#' | '|'
                   then
@@ -1168,6 +1278,23 @@ package body Model_Runner.Framework.Bootstrap is
       function Field (Text : Unbounded_String) return String
       is (To_String (Text));
 
+      --  What a document numbers itself first, then the rest: an
+      --  identifier a document gives is its own, not taken by a line that
+      --  gave none and happened to be read before it.
+      function Numbered_First return Output_List is
+         Result : Output_List;
+      begin
+         for Pass in 1 .. 2 loop
+            for Next of Found.Outputs loop
+               if (Length (Next.Given_Id) > 0) = (Pass = 1) then
+                  Result.Outputs.Append (Next);
+               end if;
+            end loop;
+         end loop;
+         return Result;
+      end Numbered_First;
+      Ordered : constant Output_List := Numbered_First;
+
       Settings : constant Records.Item := Settings_Of (Item);
       Kinds    : constant Name_Lists.Vector :=
         Items_Of (Records.Get (Settings, "set.bootstrap.propose"));
@@ -1266,7 +1393,7 @@ package body Model_Runner.Framework.Bootstrap is
       Result := (others => <>);
       Status := E.Success;
 
-      for Next of Found.Outputs loop
+      for Next of Ordered.Outputs loop
          if not Made (Next.Kind) then
             goto Next_Output;
          end if;
@@ -1765,6 +1892,16 @@ package body Model_Runner.Framework.Bootstrap is
                         Staged : Boolean;
                         Moved  : Boolean;
                      begin
+                        --  Its document moved: the entry it made is followed
+                        --  there, not made a second time.
+                        declare
+                           Followed : constant String := Moved_Here (Intent.Requirement);
+                        begin
+                           if Followed /= "" then
+                              Again (Intent.Requirement, Followed, Settled => Document_Rules);
+                              goto Next_Output;
+                           end if;
+                        end;
                         if Adopted (Intent.Requirement, Given) then
                            goto Next_Output;
                         end if;
@@ -1889,8 +2026,21 @@ package body Model_Runner.Framework.Bootstrap is
                      declare
                         Instead : Unbounded_String;
                         Said    : Results.Result;
+                        --  A record that marks itself retired says so: that is
+                        --  why, not that the line went.
+                        function Retired_As return String is
+                        begin
+                           for Next of Found.Outputs loop
+                              if Field (Next.Provenance) = To_String (Held.Provenance) & "#retired" then
+                                 return Field (Next.Text);
+                              end if;
+                           end loop;
+                           return "";
+                        end Retired_As;
                         Why     : constant String :=
-                          Known & ": " & To_String (Held.Source) & " no longer says it";
+                          Known & ": " & To_String (Held.Source)
+                          & (if Retired_As = "" then " no longer says it"
+                             else " now marks it " & Retired_As);
 
                         --  Of its own register: a decision is not replaced by
                         --  a requirement.

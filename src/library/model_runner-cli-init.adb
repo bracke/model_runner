@@ -515,6 +515,29 @@ package body Model_Runner.CLI.Init is
             Skipped_Said : Unbounded_String;
             Warned      : Unbounded_String;
 
+            --  Whether the plan writes a file beside a manifest kept: only
+            --  then are the two to agree on the crate's name.
+            function Writes_Beside (Manifest : String) return Boolean is
+               Slash : constant Natural := Ada.Strings.Fixed.Index (Manifest, "/", Ada.Strings.Backward);
+               Dir   : constant String := (if Slash = 0 then "" else Manifest (Manifest'First .. Slash));
+            begin
+               for Position in Planned.Files.Iterate loop
+                  declare
+                     Other : constant String := Cf.Value_Maps.Key (Position);
+                     Cut   : constant Natural := Ada.Strings.Fixed.Index (Other, "/", Ada.Strings.Backward);
+                  begin
+                     if Other /= Manifest
+                       and then (if Cut = 0 then "" else Other (Other'First .. Cut)) = Dir
+                       and then Other (Other'First) /= '.'
+                       and then not Ada.Directories.Exists (Hostkit.Fs.Join (Directory, Other))
+                     then
+                        return True;
+                     end if;
+                  end;
+               end loop;
+               return False;
+            end Writes_Beside;
+
             --  What an input is for, as its template says.
             function Described (Id : String) return String is
             begin
@@ -605,7 +628,11 @@ package body Model_Runner.CLI.Init is
                   Append (Inputs_Said, (if Inputs_Said = Null_Unbounded_String then "" else ", ")
                                        & Id & " = "
                                        & (if Secret then Pres.Message_Value (Screen, "cli.init.secret")
-                                          else Cf.Value_Maps.Element (Position)));
+                                          else Cf.Value_Maps.Element (Position))
+                                       --  The command true is a check of nothing, not a yes.
+                                       & (if Id in "check_command" | "check_program"
+                                            and then Cf.Value_Maps.Element (Position) = "true"
+                                          then " (the command true: nothing is checked yet)" else ""));
                end;
             end loop;
             for Made of Planned.Directories loop
@@ -629,6 +656,7 @@ package body Model_Runner.CLI.Init is
                      --  inputs: what the template writes beside it assumes
                      --  its own, and would not build against this one.
                      if Ada.Directories.Simple_Name (Path) = "alire.toml"
+                       and then Writes_Beside (Path)
                        and then Planned.Inputs.Contains ("project_name")
                        and then Crate_Named (Hostkit.Fs.Join (Directory, Path)) /= ""
                        and then Crate_Named (Hostkit.Fs.Join (Directory, Path))
@@ -658,23 +686,6 @@ package body Model_Runner.CLI.Init is
                   Append (Kept_Said, (if Kept_Said = Null_Unbounded_String then "" else ", ") & Path);
                else
                   Append (Skipped_Said, (if Skipped_Said = Null_Unbounded_String then "" else ", ") & Path);
-               end if;
-               if Ada.Directories.Simple_Name (Path) = "alire.toml"
-                 and then Ada.Directories.Exists (Hostkit.Fs.Join (Directory, Path))
-                 and then Planned.Inputs.Contains ("project_name")
-                 and then Crate_Named (Hostkit.Fs.Join (Directory, Path)) /= ""
-                 and then Crate_Named (Hostkit.Fs.Join (Directory, Path)) /= Planned.Inputs ("project_name")
-               then
-                  Say ("cli.init.kept_differs",
-                       [Loc.Named ("path", Path),
-                        Loc.Named ("name", Crate_Named (Hostkit.Fs.Join (Directory, Path))),
-                        Loc.Named ("value", Planned.Inputs ("project_name"))]);
-                  Append (Warned, Pres.Next_Step_Value
-                                    (Screen, "cli.init.kept_differs",
-                                     [Loc.Named ("path", Path),
-                                      Loc.Named ("name", Crate_Named (Hostkit.Fs.Join (Directory, Path))),
-                                      Loc.Named ("value", Planned.Inputs ("project_name"))])
-                                  & ASCII.LF);
                end if;
             end loop;
             if Skipped_Said /= Null_Unbounded_String then

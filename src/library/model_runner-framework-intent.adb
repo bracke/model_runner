@@ -522,6 +522,36 @@ package body Model_Runner.Framework.Intent is
          Event_For (Kind, Next), Status, Actor);
    end Move;
 
+   -------------
+   -- Rescope --
+   -------------
+
+   procedure Rescope
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Kind   : Intent_Kind;
+      Id     : String;
+      Scope  : String;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Value : Records.Item;
+   begin
+      Current (Item, Change, Kind, Id, Value, Status);
+      if E.Is_Error (Status) then
+         return;
+      elsif Records.Get (Value, "state") in "obsolete" | "superseded" then
+         Status := E.Make (E.Framework_Transition_Invalid);
+         E.Add_Text (Status, "name", Id);
+         E.Add_Text (Status, "value", Records.Get (Value, "state"));
+         E.Add_Text (Status, "expected", "a new revision");
+         E.Add_Text (Status, "detail", "what is retired is not placed anew");
+         return;
+      end if;
+      Keep_Earlier (Item, Change, Kind, Id);
+      Records.Set (Value, "scope", (if Scope = "" then "project" else Scope));
+      Stores.Put (Change, Area_Of (Kind), Id, Value);
+   end Rescope;
+
    ------------
    -- Revise --
    ------------

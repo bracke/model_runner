@@ -27,12 +27,15 @@ package Model_Runner.Framework.Consistency is
       Invalid_Task_Kind,
       Invalid_Task_Field,
       Missing_Symbol,
+      Missing_File,
+      Missing_Evidence,
       Stale_Verification,
       Completed_Without_Gate,
       Workspace_Assignment,
       Permission_Widening,
       Missing_Component,
       Ready_With_Open_Dependency,
+      Waits_On_Ended_Part,
       Unserved_Requirement);
 
    --  One thing found wrong.

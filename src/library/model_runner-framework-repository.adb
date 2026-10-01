@@ -1099,6 +1099,20 @@ package body Model_Runner.Framework.Repository is
 
       --  Whether the name at a place -- its whole dotted name -- is being
       --  declared or ended there, not used.
+      --  Whether the name at a place is written whole, as its owner and
+      --  itself -- Uuid.Values.Make_V7 -- a unit the file withs: no guess.
+      function Spelled_Whole (At_Index : Positive; Owner : String) return Boolean is
+         Spelled : Unbounded_String;
+         First   : Natural := At_Index;
+      begin
+         while First > 2 and then Is_Mark (Tokens (First - 1), '.') and then Tokens (First - 2).Kind = Word loop
+            First := First - 2;
+            Spelled := (if Spelled = Null_Unbounded_String then Tokens (First).Text
+                        else Tokens (First).Text & "." & Spelled);
+         end loop;
+         return Spelled /= Null_Unbounded_String and then Lower (To_String (Spelled)) = Lower (Owner);
+      end Spelled_Whole;
+
       function Declaring (At_Index : Positive) return Boolean is
          First : Positive := At_Index;
       begin
@@ -1209,6 +1223,9 @@ package body Model_Runner.Framework.Repository is
                                      /= Lower (Last_Part (Owner)))
                        and then not (Own and then Here.Line = Item.Line)
                        and then not Declaring (At_Index)
+                       --  An attribute, X'Image, is the language's, not a use
+                       --  of something called Image.
+                       and then not (At_Index > 1 and then Is_Mark (Tokens (At_Index - 1), '''))
                        and then (To_String (Item.Kind) /= "package" or else Qualified)
                      then
                         Add_Relation
@@ -1216,8 +1233,8 @@ package body Model_Runner.Framework.Repository is
                            (Kind  => References,
                             From  => To_Unbounded_String (Path),
                             To    => Item.Name,
-                            Source => Heuristic,
-                            Sure   => Probable,
+                            Source => (if Spelled_Whole (At_Index, Owner) then Explicit else Heuristic),
+                            Sure   => (if Spelled_Whole (At_Index, Owner) then Certain else Probable),
                             Where  => To_Unbounded_String
                                         (Path & ":" & Image (Here.Line)), Origin => <>));
 
@@ -1632,7 +1649,7 @@ package body Model_Runner.Framework.Repository is
    --  How source is read into the graph: a graph kept by another is read
    --  again. 2: Ada bodies declare their subprograms too. 3: a generic's
    --  formal part is not its unit.
-   Reader_Version : constant String := "4";
+   Reader_Version : constant String := "5";
 
    ------------
    -- Memory --
@@ -2160,6 +2177,8 @@ package body Model_Runner.Framework.Repository is
       for Link of From.Relations loop
          if Link.Kind = Depends_On
            and then Lower (To_String (Link.To)) = Lower (Unit)
+           --  A unit is not its own user: a C body including its header.
+           and then Lower (To_String (Link.From)) /= Lower (Unit)
            and then not Result.Contains (To_String (Link.From))
          then
             Result.Append (To_String (Link.From));

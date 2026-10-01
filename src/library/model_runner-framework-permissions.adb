@@ -859,6 +859,20 @@ package body Model_Runner.Framework.Permissions is
          then
             return Path (Path'First + Base'Length .. Path'Last);
          end if;
+         --  A path through a directory called as the project is -- as a
+         --  model guesses where the project lies -- is what follows it.
+         declare
+            Named : constant String :=
+              "/" & Ada.Directories.Simple_Name (Ada.Directories.Full_Name (if Root = "" then "." else Root)) & "/";
+            At_Name : constant Natural := Ada.Strings.Fixed.Index (Path, Named, Ada.Strings.Backward);
+         begin
+            if At_Name > 0 and then At_Name + Named'Length <= Path'Last then
+               return Path (At_Name + Named'Length .. Path'Last);
+            end if;
+         exception
+            when others =>
+               null;
+         end;
          --  The longest tail of it the project holds -- /x/project/src/a.adb
          --  is src/a.adb, not a.adb -- or, for a file not there yet, the
          --  longest whose directory is.
@@ -883,7 +897,18 @@ package body Model_Runner.Framework.Permissions is
                end if;
             end loop;
          end loop;
-         return (if Slash = 0 or else Slash = Path'Last then "" else Path (Slash + 1 .. Path'Last));
+         --  Its last part, for a file to be written; for one to be read,
+         --  only where the project has it -- not a name that is no file.
+         declare
+            Tail : constant String :=
+              (if Slash = 0 or else Slash = Path'Last then "" else Path (Slash + 1 .. Path'Last));
+         begin
+            return (if Writing or else (Tail /= "" and then Ada.Directories.Exists (Base & Tail)) then Tail
+                    else "");
+         exception
+            when others =>
+               return "";
+         end;
       end Last_Part;
 
       Outside : constant String :=

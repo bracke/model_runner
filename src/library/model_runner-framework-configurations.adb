@@ -5,6 +5,7 @@ with Ada.Strings.Maps;
 with Ada.Directories;
 
 with Hostkit.Fs;
+with Hostkit.Process;
 
 with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Events;
@@ -597,6 +598,25 @@ package body Model_Runner.Framework.Configurations is
                         end;
                         Index := Close + 1;
                         goto Next_Character;
+                     elsif Name'Length > 4
+                       and then Name (Name'Last - 3 .. Name'Last) = ".ada"
+                       and then Known.Contains (Name (Name'First .. Name'Last - 4))
+                     then
+                        --  As an Ada name is written: each word's first
+                        --  letter a capital -- greetings is Greetings,
+                        --  my_lib My_Lib.
+                        declare
+                           Value : String := Known (Name (Name'First .. Name'Last - 4));
+                        begin
+                           for At_Index in Value'Range loop
+                              if At_Index = Value'First or else Value (At_Index - 1) in '_' | '.' then
+                                 Value (At_Index) := Ada.Characters.Handling.To_Upper (Value (At_Index));
+                              end if;
+                           end loop;
+                           Append (Output, Value);
+                        end;
+                        Index := Close + 1;
+                        goto Next_Character;
                      elsif not Known.Contains (Name) then
                         Invalid ("${" & Name & "} names no input declared"
                                  & " before it");
@@ -637,6 +657,11 @@ package body Model_Runner.Framework.Configurations is
                   --  The rule a Makefile has: check, or its first one.
                   Found.Include (To_String (Rule.Key),
                                  (if Make_Rule (Project_Directory, "check") then "make check" else "make"));
+               elsif Rule.To_Input and then To_String (Rule.Value) = "python3 -m pytest"
+                 and then Hostkit.Process.Locate ("pytest") = ""
+               then
+                  --  No pytest here: the runner Python has of its own.
+                  Found.Include (To_String (Rule.Key), "python3 -m unittest discover");
                elsif Rule.To_Input then
                   Found.Include (To_String (Rule.Key), To_String (Rule.Value));
                else
@@ -1390,7 +1415,10 @@ package body Model_Runner.Framework.Configurations is
          return "agents: the most helpers any agent makes, and parts any task splits into, and how"
            & " deep -- the project's bound, below which a level's create_children max_children"
            & " and max_depth hold";
-      elsif Starts (Name, "scalar.work.") or else Starts (Name, "scalar.agents.") then
+      elsif Starts (Name, "scalar.work.") or else Starts (Name, "scalar.agents.")
+        or else Starts (Name, "scalar.task.max_seconds.") or else Starts (Name, "scalar.task.max_tool_calls.")
+        or else Starts (Name, "scalar.task.max_steps.") or else Starts (Name, "scalar.task.token_budget.")
+      then
          return "work: how agents run tasks from now on";
       elsif Starts (Name, "list.automation.") then
          return "automation: what happens on its own after an event";

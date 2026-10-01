@@ -30,6 +30,9 @@ package Model_Runner.CLI.Project_Requests is
       --  context is budgeted for, as /work budgets it.
       Session_Profile     : Model_Runner.Framework.Context.Model_Profile;
       Has_Session_Profile : Boolean := False;
+
+      --  A cancel asked about already -- by /cancel -- is not asked again.
+      Cancel_Confirmed    : Boolean := False;
    end record;
 
 end Model_Runner.CLI.Project_Requests;

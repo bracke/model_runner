@@ -161,6 +161,13 @@ package Model_Runner.Framework.Agents is
    --  @return The count.
    function Active_Count (Item : Stores.Store) return Natural;
 
+   --  The agent working on a task now: its root agent, made and not ended.
+   --
+   --  @param Item The store.
+   --  @param Task_Id The task.
+   --  @return Its identifier, or "" for none.
+   function Working_On (Item : Stores.Store; Task_Id : String) return String;
+
    --  The children of an agent.
    --
    --  @param Item The store.

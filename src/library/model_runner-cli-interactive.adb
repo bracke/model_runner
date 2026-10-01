@@ -276,6 +276,9 @@ package body Model_Runner.CLI.Interactive is
       --  Whether this session hid the echo of control keys, to show again.
       Keys_Hidden  : Boolean := False;
 
+      --  Whether lines typed during a /work are still being taken up.
+      Draining     : Boolean := False;
+
       --  The pictures the conversation shows, gathered before every turn
       --  from the turns as they stand; a picture named with /image goes
       --  into the next turn typed, as a part beside its words.
@@ -466,6 +469,10 @@ package body Model_Runner.CLI.Interactive is
                      Pres.Put_Aside (Screen, "cli.interactive.usage.state");
                   elsif Named = "check" then
                      Pres.Put_Aside (Screen, "cli.interactive.usage.check");
+                  elsif Named = "bootstrap" then
+                     Pres.Put_Aside (Screen, "cli.interactive.usage.bootstrap");
+                  elsif Named = "instruct" then
+                     Pres.Put_Aside (Screen, "cli.interactive.usage.instruct");
                   end if;
                else
                   Pres.Put_Message (Screen, "cli.interactive.help_unknown",
@@ -989,11 +996,16 @@ package body Model_Runner.CLI.Interactive is
                   end if;
                   --  Typed while a /work ran, unshown then: there at once
                   --  now, and shown as what is run.
-                  if Model_Runner.CLI.Project_Commands.Typed_During_Work
-                    and then Ada.Calendar.Clock - Asked_At < 0.3 and then Stop >= Room'First
-                  then
+                  --  Every line typed then, not the first alone: each comes at
+                  --  once, and is shown on a line of its own.
+                  if Model_Runner.CLI.Project_Commands.Typed_During_Work then
+                     Draining := True;
+                  end if;
+                  if Draining and then Ada.Calendar.Clock - Asked_At < 0.3 and then Stop >= Room'First then
                      Pres.Put_After_Prompt (Screen, "cli.interactive.typed_during_work",
                                     [Loc.Named ("value", T.Escape_Controls (Room (Room'First .. Stop)))]);
+                  else
+                     Draining := False;
                   end if;
                end;
                Model_Runner.Platform.Signals.Set_Waiting_For_Input (False);
@@ -1040,6 +1052,10 @@ package body Model_Runner.CLI.Interactive is
                     (if Last_Key = 0 then Typed else Typed (Last_Key + 1 .. Typed'Last));
                begin
                   if Last_Key > 0 then
+                     --  An Esc the terminal echoed as it is leaves a sequence
+                     --  open the next output would end, losing its first
+                     --  character: cancelled first.
+                     Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CAN);
                      Taken (Typing);
                      Pres.Put_Note
                        (Screen, "cli.interactive.dropped_key",

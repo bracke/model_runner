@@ -118,6 +118,29 @@ package body Model_Runner.Framework.Agents is
       end if;
    end Read;
 
+   function Working_On (Item : Stores.Store; Task_Id : String) return String is
+   begin
+      for Name of Stores.Names (Item, Runtime_Area) loop
+         if Name'Length > Prefix'Length
+           and then Name (Name'First .. Name'First + Prefix'Length - 1) = Prefix
+         then
+            declare
+               Held   : Agent;
+               Status : E.Error_Info;
+            begin
+               Read (Item, Name (Name'First + Prefix'Length .. Name'Last), Held, Status);
+               if E.Is_Ok (Status) and then To_String (Held.Task_Id) = Task_Id
+                 and then Length (Held.Parent) = 0
+                 and then To_String (Held.Status) in "created" | "running" | "waiting"
+               then
+                  return To_String (Held.Id);
+               end if;
+            end;
+         end if;
+      end loop;
+      return "";
+   end Working_On;
+
    --  How many agents are going: made and not ended.
    function Active_Count (Item : Stores.Store) return Natural is
       Count : Natural := 0;
@@ -638,6 +661,23 @@ package body Model_Runner.Framework.Agents is
          end loop;
          return False;
       end Made_Good;
+
+      --  Whether a child was run again: its last run is the one to name.
+      function Retried (Failed : String) return Boolean is
+      begin
+         for Child of Mine loop
+            declare
+               Held   : Agent;
+               Status : E.Error_Info;
+            begin
+               Read (Item, Child, Held, Status);
+               if To_String (Held.Retry_Of) = Failed then
+                  return True;
+               end if;
+            end;
+         end loop;
+         return False;
+      end Retried;
    begin
       Reason := Null_Unbounded_String;
       for Child of Mine loop
@@ -652,6 +692,7 @@ package body Model_Runner.Framework.Agents is
                                                  & " is still going");
                   return False;
                elsif To_String (Held.Status) = "failed" and then not Made_Good (Child)
+                 and then not Retried (Child)
                  and then not Past_Failures
                then
                   Reason := To_Unbounded_String

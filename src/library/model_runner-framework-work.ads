@@ -455,13 +455,16 @@ package Model_Runner.Framework.Work is
    --    code joins it to.
    --  @param Text_Resolved Whether the person has settled the conflicts of
    --    text in the workspace's files, which are taken over the project's.
+   --  @param Replaced_Kept Where the project's copies are kept that a
+   --    resolved anyway put the workspace's over; "" where none was.
    procedure Take_In
      (Item    : in out Stores.Store;
       Task_Id : String;
       Result  : out Report;
       Status  : out Model_Runner.Errors.Error_Info;
       Semantic_Accepted : Boolean := False;
-      Text_Resolved     : Boolean := False);
+      Text_Resolved     : Boolean := False;
+      Replaced_Kept     : String := "");
 
    --  Cancel a task, and let go of what it holds whatever its state: its
    --  agent and every child of it still going are recorded cancelled, its

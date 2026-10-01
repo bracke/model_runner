@@ -2973,11 +2973,19 @@ package body Tests.Framework_Cases is
                elsif Link.Kind = Rp.References then
                   --  A with clause names its unit for certain; a name
                   --  matched is a heuristic.
-                  Assert (Link.Source = Rp.Heuristic
-                          or else (Link.Source = Rp.Explicit
-                                   and then not Rp.Dependents_Of (Found, To_String (Link.To))
-                                                  .Is_Empty),
-                          "a name match claims more than a heuristic");
+                  --  ... or the name written whole, its unit's and its own,
+                  --  where a unit that withs it does.
+                  declare
+                     Target : constant String := To_String (Link.To);
+                     Dot    : constant Natural := Ada.Strings.Fixed.Index (Target, ".", Ada.Strings.Backward);
+                     Owner  : constant String := (if Dot = 0 then Target else Target (Target'First .. Dot - 1));
+                  begin
+                     Assert (Link.Source = Rp.Heuristic
+                             or else (Link.Source = Rp.Explicit
+                                      and then (not Rp.Dependents_Of (Found, Target).Is_Empty
+                                                or else not Rp.Dependents_Of (Found, Owner).Is_Empty)),
+                             "a name match claims more than a heuristic");
+                  end;
                end if;
             end;
          end loop;
@@ -5731,6 +5739,10 @@ package body Tests.Framework_Cases is
       Ag.Start_Root (Store, Change, "TASK-001", "planner", "", Root, Status);
       S.Commit (Store, Change, Status);
       Assert (E.Is_Ok (Status), "a root agent was not made: " & Code_Of (Status));
+      --  The task's agent is the root, not a child, and no other task's.
+      Assert (Ag.Working_On (Store, "TASK-001") = To_String (Root)
+              and then Ag.Working_On (Store, "TASK-404") = "",
+              "the agent working on a task was not found as its root");
 
       Ag.Spawn_Child (Store, Change, To_String (Root), "coder", Ag.Required,
                       Pm.Unrestricted, 300, First, Status);
@@ -6556,6 +6568,17 @@ package body Tests.Framework_Cases is
          --  A test linked by its path is a file the project has.
          Dirs.Create_Path (Dirs.Containing_Directory (S.Root (Store)) & "/tests");
          Put_File (Dirs.Containing_Directory (S.Root (Store)) & "/tests/input", "input" & LF);
+         --  Placed in another scope, as its next revision.
+         declare
+            Before : constant Natural := Held.Revision;
+            Moved  : S.Transaction;
+         begin
+            Nt.Rescope (Store, Moved, Nt.Requirement, Req, "project", Status);
+            S.Commit (Store, Moved, Status);
+            Nt.Read (Store, Nt.Requirement, Req, Held, Status);
+            Assert (E.Is_Ok (Status) and then Held.Revision > Before and then To_String (Held.Scope) = "project",
+                    "a requirement was not placed in its scope as a new revision");
+         end;
          Say (Nt.Requirement, "link|" & Req & "|test|tests/input");
          Assert (Nt.Links (Store, Nt.Requirement, Req, Nt.Test).Contains ("tests/input"),
                  "a requirement was not linked");
@@ -7028,9 +7051,9 @@ package body Tests.Framework_Cases is
                  "a task's earlier revision was written over, or taken for a task");
       end;
       Revise_Fields.Clear;
-      Revise_Fields.Include ("kind", "implementation");
+      Revise_Fields.Include ("kind", "nonsense");
       Tk.Revise (Store, Change, To_String (A), Revise_Fields, Status);
-      Assert (Status.Code = E.Framework_Input_Invalid, "a task's kind was revised");
+      Assert (Status.Code = E.Framework_Task_Kind_Unknown, "a task's kind was revised to one there is not");
       Change := S.No_Changes;
 
       --  Split: the parent waits on its parts.
@@ -8942,8 +8965,10 @@ package body Tests.Framework_Cases is
                   Model_Runner.Framework.Workspaces.Restore_Kept (Kept_Store, Copies.First_Element, Got);
                   Assert (E.Is_Ok (Got)
                           and then Ada.Strings.Fixed.Trim
-                                     (Read_Whole (Project & "/src/kept.txt"), Ada.Strings.Both) = "before",
-                          "a kept copy was not put back");
+                                     (Read_Whole (Project & "/src/kept.txt"), Ada.Strings.Both) = "before"
+                          and then Model_Runner.Framework.Workspaces.Was_Restored
+                                     (Kept_Store, Copies.First_Element),
+                          "a kept copy was not put back, or not marked so");
                   Model_Runner.Framework.Workspaces.Drop_Kept (Kept_Store, Copies.First_Element, Got);
                   Assert (E.Is_Ok (Got)
                           and then not Model_Runner.Framework.Workspaces.Kept_Copies (Kept_Store)
@@ -9341,8 +9366,8 @@ package body Tests.Framework_Cases is
                        and then Ada.Strings.Fixed.Index (Text, "Stars counted") > 0
                        and then Ada.Strings.Fixed.Index (Text, "moved from") > 0
                        and then Ada.Strings.Fixed.Index (Text, "a proposal REQ-404") > 0
-                       and then Ada.Strings.Fixed.Index (Text, "nowhere.md is not a value for a document"
-                                                           & " to read: there is no such file") > 0
+                       and then Ada.Strings.Fixed.Index (Text, "a document to read: nowhere.md will not do"
+                                                           & " -- there is no such file") > 0
                        and then Ada.Strings.Fixed.Index (Text, "not given: confirm") > 0,
                        "/task ID, an unknown /task action or /req show said nothing: " & Text);
             end;
