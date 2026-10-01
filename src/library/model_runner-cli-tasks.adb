@@ -2138,7 +2138,15 @@ package body Model_Runner.CLI.Tasks is
                   end;
                end if;
             end;
-            Once ("workspace_policy");
+            --  Where it works, in words: the project itself, or apart.
+            if R.Has (View, "workspace_policy") then
+               Said.Append ("workspace_policy");
+               Grouped ("  " & "works in",
+                        (if R.Get (View, "workspace_policy") = "workspace"
+                         then "a workspace of its own, taken in by /task integrate " & Argument
+                         elsif R.Get (View, "workspace_policy") = "project" then "the project itself"
+                         else R.Get (View, "workspace_policy")));
+            end if;
             --  How long, how many steps, how many tokens -- the time with the
             --  setting it comes from, as that is what stops a run.
             declare
