@@ -665,24 +665,6 @@ package body Model_Runner.CLI.Work is
             end if;
          end;
       end loop;
-      --  steps= is a count of a run apart's steps: checked before anything
-      --  starts, and refused where nothing would read it.
-      if Given.Contains ("steps") then
-         declare
-            Steps : constant String := Given ("steps");
-         begin
-            if Steps'Length not in 1 .. 6 or else (for some C of Steps => C not in '0' .. '9')
-              or else Natural'Value (Steps) = 0
-            then
-               Outcome := E.Make (E.Framework_Input_Invalid);
-               E.Add_Text (Outcome, "name", "steps");
-               E.Add_Text (Outcome, "value", Steps);
-               E.Add_Text (Outcome, "detail", "it is a whole number of steps, at least 1");
-               Fail (Outcome);
-               return;
-            end if;
-         end;
-      end if;
       if Model_Runner.Framework.Permissions.Sandbox_Problem /= "" then
          Outcome := E.Make (E.Framework_Input_Invalid);
          E.Add_Text (Outcome, "name", "MODEL_RUNNER_SANDBOX");
@@ -698,6 +680,31 @@ package body Model_Runner.CLI.Work is
          return;
       end if;
       Model_Runner.Framework.Configurations.Read (Store, Config, Outcome);
+      --  A profile it names is one the configuration has.
+      if Given.Contains ("profile") and then Given ("profile") /= "default"
+        and then not R.Has (Config, "map.model." & Given ("profile"))
+      then
+         declare
+            Known : Unbounded_String;
+         begin
+            for Index in 1 .. R.Field_Count (Config) loop
+               if Ada.Strings.Fixed.Index (R.Field_Name (Config, Index), "map.model.") = 1 then
+                  Append (Known, (if Known = Null_Unbounded_String then "" else ", ")
+                                 & R.Field_Name (Config, Index) (R.Field_Name (Config, Index)'First + 10
+                                                                 .. R.Field_Name (Config, Index)'Last));
+               end if;
+            end loop;
+            Outcome := E.Make (E.Framework_Input_Invalid);
+            E.Add_Text (Outcome, "name", "profile");
+            E.Add_Text (Outcome, "value", Given ("profile"));
+            E.Add_Text (Outcome, "detail", "there is no map.model." & Given ("profile")
+                        & (if Known = Null_Unbounded_String then "; /reconfigure map.model.NAME=context=N,... makes one"
+                           else "; there are " & To_String (Known)));
+            S.Close (Store);
+            Fail (Outcome);
+            return;
+         end;
+      end if;
       if Given.Contains ("steps") and then Setting ("model", "") = "" then
          Outcome := E.Make (E.Framework_Input_Invalid);
          E.Add_Text (Outcome, "name", "steps");
@@ -708,6 +715,25 @@ package body Model_Runner.CLI.Work is
          S.Close (Store);
          Fail (Outcome);
          return;
+      end if;
+      --  steps= is a count of a run apart's steps: checked before anything
+      --  starts, and refused where nothing would read it.
+      if Given.Contains ("steps") then
+         declare
+            Steps : constant String := Given ("steps");
+         begin
+            if Steps'Length not in 1 .. 6 or else (for some C of Steps => C not in '0' .. '9')
+              or else Natural'Value (Steps) = 0
+            then
+               Outcome := E.Make (E.Framework_Input_Invalid);
+               E.Add_Text (Outcome, "name", "steps");
+               E.Add_Text (Outcome, "value", Steps);
+               E.Add_Text (Outcome, "detail", "it is a whole number of steps, at least 1");
+               S.Close (Store);
+               Fail (Outcome);
+               return;
+            end if;
+         end;
       end if;
 
       --  What an interruption left is put right first, so a task whose
@@ -1019,7 +1045,8 @@ package body Model_Runner.CLI.Work is
             Model   : constant Model_Runner.Framework.Context.Model_Profile :=
               (if Given_Runner /= null and then Given_Runner.all in W.Parenting_Runner'Class
                  and then Setting ("profile", "") = "" and then Setting ("model", "") = ""
-               then W.Parenting_Runner'Class (Given_Runner.all).Profile
+               then Model_Runner.Framework.Context.Within_Configured
+                      (Store, W.Parenting_Runner'Class (Given_Runner.all).Profile)
                else Model_Runner.Framework.Context.Profile (Store, Setting ("profile", "")));
             Path    : constant String := Setting ("model", "");
 
@@ -1187,6 +1214,16 @@ package body Model_Runner.CLI.Work is
               (Ada.Directories.Containing_Directory (S.Root (Store)));
             Place : Model_Runner.Framework.Workspaces.Workspace;
             Got   : E.Error_Info;
+
+            --  Files a comma apart.
+            function Files_Said (Listed : Model_Runner.Framework.Name_Lists.Vector) return String is
+               Text : Unbounded_String;
+            begin
+               for One of Listed loop
+                  Append (Text, (if Text = Null_Unbounded_String then "" else ", ") & One);
+               end loop;
+               return To_String (Text);
+            end Files_Said;
          begin
             if Length (Done.Workspace_Id) > 0 then
                Model_Runner.Framework.Workspaces.Read (Store, To_String (Done.Workspace_Id), Place, Got);
@@ -1201,6 +1238,17 @@ package body Model_Runner.CLI.Work is
                   Say ((if Ada.Directories.Exists (Hostkit.Fs.Join (To_String (Tree), Path))
                         then "cli.work.changed" else "cli.work.removed"), Path, "");
                end loop;
+            end if;
+            --  Written over in the project itself: what was there kept, and
+            --  said -- an edit not committed is not lost without a word.
+            if Length (Done.Workspace_Id) = 0
+              and then Model_Runner.Framework.Workspaces.Kept_Copies (Store).Contains
+                         ("overwritten-" & To_String (Chosen))
+            then
+               Pres.Put_Note (Screen, "cli.work.overwritten_kept",
+                              [Loc.Named ("name", "overwritten-" & To_String (Chosen)),
+                               Loc.Named ("detail", Files_Said (Model_Runner.Framework.Workspaces.Kept_Files
+                                                                  (Store, "overwritten-" & To_String (Chosen))))]);
             end if;
          end;
          --  Each helper's end was said as it came, where the session ran
@@ -1359,7 +1407,19 @@ package body Model_Runner.CLI.Work is
          declare
             Final : constant String := To_String (Done.Final_State);
             Shown : constant String :=
-              (if Final = "verification" then "in verification"
+              --  As /task list names it: its work to integrate, or in
+              --  conflict, with the state it is a case of.
+              (if Final = "verification"
+                 and then Model_Runner.Framework.Workspaces.Active_For (Store, To_String (Done.Task_Id)) /= ""
+                 and then not Model_Runner.Framework.Workspaces.Conflict_Files
+                                (Store, Model_Runner.Framework.Workspaces.Active_For
+                                          (Store, To_String (Done.Task_Id)),
+                                 Unsettled_Only => True).Is_Empty
+               then "in conflict (verification)"
+               elsif Final = "verification"
+                 and then Model_Runner.Framework.Workspaces.Active_For (Store, To_String (Done.Task_Id)) /= ""
+               then "to integrate (verification)"
+               elsif Final = "verification" then "in verification"
                elsif Final = "blocked" and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "you stopped") = 1
                then "stopped"
                else Final);
@@ -1534,6 +1594,16 @@ package body Model_Runner.CLI.Work is
                                                 or else Ada.Strings.Fixed.Index (To_String (Done.Reason), " read ") > 0
                                               then "read"
                                               else "reach"))]);
+                  --  What it changed kept apart: said as a way on too.
+                  if Length (Done.Workspace_Id) > 0
+                    and then Model_Runner.Framework.Workspaces.Kept_Copies (Store).Contains
+                               ("given-up-" & To_String (Done.Task_Id) & "-" & To_String (Done.Workspace_Id))
+                  then
+                     Pres.Put_Note (Screen, "cli.next.kept_also",
+                                    [Loc.Named ("name", To_String (Done.Task_Id)),
+                                     Loc.Named ("value", "given-up-" & To_String (Done.Task_Id) & "-"
+                                                         & To_String (Done.Workspace_Id))]);
+                  end if;
                elsif Ada.Strings.Fixed.Index (To_String (Done.Reason), "sandbox") > 0 then
                   Pres.Put_Note (Screen, "cli.next.sandbox_refused",
                                  [Loc.Named ("name", To_String (Done.Task_Id))]);

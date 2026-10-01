@@ -713,7 +713,16 @@ package body Model_Runner.Framework.Repository.Languages is
          else Path);
       Plain : constant String :=
         (if Ends (Rest, ".rs") then Rest (Rest'First .. Rest'Last - 3) else Rest);
-      Result : Unbounded_String := U ("crate");
+      --  A crate of a workspace -- crates/parse/src -- is named by its
+      --  directory, so two crates' modules are not taken for one; a crate at
+      --  the top is the crate.
+      Member : constant String :=
+        (if Under > Path'First + 1 then Path (Path'First .. Under - 2) else "");
+      Slash  : constant Natural := Ada.Strings.Fixed.Index (Member, "/", Ada.Strings.Backward);
+      Result : Unbounded_String :=
+        U (if Member = "" then "crate"
+           else Ada.Strings.Fixed.Translate ((if Slash = 0 then Member else Member (Slash + 1 .. Member'Last)),
+                                            Ada.Strings.Maps.To_Mapping ("-", "_")));
       Base   : constant String :=
         (if Ends (Plain, "/mod") then Plain (Plain'First .. Plain'Last - 4)
          elsif Plain in "lib" | "main" then ""
@@ -809,11 +818,18 @@ package body Model_Runner.Framework.Repository.Languages is
       --  A use path made absolute: self and super are this module's, a
       --  module this file declares is under it, and outside src -- a test,
       --  an example -- the crate's own name is the crate.
+      --  The crate this file is of: crate, or a workspace member's name.
+      Crate_Name : constant String :=
+        (if Ada.Strings.Fixed.Index (Unit, "::") > 0 then Unit (Unit'First .. Ada.Strings.Fixed.Index (Unit, "::") - 1)
+         else Unit);
+
       function Resolved (Said : String) return String is
          Cut   : constant Natural := Ada.Strings.Fixed.Index (Said, "::");
          First : constant String := (if Cut = 0 then Said else Said (Said'First .. Cut - 1));
       begin
-         if Starts (Said, "self::") then
+         if Starts (Said, "crate::") and then Crate_Name /= "crate" and then Starts (Unit, Crate_Name) then
+            return Crate_Name & Said (Said'First + 5 .. Said'Last);
+         elsif Starts (Said, "self::") then
             return Unit & Said (Said'First + 4 .. Said'Last);
          elsif Starts (Said, "super::") then
             return Rust_Parent (Unit) & Said (Said'First + 5 .. Said'Last);
@@ -980,6 +996,20 @@ package body Model_Runner.Framework.Repository.Languages is
             end if;
          end;
          Index := Index + 1;
+      end loop;
+      --  A module it declares is one it uses: mod sku; and sku::check (s),
+      --  each a dependency of this unit on that module.
+      for Name of Modules loop
+         Relate (Into, Depends_On, Unit, Unit & "::" & Name, Explicit, Certain, Where (Path, 1));
+      end loop;
+      for At_Index in 1 .. Count - 2 loop
+         if Tokens (At_Index).Kind = Word and then Is_Mark (Tokens (At_Index + 1), "::")
+           and then Modules.Contains (To_String (Tokens (At_Index).Text))
+           and then (At_Index = 1 or else not Is_Mark (Tokens (At_Index - 1), "::"))
+         then
+            Relate (Into, Depends_On, Unit, Unit & "::" & To_String (Tokens (At_Index).Text), Explicit, Certain,
+                    Where (Path, Tokens (At_Index).Line));
+         end if;
       end loop;
    end Read;
 

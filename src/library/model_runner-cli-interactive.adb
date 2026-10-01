@@ -10,6 +10,7 @@ with Hostkit.Terminal_Control;
 
 with Model_Runner.CLI.Checkpoint;
 with Model_Runner.CLI.Choosers;
+with Model_Runner.CLI.Completion;
 with Model_Runner.CLI.Project_Commands;
 with Model_Runner.Clocks;
 with Model_Runner.Conversation;
@@ -485,6 +486,8 @@ package body Model_Runner.CLI.Interactive is
                      Pres.Put_Usage (Screen, "cli.interactive.usage.reject");
                   elsif Named = "git" then
                      Pres.Put_Usage (Screen, "cli.interactive.usage.git");
+                  elsif Named = "result" then
+                     Pres.Put_Usage (Screen, "cli.interactive.usage.result");
                   elsif Named = "reconfigure" then
                      Pres.Put_Usage (Screen, "cli.project.reconfigure.usage");
                   elsif Named = "config" then
@@ -788,7 +791,39 @@ package body Model_Runner.CLI.Interactive is
             declare
                Unknown : E.Error_Info := E.Make (E.CLI_Unknown_Command);
             begin
-               E.Add_Text (Unknown, "value", T.Escape_Controls (Line) & " (/help lists the commands)");
+               --  The nearest command there is, where one is near.
+               declare
+                  Typed : constant String :=
+                    (if Ada.Strings.Fixed.Index (Line & " ", " ") > Line'First
+                     then Line (Line'First .. Ada.Strings.Fixed.Index (Line & " ", " ") - 1) else Line);
+                  Near  : constant Model_Runner.Framework.Name_Lists.Vector :=
+                    Model_Runner.CLI.Completion.Candidates
+                      (Typed (Typed'First .. Typed'First + Natural'Min (2, Typed'Length - 1)));
+                  --  One it begins -- /reqs is /req -- before one a letter away.
+                  function Begun return String is
+                     Found : Natural := 0;
+                  begin
+                     for Index in 1 .. Natural (Near.Length) loop
+                        declare
+                           One : constant String := Near (Index);
+                        begin
+                           if One'Length < Typed'Length
+                             and then Typed (Typed'First .. Typed'First + One'Length - 1) = One
+                             and then (Found = 0 or else One'Length > String'(Near (Found))'Length)
+                           then
+                              Found := Index;
+                           end if;
+                        end;
+                     end loop;
+                     return (if Found = 0 then "" else Near (Found));
+                  end Begun;
+                  Best  : constant String :=
+                    (if Begun /= "" then Begun else Model_Runner.Framework.Nearest (Typed, Near));
+               begin
+                  E.Add_Text (Unknown, "value", T.Escape_Controls (Line)
+                              & (if Best /= "" then " -- did you mean " & Best & "?" else "")
+                              & " (/help lists the commands)");
+               end;
                Pres.Report (Screen, Unknown);
             end;
          end if;
@@ -1133,7 +1168,8 @@ package body Model_Runner.CLI.Interactive is
                      Ending : Model_Runner.CLI.Choosers.Line_End;
                      Got    : constant String :=
                        Model_Runner.CLI.Choosers.Edited_Line
-                         (Screen, Pres.Message_Value (Screen, Key) & " ", Ending);
+                         (Screen, Pres.Message_Value (Screen, Key) & " ", Ending,
+                          Complete => Model_Runner.CLI.Completion.Candidates'Access);
                      --  Escape and Ctrl-C drop the line, as when a cooked
                      --  terminal passes them on: the key after what was typed.
                      Whole  : constant String :=
@@ -1240,6 +1276,10 @@ package body Model_Runner.CLI.Interactive is
                         Pres.Put_Note
                           (Screen, "cli.interactive.dropped_key",
                            [Loc.Named ("name", (if Typed (Last_Key) = ASCII.ESC then "Esc" else "Ctrl-C"))]);
+                     --  Ctrl-C with nothing typed: how to leave, as a shell
+                     --  would not say but a person looks for.
+                     elsif Typed (Last_Key) = ASCII.ETX then
+                        Pres.Put_Note (Screen, "cli.interactive.how_to_leave");
                      end if;
                      Taken (Typing);
                      if Line = "" then

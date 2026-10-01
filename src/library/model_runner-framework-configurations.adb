@@ -1551,6 +1551,12 @@ package body Model_Runner.Framework.Configurations is
                end if;
             end loop;
          end;
+      --  A kind's or a role's level whole: none of it, or the level above's.
+      elsif (Starts (Name, "map.permission.kind.") or else Starts (Name, "map.permission.role."))
+        and then Ada.Strings.Fixed.Count (Name (Name'First + 20 .. Name'Last), ".") = 0
+        and then Value in "none" | "inherit"
+      then
+         null;
       elsif Starts (Name, "map.permission.") and then Value not in "off" | "inherit" then
          declare
             Last_Dot : constant Natural :=
@@ -1846,16 +1852,41 @@ package body Model_Runner.Framework.Configurations is
                              and then (Given'Length not in 1 .. 9
                                        or else (for some C of Given => C not in '0' .. '9'))
                            then
-                              return Name & "'s " & Key & " is a whole number of tokens, not " & Given;
+                              return Name & ": " & Key & " is a whole number of tokens, not " & Given;
+                           elsif Key = "context" and then (for all C of Given => C = '0') then
+                              return Name & ": context is 1 or more tokens, not " & Given;
                            elsif Key in "tools" | "structured" | "reasoning" | "streaming" | "parallel"
                              and then Ada.Characters.Handling.To_Lower (Given) not in "yes" | "no" | "true" | "false"
                            then
-                              return Name & "'s " & Key & " is yes or no, not " & Given;
+                              return Name & ": " & Key & " is yes or no, not " & Given;
                            end if;
                         end;
                         Start := Index + 1;
                      end if;
                   end loop;
+                  --  Room kept for the answer is less than the whole room.
+                  declare
+                     function Number (Key : String) return Natural is
+                        At_Key : constant Natural := Ada.Strings.Fixed.Index (Value, Key & "=");
+                        Stop   : Natural;
+                     begin
+                        if At_Key = 0 or else (At_Key > Value'First and then Value (At_Key - 1) not in ',' | ' ')
+                        then
+                           return 0;
+                        end if;
+                        Stop := At_Key + Key'Length + 1;
+                        while Stop <= Value'Last and then Value (Stop) in '0' .. '9' loop
+                           Stop := Stop + 1;
+                        end loop;
+                        return (if Stop = At_Key + Key'Length + 1 or else Stop - (At_Key + Key'Length + 1) > 9 then 0
+                                else Natural'Value (Value (At_Key + Key'Length + 1 .. Stop - 1)));
+                     end Number;
+                  begin
+                     if Number ("context") > 0 and then Number ("reserve") >= Number ("context") then
+                        return Name & ": reserve is less than context, the room the answer keeps of the whole;"
+                          & " not" & Natural'Image (Number ("reserve")) & " of" & Natural'Image (Number ("context"));
+                     end if;
+                  end;
                end;
             end if;
             --  The model profile used names one the configuration has: a
@@ -1879,6 +1910,12 @@ package body Model_Runner.Framework.Configurations is
                     & (if Known = Null_Unbounded_String then "" else "; there are " & To_String (Known))
                     & "; /work model=PATH runs a model file";
                end;
+            end if;
+            --  None at once, or no workspace at all: nothing could run.
+            if Name in "scalar.agents.max_active" | "scalar.work.max_workspaces"
+              and then Value'Length in 1 .. 9 and then (for all C of Value => C = '0')
+            then
+               return Name & " is 1 or more, not " & Value & " -- with none, no task could be worked";
             end if;
             --  A lease of nothing would end every run as it starts: not
             --  taken for the default it would fall back to.
@@ -1945,13 +1982,121 @@ package body Model_Runner.Framework.Configurations is
       return Result;
    end Known_Names;
 
+   ----------------
+   -- Meaning_Of --
+   ----------------
+
+   function Meaning_Of (Name : String) return String is
+   begin
+      if Name = "list.automation.rules" then
+         return "rules run when something happens, one a line: WHEN -> DO";
+      elsif Name = "list.verification.full" then
+         return "the profiles /check full runs, in order";
+      elsif Name = "scalar.agents.child_retries" then
+         return "how often a helper that failed is run again: a count";
+      elsif Name = "scalar.agents.max_active" then
+         return "how many agents may run at once: a count, 1 or more";
+      elsif Name = "scalar.agents.max_children" then
+         return "how many helpers an agent may make: a count, 0 for none";
+      elsif Name = "scalar.agents.max_depth" then
+         return "how deep helpers may make helpers: a count";
+      elsif Name = "scalar.agents.max_invocations" then
+         return "how many model calls a run may make: a count, 0 for no limit";
+      elsif Name = "scalar.agents.max_steps" then
+         return "how many steps an agent may take on a task: a count, 1 or more";
+      elsif Name = "scalar.agents.max_tool_calls" then
+         return "how many tool calls an agent may make: a count, 0 for no limit";
+      elsif Name = "scalar.agents.max_seconds" then
+         return "how long an agent may work on a task: seconds";
+      elsif Name = "scalar.agents.on_child_failure" then
+         return "what a failed helper does to its task: block, fail or continue";
+      elsif Name = "scalar.agents.token_budget" then
+         return "how many tokens an agent may spend on a task: a count";
+      elsif Name = "scalar.bootstrap.import" then
+         return "what bootstrap makes of an item a document names by its own identifier: accepted or candidate";
+      elsif Name = "scalar.context.rules" then
+         return "which standing rules an agent is told: all, or those of its task";
+      elsif Name = "scalar.execution.max_cpu_seconds" then
+         return "how much processor time a check may use: seconds";
+      elsif Name = "scalar.execution.max_file_mb" then
+         return "how large a file a check may write: megabytes";
+      elsif Name = "scalar.execution.max_memory_mb" then
+         return "how much memory a check may use: megabytes";
+      elsif Name = "scalar.execution.max_processes" then
+         return "how many processes a check may start: a count";
+      elsif Name = "scalar.execution.network" then
+         return "whether a check may reach the network: allowed or denied";
+      elsif Name = "scalar.execution.output_limit" then
+         return "how much of a check's output is kept: bytes";
+      elsif Name = "scalar.execution.process_slots" then
+         return "how many checks run at once: a count";
+      elsif Name = "scalar.execution.shell" then
+         return "whether a check runs in a shell: allowed or denied";
+      elsif Name = "scalar.execution.timeout" then
+         return "how long a check may run: seconds";
+      elsif Name = "scalar.init.confirm" then
+         return "whether /init asks before it writes: yes or no";
+      elsif Name = "scalar.model.default" then
+         return "the model profile, map.model.NAME, a run's context is planned with";
+      elsif Name = "scalar.recovery.running" then
+         return "what a task left running when the session ended becomes: blocked, failed or accepted";
+      elsif Name = "scalar.repository.state_policy" then
+         return "what of .model_runner/ goes into git: what its .gitignore leaves in";
+      elsif Name = "scalar.requirement.after_criteria_change" then
+         return "what an implemented requirement becomes when its criteria change: implemented or accepted";
+      elsif Name = "scalar.requirement.after_text_change" then
+         return "what a requirement becomes when its text changes: accepted or blocked";
+      elsif Name = "scalar.task.auto_accept" then
+         return "whether every task made is accepted on its own: true or false";
+      elsif Name = "scalar.task.coordination" then
+         return "whether a parent waits for its parts: parent_waits or parent_runs";
+      elsif Name = "scalar.task.derived_kind" then
+         return "the kind of the tasks derived from requirements";
+      elsif Name = "scalar.verification.default" then
+         return "the profile that checks a task when its kind names none";
+      elsif Name = "scalar.verification.escalation" then
+         return "how far a failed check widens what is run again: conservative or narrow";
+      elsif Name = "scalar.verification.requirements" then
+         return "the profile requirements themselves are checked by";
+      elsif Name = "scalar.verification.toolchain" then
+         return "whether the tools a check ran are only recorded or must match: recorded or strict";
+      elsif Name = "scalar.work.isolation" then
+         return "where agents write: project, the project itself, or workspace, one apart per task";
+      elsif Name = "scalar.work.lease" then
+         return "how long a task is held for a run: seconds, 1 or more";
+      elsif Name = "scalar.work.max_workspaces" then
+         return "how many workspaces may be open at once: a count";
+      elsif Name = "set.bootstrap.propose" then
+         return "what bootstrap proposes: requirements, specifications, decisions";
+      elsif Name = "set.bootstrap.sources" then
+         return "the documents bootstrap reads: files and patterns, * one directory, dir/** all below";
+      elsif Name = "set.components" then
+         return "the project's components, by name";
+      elsif Name = "set.execution.allowed" then
+         return "the programs a check may run, by name";
+      elsif Name = "set.execution.environment" then
+         return "the environment variables a check is given";
+      elsif Name = "set.requirement.transitions" then
+         return "the moves a requirement may make beyond the harness's own";
+      elsif Name = "set.task.auto_accept" then
+         return "the kinds of task accepted on their own when made";
+      elsif Name = "set.task.forbidden" then
+         return "the moves a task may not make";
+      elsif Name = "set.task.gates" then
+         return "what must hold before a task is complete";
+      elsif Name = "set.task.transitions" then
+         return "the moves a task may make beyond the harness's own";
+      end if;
+      return "";
+   end Meaning_Of;
+
    -----------------
    -- Plan_Change --
    -----------------
 
    --  A setting left unset, as /config says it: what holds then.
    function Not_Set (Name : String) return String
-   is (if Default_Of (Name) = "" then "(not set: the harness's default)"
+   is (if Default_Of (Name) = "" then "(not set)"
        else "(not set: " & Default_Of (Name) & ")");
 
    procedure Plan_Change
@@ -2305,6 +2450,18 @@ package body Model_Runner.Framework.Configurations is
                Stop := Ada.Strings.Fixed.Index (Held (At_Roots .. Held'Last), " ");
                return Held (At_Roots .. (if Stop = 0 then Held'Last else Stop - 1));
             end Roots_Held;
+            --  What it denies now, as deny=...; "" where nothing.
+            function Deny_Held return String is
+               Held    : constant String := Records.Get (Result.Before, Name);
+               At_Deny : constant Natural := Ada.Strings.Fixed.Index (Held, "deny=");
+               Stop    : Natural;
+            begin
+               if At_Deny = 0 then
+                  return "";
+               end if;
+               Stop := Ada.Strings.Fixed.Index (Held (At_Deny .. Held'Last), " ");
+               return Held (At_Deny .. (if Stop = 0 then Held'Last else Stop - 1));
+            end Deny_Held;
             Given : constant String :=
               (if One_Capability and then Raw = "" then "off"
                elsif One_Capability and then Raw = "on" then ""
@@ -2313,6 +2470,11 @@ package body Model_Runner.Framework.Configurations is
                elsif One_Capability and then Starts (Raw, "deny=")
                  and then Ada.Strings.Fixed.Index (Raw, "roots=") = 0 and then Roots_Held /= ""
                then Roots_Held & " " & Raw
+               --  New roots alone keep what it denies: a narrowing is not
+               --  undone by naming where it may write.
+               elsif One_Capability and then Starts (Raw, "roots=")
+                 and then Ada.Strings.Fixed.Index (Raw, "deny=") = 0 and then Deny_Held /= ""
+               then Raw & " " & Deny_Held
                else Raw);
             --  A set's items however they were written -- a space apart
             --  in a template, a line apart once changed: one a line.
@@ -2381,7 +2543,8 @@ package body Model_Runner.Framework.Configurations is
                   if Known'Length > Short'Length
                     and then Known (Known'Last - Short'Length .. Known'Last) = "." & Short
                   then
-                     Append (Found, (if Found = Null_Unbounded_String then "" else ", ") & Known.all);
+                     Append (Found, (if Found = Null_Unbounded_String then "" else ", ") & Known.all
+                             & (if Meaning_Of (Known.all) = "" then "" else " (" & Meaning_Of (Known.all) & ")"));
                      Count := Count + 1;
                   end if;
                end loop;
@@ -2638,10 +2801,10 @@ package body Model_Runner.Framework.Configurations is
                         Result.Changed.Append
                           (Name & ": " & (if Old /= "" then Old
                                           --  Set, with no limits: granted, as /config says.
-                                          elsif Records.Has (Result.Before, Name) then "granted (no limits)"
-                                          elsif Project_Level then (if Had_It then "(granted)" else "off")
+                                          elsif Records.Has (Result.Before, Name) then "granted, no limits"
+                                          elsif Project_Level then (if Had_It then "granted" else "withheld")
                                           elsif Level_Said (Name)
-                                          then "(not granted: this level grants only what it names)"
+                                          then "withheld (this level grants only what it names)"
                                           else "(as the level above has it)") & " -> inherit, "
                            & (if Project_Level then "the harness's default"
                               else "as the level above gives it")
@@ -2674,7 +2837,7 @@ package body Model_Runner.Framework.Configurations is
                        (if Level = "project" then "the default" else "the level above");
                   begin
                      if not Capable or else not Above (Which).Granted then
-                        return "(not granted by " & Whence & ")";
+                        return "withheld (by " & Whence & ")";
                      end if;
                      return "(" & Whence & ": "
                        & (if Permissions.Grant_Text (Above (Which)) = "" then "granted"
@@ -2739,12 +2902,14 @@ package body Model_Runner.Framework.Configurations is
                                                                Name (Name'First .. Ada.Strings.Fixed.Index
                                                                        (Name, ".", Ada.Strings.Backward) - 1))
                                                   = "none"
-                                       then "(not granted: this level grants none)"
+                                       then "withheld (this level grants none)"
                                        elsif not Was and then Level_Said (Name)
-                                       then "(not granted: this level grants only what it names)"
+                                         and then Ada.Strings.Fixed.Index (Name, "map.permission.project.") = 0
+                                       then "withheld (this level grants only what it names)"
+                                       elsif not Was and then Level_Said (Name) then "withheld"
                                        elsif not Was then Inherited
                                        elsif Old = "" then "granted" else Old)
-                        & " -> " & (if not Now then "(not granted)" elsif Given = "" then "granted"
+                        & " -> " & (if not Now then "withheld" elsif Given = "" then "granted"
                                     else Given));
                      if not Result.Impact.Contains (Reach (Name)) then
                         Result.Impact.Append (Reach (Name));
@@ -2855,7 +3020,7 @@ package body Model_Runner.Framework.Configurations is
             Result.Changed := Kept;
          end;
          if not (for some Line of Result.Changed => Starts (Line, Name & ":")) then
-            Result.Changed.Append (Name & ": granted -> (not granted)");
+            Result.Changed.Append (Name & ": granted -> withheld");
          end if;
       end loop;
 
@@ -2874,6 +3039,50 @@ package body Model_Runner.Framework.Configurations is
             then
                Records.Set (Result.After, Level, "none");
                Result.Changed.Append (Level & ": -> none, nothing granted (not the level above's grant)");
+            end if;
+         end;
+      end loop;
+      --  A level set whole: none takes each capability it named away and
+      --  keeps the mark; inherit takes them all away, mark too, so the level
+      --  above holds.
+      for Position in Changes.Iterate loop
+         declare
+            Level_Name : constant String := Value_Maps.Key (Position);
+            Whole      : constant String := Value_Maps.Element (Position);
+         begin
+            if (Starts (Level_Name, "map.permission.kind.") or else Starts (Level_Name, "map.permission.role."))
+              and then Ada.Strings.Fixed.Count (Level_Name (Level_Name'First + 20 .. Level_Name'Last), ".") = 0
+              and then Whole in "none" | "inherit"
+            then
+               declare
+                  Had : constant Boolean :=
+                    Records.Has (Result.Before, Level_Name)
+                    or else (for some Index in 1 .. Records.Field_Count (Result.Before) =>
+                               Starts (Records.Field_Name (Result.Before, Index), Level_Name & "."));
+               begin
+                  if Had and then not (for some Line of Result.Changed => Starts (Line, Level_Name & ":")) then
+                     Result.Changed.Append
+                       (Level_Name & ": "
+                        & (if Records.Get (Result.Before, Level_Name) = "none" then "none"
+                           else "the capabilities it named")
+                        & " -> " & (if Whole = "inherit" then "inherit, as the level above gives it" else "none"));
+                     if not Result.Impact.Contains (Reach (Level_Name)) then
+                        Result.Impact.Append (Reach (Level_Name));
+                     end if;
+                  end if;
+               end;
+               for Index in reverse 1 .. Records.Field_Count (Result.After) loop
+                  if Starts (Records.Field_Name (Result.After, Index), Level_Name & ".") then
+                     Records.Remove (Result.After, Records.Field_Name (Result.After, Index));
+                  end if;
+               end loop;
+               if Whole = "inherit" then
+                  if Records.Has (Result.After, Level_Name) then
+                     Records.Remove (Result.After, Level_Name);
+                  end if;
+               else
+                  Records.Set (Result.After, Level_Name, "none");
+               end if;
             end if;
          end;
       end loop;
@@ -2899,7 +3108,10 @@ package body Model_Runner.Framework.Configurations is
             Space : constant Natural := Ada.Strings.Fixed.Index (Whole, " ");
             Named : constant String := (if Space = 0 then "" else Whole (Whole'First .. Space - 1));
          begin
-            if Named /= "" and then Ada.Strings.Fixed.Index (Named, ".") > 0 then
+            --  NAME: what is wrong -- the setting named, what is wrong said.
+            if Named'Length > 1 and then Named (Named'Last) = ':' then
+               Status := Refused (Named (Named'First .. Named'Last - 1), Whole (Space + 1 .. Whole'Last));
+            elsif Named /= "" and then Ada.Strings.Fixed.Index (Named, ".") > 0 then
                Status := Refused (Named, "it" & Whole (Space .. Whole'Last));
             else
                Status := Refused ("reconfigure", Whole);

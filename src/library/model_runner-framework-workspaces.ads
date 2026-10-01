@@ -168,7 +168,7 @@ package Model_Runner.Framework.Workspaces is
 
    --  The copies kept of work given up or overwritten, by name: each a
    --  directory under the project's runtime -- given-up-*, overwritten-*,
-   --  replaced-* -- newest first.
+   --  replaced-*, before-restore-* -- newest first.
    --
    --  @param Item The store.
    --  @return Their names.

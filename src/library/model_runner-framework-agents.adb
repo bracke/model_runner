@@ -270,7 +270,7 @@ package body Model_Runner.Framework.Agents is
       Id := Null_Unbounded_String;
       if Active_Count (Item) >= Bounds.Max_Active then
          Over ("agents", "the project's" & Natural'Image (Bounds.Max_Active)
-               & " agents are all running", Status);
+               & " agents are all running -- scalar.agents.max_active sets how many may", Status);
          return;
       end if;
       declare
@@ -415,7 +415,7 @@ package body Model_Runner.Framework.Agents is
             return;
          elsif Active_Count (Item) >= Bounds.Max_Active then
             Over ("agents", "the project's" & Natural'Image (Bounds.Max_Active)
-                  & " agents are all running", Status);
+                  & " agents are all running -- scalar.agents.max_active sets how many may", Status);
             return;
          elsif Budget > Left then
             Over (Parent, "it has" & Natural'Image (Left) & " tokens left, not"

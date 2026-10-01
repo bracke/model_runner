@@ -1159,7 +1159,7 @@ package body Model_Runner.Framework.Permissions is
       if Value = "" and then Subject'Length > 15
         and then Subject (Subject'First .. Subject'First + 14) = "map.permission."
       then
-         return "granted (no limits)";
+         return "granted, no limits";
       end if;
       return Value;
    end Value_Said;
@@ -1171,5 +1171,53 @@ package body Model_Runner.Framework.Permissions is
       return (for some One of Entries => Trim (One) /= "")
         and then (for all One of Entries => Trim (One) = "" or else Trim (One) (Trim (One)'First) = '-');
    end Only_Withholds;
+
+   function Ruling_Agrees
+     (Item : Stores.Store; Config : Records.Item; Setting, Ruling : String) return Boolean
+   is
+      pragma Unreferenced (Item);
+      Prefix : constant String := "map.permission.";
+      Dot    : constant Natural := Ada.Strings.Fixed.Index (Setting, ".", Ada.Strings.Backward);
+   begin
+      if Setting'Length <= Prefix'Length or else Setting (Setting'First .. Setting'First + Prefix'Length - 1) /= Prefix
+        or else Dot <= Setting'First + Prefix'Length
+      then
+         return Records.Get (Config, Setting) = Ruling;
+      end if;
+      declare
+         Level : constant String := Setting (Setting'First + Prefix'Length .. Dot - 1);
+         Word_Of_Cap : constant String := Setting (Dot + 1 .. Setting'Last);
+         Found : Boolean;
+         Which : Capability;
+         Present : Boolean;
+         --  What the levels give it as the configuration stands: the
+         --  project's, narrowed by the kind's where the level is a kind's.
+         Of_Project : Permission_Set := Level_Of (Config, "project", Present);
+      begin
+         Named (Word_Of_Cap, Found, Which);
+         if not Found then
+            return Records.Get (Config, Setting) = Ruling;
+         end if;
+         if not Present then
+            Of_Project := Project_Default;
+         end if;
+         declare
+            Given : Boolean := Of_Project (Which).Granted;
+         begin
+            if Level /= "project" then
+               declare
+                  Own : constant Permission_Set := Level_Of (Config, Level, Present);
+               begin
+                  if Present then
+                     Given := Given and then Own (Which).Granted;
+                  end if;
+               end;
+            end if;
+            return (if Ruling in "off" | "none" then not Given
+                    elsif Ruling in "on" | "" | "inherit" then Given
+                    else Records.Get (Config, Setting) = Ruling);
+         end;
+      end;
+   end Ruling_Agrees;
 
 end Model_Runner.Framework.Permissions;

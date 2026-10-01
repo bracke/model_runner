@@ -6306,7 +6306,7 @@ package body Tests.Framework_Cases is
       Task_Project
         (Store, "slots",
          "scalar work.isolation = workspace" & LF
-         & "scalar work.max_workspaces = 0" & LF);
+         & "scalar work.max_workspaces = 1" & LF);
       declare
          Id : Unbounded_String;
          Changes  : Cf.Value_Maps.Map;

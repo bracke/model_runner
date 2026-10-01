@@ -2233,8 +2233,14 @@ package body Model_Runner.Framework.Verification is
                         and then Serves_It (Id))
       then
          return Lacks (To_String (Project_Empty) & ", the latest run of the project's whole suite,"
-                       & " passed and ran no test: the suite is empty; add a test that shows "
-                       & Requirement & ", then /check full");
+                       & " passed and ran no test: the suite is empty"
+                       --  A test linked already: it runs with the suite.
+                       & (if not Intent.Links (Item, Intent.Requirement, Requirement, Intent.Test).Is_Empty
+                          then "; its linked test is not in what the suite runs yet -- add it to the suite, then"
+                               & " /check full"
+                          else "; /task new TITLE kind=test requirements=" & Requirement & " writes a test that"
+                               & " shows it, /req link " & Requirement & " test FILE ties one there is, then"
+                               & " /check full"));
       end if;
       if Project_Failed /= Null_Unbounded_String then
          declare

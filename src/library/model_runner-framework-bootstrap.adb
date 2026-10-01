@@ -503,6 +503,20 @@ package body Model_Runner.Framework.Bootstrap is
          end if;
       end Found;
 
+      --  A label whose statement never came -- a row's "Nice to have: dark
+      --  mode" -- is said, not dropped without a word.
+      procedure Note_Unstated is
+      begin
+         if Pending_Label /= Null_Unbounded_String then
+            Found (Issue, Path & "#" & To_String (Pending_Label) & "#unstated",
+                   To_String (Pending_Label) & " in " & Path & " states no SHALL, MUST or SHOULD, so it is not"
+                   & " proposed: " & To_String (Pending_Title) & " -- reword it so, or /req new TITLE text=..."
+                   & " makes it",
+                   To_String (Pending_Title));
+            Pending_Label := Null_Unbounded_String;
+         end if;
+      end Note_Unstated;
+
       function Starts_With (Item, Prefix : String) return Boolean
       is (Item'Length > Prefix'Length
           and then Ada.Characters.Handling.To_Lower (Item (Item'First .. Item'First + Prefix'Length - 1))
@@ -794,6 +808,7 @@ package body Model_Runner.Framework.Bootstrap is
                   Section := Length (Result);
                   return;
                elsif Label /= Null_Unbounded_String then
+                  Note_Unstated;
                   Pending_Label := Label;
                   Pending_Title := Rest;
                   return;
@@ -944,6 +959,7 @@ package body Model_Runner.Framework.Bootstrap is
                                       and then Said (Said'Last) not in '.' | '!' | '?')
                then
                   --  Its title alone: its statement follows.
+                  Note_Unstated;
                   Pending_Label := Label;
                   Pending_Title := To_Unbounded_String (Said);
                else
@@ -1159,8 +1175,9 @@ package body Model_Runner.Framework.Bootstrap is
             --  Listed as a requirement and stating none: said, with how it
             --  comes to count.
             Found (Issue, Path & "#" & Fingerprint (Item) & "#unstated",
-                   "under a heading of requirements, this states no SHALL, MUST or SHOULD, so it is not"
-                   & " proposed: " & Headline (Item) & " -- reword it so, or /req new TITLE text=... makes it",
+                   "under a heading of requirements in " & Path & ", this states no SHALL, MUST or SHOULD, so"
+                   & " it is not proposed: " & Headline (Item) & " -- reword it so, or /req new TITLE text=..."
+                   & " makes it",
                    Item);
          end if;
       end Line_Of;
@@ -1358,8 +1375,22 @@ package body Model_Runner.Framework.Bootstrap is
                Base_End : constant Natural :=
                  (if Base = "" or else Base (Base'First) not in '0' .. '9' then Base'First - 1
                   elsif Past = 0 then Base'Last else Past - 1);
+               --  ADR-0002 Make it generic, or ADR 3 Use pnpm: its label the
+               --  number's word, its name what follows -- with no colon too.
+               Word_End : constant Natural :=
+                 (if Ada.Strings.Fixed.Index (Upper, "ADR") /= Upper'First then 0
+                  else Ada.Strings.Fixed.Index
+                         (Title & " ", " ",
+                          (if Title'Length > 4 and then Title (Title'First + 3) = ' '
+                             and then Title (Title'First + 4) in '0' .. '9'
+                           then Title'First + 4 else Title'First)) - 1);
+               Numbered_Word : constant Boolean :=
+                 Word_End > Title'First + 3
+                 and then Title (Word_End) in '0' .. '9'
+                 and then Ada.Strings.Fixed.Index (Title, ":") = 0;
                Label    : constant String :=
-                 (if Ada.Strings.Fixed.Index (Upper, "ADR") = Upper'First
+                 (if Numbered_Word then Title (Title'First .. Word_End)
+                  elsif Ada.Strings.Fixed.Index (Upper, "ADR") = Upper'First
                   then Ada.Strings.Fixed.Trim
                          (Title (Title'First .. (if Ada.Strings.Fixed.Index (Title, ":") > 0
                                                  then Ada.Strings.Fixed.Index (Title, ":") - 1
@@ -1368,7 +1399,8 @@ package body Model_Runner.Framework.Bootstrap is
                   elsif Digits_End >= Title'First then "ADR-" & Title (Title'First .. Digits_End)
                   else "ADR-" & Base);
                Name     : constant String :=
-                 (if Ada.Strings.Fixed.Index (Title, ":") > 0
+                 (if Numbered_Word and then Word_End < Title'Last then Trim (Title (Word_End + 1 .. Title'Last))
+                  elsif Ada.Strings.Fixed.Index (Title, ":") > 0
                   then Trim (Title (Ada.Strings.Fixed.Index (Title, ":") + 1 .. Title'Last))
                   elsif Digits_End >= Title'First and then Digits_End + 1 < Title'Last
                   then Trim (Title (Digits_End + 2 .. Title'Last))
@@ -1538,6 +1570,7 @@ package body Model_Runner.Framework.Bootstrap is
                      begin
                         Label_Split (Unmarked (To_String (Paragraph)), Label, Rest);
                         Paragraph := Null_Unbounded_String;
+                        Note_Unstated;
                         Pending_Label := Label;
                         Pending_Title := Rest;
                         Paragraph := To_Unbounded_String (Raw);
@@ -1561,6 +1594,7 @@ package body Model_Runner.Framework.Bootstrap is
          end if;
       end loop;
       Flush;
+      Note_Unstated;
 
       --  A heading with nothing under it says what it is by its title.
       for Index in 1 .. Length (Result) loop
@@ -1621,6 +1655,11 @@ package body Model_Runner.Framework.Bootstrap is
       Lines    : constant Name_Lists.Vector := Lines_Of_All (Text);
       Output   : Unbounded_String;
       Skip     : Boolean := False;
+      --  Lines a directive's body took, to the one before this: not said again.
+      Taken_To : Natural := 0;
+      --  An AsciiDoc table's first row, its heads: no item of it.
+      Table_Heads : Boolean := False;
+      In_Table    : Boolean := False;
 
       function Underline (Line : String) return Character is
       begin
@@ -1632,6 +1671,18 @@ package body Model_Runner.Framework.Bootstrap is
          return ' ';
       end Underline;
       --  Whether a cell is an identifier a document gives: NFR-1, FR-02.
+      --  A table row's first cell, trimmed: |ID |Text is ID.
+      function First_Cell (Row : String) return String is
+         Bar : constant Natural :=
+           (if Row'Length > 1 then Ada.Strings.Fixed.Index (Row (Row'First + 1 .. Row'Last), "|") else 0);
+      begin
+         if Row'Length < 2 or else Row (Row'First) /= '|' then
+            return "";
+         end if;
+         return Ada.Strings.Fixed.Trim (Row (Row'First + 1 .. (if Bar = 0 then Row'Last else Bar - 1)),
+                                        Ada.Strings.Both);
+      end First_Cell;
+
       function Is_Label (Cell : String) return Boolean is
          Dash : constant Natural := Ada.Strings.Fixed.Index (Cell, "-", Ada.Strings.Backward);
       begin
@@ -1682,6 +1733,61 @@ package body Model_Runner.Framework.Bootstrap is
          begin
             if Skip then
                Skip := False;
+               goto Next_Line;
+            elsif Index <= Taken_To then
+               goto Next_Line;
+            end if;
+            if Asciidoc and then Bare = "|===" then
+               In_Table := not In_Table;
+               Table_Heads := In_Table;
+               goto Next_Line;
+            elsif Asciidoc and then Table_Heads and then Bare'Length > 1 and then Bare (Bare'First) = '|'
+              --  AsciiDoc's heads: the first row with a blank line after it.
+              and then (Index = Natural (Lines.Length)
+                        or else Ada.Strings.Fixed.Trim (Lines (Index + 1), Ada.Strings.Both) = ""
+                        --  Or no label in it, where the rows under it begin with one.
+                        or else (not Is_Label (First_Cell (Bare))
+                                 and then Is_Label (First_Cell (Ada.Strings.Fixed.Trim (Lines (Index + 1),
+                                                                                       Ada.Strings.Both)))))
+            then
+               --  The heads read; the rows after them are items.
+               Table_Heads := False;
+               goto Next_Line;
+            elsif Asciidoc and then Table_Heads and then Bare /= "" then
+               Table_Heads := False;
+            end if;
+            --  reStructuredText's directive -- .. req:: REQ-20 -- with its
+            --  body indented under it: that labelled item, its body its words.
+            if Rst and then Bare'Length > 4 and then Bare (Bare'First .. Bare'First + 2) = ".. "
+              and then Ada.Strings.Fixed.Index (Bare, ":: ") > 0
+              and then Is_Label (Ada.Strings.Fixed.Trim
+                                   (Bare (Ada.Strings.Fixed.Index (Bare, ":: ") + 3 .. Bare'Last), Ada.Strings.Both))
+            then
+               declare
+                  Label : constant String :=
+                    Ada.Strings.Fixed.Trim (Bare (Ada.Strings.Fixed.Index (Bare, ":: ") + 3 .. Bare'Last),
+                                            Ada.Strings.Both);
+                  Words : Unbounded_String;
+                  Next  : Natural := Index + 1;
+               begin
+                  while Next <= Natural (Lines.Length)
+                    and then (String'(Lines (Next)) = ""
+                              or else Ada.Strings.Fixed.Index (String'(Lines (Next)), " ") = 1
+                              or else Ada.Strings.Fixed.Index (String'(Lines (Next)), [1 => ASCII.HT]) = 1)
+                  loop
+                     declare
+                        Body_Line : constant String := Ada.Strings.Fixed.Trim (Lines (Next), Ada.Strings.Both);
+                     begin
+                        --  Its options -- :status: open -- are no part of what it says.
+                        if Body_Line /= "" and then Body_Line (Body_Line'First) /= ':' then
+                           Append (Words, (if Words = Null_Unbounded_String then "" else " ") & Body_Line);
+                        end if;
+                     end;
+                     Next := Next + 1;
+                  end loop;
+                  Taken_To := Next - 1;
+                  Append (Output, "- " & Label & ": " & To_String (Words) & ASCII.LF);
+               end;
                goto Next_Line;
             end if;
             if Bare'Length > 2 and then Bare (Bare'First) = '|' then
@@ -3052,6 +3158,23 @@ package body Model_Runner.Framework.Bootstrap is
                         --  A candidate no one took up, its document no
                         --  longer saying it: let go, and said so -- there
                         --  is nothing for a person to weigh.
+                        --  Ticked as done in its document: done, not unwanted --
+                        --  kept, and said as work to complete.
+                        if Retired_As = "done" then
+                           Said :=
+                             (Kind       => Results.Diagnostic,
+                              Producer   => To_Unbounded_String ("bootstrap"),
+                              Summary    => To_Unbounded_String
+                                              (Known & " is marked done in " & To_String (Held.Source)
+                                               & ": once it is accepted, /task complete takes the task derived"
+                                               & " for it as done, its checks passing, rather than /work doing"
+                                               & " it again"),
+                              Payload    => Held.Text,
+                              Provenance => Held.Provenance & "#done",
+                              others     => <>);
+                           Raise_Issue (Said);
+                           goto Next_Known;
+                        end if;
                         if To_String (Held.State) = Intent.First_State (Kind) and then Instead = Null_Unbounded_String
                         then
                            declare

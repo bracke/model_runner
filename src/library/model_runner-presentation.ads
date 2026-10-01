@@ -132,8 +132,8 @@ package Model_Runner.Presentation is
 
    --  How a state of the project's records stands, for its colour: done
    --  (complete, verified, passed), waiting on something (candidate,
-   --  accepted, running), gone wrong or ended (failed, blocked, rejected,
-   --  superseded), or none of these.
+   --  accepted, running), gone wrong (failed, blocked), ended by choice
+   --  (cancelled, rejected, superseded), or none of these.
    --
    --  @param State The state, as its word.
    --  @return Its tone.

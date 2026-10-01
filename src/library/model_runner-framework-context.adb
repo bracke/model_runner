@@ -132,6 +132,26 @@ package body Model_Runner.Framework.Context is
       return Result;
    end Profile;
 
+   function Within_Configured (Item : Stores.Store; Session : Model_Profile) return Model_Profile is
+      Config : Records.Item;
+      Status : E.Error_Info;
+      Result : Model_Profile := Session;
+   begin
+      Configurations.Read (Item, Config, Status);
+      if E.Is_Error (Status) or else Records.Get (Config, "scalar.model.default") = "" then
+         return Session;
+      end if;
+      declare
+         Named : constant Model_Profile := Profile (Item, "");
+      begin
+         Result.Context_Limit := Positive'Min (Session.Context_Limit, Named.Context_Limit);
+         Result.Output_Reserve := Natural'Max (Session.Output_Reserve, Named.Output_Reserve);
+         Result.Tool_Overhead := Natural'Max (Session.Tool_Overhead, Named.Tool_Overhead);
+         Result.Id := Named.Id;
+      end;
+      return Result;
+   end Within_Configured;
+
    --  Fit what is offered to the model's room -- mandatory whatever it
    --  costs, the rest by priority while it fits, the same text once -- and
    --  take the fingerprint of everything the manifest says.

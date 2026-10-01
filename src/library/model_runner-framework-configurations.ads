@@ -249,6 +249,13 @@ package Model_Runner.Framework.Configurations is
    --  @return The names.
    function Known_Names return Name_Lists.Vector;
 
+   --  What a setting the harness reads does, and the values it takes, in a
+   --  line; "" for one it has no line for.
+   --
+   --  @param Name The setting's whole name.
+   --  @return The line.
+   function Meaning_Of (Name : String) return String;
+
    --  What a known setting means when the configuration does not set it.
    --
    --  @param Name Its whole name.

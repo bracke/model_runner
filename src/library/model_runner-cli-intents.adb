@@ -16,6 +16,7 @@ with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Orchestration;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Repository;
+with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Transitions;
 with Model_Runner.Framework.Verification;
@@ -196,6 +197,10 @@ package body Model_Runner.CLI.Intents is
               and then Model_Runner.Framework.Records.Has (Config, One (One'First .. Equal - 1))
               and then Model_Runner.Framework.Records.Get (Config, One (One'First .. Equal - 1))
                          /= One (Equal + 3 .. One'Last)
+              --  Saying, as it holds, what the ruling says -- inherit from
+              --  a level that withholds it is off -- is no disagreement.
+              and then not Model_Runner.Framework.Permissions.Ruling_Agrees
+                             (Store, Config, One (One'First .. Equal - 1), One (Equal + 3 .. One'Last))
             then
                Pres.Put_Note (Screen, "cli.intent.ruling_disagrees",
                               [Loc.Named ("name", Id),
@@ -237,6 +242,17 @@ package body Model_Runner.CLI.Intents is
                                           [Loc.Named ("name", Id), Loc.Named ("value", Setting & " = " & Ruling)]);
                      else
                         Pres.Report (Screen, Done);
+                     end if;
+                     --  A grant ruled that the level above does not give: it
+                     --  gets none of it, said as /reconfigure says it.
+                     if E.Is_Ok (Done) and then Ruling not in "off" | "none"
+                       and then Ada.Strings.Fixed.Index (Setting, "map.permission.") = 1
+                       and then Ada.Strings.Fixed.Index (Setting, "map.permission.project.") = 0
+                       and then not Model_Runner.Framework.Permissions.Ruling_Agrees
+                                      (Store, Planned.After, Setting, "on")
+                     then
+                        Pres.Put_Note (Screen, "cli.intent.ruling_above_withholds",
+                                       [Loc.Named ("name", Id), Loc.Named ("value", Setting)]);
                      end if;
                   end if;
                end;
@@ -324,6 +340,16 @@ package body Model_Runner.CLI.Intents is
    --  What a link names, by its relation: what tests it, or implements it.
    function What_Links (Relation : String) return String
    is (if Ada.Characters.Handling.To_Lower (Relation) = "test" then "what tests it" else "what implements it");
+
+   --  A link's kind as a person reads it: implemented by, tested by.
+   function Relation_Said (Relation : Nt.Link_Kind) return String
+   is (case Relation is
+         when Nt.Implementation => "implemented by",
+         when Nt.Test           => "tested by",
+         when Nt.Verification   => "evidence linked",
+         when Nt.Dependency     => "depends on",
+         when Nt.Component      => "belongs to",
+         when Nt.Task_Link      => "served by (linked)");
 
    function Word_Of_Command (Kind : Nt.Intent_Kind) return String
    is (case Kind is
@@ -465,6 +491,12 @@ package body Model_Runner.CLI.Intents is
                                  then "(its default)"
                                  else Model_Runner.Framework.Permissions.Value_Said
                                         (Setting, Model_Runner.Framework.Records.Get (Config, Setting))))]);
+               --  What the ruling wrote into the configuration stays there:
+               --  said, with how it changes.
+               if Model_Runner.Framework.Records.Has (Config, Setting) then
+                  Pres.Put_Note (Screen, "cli.intent.ruling_value_stays",
+                                 [Loc.Named ("name", Setting)]);
+               end if;
                <<Ruling_Said>>
             end;
          end if;
@@ -934,23 +966,27 @@ package body Model_Runner.CLI.Intents is
                   Pres.Report (Screen, Status);
                   return;
                end if;
-               Pres.Put_Message
-                 (Screen, "cli.task.verified",
-                  [Loc.Named ("name", To_String (Evidence)),
-                   Loc.Named ("value", (if Passed then "passed" else "failed")),
-                   Loc.Named ("count", "1"), Loc.Named ("total", "0")]);
-               --  Passed, and still not verified: why, not silence.
+               --  Passed, and still not verified: said once, with why -- not a
+               --  pass beside a not-verified.
+               if Nt.State_Of (Store, Kind, Word (2)) = "verified" then
+                  Pres.Put_Message
+                    (Screen, "cli.intent.verify_outcome",
+                     [Loc.Named ("name", Word (2)), Loc.Named ("other", To_String (Evidence)),
+                      Loc.Named ("value", (if Passed then "passed" else "failed"))]);
+               end if;
                if Nt.State_Of (Store, Kind, Word (2)) /= "verified" then
                   Pres.Put_Message
-                    (Screen, "cli.check.passed_not_verified",
-                     [Loc.Named ("name", Word (2)),
+                    (Screen, (if Passed then "cli.check.passed_not_verified" else "cli.check.not_verified_failed"),
+                     [Loc.Named ("name", Word (2) & " (" & To_String (Evidence) & ")"),
                       Loc.Named ("detail", Vf.Why_Not_Verified (Store, Word (2)))]);
                end if;
                for Requirement of Moved loop
-                  Pres.Put_Message
-                    (Screen, "cli.work.requirement",
-                     [Loc.Named ("name", Requirement),
-                      Loc.Named ("value", Nt.State_Of (Store, Nt.Requirement, Requirement))]);
+                  if Requirement /= Word (2) then
+                     Pres.Put_Message
+                       (Screen, "cli.work.requirement",
+                        [Loc.Named ("name", Requirement),
+                         Loc.Named ("value", Nt.State_Of (Store, Nt.Requirement, Requirement))]);
+                  end if;
                end loop;
             end;
          end if;
@@ -1123,11 +1159,14 @@ package body Model_Runner.CLI.Intents is
                               end;
                            end loop;
                            if not Taken then
-                              Status := E.Make (E.Framework_Not_Found);
+                              Status := E.Make (E.Framework_Input_Invalid);
+                              E.Add_Text (Status, "name", "from-document");
+                              E.Add_Text (Status, "value", Word (2));
                               E.Add_Text
-                                (Status, "name",
-                                 "what " & Word (2) & " says, in " & To_String (Held.Source)
-                                 & " (it no longer says it where it did; revise it with text=...)");
+                                (Status, "detail",
+                                 To_String (Held.Source) & " no longer says " & Word (2) & ": "
+                                 & Word_Of_Command (Kind) & " revise " & Word (2) & " text=... says it anew, or "
+                                 & Word_Of_Command (Kind) & " obsolete " & Word (2) & " retires it");
                            end if;
                         end;
                         Settle (Store, Change, Status, Screen, "cli.task.revised", Word (2));
@@ -2120,6 +2159,30 @@ package body Model_Runner.CLI.Intents is
                   if Length (Held.Criteria) > 0 then
                      Item ("criteria", To_String (Held.Criteria));
                   end if;
+                  --  Its document saying otherwise now, as bootstrap found:
+                  --  said here, with the step that takes the document's words.
+                  for Name of S.Names (Store, Model_Runner.Framework.Results_Area) loop
+                     declare
+                        package Rs renames Model_Runner.Framework.Results;
+                        Result_Id : constant String :=
+                          (if Name'Length > 4 and then Name (Name'Last - 3 .. Name'Last) = ".rec"
+                           then Name (Name'First .. Name'Last - 4) else Name);
+                        One : Rs.Result;
+                        Got : E.Error_Info;
+                     begin
+                        Rs.Read (Store, Result_Id, One, Got);
+                        if E.Is_Ok (Got)
+                          and then Ada.Strings.Unbounded.Index
+                                     (One.Summary, " now says what " & Named & " does not") > 0
+                          and then One.Payload /= Held.Text
+                        then
+                           Item ("its document now says",
+                                 To_String (One.Payload) & " -- " & Word_Of_Command (Kind) & " revise " & Named
+                                 & " from-document takes it", Pres.Pending);
+                           exit;
+                        end if;
+                     end;
+                  end loop;
 
                   --  How it stands, coloured by that: an accepted decision
                   --  or specification governs, an accepted requirement waits.
@@ -2159,6 +2222,23 @@ package body Model_Runner.CLI.Intents is
                                          else To_String (Serving)));
                      --  Verified by it only while it is verified; evidence
                      --  taken before is said as that.
+                     for Relation in Nt.Implementation .. Nt.Test loop
+                        if Relation in Nt.Implementation | Nt.Test then
+                           for Target of Nt.Links (Store, Kind, Named, Relation) loop
+                              if Ada.Strings.Fixed.Index (Target, "/") > 0
+                                and then Ada.Strings.Fixed.Index (Target, ":") = 0
+                                and then not Ada.Directories.Exists
+                                               (Hostkit.Fs.Join
+                                                  (Ada.Directories.Containing_Directory (S.Root (Store)), Target))
+                              then
+                                 Item (Relation_Said (Relation),
+                                       Target & " (missing: the repository does not hold it)", Pres.Bad);
+                              else
+                                 Item (Relation_Said (Relation), Target);
+                              end if;
+                           end loop;
+                        end if;
+                     end loop;
                      if Verified_By /= Null_Unbounded_String then
                         Item ((if To_String (Held.State) = "verified" then "verified by" else "evidence taken"),
                               To_String (Verified_By));
@@ -2208,6 +2288,10 @@ package body Model_Runner.CLI.Intents is
                      Item ("superseded_by", To_String (Held.Superseded_By));
                   end if;
                   for Relation in Nt.Link_Kind loop
+                     --  Its implementation and its tests are its work, said there.
+                     if Is_Requirement and then Relation in Nt.Implementation | Nt.Test then
+                        goto Next_Relation;
+                     end if;
                      for Target of Nt.Links (Store, Kind, Named, Relation) loop
                         --  A file it names that is not there: marked.
                         if Ada.Strings.Fixed.Index (Target, "/") > 0
@@ -2217,12 +2301,13 @@ package body Model_Runner.CLI.Intents is
                                          (Hostkit.Fs.Join (Ada.Directories.Containing_Directory (S.Root (Store)),
                                                            Target))
                         then
-                           Item ("link." & Lower (Nt.Link_Kind'Image (Relation)),
+                           Item (Relation_Said (Relation),
                                  Target & " (missing: the repository does not hold it)", Pres.Bad);
                         else
-                           Item ("link." & Lower (Nt.Link_Kind'Image (Relation)), Target);
+                           Item (Relation_Said (Relation), Target);
                         end if;
                      end loop;
+                     <<Next_Relation>>
                   end loop;
                end;
             end if;

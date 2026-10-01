@@ -255,6 +255,9 @@ package body Model_Runner.Presentation is
       begin
          return Bare /= ""
            and then not Lower_Word (Bare)
+           --  Another command, or a value left to the reader, is no argument.
+           and then Bare (Bare'First) /= '/'
+           and then Ada.Strings.Fixed.Index (Bare, "...") = 0
            and then (for all C of Bare => C not in '(' | '"')
            and then (for some C of Bare =>
                        C in 'A' .. 'Z' | '0' .. '9' | '=' | '.' | '/' | '-' | '_' | '|' | '[' | ']');
@@ -304,6 +307,8 @@ package body Model_Runner.Presentation is
                               if not In_Args and then Ada.Strings.Fixed.Index (Actions, " " & Bare & " ") > 0 then
                                  Head_End := Cursor + Bare'Length;
                                  Args_End := Head_End;
+                                 --  What follows new or note is words, not arguments.
+                                 exit when Bare in "new" | "note";
                               elsif Given_Word (Word) then
                                  In_Args := True;
                                  Args_End := Cursor + Bare'Length;
@@ -432,10 +437,11 @@ package body Model_Runner.Presentation is
         | "ok" | "yes" | "true"
       then
          return Good;
-      elsif Word in "failed" | "fail" | "blocked" | "cancelled" | "rejected" | "superseded" | "obsolete"
-        | "retired" | "deprecated" | "withdrawn" | "conflicted" | "error" | "blocking"
-      then
+      elsif Word in "failed" | "fail" | "blocked" | "deprecated" | "conflicted" | "error" | "blocking" then
          return Bad;
+      --  Ended by choice: finished with, not gone wrong.
+      elsif Word in "cancelled" | "rejected" | "superseded" | "obsolete" | "retired" | "withdrawn" then
+         return Muted;
       elsif Word in "candidate" | "proposed" | "accepted" | "running" | "verification" | "implemented"
         | "waiting" | "open" | "pending" | "warning" | "stale" | "stopped"
       then
@@ -918,8 +924,10 @@ package body Model_Runner.Presentation is
             then Commands_Coloured (Message (Item, "diagnostic.note", [Loc.Named ("detail", Said)]))
             else Message (Item, "diagnostic.note", [Loc.Named ("detail", Said)]));
          Lead    : constant String := Message (Item, "diagnostic.next_lead");
+         --  Its way on dimmed wherever the note begins with one.
          At_Lead : constant Natural :=
-           (if Lead = "" or else Key'Length <= 9 or else Key (Key'First .. Key'First + 8) /= "cli.next."
+           (if Lead = "" or else Said'Length < Lead'Length
+              or else Said (Said'First .. Said'First + Lead'Length - 1) /= Lead
             then 0 else Ada.Strings.Fixed.Index (Line, Lead));
       begin
          if Styles_Diagnostics (Item) and then At_Lead > 0 then
@@ -1201,10 +1209,11 @@ package body Model_Runner.Presentation is
                  (Item,
                   Line (Line'First .. At_Label - 1)
                   & Terminal_Styles.Decorate (Severity, Role)
-                  & (if At_Code = 0 then Rest
+                  --  The commands it names coloured, as anywhere.
+                  & (if At_Code = 0 then Commands_Coloured (Rest)
                      else Rest (Rest'First .. At_Code - 1)
                           & Terminal_Styles.Decorate (Code, Terminal_Styles.Role_Muted)
-                          & Rest (At_Code + Code'Length .. Rest'Last)));
+                          & Commands_Coloured (Rest (At_Code + Code'Length .. Rest'Last))));
             end;
          else
             Error_Line (Item, Line);

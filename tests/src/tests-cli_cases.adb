@@ -14,6 +14,7 @@ with Ada.Strings.Unbounded;
 with Ada.Text_IO.Text_Streams;
 with Captured_Output;
 with Model_Runner.CLI.Choosers;
+with Model_Runner.CLI.Completion;
 with Model_Runner.CLI.Project_Commands;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Execution;
@@ -1821,14 +1822,14 @@ package body Tests.CLI_Cases is
       Assert (Command ("task|context|TASK-002|--set|--verbose") = 0 and then Shows ("## Rules"),
               "task context --verbose did not show the text the agent reads: " & Last_Output);
 
-      Assert (Command ("task|split|TASK-001|One; Two") = 0 and then Shows ("is blocked, waiting for parts"),
+      Assert (Command ("task|split|TASK-001|One; Two") = 0 and then Shows ("is waiting for parts (blocked)"),
               "task split did not make the parts and block the parent: " & Last_Output);
       Assert (Command ("task|depend|TASK-004|TASK-003") = 0 and then Shows ("waits for"),
               "task depend did not make one wait for the other: " & Last_Output);
       Assert (Command ("task|accept|TASK-002") = 0
               and then Command ("task|cancel|TASK-002") = 0
               and then Command ("task|reopen|TASK-002") = 0
-              and then Shows ("is accepted"),
+              and then Shows ("(accepted)"),
               "a cancelled task was not reopened: " & Last_Output);
 
       --  What the condition names is a field of its own, not only words in
@@ -12975,6 +12976,21 @@ package body Tests.CLI_Cases is
       B.Free (Data);
    end A_Large_Write_Is_Not_Bounded_By_The_Stack;
 
+   --  Tab at the prompt completes a command, its action and a path.
+   procedure Tab_Completes_Commands (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+   begin
+      Assert (Model_Runner.CLI.Completion.Candidates ("/ta").Contains ("/task"),
+              "a command was not completed");
+      Assert (Natural (Model_Runner.CLI.Completion.Candidates ("/task sh").Length) = 1
+              and then Model_Runner.CLI.Completion.Candidates ("/task sh").Contains ("show"),
+              "an action was not completed");
+      Assert (Model_Runner.CLI.Completion.Candidates ("/help reconf").Contains ("reconfigure"),
+              "a command to help with was not completed");
+      Assert (Model_Runner.CLI.Completion.Candidates ("/nosuch").Is_Empty,
+              "a word nothing begins was completed");
+   end Tab_Completes_Commands;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -13257,6 +13273,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, A_Large_Write_Is_Not_Bounded_By_The_Stack'Access,
          "a saved context larger than a stack is written and read back");
+      Register_Routine
+        (T, Tab_Completes_Commands'Access,
+         "Tab at the prompt completes a command, its action and its arguments");
    end Register_Tests;
 
 end Tests.CLI_Cases;

@@ -65,6 +65,14 @@ package Model_Runner.Framework.Context is
    --  @return The profile.
    function Profile (Item : Stores.Store; Id : String) return Model_Profile;
 
+   --  A session's model as the project plans for it: where scalar.model.default
+   --  names a profile, its room the lower of the two, its reserve the larger.
+   --
+   --  @param Item The store.
+   --  @param Session What the session's model can take.
+   --  @return The profile a run is planned with.
+   function Within_Configured (Item : Stores.Store; Session : Model_Profile) return Model_Profile;
+
    --  What a text is estimated to cost: a token for every four bytes.
    --
    --  @param Text The text.

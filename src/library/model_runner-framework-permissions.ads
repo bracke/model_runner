@@ -307,7 +307,7 @@ package Model_Runner.Framework.Permissions is
    --
    --  @param Subject The setting's name.
    --  @param Value Its value.
-   --  @return The value, or "granted (no limits)".
+   --  @return The value, or "granted, no limits".
    function Value_Said (Subject, Value : String) return String;
 
    --  Whether a task's permissions only take capabilities away -- each
@@ -316,6 +316,18 @@ package Model_Runner.Framework.Permissions is
    --  @param Text The permissions field.
    --  @return True when every entry is one taken away.
    function Only_Withholds (Text : String) return Boolean;
+
+   --  Whether a ruling on one capability says what the configuration
+   --  gives it -- off for one withheld, however that comes about, inherit
+   --  from a level above that withholds it included.
+   --
+   --  @param Item The store.
+   --  @param Config The configuration, as it is or would be.
+   --  @param Setting The capability's setting, map.permission.LEVEL.CAPABILITY.
+   --  @param Ruling What the ruling says: on, off, none or constraints.
+   --  @return True when they agree.
+   function Ruling_Agrees
+     (Item : Stores.Store; Config : Records.Item; Setting, Ruling : String) return Boolean;
 
 private
 

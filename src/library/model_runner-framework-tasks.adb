@@ -2360,10 +2360,10 @@ package body Model_Runner.Framework.Tasks is
                   Read  : E.Error_Info;
                begin
                   Stores.Read (Item, Tasks_Area, Parent & State_Suffix, Value, Read);
-                  if E.Is_Ok (Read)
-                    and then Ada.Strings.Fixed.Index
-                               (Records.Get (Value, "blocking_reasons"), Children_Reason) = 1
-                  then
+                  --  Waiting for parts already, or stopped for another
+                  --  reason that splitting it answers: it waits for its
+                  --  parts now, and says that.
+                  if E.Is_Ok (Read) and then Coordination /= "parent_runs" then
                      Set_Reason (Item, Change, Parent,
                                  Children_Reason
                                  & Joined (Open_Children (Item, Change, Parent), ", "));

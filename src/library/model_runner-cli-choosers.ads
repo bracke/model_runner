@@ -180,24 +180,32 @@ package Model_Runner.CLI.Choosers is
    --  @return Whether the answer was yes.
    function Confirmed_Line (Screen : in out Model_Runner.Presentation.Console; Question : String) return Boolean;
 
+   --  What Tab completes the last word of a line to: each whole word it
+   --  may become, given what is typed before the cursor.
+   type Completer is access function (Before : String) return Model_Runner.Framework.Name_Lists.Vector;
+
    --  A line typed at the session's prompt, edited as it is typed and its
    --  commands coloured as they are: the cursor moves with the arrows,
    --  Home and End (Ctrl-A, Ctrl-E), Backspace and Delete take a character,
    --  Ctrl-U, Ctrl-K and Ctrl-W what is before or after the cursor or the
    --  word before it, Up and Down step through the lines typed before,
    --  Ctrl-L clears the screen. Enter ends it; Escape and Ctrl-C end it at
-   --  once, dropping it; Ctrl-D on an empty line ends the input.
+   --  once, dropping it; Ctrl-D on an empty line ends the input. Tab
+   --  completes the word at the cursor: the one word it can be, or what
+   --  those it can be share, and pressed again, those words listed.
    --  Unavailable where there is no terminal to read it from that way; the
    --  caller shows the prompt and reads a line then.
    --
    --  @param Screen Where it is shown, and how commands are coloured.
    --  @param Prompt The prompt, as shown before the line.
    --  @param Outcome How it ended.
+   --  @param Complete What Tab completes a word to; null, Tab completes nothing.
    --  @return What was typed.
    function Edited_Line
-     (Screen  : Model_Runner.Presentation.Console;
-      Prompt  : String;
-      Outcome : out Line_End) return String;
+     (Screen   : Model_Runner.Presentation.Console;
+      Prompt   : String;
+      Outcome  : out Line_End;
+      Complete : Completer := null) return String;
 
    --  A yes or no read from the person: anything else asked again, a
    --  command typed in its place said and not run, and no answer, Escape

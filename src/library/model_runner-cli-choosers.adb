@@ -1,4 +1,6 @@
 with Ada.Characters.Handling;
+with Ada.Containers;
+with Ada.Directories;
 with Ada.Finalization;
 with Ada.Streams;
 with Ada.Strings.Fixed;
@@ -120,7 +122,10 @@ package body Model_Runner.CLI.Choosers is
                 (To_String (Item.Items (Index).Tag) & " "
                  & To_String (Item.Items (Index).Label));
          begin
-            if Wanted = "" or else Ada.Strings.Fixed.Index (Said, Wanted) > 0 then
+            --  A choice for any language is one for every language named.
+            if Wanted = "" or else Ada.Strings.Fixed.Index (Said, Wanted) > 0
+              or else Ada.Strings.Fixed.Index (Said, "any language") > 0
+            then
                Item.Visible.Append (Index);
             end if;
          end;
@@ -207,10 +212,18 @@ package body Model_Runner.CLI.Choosers is
             Item.Cursor := Count;
          when Tab =>
             Item.Details := not Item.Details;
+         when Backspace =>
+            --  A filter left by Enter is taken up again where it stood.
+            if Length (Item.Filter) > 0 then
+               Item.Filtering := True;
+               Head (Item.Filter, Length (Item.Filter) - 1);
+               Refilter (Item);
+            end if;
          when Printable =>
             if Pressed.Char = '/' then
                Item.Filtering := True;
-            elsif Pressed.Char = 'q' then
+            --  q quits where no filter stands; with one, it is a letter of it.
+            elsif Pressed.Char = 'q' and then Length (Item.Filter) = 0 then
                Item.Done := True;
 
             --  A number is the choice of that number; any other character
@@ -249,7 +262,7 @@ package body Model_Runner.CLI.Choosers is
          when Interrupt =>
             Item.Done := True;
             Item.Result := 0;
-         when Backspace | Nothing =>
+         when Nothing =>
             null;
       end case;
 
@@ -405,6 +418,12 @@ package body Model_Runner.CLI.Choosers is
       loop
          Result.Append (Line);
       end loop;
+      --  Filtering, the keys too: how to take it back, and how to leave.
+      if Item.Filtering or else Length (Item.Filter) > 0 then
+         for Line of Wrapped (To_String (Words.Keys), Columns) loop
+            Result.Append (Line);
+         end loop;
+      end if;
 
       while Natural (Result.Length) > Rows loop
          Result.Delete_Last;
@@ -930,13 +949,83 @@ package body Model_Runner.CLI.Choosers is
    -- Edited_Line --
    -----------------
 
-   --  The lines typed at the prompt this session, oldest first.
+   --  The lines typed at the prompt, oldest first: this session's, after
+   --  those kept in the project from the sessions before.
    History : Model_Runner.Framework.Name_Lists.Vector;
+   History_Read : Boolean := False;
+
+   --  Where the project here keeps them; "" outside a project.
+   function History_File return String is
+      State : constant String := Ada.Directories.Current_Directory & "/.model_runner";
+   begin
+      return (if Ada.Directories.Exists (State & "/runtime") then State & "/runtime/prompt-history" else "");
+   exception
+      when others =>
+         return "";
+   end History_File;
+
+   procedure Read_History is
+      File : Ada.Text_IO.File_Type;
+   begin
+      History_Read := True;
+      if History_File = "" or else not Ada.Directories.Exists (History_File) then
+         return;
+      end if;
+      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, History_File);
+      while not Ada.Text_IO.End_Of_File (File) loop
+         History.Append (Ada.Text_IO.Get_Line (File));
+      end loop;
+      Ada.Text_IO.Close (File);
+   exception
+      when others =>
+         if Ada.Text_IO.Is_Open (File) then
+            Ada.Text_IO.Close (File);
+         end if;
+   end Read_History;
+
+   --  The history read, once, before it is first stepped through.
+   function History_Ready return Boolean is
+   begin
+      if not History_Read then
+         Read_History;
+      end if;
+      return True;
+   end History_Ready;
+
+   --  A line kept for the next session, the last 500 kept.
+   procedure Keep_In_History (Line : String) is
+      File : Ada.Text_IO.File_Type;
+   begin
+      if History_File = "" then
+         return;
+      end if;
+      if Natural (History.Length) > 500 then
+         History.Delete_First (Ada.Containers.Count_Type (Natural (History.Length) - 500));
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, History_File);
+         for One of History loop
+            Ada.Text_IO.Put_Line (File, One);
+         end loop;
+      else
+         if Ada.Directories.Exists (History_File) then
+            Ada.Text_IO.Open (File, Ada.Text_IO.Append_File, History_File);
+         else
+            Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, History_File);
+         end if;
+         Ada.Text_IO.Put_Line (File, Line);
+      end if;
+      Ada.Text_IO.Close (File);
+   exception
+      when others =>
+         if Ada.Text_IO.Is_Open (File) then
+            Ada.Text_IO.Close (File);
+         end if;
+   end Keep_In_History;
 
    function Edited_Line
-     (Screen  : Model_Runner.Presentation.Console;
-      Prompt  : String;
-      Outcome : out Line_End) return String
+     (Screen   : Model_Runner.Presentation.Console;
+      Prompt   : String;
+      Outcome  : out Line_End;
+      Complete : Completer := null) return String
    is
       Guard   : Raw_Guard;
       Text    : Unbounded_String;
@@ -946,6 +1035,8 @@ package body Model_Runner.CLI.Choosers is
       Drawn_Row : Natural := 0;
       --  Where Up and Down are in the history; past its end, the line
       --  being typed, kept while older ones are looked at.
+      Ready   : constant Boolean := History_Ready;
+      pragma Unreferenced (Ready);
       Looking : Natural := Natural (History.Length) + 1;
       Typing  : Unbounded_String;
       Buffer  : Ada.Streams.Stream_Element_Array (1 .. 1);
@@ -1068,6 +1159,92 @@ package body Model_Runner.CLI.Choosers is
          Into := Character'Val (Buffer (Buffer'First));
          return True;
       end Next;
+
+      --  Whether the key before was a Tab that completed nothing more:
+      --  a second lists what the word may be.
+      Tabbed : Boolean := False;
+
+      --  The word at the cursor completed: to the one word it can be, with
+      --  a space after unless it goes on; to what several share; or, asked
+      --  again, those listed under the line and the line drawn again.
+      procedure Complete_Word is
+         Line     : constant String := To_String (Text);
+         Before   : constant String := Line (Line'First .. Line'First + Cursor - 1);
+         Start    : constant Natural := Ada.Strings.Fixed.Index (Before, " ", Ada.Strings.Backward);
+         Word     : constant String := Before ((if Start = 0 then Before'First else Start + 1) .. Before'Last);
+         Choices  : constant Model_Runner.Framework.Name_Lists.Vector := Complete (Before);
+         Shared   : Unbounded_String;
+      begin
+         if Choices.Is_Empty then
+            Put ([1 => ASCII.BEL]);
+            return;
+         end if;
+         --  What every choice begins with.
+         Shared := To_Unbounded_String (Choices.First_Element);
+         for One of Choices loop
+            declare
+               Same : Natural := 0;
+            begin
+               while Same < Length (Shared) and then Same < One'Length
+                 and then Element (Shared, Same + 1) = One (One'First + Same)
+               loop
+                  Same := Same + 1;
+               end loop;
+               Shared := Head (Shared, Same);
+            end;
+         end loop;
+         if Natural (Choices.Length) = 1 then
+            declare
+               Whole : constant String := Choices.First_Element;
+               After : constant String :=
+                 (if Whole (Whole'Last) in '/' | '=' then "" else " ");
+            begin
+               Insert (Text, Cursor + 1, Whole (Whole'First + Word'Length .. Whole'Last) & After);
+               Cursor := Cursor + Whole'Length - Word'Length + After'Length;
+            end;
+            Tabbed := False;
+         elsif Length (Shared) > Word'Length then
+            Insert (Text, Cursor + 1, Slice (Shared, Word'Length + 1, Length (Shared)));
+            Cursor := Cursor + Length (Shared) - Word'Length;
+            Tabbed := False;
+         elsif not Tabbed then
+            Put ([1 => ASCII.BEL]);
+            Tabbed := True;
+         else
+            --  Listed, a few to a row, under the line as it ends.
+            declare
+               Saved  : constant Natural := Cursor;
+               Widest : Natural := 0;
+               Across : Positive;
+               Column : Natural := 0;
+               Shown  : Natural := 0;
+            begin
+               for One of Choices loop
+                  Widest := Natural'Max (Widest, One'Length);
+               end loop;
+               Across := Positive'Max (1, Columns / (Widest + 2));
+               Cursor := Length (Text);
+               Redraw;
+               Put (ASCII.CR & ASCII.LF);
+               for One of Choices loop
+                  exit when Shown = 200;
+                  Put (One & [1 .. Widest + 2 - One'Length => ' ']);
+                  Column := Column + 1;
+                  Shown := Shown + 1;
+                  if Column = Across then
+                     Put (ASCII.CR & ASCII.LF);
+                     Column := 0;
+                  end if;
+               end loop;
+               if Column > 0 then
+                  Put (ASCII.CR & ASCII.LF);
+               end if;
+               Drawn_Row := 0;
+               Cursor := Saved;
+               Tabbed := False;
+            end;
+         end if;
+      end Complete_Word;
 
       Key : Character;
    begin
@@ -1220,13 +1397,18 @@ package body Model_Runner.CLI.Choosers is
                   end if;
                end;
             when ASCII.HT =>
-               null;
+               if Complete /= null then
+                  Complete_Word;
+               end if;
             when others =>
                if Key >= ' ' then
                   Insert (Text, Cursor + 1, [1 => Key]);
                   Cursor := Cursor + 1;
                end if;
          end case;
+         if Key /= ASCII.HT then
+            Tabbed := False;
+         end if;
          --  Bytes still coming -- a paste, the rest of a character -- are
          --  taken before it is drawn again.
          if not Hostkit.Descriptors.Wait_Readable (Input, 0) then
@@ -1243,6 +1425,7 @@ package body Model_Runner.CLI.Choosers is
         and then (History.Is_Empty or else History.Last_Element /= To_String (Text))
       then
          History.Append (To_String (Text));
+         Keep_In_History (To_String (Text));
       end if;
       return To_String (Text);
    end Edited_Line;
@@ -1309,6 +1492,9 @@ package body Model_Runner.CLI.Choosers is
                return False;
             end if;
             Pres.Put_Note (Screen, "cli.choose.yes_or_no", [Loc.Named ("value", Answer)]);
+            --  Asked again where the answer goes, not on a bare line.
+            Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, "(yes/no) ");
+            Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
          end;
       end loop;
       return False;

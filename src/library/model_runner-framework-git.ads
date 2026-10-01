@@ -55,4 +55,30 @@ package Model_Runner.Framework.Git is
    --    there is no git.
    function Top_Level (Directory : String) return String;
 
+   --  Where the repository's history says a file went: the path a commit
+   --  renamed it to, followed through later renames, as the project names
+   --  paths; "" where no commit renamed it, or there is no git.
+   --
+   --  @param Project_Directory The project.
+   --  @param Path The file's path, as the project names it.
+   --  @return Its path now.
+   function Renamed_In_History (Project_Directory, Path : String) return String;
+
+   --  When the last commit to a file was made, as Timestamp says a time.
+   --
+   --  @param Project_Directory The project.
+   --  @param Path The file, as the project names it.
+   --  @return The commit's time; "" where no commit holds it, or there is no
+   --    git.
+   function Last_Commit_At (Project_Directory, Path : String) return String;
+
+   --  What some files hold beyond the last commit, as git diff shows it.
+   --
+   --  @param Project_Directory The project.
+   --  @param Paths The files, as the project names them.
+   --  @param Found False where there is no repository or no git.
+   --  @return The diff; "" where they are as committed.
+   function Uncommitted_Diff
+     (Project_Directory : String; Paths : Name_Lists.Vector; Found : out Boolean) return String;
+
 end Model_Runner.Framework.Git;

@@ -1,4 +1,6 @@
+with Ada.Calendar.Formatting;
 with Ada.Directories;
+with Ada.Strings.Fixed;
 
 with Hostkit;
 with Hostkit.Fs;
@@ -156,5 +158,154 @@ package body Model_Runner.Framework.Git is
       end loop;
       return "";
    end Top_Level;
+
+   ------------------------
+   -- Renamed_In_History --
+   ------------------------
+
+   function Renamed_In_History (Project_Directory, Path : String) return String is
+      Arguments : Name_Lists.Vector;
+      Output    : constant String :=
+        Hostkit.Fs.Join (Hostkit.Fs.Temp_Directory,
+                         "model_runner-git-renames-" & Fingerprint (Project_Directory) & ".txt");
+      Happened  : Execution.Outcome;
+      Text      : Unbounded_String;
+      Read      : E.Error_Info;
+      Top       : constant String := Top_Level (Project_Directory);
+      Here      : constant String := Ada.Directories.Full_Name (Project_Directory);
+      Prefix    : constant String :=
+        (if Top /= "" and then Here'Length > Top'Length + 1
+           and then Here (Here'First .. Here'First + Top'Length - 1) = Top
+         then Here (Here'First + Top'Length + 1 .. Here'Last) & "/" else "");
+      Now       : Unbounded_String := To_Unbounded_String (Prefix & Path);
+   begin
+      --  The renames of the last commits, newest first: old and new path.
+      Arguments.Append ("log");
+      Arguments.Append ("-M");
+      Arguments.Append ("--diff-filter=R");
+      Arguments.Append ("--name-status");
+      Arguments.Append ("--format=");
+      Arguments.Append ("-n");
+      Arguments.Append ("200");
+      Execution.Run_Harness (Project_Directory, "git", Arguments, Project_Directory, Output, 60, Happened);
+      if Ada.Directories.Exists (Output) then
+         Files.Read_Text (Output, Text, Read);
+         Files.Discard (Output);
+      end if;
+      if not (Happened.Started and then not Happened.Timed_Out and then Happened.Exit_Status = 0) then
+         return "";
+      end if;
+      declare
+         Lines   : constant Name_Lists.Vector := Lines_Of (To_String (Text));
+         Changed : Boolean := True;
+         Rounds  : Natural := 0;
+      begin
+         --  Oldest rename first, then each one after it.
+         while Changed and then Rounds < 10 loop
+            Changed := False;
+            Rounds := Rounds + 1;
+            for Line of reverse Lines loop
+               declare
+                  First_Tab  : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
+                  Second_Tab : constant Natural :=
+                    (if First_Tab = 0 then 0
+                     else Ada.Strings.Fixed.Index (Line (First_Tab + 1 .. Line'Last), [1 => ASCII.HT]));
+               begin
+                  if Line'Length > 1 and then Line (Line'First) = 'R' and then Second_Tab > 0
+                    and then Line (First_Tab + 1 .. Second_Tab - 1) = To_String (Now)
+                  then
+                     Now := To_Unbounded_String (Line (Second_Tab + 1 .. Line'Last));
+                     Changed := True;
+                  end if;
+               end;
+            end loop;
+         end loop;
+      end;
+      if To_String (Now) = Prefix & Path then
+         return "";
+      end if;
+      declare
+         Went : constant String := To_String (Now);
+      begin
+         return (if Prefix /= "" and then Went'Length > Prefix'Length
+                   and then Went (Went'First .. Went'First + Prefix'Length - 1) = Prefix
+                 then Went (Went'First + Prefix'Length .. Went'Last) else Went);
+      end;
+   end Renamed_In_History;
+
+   --------------------
+   -- Last_Commit_At --
+   --------------------
+
+   function Last_Commit_At (Project_Directory, Path : String) return String is
+      use type Ada.Calendar.Time;
+      Arguments : Name_Lists.Vector;
+      Output    : constant String :=
+        Hostkit.Fs.Join (Hostkit.Fs.Temp_Directory,
+                         "model_runner-git-when-" & Fingerprint (Project_Directory) & ".txt");
+      Happened  : Execution.Outcome;
+      Text      : Unbounded_String;
+      Read      : E.Error_Info;
+   begin
+      Arguments.Append ("log");
+      Arguments.Append ("-1");
+      Arguments.Append ("--format=%ct");
+      Arguments.Append ("--");
+      Arguments.Append (Path);
+      Execution.Run_Harness (Project_Directory, "git", Arguments, Project_Directory, Output, 60, Happened);
+      if Ada.Directories.Exists (Output) then
+         Files.Read_Text (Output, Text, Read);
+         Files.Discard (Output);
+      end if;
+      declare
+         Seconds : constant String := Ada.Strings.Fixed.Trim (To_String (Text), Ada.Strings.Both);
+         Digits_Only : constant Boolean :=
+           Seconds /= ""
+           and then (for all C of Seconds => C in '0' .. '9' | ASCII.LF | ASCII.CR);
+      begin
+         if not (Happened.Started and then Happened.Exit_Status = 0 and then Digits_Only) then
+            return "";
+         end if;
+         declare
+            Image : String :=
+              Ada.Calendar.Formatting.Image
+                (Ada.Calendar.Formatting.Time_Of (1970, 1, 1, 0.0)
+                 + Duration (Long_Long_Integer'Value (Lines_Of (Seconds).First_Element)));
+         begin
+            Image (Image'First + 10) := 'T';
+            return Image & "Z";
+         end;
+      end;
+   end Last_Commit_At;
+
+   ----------------------
+   -- Uncommitted_Diff --
+   ----------------------
+
+   function Uncommitted_Diff
+     (Project_Directory : String; Paths : Name_Lists.Vector; Found : out Boolean) return String
+   is
+      Arguments : Name_Lists.Vector;
+      Output    : constant String :=
+        Hostkit.Fs.Join (Hostkit.Fs.Temp_Directory,
+                         "model_runner-git-diff-" & Fingerprint (Project_Directory) & ".txt");
+      Happened  : Execution.Outcome;
+      Text      : Unbounded_String;
+      Read      : E.Error_Info;
+   begin
+      Arguments.Append ("diff");
+      Arguments.Append ("--no-color");
+      Arguments.Append ("--relative");
+      Arguments.Append ("HEAD");
+      Arguments.Append ("--");
+      Arguments.Append_Vector (Paths);
+      Execution.Run_Harness (Project_Directory, "git", Arguments, Project_Directory, Output, 60, Happened);
+      if Ada.Directories.Exists (Output) then
+         Files.Read_Text (Output, Text, Read);
+         Files.Discard (Output);
+      end if;
+      Found := Happened.Started and then not Happened.Timed_Out and then Happened.Exit_Status = 0;
+      return (if Found then To_String (Text) else "");
+   end Uncommitted_Diff;
 
 end Model_Runner.Framework.Git;

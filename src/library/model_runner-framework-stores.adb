@@ -1566,7 +1566,8 @@ package body Model_Runner.Framework.Stores is
                  and then not (Under = "runtime"
                                and then (Ada.Strings.Fixed.Index (Name, "overwritten-") = Name'First
                                          or else Ada.Strings.Fixed.Index (Name, "given-up-") = Name'First
-                                         or else Ada.Strings.Fixed.Index (Name, "replaced-") = Name'First))
+                                         or else Ada.Strings.Fixed.Index (Name, "replaced-") = Name'First
+                                         or else Ada.Strings.Fixed.Index (Name, "before-restore-") = Name'First))
                then
                   Gather (Root, Relative, Into);
                end if;

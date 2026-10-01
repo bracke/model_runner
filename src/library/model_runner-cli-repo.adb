@@ -15,6 +15,7 @@ with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Repository;
+with Model_Runner.Framework.Bootstrap;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
@@ -100,7 +101,8 @@ package body Model_Runner.CLI.Repo is
               elsif Bare = "serves" then F & " serves " & To_Said
               else F & " " & Ada.Strings.Fixed.Translate (Bare, Ada.Strings.Maps.To_Mapping ("_", " "))
                    & " " & To_Said)
-        & (if Sure then "" else ", probably");
+        --  Missing is said already; an explicit link is no guess.
+        & (if Sure or else Missing then "" else ", probably");
    end Edge_Said;
 
    ---------
@@ -541,8 +543,33 @@ package body Model_Runner.CLI.Repo is
 
       elsif Action = "sym" then
          declare
-            Names : constant Model_Runner.Framework.Name_Lists.Vector :=
-              Rp.Find_Symbols (Found, Argument);
+            --  As named; else every symbol holding it, whatever the case,
+            --  a * standing for anything: valid, VALID_SKU, valid*.
+            function Looked_Up return Model_Runner.Framework.Name_Lists.Vector is
+               Exact : constant Model_Runner.Framework.Name_Lists.Vector := Rp.Find_Symbols (Found, Argument);
+               Wanted : constant String :=
+                 Ada.Characters.Handling.To_Lower
+                   (Ada.Strings.Fixed.Trim (Argument, Ada.Strings.Maps.To_Set ("*"), Ada.Strings.Maps.To_Set ("*")));
+               Result : Model_Runner.Framework.Name_Lists.Vector;
+            begin
+               if not Exact.Is_Empty or else Wanted = "" then
+                  return Exact;
+               end if;
+               for Index in 1 .. Rp.Symbol_Count (Found) loop
+                  declare
+                     Name : constant String := To_String (Rp.Symbol_At (Found, Index).Name);
+                  begin
+                     if Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Name), Wanted) > 0
+                       and then not Result.Contains (Name)
+                       and then Natural (Result.Length) < 30
+                     then
+                        Result.Append (Name);
+                     end if;
+                  end;
+               end loop;
+               return Result;
+            end Looked_Up;
+            Names : constant Model_Runner.Framework.Name_Lists.Vector := Looked_Up;
          begin
             if Names.Is_Empty then
                Not_Found;
@@ -847,6 +874,9 @@ package body Model_Runner.CLI.Repo is
                         declare
                            Naming : Unbounded_String;
                            Count  : Natural := 0;
+                           Read_Already : constant Model_Runner.Framework.Name_Lists.Vector :=
+                             Model_Runner.Framework.Bootstrap.Documents (Store);
+                           In_Read : Boolean := False;
                         begin
                            for Index in 1 .. Rp.File_Count (Found) loop
                               exit when Count >= 5;
@@ -880,15 +910,24 @@ package body Model_Runner.CLI.Repo is
                                  At_Word := (if E.Is_Ok (Read) then Ada.Strings.Unbounded.Index (Text, Argument)
                                              else 0);
                                  if At_Word > 0
+                                   and then (At_Word = 1
+                                             or else Element (Text, At_Word - 1)
+                                                       not in '0' .. '9' | 'A' .. 'Z' | 'a' .. 'z' | '-' | '_')
                                    and then (At_Word + Argument'Length > Length (Text)
                                              or else Element (Text, At_Word + Argument'Length) not in '0' .. '9')
                                  then
                                     Append (Naming, (if Count = 0 then "" else ", ") & Path);
                                     Count := Count + 1;
+                                    --  A document bootstrap reads already: reading it
+                                    --  again makes no more of it.
+                                    if Read_Already.Contains (Path) then
+                                       In_Read := True;
+                                    end if;
                                  end if;
                               end;
                            end loop;
-                           Pres.Put_Message (Screen, "cli.repo.trace_unknown",
+                           Pres.Put_Message (Screen, (if In_Read then "cli.repo.trace_unknown_read"
+                                                      else "cli.repo.trace_unknown"),
                                              [Loc.Named ("name", Argument),
                                               Loc.Named ("detail", (if Count = 0 then "nothing in the code names it"
                                                                     else To_String (Naming) & " names it"))]);
@@ -932,20 +971,48 @@ package body Model_Runner.CLI.Repo is
                                  Path : constant String := To_String (Rp.File_At (Found, Index).Path);
                                  Text : Unbounded_String;
                                  Read : E.Error_Info := E.Success;
+                                 --  Named as a whole word: FR-1 is not in NFR-1,
+                                 --  nor REQ-1 in REQ-10.
                                  function Names_It (Word : String) return Boolean is
-                                    At_Word : constant Natural := Ada.Strings.Unbounded.Index (Text, Word);
+                                    From : Positive := 1;
                                  begin
-                                    return Word /= "" and then At_Word > 0
-                                      and then (At_Word + Word'Length > Length (Text)
-                                                or else Element (Text, At_Word + Word'Length)
-                                                          not in '0' .. '9' | 'A' .. 'Z' | 'a' .. 'z');
+                                    if Word = "" then
+                                       return False;
+                                    end if;
+                                    loop
+                                       declare
+                                          At_Word : constant Natural :=
+                                            Ada.Strings.Unbounded.Index (Text, Word, From);
+                                       begin
+                                          exit when At_Word = 0;
+                                          if (At_Word = 1
+                                              or else Element (Text, At_Word - 1)
+                                                        not in '0' .. '9' | 'A' .. 'Z' | 'a' .. 'z' | '-' | '_')
+                                            and then (At_Word + Word'Length > Length (Text)
+                                                      or else Element (Text, At_Word + Word'Length)
+                                                                not in '0' .. '9' | 'A' .. 'Z' | 'a' .. 'z')
+                                          then
+                                             return True;
+                                          end if;
+                                          From := At_Word + 1;
+                                       end;
+                                    end loop;
+                                    return False;
                                  end Names_It;
+                                 --  A document is where requirements are said, not
+                                 --  where they are done: no implementation.
+                                 Is_Document : constant Boolean :=
+                                   Rp."=" (Rp.File_At (Found, Index).Role, Rp.Documentation)
+                                   or else (for some Ext of Model_Runner.Framework.Name_Lists.Vector'
+                                              ([".md", ".adoc", ".rst", ".txt"]) =>
+                                              Path'Length > Ext'Length
+                                              and then Path (Path'Last - Ext'Length + 1 .. Path'Last) = Ext);
                                  Linked : Boolean := False;
                               begin
                                  for Line of Shown loop
                                     Linked := Linked or else Ada.Strings.Fixed.Index (Line, "file:" & Path) > 0;
                                  end loop;
-                                 if not Linked
+                                 if not Linked and then not Is_Document
                                    and then Ada.Directories.Exists (Hostkit.Fs.Join (Directory, Path))
                                    and then Ada.Directories."<"
                                               (Ada.Directories.Size (Hostkit.Fs.Join (Directory, Path)), 2_000_000)

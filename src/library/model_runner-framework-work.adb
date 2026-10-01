@@ -653,8 +653,17 @@ package body Model_Runner.Framework.Work is
    --  failure, with the root's own only when it says something more,
    --  and the setting that decides what such a failure does.
    function Child_Failure (Child_Why, Own_Why : String; Policy : String := "") return String is
+      --  Without its code -- [MR-...] -- for telling one failure said twice
+      --  from two.
+      function Bare (Text : String) return String is
+         Mark : constant Natural := Ada.Strings.Fixed.Index (Text, " [MR-");
+      begin
+         return (if Mark = 0 then Text else Text (Text'First .. Mark - 1));
+      end Bare;
       Said : constant String :=
-        (if Ada.Strings.Fixed.Index (Child_Why, Own_Why) > 0 then Child_Why
+        (if Ada.Strings.Fixed.Index (Child_Why, Bare (Own_Why)) > 0
+           or else Ada.Strings.Fixed.Index (Own_Why, Bare (Child_Why)) > 0
+         then Child_Why
          else Child_Why & "; and then " & Own_Why);
    begin
       --  continue set already, and not gone on: why, not the setting again.
@@ -1502,8 +1511,15 @@ package body Model_Runner.Framework.Work is
             else "the workspace " & Records.Get (State, "current_workspace") & ", given up:"
                  & " nothing of it was taken in"
                  & (if Records.Get (State, "changed_files") = "" then ""
-                    else ", and with it what it changed there: "
-                         & Comma_Separated (Lines_Of (Records.Get (State, "changed_files"))))));
+                    else "; what it changed there ("
+                         & Comma_Separated (Lines_Of (Records.Get (State, "changed_files")))
+                         & (if Ada.Directories.Exists
+                              (Workspaces.Kept_Copy (Item, Records.Get (State, "current_workspace")))
+                            then ") is kept in "
+                                 & Ada.Directories.Simple_Name
+                                     (Workspaces.Kept_Copy
+                                        (Item, Records.Get (State, "current_workspace")))
+                            else ") went with it"))));
       declare
          Became : Unbounded_String;
       begin

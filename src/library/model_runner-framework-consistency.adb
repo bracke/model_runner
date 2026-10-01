@@ -358,9 +358,6 @@ package body Model_Runner.Framework.Consistency is
                           Whole (Ada.Strings.Fixed.Trim (Line (Colon + 2 .. Equal - 1), Ada.Strings.Both));
                         Said : constant String :=
                           Ada.Strings.Fixed.Trim (Line (Equal + 1 .. Line'Last), Ada.Strings.Both);
-                        Limit : constant String :=
-                          (if Name'Length > 14 and then Name (Name'First .. Name'First + 13) = "scalar.agents."
-                           then Name (Name'First + 14 .. Name'Last) else "");
                      begin
                         if Name /= "" and then Records.Has (Config, Name)
                           and then Records.Get (Config, Name) /= Said
@@ -371,24 +368,9 @@ package body Model_Runner.Framework.Consistency is
                                   & " to the agent, not applied -- /reconfigure " & Name & "=" & Said
                                   & " makes it hold");
                         end if;
-                        if Limit /= "" then
-                           for Index in 1 .. Records.Field_Count (Config) loop
-                              declare
-                                 Field : constant String := Records.Field_Name (Config, Index);
-                                 Stem  : constant String := "scalar.task." & Limit & ".";
-                              begin
-                                 if Field'Length > Stem'Length
-                                   and then Field (Field'First .. Field'First + Stem'Length - 1) = Stem
-                                   and then Records.Get (Config, Field) /= Said
-                                 then
-                                    Found (Unapplied_Ruling, Field,
-                                           Id & " says " & Name & " = " & Said & ", and " & Field & " is "
-                                           & Records.Get (Config, Field) & ", which is what runs for that kind:"
-                                           & " /reconfigure " & Field & "=" & Said & " makes it hold");
-                                 end if;
-                              end;
-                           end loop;
-                        end if;
+                        --  A kind's own limit is its own: a ruling on the
+                        --  agents' default does not reach it, and is not
+                        --  held against it.
                      end;
                      --  An instruction and an accepted decision on one setting,
                      --  saying different things: which holds is a person's.
@@ -814,6 +796,16 @@ package body Model_Runner.Framework.Consistency is
                   end if;
                end;
             end loop;
+            --  Renamed and committed: where the history says it went, while
+            --  that file is there.
+            declare
+               Project : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
+               Went    : constant String := Git.Renamed_In_History (Project, Path);
+            begin
+               if Went /= "" and then Ada.Directories.Exists (Project & "/" & Went) then
+                  return Went;
+               end if;
+            end;
             return "";
          end Renamed_To;
          --  A file of the same kind that names the requirement, where git
