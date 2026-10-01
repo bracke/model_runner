@@ -1172,8 +1172,39 @@ package body Model_Runner.Framework.Verification is
                   Results.Read (Item, Parts (7), Log, Got);
                   if E.Is_Ok (Got) and then Length (Log.Payload) > 0 then
                      declare
+                        Whole : constant String := To_String (Log.Payload);
+
+                        --  The line that says what went wrong -- an error's
+                        --  or an exception's -- where the ending does not.
+                        function Cause return String is
+                           Found : Unbounded_String;
+                           Start : Positive := Whole'First;
+                        begin
+                           for At_Index in Whole'First .. Whole'Last + 1 loop
+                              if At_Index > Whole'Last or else Whole (At_Index) = ASCII.LF then
+                                 declare
+                                    Line : constant String :=
+                                      Ada.Strings.Fixed.Trim (Whole (Start .. At_Index - 1), Ada.Strings.Both);
+                                 begin
+                                    if Ada.Strings.Fixed.Index (Line, "Error:") > 0
+                                      or else Ada.Strings.Fixed.Index (Line, "Exception:") > 0
+                                      or else Ada.Strings.Fixed.Index (Line, "error:") > 0
+                                      or else Ada.Strings.Fixed.Index (Line, "ERROR:") > 0
+                                    then
+                                       Found := To_Unbounded_String (Line);
+                                    end if;
+                                 end;
+                                 Start := At_Index + 1;
+                              end if;
+                           end loop;
+                           return To_String (Found);
+                        end Cause;
+
+                        Ending : constant String :=
+                          Ada.Strings.Fixed.Trim (Last_Lines (Whole), Ada.Strings.Right);
                         Tail : constant String :=
-                          Ada.Strings.Fixed.Trim (Last_Lines (To_String (Log.Payload)), Ada.Strings.Right);
+                          (if Cause /= "" and then Ada.Strings.Fixed.Index (Ending, Cause) = 0
+                           then Cause & ASCII.LF & "..." & ASCII.LF & Ending else Ending);
                      begin
                         --  The same ending as a check's above: said once.
                         if Tails.Contains (Tail) then
@@ -2346,8 +2377,8 @@ package body Model_Runner.Framework.Verification is
       if not Any then
          return Lacks ("no task serves it");
       elsif not Built then
-         return Lacks ("nothing implements it: no task serving it changed a file, and no"
-                       & " implementation is linked; where the code is there already, /req link "
+         return Lacks ("no implementation is known for it: no task serving it changed a file, and no"
+                       & " file is linked as its implementation; where the code is there already, /req link "
                        & Requirement & " implementation FILE names it, and /check " & Requirement
                        & " then judges it");
       end if;

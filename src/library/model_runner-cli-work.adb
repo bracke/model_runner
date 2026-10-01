@@ -11,6 +11,7 @@ with Hostkit;
 with Hostkit.Fs;
 
 with Model_Runner.CLI.Choosers;
+with Model_Runner.CLI.Project_Commands;
 with Model_Runner.Errors;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Configurations;
@@ -433,6 +434,24 @@ package body Model_Runner.CLI.Work is
          Tk.Definition (Store, Id, Defined, Read);
          return (if E.Is_Ok (Read) then R.Get (Defined, "title") else "");
       end Title_Of;
+
+      --  A task's notes.
+      function Notes_Of (Id : String) return String is
+         Defined : R.Item;
+         Read    : E.Error_Info;
+      begin
+         Tk.Definition (Store, Id, Defined, Read);
+         return (if E.Is_Ok (Read) then R.Get (Defined, "notes") else "");
+      end Notes_Of;
+
+      --  The kind of the task chosen.
+      function Kind_Of_Chosen return String is
+         Defined : R.Item;
+         Read    : E.Error_Info;
+      begin
+         Tk.Definition (Store, To_String (Chosen), Defined, Read);
+         return (if E.Is_Ok (Read) then R.Get (Defined, "kind") else "");
+      end Kind_Of_Chosen;
 
       procedure Say_What_Is_Ready is
          Ready       : Natural := 0;
@@ -1285,6 +1304,18 @@ package body Model_Runner.CLI.Work is
             end if;
          end;
 
+         --  What it was refused on the way, where its end does not say it:
+         --  with the level that says what its kind may do.
+         if Given_Runner /= null and then Setting ("model", "") = ""
+           and then Model_Runner.CLI.Project_Commands.Last_Refusals /= ""
+           and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "may not") = 0
+           and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "outside the project") = 0
+         then
+            Pres.Put_Note (Screen, "cli.work.refused_on_way",
+                           [Loc.Named ("detail", Model_Runner.CLI.Project_Commands.Last_Refusals),
+                            Loc.Named ("name", Kind_Of_Chosen)]);
+         end if;
+
          --  And what a person does next, where it did not complete.
          if To_String (Done.Final_State) = "blocked"
            and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "waiting for its children: ") = 1
@@ -1407,14 +1438,21 @@ package body Model_Runner.CLI.Work is
                end loop;
                --  Which refused it decides the way on: a path outside the
                --  project no grant reaches; a narrowing is undone where it is.
-               if Ada.Strings.Fixed.Index (To_String (Done.Reason), "outside the project") > 0 then
+               if Ada.Strings.Fixed.Index (To_String (Done.Reason), "outside the project") > 0
+                 --  Its notes say so already: not suggested again.
+                 and then Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Title_Of (To_String (Done.Task_Id))
+                                                     & " " & Notes_Of (To_String (Done.Task_Id))),
+                                                   "relative to the project") = 0
+               then
                   --  Said as what it tried: reading, or writing.
                   Pres.Put_Note (Screen, "cli.next.refused_outside",
                                  [Loc.Named ("name", To_String (Done.Task_Id)),
                                   Loc.Named ("value",
-                                             (if Ada.Strings.Fixed.Index (To_String (Done.Reason), "writ") > 0
-                                                or else Ada.Strings.Fixed.Index (To_String (Done.Reason), "wrote") > 0
-                                              then "write" else "read"))]);
+                                             (if Ada.Strings.Fixed.Index (To_String (Done.Reason), "read_file") > 0
+                                                or else Ada.Strings.Fixed.Index
+                                                          (To_String (Done.Reason), "list_directory") > 0
+                                                or else Ada.Strings.Fixed.Index (To_String (Done.Reason), " read ") > 0
+                                              then "read" else "write"))]);
                elsif Ada.Strings.Fixed.Index (To_String (Done.Reason), "sandbox") > 0 then
                   Pres.Put_Note (Screen, "cli.next.sandbox_refused",
                                  [Loc.Named ("name", To_String (Done.Task_Id))]);
@@ -1452,6 +1490,11 @@ package body Model_Runner.CLI.Work is
                               [Loc.Named ("name", To_String (Done.Task_Id)),
                                Loc.Named ("value", "given-up-" & To_String (Done.Task_Id) & "-"
                                                    & To_String (Done.Workspace_Id))]);
+            --  The reason names completing it by hand already: the way on
+            --  said once, as trying again.
+            elsif Ada.Strings.Fixed.Index (To_String (Done.Reason), "/task complete " & To_String (Done.Task_Id)) > 0
+            then
+               Pres.Put_Note (Screen, "cli.next.retry_only", [Loc.Named ("name", To_String (Done.Task_Id))]);
             else
                Pres.Put_Note (Screen, "cli.next.retry", [Loc.Named ("name", To_String (Done.Task_Id))]);
             end if;

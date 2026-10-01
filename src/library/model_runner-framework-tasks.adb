@@ -1007,6 +1007,11 @@ package body Model_Runner.Framework.Tasks is
                                              & " makes it a candidate again"
                elsif State = "candidate" then "it is a candidate: /task accept " & Id
                                               & " accepts it first"
+               --  Blocked with nothing said why: by hand, and how it goes on.
+               elsif State = "blocked" and then Why = Null_Unbounded_String
+               then "it was blocked with no reason given: /task accept " & Id & " takes it up again"
+               elsif State = "failed"
+               then "it failed" & (if Why = Null_Unbounded_String then "" else ": " & To_String (Why))
                else "it is " & State_Said (State)
                     & (if Why = Null_Unbounded_String then "" else ": " & To_String (Why)));
          end;

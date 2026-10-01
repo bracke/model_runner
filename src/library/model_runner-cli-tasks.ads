@@ -1,3 +1,4 @@
+with Model_Runner.Framework.Stores;
 with Model_Runner.CLI.Project_Requests;
 with Model_Runner.Presentation;
 
@@ -21,5 +22,13 @@ package Model_Runner.CLI.Tasks is
      (Item   : Model_Runner.CLI.Project_Requests.Request;
       Screen : in out Model_Runner.Presentation.Console;
       Status : out Natural);
+
+   --  The open tasks that wait for a task, said for a question about
+   --  ending it: "; TASK-003 waits on it", or "" for none.
+   --
+   --  @param Store The project's state.
+   --  @param Id The task.
+   --  @return The words.
+   function Waiting_On_It (Store : Model_Runner.Framework.Stores.Store; Id : String) return String;
 
 end Model_Runner.CLI.Tasks;

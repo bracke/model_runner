@@ -777,12 +777,14 @@ package body Model_Runner.CLI.Init is
                                  Refused.Append (Command);
                                  Say ("cli.init.check_no_crate",
                                       [Loc.Named ("name", To_String (One.Label)), Loc.Named ("value", Command),
-                                       Loc.Named ("path", To_String (One.Directory))]);
+                                       Loc.Named ("path", To_String (One.Directory)),
+                                       Loc.Named ("other", Name)]);
                                  Append (Warned, Pres.Next_Step_Value
                                                    (Screen, "cli.init.check_no_crate",
                                                     [Loc.Named ("name", To_String (One.Label)),
                                                      Loc.Named ("value", Command),
-                                                     Loc.Named ("path", To_String (One.Directory))])
+                                                     Loc.Named ("path", To_String (One.Directory)),
+                                                     Loc.Named ("other", Name)])
                                                  & ASCII.LF);
                               end if;
                               if Why = "" and then Missing /= "" and then not Refused.Contains (Command) then

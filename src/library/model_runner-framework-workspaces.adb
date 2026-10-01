@@ -634,13 +634,19 @@ package body Model_Runner.Framework.Workspaces is
           or else (A.First = A.Last and then C.First < A.First and then A.First < C.Last)
           or else (C.First = C.Last and then A.First < C.First and then C.First < A.Last));
 
-      procedure Take (One : Hunk) is
+      --  Which side the last line joined came from: its end -- a line
+      --  break or none -- is that side's.
+      Last_From : Character := 'B';
+
+      procedure Take (One : Hunk; From : Character) is
       begin
          for Index in P + 1 .. One.First loop
             Lines.Append (B (Index));
+            Last_From := 'B';
          end loop;
          for Line of One.With_Lines loop
             Lines.Append (Line);
+            Last_From := From;
          end loop;
          P := One.Last;
       end Take;
@@ -661,7 +667,7 @@ package body Model_Runner.Framework.Workspaces is
             if HO (IO).First = HT (IT).First and then HO (IO).Last = HT (IT).Last
               and then Name_Lists."=" (HO (IO).With_Lines, HT (IT).With_Lines)
             then
-               Take (HO (IO));
+               Take (HO (IO), 'O');
                IO := IO + 1;
                IT := IT + 1;
             else
@@ -670,25 +676,34 @@ package body Model_Runner.Framework.Workspaces is
          elsif IT > Natural (HT.Length)
            or else (IO <= Natural (HO.Length) and then HO (IO).First <= HT (IT).First)
          then
-            Take (HO (IO));
+            Take (HO (IO), 'O');
             IO := IO + 1;
          else
-            Take (HT (IT));
+            Take (HT (IT), 'T');
             IT := IT + 1;
          end if;
       end loop;
       for Index in P + 1 .. Natural (B.Length) loop
          Lines.Append (B (Index));
+         Last_From := 'B';
       end loop;
-      for Index in 1 .. Natural (Lines.Length) loop
-         Append (Joined, Lines (Index));
-         if Index < Natural (Lines.Length) or else (Ours_End and then Theirs_End)
-           or else (Ours_End /= Base_End and then Ours_End)
-           or else (Theirs_End /= Base_End and then Theirs_End)
-         then
-            Append (Joined, ASCII.LF);
-         end if;
-      end loop;
+      declare
+         Ends : constant Boolean :=
+           (case Last_From is
+               when 'O'    => Ours_End,
+               when 'T'    => Theirs_End,
+               when others =>
+                 (if Ours_End /= Base_End then Ours_End
+                  elsif Theirs_End /= Base_End then Theirs_End
+                  else Base_End));
+      begin
+         for Index in 1 .. Natural (Lines.Length) loop
+            Append (Joined, Lines (Index));
+            if Index < Natural (Lines.Length) or else Ends then
+               Append (Joined, ASCII.LF);
+            end if;
+         end loop;
+      end;
       Clean := True;
    end Join_Changes;
 
@@ -1131,6 +1146,21 @@ package body Model_Runner.Framework.Workspaces is
                      end if;
                      if Clean then
                         Joined_Last.Append (Path);
+                        --  The project's own change, as it was before they
+                        --  were joined, kept: a join can be put back too.
+                        declare
+                           Aside : constant String :=
+                             Hostkit.Fs.Join (Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "runtime"),
+                                                               "replaced-" & To_String (Held.Task_Id)
+                                                               & "-" & Id),
+                                              Path);
+                        begin
+                           Dirs.Create_Path (Dirs.Containing_Directory (Aside));
+                           Dirs.Copy_File (Target, Aside);
+                        exception
+                           when others =>
+                              null;
+                        end;
                         Files.Write_Text (Target, To_String (Joined), Wrote);
                         if E.Is_Error (Wrote) then
                            Status := Wrote;

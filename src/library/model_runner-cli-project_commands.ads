@@ -153,6 +153,12 @@ package Model_Runner.CLI.Project_Commands is
    --  @return True after such a /work.
    function Typed_During_Work return Boolean;
 
+   --  What the last /work's agent was refused on the way -- a write where
+   --  it may not, a path outside the project -- for its outcome to say.
+   --
+   --  @return The refusals, a semicolon apart; empty for none.
+   function Last_Refusals return String;
+
    --  The same, with the agent /work runs supplied: a test's own, in
    --  place of a model.
    --

@@ -390,7 +390,8 @@ package body Model_Runner.Framework.Work is
    --  What an answer says in its own words: the instructions' own example
    --  line copied back -- one line on what you did -- is no summary.
    function Own_Words (Summary : String) return String
-   is (if Ada.Strings.Fixed.Index (Summary, "one line on what you") > 0 then "" else Summary);
+   is (if Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Summary), "one line on what you") > 0
+       then "(its summary was the instructions' example line, not its own words)" else Summary);
 
    --  What a run stopped part way left in the project, and the ways on,
    --  said alike however it stopped.
@@ -670,8 +671,9 @@ package body Model_Runner.Framework.Work is
             One : constant Verification.Diagnostic := Verification.Element (Found, Index);
          begin
             Append (Result, (if Index = 1 then ": " else "; ")
-                    & (if Length (One.File) > 0
+                    & (if Length (One.File) > 0 and then One.Line > 0
                        then To_String (One.File) & ":" & Trim (Natural'Image (One.Line)) & ": "
+                       elsif Length (One.File) > 0 then To_String (One.File) & ": "
                        else "")
                     & To_String (One.Message));
          end;
@@ -719,11 +721,25 @@ package body Model_Runner.Framework.Work is
       for Id of Moved loop
          if not Was.Contains (Id) or else Was (Id) /= Intent.State_Of (Item, Intent.Requirement, Id)
          then
-            Said.Append (Id & " is " & Intent.State_Of (Item, Intent.Requirement, Id) & " now"
-                         & (if Was.Contains (Id) then ", not " & Configurations.Value_Maps.Element (Was, Id)
-                            else "")
-                         & ": what verified it no longer covers it as it stands -- it or its code changed;"
-                         & " /check " & Id & " judges it again");
+            declare
+               Now    : constant String := Intent.State_Of (Item, Intent.Requirement, Id);
+               Before : constant String := (if Was.Contains (Id) then Configurations.Value_Maps.Element (Was, Id)
+                                            else "");
+               function Rank (State : String) return Natural
+               is (if State = "verified" then 3 elsif State = "implemented" then 2
+                   elsif State = "accepted" then 1 else 0);
+            begin
+               --  Said as the way it went: back, because what verified it
+               --  no longer covers it; or on, because now something does.
+               if Before /= "" and then Rank (Now) < Rank (Before) then
+                  Said.Append (Id & " drops back from " & Before & " to " & Now
+                               & ": what verified it no longer covers it as it stands -- it or its code"
+                               & " changed; /check " & Id & " judges it again");
+               else
+                  Said.Append (Id & " is " & Now & " now" & (if Before = "" then "" else ", from " & Before)
+                               & ": what it is judged by covers it as it stands");
+               end if;
+            end;
          end if;
       end loop;
    end Reevaluate;
@@ -1588,7 +1604,10 @@ package body Model_Runner.Framework.Work is
          end if;
          if Allowed (Permissions.Write_Source).Granted then
             Add ("write " & (if Allowed (Permissions.Write_Source).Roots.Is_Empty then "files"
-                             else "files under " & Comma_Separated (Allowed (Permissions.Write_Source).Roots)));
+                             else "files under " & Comma_Separated (Allowed (Permissions.Write_Source).Roots))
+                 --  What it may not, inherited or its own, said with it.
+                 & (if Allowed (Permissions.Write_Source).Deny.Is_Empty then ""
+                    else " except " & Comma_Separated (Allowed (Permissions.Write_Source).Deny)));
          end if;
          if Allowed (Permissions.Write_Specs).Granted then
             Add ("write specifications "
@@ -1596,12 +1615,23 @@ package body Model_Runner.Framework.Work is
                     then "(in " & Permissions.Specification_Places & ")"
                     else "under " & Comma_Separated (Allowed (Permissions.Write_Specs).Roots)));
          end if;
+         --  Its checks, by the profile that runs them.
          if May_Check then
-            Add ("run the project's checks");
+            declare
+               Kind    : constant String := Kind_Of_Task (Item, Task_Id);
+               Profile : constant String :=
+                 (if Tasks.Kind_Policy (Item, Kind, "profile") /= "" then Tasks.Kind_Policy (Item, Kind, "profile")
+                  else Scalar (Item, "verification.default"));
+            begin
+               Add ("run the project's checks" & (if Profile = "" then "" else " (profile " & Profile & ")"));
+            end;
          end if;
          if May_Delegate then
+            --  The lower of the grant and the agents' own bound: what an
+            --  agent meets.
             Add ("hand parts to helpers (at most"
-                 & Natural'Image (Allowed (Permissions.Create_Children).Max_Children) & ")");
+                 & Natural'Image (Natural'Min (Allowed (Permissions.Create_Children).Max_Children,
+                                               Agents.Limits_Of (Item).Max_Children)) & ")");
          end if;
          if May_Propose then
             Add ("propose tasks");
@@ -3246,7 +3276,8 @@ package body Model_Runner.Framework.Work is
       --  The answer, kept, and the call ended.
       declare
          Kept : Results.Result :=
-           (Kind       => Results.Implementation,
+           (Kind       => (if Kind_Of_Task (Item, Task_Id) = "analysis" then Results.Analysis
+                           else Results.Implementation),
             Producer   => Result.Agent_Id,
             Summary    => To_Unbounded_String ("answer to " & To_String (Result.Invocation_Id)),
             Payload    => Answer,
@@ -4170,7 +4201,12 @@ package body Model_Runner.Framework.Work is
                             & Task_Id & " discard gives it up and does the task afresh", "completed");
                end;
                return;
-            elsif Work_Setting (Item, "integrate") /= "automatic" then
+            --  Nothing written, nothing to take in: it goes on at once, as
+            --  an analysis's answer is all its work.
+            elsif Work_Setting (Item, "integrate") /= "automatic"
+              and then not (Ada.Strings.Fixed.Index (May_Do (Item, Task_Id), "write") = 0
+                            and then Workspaces.Changes (Item, To_String (Result.Workspace_Id)).Is_Empty)
+            then
                --  What it did not report is kept, for the taking in to say.
                if Unreported_Note /= "" then
                   Annotate (Item, Change, Task_Id, "unreported_files",
@@ -4194,8 +4230,10 @@ package body Model_Runner.Framework.Work is
             Held_Root : Agents.Agent;
          begin
             Agents.Read (Item, To_String (Result.Agent_Id), Held_Root, Held);
-            if E.Is_Error (Held)
-              or else not Permissions.Allows (Held_Root.Allowed, Permissions.Request_Integration)
+            if (E.Is_Error (Held)
+                or else not Permissions.Allows (Held_Root.Allowed, Permissions.Request_Integration))
+              and then not (Ada.Strings.Fixed.Index (May_Do (Item, Task_Id), "write") = 0
+                            and then Workspaces.Changes (Item, To_String (Result.Workspace_Id)).Is_Empty)
             then
                Conclude ("", To_String (Result.Workspace_Id) & " waits to be taken in: its"
                          & " agent may not request integration", "completed");

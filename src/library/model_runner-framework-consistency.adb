@@ -5,9 +5,11 @@ with Ada.Strings.Fixed;
 with Model_Runner.Errors;
 with Model_Runner.Framework.Authority;
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Leases;
+with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Verification;
@@ -321,11 +323,74 @@ package body Model_Runner.Framework.Consistency is
                   if Colon > 0 and then Equal > Colon then
                      Judge (Line (Line'First .. Colon - 1), Line (Colon + 2 .. Equal - 1),
                             Line (Equal + 1 .. Line'Last));
+                     --  An instruction and an accepted decision on one setting,
+                     --  saying different things: which holds is a person's.
+                     declare
+                        Id      : constant String := Line (Line'First .. Colon - 1);
+                        Name    : constant String :=
+                          Whole (Ada.Strings.Fixed.Trim (Line (Colon + 2 .. Equal - 1), Ada.Strings.Both));
+                        Said    : constant String :=
+                          Ada.Strings.Fixed.Trim (Line (Equal + 1 .. Line'Last), Ada.Strings.Both);
+                     begin
+                        for Dec of Intent.List (Item, Intent.Decision) loop
+                           declare
+                              Rule  : constant String := Intent.Governs (Item, Intent.Decision, Dec);
+                              Eq    : constant Natural := Ada.Strings.Fixed.Index (Rule, " = ");
+                              Over  : constant Natural := Ada.Strings.Fixed.Index (Rule, " (over ");
+                              Value : constant String :=
+                                (if Eq = 0 then "" else Rule (Eq + 3 .. (if Over = 0 then Rule'Last else Over - 1)));
+                           begin
+                              if Name /= "" and then Intent.State_Of (Item, Intent.Decision, Dec) = "accepted"
+                                and then Eq > 0 and then Whole (Rule (Rule'First .. Eq - 1)) = Name
+                                and then Ada.Strings.Fixed.Trim (Value, Ada.Strings.Both) /= Said
+                              then
+                                 Found (Conflicting_Authority, Name,
+                                        Id & " says " & Said & " and " & Dec & " rules " & Value
+                                        & "; /instruct withdraw " & Id & " leaves the decision, or /decision govern "
+                                        & Dec & " " & Name & " " & Said & " makes them agree");
+                              end if;
+                           end;
+                        end loop;
+                     end;
                   end if;
                end;
             end loop;
          end if;
       end;
+
+      --  A task its own permissions leave asking for more than its kind
+      --  gives, or unable to start for want of leave: named, with what
+      --  gives it the rest.
+      for Id of Tasks.List (Item) loop
+         if Tasks.State_Of (Item, Id) in "candidate" | "accepted" then
+            declare
+               Defined : Records.Item;
+               Read    : E.Error_Info;
+               Asked   : Permissions.Permission_Set;
+               Parsed  : E.Error_Info;
+            begin
+               Tasks.Definition (Item, Id, Defined, Read);
+               if E.Is_Ok (Read) and then Records.Get (Defined, "permissions") /= "" then
+                  Permissions.Restriction (Records.Get (Defined, "permissions"), Asked, Parsed);
+                  if E.Is_Ok (Parsed) then
+                     declare
+                        Clipped : constant String :=
+                          Permissions.Clipped
+                            (Asked, Permissions.Effective (Item, Records.Get (Defined, "kind"), "",
+                                                           Within_Sandbox => False));
+                     begin
+                        if Clipped /= "" then
+                           Found (Permission_Widening, Id,
+                                  "its permissions ask for more than its kind " & Records.Get (Defined, "kind")
+                                  & " gives -- " & Clipped & "; /task edit " & Id
+                                  & " permissions=inherit takes its kind's");
+                        end if;
+                     end;
+                  end if;
+               end if;
+            end;
+         end if;
+      end loop;
 
       --  Tasks: every task named is one there is, no dependency or parent
       --  comes back to itself, and every task is of a kind the project
@@ -681,6 +746,31 @@ package body Model_Runner.Framework.Consistency is
             end loop;
             return "";
          end Renamed_To;
+         --  A file of the same kind that names the requirement, where git
+         --  says nothing of where the linked one went: "" where none does.
+         function Naming (Id, Gone : String) return String is
+            Dot  : constant Natural := Ada.Strings.Fixed.Index (Gone, ".", Ada.Strings.Backward);
+            Kind : constant String := (if Dot = 0 then "" else Gone (Dot .. Gone'Last));
+            Root : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
+         begin
+            for Index in 1 .. Repository.File_Count (Graph) loop
+               declare
+                  Path : constant String := To_String (Repository.File_At (Graph, Index).Path);
+                  Text : Unbounded_String;
+                  Read : E.Error_Info;
+               begin
+                  if Kind /= "" and then Path'Length > Kind'Length
+                    and then Path (Path'Last - Kind'Length + 1 .. Path'Last) = Kind
+                  then
+                     Files.Read_Text (Root & "/" & Path, Text, Read);
+                     if E.Is_Ok (Read) and then Ada.Strings.Unbounded.Index (Text, Id) > 0 then
+                        return Path;
+                     end if;
+                  end if;
+               end;
+            end loop;
+            return "";
+         end Naming;
       begin
          for Id of Intent.List (Item, Intent.Requirement) loop
             --  One retired links nothing that matters now.
@@ -699,7 +789,12 @@ package body Model_Runner.Framework.Consistency is
                                (if Intent."=" (Relation, Intent.Test) then "it is tested by "
                                 else "it is implemented by ")
                                & Target & ", which the repository does not hold; "
-                               & (if Renamed_To (Target) /= ""
+                               & (if Renamed_To (Target) = "" and then Naming (Id, Target) /= ""
+                                  then Naming (Id, Target) & " names " & Id & ", and may be where it went: /req link "
+                                       & Id & " " & (if Intent."=" (Relation, Intent.Test) then "test"
+                                                     else "implementation")
+                                       & " " & Naming (Id, Target) & " follows it, and "
+                                  elsif Renamed_To (Target) /= ""
                                   then "git shows it renamed to " & Renamed_To (Target) & ": /req link " & Id
                                        & " " & (if Intent."=" (Relation, Intent.Test) then "test"
                                                 else "implementation")

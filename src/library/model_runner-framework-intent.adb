@@ -334,6 +334,46 @@ package body Model_Runner.Framework.Intent is
          Stores.Pending (Change, Area_Of (Kind), Name, Held, Staged);
          return Staged or else Stores.Exists (Item, Area_Of (Kind), Name);
       end Taken;
+      --  The next of a register that holds only unpadded numbers in the
+      --  project's namespace -- REQ-1, REQ-2 -- and no others; "" when it
+      --  holds none, or any of the harness's own.
+      function Unpadded_Next return String is
+         Prefix  : constant String := Namespace (Kind) & "-";
+         Highest : Natural := 0;
+         Any     : Boolean := False;
+      begin
+         if Key /= "" and then Key /= Namespace (Kind) then
+            return "";
+         end if;
+         for Held of List (Item, Kind) loop
+            if Held'Length > Prefix'Length and then Held (Held'First .. Held'First + Prefix'Length - 1) = Prefix
+              and then (for all C of Held (Held'First + Prefix'Length .. Held'Last) => C in '0' .. '9')
+            then
+               declare
+                  Number : constant String := Held (Held'First + Prefix'Length .. Held'Last);
+               begin
+                  if Number'Length >= 3 or else Number (Number'First) = '0' then
+                     return "";
+                  end if;
+                  Any := True;
+                  Highest := Natural'Max (Highest, Natural'Value (Number));
+               end;
+            end if;
+         end loop;
+         if not Any then
+            return "";
+         end if;
+         for Next in Highest + 1 .. Highest + 100 loop
+            declare
+               Image : constant String := Ada.Strings.Fixed.Trim (Natural'Image (Next), Ada.Strings.Both);
+            begin
+               if not Taken (Prefix & Image) then
+                  return Prefix & Image;
+               end if;
+            end;
+         end loop;
+         return "";
+      end Unpadded_Next;
    begin
       Status := E.Success;
       if Given /= "" and then Identifiers.Is_Valid (Given)
@@ -342,6 +382,10 @@ package body Model_Runner.Framework.Intent is
         and then not Taken (Given)
       then
          Id := To_Unbounded_String (Given);
+      elsif Unpadded_Next /= "" then
+         --  The register numbered as its documents number it -- REQ-1,
+         --  REQ-2 -- goes on so: REQ-3, not REQ-001 beside them.
+         Id := To_Unbounded_String (Unpadded_Next);
       else
          --  Made, and made again past any a source gave that has the number.
          loop

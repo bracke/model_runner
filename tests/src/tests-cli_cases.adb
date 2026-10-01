@@ -1815,7 +1815,7 @@ package body Tests.CLI_Cases is
               and then Shows ("may: read the source, read the specifications")
               and then Shows ("propose tasks")
               and then Command ("task|show|TASK-002") = 0
-              and then Shows ("implementation_present"),
+              and then Shows ("it changed something"),
               "a kind was not narrowed, or its gates not what the template says: " & Last_Output);
       --  --verbose after the task shows the whole text its agent reads.
       Assert (Command ("task|context|TASK-002|--set|--verbose") = 0 and then Shows ("## Rules"),
@@ -2188,7 +2188,7 @@ package body Tests.CLI_Cases is
              & "Arguments SHALL be quoted." & LF & "Acceptance: a space survives" & LF & LF
              & "- DEC-001: We use posix_spawn." & LF & LF & "It SHOULD retry once." & LF);
       Run ("bootstrap");
-      Assert (Shows ("REQ-SHELL-001") and then Shows ("DEC-001") and then Shows ("next: /accept goes through")
+      Assert (Shows ("REQ-SHELL-001") and then Shows ("DEC-001") and then Shows ("next: /accept lists what waits")
               and then Shows ("made REQ-SHELL-001, accepted"),
               "bootstrap did not keep the document's identifiers, or say what it made is: "
               & To_String (Said));
@@ -2859,7 +2859,7 @@ package body Tests.CLI_Cases is
              & "end Main;" & ASCII.LF);
 
       Assert (Repo ("scan", "") = 0
-              and then Ada.Strings.Fixed.Index (Last_Output, "2 files") > 0,
+              and then Ada.Strings.Fixed.Index (Last_Output, "files: 2") > 0,
               "the scan did not say what it found: " & Last_Output);
       Assert (Repo ("tree", "") = 0
               and then Ada.Strings.Fixed.Index (Last_Output, "src/greet.ads") > 0,

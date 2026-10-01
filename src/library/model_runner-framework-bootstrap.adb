@@ -250,7 +250,7 @@ package body Model_Runner.Framework.Bootstrap is
    -- Scan --
    ----------
 
-   function Scan (Path : String; Text : String) return Output_List is
+   function Scan_Markdown (Path : String; Text : String) return Output_List is
       Result  : Output_List;
       Key     : constant String := Key_Of (Path);
       Seen    : Name_Lists.Vector;
@@ -297,9 +297,12 @@ package body Model_Runner.Framework.Bootstrap is
       Process_Document : constant Boolean :=
         (for some Word of Name_Lists.Vector'
            (["decision", "adr", "contributing", "code_of_conduct", "conduct", "security", "process",
-             "workflow", "release", "governance", "support", "maintain", "style"])
+             "workflow", "release", "governance", "support", "maintain", "style", "todo"])
          => Ada.Strings.Fixed.Index (Lower_Name, Word) > 0)
         or else Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Path), "/adr/") > 0;
+
+      --  A to-do list: its open boxes are what is wanted.
+      Todo_Document : constant Boolean := Ada.Strings.Fixed.Index (Lower_Name, "todo") > 0;
 
       --  Under a heading of decisions: each listed line is one.
       Decisions_Here : Boolean := False;
@@ -530,21 +533,35 @@ package body Model_Runner.Framework.Bootstrap is
             end if;
          end if;
 
+         --  A to-do list's open box is work wanted: a candidate requirement
+         --  in its words; a ticked one is done, and nothing is made of it.
+         if Todo_Document and then Line'Length > 6 and then Line (Line'First) in '-' | '*' | '+'
+           and then Ada.Characters.Handling.To_Lower (Line (Line'First + 1 .. Line'First + 5)) in " [ ] " | " [x] "
+         then
+            if Line (Line'First + 3) = ' ' and then not Seen.Contains (Fingerprint (Item)) then
+               Seen.Append (Fingerprint (Item));
+               Found (Requirement_Candidate, Path & "#" & Fingerprint (Item), Headline (Item), Item);
+            end if;
+            return;
+         end if;
+
          --  A ticked box -- - [x] -- is done already: said, as work taken
-         --  as done, not done again; what it says is read as ever.
+         --  as done, not done again; what it says is read as ever. Only
+         --  one the document labels is made at once, with a task for it.
+         Label_Split (Item, Label, Rest);
          if Line'Length > 6 and then Line (Line'First) in '-' | '*' | '+'
            and then Ada.Characters.Handling.To_Lower (Line (Line'First + 1 .. Line'First + 5)) = " [x] "
+           and then Label /= Null_Unbounded_String
          then
-            Label_Split (Item, Label, Rest);
             Found (Issue, Path & "#" & (if Label /= Null_Unbounded_String then To_String (Label)
                                         else Fingerprint (Item)) & "#done",
                    (if Label /= Null_Unbounded_String then To_String (Label) else Headline (Item))
                    & " is ticked as done in " & Path & ": /task complete takes the task derived for it as done,"
                    & " its checks passing, rather than /work doing it again",
                    Item);
-            Label := Null_Unbounded_String;
-            Rest := Null_Unbounded_String;
          end if;
+         Label := Null_Unbounded_String;
+         Rest := Null_Unbounded_String;
 
          --  The items under a requirement that leads into them are what it
          --  says; anything else ends its list.
@@ -816,6 +833,13 @@ package body Model_Runner.Framework.Bootstrap is
                   end if;
                end;
             end if;
+         --  A sentence of its own under a heading of decisions -- not a
+         --  list, not a requirement -- is a decision too.
+         elsif Decisions_Here and then Item'Length > 10 and then Item (Item'Last) = '.'
+           and then not Says_Requirement (Item, False)
+         then
+            Found (Decision_Candidate, Path & "#" & Fingerprint (Item), Headline (Item), Item);
+            return;
          end if;
 
          --  In a document of decisions, a listed D1: text is one.
@@ -1319,7 +1343,147 @@ package body Model_Runner.Framework.Bootstrap is
          end;
       end if;
       return Result;
-   end Scan;
+   end Scan_Markdown;
+
+   --  A document in AsciiDoc or reStructuredText, read as Markdown says
+   --  the same: = Title and == Section are # and ##, a title underlined
+   --  with = or - is # or ##, and a * item is a - one.
+   --  Every line of a text, the empty ones too: a blank line ends a part.
+   function Lines_Of_All (Text : String) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+      Start  : Positive := Text'First;
+   begin
+      for Index in Text'First .. Text'Last + 1 loop
+         if Index > Text'Last or else Text (Index) = ASCII.LF then
+            Result.Append
+              (if Index - 1 >= Start and then Text (Index - 1) = ASCII.CR then Text (Start .. Index - 2)
+               else Text (Start .. Index - 1));
+            Start := Index + 1;
+         end if;
+      end loop;
+      return Result;
+   end Lines_Of_All;
+
+   function As_Markdown (Path : String; Text : String) return String is
+      Lower   : constant String := Ada.Characters.Handling.To_Lower (Path);
+      function Ends (Suffix : String) return Boolean
+      is (Lower'Length > Suffix'Length and then Lower (Lower'Last - Suffix'Length + 1 .. Lower'Last) = Suffix);
+      Asciidoc : constant Boolean := Ends (".adoc") or else Ends (".asciidoc");
+      Rst      : constant Boolean := Ends (".rst");
+      Lines    : constant Name_Lists.Vector := Lines_Of_All (Text);
+      Output   : Unbounded_String;
+      Skip     : Boolean := False;
+
+      function Underline (Line : String) return Character is
+      begin
+         if Line'Length >= 3 and then Line (Line'First) in '=' | '-' | '~' | '^'
+           and then (for all C of Line => C = Line (Line'First))
+         then
+            return Line (Line'First);
+         end if;
+         return ' ';
+      end Underline;
+      --  Whether a cell is an identifier a document gives: NFR-1, FR-02.
+      function Is_Label (Cell : String) return Boolean is
+         Dash : constant Natural := Ada.Strings.Fixed.Index (Cell, "-", Ada.Strings.Backward);
+      begin
+         return Dash > Cell'First and then Dash < Cell'Last
+           and then (for all C of Cell (Cell'First .. Dash - 1) => C in 'A' .. 'Z' | '0' .. '9' | '-' | '_')
+           and then Cell (Cell'First) in 'A' .. 'Z'
+           and then (for all C of Cell (Dash + 1 .. Cell'Last) => C in '0' .. '9');
+      end Is_Label;
+
+      --  A table's row of an identifier and its words: a labelled line, as
+      --  a list says it; one marked done, ticked. A row marked retired is
+      --  left as it is, to be said so.
+      function Row (Line : String) return String is
+         Cells : Name_Lists.Vector;
+         Start : Positive := Line'First + 1;
+         Done  : Boolean := False;
+      begin
+         for At_Index in Line'First + 1 .. Line'Last loop
+            if Line (At_Index) = '|' then
+               Cells.Append (Ada.Strings.Fixed.Trim (Line (Start .. At_Index - 1), Ada.Strings.Both));
+               Start := At_Index + 1;
+            end if;
+         end loop;
+         if Natural (Cells.Length) < 2 or else not Is_Label (Cells (1)) or else Cells (2) = "" then
+            return Line;
+         end if;
+         for Cell of Cells loop
+            declare
+               Lower_Cell : constant String := Ada.Characters.Handling.To_Lower (Cell);
+            begin
+               if Lower_Cell in "superseded" | "deprecated" | "rejected" | "withdrawn" | "obsolete" then
+                  return Line;
+               end if;
+               Done := Done or else Lower_Cell in "done" | "implemented" | "complete" | "completed";
+            end;
+         end loop;
+         return "- " & (if Done then "[x] " else "") & Cells (1) & ": " & Cells (2);
+      end Row;
+   begin
+      for Index in 1 .. Natural (Lines.Length) loop
+         declare
+            Line : constant String := Lines (Index);
+            Said : Unbounded_String := To_Unbounded_String (Line);
+            Bare : constant String := Ada.Strings.Fixed.Trim (Line, Ada.Strings.Both);
+         begin
+            if Skip then
+               Skip := False;
+               goto Next_Line;
+            end if;
+            if Bare'Length > 2 and then Bare (Bare'First) = '|' then
+               Said := To_Unbounded_String (Row (Bare));
+            --  reStructuredText's list-table: * - ID, then - its words.
+            elsif Rst and then Bare'Length > 4 and then Bare (Bare'First .. Bare'First + 3) = "* - "
+              and then Index < Natural (Lines.Length)
+              and then Ada.Strings.Fixed.Index (Ada.Strings.Fixed.Trim (Lines (Index + 1), Ada.Strings.Both), "- ") = 1
+              and then Is_Label (Ada.Strings.Fixed.Trim (Bare (Bare'First + 4 .. Bare'Last), Ada.Strings.Both))
+            then
+               declare
+                  Next_Line : constant String := Ada.Strings.Fixed.Trim (Lines (Index + 1), Ada.Strings.Both);
+               begin
+                  Said := To_Unbounded_String
+                    ("- " & Ada.Strings.Fixed.Trim (Bare (Bare'First + 4 .. Bare'Last), Ada.Strings.Both)
+                     & ": " & Next_Line (Next_Line'First + 2 .. Next_Line'Last));
+                  Skip := True;
+               end;
+            end if;
+            if Said /= To_Unbounded_String (Line) then
+               null;
+            elsif Asciidoc and then Line'Length > 2 and then Line (Line'First) = '=' then
+               declare
+                  Depth : Natural := 0;
+               begin
+                  while Depth < Line'Length and then Line (Line'First + Depth) = '=' loop
+                     Depth := Depth + 1;
+                  end loop;
+                  if Depth < Line'Length and then Line (Line'First + Depth) = ' ' then
+                     Said := To_Unbounded_String
+                       ([1 .. Depth => '#'] & Line (Line'First + Depth .. Line'Last));
+                  end if;
+               end;
+            elsif Asciidoc and then Line'Length > 2 and then Line (Line'First .. Line'First + 1) = "* " then
+               Said := To_Unbounded_String ("- " & Line (Line'First + 2 .. Line'Last));
+            elsif Rst and then Index < Natural (Lines.Length) and then Line /= ""
+              and then Underline (Lines (Index + 1)) /= ' '
+              and then Underline (Line) = ' '
+            then
+               Said := To_Unbounded_String
+                 ((if Underline (Lines (Index + 1)) = '=' then "# "
+                   elsif Underline (Lines (Index + 1)) = '-' then "## " else "### ") & Line);
+               Skip := True;
+            end if;
+            Append (Output, To_String (Said) & ASCII.LF);
+         end;
+         <<Next_Line>>
+      end loop;
+      return To_String (Output);
+   end As_Markdown;
+
+   function Scan (Path : String; Text : String) return Output_List
+   is (Scan_Markdown (Path, As_Markdown (Path, Text)));
 
    -----------
    -- Apply --
@@ -2325,8 +2489,9 @@ package body Model_Runner.Framework.Bootstrap is
       --  says: an issue for a person, who retires it or keeps it -- with
       --  what was made from the document now, which may be its successor.
       declare
-         Read_From : Name_Lists.Vector;
-         Said_Now  : Name_Lists.Vector;
+         Read_From    : Name_Lists.Vector;
+         Said_Now     : Name_Lists.Vector;
+         Gone_Entries : Name_Lists.Vector;
       begin
          for Next of Found.Outputs loop
             if not Read_From.Contains (Field (Next.Source)) then
@@ -2334,6 +2499,83 @@ package body Model_Runner.Framework.Bootstrap is
             end if;
             Said_Now.Append (Field (Next.Provenance));
          end loop;
+         --  A document gone altogether, with what was taken up from it: one
+         --  issue for it, naming them all, not one an entry.
+         declare
+            Root    : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
+            Sources : Name_Lists.Vector;
+
+            function Source_Of (Kind : Intent.Intent_Kind; Known : String) return String is
+               Held : Intent.Entity;
+               Read : E.Error_Info;
+            begin
+               Intent.Read (Item, Kind, Known, Held, Read);
+               return (if E.Is_Ok (Read) then To_String (Held.Source) else "");
+            end Source_Of;
+         begin
+            for Kind in Intent.Requirement .. Intent.Decision loop
+               for Known of Intent.List (Item, Kind) loop
+                  declare
+                     Held : Intent.Entity;
+                     Read : E.Error_Info;
+                  begin
+                     Intent.Read (Item, Kind, Known, Held, Read);
+                     if E.Is_Ok (Read) and then Length (Held.Source) > 0 and then Length (Held.Provenance) > 0
+                       and then To_String (Held.State) not in "obsolete" | "superseded" | "rejected"
+                       and then To_String (Held.State) /= Intent.First_State (Kind)
+                       and then not Ada.Directories.Exists (Hostkit.Fs.Join (Root, To_String (Held.Source)))
+                       and then not (for some Line of Result.Moved =>
+                                       Ada.Strings.Fixed.Index (Line, Known & " ") = Line'First)
+                     then
+                        Gone_Entries.Append (Known);
+                        if not Sources.Contains (To_String (Held.Source)) then
+                           Sources.Append (To_String (Held.Source));
+                        end if;
+                     end if;
+                  end;
+               end loop;
+            end loop;
+            for Source of Sources loop
+               declare
+                  Named : Unbounded_String;
+                  Count : Natural := 0;
+               begin
+                  for Kind in Intent.Requirement .. Intent.Decision loop
+                     for Known of Intent.List (Item, Kind) loop
+                        if Gone_Entries.Contains (Known) and then Source_Of (Kind, Known) = Source
+                        then
+                           Append (Named, (if Named = Null_Unbounded_String then "" else " ") & Known);
+                           Count := Count + 1;
+                        end if;
+                     end loop;
+                  end loop;
+                  if Count > 1 then
+                     declare
+                        Said : Results.Result :=
+                          (Kind       => Results.Diagnostic,
+                           Producer   => To_Unbounded_String ("bootstrap"),
+                           Summary    => To_Unbounded_String
+                                           (Source & " is gone; it was where " & To_String (Named)
+                                            & " came from: /req obsolete " & To_String (Named)
+                                            & " retires them, or a document that says them again keeps them"),
+                           Provenance => To_Unbounded_String (Source & "#gone"),
+                           others     => <>);
+                     begin
+                        Raise_Issue (Said);
+                     end;
+                  else
+                     --  One alone: said of itself, below.
+                     for Kind in Intent.Requirement .. Intent.Decision loop
+                        for Known of Intent.List (Item, Kind) loop
+                           if Source_Of (Kind, Known) = Source and then Gone_Entries.Contains (Known) then
+                              Gone_Entries.Delete (Gone_Entries.Find_Index (Known));
+                           end if;
+                        end loop;
+                     end loop;
+                  end if;
+               end;
+            end loop;
+         end;
          for Kind in Intent.Requirement .. Intent.Decision loop
             for Known of Intent.List (Item, Kind) loop
                declare
@@ -2356,6 +2598,7 @@ package body Model_Runner.Framework.Bootstrap is
                     and then Length (Held.Provenance) > 0
                     and then not Said_Now.Contains (To_String (Held.Provenance))
                     and then not Rewritten.Contains (Known)
+                    and then not Gone_Entries.Contains (Known)
                     and then To_String (Held.State) not in "obsolete" | "superseded" | "rejected"
                   then
                      declare

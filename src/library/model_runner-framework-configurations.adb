@@ -1517,6 +1517,16 @@ package body Model_Runner.Framework.Configurations is
    --  Whether a value reads as its field needs.
    function Problem (Name, Value : String) return String is
    begin
+      --  A limit of nothing lets an agent do nothing: refused, with what
+      --  leaving it unset gives.
+      if Ada.Strings.Fixed.Trim (Value, Ada.Strings.Both) = "0"
+        and then (Name in "scalar.agents.max_steps" | "scalar.agents.max_seconds" | "scalar.agents.token_budget"
+                  or else Starts (Name, "scalar.task.max_steps.") or else Starts (Name, "scalar.task.max_seconds.")
+                  or else Starts (Name, "scalar.task.token_budget."))
+      then
+         return "0 would let an agent do nothing; give the most it may, or leave it unset for "
+           & (if Starts (Name, "scalar.task.") then "the agents' own" else "the default");
+      end if;
       if Starts (Name, "baseline.")
         and then not Starts (Name, "baseline.project.")
         and then not Starts (Name, "baseline.language.")
@@ -1932,6 +1942,47 @@ package body Model_Runner.Framework.Configurations is
          end if;
       end Level_Problem;
 
+      --  A new profile nothing runs -- no kind's profile, not the default,
+      --  not the full verification, in the configuration or this change:
+      --  refused, with the profiles there are, as it would change nothing.
+      function Unused_Profile (Name : String) return String is
+         Profile : constant String := (if Starts (Name, "profile.") then Name (Name'First + 8 .. Name'Last) else "");
+         Known   : Unbounded_String;
+
+         function Names_It (Field, Value : String) return Boolean
+         is ((Starts (Field, "scalar.task.profile.") or else Field = "scalar.verification.default"
+              or else Field = "list.verification.full")
+             and then Lines_Of (Value).Contains (Profile));
+      begin
+         if Profile = "" or else Records.Has (Result.Before, Name) then
+            return "";
+         end if;
+         for Index in 1 .. Records.Field_Count (Result.Before) loop
+            declare
+               Field : constant String := Records.Field_Name (Result.Before, Index);
+            begin
+               if Names_It (Field, Records.Get (Result.Before, Field)) then
+                  return "";
+               end if;
+               if Starts (Field, "profile.") then
+                  Append (Known, (if Known = Null_Unbounded_String then "" else ", ") & Field);
+               end if;
+            end;
+         end loop;
+         for Position in Changes.Iterate loop
+            if Names_It ((if Starts (Value_Maps.Key (Position), "scalar.")
+                            or else Starts (Value_Maps.Key (Position), "list.")
+                          then Value_Maps.Key (Position) else "scalar." & Value_Maps.Key (Position)),
+                         Value_Maps.Element (Position))
+            then
+               return "";
+            end if;
+         end loop;
+         return "no task kind, nor the default or the full verification, runs a profile called " & Profile
+           & (if Known = Null_Unbounded_String then "" else "; the profiles are " & To_String (Known))
+           & " -- change one of those, or add task.profile.KIND=" & Profile & " in the same /reconfigure";
+      end Unused_Profile;
+
       --  A setting a task kind has its own of, named for a kind the
       --  project does not have: refused as a level of one is.
       function Kind_Problem (Name : String) return String is
@@ -2032,6 +2083,16 @@ package body Model_Runner.Framework.Configurations is
       end Missing_Root;
 
       --  A change asked for that cannot be made: the caller's to put right.
+      --  A name that is no setting: said as a name, not as a value.
+      function Unknown (Name, Detail : String) return E.Error_Info is
+         Made : E.Error_Info := E.Make (E.Framework_Input_Invalid);
+      begin
+         E.Add_Text (Made, "name", "a setting's name");
+         E.Add_Text (Made, "value", Name);
+         E.Add_Text (Made, "detail", Detail);
+         return Made;
+      end Unknown;
+
       function Refused (Name, Detail : String) return E.Error_Info is
          Made : E.Error_Info := E.Make (E.CLI_Invalid_Option_Value);
       begin
@@ -2308,7 +2369,7 @@ package body Model_Runner.Framework.Configurations is
                      else ""));
                return;
             elsif not (for some Prefix of Changeable => Starts (Name, Prefix.all)) then
-               Status := Refused (Name, "there is no setting " & Name & Near
+               Status := Unknown (Name, "there is no setting " & Name & Near
                                   & "; a new one is named with its kind: scalar." & Name
                                   & " for one value, set." & Name & " for several");
                return;
@@ -2321,7 +2382,7 @@ package body Model_Runner.Framework.Configurations is
               and then not Starts (Name, "profile.") and then not Starts (Name, "fact.")
               and then not Starts (Name, "map.") and then not Starts (Name, "task_kind.")
             then
-               Status := Refused (Name, "there is no setting " & Name & Near);
+               Status := Unknown (Name, "there is no setting " & Name & Near);
                return;
             elsif (Adding or else Taking)
               and then not (Starts (Name, "set.") or else Starts (Name, "list."))
@@ -2362,6 +2423,9 @@ package body Model_Runner.Framework.Configurations is
                Status := Refused (Name, Level_Problem (Name));
             elsif Kind_Problem (Name) /= "" then
                Status := Refused (Name, Kind_Problem (Name));
+               return;
+            elsif Unused_Profile (Name) /= "" then
+               Status := Refused (Name, Unused_Profile (Name));
                return;
             elsif Starts (Name, "map.permission.") and then Given = "off"
               and then (Ada.Strings.Fixed.Index (Name (Name'First + 15 .. Name'Last), ".") = 0

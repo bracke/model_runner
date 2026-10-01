@@ -117,6 +117,37 @@ package body Model_Runner.CLI.Repo is
             Pres.Put_Message (Screen, "cli.repo.unread_language", [Loc.Named ("name", Argument)]);
          else
             Pres.Put_Message (Screen, "cli.repo.none", [Loc.Named ("name", Argument)]);
+            --  An entry of the project's state is traced, not looked up in
+            --  the code; and code in a language not read may hold it.
+            if (for some Prefix of Model_Runner.Framework.Name_Lists.Vector'(["REQ-", "DEC-", "SPEC-", "TASK-"])
+                  => Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Upper (Argument), Prefix) = 1)
+            then
+               Pres.Put_Note (Screen, "cli.repo.trace_instead", [Loc.Named ("name", Argument)]);
+            else
+               declare
+                  Kinds : Unbounded_String;
+               begin
+                  for Index in 1 .. Rp.File_Count (Found) loop
+                     declare
+                        Path : constant String := To_String (Rp.File_At (Found, Index).Path);
+                        Dot  : constant Natural := Ada.Strings.Fixed.Index (Path, ".", Ada.Strings.Backward);
+                        Ext  : constant String := (if Dot = 0 then "" else Path (Dot .. Path'Last));
+                     begin
+                        if To_String (Rp.File_At (Found, Index).Language) = ""
+                          and then Ext in ".js" | ".mjs" | ".cjs" | ".jsx" | ".ts" | ".tsx" | ".java" | ".go"
+                                        | ".rb" | ".cs" | ".kt" | ".swift" | ".php" | ".scala" | ".lua" | ".pl"
+                          and then Ada.Strings.Unbounded.Index (Kinds, Ext) = 0
+                        then
+                           Append (Kinds, (if Kinds = Null_Unbounded_String then "" else ", ") & Ext);
+                        end if;
+                     end;
+                  end loop;
+                  if Kinds /= Null_Unbounded_String then
+                     Pres.Put_Note (Screen, "cli.repo.unread_may_hold",
+                                    [Loc.Named ("name", Argument), Loc.Named ("detail", To_String (Kinds))]);
+                  end if;
+               end;
+            end if;
          end if;
          Status := E.Exit_Status (E.Make (E.Framework_Not_Found));
       end Not_Found;
@@ -673,11 +704,13 @@ package body Model_Runner.CLI.Repo is
                         begin
                            Model_Runner.Framework.Intent.Read
                              (Store, Model_Runner.Framework.Intent.Requirement, Argument, Held, Got);
+                           --  The label is the end of where it was read from.
                            if E.Is_Ok (Got)
-                             and then Ada.Strings.Fixed.Index (To_String (Held.Source), "#", Ada.Strings.Backward) > 0
+                             and then Ada.Strings.Fixed.Index (To_String (Held.Provenance), "#", Ada.Strings.Backward)
+                                      > 0
                            then
                               declare
-                                 Source : constant String := To_String (Held.Source);
+                                 Source : constant String := To_String (Held.Provenance);
                                  Hash   : constant Natural :=
                                    Ada.Strings.Fixed.Index (Source, "#", Ada.Strings.Backward);
                               begin
@@ -971,6 +1004,12 @@ package body Model_Runner.CLI.Repo is
                                         when Tr.Component_Tests => "its component's tests",
                                         when Tr.Certain_Tests   => "the tests it certainly reaches")),
                          Loc.Named ("detail", To_String (Chosen.Reason))]);
+                     --  The tests themselves, where only some are to run.
+                     if Tr."/=" (Chosen.Width, Tr.Full_Suite) then
+                        for Test of Chosen.Tests loop
+                           Pres.Put_Indented (Screen, "cli.repo.unit", [Loc.Named ("name", Test)], Indent => 4);
+                        end loop;
+                     end if;
                   end;
                end if;
             end;

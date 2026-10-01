@@ -779,13 +779,36 @@ package body Model_Runner.Framework.Repository.Languages is
          After := At_Index;
       end Path_At;
 
-      --  A use path made absolute: self and super are this module's.
+      --  The modules this file declares: mod parser; is parser here.
+      function Declared_Modules return Name_Lists.Vector is
+         Found : Name_Lists.Vector;
+      begin
+         for At_Index in 1 .. Count - 1 loop
+            if Is_Word (Tokens (At_Index), "mod") and then Tokens (At_Index + 1).Kind = Word then
+               Found.Append (To_String (Tokens (At_Index + 1).Text));
+            end if;
+         end loop;
+         return Found;
+      end Declared_Modules;
+      Modules : constant Name_Lists.Vector := Declared_Modules;
+
+      --  A use path made absolute: self and super are this module's, a
+      --  module this file declares is under it, and outside src -- a test,
+      --  an example -- the crate's own name is the crate.
       function Resolved (Said : String) return String is
+         Cut   : constant Natural := Ada.Strings.Fixed.Index (Said, "::");
+         First : constant String := (if Cut = 0 then Said else Said (Said'First .. Cut - 1));
       begin
          if Starts (Said, "self::") then
             return Unit & Said (Said'First + 4 .. Said'Last);
          elsif Starts (Said, "super::") then
             return Rust_Parent (Unit) & Said (Said'First + 5 .. Said'Last);
+         elsif Cut > 0 and then Modules.Contains (First) then
+            return Unit & "::" & Said;
+         elsif Cut > 0 and then not Starts (Unit, "crate")
+           and then First not in "crate" | "std" | "core" | "alloc"
+         then
+            return "crate" & Said (Cut .. Said'Last);
          end if;
          return Said;
       end Resolved;

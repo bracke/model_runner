@@ -14,6 +14,7 @@ with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Orchestration;
+with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Transitions;
@@ -348,7 +349,7 @@ package body Model_Runner.CLI.Intents is
                          .Contains (Requirement)
             then
                Pres.Put_Note
-                 (Screen, "cli.next.task_left",
+                 (Screen, "cli.intent.task_left",
                   [Loc.Named ("name", Id),
                    Loc.Named ("value", (if State = "candidate" then "reject" else "cancel")),
                    Loc.Named ("other", Requirement)]);
@@ -496,6 +497,27 @@ package body Model_Runner.CLI.Intents is
          end;
       end loop;
 
+      --  A ruling written as NAME=VALUE -- roots=tests/, max_children=5 --
+      --  is the ruling a decision governs with, not a field of it.
+      if not Plain.Is_Empty and then Lower (Plain.First_Element) = "govern" then
+         declare
+            Kept   : Names.Vector;
+            Ruling : Unbounded_String;
+         begin
+            for Pair of Settings loop
+               if Ada.Strings.Fixed.Index (Lower (Pair), "overrides=") = 1 then
+                  Kept.Append (Pair);
+               else
+                  Append (Ruling, (if Ruling = Null_Unbounded_String then "" else " ") & Pair);
+               end if;
+            end loop;
+            if Ruling /= Null_Unbounded_String then
+               Plain.Append (To_String (Ruling));
+               Settings := Kept;
+            end if;
+         end;
+      end if;
+
       --  A field new or revise does not take is refused by name, not
       --  dropped unsaid.
       if Action in "new" | "revise" then
@@ -586,6 +608,51 @@ package body Model_Runner.CLI.Intents is
       end if;
 
       if Action = "" or else Action = "list" then
+         --  Its filter is state=, of a state the register has: anything
+         --  else said, not answered with all or with nothing.
+         declare
+            States : constant String :=
+              (case Kind is
+                  when Nt.Requirement => "candidate, accepted, implemented, verified, blocked, rejected or obsolete",
+                  when others         => "candidate, accepted, rejected, superseded or obsolete");
+         begin
+            for Pair of Settings loop
+               if Ada.Strings.Fixed.Index (Pair, "state=") /= Pair'First then
+                  Status := E.Make (E.Framework_Input_Invalid);
+                  E.Add_Text (Status, "name", "a filter of " & Word_Of_Command (Kind) & " list");
+                  E.Add_Text (Status, "value", Pair);
+                  E.Add_Text (Status, "detail", "it takes state=STATE alone");
+               end if;
+            end loop;
+            if E.Is_Ok (Status) and then Natural (Plain.Length) > (if Action = "" then 0 else 1) then
+               Status := E.Make (E.Framework_Input_Invalid);
+               E.Add_Text (Status, "name", Word_Of_Command (Kind) & " list");
+               E.Add_Text (Status, "value", Word ((if Action = "" then 1 else 2)));
+               E.Add_Text (Status, "detail", "it takes state=STATE alone; " & Word_Of_Command (Kind)
+                           & " show ID shows one");
+            end if;
+            if E.Is_Ok (Status) and then Given ("state") /= ""
+              and then not Tr.Is_State (Nt.Machine_Of (Kind), Given ("state"))
+            then
+               Status := E.Make (E.Framework_Input_Invalid);
+               E.Add_Text (Status, "name", "a state of " & Word_Of_Command (Kind) & " list");
+               E.Add_Text (Status, "value", Given ("state"));
+               E.Add_Text (Status, "detail", "an entry here is " & States);
+            end if;
+            if E.Is_Error (Status) then
+               Pres.Report (Screen, Status);
+               return;
+            end if;
+         end;
+         if Given ("state") /= "" and then Nt.List (Store, Kind, Given ("state")).Is_Empty
+           and then not Nt.List (Store, Kind).Is_Empty
+         then
+            Pres.Put_Note (Screen, "cli.intent.none_match",
+                           [Loc.Named ("value", Given ("state")),
+                            Loc.Named ("count", Ada.Strings.Fixed.Trim
+                                                  (Natural'Image (Natural (Nt.List (Store, Kind).Length)),
+                                                   Ada.Strings.Both))]);
+         end if;
          declare
             Held : Nt.Entity;
             Read : E.Error_Info;
@@ -792,6 +859,25 @@ package body Model_Runner.CLI.Intents is
                  (Screen, "cli.task.moved", [Loc.Named ("name", Word (2)),
                                              Loc.Named ("value", Model_Runner.Framework.State_Said (Next))]);
                Apply_Rulings (Store, Kind, Word (2), Screen);
+               --  Accepted, and what that means: a decision that rules on
+               --  nothing yet, how it would; a specification, where it holds.
+               if Next = "accepted" and then Nt."=" (Kind, Nt.Decision)
+                 and then Nt.Governs (Store, Kind, Word (2)) = ""
+               then
+                  Pres.Put_Note (Screen, "cli.next.decision_govern", [Loc.Named ("name", Word (2))]);
+               elsif Next = "accepted" and then Nt."=" (Kind, Nt.Specification) then
+                  declare
+                     Held : Nt.Entity;
+                     Got  : E.Error_Info;
+                  begin
+                     Nt.Read (Store, Kind, Word (2), Held, Got);
+                     Pres.Put_Note (Screen, "cli.intent.spec_in_force",
+                                    [Loc.Named ("name", Word (2)),
+                                     Loc.Named ("value", (if To_String (Held.Scope) in "" | "project"
+                                                          then "the whole project"
+                                                          else "the component " & To_String (Held.Scope)))]);
+                  end;
+               end if;
                Move_Along (Store, Screen);
 
                --  What it governed is governed no more: said, with what the
@@ -1612,10 +1698,11 @@ package body Model_Runner.CLI.Intents is
          end if;
 
       elsif Action = "govern"
-        and then (Natural (Plain.Length) = 3 or else (Natural (Plain.Length) = 4 and then Lower (Word (4)) = "off"))
+        and then (Natural (Plain.Length) = 3 or else (Natural (Plain.Length) = 4 and then Lower (Word (4)) = "none"))
       then
-         --  A setting named and no ruling, or off: it governs that one no
-         --  more, and what holds then is said.
+         --  A setting named and no ruling, or none: it governs that one no
+         --  more, and what holds then is said. off is a ruling, as a
+         --  permission is taken away.
          declare
             Rulings : Names.Vector := Nt.Also_Governs (Store, Kind, Word (2));
             Found   : Unbounded_String;
@@ -1701,6 +1788,12 @@ package body Model_Runner.CLI.Intents is
                   if not Model_Runner.Framework.Records.Has (Config, Setting)
                     and then not Model_Runner.Framework.Configurations.Known_Names.Contains (Setting)
                     and then Ada.Strings.Fixed.Index (Setting, "baseline.") /= 1
+                    --  A level's capability is one whether set or not.
+                    and then not (Ada.Strings.Fixed.Index (Setting, "map.permission.") = 1
+                                  and then (for some One in Model_Runner.Framework.Permissions.Capability =>
+                                              Ada.Strings.Fixed.Tail
+                                                (Setting, Model_Runner.Framework.Permissions.Word (One)'Length + 1)
+                                              = "." & Model_Runner.Framework.Permissions.Word (One)))
                   then
                      for Index in 1 .. Model_Runner.Framework.Records.Field_Count (Config) loop
                         declare
@@ -1824,13 +1917,15 @@ package body Model_Runner.CLI.Intents is
                   package Cs renames Model_Runner.Framework.Consistency;
                   Found : constant Cs.Finding_List := Cs.Check (Store);
                begin
+                  --  Said once: a disagreement with the configuration is
+                  --  said by the ruling's own note above, not again here.
                   for Index in 1 .. Cs.Length (Found) loop
-                     if To_String (Cs.Element (Found, Index).Subject) = To_String (Governed_Setting) then
-                        Pres.Put_Message
-                          (Screen, "cli.task.item",
-                           [Loc.Named ("name", To_String (Governed_Setting)),
-                            Loc.Named ("value", Cs.Kind_Word (Cs.Element (Found, Index).Kind)),
-                            Loc.Named ("detail", To_String (Cs.Element (Found, Index).Detail))]);
+                     if To_String (Cs.Element (Found, Index).Subject) = To_String (Governed_Setting)
+                       and then Ada.Strings.Fixed.Index (To_String (Cs.Element (Found, Index).Detail),
+                                                         "CONFIG says") = 0
+                     then
+                        Pres.Put_Note (Screen, "cli.intent.also_found",
+                                       [Loc.Named ("detail", To_String (Cs.Element (Found, Index).Detail))]);
                      end if;
                   end loop;
                end;
@@ -1848,7 +1943,21 @@ package body Model_Runner.CLI.Intents is
            and then Ada.Strings.Fixed.Index (Word (1), "-") = 0
          then
             Status := E.Make (E.CLI_Unexpected_Operand);
-            E.Add_Text (Status, "value", Word (1) & "; " & Word_Of_Command (Kind) & " takes list, new,"
+            E.Add_Text (Status, "value", Word (1)
+                        & (if Model_Runner.Framework.Nearest
+                                (Word (1), Names.Vector'(["list", "new", "accept", "reject", "reconsider",
+                                                          "obsolete", "revise", "move", "link", "unlink",
+                                                          "supersede", "verify", "block", "unblock", "govern",
+                                                          "show"])) /= ""
+                           then " (did you mean "
+                                & Model_Runner.Framework.Nearest
+                                    (Word (1), Names.Vector'(["list", "new", "accept", "reject", "reconsider",
+                                                              "obsolete", "revise", "move", "link", "unlink",
+                                                              "supersede", "verify", "block", "unblock", "govern",
+                                                              "show"]))
+                                & "?)"
+                           else "")
+                        & "; " & Word_Of_Command (Kind) & " takes list, new,"
                         & " accept, reject, reconsider, obsolete, revise, move, link, unlink, supersede"
                         & (if Nt."=" (Kind, Nt.Requirement) then ", verify, block, unblock" else "")
                         & (if Nt."=" (Kind, Nt.Decision) then ", govern" else "")
@@ -1871,6 +1980,13 @@ package body Model_Runner.CLI.Intents is
          begin
             if E.Is_Ok (Status) then
                Nt.Read (Store, Kind, Named, Held, Status);
+               --  None such: said, with where the ones there are are listed.
+               if E."=" (Status.Code, E.Framework_Not_Found) then
+                  Pres.Report (Screen, Status);
+                  Pres.Put_Note (Screen, "cli.intent.list_hint",
+                                 [Loc.Named ("name", Word_Of_Command (Kind))]);
+                  return;
+               end if;
             end if;
             if E.Is_Ok (Status) then
                --  It, by its identifier and title, set apart; then its

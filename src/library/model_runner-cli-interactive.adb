@@ -1055,13 +1055,21 @@ package body Model_Runner.CLI.Interactive is
                      --  open the next output would end, losing its first
                      --  character: cancelled first.
                      Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CAN);
+                     --  Something before the key was dropped: said. Nothing
+                     --  was -- the key pressed on an empty line -- nothing
+                     --  to say; and what follows it, shown, as the echo of
+                     --  the key hid it.
+                     if T.Trim (Typed (Typed'First .. Last_Key - 1)) /= "" or else Pending (Typing) /= "" then
+                        Pres.Put_Note
+                          (Screen, "cli.interactive.dropped_key",
+                           [Loc.Named ("name", (if Typed (Last_Key) = ASCII.ESC then "Esc" else "Ctrl-C"))]);
+                     end if;
                      Taken (Typing);
-                     Pres.Put_Note
-                       (Screen, "cli.interactive.dropped_key",
-                        [Loc.Named ("name", (if Typed (Last_Key) = ASCII.ESC then "Esc" else "Ctrl-C"))]);
                      if Line = "" then
                         goto Next_Line;
                      end if;
+                     Pres.Put_After_Prompt (Screen, "cli.interactive.line_after_key",
+                                            [Loc.Named ("value", T.Escape_Controls (Line))]);
                   end if;
                   --  Ctrl-C while a prompt was being typed drops it: the
                   --  line after starts afresh.

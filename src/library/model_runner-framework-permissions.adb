@@ -925,7 +925,7 @@ package body Model_Runner.Framework.Permissions is
                       and then Ada.Strings.Fixed.Index (Path, "..") = 0
                       --  A short one -- /dir/file -- not a whole path of the
                       --  machine's, which names no place of the project's.
-                      and then Ada.Strings.Fixed.Count (Path, "/") <= 3
+                      and then Ada.Strings.Fixed.Count (Path, "/") <= 2
                     then Path (Path'First + 1 .. Path'Last)
                     elsif Writing or else (Tail /= "" and then Ada.Directories.Exists (Base & Tail)) then Tail
                     else "");
