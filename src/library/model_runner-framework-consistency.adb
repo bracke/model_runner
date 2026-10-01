@@ -1,9 +1,11 @@
 with Ada.Characters.Handling;
+with Ada.Directories;
 with Ada.Strings.Fixed;
 
 with Model_Runner.Errors;
 with Model_Runner.Framework.Authority;
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Leases;
 with Model_Runner.Framework.Records;
@@ -254,6 +256,75 @@ package body Model_Runner.Framework.Consistency is
                end loop;
             end;
          end loop;
+      end;
+
+      --  A ruling on a setting the harness reads that the configuration
+      --  does not set: the harness keeps to its default, whatever the
+      --  ruling says -- said, with what makes it hold.
+      declare
+         Config : Records.Item;
+         Read   : E.Error_Info;
+         Known  : constant Name_Lists.Vector := Configurations.Known_Names;
+
+         --  A setting's whole name, as the configuration knows it.
+         function Whole (Subject : String) return String is
+         begin
+            if Known.Contains (Subject) then
+               return Subject;
+            end if;
+            for Prefix of Name_Lists.Vector'(["scalar.", "set.", "list."]) loop
+               if Known.Contains (Prefix & Subject) then
+                  return Prefix & Subject;
+               end if;
+            end loop;
+            return "";
+         end Whole;
+
+         procedure Judge (Source, Subject, Ruling : String) is
+            Name : constant String := Whole (Ada.Strings.Fixed.Trim (Subject, Ada.Strings.Both));
+            Said : constant String := Ada.Strings.Fixed.Trim (Ruling, Ada.Strings.Both);
+            Bare : constant String :=
+              (if Name'Length > 7 and then Name (Name'First .. Name'First + 6) = "scalar."
+               then Name (Name'First + 7 .. Name'Last) else Name);
+         begin
+            if Name /= "" and then not Records.Has (Config, Name)
+              and then Configurations.Default_Of (Name) /= Said
+            then
+               Found (Unapplied_Ruling, Name,
+                      Source & " rules " & Bare & " = " & Said & ", and the configuration does not set it,"
+                      & " so the harness keeps to "
+                      & (if Configurations.Default_Of (Name) = "" then "its default"
+                         else Configurations.Default_Of (Name))
+                      & "; /reconfigure " & Bare & "=" & Said & " makes it hold");
+            end if;
+         end Judge;
+      begin
+         Configurations.Read (Item, Config, Read);
+         if E.Is_Ok (Read) then
+            for Id of Intent.List (Item, Intent.Decision) loop
+               declare
+                  Rule  : constant String := Intent.Governs (Item, Intent.Decision, Id);
+                  Equal : constant Natural := Ada.Strings.Fixed.Index (Rule, " = ");
+                  Over  : constant Natural := Ada.Strings.Fixed.Index (Rule, " (over ");
+               begin
+                  if Intent.State_Of (Item, Intent.Decision, Id) = "accepted" and then Equal > 0 then
+                     Judge (Id, Rule (Rule'First .. Equal - 1),
+                            Rule (Equal + 3 .. (if Over = 0 then Rule'Last else Over - 1)));
+                  end if;
+               end;
+            end loop;
+            for Line of Authority.Standing_Instructions (Item) loop
+               declare
+                  Colon : constant Natural := Ada.Strings.Fixed.Index (Line, ": ");
+                  Equal : constant Natural := Ada.Strings.Fixed.Index (Line, "=");
+               begin
+                  if Colon > 0 and then Equal > Colon then
+                     Judge (Line (Line'First .. Colon - 1), Line (Colon + 2 .. Equal - 1),
+                            Line (Equal + 1 .. Line'Last));
+                  end if;
+               end;
+            end loop;
+         end if;
       end;
 
       --  Tasks: every task named is one there is, no dependency or parent
@@ -588,6 +659,28 @@ package body Model_Runner.Framework.Consistency is
             end loop;
             return False;
          end Holds_File;
+         --  Where git says a file went, renamed: "" where it says nothing.
+         Git_Said : Git.Status_Report;
+         Asked    : Boolean := False;
+         function Renamed_To (Path : String) return String is
+         begin
+            if not Asked then
+               Git_Said := Git.Status_Of (Ada.Directories.Containing_Directory (Stores.Root (Item)));
+               Asked := True;
+            end if;
+            for Line of Git_Said.Changes loop
+               declare
+                  Arrow : constant Natural := Ada.Strings.Fixed.Index (Line, " -> ");
+               begin
+                  if Line'Length > 3 and then Line (Line'First) = 'R' and then Arrow > 0
+                    and then Ada.Strings.Fixed.Trim (Line (Line'First + 2 .. Arrow - 1), Ada.Strings.Both) = Path
+                  then
+                     return Ada.Strings.Fixed.Trim (Line (Arrow + 4 .. Line'Last), Ada.Strings.Both);
+                  end if;
+               end;
+            end loop;
+            return "";
+         end Renamed_To;
       begin
          for Id of Intent.List (Item, Intent.Requirement) loop
             --  One retired links nothing that matters now.
@@ -605,7 +698,14 @@ package body Model_Runner.Framework.Consistency is
                                 else Missing_Symbol), Id,
                                (if Intent."=" (Relation, Intent.Test) then "it is tested by "
                                 else "it is implemented by ")
-                               & Target & ", which the repository does not hold; /req unlink "
+                               & Target & ", which the repository does not hold; "
+                               & (if Renamed_To (Target) /= ""
+                                  then "git shows it renamed to " & Renamed_To (Target) & ": /req link " & Id
+                                       & " " & (if Intent."=" (Relation, Intent.Test) then "test"
+                                                else "implementation")
+                                       & " " & Renamed_To (Target) & " follows it, and "
+                                  else "")
+                               & "/req unlink "
                                & Id & " " & (if Intent."=" (Relation, Intent.Test) then "test"
                                              else "implementation")
                                & " " & Target & " takes it off");

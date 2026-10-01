@@ -705,8 +705,8 @@ package body Model_Runner.Framework.Traceability is
       elsif Partial and then Records.Get (Config, "set.components") = "" then
          Result.Width := Full_Suite;
          Result.Reason := To_Unbounded_String
-           ("some tests are only probably affected, and the project names no components, so the whole"
-            & " suite runs");
+           ("some tests are only probably affected, and the configuration declares no components of its"
+            & " own -- the project itself is its one -- so the whole suite runs");
       elsif Partial then
          Result.Width := Component_Tests;
          declare

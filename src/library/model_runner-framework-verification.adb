@@ -2169,11 +2169,25 @@ package body Model_Runner.Framework.Verification is
                               or else (Mine'Length > Path'Length
                                        and then Mine (Mine'Last - Path'Length + 1 .. Mine'Last) = Path)));
       end Failed_Elsewhere;
+      --  Whether a task serves the requirement.
+      function Serves_It (Id : String) return Boolean is
+         Defined : Records.Item;
+         Read    : E.Error_Info;
+      begin
+         Tasks.Definition (Item, Id, Defined, Read);
+         return E.Is_Ok (Read) and then Lines_Of (Records.Get (Defined, "requirements")).Contains (Requirement);
+      end Serves_It;
    begin
       Find_Project_Runs;
       --  A suite that ran nothing passed nothing: said as that, with the
       --  way on -- a test that shows it -- not as a failure to fix.
-      if Project_Empty /= Null_Unbounded_String and then Standing_Of_Tasks = "" then
+      --  Work still open for it is the reason first: its task undone says
+      --  more than a suite that has nothing to run yet.
+      if Project_Empty /= Null_Unbounded_String and then Standing_Of_Tasks = ""
+        and then not (for some Id of Everything =>
+                        Tasks.State_Of (Item, Id) not in "complete" | "cancelled" | "rejected"
+                        and then Serves_It (Id))
+      then
          return Lacks (To_String (Project_Empty) & ", the latest run of the project's whole suite,"
                        & " passed and ran no test: the suite is empty; add a test that shows "
                        & Requirement & ", then /check full");
@@ -2248,7 +2262,9 @@ package body Model_Runner.Framework.Verification is
                                 & "; it is verified once that is complete"
                                 & (if State = "candidate"
                                    then ": /task accept " & Id & ", then /work " & Id & " does it"
-                                   elsif State in "accepted" | "blocked" | "failed"
+                                   elsif State = "failed"
+                                   then ": /task accept " & Id & " tries it again"
+                                   elsif State in "accepted" | "blocked"
                                    then ": /work " & Id & " does it"
                                    else "")
                                 & (if State in "accepted" | "blocked" | "failed" | "candidate"

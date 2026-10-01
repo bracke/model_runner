@@ -1811,8 +1811,9 @@ package body Tests.CLI_Cases is
       Assert (Command ("task|new|Elsewhere|--set|kind=implementation|--set|component=nowhere") /= 0,
               "a task named a component the project does not have");
       Assert (Command ("task|show|TASK-001") = 0
-              and then Shows ("may: read the source, read the specifications, build it, run its tests,"
-                              & " run its static analysis, propose tasks")
+              --  As its agent is told it: what it has a tool or a way for.
+              and then Shows ("may: read the source, read the specifications")
+              and then Shows ("propose tasks")
               and then Command ("task|show|TASK-002") = 0
               and then Shows ("implementation_present"),
               "a kind was not narrowed, or its gates not what the template says: " & Last_Output);
@@ -1820,7 +1821,7 @@ package body Tests.CLI_Cases is
       Assert (Command ("task|context|TASK-002|--set|--verbose") = 0 and then Shows ("## Rules"),
               "task context --verbose did not show the text the agent reads: " & Last_Output);
 
-      Assert (Command ("task|split|TASK-001|One; Two") = 0 and then Shows ("is blocked"),
+      Assert (Command ("task|split|TASK-001|One; Two") = 0 and then Shows ("is blocked, waiting for parts"),
               "task split did not make the parts and block the parent: " & Last_Output);
       Assert (Command ("task|depend|TASK-004|TASK-003") = 0 and then Shows ("waits for"),
               "task depend did not make one wait for the other: " & Last_Output);
@@ -2080,7 +2081,7 @@ package body Tests.CLI_Cases is
       Run ("req");
       Assert (Shows ("no requirements yet"), "an empty register did not say how to begin");
       Run ("reconfigure|work.lease=90|confirm=yes");
-      Assert (Code = 0 and then Shows ("scalar.work.lease"),
+      Assert (Code = 0 and then Shows ("changes work.lease"),
               "a setting named without its kind was not found: " & To_String (Said));
 
       --  3. With no agent to run, that is said before the task is touched;
@@ -2187,12 +2188,12 @@ package body Tests.CLI_Cases is
              & "Arguments SHALL be quoted." & LF & "Acceptance: a space survives" & LF & LF
              & "- DEC-001: We use posix_spawn." & LF & LF & "It SHOULD retry once." & LF);
       Run ("bootstrap");
-      Assert (Shows ("REQ-SHELL-001") and then Shows ("DEC-001") and then Shows ("next: /req accept")
+      Assert (Shows ("REQ-SHELL-001") and then Shows ("DEC-001") and then Shows ("next: /accept goes through")
               and then Shows ("made REQ-SHELL-001, accepted"),
               "bootstrap did not keep the document's identifiers, or say what it made is: "
               & To_String (Said));
       Run ("req|show|REQ-SHELL-001");
-      Assert (Shows ("criteria: a space survives") and then Shows ("title: Quoting"),
+      Assert (Shows ("criteria: a space survives") and then Shows ("REQ-SHELL-001: Quoting"),
               "a requirement's criteria and title were not read: " & To_String (Said));
       Run ("repo|impact|REQ-SHELL-001");
       Assert (Shows ("requirement  REQ-SHELL-001") and then Shows ("task  TASK-"),

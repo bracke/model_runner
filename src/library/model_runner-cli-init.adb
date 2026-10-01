@@ -4,6 +4,7 @@ with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
 with Hostkit.Fs;
+with Hostkit.Process;
 
 with Model_Runner.Errors;
 with Model_Runner.CLI.Choosers;
@@ -638,8 +639,11 @@ package body Model_Runner.CLI.Init is
             for Made of Planned.Directories loop
                Say ("cli.init.directory", [Loc.Named ("path", Made)]);
             end loop;
+            --  Only those not there yet: one the project has is not made.
             for Made of Planned.Directories loop
-               Append (Dirs_Said, (if Dirs_Said = Null_Unbounded_String then "" else ", ") & Made);
+               if not Ada.Directories.Exists (Hostkit.Fs.Join (Directory, Made)) then
+                  Append (Dirs_Said, (if Dirs_Said = Null_Unbounded_String then "" else ", ") & Made);
+               end if;
             end loop;
             for Position in Planned.Files.Iterate loop
                declare
@@ -691,6 +695,29 @@ package body Model_Runner.CLI.Init is
             if Skipped_Said /= Null_Unbounded_String then
                Say ("cli.init.short.skips", [Loc.Named ("detail", To_String (Skipped_Said))]);
             end if;
+            --  Inside a repository whose root is further up: said, as what
+            --  lies above -- its documents, its version control's view -- is
+            --  outside this project.
+            declare
+               Up : Unbounded_String := To_Unbounded_String (Ada.Directories.Full_Name (Directory));
+            begin
+               if not Ada.Directories.Exists (Hostkit.Fs.Join (To_String (Up), ".git")) then
+                  for Level in 1 .. 6 loop
+                     exit when To_String (Up) = "/" or else To_String (Up) = "";
+                     Up := To_Unbounded_String (Ada.Directories.Containing_Directory (To_String (Up)));
+                     if Ada.Directories.Exists (Hostkit.Fs.Join (To_String (Up), ".git")) then
+                        Say ("cli.init.inside_repository", [Loc.Named ("path", To_String (Up))]);
+                        Append (Warned, Pres.Next_Step_Value
+                                          (Screen, "cli.init.inside_repository", [Loc.Named ("path", To_String (Up))])
+                                        & ASCII.LF);
+                        exit;
+                     end if;
+                  end loop;
+               end if;
+            exception
+               when others =>
+                  null;
+            end;
             for Position in Planned.Template_Facts.Iterate loop
                if not Planned.Discovered_Facts.Contains (Cf.Value_Maps.Key (Position)) then
                   Say ("cli.init.fact", [Loc.Named ("name", Cf.Value_Maps.Key (Position)),
@@ -723,7 +750,53 @@ package body Model_Runner.CLI.Init is
                                 (if Command = "" then "" else Ex.Refusal (Rules, Command));
                               Words   : constant Model_Runner.Framework.Name_Lists.Vector :=
                                 Ex.Words_Of (Command);
+                              --  The program it runs, not here: said before
+                              --  the first check fails on it.
+                              Missing : constant String :=
+                                (if Words.Is_Empty then ""
+                                 elsif Ada.Strings.Fixed.Index (Words.First_Element, "/") = 0
+                                   and then Hostkit.Process.Locate (Words.First_Element) = ""
+                                 then Words.First_Element
+                                 elsif Ada.Strings.Fixed.Index (Command, "-m pytest") > 0
+                                   and then Hostkit.Process.Locate ("pytest") = ""
+                                 then "pytest"
+                                 else "");
                            begin
+                              --  An alr command in a directory with no crate of
+                              --  its own -- one /init leaves out -- runs the
+                              --  crate above it instead: said.
+                              if Why = "" and then Missing = "" and then not Words.Is_Empty
+                                and then Words.First_Element = "alr"
+                                and then To_String (One.Directory) not in "" | "."
+                                and then not Planned.Files.Contains (To_String (One.Directory) & "/alire.toml")
+                                and then not Ada.Directories.Exists
+                                               (Hostkit.Fs.Join (Hostkit.Fs.Join (Directory, To_String (One.Directory)),
+                                                                 "alire.toml"))
+                                and then not Refused.Contains (Command)
+                              then
+                                 Refused.Append (Command);
+                                 Say ("cli.init.check_no_crate",
+                                      [Loc.Named ("name", To_String (One.Label)), Loc.Named ("value", Command),
+                                       Loc.Named ("path", To_String (One.Directory))]);
+                                 Append (Warned, Pres.Next_Step_Value
+                                                   (Screen, "cli.init.check_no_crate",
+                                                    [Loc.Named ("name", To_String (One.Label)),
+                                                     Loc.Named ("value", Command),
+                                                     Loc.Named ("path", To_String (One.Directory))])
+                                                 & ASCII.LF);
+                              end if;
+                              if Why = "" and then Missing /= "" and then not Refused.Contains (Command) then
+                                 Refused.Append (Command);
+                                 Say ("cli.init.check_missing",
+                                      [Loc.Named ("name", To_String (One.Label)),
+                                       Loc.Named ("value", Command), Loc.Named ("detail", Missing)]);
+                                 Append (Warned, Pres.Next_Step_Value
+                                                   (Screen, "cli.init.check_missing",
+                                                    [Loc.Named ("name", To_String (One.Label)),
+                                                     Loc.Named ("value", Command),
+                                                     Loc.Named ("detail", Missing)])
+                                                 & ASCII.LF);
+                              end if;
                               if Why /= "" and then not Refused.Contains (Command) then
                                  Refused.Append (Command);
                                  Say ("cli.init.check_refused",

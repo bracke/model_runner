@@ -126,6 +126,26 @@ package body Model_Runner.Framework is
       --  A letter or two, and no more than a third of the word.
       Limit : constant Natural := Natural'Max (1, Natural'Min (2, Word'Length / 3));
    begin
+      --  The one name it begins, first: ada-lib is ada-library, however
+      --  near another's letters are.
+      declare
+         Starting : Natural := 0;
+         Named    : Unbounded_String;
+      begin
+         if Word'Length >= 3 then
+            for Name of Among loop
+               if Name'Length > Word'Length
+                 and then Lower (Name (Name'First .. Name'First + Word'Length - 1)) = Lower (Word)
+               then
+                  Starting := Starting + 1;
+                  Named := To_Unbounded_String (Name);
+               end if;
+            end loop;
+            if Starting = 1 then
+               return To_String (Named);
+            end if;
+         end if;
+      end;
       for Name of Among loop
          declare
             Apart : constant Natural := Distance (Lower (Word), Lower (Name));

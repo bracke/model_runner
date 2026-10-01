@@ -1,3 +1,4 @@
+with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.IO_Exceptions;
@@ -252,6 +253,107 @@ package body Model_Runner.Presentation is
       end if;
    end Put_Header;
 
+   -------------
+   -- Tone_Of --
+   -------------
+
+   function Tone_Of (State : String) return Tone is
+      Word : constant String := Ada.Characters.Handling.To_Lower (Ada.Strings.Fixed.Trim (State, Ada.Strings.Both));
+   begin
+      if Word in "complete" | "completed" | "verified" | "passed" | "pass" | "done" | "integrated" | "ready"
+        | "ok" | "yes" | "true"
+      then
+         return Good;
+      elsif Word in "failed" | "fail" | "blocked" | "cancelled" | "rejected" | "superseded" | "obsolete"
+        | "retired" | "deprecated" | "withdrawn" | "conflicted" | "error" | "blocking"
+      then
+         return Bad;
+      elsif Word in "candidate" | "proposed" | "accepted" | "running" | "verification" | "implemented"
+        | "waiting" | "open" | "pending" | "warning" | "stale"
+      then
+         return Pending;
+      else
+         return Plain;
+      end if;
+   end Tone_Of;
+
+   --  The role a tone is coloured in.
+   function Role_Of (Value_Tone : Tone) return Terminal_Styles.Style_Role
+   is (case Value_Tone is
+          when Plain | Good => Terminal_Styles.Role_Success,
+          when Pending      => Terminal_Styles.Role_Warning,
+          when Bad          => Terminal_Styles.Role_Error,
+          when Muted        => Terminal_Styles.Role_Muted);
+
+   ----------------
+   -- Put_Marked --
+   ----------------
+
+   procedure Put_Marked
+     (Item      : in out Console;
+      Key       : String;
+      Arguments : Loc.Argument_List;
+      Mark      : String;
+      Mark_Tone : Tone)
+   is
+      function Letter (C : Character) return Boolean
+      is (Ada.Characters.Handling.Is_Alphanumeric (C) or else C in '_' | '-');
+   begin
+      if Item.Structured or else not Styles (Item, Answer) or else Mark = "" or else Mark_Tone = Plain then
+         Put_Message (Item, Key, Arguments);
+         return;
+      end if;
+      declare
+         Line : constant String := Message (Item, Key, Arguments);
+         From    : Positive := Line'First;
+         At_Mark : Natural := 0;
+         Found   : Boolean := False;
+      begin
+         --  The word whole: "accepted" is not marked in "unaccepted".
+         while From <= Line'Last loop
+            At_Mark := Ada.Strings.Fixed.Index (Line (From .. Line'Last), Mark);
+            exit when At_Mark = 0;
+            if (At_Mark = Line'First or else not Letter (Line (At_Mark - 1)))
+              and then (At_Mark + Mark'Length > Line'Last or else not Letter (Line (At_Mark + Mark'Length)))
+            then
+               Found := True;
+               exit;
+            end if;
+            From := At_Mark + 1;
+         end loop;
+         if not Found then
+            Put_Line (Item, Line);
+         else
+            Put_Line (Item, Line (Line'First .. At_Mark - 1)
+                            & Terminal_Styles.Decorate (Mark, Role_Of (Mark_Tone))
+                            & Line (At_Mark + Mark'Length .. Line'Last));
+         end if;
+      end;
+   end Put_Marked;
+
+   -------------------
+   -- Put_Diff_Line --
+   -------------------
+
+   procedure Put_Diff_Line (Item : in out Console; Text : String) is
+      function Starts (Prefix : String) return Boolean
+      is (Text'Length >= Prefix'Length and then Text (Text'First .. Text'First + Prefix'Length - 1) = Prefix);
+   begin
+      if Item.Structured or else not Styles (Item, Answer) or else Text = "" then
+         Put_Line (Item, Text);
+      elsif Starts ("+++") or else Starts ("---") or else Starts ("@@") or else Starts ("diff ")
+        or else Starts ("index ")
+      then
+         Put_Line (Item, Terminal_Styles.Decorate (Text, Terminal_Styles.Role_Muted));
+      elsif Starts ("+") then
+         Put_Line (Item, Terminal_Styles.Decorate (Text, Terminal_Styles.Role_Success));
+      elsif Starts ("-") then
+         Put_Line (Item, Terminal_Styles.Decorate (Text, Terminal_Styles.Role_Error));
+      else
+         Put_Line (Item, Text);
+      end if;
+   end Put_Diff_Line;
+
    --------------
    -- Put_Pair --
    --------------
@@ -281,7 +383,8 @@ package body Model_Runner.Presentation is
            (case Value_Tone is
                when Plain | Good => Terminal_Styles.Role_Success,
                when Pending      => Terminal_Styles.Role_Warning,
-               when Bad          => Terminal_Styles.Role_Error);
+               when Bad          => Terminal_Styles.Role_Error,
+               when Muted        => Terminal_Styles.Role_Muted);
       begin
          --  Either not found as given -- the catalog changed it -- the line
          --  is said plain.
@@ -445,11 +548,25 @@ package body Model_Runner.Presentation is
       if Item.Level = Opt.Quiet then
          return;
       end if;
-      Error_Line
-        (Item,
-         Message
-           (Item, "diagnostic.note",
-            [Loc.Named ("detail", Said)]));
+      --  The way on set apart from what it says at a terminal that shows
+      --  colour: its "next:" muted, coloured after the line is rendered.
+      declare
+         Line    : constant String := Message (Item, "diagnostic.note", [Loc.Named ("detail", Said)]);
+         Lead    : constant String := Message (Item, "diagnostic.next_lead");
+         At_Lead : constant Natural :=
+           (if Lead = "" or else Key'Length <= 9 or else Key (Key'First .. Key'First + 8) /= "cli.next."
+            then 0 else Ada.Strings.Fixed.Index (Line, Lead));
+      begin
+         if Styles_Diagnostics (Item) and then At_Lead > 0 then
+            Error_Line
+              (Item,
+               Line (Line'First .. At_Lead - 1)
+               & Terminal_Styles.Decorate (Lead, Terminal_Styles.Role_Muted)
+               & Line (At_Lead + Lead'Length .. Line'Last));
+         else
+            Error_Line (Item, Line);
+         end if;
+      end;
    end Put_Note;
 
    ---------------
@@ -698,11 +815,21 @@ package body Model_Runner.Presentation is
             else Ada.Strings.Fixed.Index (Line, Severity));
       begin
          if Styles_Diagnostics (Item) and then At_Label > 0 then
-            Error_Line
-              (Item,
-               Line (Line'First .. At_Label - 1)
-               & Terminal_Styles.Decorate (Severity, Role)
-               & Line (At_Label + Severity'Length .. Line'Last));
+            --  And its code muted: looked up, not read.
+            declare
+               Code    : constant String := E.Diagnostic_Code (Condition.Code);
+               Rest    : constant String := Line (At_Label + Severity'Length .. Line'Last);
+               At_Code : constant Natural := (if Code = "" then 0 else Ada.Strings.Fixed.Index (Rest, Code));
+            begin
+               Error_Line
+                 (Item,
+                  Line (Line'First .. At_Label - 1)
+                  & Terminal_Styles.Decorate (Severity, Role)
+                  & (if At_Code = 0 then Rest
+                     else Rest (Rest'First .. At_Code - 1)
+                          & Terminal_Styles.Decorate (Code, Terminal_Styles.Role_Muted)
+                          & Rest (At_Code + Code'Length .. Rest'Last)));
+            end;
          else
             Error_Line (Item, Line);
          end if;

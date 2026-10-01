@@ -1308,6 +1308,24 @@ package body Model_Runner.Framework.Workspaces is
    -- Restore_Kept --
    ------------------
 
+   function Replaced_Copy (Name : String) return String
+   is ("replaced-" & Name);
+
+   function Changed_Since_Kept (Item : Stores.Store; Name : String) return Name_Lists.Vector is
+      Project : constant String := Dirs.Containing_Directory (Stores.Root (Item));
+      Where   : constant String := Hostkit.Fs.Join (Runtime_Of (Item), Name);
+      Result  : Name_Lists.Vector;
+   begin
+      for Path of Kept_Files (Item, Name) loop
+         if Dirs.Exists (Hostkit.Fs.Join (Project, Path))
+           and then Print_Of (Hostkit.Fs.Join (Project, Path)) /= Print_Of (Hostkit.Fs.Join (Where, Path))
+         then
+            Result.Append (Path);
+         end if;
+      end loop;
+      return Result;
+   end Changed_Since_Kept;
+
    procedure Restore_Kept
      (Item   : Stores.Store;
       Name   : String;
@@ -1316,12 +1334,23 @@ package body Model_Runner.Framework.Workspaces is
       Project : constant String := Dirs.Containing_Directory (Stores.Root (Item));
       Where   : constant String := Hostkit.Fs.Join (Runtime_Of (Item), Name);
       Listed  : constant Name_Lists.Vector := Kept_Files (Item, Name);
+      Aside   : constant String := Hostkit.Fs.Join (Runtime_Of (Item), Replaced_Copy (Name));
    begin
       if Listed.Is_Empty then
          Status := E.Make (E.Framework_Not_Found);
          E.Add_Text (Status, "name", "a kept copy called " & Name);
          return;
       end if;
+      --  What the project holds otherwise now is kept before it is
+      --  overwritten: putting a copy back loses nothing either.
+      for Path of Changed_Since_Kept (Item, Name) loop
+         declare
+            Target : constant String := Hostkit.Fs.Join (Aside, Path);
+         begin
+            Dirs.Create_Path (Dirs.Containing_Directory (Target));
+            Dirs.Copy_File (Hostkit.Fs.Join (Project, Path), Target);
+         end;
+      end loop;
       for Path of Listed loop
          declare
             Target : constant String := Hostkit.Fs.Join (Project, Path);

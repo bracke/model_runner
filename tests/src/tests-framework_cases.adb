@@ -2305,7 +2305,9 @@ package body Tests.Framework_Cases is
                  and then Bs."=" (Bs.Element (Said, 2).Kind, Bs.Issue),
                  "a document's facts were not read, or one that does not read not said");
       end;
-      Assert (Count_Of (Bs.Specification_Candidate) = 1
+      --  Read for its requirements and decision, a document is those, not
+      --  a specification besides.
+      Assert (Count_Of (Bs.Specification_Candidate) = 0
               and then Count_Of (Bs.Imported_Item) = 1
               and then Count_Of (Bs.Requirement_Candidate) = 2
               and then Count_Of (Bs.Decision_Candidate) = 1
@@ -2316,7 +2318,7 @@ package body Tests.Framework_Cases is
       Bs.Apply (Store, Change, Found, Report, Status);
       Assert (E.Is_Ok (Status), "bootstrap was refused: " & Code_Of (Status));
       S.Commit (Store, Change, Status);
-      Assert (Report.Created = 5 and then Report.Issues = 1,
+      Assert (Report.Created = 4 and then Report.Issues = 1,
               "bootstrap did not make what it found");
       Assert (Natural (Nt.List (Store, Nt.Requirement, "accepted").Length) = 1
               and then Natural (Nt.List (Store, Nt.Requirement, "candidate")
@@ -2326,15 +2328,15 @@ package body Tests.Framework_Cases is
       --  Again, and again with a line added.
       Bs.Apply (Store, Change, Found, Report, Status);
       S.Commit (Store, Change, Status);
-      Assert (Report.Created = 0 and then Report.Existing = 5,
+      Assert (Report.Created = 0 and then Report.Existing = 4,
               "bootstrap run again made its findings twice");
       Bs.Apply (Store, Change,
                 Bs.Scan ("docs/parser.md",
                          Document & "Output MUST be flushed." & LF),
                 Report, Status);
       S.Commit (Store, Change, Status);
-      --  The new line made, and the specification the document is revised.
-      Assert (Report.Created = 1 and then Natural (Report.Revised.Length) = 1,
+      --  The new line made, and nothing else revised.
+      Assert (Report.Created = 1 and then Natural (Report.Revised.Length) = 0,
               "bootstrap over an edited document did not make only what is"
               & " new and revise what changed:" & Report.Created'Image);
       Assert (Natural (Nt.List (Store, Nt.Requirement).Length) = 4
@@ -3801,7 +3803,7 @@ package body Tests.Framework_Cases is
          end;
          --  Said to a person or an agent in words, not by their names.
          Assert (Pm.In_Words ("read_source; write_source roots=docs/|src/; create_children max_depth=1"
-                              & " max_children=2") = "read the source, write files in docs/,src/, make helpers"
+                              & " max_children=2") = "read the source, write files in docs/, src/, make helpers"
                  & " (at most 2)"
                  and then Pm.In_Words ("") = "nothing",
                  "permissions were not said in words: "
@@ -4318,6 +4320,11 @@ package body Tests.Framework_Cases is
       S.Commit (Store, Change, Status);
       Assert (Model_Runner.Framework.Work.Time_Allowed (Store, To_String (Id)) = 120,
               "a kind's own time was not the time it was allowed");
+      --  What its agent is told it may do: reading, as an analysis is let.
+      Assert (Ada.Strings.Fixed.Index (Model_Runner.Framework.Work.May_Do (Store, To_String (Id)),
+                                       "read the source") > 0,
+              "what an agent may do was not said as it is told: "
+              & Model_Runner.Framework.Work.May_Do (Store, To_String (Id)));
       Model_Runner.Framework.Work.Execute
         (Store, To_String (Id),
          Accounting_Agent'(Scripted_Agent'(File   => Null_Unbounded_String,
@@ -8464,9 +8471,9 @@ package body Tests.Framework_Cases is
             Pm.Restriction ("read_source; create_children max_depth=1", Allowed, Read);
             Assert (Natural (Pm.Widenings (Asked, Allowed).Length) = 2
                     and then Ada.Strings.Fixed.Index (Pm.Clipped (Asked, Allowed),
-                                                      "use_network (gets none)") > 0
+                                                      "use_network: not granted there, so it gets none") > 0
                     and then Ada.Strings.Fixed.Index (Pm.Clipped (Asked, Allowed),
-                                                      "create_children (gets max_depth=1)") > 0,
+                                                      "create_children max_depth=5: it gets max_depth=1") > 0,
                     "what asks for more than allowed was not all said, with what it gets: "
                     & Pm.Clipped (Asked, Allowed));
          end;
@@ -8696,7 +8703,25 @@ package body Tests.Framework_Cases is
              Model_Runner.Localization.Named ("value", "Toned")]);
          Model_Runner.Presentation.Put_Pair
            (Screen, "cli.task.grouped", "  state", "failed", Model_Runner.Presentation.Bad);
+         --  A line with one word in its tone, and a diff's lines: plain too.
+         Model_Runner.Presentation.Put_Marked
+           (Screen, "cli.task.item",
+            [Model_Runner.Localization.Named ("name", "TASK-9"),
+             Model_Runner.Localization.Named ("value", "ready"),
+             Model_Runner.Localization.Named ("detail", "Toned")],
+            "ready", Model_Runner.Presentation.Good);
+         Model_Runner.Presentation.Put_Diff_Line (Screen, "+added");
+         Model_Runner.Presentation.Put_Diff_Line (Screen, "-removed");
          Set_Output (Standard_Output);
+         declare
+            use type Model_Runner.Presentation.Tone;
+         begin
+            Assert (Model_Runner.Presentation.Tone_Of ("complete") = Model_Runner.Presentation.Good
+                    and then Model_Runner.Presentation.Tone_Of ("Blocked") = Model_Runner.Presentation.Bad
+                    and then Model_Runner.Presentation.Tone_Of ("candidate") = Model_Runner.Presentation.Pending
+                    and then Model_Runner.Presentation.Tone_Of ("whatever") = Model_Runner.Presentation.Plain,
+                    "a state was not given the tone of how it stands");
+         end;
          --  A usage error of a command points to that command's help.
          Model_Runner.Presentation.Use_Command (Screen, "task");
          Model_Runner.Presentation.Report
@@ -8988,7 +9013,15 @@ package body Tests.Framework_Cases is
                           and then Model_Runner.Framework.Workspaces.Kept_Files
                                      (Kept_Store, Copies.First_Element).Contains ("src/kept.txt"),
                           "a kept copy was not listed with its file");
+                  --  What the project holds otherwise now is said, and kept
+                  --  aside by the restore.
+                  Assert (Model_Runner.Framework.Workspaces.Changed_Since_Kept
+                            (Kept_Store, Copies.First_Element).Contains ("src/kept.txt"),
+                          "a file the project holds otherwise was not said to have changed");
                   Model_Runner.Framework.Workspaces.Restore_Kept (Kept_Store, Copies.First_Element, Got);
+                  Assert (Model_Runner.Framework.Workspaces.Kept_Copies (Kept_Store).Contains
+                            (Model_Runner.Framework.Workspaces.Replaced_Copy (Copies.First_Element)),
+                          "what a restore overwrote was not kept aside");
                   Assert (E.Is_Ok (Got)
                           and then Ada.Strings.Fixed.Trim
                                      (Read_Whole (Project & "/src/kept.txt"), Ada.Strings.Both) = "before"
@@ -9646,7 +9679,7 @@ package body Tests.Framework_Cases is
 
       Work (Interrupted);
       Assert (To_String (Done.Final_State) = "blocked"
-              and then Contains (To_String (Done.Reason), "interrupted")
+              and then Contains (To_String (Done.Reason), "you stopped its work")
               and then Iv.State_Of (Store, To_String (Done.Invocation_Id)) = "cancelled"
               and then Contains (Done.Children.First_Element, "cancelled"),
               "an interrupted run was not recorded as cancelled: "

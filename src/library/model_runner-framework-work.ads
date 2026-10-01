@@ -171,6 +171,15 @@ package Model_Runner.Framework.Work is
    --  @return The text.
    function Instructions_Of (Item : Stores.Store; Task_Id : String) return String;
 
+   --  What a task's agent is told it may do, in words, as Instructions_Of
+   --  tells it: only what it has a tool or a way to do.
+   --
+   --  @param Item The store.
+   --  @param Task_Id The task.
+   --  @return The words, as "read the source; write files"; "" where the
+   --    task cannot be read.
+   function May_Do (Item : Stores.Store; Task_Id : String) return String;
+
    --  Why a task's agent would be left unable to do it, by its own
    --  permissions or the session's sandbox: nothing to do at all, no file
    --  to write where its gate wants one, nothing to read, or no write where

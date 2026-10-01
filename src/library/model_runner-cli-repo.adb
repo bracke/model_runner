@@ -1,6 +1,7 @@
 with Ada.Characters.Handling;
 with Ada.Containers.Vectors;
 with Ada.Directories;
+with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 
@@ -8,6 +9,7 @@ with Hostkit.Fs;
 
 with Model_Runner.CLI.Options;
 with Model_Runner.Errors;
+with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Repository;
@@ -100,8 +102,22 @@ package body Model_Runner.CLI.Repo is
       --  Nothing of that name: said as the answer it is, with the status
       --  a name not found has.
       procedure Not_Found is
+         Unread : Boolean := False;
       begin
-         Pres.Put_Message (Screen, "cli.repo.none", [Loc.Named ("name", Argument)]);
+         --  A file there is, in a language not read for what it holds: said
+         --  so, not as if there were no such file.
+         for Index in 1 .. Rp.File_Count (Found) loop
+            if To_String (Rp.File_At (Found, Index).Path) = Argument
+              and then To_String (Rp.File_At (Found, Index).Language) = ""
+            then
+               Unread := True;
+            end if;
+         end loop;
+         if Unread then
+            Pres.Put_Message (Screen, "cli.repo.unread_language", [Loc.Named ("name", Argument)]);
+         else
+            Pres.Put_Message (Screen, "cli.repo.none", [Loc.Named ("name", Argument)]);
+         end if;
          Status := E.Exit_Status (E.Make (E.Framework_Not_Found));
       end Not_Found;
 
@@ -280,6 +296,68 @@ package body Model_Runner.CLI.Repo is
             [Loc.Named ("count", Image (Rp.File_Count (Found))),
              Loc.Named ("total", Image (Rp.Relation_Count (Found))),
              Loc.Named ("value", Rp.Graph_Fingerprint (Found))]);
+         --  A file a requirement is linked to that the scan no longer
+         --  finds -- removed, renamed: said now, not left to /check.
+         declare
+            Store  : S.Store;
+            Report : S.Recovery_Report;
+            Opened : E.Error_Info;
+         begin
+            S.Open (Store, Directory, Report, Opened);
+            if E.Is_Ok (Opened) then
+               declare
+                  package Cs renames Model_Runner.Framework.Consistency;
+                  Wrong : constant Cs.Finding_List := Cs.Check (Store);
+               begin
+                  for Index in 1 .. Cs.Length (Wrong) loop
+                     if Cs."=" (Cs.Element (Wrong, Index).Kind, Cs.Missing_File) then
+                        Pres.Put_Note (Screen, "cli.repo.link_missing",
+                                       [Loc.Named ("name", To_String (Cs.Element (Wrong, Index).Subject)),
+                                        Loc.Named ("detail", To_String (Cs.Element (Wrong, Index).Detail))]);
+                     end if;
+                  end loop;
+               end;
+               S.Close (Store);
+            end if;
+         exception
+            when others =>
+               null;
+         end;
+         --  Source in a language not read: counted, by its kinds, so an
+         --  empty graph is not taken for an empty project.
+         declare
+            Unread : Natural := 0;
+            Kinds  : Model_Runner.Framework.Name_Lists.Vector;
+         begin
+            for Index in 1 .. Rp.File_Count (Found) loop
+               declare
+                  Path : constant String := To_String (Rp.File_At (Found, Index).Path);
+                  Dot  : constant Natural := Ada.Strings.Fixed.Index (Path, ".", Ada.Strings.Backward);
+                  Ext  : constant String := (if Dot = 0 then "" else Path (Dot .. Path'Last));
+               begin
+                  if To_String (Rp.File_At (Found, Index).Language) = ""
+                    and then Ext in ".js" | ".mjs" | ".cjs" | ".jsx" | ".ts" | ".tsx" | ".java" | ".go" | ".rb"
+                                  | ".cs" | ".kt" | ".swift" | ".php" | ".scala" | ".lua" | ".pl"
+                  then
+                     Unread := Unread + 1;
+                     if not Kinds.Contains (Ext) then
+                        Kinds.Append (Ext);
+                     end if;
+                  end if;
+               end;
+            end loop;
+            if Unread > 0 then
+               declare
+                  Said : Unbounded_String;
+               begin
+                  for One of Kinds loop
+                     Append (Said, (if Said = Null_Unbounded_String then "" else ", ") & One);
+                  end loop;
+                  Pres.Put_Note (Screen, "cli.repo.unread_files",
+                                 [Loc.Named ("count", Image (Unread)), Loc.Named ("detail", To_String (Said))]);
+               end;
+            end if;
+         end;
          --  The directories left out, said: a source tree under one of
          --  them would be missed unseen.
          declare
@@ -567,6 +645,97 @@ package body Model_Runner.CLI.Repo is
                      end if;
                      if Shown.Is_Empty then
                         Pres.Put_Message (Screen, "cli.repo.no_edges", [Loc.Named ("name", Argument)]);
+                     end if;
+
+                     --  A requirement the code names -- by its identifier or
+                     --  the document's own label -- with no link to that file:
+                     --  each such file said, with the link that ties it.
+                     if Model_Runner.Framework.Intent.State_Of
+                          (Store, Model_Runner.Framework.Intent.Requirement, Argument) /= ""
+                     then
+                        declare
+                           Held  : Model_Runner.Framework.Intent.Entity;
+                           Got   : E.Error_Info;
+                           Label : Unbounded_String;
+                           Said  : Natural := 0;
+                        begin
+                           Model_Runner.Framework.Intent.Read
+                             (Store, Model_Runner.Framework.Intent.Requirement, Argument, Held, Got);
+                           if E.Is_Ok (Got)
+                             and then Ada.Strings.Fixed.Index (To_String (Held.Source), "#", Ada.Strings.Backward) > 0
+                           then
+                              declare
+                                 Source : constant String := To_String (Held.Source);
+                                 Hash   : constant Natural :=
+                                   Ada.Strings.Fixed.Index (Source, "#", Ada.Strings.Backward);
+                              begin
+                                 if Hash < Source'Last and then Source (Hash + 1 .. Source'Last) /= "retired" then
+                                    Label := To_Unbounded_String (Source (Hash + 1 .. Source'Last));
+                                 end if;
+                              end;
+                           end if;
+                           for Index in 1 .. Rp.File_Count (Found) loop
+                              exit when Said >= 10;
+                              declare
+                                 Path : constant String := To_String (Rp.File_At (Found, Index).Path);
+                                 Text : Unbounded_String;
+                                 Read : E.Error_Info := E.Success;
+                                 function Names_It (Word : String) return Boolean is
+                                    At_Word : constant Natural := Ada.Strings.Unbounded.Index (Text, Word);
+                                 begin
+                                    return Word /= "" and then At_Word > 0
+                                      and then (At_Word + Word'Length > Length (Text)
+                                                or else Element (Text, At_Word + Word'Length)
+                                                          not in '0' .. '9' | 'A' .. 'Z' | 'a' .. 'z');
+                                 end Names_It;
+                                 Linked : Boolean := False;
+                              begin
+                                 for Line of Shown loop
+                                    Linked := Linked or else Ada.Strings.Fixed.Index (Line, "file:" & Path) > 0;
+                                 end loop;
+                                 if not Linked
+                                   and then Ada.Directories.Exists (Hostkit.Fs.Join (Directory, Path))
+                                   and then Ada.Directories."<"
+                                              (Ada.Directories.Size (Hostkit.Fs.Join (Directory, Path)), 2_000_000)
+                                 then
+                                    declare
+                                       use Ada.Streams.Stream_IO;
+                                       File : File_Type;
+                                    begin
+                                       Open (File, In_File, Hostkit.Fs.Join (Directory, Path));
+                                       declare
+                                          Whole : String (1 .. Natural (Size (File)));
+                                       begin
+                                          String'Read (Stream (File), Whole);
+                                          Text := To_Unbounded_String (Whole);
+                                       end;
+                                       Close (File);
+                                    exception
+                                       when others =>
+                                          if Is_Open (File) then
+                                             Close (File);
+                                          end if;
+                                          Read := E.Make (E.Framework_Not_Found);
+                                    end;
+                                    if E.Is_Ok (Read)
+                                      and then (Names_It (Argument) or else Names_It (To_String (Label)))
+                                    then
+                                       Said := Said + 1;
+                                       Pres.Put_Note
+                                         (Screen, "cli.repo.mentioned",
+                                          [Loc.Named ("name", Path), Loc.Named ("value", Argument),
+                                           Loc.Named ("detail",
+                                                      (if Ada.Strings.Fixed.Index
+                                                            (Ada.Characters.Handling.To_Lower (Path), "test") > 0
+                                                       then "test" else "implementation"))]);
+                                    end if;
+                                 end if;
+                              exception
+                                 when others =>
+                                    null;
+                              end;
+                           end loop;
+                        end;
                      end if;
                   end;
                else

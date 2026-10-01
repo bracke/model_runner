@@ -376,8 +376,12 @@ package body Model_Runner.Framework.Orchestration is
             Result.Append (Id & ": failed"
                            & (if Records.Get (Value, "current_failure") = "" then ""
                               else ", " & Records.Get (Value, "current_failure"))
-                           & "; /task accept " & Id & " tries again, /task complete " & Id
-                           & " once it is done by hand");
+                           --  The ways on, unless its failure says them.
+                           & (if Ada.Strings.Fixed.Index (Records.Get (Value, "current_failure"),
+                                                          "/task complete " & Id) > 0
+                              then ""
+                              else "; /task accept " & Id & " tries again, /task complete " & Id
+                                   & " once it is done by hand"));
          end;
       end loop;
       --  Waiting in a workspace to be taken in.

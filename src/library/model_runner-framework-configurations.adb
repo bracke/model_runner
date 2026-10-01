@@ -171,6 +171,26 @@ package body Model_Runner.Framework.Configurations is
          begin
             String'Read (Stream (File), Text);
             Close (File);
+            --  JSON as it comes, on one line or many: its first "name" key.
+            if File_Name = "package.json" then
+               declare
+                  At_Key : constant Natural := Ada.Strings.Fixed.Index (Text, """name""");
+                  Colon  : constant Natural :=
+                    (if At_Key = 0 then 0 else Ada.Strings.Fixed.Index (Text (At_Key + 6 .. Text'Last), ":"));
+                  Open_Q : constant Natural :=
+                    (if Colon = 0 then 0 else Ada.Strings.Fixed.Index (Text (Colon + 1 .. Text'Last), """"));
+                  Shut_Q : constant Natural :=
+                    (if Open_Q = 0 then 0 else Ada.Strings.Fixed.Index (Text (Open_Q + 1 .. Text'Last), """"));
+               begin
+                  if Shut_Q > Open_Q + 1
+                    and then Ada.Strings.Fixed.Trim (Text (At_Key + 6 .. Colon - 1), Ada.Strings.Both) = ""
+                    and then Ada.Strings.Fixed.Trim (Text (Colon + 1 .. Open_Q - 1), Ada.Strings.Both) = ""
+                  then
+                     return Text (Open_Q + 1 .. Shut_Q - 1);
+                  end if;
+                  return "";
+               end;
+            end if;
             for Raw of Lines_Of (Text) loop
                declare
                   Line  : constant String := Ada.Strings.Fixed.Trim (Raw, Ada.Strings.Both);
@@ -634,6 +654,59 @@ package body Model_Runner.Framework.Configurations is
          end loop;
          return To_String (Output);
       end Substitute;
+      --  Tests written for pytest -- a [tool.pytest] table, or a test
+      --  module that imports pytest or never imports unittest: unittest
+      --  would run none of them, so pytest stays, said missing at /init.
+      function Pytest_Style (Directory : String) return Boolean is
+         Found_Test : Boolean := False;
+         Unittest   : Boolean := False;
+
+         function Holds (Path, Text : String) return Boolean is
+            Held : Unbounded_String;
+            Read : E.Error_Info;
+         begin
+            Files.Read_Text (Path, Held, Read);
+            return E.Is_Ok (Read) and then Index (Held, Text) > 0;
+         end Holds;
+
+         procedure Walk (Dir : String; Depth : Natural) is
+            Search : Ada.Directories.Search_Type;
+            Found  : Ada.Directories.Directory_Entry_Type;
+         begin
+            Ada.Directories.Start_Search (Search, Dir, "");
+            while Ada.Directories.More_Entries (Search) loop
+               Ada.Directories.Get_Next_Entry (Search, Found);
+               declare
+                  Name : constant String := Ada.Directories.Simple_Name (Found);
+               begin
+                  if Name (Name'First) = '.' or else Name in "node_modules" | "venv" | "__pycache__" then
+                     null;
+                  elsif Ada.Directories."=" (Ada.Directories.Kind (Found), Ada.Directories.Directory) then
+                     if Depth < 3 then
+                        Walk (Ada.Directories.Full_Name (Found), Depth + 1);
+                     end if;
+                  elsif Name'Length > 8 and then Name (Name'First .. Name'First + 4) = "test_"
+                    and then Name (Name'Last - 2 .. Name'Last) = ".py"
+                  then
+                     Found_Test := True;
+                     Unittest := Unittest or else Holds (Ada.Directories.Full_Name (Found), "import unittest");
+                  end if;
+               end;
+            end loop;
+            Ada.Directories.End_Search (Search);
+         exception
+            when others =>
+               null;
+         end Walk;
+      begin
+         if Ada.Directories.Exists (Hostkit.Fs.Join (Directory, "pyproject.toml"))
+           and then Holds (Hostkit.Fs.Join (Directory, "pyproject.toml"), "[tool.pytest")
+         then
+            return True;
+         end if;
+         Walk (Directory, 0);
+         return Found_Test and then not Unittest;
+      end Pytest_Style;
    begin
       Result := (others => <>);
       Status := E.Success;
@@ -659,6 +732,7 @@ package body Model_Runner.Framework.Configurations is
                                  (if Make_Rule (Project_Directory, "check") then "make check" else "make"));
                elsif Rule.To_Input and then To_String (Rule.Value) = "python3 -m pytest"
                  and then Hostkit.Process.Locate ("pytest") = ""
+                 and then not Pytest_Style (Project_Directory)
                then
                   --  No pytest here: the runner Python has of its own.
                   Found.Include (To_String (Rule.Key), "python3 -m unittest discover");
@@ -1252,9 +1326,10 @@ package body Model_Runner.Framework.Configurations is
    --  The settings the harness reads, by their whole names: where a name
    --  is given without its kind and the configuration holds none of it
    --  yet, the one of these it is.
-   Known_Settings : constant array (1 .. 48) of access constant String :=
+   Known_Settings : constant array (1 .. 49) of access constant String :=
      [new String'("list.automation.rules"),
       new String'("list.verification.full"),
+      new String'("scalar.agents.child_retries"),
       new String'("scalar.agents.max_active"),
       new String'("scalar.agents.max_children"),
       new String'("scalar.agents.max_depth"),
@@ -1314,6 +1389,8 @@ package body Model_Runner.Framework.Configurations is
          return "3";
       elsif Name = "scalar.agents.max_active" then
          return "4";
+      elsif Name = "scalar.agents.child_retries" then
+         return "1: a required helper that fails is run once more";
       elsif Name = "scalar.agents.token_budget" then
          return "200000";
       elsif Name = "scalar.agents.max_steps" then
@@ -1404,17 +1481,18 @@ package body Model_Runner.Framework.Configurations is
          return "verification: how tasks are checked from now on";
       elsif Starts (Name, "map.permission.") and then Ada.Strings.Fixed.Index (Name, "create_children") > 0
       then
-         return "permissions: how many helpers an agent at that level makes and parts its task"
-           & " splits into, and how deep, within agents.max_children and agents.max_depth";
+         return "permissions: how many helpers an agent at that level makes and parts it splits its"
+           & " task into, and how deep, within agents.max_children and agents.max_depth -- a person's"
+           & " /task split is not bounded by them";
       elsif Starts (Name, "map.permission.") then
          return "permissions: what agents started from now on may do";
       elsif Starts (Name, "task_kind.") then
          return "tasks of kind " & Name (Name'First + 10 .. Name'Last)
            & ": the fields new ones may have";
       elsif Name in "scalar.agents.max_children" | "scalar.agents.max_depth" then
-         return "agents: the most helpers any agent makes, and parts any task splits into, and how"
-           & " deep -- the project's bound, below which a level's create_children max_children"
-           & " and max_depth hold";
+         return "agents: the most helpers any agent makes, and parts an agent splits a task into, and"
+           & " how deep -- the project's bound, below which a level's create_children max_children"
+           & " and max_depth hold; a person's /task split is not bounded by it";
       elsif Starts (Name, "scalar.work.") or else Starts (Name, "scalar.agents.")
         or else Starts (Name, "scalar.task.max_seconds.") or else Starts (Name, "scalar.task.max_tool_calls.")
         or else Starts (Name, "scalar.task.max_steps.") or else Starts (Name, "scalar.task.token_budget.")
@@ -1854,6 +1932,21 @@ package body Model_Runner.Framework.Configurations is
          end if;
       end Level_Problem;
 
+      --  A setting a task kind has its own of, named for a kind the
+      --  project does not have: refused as a level of one is.
+      function Kind_Problem (Name : String) return String is
+      begin
+         for Family of Name_Lists.Vector'
+           (["scalar.task.max_seconds.", "scalar.task.max_tool_calls.", "scalar.task.max_steps.",
+             "scalar.task.token_budget.", "scalar.task.coordination.", "scalar.task.profile."])
+         loop
+            if Starts (Name, Family) and then Name'Length > Family'Length then
+               return Level_Problem ("map.permission.kind." & Name (Name'First + Family'Length .. Name'Last));
+            end if;
+         end loop;
+         return "";
+      end Kind_Problem;
+
       --  A root the value names that another component has already, the
       --  same place however written (src and src/): two cannot both own it.
       function Shared_Root (Name, Value : String) return String is
@@ -2267,6 +2360,8 @@ package body Model_Runner.Framework.Configurations is
                return;
             elsif Starts (Name, "map.permission.") and then Level_Problem (Name) /= "" then
                Status := Refused (Name, Level_Problem (Name));
+            elsif Kind_Problem (Name) /= "" then
+               Status := Refused (Name, Kind_Problem (Name));
                return;
             elsif Starts (Name, "map.permission.") and then Given = "off"
               and then (Ada.Strings.Fixed.Index (Name (Name'First + 15 .. Name'Last), ".") = 0

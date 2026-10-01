@@ -151,7 +151,32 @@ package body Model_Runner.CLI.Work is
          Status := E.Make (E.Framework_Input_Invalid);
          E.Add_Text (Status, "name", "model");
          E.Add_Text (Status, "value", Named);
-         E.Add_Text (Status, "detail", "there is no such model file here or among the models");
+         --  The models there are, by the names model= takes.
+         declare
+            Listed : Unbounded_String;
+            Search : Ada.Directories.Search_Type;
+            Found  : Ada.Directories.Directory_Entry_Type;
+            Count  : Natural := 0;
+         begin
+            if Model_Runner.Platform.Models_Directory /= ""
+              and then Ada.Directories.Exists (Model_Runner.Platform.Models_Directory)
+            then
+               Ada.Directories.Start_Search (Search, Model_Runner.Platform.Models_Directory, "*.gguf");
+               while Ada.Directories.More_Entries (Search) and then Count < 8 loop
+                  Ada.Directories.Get_Next_Entry (Search, Found);
+                  Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ")
+                                  & Ada.Directories.Simple_Name (Found));
+                  Count := Count + 1;
+               end loop;
+               Ada.Directories.End_Search (Search);
+            end if;
+            E.Add_Text (Status, "detail", "there is no such model file here or among the models"
+                        & (if Listed = Null_Unbounded_String then ""
+                           else " -- they are " & To_String (Listed)));
+         exception
+            when others =>
+               E.Add_Text (Status, "detail", "there is no such model file here or among the models");
+         end;
       else
          --  A model file is a GGUF one, by its first four bytes: anything
          --  else is refused before the task is touched.
@@ -444,6 +469,20 @@ package body Model_Runner.CLI.Work is
                                     & " resolved once settled"))]);
             end if;
          end loop;
+         --  Accepted and waiting: each with what it waits on, first.
+         if Ready = 0 then
+            for Id of Tk.List (Store, "accepted") loop
+               declare
+                  Now : constant Tk.Readiness := Tk.Ready (Store, Id);
+               begin
+                  if not Now.Ready and then not Now.Reasons.Is_Empty then
+                     Pres.Put_Note (Screen, "cli.work.waits_because",
+                                    [Loc.Named ("name", Id), Loc.Named ("value", Title_Of (Id)),
+                                     Loc.Named ("detail", Now.Reasons.First_Element)]);
+                  end if;
+               end;
+            end loop;
+         end if;
          if Ready = 0 and then Candidate > 0 then
             Pres.Put_Note
               (Screen, "cli.next.accept",
@@ -1149,9 +1188,14 @@ package body Model_Runner.CLI.Work is
             end if;
          end;
          for Requirement of Done.Requirements loop
-            Say ("cli.work.requirement", Requirement,
-                 Model_Runner.Framework.Intent.State_Of
-                   (Store, Model_Runner.Framework.Intent.Requirement, Requirement));
+            declare
+               Now : constant String :=
+                 Model_Runner.Framework.Intent.State_Of (Store, Model_Runner.Framework.Intent.Requirement, Requirement);
+            begin
+               Pres.Put_Marked (Screen, "cli.work.requirement",
+                                [Loc.Named ("name", Requirement), Loc.Named ("value", Now)],
+                                Now, Pres.Tone_Of (Now));
+            end;
          end loop;
 
          --  Complete, and what it served that is still not verified: said,
@@ -1208,18 +1252,31 @@ package body Model_Runner.CLI.Work is
          end if;
          --  Why, where it did not complete: blocked or failed, the reason
          --  is what a person acts on.
-         if Done.Reason = Null_Unbounded_String then
-            Say ("cli.work.ended",
-                 (if To_String (Done.Final_State) = "verification" then "in verification"
-                  else To_String (Done.Final_State)), "");
-         else
-            Pres.Put_Message
-              (Screen, (if To_String (Done.Final_State) = "failed" then "cli.work.failed_because"
-                        else "cli.work.ended_because"),
-               [Loc.Named ("name", (if To_String (Done.Final_State) = "verification"
-                                    then "in verification" else To_String (Done.Final_State))),
-                Loc.Named ("detail", To_String (Done.Reason))]);
-         end if;
+         --  Where it ended stands out from what led there: in the colour
+         --  of how it stands.
+         declare
+            Final : constant String := To_String (Done.Final_State);
+            Shown : constant String :=
+              (if Final = "verification" then "in verification"
+               elsif Final = "blocked" and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "you stopped") = 1
+               then "stopped"
+               else Final);
+         begin
+            if Done.Reason = Null_Unbounded_String then
+               Pres.Put_Marked (Screen, "cli.work.ended",
+                                [Loc.Named ("name", Shown), Loc.Named ("value", "")],
+                                Shown, Pres.Tone_Of (Final));
+            else
+               --  Complete with a reservation: the reservation said as
+               --  one, not as why it completed.
+               Pres.Put_Marked
+                 (Screen, (if Final = "failed" then "cli.work.failed_because"
+                           elsif Final = "complete" then "cli.work.complete_but"
+                           else "cli.work.ended_because"),
+                  [Loc.Named ("name", Shown), Loc.Named ("detail", To_String (Done.Reason))],
+                  Shown, (if Shown = "stopped" then Pres.Pending else Pres.Tone_Of (Final)));
+            end if;
+         end;
 
          --  And what a person does next, where it did not complete.
          if To_String (Done.Final_State) = "blocked"
@@ -1344,8 +1401,13 @@ package body Model_Runner.CLI.Work is
                --  Which refused it decides the way on: a path outside the
                --  project no grant reaches; a narrowing is undone where it is.
                if Ada.Strings.Fixed.Index (To_String (Done.Reason), "outside the project") > 0 then
+                  --  Said as what it tried: reading, or writing.
                   Pres.Put_Note (Screen, "cli.next.refused_outside",
-                                 [Loc.Named ("name", To_String (Done.Task_Id))]);
+                                 [Loc.Named ("name", To_String (Done.Task_Id)),
+                                  Loc.Named ("value",
+                                             (if Ada.Strings.Fixed.Index (To_String (Done.Reason), "writ") > 0
+                                                or else Ada.Strings.Fixed.Index (To_String (Done.Reason), "wrote") > 0
+                                              then "write" else "read"))]);
                elsif Ada.Strings.Fixed.Index (To_String (Done.Reason), "sandbox") > 0 then
                   Pres.Put_Note (Screen, "cli.next.sandbox_refused",
                                  [Loc.Named ("name", To_String (Done.Task_Id))]);
@@ -1373,11 +1435,16 @@ package body Model_Runner.CLI.Work is
             if To_String (Done.Claimed) = "blocked" then
                Pres.Put_Note (Screen, "cli.next.answer_blocked",
                               [Loc.Named ("name", To_String (Done.Task_Id))]);
-            elsif (for some One of Model_Runner.Framework.Workspaces.Kept_Copies (Store) =>
-                     Ada.Strings.Fixed.Index (One, "given-up-" & To_String (Done.Task_Id) & "-") = One'First)
+            elsif Length (Done.Workspace_Id) > 0
+              and then Model_Runner.Framework.Workspaces.Kept_Copies (Store).Contains
+                         ("given-up-" & To_String (Done.Task_Id) & "-" & To_String (Done.Workspace_Id))
             then
-               --  What it changed is kept: putting that in is a way on too.
-               Pres.Put_Note (Screen, "cli.next.retry_kept", [Loc.Named ("name", To_String (Done.Task_Id))]);
+               --  What this run changed is kept: putting that in is a way on
+               --  too -- that copy by its name, not an earlier run's.
+               Pres.Put_Note (Screen, "cli.next.retry_kept",
+                              [Loc.Named ("name", To_String (Done.Task_Id)),
+                               Loc.Named ("value", "given-up-" & To_String (Done.Task_Id) & "-"
+                                                   & To_String (Done.Workspace_Id))]);
             else
                Pres.Put_Note (Screen, "cli.next.retry", [Loc.Named ("name", To_String (Done.Task_Id))]);
             end if;

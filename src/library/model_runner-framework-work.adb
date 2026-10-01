@@ -1653,6 +1653,27 @@ package body Model_Runner.Framework.Work is
                    else Work_Setting (Item, "isolation")) = "workspace");
    end Instructions_Of;
 
+   ------------
+   -- May_Do --
+   ------------
+
+   function May_Do (Item : Stores.Store; Task_Id : String) return String is
+      Text  : constant String := Instructions_Of (Item, Task_Id);
+      Lead  : constant String := "## What you may do" & ASCII.LF & "You may ";
+      Start : constant Natural := Ada.Strings.Fixed.Index (Text, Lead);
+   begin
+      if Start = 0 then
+         return "";
+      end if;
+      --  To the end of its sentence: a full stop a word ends with.
+      for Index in Start + Lead'Length .. Text'Last loop
+         if Text (Index) = '.' and then (Index = Text'Last or else Text (Index + 1) in ' ' | ASCII.LF) then
+            return Text (Start + Lead'Length .. Index - 1);
+         end if;
+      end loop;
+      return Text (Start + Lead'Length .. Text'Last);
+   end May_Do;
+
    -------------------
    -- Unable_Reason --
    -------------------
@@ -1721,8 +1742,11 @@ package body Model_Runner.Framework.Work is
          end Named_Out_Of_Reach;
          Lacks   : constant String :=
            (if Permissions.Image (Allowed) = "" then "anything"
+            --  Specifications alone are writing only for documentation:
+            --  an implementation's files are source.
             elsif Writes and then not Permissions.Allows (Allowed, Permissions.Write_Source)
-              and then not Permissions.Allows (Allowed, Permissions.Write_Specs)
+              and then not (Permissions.Allows (Allowed, Permissions.Write_Specs)
+                            and then Records.Get (View, "definition.kind") = "documentation")
             then "write a file"
             elsif not Permissions.Allows (Allowed, Permissions.Read_Source) then "read the source"
             elsif Elsewhere then "write where its component's files are"
@@ -1748,22 +1772,38 @@ package body Model_Runner.Framework.Work is
                  or else Ada.Strings.Fixed.Index (Records.Field_Name (Config, Index),
                                                   "map.permission.kind." & Kind & ".") = 1;
             end loop;
-            return "it would not be let " & Lacks
-              & (if Lacks = "write a file" then ", which its gate implementation_present needs" else "")
-              & (if Capability = "" or else Permissions."/=" (Permissions.Sandbox, Permissions.Unrestricted)
-                   or else Records.Get (View, "definition.permissions") /= ""
-                 then ""
-                 else "; /reconfigure map.permission."
-                      & (if Kind_Named then "kind." & Kind else "project") & "." & Capability
-                      & "=on grants it")
-              & (if Elsewhere then " (" & Comma_Separated (Homes) & ")" else "")
-              & (if Permissions."/=" (Permissions.Sandbox, Permissions.Unrestricted)
-                 then "; " & Permissions.Sandbox_Source & " confines it -- /sandbox off lifts that"
-                 else "")
-              & (if Records.Get (View, "definition.permissions") /= ""
-                 then "; its own permissions narrow it -- /task edit " & Task_Id
-                      & " permissions=inherit takes its kind's"
-                 else "");
+            declare
+               --  Which level withholds it: the task's own field only where
+               --  its kind would grant it; else the kind, else the project.
+               Of_Kind    : constant Permissions.Permission_Set :=
+                 Permissions.Effective (Item, Kind, "worker", Within_Sandbox => False);
+               Of_Project : constant Permissions.Permission_Set :=
+                 Permissions.Effective (Item, "", "worker", Within_Sandbox => False);
+               function Grants (Set : Permissions.Permission_Set) return Boolean
+               is (Capability /= ""
+                   and then (for some One in Permissions.Capability =>
+                               Permissions.Word (One) = Capability and then Set (One).Granted));
+               Own_Narrows : constant Boolean :=
+                 Records.Get (View, "definition.permissions") /= "" and then Grants (Of_Kind);
+               Level : constant String :=
+                 (if Kind_Named and then Grants (Of_Project) then "kind." & Kind else "project");
+            begin
+               return "it would not be let " & Lacks
+                 & (if Lacks = "write a file" then ", which its gate implementation_present needs" else "")
+                 & (if Capability = "" or else Permissions."/=" (Permissions.Sandbox, Permissions.Unrestricted)
+                      or else Own_Narrows
+                    then ""
+                    else "; " & Level & " withholds " & Capability & " -- /reconfigure map.permission."
+                         & Level & "." & Capability & "=on grants it")
+                 & (if Elsewhere then " (" & Comma_Separated (Homes) & ")" else "")
+                 & (if Permissions."/=" (Permissions.Sandbox, Permissions.Unrestricted)
+                    then "; " & Permissions.Sandbox_Source & " confines it -- /sandbox off lifts that"
+                    else "")
+                 & (if Own_Narrows
+                    then "; its own permissions narrow it -- /task edit " & Task_Id
+                         & " permissions=inherit takes its kind's"
+                    else "");
+            end;
          end;
       end;
    end Unable_Reason;
@@ -3279,7 +3319,7 @@ package body Model_Runner.Framework.Work is
          return;
       elsif Interrupted (Ran) then
          Stop_Children (Item, Change, To_String (Result.Agent_Id), "the work was interrupted");
-         Conclude ("blocked", "its work was interrupted before it finished", "cancelled");
+         Conclude ("blocked", "you stopped its work (Ctrl-C) before it finished", "cancelled");
          return;
       elsif Out_Of_Time (Ran) then
          --  Out of time is not wrong work: the task is set aside, not

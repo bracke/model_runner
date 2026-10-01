@@ -443,8 +443,26 @@ package body Model_Runner.Platform is
    -- Resolve_Model_Path --
    -------------------------
 
-   function Resolve_Model_Path (Named : String) return String
-   is (Resolve_In (Named, Models_Directory));
+   function Resolve_Model_Path (Named : String) return String is
+      --  ~/ as the shell takes it: the home directory.
+      Expanded : constant String :=
+        (if Named'Length > 2 and then Named (Named'First .. Named'First + 1) = "~/"
+           and then Hostkit.Fs.Home_Directory /= ""
+         then Hostkit.Fs.Join (Hostkit.Fs.Home_Directory, Named (Named'First + 2 .. Named'Last))
+         else Named);
+      Found    : constant String := Resolve_In (Expanded, Models_Directory);
+   begin
+      --  A model named without its .gguf, as the models are listed.
+      if not Ada.Directories.Exists (Found) and then Expanded'Length > 0
+        and then Ada.Directories.Exists (Resolve_In (Expanded & ".gguf", Models_Directory))
+      then
+         return Resolve_In (Expanded & ".gguf", Models_Directory);
+      end if;
+      return Found;
+   exception
+      when others =>
+         return Named;
+   end Resolve_Model_Path;
 
    ------------------
    -- Models_File --

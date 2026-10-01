@@ -846,4 +846,138 @@ package body Model_Runner.CLI.Choosers is
       end loop;
    end Ask;
 
+   ----------------
+   -- Typed_Line --
+   ----------------
+
+   function Typed_Line (Outcome : out Line_End) return String is
+      Guard  : Raw_Guard;
+      Typed  : Unbounded_String;
+      Buffer : Ada.Streams.Stream_Element_Array (1 .. 1);
+      Last   : Ada.Streams.Stream_Element_Offset;
+   begin
+      Outcome := Unavailable;
+      if not Is_Available or else not Term.Save_Mode (Input, Guard.Saved) then
+         return "";
+      end if;
+      Guard.Held := True;
+      if not Term.Set_Raw (Input) then
+         return "";
+      end if;
+      Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
+      loop
+         if Hostkit.Descriptors.Read (Input, Buffer, Last) /= Hostkit.Descriptors.Transfer_Ok
+           or else Last < Buffer'First
+         then
+            Outcome := Ended;
+            exit;
+         end if;
+         declare
+            Key : constant Character := Character'Val (Buffer (Buffer'First));
+         begin
+            if Key in ASCII.CR | ASCII.LF then
+               Outcome := Entered;
+               exit;
+            elsif Key = ASCII.ESC then
+               --  The rest of a key's sequence -- an arrow -- is read and
+               --  left: Escape alone, or a key that means nothing here.
+               while Hostkit.Descriptors.Wait_Readable (Input, 30) loop
+                  exit when Hostkit.Descriptors.Read (Input, Buffer, Last) /= Hostkit.Descriptors.Transfer_Ok;
+               end loop;
+               Outcome := Escaped;
+               exit;
+            elsif Key = ASCII.ETX then
+               Outcome := Interrupted;
+               exit;
+            elsif Key = ASCII.EOT and then Length (Typed) = 0 then
+               Outcome := Ended;
+               exit;
+            elsif Key in ASCII.DEL | ASCII.BS then
+               if Length (Typed) > 0 then
+                  Delete (Typed, Length (Typed), Length (Typed));
+                  Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.BS & " " & ASCII.BS);
+               end if;
+            elsif Key >= ' ' then
+               Append (Typed, Key);
+               Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, Key);
+            end if;
+            Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
+         end;
+      end loop;
+      Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CR);
+      Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Error);
+      Finalize (Guard);
+      return (if Outcome = Entered then To_String (Typed) else "");
+   end Typed_Line;
+
+   ------------------
+   -- Answered_Yes --
+   ------------------
+
+   function Answered_Yes (Screen : in out Pres.Console) return Boolean is
+   begin
+      for Asked in 1 .. 3 loop
+         declare
+            --  Ctrl-C while it is asked: the question answered no, once
+            --  Enter is pressed after it.
+            procedure Waiting (On : Boolean) is
+            begin
+               Model_Runner.Platform.Signals.Set_Waiting_For_Input
+                 (On, Note => (if On then ASCII.LF & Pres.Message_Value (Screen, "cli.choose.interrupted")
+                               else ""));
+            end Waiting;
+            --  At a terminal, read raw: Escape and Ctrl-C answer at once.
+            Ending : Line_End := Unavailable;
+            function Read return String is
+               Raw : constant String := Typed_Line (Ending);
+            begin
+               if Ending /= Unavailable then
+                  return Raw;
+               end if;
+               Waiting (True);
+               return Line : constant String := Ada.Text_IO.Get_Line do
+                  Waiting (False);
+               end return;
+            end Read;
+            Typed  : constant String := Ada.Strings.Fixed.Trim (Read, Ada.Strings.Both);
+            Answer : constant String := Ada.Characters.Handling.To_Lower (Typed);
+         begin
+            --  Esc, or Ctrl-C: no. An Esc the terminal showed as it is
+            --  starts a sequence the next output would end: cancelled.
+            if Ending = Escaped then
+               Pres.Put_Note (Screen, "cli.choose.escaped");
+               return False;
+            elsif Ending = Interrupted then
+               Pres.Put_Note (Screen, "cli.choose.interrupted_at_once");
+               return False;
+            elsif Ending = Ended then
+               return False;
+            elsif Ada.Strings.Fixed.Index (Typed, [1 => ASCII.ESC]) > 0
+              or else Model_Runner.Platform.Signals.Interrupt_Noted
+            then
+               if Ada.Strings.Fixed.Index (Typed, [1 => ASCII.ESC]) > 0 then
+                  Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CAN);
+                  Pres.Put_Note (Screen, "cli.choose.escaped");
+               end if;
+               return False;
+            end if;
+            --  Echoed as typed: a command's identifiers keep their case.
+            if Answer'Length > 1 and then Answer (Answer'First) = '/' then
+               Pres.Put_Note (Screen, "cli.choose.command_typed",
+                              [Loc.Named ("value", Typed), Loc.Named ("name", "a yes or no")]);
+               return False;
+            elsif Answer in "y" | "yes" | "j" | "ja" then
+               return True;
+            elsif Answer in "" | "n" | "no" | "nej" or else Asked = 3 then
+               return False;
+            end if;
+            Pres.Put_Note (Screen, "cli.choose.yes_or_no", [Loc.Named ("value", Answer)]);
+         end;
+      end loop;
+      return False;
+   exception
+      when Ada.Text_IO.End_Error =>
+         return False;
+   end Answered_Yes;
+
 end Model_Runner.CLI.Choosers;

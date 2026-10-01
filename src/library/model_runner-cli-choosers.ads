@@ -161,6 +161,26 @@ package Model_Runner.CLI.Choosers is
       Items   : Choice_List;
       Heading : String := "") return Natural;
 
+   --  How a line typed by Typed_Line ended.
+   type Line_End is (Entered, Escaped, Interrupted, Ended, Unavailable);
+
+   --  A short answer typed at the terminal, shown as it is typed: Enter
+   --  ends it, Backspace takes a character back, and Escape or Ctrl-C end
+   --  it at once, with nothing more to press. Unavailable where there is no
+   --  terminal to read it from that way; the caller reads a line then.
+   --
+   --  @param Outcome How it ended.
+   --  @return What was typed; empty unless it was Entered.
+   function Typed_Line (Outcome : out Line_End) return String;
+
+   --  A yes or no read from the person: anything else asked again, a
+   --  command typed in its place said and not run, and no answer, Escape
+   --  or Ctrl-C a no -- at a terminal at once, with nothing more to press.
+   --
+   --  @param Screen Where to say what was understood.
+   --  @return True for a yes.
+   function Answered_Yes (Screen : in out Model_Runner.Presentation.Console) return Boolean;
+
    --  Ask for one value on the terminal: from the choices by the selector
    --  when there are any, typed on a line when there are none.
    --

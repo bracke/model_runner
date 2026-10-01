@@ -23,6 +23,7 @@ package Model_Runner.Framework.Consistency is
       Undefined_Requirement,
       Retired_Requirement,
       Conflicting_Authority,
+      Unapplied_Ruling,
       Unknown_Task_Reference,
       Cyclic_Dependency,
       Invalid_Task_Kind,

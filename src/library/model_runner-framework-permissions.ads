@@ -273,8 +273,9 @@ package Model_Runner.Framework.Permissions is
    --
    --  @param Asked What is asked.
    --  @param Allowed What the level above allows.
-   --  @return As "create_children (gets max_depth=1 max_children=2),
-   --    use_network (gets none)"; empty where nothing is asked too much.
+   --  @return As "write_source roots=src/: granted there only as
+   --    roots=tests/, so it gets none; use_network: not granted there, so
+   --    it gets none"; empty where nothing is asked too much.
    function Clipped (Asked, Allowed : Permission_Set) return String;
 
    --  A set, written as one line a granted capability.

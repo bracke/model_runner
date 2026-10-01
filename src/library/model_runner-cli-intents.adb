@@ -9,7 +9,6 @@ with Hostkit.Fs;
 
 with Model_Runner.CLI.Choosers;
 with Model_Runner.Errors;
-with Model_Runner.Platform.Signals;
 with Model_Runner.Framework.Bootstrap;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Consistency;
@@ -204,12 +203,19 @@ package body Model_Runner.CLI.Intents is
                                Loc.Named ("other", Model_Runner.Framework.Records.Get
                                                      (Config, One (One'First .. Equal - 1)))]);
             end if;
-            if Equal > One'First and then Over > Equal
-              and then Ada.Strings.Fixed.Index (One (Over .. One'Last), "CONFIG") > 0
+            --  Held over the configuration -- or ruling on a setting it
+            --  does not set, with nothing there to hold over: the ruling
+            --  is made the setting, and so holds for the harness too.
+            if Equal > One'First
+              and then ((Over > Equal and then Ada.Strings.Fixed.Index (One (Over .. One'Last), "CONFIG") > 0)
+                        or else (Over = 0 and then E.Is_Ok (Read)
+                                 and then not Model_Runner.Framework.Records.Has
+                                                (Config, One (One'First .. Equal - 1))
+                                 and then Cf.Known_Names.Contains (One (One'First .. Equal - 1))))
             then
                declare
                   Setting : constant String := One (One'First .. Equal - 1);
-                  Ruling  : constant String := One (Equal + 3 .. Over - 1);
+                  Ruling  : constant String := One (Equal + 3 .. (if Over = 0 then One'Last else Over - 1));
                   Changes : Cf.Value_Maps.Map;
                   Planned : Cf.Change_Plan;
                   Done    : E.Error_Info;
@@ -359,54 +365,7 @@ package body Model_Runner.CLI.Intents is
    --  command typed in its place said and not run, and no answer a no.
    function Answered_Yes (Screen : in out Pres.Console) return Boolean is
    begin
-      for Asked in 1 .. 3 loop
-         declare
-            --  Ctrl-C while it is asked: the question answered no, once
-            --  Enter is pressed after it.
-            procedure Waiting (On : Boolean) is
-            begin
-               Model_Runner.Platform.Signals.Set_Waiting_For_Input
-                 (On, Note => (if On then ASCII.LF & Pres.Message_Value (Screen, "cli.choose.interrupted")
-                               else ""));
-            end Waiting;
-            function Read return String is
-            begin
-               Waiting (True);
-               return Line : constant String := Ada.Text_IO.Get_Line do
-                  Waiting (False);
-               end return;
-            end Read;
-            Typed  : constant String := Ada.Strings.Fixed.Trim (Read, Ada.Strings.Both);
-            Answer : constant String := Ada.Characters.Handling.To_Lower (Typed);
-         begin
-            --  Esc, or Ctrl-C: no. An Esc the terminal showed as it is
-            --  starts a sequence the next output would end: cancelled.
-            if Ada.Strings.Fixed.Index (Typed, [1 => ASCII.ESC]) > 0
-              or else Model_Runner.Platform.Signals.Interrupt_Noted
-            then
-               if Ada.Strings.Fixed.Index (Typed, [1 => ASCII.ESC]) > 0 then
-                  Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CAN);
-                  Pres.Put_Note (Screen, "cli.choose.escaped");
-               end if;
-               return False;
-            end if;
-            --  Echoed as typed: a command's identifiers keep their case.
-            if Answer'Length > 1 and then Answer (Answer'First) = '/' then
-               Pres.Put_Note (Screen, "cli.choose.command_typed",
-                              [Loc.Named ("value", Typed), Loc.Named ("name", "a yes or no")]);
-               return False;
-            elsif Answer in "y" | "yes" | "j" | "ja" then
-               return True;
-            elsif Answer in "" | "n" | "no" | "nej" or else Asked = 3 then
-               return False;
-            end if;
-            Pres.Put_Note (Screen, "cli.choose.yes_or_no", [Loc.Named ("value", Answer)]);
-         end;
-      end loop;
-      return False;
-   exception
-      when Ada.Text_IO.End_Error =>
-         return False;
+      return Model_Runner.CLI.Choosers.Answered_Yes (Screen);
    end Answered_Yes;
 
    procedure Run
@@ -454,10 +413,11 @@ package body Model_Runner.CLI.Intents is
          return To_String (Text);
       end From;
 
-      procedure Field (Name, Value : String) is
+      --  A field, its name muted and its value in its tone at a terminal
+      --  that shows colour.
+      procedure Field (Name, Value : String; Value_Tone : Pres.Tone := Pres.Plain) is
       begin
-         Pres.Put_Message (Screen, "cli.task.field",
-                           [Loc.Named ("name", Name), Loc.Named ("value", Value)]);
+         Pres.Put_Pair (Screen, "cli.task.field", Name, Value, Value_Tone);
       end Field;
 
       procedure Needs (Count : Positive; What : String) is
@@ -639,14 +599,20 @@ package body Model_Runner.CLI.Intents is
          begin
             for Id of Nt.List (Store, Kind, Given ("state")) loop
                Nt.Read (Store, Kind, Id, Held, Read);
-               Pres.Put_Message
+               --  Its state coloured by how it stands, as /req show has it.
+               Pres.Put_Marked
                  (Screen, "cli.task.item",
                   [Loc.Named ("name", Id),
                    --  Replaced, in every register alike: by what.
                    Loc.Named ("value", (if Length (Held.Superseded_By) > 0
                                         then "superseded by " & To_String (Held.Superseded_By)
                                         else To_String (Held.State))),
-                   Loc.Named ("detail", To_String (Held.Title))]);
+                   Loc.Named ("detail", To_String (Held.Title))],
+                  (if Length (Held.Superseded_By) > 0 then "superseded" else To_String (Held.State)),
+                  (if Length (Held.Superseded_By) > 0 then Pres.Bad
+                   elsif To_String (Held.State) = "accepted" and then not Nt."=" (Kind, Nt.Requirement)
+                   then Pres.Good
+                   else Pres.Tone_Of (To_String (Held.State))));
             end loop;
             --  None at all: how to make the first.
             if Nt."=" (Kind, Nt.Requirement) and then Nt.List (Store, Kind).Is_Empty then
@@ -1914,11 +1880,19 @@ package body Model_Runner.CLI.Intents is
                Nt.Read (Store, Kind, Named, Held, Status);
             end if;
             if E.Is_Ok (Status) then
-               Field ("title", To_String (Held.Title));
+               --  It, by its identifier and title, set apart; then how it
+               --  stands, coloured by that: an accepted decision or
+               --  specification governs, an accepted requirement waits.
+               Pres.Put_Header (Screen, "cli.task.heading",
+                                [Loc.Named ("name", Named), Loc.Named ("value", To_String (Held.Title))]);
                Field ("state", (if Length (Held.Superseded_By) > 0
                                 then "superseded by " & To_String (Held.Superseded_By)
                                      & " (" & To_String (Held.State) & ")"
-                                else To_String (Held.State)));
+                                else To_String (Held.State)),
+                      (if Length (Held.Superseded_By) > 0 then Pres.Bad
+                       elsif To_String (Held.State) = "accepted" and then not Nt."=" (Kind, Nt.Requirement)
+                       then Pres.Good
+                       else Pres.Tone_Of (To_String (Held.State))));
                Field ("revision", Ada.Strings.Fixed.Trim (Natural'Image (Held.Revision), Ada.Strings.Both));
                Field ("scope", To_String (Held.Scope));
                Field ("text", To_String (Held.Text));
@@ -1926,7 +1900,7 @@ package body Model_Runner.CLI.Intents is
                   Field ("criteria", To_String (Held.Criteria));
                end if;
                if Nt.Blocked_Because (Store, Kind, Named) /= "" then
-                  Field ("blocked because", Nt.Blocked_Because (Store, Kind, Named));
+                  Field ("blocked because", Nt.Blocked_Because (Store, Kind, Named), Pres.Bad);
                end if;
                if Nt.Governs (Store, Kind, Named) /= "" then
                   Field ((if To_String (Held.State) in "obsolete" | "superseded" | "rejected"
@@ -1975,7 +1949,7 @@ package body Model_Runner.CLI.Intents is
                  and then Model_Runner.Framework.Verification.Why_Not_Verified (Store, Named) /= ""
                then
                   Field ("no longer holds",
-                         Model_Runner.Framework.Verification.Why_Not_Verified (Store, Named));
+                         Model_Runner.Framework.Verification.Why_Not_Verified (Store, Named), Pres.Bad);
                end if;
 
                --  Not verified yet: what it still lacks, and what supplies it.
@@ -1988,7 +1962,8 @@ package body Model_Runner.CLI.Intents is
                   begin
                      Field ("not verified",
                             (if Why /= "" then Why
-                             else "its evidence holds; check " & Named & " records it verified"));
+                             else "its evidence holds; check " & Named & " records it verified"),
+                            Pres.Pending);
                   end;
                end if;
                Field ("source", To_String (Held.Source));

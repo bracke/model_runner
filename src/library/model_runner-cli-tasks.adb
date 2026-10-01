@@ -14,7 +14,6 @@ with Hostkit.Process;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Options;
 with Model_Runner.Errors;
-with Model_Runner.Platform.Signals;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Context;
 with Model_Runner.Framework.Configurations;
@@ -168,54 +167,7 @@ package body Model_Runner.CLI.Tasks is
    --  command typed in its place said and not run, and no answer a no.
    function Answered_Yes (Screen : in out Pres.Console) return Boolean is
    begin
-      for Asked in 1 .. 3 loop
-         declare
-            --  Ctrl-C while it is asked: the question answered no, once
-            --  Enter is pressed after it.
-            procedure Waiting (On : Boolean) is
-            begin
-               Model_Runner.Platform.Signals.Set_Waiting_For_Input
-                 (On, Note => (if On then ASCII.LF & Pres.Message_Value (Screen, "cli.choose.interrupted")
-                               else ""));
-            end Waiting;
-            function Read return String is
-            begin
-               Waiting (True);
-               return Line : constant String := Ada.Text_IO.Get_Line do
-                  Waiting (False);
-               end return;
-            end Read;
-            Typed  : constant String := Ada.Strings.Fixed.Trim (Read, Ada.Strings.Both);
-            Answer : constant String := Ada.Characters.Handling.To_Lower (Typed);
-         begin
-            --  Esc, or Ctrl-C: no. An Esc the terminal showed as it is
-            --  starts a sequence the next output would end: cancelled.
-            if Ada.Strings.Fixed.Index (Typed, [1 => ASCII.ESC]) > 0
-              or else Model_Runner.Platform.Signals.Interrupt_Noted
-            then
-               if Ada.Strings.Fixed.Index (Typed, [1 => ASCII.ESC]) > 0 then
-                  Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CAN);
-                  Pres.Put_Note (Screen, "cli.choose.escaped");
-               end if;
-               return False;
-            end if;
-            --  Echoed as typed: a command's identifiers keep their case.
-            if Answer'Length > 1 and then Answer (Answer'First) = '/' then
-               Pres.Put_Note (Screen, "cli.choose.command_typed",
-                              [Loc.Named ("value", Typed), Loc.Named ("name", "a yes or no")]);
-               return False;
-            elsif Answer in "y" | "yes" | "j" | "ja" then
-               return True;
-            elsif Answer in "" | "n" | "no" | "nej" or else Asked = 3 then
-               return False;
-            end if;
-            Pres.Put_Note (Screen, "cli.choose.yes_or_no", [Loc.Named ("value", Answer)]);
-         end;
-      end loop;
-      return False;
-   exception
-      when Ada.Text_IO.End_Error =>
-         return False;
+      return Model_Runner.CLI.Choosers.Answered_Yes (Screen);
    end Answered_Yes;
 
    procedure Run
@@ -353,6 +305,57 @@ package body Model_Runner.CLI.Tasks is
          Result.Append (Rest);
          return Result;
       end Ready_First;
+
+      --  A task's state as /task list says it, and every message after
+      --  it: accepted is ready or waiting, a parent blocked on its parts
+      --  is waiting for them, work in a workspace waits to be taken in.
+      function Listed_State (Id : String) return String is
+         State : constant String := Tk.State_Of (Store, Id);
+         Space : constant String :=
+           (if State = "verification"
+            then Model_Runner.Framework.Workspaces.Active_For (Store, Id) else "");
+         --  Work waiting to be taken in says so, and whether it is in
+         --  conflict: it waits on a person, not on the harness.
+      begin
+         return
+           (if State = "accepted" and then Tk.Ready (Store, Id).Ready then "ready"
+            elsif State = "accepted"
+              and then (for some Reason of Tk.Ready (Store, Id).Reasons =>
+                          Ada.Strings.Fixed.Index (Reason, ", which is cancelled") > 0
+                          or else Ada.Strings.Fixed.Index (Reason, ", which is rejected") > 0)
+            then "waiting on an ended task"
+            elsif State = "accepted" then "waiting"
+            elsif Space /= ""
+              and then not Model_Runner.Framework.Workspaces.Conflict_Files
+                             (Store, Space, Unsettled_Only => True).Is_Empty
+            then "conflict"
+            elsif Space /= ""
+              and then (for some Reason of Tk.Ready (Store, Id).Reasons =>
+                          Ada.Strings.Fixed.Index (Reason, "did not pass") > 0)
+            then "checks failed"
+            elsif Space /= "" then "to integrate"
+            --  Waiting for parts still being done; one whose part
+            --  failed or ended undone is blocked, and shown so.
+            elsif State = "blocked"
+              and then (for some Reason of Tk.Ready (Store, Id).Reasons =>
+                          Ada.Strings.Fixed.Index (Reason, "waiting for its children") > 0
+                          or else Ada.Strings.Fixed.Index (Reason, "its child ") = Reason'First)
+              and then not (for some Child of Tk.Children (Store, Id) =>
+                              Tk.State_Of (Store, Child) in "failed" | "cancelled" | "rejected")
+            then "waiting for parts"
+            --  Stopped by the person, not by anything wrong with it.
+            elsif State = "blocked"
+              and then (for some Reason of Tk.Ready (Store, Id).Reasons =>
+                          Ada.Strings.Fixed.Index (Reason, "you stopped its work") > 0)
+            then "stopped"
+            else State);
+      end Listed_State;
+
+      --  A state as a move says it: the state itself still named, with how
+      --  it stands within it -- accepted, ready -- as /task show has it.
+      function Moved_State (Id : String) return String
+      is (if Listed_State (Id) = Tk.State_Of (Store, Id) then Tk.State_Of (Store, Id)
+          else Tk.State_Of (Store, Id) & ", " & Listed_State (Id));
 
       procedure Show_List is
          Listed : constant Model_Runner.Framework.Name_Lists.Vector := Ready_First;
@@ -526,38 +529,7 @@ package body Model_Runner.CLI.Tasks is
                Defined : R.Item;
                Read    : E.Error_Info;
                State   : constant String := Tk.State_Of (Store, Id);
-               Space : constant String :=
-                 (if State = "verification"
-                  then Model_Runner.Framework.Workspaces.Active_For (Store, Id) else "");
-               --  Work waiting to be taken in says so, and whether it is in
-               --  conflict: it waits on a person, not on the harness.
-               Shown_State : constant String :=
-                 (if State = "accepted" and then Tk.Ready (Store, Id).Ready then "ready"
-                  elsif State = "accepted"
-                    and then (for some Reason of Tk.Ready (Store, Id).Reasons =>
-                                Ada.Strings.Fixed.Index (Reason, ", which is cancelled") > 0
-                                or else Ada.Strings.Fixed.Index (Reason, ", which is rejected") > 0)
-                  then "waiting on an ended task"
-                  elsif State = "accepted" then "waiting"
-                  elsif Space /= ""
-                    and then not Model_Runner.Framework.Workspaces.Conflict_Files
-                                   (Store, Space, Unsettled_Only => True).Is_Empty
-                  then "conflict"
-                  elsif Space /= ""
-                    and then (for some Reason of Tk.Ready (Store, Id).Reasons =>
-                                Ada.Strings.Fixed.Index (Reason, "did not pass") > 0)
-                  then "checks failed"
-                  elsif Space /= "" then "to integrate"
-                  --  Waiting for parts still being done; one whose part
-                  --  failed or ended undone is blocked, and shown so.
-                  elsif State = "blocked"
-                    and then (for some Reason of Tk.Ready (Store, Id).Reasons =>
-                                Ada.Strings.Fixed.Index (Reason, "waiting for its children") > 0
-                                or else Ada.Strings.Fixed.Index (Reason, "its child ") = Reason'First)
-                    and then not (for some Child of Tk.Children (Store, Id) =>
-                                    Tk.State_Of (Store, Child) in "failed" | "cancelled" | "rejected")
-                  then "waiting for parts"
-                  else State);
+               Shown_State : constant String := Listed_State (Id);
 
                function Fits (Name, Held : String) return Boolean
                is (Wanted (Name) = "" or else Wanted (Name) = Held);
@@ -577,11 +549,17 @@ package body Model_Runner.CLI.Tasks is
                                         (Wanted ("requirement")))
                then
                   Shown := Shown + 1;
-                  Pres.Put_Message
+                  --  Its state coloured by how it stands: ready and done
+                  --  apart from what waits and from what went wrong.
+                  Pres.Put_Marked
                     (Screen, "cli.task.item",
                      [Loc.Named ("name", Id),
                       Loc.Named ("value", Shown_State),
-                      Loc.Named ("detail", R.Get (Defined, "title"))]);
+                      Loc.Named ("detail", R.Get (Defined, "title"))],
+                     Shown_State,
+                     (if Shown_State in "conflict" | "checks failed" | "waiting on an ended task" then Pres.Bad
+                      elsif Shown_State in "to integrate" | "waiting for parts" then Pres.Pending
+                      else Pres.Tone_Of (Shown_State)));
                end if;
             end;
          end loop;
@@ -959,7 +937,7 @@ package body Model_Runner.CLI.Tasks is
                Pres.Put_Message
                  (Screen, "cli.task.field",
                   [Loc.Named ("name", "left"),
-                   Loc.Named ("value", Child & " " & Tk.State_Of (Store, Child)
+                   Loc.Named ("value", Child & " " & Listed_State (Child)
                               & "; /task " & (if Tk.State_Of (Store, Child) = "candidate"
                                              then "reject " else "cancel ")
                               & Child & " lets it go")]);
@@ -1024,7 +1002,7 @@ package body Model_Runner.CLI.Tasks is
          Pres.Put_Message
            (Screen, "cli.task.moved",
             [Loc.Named ("name", Argument),
-             Loc.Named ("value", Model_Runner.Framework.State_Said (Tk.State_Of (Store, Argument)))]);
+             Loc.Named ("value", Model_Runner.Framework.State_Said (Moved_State (Argument)))]);
          if Next in "rejected" | "cancelled" then
             Say_Left_Waiting (Argument);
          elsif Next = "accepted" and then Tk.Ready (Store, Argument).Ready then
@@ -1164,7 +1142,10 @@ package body Model_Runner.CLI.Tasks is
             --  The one just accepted was said with its next step already,
             --  and one that is done is not ready for anything: only those
             --  that can now be worked are said.
+            --  Nor one a completing just failed for: ready to be done is no
+            --  news after its check failed.
             if not (Action = "accept" and then Id = Argument)
+              and then not (Action = "complete" and then Id = Argument and then Status /= E.Exit_Success)
               and then Tk.State_Of (Store, Id) = "accepted"
               and then not Said_Ready.Contains (Id)
             then
@@ -1213,7 +1194,7 @@ package body Model_Runner.CLI.Tasks is
          Pres.Put_Message
            (Screen, "cli.task.moved",
             [Loc.Named ("name", Argument),
-             Loc.Named ("value", Model_Runner.Framework.State_Said (Tk.State_Of (Store, Argument)))]);
+             Loc.Named ("value", Model_Runner.Framework.State_Said (Moved_State (Argument)))]);
          declare
             Kept    : Unbounded_String;
             Search  : Ada.Directories.Search_Type;
@@ -1468,7 +1449,25 @@ package body Model_Runner.CLI.Tasks is
             Fail (Outcome);
             return;
          end if;
-         Pres.Put_Message (Screen, "cli.task.revised", [Loc.Named ("name", Id)]);
+         --  What changed, each field as it now is; a new kind, what its
+         --  agent may do now.
+         declare
+            Said : Unbounded_String;
+         begin
+            for Position in Fields.Iterate loop
+               Append (Said, (if Said = Null_Unbounded_String then "" else "; ")
+                             & Model_Runner.Framework.Configurations.Value_Maps.Key (Position) & " is now "
+                             & (if Model_Runner.Framework.Configurations.Value_Maps.Element (Position) = ""
+                                then "empty" else Model_Runner.Framework.Configurations.Value_Maps.Element (Position)));
+            end loop;
+            Pres.Put_Message (Screen, "cli.task.revised_fields",
+                              [Loc.Named ("name", Id), Loc.Named ("detail", To_String (Said))]);
+            if Fields.Contains ("kind") and then Model_Runner.Framework.Work.May_Do (Store, Id) /= "" then
+               Pres.Put_Note (Screen, "cli.task.kind_changed",
+                              [Loc.Named ("name", Id), Loc.Named ("value", Fields ("kind")),
+                               Loc.Named ("detail", Model_Runner.Framework.Work.May_Do (Store, Id))]);
+            end if;
+         end;
 
          --  Its permissions asking for more than its kind allows: what it
          --  gets, as a new task is told.
@@ -1670,7 +1669,7 @@ package body Model_Runner.CLI.Tasks is
          Pres.Put_Message
            (Screen, "cli.task.moved",
             [Loc.Named ("name", First_Word),
-             Loc.Named ("value", Model_Runner.Framework.State_Said (Tk.State_Of (Store, First_Word)))]);
+             Loc.Named ("value", Model_Runner.Framework.State_Said (Moved_State (First_Word)))]);
          --  What comes next: a candidate parent is accepted with its parts,
          --  or it is left a candidate once they are done; accepted, the
          --  first part ready is worked.
@@ -1936,11 +1935,27 @@ package body Model_Runner.CLI.Tasks is
                      then (if Tk.Ready (Store, Argument).Ready then "accepted, ready" else "accepted, waiting")
                      else Raw);
                   --  A list of identifiers on one line.
+                  --  Gates in one order for every kind: by name.
+                  function Sorted (Text : String) return String is
+                     package Sorting is new Model_Runner.Framework.Name_Lists.Generic_Sorting;
+                     Items : Model_Runner.Framework.Name_Lists.Vector;
+                  begin
+                     for Part of Model_Runner.Framework.Lines_Of
+                       (Ada.Strings.Fixed.Translate (Text, Ada.Strings.Maps.To_Mapping (",", [1 => ASCII.LF])))
+                     loop
+                        if Ada.Strings.Fixed.Trim (Part, Ada.Strings.Both) /= "" then
+                           Items.Append (Ada.Strings.Fixed.Trim (Part, Ada.Strings.Both));
+                        end if;
+                     end loop;
+                     Sorting.Sort (Items);
+                     return Joined (Items);
+                  end Sorted;
                   Value : constant String :=
                     (if Name in "definition.requirements" | "definition.depends_on"
                      then Ada.Strings.Fixed.Trim
                             (Joined (Model_Runner.Framework.Lines_Of (Held)),
                              Ada.Strings.Both)
+                     elsif Name = "gates" then Sorted (Held)
                      else Held);
                   --  A rule's LEVEL SOURCE: TEXT is TEXT, and (SOURCE) after
                   --  it where a person or an entry said it.
@@ -1978,11 +1993,41 @@ package body Model_Runner.CLI.Tasks is
                if Name = "ready" and then R.Get (View, Name) /= "true" and then R.Get (View, "blocked_by") /= "" then
                   return;
                end if;
+               --  Why it is blocked or failed, said once: what blocked_by
+               --  says already is not said again under its own name.
+               if Shown_Name in "blocking_reasons" | "current_failure"
+                 and then R.Get (View, "blocked_by") /= ""
+                 and then Ada.Strings.Fixed.Index (R.Get (View, "blocked_by"), R.Get (View, Name)) > 0
+               then
+                  return;
+               end if;
+               --  A decision that governs it: by its title and what it says,
+               --  not by its revision alone.
+               if Starts ("decision.") then
+                  declare
+                     Held : Model_Runner.Framework.Intent.Entity;
+                     Got  : E.Error_Info;
+                  begin
+                     Model_Runner.Framework.Intent.Read
+                       (Store, Model_Runner.Framework.Intent.Decision, Name (Name'First + 9 .. Name'Last), Held, Got);
+                     if E.Is_Ok (Got) then
+                        Grouped ("  decision " & Name (Name'First + 9 .. Name'Last),
+                                 To_String (Held.Title) & ": " & To_String (Held.Text));
+                        return;
+                     end if;
+                  end;
+               end if;
                --  What its agent may do, in words, not by the permissions'
                --  own names.
                if Name = "permissions" then
+                  --  As its agent is told it: only what it has a tool or
+                  --  a way to do, not every capability granted.
                   Grouped ("  " & "may",
-                    Model_Runner.Framework.Permissions.In_Words (R.Get (View, Name))
+                    (if Model_Runner.Framework.Work.May_Do (Store, Argument) /= ""
+                     then Ada.Strings.Fixed.Translate
+                            (Model_Runner.Framework.Work.May_Do (Store, Argument),
+                             Ada.Strings.Maps.To_Mapping (";", ","))
+                     else Model_Runner.Framework.Permissions.In_Words (R.Get (View, Name)))
                     --  Apart in a workspace its checks are not its to run:
                     --  they run when its work is taken in.
                     & (if R.Get (View, "workspace_policy") = "workspace"
@@ -2057,6 +2102,7 @@ package body Model_Runner.CLI.Tasks is
             function Governing (Name : String) return Boolean
             is (((Name'Length > 10 and then Name (Name'First .. Name'First + 9) = "authority.")
                  and then not (Baseline (Name) and then not Writes))
+                or else Ada.Strings.Fixed.Index (Name, "decision.") = Name'First
                 or else Ada.Strings.Fixed.Index (Name, "override.") = Name'First
                 or else Ada.Strings.Fixed.Index (Name, "conflict.") = Name'First);
 
@@ -2256,20 +2302,69 @@ package body Model_Runner.CLI.Tasks is
                for Index in 1 .. R.Field_Count (View) loop
                   Rules := Rules or else Governing (R.Field_Name (View, Index));
                end loop;
-               if Rules then
-                  Section ("cli.task.section.governs");
-                  for Index in 1 .. R.Field_Count (View) loop
-                     if Governing (R.Field_Name (View, Index)) then
-                        Once (R.Field_Name (View, Index));
-                     end if;
+               --  And the specifications in force where it works, which its
+               --  agent is given as /task context shows.
+               declare
+                  Component : constant String := R.Get (View, "definition.component");
+                  Specs     : Model_Runner.Framework.Name_Lists.Vector;
+               begin
+                  for Id of Model_Runner.Framework.Intent.List (Store, Model_Runner.Framework.Intent.Specification)
+                  loop
+                     declare
+                        Held : Model_Runner.Framework.Intent.Entity;
+                        Got  : E.Error_Info;
+                     begin
+                        Model_Runner.Framework.Intent.Read
+                          (Store, Model_Runner.Framework.Intent.Specification, Id, Held, Got);
+                        if E.Is_Ok (Got) and then To_String (Held.State) = "accepted"
+                          and then To_String (Held.Scope) in "" | "project" | Component
+                        then
+                           Specs.Append (Id);
+                        end if;
+                     end;
                   end loop;
-               end if;
+                  if Rules or else not Specs.Is_Empty then
+                     Section ("cli.task.section.governs");
+                     for Index in 1 .. R.Field_Count (View) loop
+                        if Governing (R.Field_Name (View, Index)) then
+                           Once (R.Field_Name (View, Index));
+                        end if;
+                     end loop;
+                     for Id of Specs loop
+                        declare
+                           Held : Model_Runner.Framework.Intent.Entity;
+                           Got  : E.Error_Info;
+                           Text : Unbounded_String;
+                        begin
+                           Model_Runner.Framework.Intent.Read
+                             (Store, Model_Runner.Framework.Intent.Specification, Id, Held, Got);
+                           Text := Held.Text;
+                           --  Its first line: a whole document is /spec show's.
+                           if Index (Text, [1 => ASCII.LF]) > 0 then
+                              Text := Head (Text, Index (Text, [1 => ASCII.LF]) - 1) & " ...";
+                           end if;
+                           Grouped ("  spec " & Id, To_String (Held.Title) & ": " & To_String (Text));
+                        end;
+                     end loop;
+                  end if;
+               end;
             end;
 
-            --  Anything else it holds, so nothing is hidden by the grouping.
+            --  Anything else it holds, so nothing is hidden by the grouping
+            --  -- but a rule that governs nothing it may do, which is left
+            --  out above for that, is not said below the wrong heading.
             for Index in 1 .. R.Field_Count (View) loop
-               Once (R.Field_Name (View, Index));
+               if Ada.Strings.Fixed.Index (R.Field_Name (View, Index), "authority.") /= 1 then
+                  Once (R.Field_Name (View, Index));
+               end if;
             end loop;
+
+            --  Stopped: the way on, as /work says it.
+            if R.Get (View, "runtime.state") in "failed" | "blocked"
+              and then Ada.Strings.Fixed.Index (R.Get (View, "blocked_by"), "waiting for its children") = 0
+            then
+               Pres.Put_Note (Screen, "cli.next.retry", [Loc.Named ("name", Argument)]);
+            end if;
          end;
       end Show;
 
@@ -2443,6 +2538,11 @@ package body Model_Runner.CLI.Tasks is
                --  not the one the project means.
                Pres.Put_Note (Screen, "cli.next.check_failed",
                               [Loc.Named ("name", Profile), Loc.Named ("value", Profile_Text (Profile))]);
+               --  Completing, it stays where it is: said, with how to finish.
+               if Action = "complete" then
+                  Pres.Put_Note (Screen, "cli.task.stays",
+                                 [Loc.Named ("name", Argument), Loc.Named ("value", Tk.State_Of (Store, Argument))]);
+               end if;
             end;
          elsif Action = "verify"
            and then Tk.State_Of (Store, Argument) in "failed" | "blocked" | "accepted"
@@ -2582,14 +2682,20 @@ package body Model_Runner.CLI.Tasks is
                then
                   return;
                end if;
-               Pres.Put_Note (Screen,
-                              (if Model_Runner.Framework.Workspaces.Was_Restored
-                                    (Store, Ada.Directories.Simple_Name
-                                              (Model_Runner.Framework.Workspaces.Kept_Copy
-                                                 (Store, R.Get (Held_State, "current_workspace"))))
-                               then "cli.task.given_up_restored" else "cli.task.given_up_by_hand"),
-                              [Loc.Named ("name", Argument),
-                               Loc.Named ("value", R.Get (Held_State, "current_workspace"))]);
+               --  A workspace it wrote nothing in -- an analysis -- gave
+               --  up nothing worth a word.
+               if Ada.Directories.Exists (Model_Runner.Framework.Workspaces.Kept_Copy
+                                            (Store, R.Get (Held_State, "current_workspace")))
+               then
+                  Pres.Put_Note (Screen,
+                                 (if Model_Runner.Framework.Workspaces.Was_Restored
+                                       (Store, Ada.Directories.Simple_Name
+                                                 (Model_Runner.Framework.Workspaces.Kept_Copy
+                                                    (Store, R.Get (Held_State, "current_workspace"))))
+                                  then "cli.task.given_up_restored" else "cli.task.given_up_by_hand"),
+                                 [Loc.Named ("name", Argument),
+                                  Loc.Named ("value", R.Get (Held_State, "current_workspace"))]);
+               end if;
             end if;
          end;
 
@@ -2641,14 +2747,17 @@ package body Model_Runner.CLI.Tasks is
          begin
             Tk.Definition (Store, Argument, Defined, Read);
             if Interactive and then E.Is_Ok (Read) and then R.Get (Defined, "kind") = "analysis"
-              and then R.Get (Defined, "notes") = ""
+              and then Ada.Strings.Fixed.Index (R.Get (Defined, "notes"), "found: ") = 0
             then
                Pres.Put_Message (Screen, "cli.task.analysis_findings", [Loc.Named ("name", Argument)]);
                declare
                   Found : constant String := Ada.Strings.Fixed.Trim (Ada.Text_IO.Get_Line, Ada.Strings.Both);
                begin
+                  --  Kept beside what its notes asked, not over it.
                   if Found /= "" then
-                     Fields.Include ("notes", Found);
+                     Fields.Include ("notes", (if R.Get (Defined, "notes") = "" then ""
+                                               else R.Get (Defined, "notes") & " -- ")
+                                              & "found: " & Found);
                      Tk.Revise (Store, Change, Argument, Fields, Outcome);
                      if E.Is_Ok (Outcome) then
                         Commit;
@@ -2728,11 +2837,8 @@ package body Model_Runner.CLI.Tasks is
             declare
                One : constant Model_Runner.Framework.Verification.Gate :=
                  Model_Runner.Framework.Verification.Element (Judged, Index);
-            begin
-               Pres.Put_Message
-                 (Screen, "cli.task.gate",
-                  [Loc.Named ("name", To_String (One.Name)),
-                   Loc.Named ("detail", (if To_String (One.Name) = "integration" and then Space = ""
+               Detail : constant String :=
+                                        (if To_String (One.Name) = "integration" and then Space = ""
                                            and then Never_Apart
                                          then "set aside: it had no workspace, and nothing to take in"
                                          elsif Space /= ""
@@ -2749,7 +2855,22 @@ package body Model_Runner.CLI.Tasks is
                                            and then Tk.State_Of (Store, Argument)
                                                     in "accepted" | "failed" | "blocked"
                                          then "set aside: it is completed by hand"
-                                         else To_String (One.Reason)))]);
+                                         else To_String (One.Reason));
+               Lead : constant String :=
+                 (if Detail = "passed" then "passed"
+                  elsif Ada.Strings.Fixed.Index (Detail, "set aside") = Detail'First then "set aside"
+                  else "");
+            begin
+               --  Each check's outcome in its colour: passed, set aside,
+               --  or what stopped it.
+               if Lead = "" then
+                  Pres.Put_Pair (Screen, "cli.task.field", To_String (One.Name), Detail, Pres.Bad);
+               else
+                  Pres.Put_Marked
+                    (Screen, "cli.task.gate",
+                     [Loc.Named ("name", To_String (One.Name)), Loc.Named ("detail", Detail)],
+                     Lead, (if Lead = "passed" then Pres.Good else Pres.Muted));
+               end if;
             end;
          end loop;
 
@@ -2799,7 +2920,7 @@ package body Model_Runner.CLI.Tasks is
             --  An analysis is done for what it found: one completed with
             --  nothing of that kept is said to be, and where to keep it.
             if E.Is_Ok (Got) and then R.Get (Defined, "kind") = "analysis"
-              and then R.Get (Defined, "notes") = ""
+              and then Ada.Strings.Fixed.Index (R.Get (Defined, "notes"), "found: ") = 0
             then
                Pres.Put_Note (Screen, "cli.task.analysis_no_findings", [Loc.Named ("name", Argument)]);
             end if;
@@ -3256,15 +3377,25 @@ package body Model_Runner.CLI.Tasks is
       procedure Show_Plan is
          Planned : constant Model_Runner.Framework.Orchestration.Dispatch_Plan :=
            Model_Runner.Framework.Orchestration.Plan (Store);
+
+         --  The task a line is about: its first word.
+         function Task_In (Line : String) return String is
+            Stop : constant Natural := Ada.Strings.Fixed.Index (Line & " ", " ");
+         begin
+            return Ada.Strings.Fixed.Trim (Line (Line'First .. Stop - 1), Ada.Strings.Maps.To_Set (":,"),
+                                           Ada.Strings.Maps.To_Set (":,"));
+         end Task_In;
       begin
+         --  Each task in the colour of how it stands: to start, waiting,
+         --  or wanting a person's judgment.
          for Id of Planned.Start loop
-            Pres.Put_Message (Screen, "cli.task.start", [Loc.Named ("name", Id)]);
+            Pres.Put_Marked (Screen, "cli.task.start", [Loc.Named ("name", Id)], Id, Pres.Good);
          end loop;
          for Line of Planned.Held loop
-            Pres.Put_Message (Screen, "cli.task.held", [Loc.Named ("detail", Line)]);
+            Pres.Put_Marked (Screen, "cli.task.held", [Loc.Named ("detail", Line)], Task_In (Line), Pres.Pending);
          end loop;
          for Line of Model_Runner.Framework.Orchestration.Needs_Judgment (Store) loop
-            Pres.Put_Message (Screen, "cli.task.judgment", [Loc.Named ("detail", Line)]);
+            Pres.Put_Marked (Screen, "cli.task.judgment", [Loc.Named ("detail", Line)], Task_In (Line), Pres.Pending);
          end loop;
       end Show_Plan;
 
@@ -3351,6 +3482,9 @@ package body Model_Runner.CLI.Tasks is
                                        (Argument, Ada.Strings.Maps.To_Mapping (" ", [1 => ASCII.LF])))
                   => Ada.Strings.Fixed.Index (Word, "TASK-") = Word'First)
       then
+         --  Each one's way on held, and the first that can be worked said
+         --  once at the end: not the last one's.
+         Pres.Hold_Next_Steps (Screen, True);
          for Word of Model_Runner.Framework.Lines_Of
                        (Ada.Strings.Fixed.Translate
                           (Argument, Ada.Strings.Maps.To_Mapping (" ", [1 => ASCII.LF])))
@@ -3364,6 +3498,22 @@ package body Model_Runner.CLI.Tasks is
                Status := Natural'Max (Status, Went);
             end;
          end loop;
+         Pres.Hold_Next_Steps (Screen, False);
+         if Action = "accept" then
+            S.Open_To_Read (Store, Directory, Outcome);
+            if E.Is_Ok (Outcome) then
+               for Word of Model_Runner.Framework.Lines_Of
+                             (Ada.Strings.Fixed.Translate
+                                (Argument, Ada.Strings.Maps.To_Mapping (" ", [1 => ASCII.LF])))
+               loop
+                  if Tk.Ready (Store, Word).Ready then
+                     Pres.Put_Note (Screen, "cli.next.work", [Loc.Named ("name", Word)]);
+                     exit;
+                  end if;
+               end loop;
+            end if;
+            S.Close (Store);
+         end if;
          return;
       end if;
 
@@ -3566,7 +3716,7 @@ package body Model_Runner.CLI.Tasks is
                   begin
                      Tk.Definition (Store, First_Word, Defined, Read);
                      if not Confirmed ("cli.project.cancel.confirm", First_Word,
-                                       R.Get (Defined, "title") & ", " & Tk.State_Of (Store, First_Word))
+                                       R.Get (Defined, "title") & ", " & Listed_State (First_Word))
                      then
                         S.Close (Store);
                         return;
@@ -3833,6 +3983,29 @@ package body Model_Runner.CLI.Tasks is
                end if;
                return Found;
             end Copies_Of_Task;
+            --  What a copy holds, by how it was kept: an agent's work, or
+            --  the project's own files from before something wrote over them.
+            function Holds (One : String) return String is
+               function Starts (Prefix : String) return Boolean
+               is (Ada.Strings.Fixed.Index (One, Prefix) = One'First);
+            begin
+               return (if Starts ("given-up-") then "its agent's work, given up"
+                       elsif Starts ("overwritten-")
+                       then "the project's files from before its agent wrote them -- the only copy of those"
+                       elsif Starts ("replaced-") then "the project's files from before a copy was put back"
+                       else "kept")
+                 & (if Ws.Was_Restored (Store, One) then "; put back already" else "");
+            end Holds;
+
+            --  Copies, each with what it holds.
+            function Said (Listed : Model_Runner.Framework.Name_Lists.Vector) return String is
+               Text : Unbounded_String;
+            begin
+               for One of Listed loop
+                  Append (Text, (if Text = Null_Unbounded_String then "" else "; ") & One & " (" & Holds (One) & ")");
+               end loop;
+               return To_String (Text);
+            end Said;
          begin
             if Verb = "" then
                if Copies.Is_Empty then
@@ -3844,7 +4017,8 @@ package body Model_Runner.CLI.Tasks is
                         [Loc.Named ("name", One),
                          Loc.Named ("value", T.Image (Long_Long_Integer (Ws.Kept_Files (Store, One).Length))
                                              & (if Natural (Ws.Kept_Files (Store, One).Length) = 1 then " file"
-                                                else " files")),
+                                                else " files")
+                                             & ", " & Holds (One)),
                          Loc.Named ("detail", Joined (Ws.Kept_Files (Store, One)))]);
                   end loop;
                   Pres.Put_Note (Screen, "cli.next.kept");
@@ -3856,9 +4030,19 @@ package body Model_Runner.CLI.Tasks is
                E.Add_Text (Outcome, "detail", "/task kept lists the copies, /task kept restore NAME puts one"
                            & " back, and /task kept drop NAME (or all) removes it");
                Fail (Outcome);
+            elsif Verb = "restore" and then Natural (Copies_Of_Task.Length) > 1 then
+               --  A task with several: which is put back is asked, not
+               --  guessed -- its work and the files it overwrote undo
+               --  each other.
+               Outcome := E.Make (E.Framework_Input_Invalid);
+               E.Add_Text (Outcome, "name", "/task kept restore");
+               E.Add_Text (Outcome, "value", After_First);
+               E.Add_Text (Outcome, "detail", After_First & " has several kept copies: " & Said (Copies_Of_Task)
+                           & " -- /task kept restore NAME puts the one named back");
+               Fail (Outcome);
             elsif Verb = "drop" and then Natural (Copies_Of_Task.Length) > 1 then
-               --  A task named: all its copies.
-               if Confirmed ("cli.task.kept_drop_confirm", After_First, Joined (Copies_Of_Task)) then
+               --  A task named: all its copies, each said with what it holds.
+               if Confirmed ("cli.task.kept_drop_several_confirm", After_First, Said (Copies_Of_Task)) then
                   for One of Copies_Of_Task loop
                      Ws.Drop_Kept (Store, One, Outcome);
                      exit when E.Is_Error (Outcome);
@@ -3887,7 +4071,9 @@ package body Model_Runner.CLI.Tasks is
                            & (if Copies.Is_Empty then "" else " (there are " & Joined (Copies) & ")"));
                Fail (Outcome);
             elsif Verb = "drop" then
-               if Confirmed ("cli.task.kept_drop_confirm", Name, Joined (Ws.Kept_Files (Store, Name))) then
+               if Confirmed ("cli.task.kept_drop_confirm", Name,
+                             Joined (Ws.Kept_Files (Store, Name)) & " (" & Holds (Name) & ")")
+               then
                   Ws.Drop_Kept (Store, Name, Outcome);
                   if E.Is_Error (Outcome) then
                      Fail (Outcome);
@@ -3895,15 +4081,32 @@ package body Model_Runner.CLI.Tasks is
                      Pres.Put_Message (Screen, "cli.task.kept_dropped", [Loc.Named ("name", Name)]);
                   end if;
                end if;
-            elsif Confirmed ("cli.task.kept_restore_confirm", Name, Joined (Ws.Kept_Files (Store, Name))) then
-               Ws.Restore_Kept (Store, Name, Outcome);
-               if E.Is_Error (Outcome) then
-                  Fail (Outcome);
-               else
-                  Pres.Put_Message (Screen, "cli.task.kept_restored",
-                                    [Loc.Named ("name", Name),
-                                     Loc.Named ("detail", Joined (Ws.Kept_Files (Store, Name)))]);
-               end if;
+            else
+               --  What the project holds otherwise now is said, and kept.
+               declare
+                  Changed : constant Model_Runner.Framework.Name_Lists.Vector := Ws.Changed_Since_Kept (Store, Name);
+                  Over    : constant String :=
+                    (if Natural (Changed.Length) = 0 then ""
+                     else "; " & Joined (Changed) & " changed in the project since, and what it holds now is kept as "
+                          & Ws.Replaced_Copy (Name));
+               begin
+                  if Confirmed ("cli.task.kept_restore_confirm", Name, Joined (Ws.Kept_Files (Store, Name)) & Over)
+                  then
+                     Ws.Restore_Kept (Store, Name, Outcome);
+                     if E.Is_Error (Outcome) then
+                        Fail (Outcome);
+                     else
+                        Pres.Put_Message (Screen, "cli.task.kept_restored",
+                                          [Loc.Named ("name", Name),
+                                           Loc.Named ("detail", Joined (Ws.Kept_Files (Store, Name)))]);
+                        if Natural (Changed.Length) > 0 then
+                           Pres.Put_Note (Screen, "cli.task.kept_replaced",
+                                          [Loc.Named ("name", Ws.Replaced_Copy (Name)),
+                                           Loc.Named ("detail", Joined (Changed))]);
+                        end if;
+                     end if;
+                  end if;
+               end;
             end if;
          end;
       elsif Action = "diff" then
@@ -4042,7 +4245,7 @@ package body Model_Runner.CLI.Tasks is
                            begin
                               Ada.Text_IO.Open (File_In, Ada.Text_IO.In_File, Output);
                               while not Ada.Text_IO.End_Of_File (File_In) loop
-                                 Pres.Put_Line (Screen, Ada.Text_IO.Get_Line (File_In));
+                                 Pres.Put_Diff_Line (Screen, Ada.Text_IO.Get_Line (File_In));
                               end loop;
                               Ada.Text_IO.Close (File_In);
                               Ada.Directories.Delete_File (Output);

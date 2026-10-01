@@ -122,7 +122,16 @@ package Model_Runner.Presentation is
 
    --  How a value stands, for its colour at a terminal: done, waiting on
    --  something, gone wrong, or none of these.
-   type Tone is (Plain, Good, Pending, Bad);
+   type Tone is (Plain, Good, Pending, Bad, Muted);
+
+   --  How a state of the project's records stands, for its colour: done
+   --  (complete, verified, passed), waiting on something (candidate,
+   --  accepted, running), gone wrong or ended (failed, blocked, rejected,
+   --  superseded), or none of these.
+   --
+   --  @param State The state, as its word.
+   --  @return Its tone.
+   function Tone_Of (State : String) return Tone;
 
    --  Write a localized line to standard output as a heading: set apart
    --  at a terminal that shows colour, plain anywhere else.
@@ -151,6 +160,30 @@ package Model_Runner.Presentation is
       Name       : String;
       Value      : String;
       Value_Tone : Tone := Plain);
+
+   --  Write a localized line to standard output with one word of it in
+   --  its tone at a terminal that shows colour: a list's state, a check's
+   --  outcome. Anywhere else, and in structured output, as Put_Message.
+   --
+   --  @param Item Console to write through.
+   --  @param Key Stable message identifier.
+   --  @param Arguments Message arguments.
+   --  @param Mark The word to colour, found whole in the rendered line.
+   --  @param Mark_Tone Its tone.
+   procedure Put_Marked
+     (Item      : in out Console;
+      Key       : String;
+      Arguments : Model_Runner.Localization.Argument_List;
+      Mark      : String;
+      Mark_Tone : Tone);
+
+   --  Write a line of a unified diff to standard output: at a terminal
+   --  that shows colour, an added line green, a removed one red, and a
+   --  file or hunk header muted.
+   --
+   --  @param Item Console to write through.
+   --  @param Text The line.
+   procedure Put_Diff_Line (Item : in out Console; Text : String);
 
    --  Write a localized line to standard output.
    --

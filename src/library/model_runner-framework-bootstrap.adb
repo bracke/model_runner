@@ -6,6 +6,7 @@ with Hostkit.Fs;
 
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Facts;
+with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Records;
@@ -303,6 +304,10 @@ package body Model_Runner.Framework.Bootstrap is
       --  Under a heading of decisions: each listed line is one.
       Decisions_Here : Boolean := False;
 
+      --  Under a heading about how the project is released or worked on --
+      --  a release checklist -- a must is the team's, not the product's.
+      Process_Here : Boolean := False;
+
       --  A heading a document's own label opens -- ### FR-001 Capacity --
       --  whose first line stating a requirement is that requirement.
       Pending_Label : Unbounded_String;
@@ -319,7 +324,9 @@ package body Model_Runner.Framework.Bootstrap is
          Index  : Natural := Text'First;
       begin
          while Index <= Text'Last loop
-            if Index < Text'Last and then Text (Index .. Index + 1) in "**" | "__" then
+            --  Emphasis, and reStructuredText's literal marks, are no
+            --  part of the words.
+            if Index < Text'Last and then Text (Index .. Index + 1) in "**" | "__" | "``" then
                Index := Index + 2;
             elsif Text (Index) = '['
               and then Ada.Strings.Fixed.Index (Text (Index .. Text'Last), "](") > 0
@@ -523,6 +530,22 @@ package body Model_Runner.Framework.Bootstrap is
             end if;
          end if;
 
+         --  A ticked box -- - [x] -- is done already: said, as work taken
+         --  as done, not done again; what it says is read as ever.
+         if Line'Length > 6 and then Line (Line'First) in '-' | '*' | '+'
+           and then Ada.Characters.Handling.To_Lower (Line (Line'First + 1 .. Line'First + 5)) = " [x] "
+         then
+            Label_Split (Item, Label, Rest);
+            Found (Issue, Path & "#" & (if Label /= Null_Unbounded_String then To_String (Label)
+                                        else Fingerprint (Item)) & "#done",
+                   (if Label /= Null_Unbounded_String then To_String (Label) else Headline (Item))
+                   & " is ticked as done in " & Path & ": /task complete takes the task derived for it as done,"
+                   & " its checks passing, rather than /work doing it again",
+                   Item);
+            Label := Null_Unbounded_String;
+            Rest := Null_Unbounded_String;
+         end if;
+
          --  The items under a requirement that leads into them are what it
          --  says; anything else ends its list.
          if Lead > 0 and then Item /= "" then
@@ -562,6 +585,9 @@ package body Model_Runner.Framework.Bootstrap is
                      Found (Specification_Candidate, Path, Heading, Text);
                   end if;
                end if;
+               Process_Here :=
+                 (for some Word of Name_Lists.Vector'(["release", "checklist", "contributing", "how to contribute"])
+                  => Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Heading), Word) > 0);
                Decisions_Here :=
                  Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Heading), "decision") > 0
                  and then Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Heading), "decision ") = 0;
@@ -863,6 +889,27 @@ package body Model_Runner.Framework.Bootstrap is
 
          --  In a section a requirement's heading opens, what is said is
          --  that requirement's statement.
+         if Section > 0 and then Starts_With (Ada.Characters.Handling.To_Lower (Item), "status:") then
+            --  Its status is no part of what it says: done already, it is
+            --  said, as work a person takes as done, not does again.
+            declare
+               Held  : constant Output := Result.Outputs (Section);
+               Said  : constant String := Ada.Characters.Handling.To_Lower (Trim (Item (Item'First + 7 .. Item'Last)));
+               Label : constant String :=
+                 (if Held.Given_Id /= Null_Unbounded_String then To_String (Held.Given_Id)
+                  else To_String (Held.Title));
+            begin
+               if Starts_With (Said, "implemented") or else Starts_With (Said, "done")
+                 or else Starts_With (Said, "complete")
+               then
+                  Found (Issue, Path & "#" & Label & "#done",
+                         Label & " is marked " & Said & " in " & Path & ": /task complete takes the task derived"
+                         & " for it as done, its checks passing, rather than /work doing it again",
+                         Item);
+               end if;
+            end;
+            return;
+         end if;
          if Section > 0 then
             declare
                Held : Output := Result.Outputs (Section);
@@ -875,7 +922,7 @@ package body Model_Runner.Framework.Bootstrap is
             return;
          end if;
 
-         if Says_Requirement (Item, Listed or else Requirements_Here) then
+         if not Process_Here and then Says_Requirement (Item, Listed or else Requirements_Here) then
             declare
                Print : constant String := Fingerprint (Item);
             begin
@@ -1254,6 +1301,23 @@ package body Model_Runner.Framework.Bootstrap is
             end if;
          end;
       end loop;
+
+      --  A document read for its requirements or decisions is those, not
+      --  a specification besides: what it says is not proposed twice.
+      if (for some One of Result.Outputs =>
+            One.Kind in Imported_Item | Requirement_Candidate | Decision_Candidate)
+      then
+         declare
+            Kept : Output_Vectors.Vector;
+         begin
+            for One of Result.Outputs loop
+               if One.Kind /= Specification_Candidate then
+                  Kept.Append (One);
+               end if;
+            end loop;
+            Result.Outputs := Kept;
+         end;
+      end if;
       return Result;
    end Scan;
 
@@ -2185,7 +2249,41 @@ package body Model_Runner.Framework.Bootstrap is
                   Propose (Intent.Requirement);
 
                when Decision_Candidate =>
-                  Propose (Intent.Decision);
+                  declare
+                     Before : constant Natural := Natural (Result.Made.Length);
+
+                     --  The record says of itself that it is accepted: a
+                     --  Status: line, or a status: field, that begins so.
+                     function Says_Accepted return Boolean is
+                        Path : constant String :=
+                          Ada.Directories.Containing_Directory (Stores.Root (Item)) & "/" & Field (Next.Source);
+                        Text : Unbounded_String;
+                        Read : E.Error_Info;
+                        Lower : Unbounded_String;
+                     begin
+                        if not Ada.Directories.Exists (Path) then
+                           return False;
+                        end if;
+                        Files.Read_Text (Path, Text, Read);
+                        Lower := To_Unbounded_String (Ada.Characters.Handling.To_Lower (To_String (Text)));
+                        return E.Is_Ok (Read)
+                          and then (Index (Lower, "status: accepted") > 0
+                                    or else Index (Lower, "## status" & ASCII.LF & ASCII.LF & "accepted") > 0
+                                    or else Index (Lower, "## status" & ASCII.LF & "accepted") > 0);
+                     end Says_Accepted;
+                  begin
+                     Propose (Intent.Decision);
+                     --  Made now, and accepted by its own record: accepted, as
+                     --  a requirement the document labels is.
+                     if E.Is_Ok (Status) and then Accept_Imports
+                       and then Natural (Result.Made.Length) = Before + 1
+                       and then Ada.Strings.Fixed.Index (Result.Made.Last_Element, "DEC-") = 1
+                       and then Says_Accepted
+                     then
+                        Intent.Move (Item, Change, Intent.Decision, Result.Made.Last_Element,
+                                     "accepted", Transitions.Ordinary_Only, Status);
+                     end if;
+                  end;
 
                when Specification_Candidate =>
                   Propose (Intent.Specification);

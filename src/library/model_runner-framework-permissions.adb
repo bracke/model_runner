@@ -312,8 +312,11 @@ package body Model_Runner.Framework.Permissions is
                            & "; they are read_source, write_source, read_specs, write_specs,"
                            & " run_build, run_tests, run_static_analysis, create_children,"
                            & " propose_tasks, request_integration, use_network and"
-                           & " execute_external_process, written as write_source roots=docs/;"
-                           & " read_source");
+                           & " execute_external_process, written in quotes as"
+                           & " permissions=""write_source roots=docs/; read_source"""
+                           & (if Ada.Strings.Fixed.Index (Name, "=") > 0
+                              then " -- on and off are for a level's, by /reconfigure map.permission.LEVEL.NAME=off"
+                              else ""));
                Result := Nothing;
                return;
             end if;
@@ -688,12 +691,15 @@ package body Model_Runner.Framework.Permissions is
                   Which := Item;
                end if;
             end loop;
-            Append (Result, (if Result = Null_Unbounded_String then "" else ", ") & Name
-                    & " (gets "
-                    & (if not Both (Which).Granted then "none"
-                       elsif Grant_Text (Both (Which)) = "" then "it"
-                       else Grant_Text (Both (Which)))
-                    & ")");
+            --  What it asks, what the level grants, and so what it gets.
+            Append (Result, (if Result = Null_Unbounded_String then "" else "; ") & Name
+                    & (if Grant_Text (Asked (Which)) = "" then "" else " " & Grant_Text (Asked (Which)))
+                    & ": "
+                    & (if not Allowed (Which).Granted then "not granted there, so it gets none"
+                       elsif not Both (Which).Granted
+                       then "granted there only as " & Grant_Text (Allowed (Which)) & ", so it gets none"
+                       elsif Grant_Text (Both (Which)) = "" then "it gets it"
+                       else "it gets " & Grant_Text (Both (Which))));
          end;
       end loop;
       return To_String (Result);
@@ -861,14 +867,24 @@ package body Model_Runner.Framework.Permissions is
          end if;
          --  A path through a directory called as the project is -- as a
          --  model guesses where the project lies -- is what follows it.
+         --  A workspace's tree is the project's too: the project's own
+         --  directory, above its state, is named as well.
          declare
-            Named : constant String :=
-              "/" & Ada.Directories.Simple_Name (Ada.Directories.Full_Name (if Root = "" then "." else Root)) & "/";
-            At_Name : constant Natural := Ada.Strings.Fixed.Index (Path, Named, Ada.Strings.Backward);
+            Full    : constant String := Ada.Directories.Full_Name (if Root = "" then "." else Root);
+            State   : constant Natural := Ada.Strings.Fixed.Index (Full, "/.model_runner/");
+            Project : constant String :=
+              (if State > Full'First then Ada.Directories.Simple_Name (Full (Full'First .. State - 1)) else "");
          begin
-            if At_Name > 0 and then At_Name + Named'Length <= Path'Last then
-               return Path (At_Name + Named'Length .. Path'Last);
-            end if;
+            for Name of Name_Lists.Vector'([Ada.Directories.Simple_Name (Full), Project]) loop
+               declare
+                  Named   : constant String := "/" & Name & "/";
+                  At_Name : constant Natural := Ada.Strings.Fixed.Index (Path, Named, Ada.Strings.Backward);
+               begin
+                  if Name /= "" and then At_Name > 0 and then At_Name + Named'Length <= Path'Last then
+                     return Path (At_Name + Named'Length .. Path'Last);
+                  end if;
+               end;
+            end loop;
          exception
             when others =>
                null;
@@ -909,7 +925,7 @@ package body Model_Runner.Framework.Permissions is
                       and then Ada.Strings.Fixed.Index (Path, "..") = 0
                       --  A short one -- /dir/file -- not a whole path of the
                       --  machine's, which names no place of the project's.
-                      and then Ada.Strings.Fixed.Count (Path, "/") <= 2
+                      and then Ada.Strings.Fixed.Count (Path, "/") <= 3
                     then Path (Path'First + 1 .. Path'Last)
                     elsif Writing or else (Tail /= "" and then Ada.Directories.Exists (Base & Tail)) then Tail
                     else "");
@@ -1023,8 +1039,14 @@ package body Model_Runner.Framework.Permissions is
          Line  : constant String := Ada.Strings.Fixed.Trim (Raw, Ada.Strings.Both);
          Space : constant Natural := Ada.Strings.Fixed.Index (Line & " ", " ");
          Name  : constant String := Line (Line'First .. Space - 1);
-         Roots : constant String :=
-           Ada.Strings.Fixed.Translate (Value_Of (Line, "roots"), Ada.Strings.Maps.To_Mapping ("|", ","));
+         --  Its roots as a list is written: a comma and a space apart.
+         function Listed (Text : String) return String is
+            Bar : constant Natural := Ada.Strings.Fixed.Index (Text, "|");
+         begin
+            return (if Bar = 0 then Text
+                    else Text (Text'First .. Bar - 1) & ", " & Listed (Text (Bar + 1 .. Text'Last)));
+         end Listed;
+         Roots : constant String := Listed (Value_Of (Line, "roots"));
          Where : constant String := (if Roots = "" then "" else " in " & Roots);
          Most  : constant String := Value_Of (Line, "max_children");
          Words : constant String :=
@@ -1038,7 +1060,7 @@ package body Model_Runner.Framework.Permissions is
             elsif Name = "run_static_analysis" then "run its static analysis"
             elsif Name = "create_children" then "make helpers" & (if Most = "" then "" else " (at most " & Most & ")")
             elsif Name = "propose_tasks" then "propose tasks"
-            elsif Name = "use_network" then "use the network"
+            elsif Name = "use_network" then "use the network (only a model=PATH run has a tool for it)"
             elsif Name = "execute_external_process" then "run other programs (no tool uses this yet)"
             elsif Name = "request_integration" then "ask for integration (no tool uses this yet)"
             else Line);

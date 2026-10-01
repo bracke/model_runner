@@ -14,7 +14,9 @@ package body Untested_Surface is
    --  Asked of the host. Is_Terminal, Host_Locale and Executable_Directory
    --  answer differently on every machine and cannot be asserted against a
    --  value; what can be asked of them is their contract, and Core_Count is
-   --  the one that has been.
+   --  the one that has been. Answered_Yes and Typed_Line wait for a person
+   --  at the terminal the suite is run from: called here, they would hold
+   --  the run until someone typed.
    --
    --  Interfaces for a caller this repository does not have. A library is
    --  wider than its command, which Library_Surface already records; these
@@ -52,6 +54,7 @@ package body Untested_Surface is
          | "Add_Frame"
          | "Add_Integer"
          | "Add_Real"
+         | "Answered_Yes"
          | "Answering_Locale"
          | "Capability"
          | "Category_Name"
@@ -117,6 +120,7 @@ package body Untested_Surface is
          | "Tensor_Is_Supported"
          | "To_Tensor_Type"
          | "To_Value_Type"
+         | "Typed_Line"
          | "Wide_From_Bits"
          | "Write_Text"
          | "Write_Whole";

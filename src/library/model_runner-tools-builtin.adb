@@ -1109,8 +1109,18 @@ package body Model_Runner.Tools.Builtin is
          return "";
       end if;
       declare
-         Tail  : constant String := Path (Path'First + 1 .. Path'Last);
-         Whole : constant String := Env.Value (Pm.Agent_Root_Variable) & "/" & Tail;
+         Root    : constant String := Env.Value (Pm.Agent_Root_Variable);
+         --  The project's own name, a workspace's tree's too: /demo/a.txt
+         --  in the project demo is a.txt, not demo/a.txt.
+         State   : constant Natural := Ada.Strings.Fixed.Index (Root, "/.model_runner/");
+         Project : constant String :=
+           Ada.Directories.Simple_Name (if State > Root'First then Root (Root'First .. State - 1) else Root);
+         Given   : constant String := Path (Path'First + 1 .. Path'Last);
+         Tail    : constant String :=
+           (if Given'Length > Project'Length + 1
+              and then Given (Given'First .. Given'First + Project'Length) = Project & "/"
+            then Given (Given'First + Project'Length + 1 .. Given'Last) else Given);
+         Whole   : constant String := Root & "/" & Tail;
       begin
          if Ada.Directories.Exists (Whole)
            or else (Named = "write_file" and then Ada.Strings.Fixed.Index (Tail, "/") > 0

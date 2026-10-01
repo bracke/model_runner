@@ -181,7 +181,23 @@ package Model_Runner.Framework.Workspaces is
    --  @return The paths, sorted; none when there is no such copy.
    function Kept_Files (Item : Stores.Store; Name : String) return Name_Lists.Vector;
 
-   --  Put a kept copy's files back in the project, each over what is there.
+   --  The files of a kept copy the project holds otherwise now: what
+   --  putting the copy back would overwrite.
+   --
+   --  @param Item The store.
+   --  @param Name The copy.
+   --  @return The paths, sorted; none when nothing differs.
+   function Changed_Since_Kept (Item : Stores.Store; Name : String) return Name_Lists.Vector;
+
+   --  The copy Restore_Kept keeps what the project held of a copy's files,
+   --  where they differed: replaced-NAME.
+   --
+   --  @param Name The copy put back.
+   --  @return Its name.
+   function Replaced_Copy (Name : String) return String;
+
+   --  Put a kept copy's files back in the project, each over what is there;
+   --  a file the project holds otherwise is kept first, as Replaced_Copy.
    --
    --  @param Item The store.
    --  @param Name The copy.
