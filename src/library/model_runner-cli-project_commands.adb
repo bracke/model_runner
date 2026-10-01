@@ -4527,7 +4527,9 @@ package body Model_Runner.CLI.Project_Commands is
          Command.Session_Profile := Wk.Parenting_Runner'Class (Agent).Profile;
          Command.Has_Session_Profile := True;
       end if;
-      if All_Words.Contains ("--verbose") then
+      if All_Words.Contains ("--verbose")
+        and then not (Word = "/task" and then Argument (1) not in "show" | "context" | "audit" | "list" | "plan")
+      then
          Command.Level := Opt.Verbose;
       end if;
       if Open_Quote then
@@ -4697,10 +4699,13 @@ package body Model_Runner.CLI.Project_Commands is
             Command.Action_Argument := T.To_Bounded (Argument (1));
          else
             Command.Action := T.To_Bounded (Argument (1));
-            --  --verbose is how much is said, not what it is said of.
+            --  --verbose is how much a look says, not what it is said of;
+            --  in a title or a note it is the words typed.
             declare
                Said : constant String := Rest (2);
-               At_V : constant Natural := Ada.Strings.Fixed.Index (Said, "--verbose");
+               At_V : constant Natural :=
+                 (if Argument (1) in "show" | "context" | "audit" | "list" | "plan"
+                  then Ada.Strings.Fixed.Index (" " & Said & " ", " --verbose ") else 0);
             begin
                Command.Action_Argument := T.To_Bounded
                  (if At_V = 0 then Said

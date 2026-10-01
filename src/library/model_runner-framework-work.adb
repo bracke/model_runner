@@ -1,7 +1,6 @@
 with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Strings.Fixed;
-with Ada.Strings.Maps;
 
 with Hostkit.Fs;
 
@@ -2131,29 +2130,8 @@ package body Model_Runner.Framework.Work is
                               or else Ada.Strings.Fixed.Index (Word, "run_") = Word'First
                               or else Ada.Strings.Fixed.Index (Word, "create_children") = Word'First)
                   then
-                     declare
-                        Space : constant Natural := Ada.Strings.Fixed.Index (Word & " ", " ");
-                        Name  : constant String := Word (Word'First .. Space - 1);
-                        Roots : constant Natural := Ada.Strings.Fixed.Index (Word, "roots=");
-                        Where : constant String :=
-                          (if Roots = 0 then ""
-                           else " in " & Ada.Strings.Fixed.Translate
-                                           (Trim (Word (Roots + 6 .. Word'Last)),
-                                            Ada.Strings.Maps.To_Mapping ("|", ",")));
-                        --  Said in words, not by the permission's own name.
-                        Plain : constant String :=
-                          (if Name = "read_source" then "read the source"
-                           elsif Name = "read_specs" then "read the specifications"
-                           elsif Name = "write_source" then "write files" & Where
-                           elsif Name = "write_specs" then "write specifications" & Where
-                           elsif Name = "run_build" then "build it"
-                           elsif Name = "run_tests" then "run its tests"
-                           elsif Name = "run_static_analysis" then "run its static analysis"
-                           elsif Name = "create_children" then "make helpers"
-                           else Name);
-                     begin
-                        Append (Said, (if Said = Null_Unbounded_String then "" else ", ") & Plain);
-                     end;
+                     Append (Said, (if Said = Null_Unbounded_String then "" else ", ")
+                             & Permissions.In_Words (Word));
                   end if;
                end;
             end loop;

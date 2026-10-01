@@ -1811,8 +1811,8 @@ package body Tests.CLI_Cases is
       Assert (Command ("task|new|Elsewhere|--set|kind=implementation|--set|component=nowhere") /= 0,
               "a task named a component the project does not have");
       Assert (Command ("task|show|TASK-001") = 0
-              and then Shows ("permissions: read_source; read_specs; run_build; run_tests;"
-                              & " run_static_analysis; propose_tasks")
+              and then Shows ("may: read the source, read the specifications, build it, run its tests,"
+                              & " run its static analysis, propose tasks")
               and then Command ("task|show|TASK-002") = 0
               and then Shows ("implementation_present"),
               "a kind was not narrowed, or its gates not what the template says: " & Last_Output);

@@ -963,4 +963,64 @@ package body Model_Runner.Framework.Permissions is
       return "";
    end Path_Refusal;
 
+   --------------
+   -- In_Words --
+   --------------
+
+   function In_Words (Text : String) return String is
+      Said  : Ada.Strings.Unbounded.Unbounded_String;
+      Start : Natural := Text'First;
+
+      --  The number after NAME= in a line, or "".
+      function Value_Of (Line, Name : String) return String is
+         At_Name : constant Natural := Ada.Strings.Fixed.Index (Line, Name & "=");
+         Stop    : Natural;
+      begin
+         if At_Name = 0 then
+            return "";
+         end if;
+         Stop := At_Name + Name'Length + 1;
+         while Stop <= Line'Last and then Line (Stop) not in ' ' | ';' loop
+            Stop := Stop + 1;
+         end loop;
+         return Line (At_Name + Name'Length + 1 .. Stop - 1);
+      end Value_Of;
+
+      procedure One (Raw : String) is
+         Line  : constant String := Ada.Strings.Fixed.Trim (Raw, Ada.Strings.Both);
+         Space : constant Natural := Ada.Strings.Fixed.Index (Line & " ", " ");
+         Name  : constant String := Line (Line'First .. Space - 1);
+         Roots : constant String :=
+           Ada.Strings.Fixed.Translate (Value_Of (Line, "roots"), Ada.Strings.Maps.To_Mapping ("|", ","));
+         Where : constant String := (if Roots = "" then "" else " in " & Roots);
+         Most  : constant String := Value_Of (Line, "max_children");
+         Words : constant String :=
+           (if Name = "read_source" then "read the source"
+            elsif Name = "read_specs" then "read the specifications"
+            elsif Name = "write_source" then "write files" & Where
+            elsif Name = "write_specs" then "write specifications" & Where
+            elsif Name = "run_build" then "build it"
+            elsif Name = "run_tests" then "run its tests"
+            elsif Name = "run_static_analysis" then "run its static analysis"
+            elsif Name = "create_children" then "make helpers" & (if Most = "" then "" else " (at most " & Most & ")")
+            elsif Name = "propose_tasks" then "propose tasks"
+            elsif Name = "use_network" then "use the network"
+            else Line);
+      begin
+         if Line /= "" then
+            Ada.Strings.Unbounded.Append
+              (Said, (if Ada.Strings.Unbounded.Length (Said) = 0 then "" else ", ") & Words);
+         end if;
+      end One;
+   begin
+      for Index in Text'First .. Text'Last + 1 loop
+         if Index > Text'Last or else Text (Index) in ';' | ASCII.LF then
+            One (Text (Start .. Index - 1));
+            Start := Index + 1;
+         end if;
+      end loop;
+      return (if Ada.Strings.Unbounded.Length (Said) = 0 then "nothing"
+              else Ada.Strings.Unbounded.To_String (Said));
+   end In_Words;
+
 end Model_Runner.Framework.Permissions;

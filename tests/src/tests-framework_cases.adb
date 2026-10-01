@@ -3765,6 +3765,13 @@ package body Tests.Framework_Cases is
                                             "src/security/x.adb"),
                     "a permission written and read back was not the same: " & Pm.Image (Rules));
          end;
+         --  Said to a person or an agent in words, not by their names.
+         Assert (Pm.In_Words ("read_source; write_source roots=docs/|src/; create_children max_depth=1"
+                              & " max_children=2") = "read the source, write files in docs/,src/, make helpers"
+                 & " (at most 2)"
+                 and then Pm.In_Words ("") = "nothing",
+                 "permissions were not said in words: "
+                 & Pm.In_Words ("read_source; write_source roots=docs/|src/; create_children max_children=2"));
          Assert (Pm.Path_Refusal (Root, "src/new.adb", True, Pm.Value ("write_source roots=docs/"))
                  = "you may not write src/new.adb",
                  "the grants did not narrow what may be written");

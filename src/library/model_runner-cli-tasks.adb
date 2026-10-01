@@ -1807,6 +1807,15 @@ package body Model_Runner.CLI.Tasks is
                if Name = "ready" and then R.Get (View, Name) /= "true" and then R.Get (View, "blocked_by") /= "" then
                   return;
                end if;
+               --  What its agent may do, in words, not by the permissions'
+               --  own names.
+               if Name = "permissions" then
+                  Pres.Put_Message
+                    (Screen, "cli.task.grouped",
+                     [Loc.Named ("name", "  " & "may"),
+                      Loc.Named ("value", Model_Runner.Framework.Permissions.In_Words (R.Get (View, Name)))]);
+                  return;
+               end if;
                --  The checks it is verified by, said once: the profile, then
                --  what it runs -- not profile, label and command stacked.
                if Name = "verification_profile" then
@@ -1830,6 +1839,11 @@ package body Model_Runner.CLI.Tasks is
                                     (if Colon = 0 then Held
                                      else "profile " & Held (Held'First .. Colon - 1)
                                           & (if Runs = Null_Unbounded_String then ""
+                                             --  A check that is only true checks nothing yet.
+                                             elsif To_String (Runs) = "true"
+                                             then ", which checks nothing yet (it runs true); /reconfigure "
+                                                  & "profile." & Held (Held'First .. Colon - 1)
+                                                  & "=""check: COMMAND"" sets what it runs"
                                              else ", which runs " & To_String (Runs))))]);
                      return;
                   end;

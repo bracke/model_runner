@@ -283,6 +283,15 @@ package Model_Runner.Framework.Permissions is
    --  @return The text.
    function Image (Set : Permission_Set) return String;
 
+   --  Permissions as Image writes them -- a line or a ";" apart each --
+   --  said in words, a comma apart: write_source roots=docs/ is "write
+   --  files in docs/", create_children max_children=2 "make helpers (at
+   --  most 2)".
+   --
+   --  @param Text The permissions.
+   --  @return The words; "nothing" for none.
+   function In_Words (Text : String) return String;
+
    --  A set as Image writes it.
    --
    --  @param Text The text.
