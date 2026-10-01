@@ -452,6 +452,13 @@ en.cli.intent.superseded = {name} is {value} now, replaced by {other}
 en.cli.intent.work_moved = {name} serves {value} now, in {other}'s place
 en.cli.intent.work_kept = {name} still serves {other}: {value} is served by {detail} already, so it is not moved there; /task cancel {name} lets it go
 en.cli.task.field = {name}: {value}
+en.cli.task.grouped = {name}: {value}
+en.cli.task.heading = {name}: {value}
+en.cli.task.section.what = What it is
+en.cli.task.section.stands = Where it stands
+en.cli.task.section.judged = How it is judged
+en.cli.task.section.agent = What its agent may do
+en.cli.task.section.governs = What governs it
 en.cli.task.derived = derived {name}, in the component {value}
 en.cli.task.derived_placed = {name} is in {value}, the first component listed, since what it serves is the whole project's; /task edit {name} component=NAME places it in another (in a project of several components, a task's identifier names its component)
 en.cli.task.derived_one_of = {name} serves {other}, which belongs to {detail}: it was derived in {value} alone; /task new TITLE kind=KIND component=NAME requirements={other} makes one for another
@@ -1568,6 +1575,13 @@ da.cli.intent.superseded = {name} er {value} nu, afløst af {other}
 da.cli.intent.work_moved = {name} betjener {value} nu, i stedet for {other}
 da.cli.intent.work_kept = {name} betjener stadig {other}: {value} betjenes allerede af {detail}, så den flyttes ikke dertil; /task cancel {name} slipper den
 da.cli.task.field = {name}: {value}
+da.cli.task.grouped = {name}: {value}
+da.cli.task.heading = {name}: {value}
+da.cli.task.section.what = Hvad den er
+da.cli.task.section.stands = Hvor den står
+da.cli.task.section.judged = Hvordan den bedømmes
+da.cli.task.section.agent = Hvad dens agent må
+da.cli.task.section.governs = Hvad der gælder for den
 da.cli.task.derived = afledt {name}, i komponenten {value}
 da.cli.task.derived_placed = {name} er i {value}, den første komponent på listen, da det den betjener er hele projektets; /task edit {name} component=NAVN placerer den i en anden (i et projekt med flere komponenter nævner en opgaves identifikator dens komponent)
 da.cli.task.derived_one_of = {name} betjener {other}, som hører til {detail}: den blev afledt i {value} alene; /task new TITEL kind=ART component=NAVN requirements={other} laver en til en anden
@@ -2465,6 +2479,13 @@ qps.cli.intent.superseded = ⟦{name} íß {value} ñów, ŕépĺáçéð bý {o
 qps.cli.intent.work_moved = ⟦{name} ßéŕvéß {value} ñów, íñ {other}'ß pĺáçé⟧
 qps.cli.intent.work_kept = ⟦{name} ßŧíĺĺ ßéŕvéß {other}: {value} íß ßéŕvéð bý {detail} áĺŕéáðý, ßó íŧ íß ñóŧ móvéð ŧhéŕé; /ŧáßk çáñçéĺ {name} ĺéŧß íŧ gó⟧
 qps.cli.task.field = ⟦{name}: {value}⟧
+qps.cli.task.grouped = ⟦{name}: {value}⟧
+qps.cli.task.heading = ⟦{name}: {value}⟧
+qps.cli.task.section.what = ⟦Wháŧ íŧ íß⟧
+qps.cli.task.section.stands = ⟦Whéŕé íŧ ßŧáñðß⟧
+qps.cli.task.section.judged = ⟦Hów íŧ íß júðgéð⟧
+qps.cli.task.section.agent = ⟦Wháŧ íŧß ágéñŧ máý ðó⟧
+qps.cli.task.section.governs = ⟦Wháŧ góvéŕñß íŧ⟧
 qps.cli.task.derived = ⟦ðéŕívéð {name}, íñ ŧhé çómpóñéñŧ {value}⟧
 qps.cli.task.derived_placed = ⟦{name} íß íñ {value}, ŧhé fíŕßŧ çómpóñéñŧ ĺíßŧéð, ßíñçé wháŧ íŧ ßéŕvéß íß ŧhé whóĺé pŕójéçŧ'ß; /ŧáßk éðíŧ {name} çómpóñéñŧ=NAME pĺáçéß íŧ íñ áñóŧhéŕ (íñ á pŕójéçŧ óf ßévéŕáĺ çómpóñéñŧß, á ŧáßk'ß íðéñŧífíéŕ ñáméß íŧß çómpóñéñŧ)⟧
 qps.cli.task.derived_one_of = ⟦{name} ßéŕvéß {other}, whíçh béĺóñgß ŧó {detail}: íŧ wáß ðéŕívéð íñ {value} áĺóñé; /ŧáßk ñéw ŦIŦLE kíñð=KIND çómpóñéñŧ=NAME ŕéqúíŕéméñŧß={other} mákéß óñé fóŕ áñóŧhéŕ⟧

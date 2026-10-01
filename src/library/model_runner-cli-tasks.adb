@@ -1690,11 +1690,9 @@ package body Model_Runner.CLI.Tasks is
             Fail (Outcome);
             return;
          end if;
-         --  What it is and where it stands first; what governs it last.
+         --  In groups, each under its title: what it is, where it stands,
+         --  how it is judged, what its agent may do, and what governs it.
          declare
-            First : constant Model_Runner.Framework.Name_Lists.Vector :=
-              ["definition.title", "runtime.state", "blocked_by", "definition.kind",
-               "definition.component", "definition.requirements", "definition.depends_on"];
 
             --  A field by its own name, the record's grouping left out --
             --  definition.title is title -- and one that says nothing, or
@@ -1781,8 +1779,8 @@ package body Model_Runner.CLI.Tasks is
                                                      (Checks, Index).Command));
                      end loop;
                      Pres.Put_Message
-                       (Screen, "cli.task.field",
-                        [Loc.Named ("name", "checked by"),
+                       (Screen, "cli.task.grouped",
+                        [Loc.Named ("name", "  " & "checked by"),
                          Loc.Named ("value",
                                     (if Colon = 0 then Held
                                      else "profile " & Held (Held'First .. Colon - 1)
@@ -1797,143 +1795,218 @@ package body Model_Runner.CLI.Tasks is
                  and then Model_Runner.Framework.Work.Unable_Reason (Store, Argument) /= ""
                then
                   Pres.Put_Message
-                    (Screen, "cli.task.field",
-                     [Loc.Named ("name", "ready"),
+                    (Screen, "cli.task.grouped",
+                     [Loc.Named ("name", "  " & "ready"),
                       Loc.Named ("value", "no -- " & Model_Runner.Framework.Work.Unable_Reason (Store, Argument))]);
                   return;
                end if;
                Pres.Put_Message
-                 (Screen, "cli.task.field",
-                  [Loc.Named ("name", Shown_Name), Loc.Named ("value", Shown_Value)]);
+                 (Screen, "cli.task.grouped",
+                  [Loc.Named ("name", "  " & Shown_Name), Loc.Named ("value", Shown_Value)]);
             end Line;
 
-            function Leading (Name : String) return Boolean
-            is (First.Contains (Name));
-
             function Governing (Name : String) return Boolean
-            is (Name'Length > 10 and then Name (Name'First .. Name'First + 9) = "authority.");
+            is ((Name'Length > 10 and then Name (Name'First .. Name'First + 9) = "authority.")
+                or else Ada.Strings.Fixed.Index (Name, "override.") = Name'First
+                or else Ada.Strings.Fixed.Index (Name, "conflict.") = Name'First);
+
+            --  Each field said once, in the group it belongs to.
+            Said : Model_Runner.Framework.Name_Lists.Vector;
+
+            procedure Once (Name : String) is
+            begin
+               if not Said.Contains (Name) and then R.Has (View, Name) then
+                  Said.Append (Name);
+                  Line (Name);
+               end if;
+            end Once;
+
+            --  A group's title, a blank line before it.
+            procedure Section (Key : String) is
+            begin
+               Pres.Put_Line (Screen, "");
+               Pres.Put_Message (Screen, Key);
+            end Section;
+
+            Ended : constant Boolean :=
+              R.Get (View, "runtime.state") in "complete" | "cancelled" | "rejected";
          begin
-            for One of First loop
-               --  What it waits for, only where it waits.
-               if R.Has (View, One) and then not (One = "blocked_by" and then R.Get (View, One) = "")
-               then
-                  Line (One);
-               end if;
-            end loop;
-            for Index in 1 .. R.Field_Count (View) loop
-               if not Leading (R.Field_Name (View, Index))
-                 and then not Governing (R.Field_Name (View, Index))
-               then
-                  Line (R.Field_Name (View, Index));
-               end if;
-            end loop;
-            --  What it is judged by, where it serves nothing: itself.
+            --  It, by its identifier and title.
+            Pres.Put_Message (Screen, "cli.task.heading",
+                              [Loc.Named ("name", Argument),
+                               Loc.Named ("value", R.Get (View, "definition.title"))]);
+            Said.Append ("definition.title");
+
+            --  What it is: its kind, where, what it serves, and what it is
+            --  judged by as a task.
+            Section ("cli.task.section.what");
+            Once ("definition.kind");
+            Once ("definition.component");
+            Once ("definition.requirements");
+            Once ("definition.acceptance");
             if R.Get (View, "definition.requirements") = ""
               and then R.Get (View, "definition.acceptance") in "" | "from_requirements"
             then
                Pres.Put_Message
-                 (Screen, "cli.task.field",
-                  [Loc.Named ("name", "acceptance"),
+                 (Screen, "cli.task.grouped",
+                  [Loc.Named ("name", "  " & "acceptance"),
                    Loc.Named ("value", "its title and notes -- it serves no requirement; /task link "
                                        & Argument & " REQ-ID ties it to one")]);
             end if;
-            --  Its bounds on one line.
+            Once ("definition.notes");
+            for Index in 1 .. R.Field_Count (View) loop
+               if Ada.Strings.Fixed.Index (R.Field_Name (View, Index), "definition.") = 1
+                 and then R.Field_Name (View, Index) not in "definition.depends_on" | "definition.permissions"
+                                                         | "definition.parent"
+               then
+                  Once (R.Field_Name (View, Index));
+               end if;
+            end loop;
+
+            --  Where it stands: its state and what holds it, what it waits
+            --  for, its parts and its waiting work.
+            Section ("cli.task.section.stands");
+            Once ("runtime.state");
+            if Ended then
+               Said.Append ("blocked_by");
+            end if;
+            if R.Get (View, "blocked_by") = "" then
+               Said.Append ("blocked_by");
+            end if;
+            Once ("blocked_by");
+            Once ("ready");
+            Once ("definition.parent");
+            Once ("definition.depends_on");
+            declare
+               Parts : Unbounded_String;
+            begin
+               for Child of Tk.Children (Store, Argument) loop
+                  Append (Parts, (if Parts = Null_Unbounded_String then "" else ", ")
+                                 & Child & " " & Tk.State_Of (Store, Child));
+               end loop;
+               if Parts /= Null_Unbounded_String then
+                  Pres.Put_Message
+                    (Screen, "cli.task.grouped",
+                     [Loc.Named ("name", "  " & "parts"), Loc.Named ("value", To_String (Parts))]);
+               end if;
+            end;
+            if Model_Runner.Framework.Workspaces.Active_For (Store, Argument) /= "" then
+               declare
+                  Place : Model_Runner.Framework.Workspaces.Workspace;
+                  Read  : E.Error_Info;
+               begin
+                  Model_Runner.Framework.Workspaces.Read
+                    (Store, Model_Runner.Framework.Workspaces.Active_For (Store, Argument), Place, Read);
+                  Pres.Put_Message
+                    (Screen, "cli.task.grouped",
+                     [Loc.Named ("name", "  " & "workspace"),
+                      Loc.Named ("value", Model_Runner.Framework.Workspaces.Active_For (Store, Argument)
+                                          & " " & To_String (Place.Path))]);
+               end;
+            end if;
+            --  The rest of where it stands: who moved it, what failed.
+            for Index in 1 .. R.Field_Count (View) loop
+               declare
+                  Name : constant String := R.Field_Name (View, Index);
+               begin
+                  if Ada.Strings.Fixed.Index (Name, "runtime.") = 1
+                    or else Name in "accepted_by" | "moved_by" | "rejected_by" | "blocking_reasons"
+                                  | "current_failure"
+                  then
+                     Once (Name);
+                  end if;
+               end;
+            end loop;
+
+            --  How it is judged: the gates it passes, and the checks.
+            Section ("cli.task.section.judged");
+            Once ("gates");
+            Once ("verification_profile");
+
+            --  What its agent may do, from where, where it writes, and how
+            --  long and how much.
+            Section ("cli.task.section.agent");
+            Once ("permissions");
+            declare
+               package Pm renames Model_Runner.Framework.Permissions;
+               Kind    : constant String := R.Get (View, "definition.kind");
+               Own     : constant String := R.Get (View, "definition.permissions");
+               Config  : R.Item;
+               Read    : E.Error_Info;
+               Named   : Boolean := False;
+            begin
+               Model_Runner.Framework.Configurations.Read (Store, Config, Read);
+               for Index in 1 .. R.Field_Count (Config) loop
+                  Named := Named
+                    or else Ada.Strings.Fixed.Index (R.Field_Name (Config, Index),
+                                                     "map.permission.kind." & Kind & ".") = 1;
+               end loop;
+               Pres.Put_Message
+                 (Screen, "cli.task.grouped",
+                  [Loc.Named ("name", "  " & "permissions from"),
+                   Loc.Named ("value",
+                              (if Own /= "" then "its own permissions field, within "
+                               else "")
+                              & (if Named then "kind." & Kind & " (/config permission.kind." & Kind & ")"
+                                 else "the project's (/config permission.project)"))]);
+               if Pm.Sandbox_Problem /= "" then
+                  Pres.Put_Note (Screen, "cli.task.sandbox_bad", [Loc.Named ("detail", Pm.Sandbox_Problem)]);
+               elsif Pm.Sandbox_Source /= "" then
+                  declare
+                     Free     : constant Pm.Permission_Set :=
+                       Pm.Effective (Store, Kind, "", Task_Level => Own, Within_Sandbox => False);
+                     Confined : constant Pm.Permission_Set :=
+                       Pm.Effective (Store, Kind, "", Task_Level => Own);
+                     Withheld : Unbounded_String;
+                  begin
+                     for One in Pm.Capability loop
+                        if Free (One).Granted and then not Confined (One).Granted then
+                           Append (Withheld, (if Withheld = Null_Unbounded_String then "" else ", ")
+                                             & Pm.Word (One));
+                        end if;
+                     end loop;
+                     Pres.Put_Message
+                       (Screen, "cli.task.grouped",
+                        [Loc.Named ("name", "  " & "sandbox"),
+                         Loc.Named ("value", Pm.Sandbox_Source & ": "
+                                    & Joined (Model_Runner.Framework.Lines_Of (Pm.Image (Pm.Sandbox)))
+                                    & (if Withheld = Null_Unbounded_String then ""
+                                       else " -- withholds " & To_String (Withheld)))]);
+                  end;
+               end if;
+            end;
+            Once ("workspace_policy");
             if R.Get (View, "resource.max_steps") /= "" or else R.Get (View, "resource.token_budget") /= "" then
                Pres.Put_Message
-                 (Screen, "cli.task.field",
-                  [Loc.Named ("name", "limits"),
+                 (Screen, "cli.task.grouped",
+                  [Loc.Named ("name", "  " & "limits"),
                    Loc.Named ("value", R.Get (View, "resource.max_steps") & " steps, "
                                        & R.Get (View, "resource.token_budget") & " tokens")]);
             end if;
-            for Index in 1 .. R.Field_Count (View) loop
-               if Governing (R.Field_Name (View, Index)) then
-                  Line (R.Field_Name (View, Index));
-               end if;
-            end loop;
-         end;
 
-         --  Where its permissions come from: its kind's level where that
-         --  names any, else the project's -- and what a sandbox, the
-         --  environment's or the session's, withholds from them.
-         declare
-            package Pm renames Model_Runner.Framework.Permissions;
-            Kind    : constant String := R.Get (View, "definition.kind");
-            Own     : constant String := R.Get (View, "definition.permissions");
-            Config  : R.Item;
-            Read    : E.Error_Info;
-            Named   : Boolean := False;
-         begin
-            Model_Runner.Framework.Configurations.Read (Store, Config, Read);
-            for Index in 1 .. R.Field_Count (Config) loop
-               Named := Named
-                 or else Ada.Strings.Fixed.Index (R.Field_Name (Config, Index),
-                                                  "map.permission.kind." & Kind & ".") = 1;
-            end loop;
-            Pres.Put_Message
-              (Screen, "cli.task.field",
-               [Loc.Named ("name", "permissions from"),
-                Loc.Named ("value",
-                           (if Own /= "" then "its own permissions field, within "
-                            else "")
-                           & (if Named then "kind." & Kind & " (/config permission.kind." & Kind & ")"
-                              else "the project's (/config permission.project)"))]);
-            if Pm.Sandbox_Problem /= "" then
-               Pres.Put_Note (Screen, "cli.task.sandbox_bad", [Loc.Named ("detail", Pm.Sandbox_Problem)]);
-            elsif Pm.Sandbox_Source /= "" then
-               declare
-                  Free     : constant Pm.Permission_Set :=
-                    Pm.Effective (Store, Kind, "", Task_Level => Own, Within_Sandbox => False);
-                  Confined : constant Pm.Permission_Set :=
-                    Pm.Effective (Store, Kind, "", Task_Level => Own);
-                  Withheld : Unbounded_String;
-               begin
-                  for One in Pm.Capability loop
-                     if Free (One).Granted and then not Confined (One).Granted then
-                        Append (Withheld, (if Withheld = Null_Unbounded_String then "" else ", ")
-                                          & Pm.Word (One));
+            --  What governs it: the rules above the configuration, and every
+            --  override and conflict among them.
+            declare
+               Rules : Boolean := False;
+            begin
+               for Index in 1 .. R.Field_Count (View) loop
+                  Rules := Rules or else Governing (R.Field_Name (View, Index));
+               end loop;
+               if Rules then
+                  Section ("cli.task.section.governs");
+                  for Index in 1 .. R.Field_Count (View) loop
+                     if Governing (R.Field_Name (View, Index)) then
+                        Once (R.Field_Name (View, Index));
                      end if;
                   end loop;
-                  Pres.Put_Message
-                    (Screen, "cli.task.field",
-                     [Loc.Named ("name", "sandbox"),
-                      Loc.Named ("value", Pm.Sandbox_Source & ": "
-                                 & Joined (Model_Runner.Framework.Lines_Of (Pm.Image (Pm.Sandbox)))
-                                 & (if Withheld = Null_Unbounded_String then ""
-                                    else " -- withholds " & To_String (Withheld)))]);
-               end;
-            end if;
-         end;
-
-         --  Its parts, each with how it stands, whatever the parent's state.
-         declare
-            Parts : Unbounded_String;
-         begin
-            for Child of Tk.Children (Store, Argument) loop
-               Append (Parts, (if Parts = Null_Unbounded_String then "" else ", ")
-                              & Child & " " & Tk.State_Of (Store, Child));
-            end loop;
-            if Parts /= Null_Unbounded_String then
-               Pres.Put_Message
-                 (Screen, "cli.task.field",
-                  [Loc.Named ("name", "parts"), Loc.Named ("value", To_String (Parts))]);
-            end if;
-         end;
-
-         --  Work waiting in a workspace: which, and where.
-         if Model_Runner.Framework.Workspaces.Active_For (Store, Argument) /= "" then
-            declare
-               Place : Model_Runner.Framework.Workspaces.Workspace;
-               Read  : E.Error_Info;
-            begin
-               Model_Runner.Framework.Workspaces.Read
-                 (Store, Model_Runner.Framework.Workspaces.Active_For (Store, Argument), Place, Read);
-               Pres.Put_Message
-                 (Screen, "cli.task.field",
-                  [Loc.Named ("name", "workspace"),
-                   Loc.Named ("value", Model_Runner.Framework.Workspaces.Active_For (Store, Argument)
-                                       & " " & To_String (Place.Path))]);
+               end if;
             end;
-         end if;
+
+            --  Anything else it holds, so nothing is hidden by the grouping.
+            for Index in 1 .. R.Field_Count (View) loop
+               Once (R.Field_Name (View, Index));
+            end loop;
+         end;
       end Show;
 
       --  The context a model would be given for the task, kept so that

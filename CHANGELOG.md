@@ -1831,6 +1831,9 @@ Keep a Changelog and the project uses semantic versioning.
     adds a test, the rare answer lines on one line, and a file the task
     names put in its context; `/task context` budgets as `/work` does and
     `--verbose` shows the whole text.
+  - `/task show` opens with the task's identifier and title and groups the
+    rest under titles, a blank line apart: what it is, where it stands, how
+    it is judged, what its agent may do, and what governs it.
   - `/task show` leaves out a `ready: false` its `blocked_by` says already,
     and names its checks as `checked by: profile checks, which runs true`.
   - Clearer: `/task diff` with labels, removals and conflicts; conflicts a
