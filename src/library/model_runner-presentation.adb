@@ -114,6 +114,9 @@ package body Model_Runner.Presentation is
    function Styles (Item : Console; Where : Destination) return Boolean
    is (Styled (Item, Attached (Item, Where)));
 
+   function Styles_Answers (Item : Console) return Boolean
+   is (Styles (Item, Answer) and then not Item.Structured);
+
    --  Look up a localized message, tolerating an absent catalog.
    function Message
      (Item      : Console;
@@ -583,6 +586,90 @@ package body Model_Runner.Presentation is
 
    function In_Session (Item : Console) return Boolean is (Item.Session);
 
+   ---------------------
+   -- Looks_Like_JSON --
+   ---------------------
+
+   function Looks_Like_JSON (Text : String) return Boolean is
+      Bare : constant String := Ada.Strings.Fixed.Trim (Text, Ada.Strings.Both);
+   begin
+      return Bare'Length >= 2
+        and then ((Bare (Bare'First) = '{' and then Bare (Bare'Last) = '}')
+                  or else (Bare (Bare'First) = '[' and then Bare (Bare'Last) = ']'));
+   end Looks_Like_JSON;
+
+   -------------------
+   -- JSON_Coloured --
+   -------------------
+
+   function JSON_Coloured (Text : String) return String is
+      Result : Ada.Strings.Unbounded.Unbounded_String;
+      Index  : Natural := Text'First;
+
+      procedure Add (Part : String; Role : Terminal_Styles.Style_Role) is
+      begin
+         Ada.Strings.Unbounded.Append (Result, Terminal_Styles.Decorate (Part, Role));
+      end Add;
+
+      function Starts_Word (Word : String) return Boolean
+      is (Index + Word'Length - 1 <= Text'Last and then Text (Index .. Index + Word'Length - 1) = Word);
+   begin
+      while Index <= Text'Last loop
+         declare
+            C : constant Character := Text (Index);
+         begin
+            if C = '"' then
+               --  A string to its closing quote, escapes and all; a key where
+               --  a colon follows it.
+               declare
+                  Stop  : Natural := Index + 1;
+                  After : Natural;
+               begin
+                  while Stop <= Text'Last and then Text (Stop) /= '"' loop
+                     if Text (Stop) = '\' then
+                        Stop := Stop + 1;
+                     end if;
+                     Stop := Stop + 1;
+                  end loop;
+                  Stop := Natural'Min (Stop, Text'Last);
+                  After := Stop + 1;
+                  while After <= Text'Last and then Text (After) in ' ' | ASCII.HT loop
+                     After := After + 1;
+                  end loop;
+                  Add (Text (Index .. Stop),
+                       (if After <= Text'Last and then Text (After) = ':' then Terminal_Styles.Role_Info
+                        else Terminal_Styles.Role_Success));
+                  Index := Stop + 1;
+               end;
+            elsif C in '0' .. '9' or else (C = '-' and then Index < Text'Last and then Text (Index + 1) in '0' .. '9')
+            then
+               declare
+                  Stop : Natural := Index + 1;
+               begin
+                  while Stop <= Text'Last and then Text (Stop) in '0' .. '9' | '.' | 'e' | 'E' | '+' | '-' loop
+                     Stop := Stop + 1;
+                  end loop;
+                  Add (Text (Index .. Stop - 1), Terminal_Styles.Role_Warning);
+                  Index := Stop;
+               end;
+            elsif Starts_Word ("true") or else Starts_Word ("null") then
+               Add (Text (Index .. Index + 3), Terminal_Styles.Role_Warning);
+               Index := Index + 4;
+            elsif Starts_Word ("false") then
+               Add (Text (Index .. Index + 4), Terminal_Styles.Role_Warning);
+               Index := Index + 5;
+            elsif C in '{' | '}' | '[' | ']' | ',' | ':' then
+               Add ([1 => C], Terminal_Styles.Role_Muted);
+               Index := Index + 1;
+            else
+               Ada.Strings.Unbounded.Append (Result, C);
+               Index := Index + 1;
+            end if;
+         end;
+      end loop;
+      return Ada.Strings.Unbounded.To_String (Result);
+   end JSON_Coloured;
+
    -------------
    -- Put_Row --
    -------------
@@ -792,7 +879,9 @@ package body Model_Runner.Presentation is
             then Terminal_Styles.Decorate (Named, Terminal_Styles.Role_Header)
             else Named)
          & " "
-         & (if Styled
+         --  Its arguments as JSON is read, where they are JSON.
+         & (if Styled and then Looks_Like_JSON (Arguments) then JSON_Coloured (Arguments)
+            elsif Styled
             then Terminal_Styles.Decorate
                    (Arguments, Terminal_Styles.Role_Muted)
             else Arguments));
@@ -811,7 +900,9 @@ package body Model_Runner.Presentation is
       Error_Line
         (Item,
          (if Styled then Glyph_Result & " " else "<- ")
-         & (if Styled
+         --  A result that is JSON coloured as JSON; any other muted.
+         & (if Styled and then Looks_Like_JSON (Result) then JSON_Coloured (Result)
+            elsif Styled
             then Terminal_Styles.Decorate (Result, Terminal_Styles.Role_Muted)
             else Result));
    end Put_Tool_Result;

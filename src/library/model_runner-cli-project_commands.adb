@@ -166,6 +166,9 @@ package body Model_Runner.CLI.Project_Commands is
       --  A helper's run: what it writes is its report, which the agent
       --  that asked reads and the screen shows as that call's answer.
       Quiet         : Boolean := False;
+
+      --  Whether standard output shows colour: an answer's JSON coloured.
+      Styled        : Boolean := False;
    end record;
 
    --  What was held back was a call: not written.
@@ -472,8 +475,9 @@ package body Model_Runner.CLI.Project_Commands is
          declare
             Shown   : Unbounded_String;
             Last    : Unbounded_String;
-            Same    : Natural := 0;
-            Skipped : Natural := 0;
+            Same     : Natural := 0;
+            Skipped  : Natural := 0;
+            In_Fence : Boolean := False;
 
             procedure Flush_Skipped is
             begin
@@ -483,19 +487,35 @@ package body Model_Runner.CLI.Project_Commands is
                end if;
             end Flush_Skipped;
          begin
-            for Line of Model_Runner.Framework.Lines_Of (To_String (Self.Held)) loop
-               if Line = To_String (Last) then
-                  Same := Same + 1;
-               else
-                  Flush_Skipped;
-                  Same := 0;
-                  Last := To_Unbounded_String (Line);
-               end if;
-               if Same < 3 then
-                  Append (Shown, Line & ASCII.LF);
-               else
-                  Skipped := Skipped + 1;
-               end if;
+            for Raw of Model_Runner.Framework.Lines_Of (To_String (Self.Held)) loop
+               declare
+                  --  JSON in a fence, or an answer that is JSON whole, coloured
+                  --  as JSON where colour shows.
+                  Fence : constant Boolean :=
+                    Ada.Strings.Fixed.Index (Ada.Strings.Fixed.Trim (Raw, Ada.Strings.Left), "```") = 1;
+                  Line  : constant String :=
+                    (if not Self.Styled then Raw
+                     elsif Fence then Raw
+                     elsif In_Fence or else Pres.Looks_Like_JSON (To_String (Self.Held))
+                     then Pres.JSON_Coloured (Raw)
+                     else Raw);
+               begin
+                  if Fence then
+                     In_Fence := not In_Fence;
+                  end if;
+                  if Raw = To_String (Last) then
+                     Same := Same + 1;
+                  else
+                     Flush_Skipped;
+                     Same := 0;
+                     Last := To_Unbounded_String (Raw);
+                  end if;
+                  if Same < 3 then
+                     Append (Shown, Line & ASCII.LF);
+                  else
+                     Skipped := Skipped + 1;
+                  end if;
+               end;
             end loop;
             Flush_Skipped;
             Pres.Standard_Output_Sink (Self).Write (To_String (Shown), Closed);
@@ -524,7 +544,8 @@ package body Model_Runner.CLI.Project_Commands is
       Runner   : Work_Tools (Self'Unchecked_Access, Host);
       Guard    : aliased Fence (Self.Screen);
       Watcher  : aliased Watch (Self.Screen, Host);
-      Sink     : aliased Watching_Sink;
+      Sink     : aliased Watching_Sink :=
+        (Pres.Standard_Output_Sink with Styled => Pres.Styles_Answers (Self.Screen.all), others => <>);
       Clock    : aliased Model_Runner.Clocks.System_Clock;
       Seeds    : aliased Model_Runner.Entropy.Host_Source;
       Request  : Model_Runner.Generation.Request;
@@ -3444,7 +3465,11 @@ package body Model_Runner.CLI.Project_Commands is
          elsif Whole then
             Field ("payload", "");
             for Line of Model_Runner.Framework.Lines_Of (To_String (Held.Payload)) loop
-               Pres.Put_Line (Screen, "      " & Line);
+               --  JSON coloured as JSON where colour shows.
+               Pres.Put_Line (Screen, "      "
+                                      & (if Pres.Styles_Answers (Screen)
+                                           and then Pres.Looks_Like_JSON (To_String (Held.Payload))
+                                         then Pres.JSON_Coloured (Line) else Line));
             end loop;
          else
             Field ("payload", "(" & Image (Size) & " bytes; /result " & Argument (1)

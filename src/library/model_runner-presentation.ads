@@ -112,6 +112,12 @@ package Model_Runner.Presentation is
    --  @return True when diagnostics may carry escape sequences.
    function Styles_Diagnostics (Item : Console) return Boolean;
 
+   --  Report whether styling applies to standard output, where answers go.
+   --
+   --  @param Item Console to inspect.
+   --  @return True when answers may carry escape sequences.
+   function Styles_Answers (Item : Console) return Boolean;
+
    --  Write a line of application text to standard output.
    --
    --  Used for help and version output, never for generated model text.
@@ -234,6 +240,22 @@ package Model_Runner.Presentation is
       Indent     : Natural := 0;
       Main_Tone  : Tone := Plain;
       Mute_Aside : Boolean := True);
+
+   --  JSON as a reader takes it in at a terminal that shows colour: its keys,
+   --  its strings, its numbers and literals each in a colour of their own,
+   --  and the brackets, commas and colons that hold them muted. Text that
+   --  is not JSON -- around it, or in place of it -- is left as it is.
+   --
+   --  @param Text The text, already escaped.
+   --  @return It coloured.
+   function JSON_Coloured (Text : String) return String;
+
+   --  Whether a text is JSON, by its first and last characters: an object
+   --  or a list.
+   --
+   --  @param Text The text.
+   --  @return True for one that reads as JSON.
+   function Looks_Like_JSON (Text : String) return Boolean;
 
    --  Write a line of help on standard error: the command it is for --
    --  its first word -- in bold at a terminal that shows colour.

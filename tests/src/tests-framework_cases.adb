@@ -8730,6 +8730,29 @@ package body Tests.Framework_Cases is
                  and then Model_Runner.Presentation.Size_Image (10) = "10 bytes",
                  "a size was not said as a reader takes it in: "
                  & Model_Runner.Presentation.Size_Image (2048));
+         --  JSON told from text, and coloured with its words kept: the
+         --  colour stripped, what is left is the text as it was.
+         declare
+            Said    : constant String :=
+              Model_Runner.Presentation.JSON_Coloured ("{""a"": [1, true, ""x\""y""], ""b"": null}");
+            Kept    : Ada.Strings.Unbounded.Unbounded_String;
+            Escaped : Boolean := False;
+         begin
+            for C of Said loop
+               if C = ASCII.ESC then
+                  Escaped := True;
+               elsif Escaped then
+                  Escaped := C /= 'm';
+               else
+                  Ada.Strings.Unbounded.Append (Kept, C);
+               end if;
+            end loop;
+            Assert (Model_Runner.Presentation.Looks_Like_JSON ("  {""a"": 1}  ")
+                    and then not Model_Runner.Presentation.Looks_Like_JSON ("def add(a, b):")
+                    and then Ada.Strings.Unbounded.To_String (Kept)
+                             = "{""a"": [1, true, ""x\""y""], ""b"": null}",
+                    "JSON coloured lost or changed its words: " & Ada.Strings.Unbounded.To_String (Kept));
+         end;
          Model_Runner.Presentation.Put_Diff_Line (Screen, "+added");
          Model_Runner.Presentation.Put_Diff_Line (Screen, "-removed");
          Set_Output (Standard_Output);
