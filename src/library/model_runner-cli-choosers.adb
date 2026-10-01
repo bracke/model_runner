@@ -920,6 +920,333 @@ package body Model_Runner.CLI.Choosers is
       return (if Outcome = Entered then To_String (Typed) else "");
    end Typed_Line;
 
+   function Confirmed_Line (Screen : in out Model_Runner.Presentation.Console; Question : String) return Boolean is
+   begin
+      Ada.Text_IO.Put_Line (Ada.Text_IO.Standard_Error, Question);
+      return Answered_Yes (Screen);
+   end Confirmed_Line;
+
+   -----------------
+   -- Edited_Line --
+   -----------------
+
+   --  The lines typed at the prompt this session, oldest first.
+   History : Model_Runner.Framework.Name_Lists.Vector;
+
+   function Edited_Line
+     (Screen  : Model_Runner.Presentation.Console;
+      Prompt  : String;
+      Outcome : out Line_End) return String
+   is
+      Guard   : Raw_Guard;
+      Text    : Unbounded_String;
+      --  The cursor: the bytes before it.
+      Cursor  : Natural := 0;
+      --  The row the cursor was drawn on, counted from the prompt's.
+      Drawn_Row : Natural := 0;
+      --  Where Up and Down are in the history; past its end, the line
+      --  being typed, kept while older ones are looked at.
+      Looking : Natural := Natural (History.Length) + 1;
+      Typing  : Unbounded_String;
+      Buffer  : Ada.Streams.Stream_Element_Array (1 .. 1);
+      Last    : Ada.Streams.Stream_Element_Offset;
+
+      procedure Put (Item : String) is
+      begin
+         Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, Item);
+      end Put;
+
+      function Image (N : Natural) return String
+      is (Ada.Strings.Fixed.Trim (Natural'Image (N), Ada.Strings.Both));
+
+      --  Characters, not bytes: a UTF-8 continuation byte is no column.
+      function Width (Item : String) return Natural is
+         Count : Natural := 0;
+      begin
+         for C of Item loop
+            if Character'Pos (C) not in 16#80# .. 16#BF# then
+               Count := Count + 1;
+            end if;
+         end loop;
+         return Count;
+      end Width;
+
+      function Columns return Positive is
+         Size : Term.Window_Size;
+      begin
+         if Term.Size (Hostkit.Descriptors.Standard_Error, Size) and then Size.Columns > 0 then
+            return Size.Columns;
+         end if;
+         return 80;
+      end Columns;
+
+      --  The prompt and the line drawn again from the prompt's row, the
+      --  cursor put where it is in the line.
+      procedure Redraw is
+         W        : constant Positive := Columns;
+         Line     : constant String := To_String (Text);
+         Before   : constant Natural := Width (Prompt);
+         Total    : constant Natural := Before + Width (Line);
+         At_Cursor : constant Natural := Before + Width (Line (Line'First .. Line'First + Cursor - 1));
+         Wrapped  : Boolean := False;
+         End_Row  : Natural;
+      begin
+         if Drawn_Row > 0 then
+            Put (ASCII.ESC & "[" & Image (Drawn_Row) & "A");
+         end if;
+         Put (ASCII.CR & ASCII.ESC & "[J" & Prompt & Pres.Coloured_Commands (Screen, Line));
+         --  Ended exactly at the edge with the cursor there: on to the next
+         --  row, as the terminal would only once another character came.
+         if Total > 0 and then Total mod W = 0 and then At_Cursor = Total then
+            Put (ASCII.LF & ASCII.CR);
+            Wrapped := True;
+         end if;
+         End_Row := (if Total > 0 and then Total mod W = 0 and then not Wrapped then Total / W - 1 else Total / W);
+         if End_Row > At_Cursor / W then
+            Put (ASCII.ESC & "[" & Image (End_Row - At_Cursor / W) & "A");
+         end if;
+         Put ([1 => ASCII.CR]);
+         if At_Cursor mod W > 0 then
+            Put (ASCII.ESC & "[" & Image (At_Cursor mod W) & "C");
+         end if;
+         Drawn_Row := At_Cursor / W;
+         Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
+      end Redraw;
+
+      --  One character back or on, a UTF-8 sequence whole.
+      function Back (From : Natural) return Natural is
+         At_Byte : Natural := From;
+      begin
+         if At_Byte = 0 then
+            return 0;
+         end if;
+         At_Byte := At_Byte - 1;
+         while At_Byte > 0 and then Character'Pos (Element (Text, At_Byte + 1)) in 16#80# .. 16#BF# loop
+            At_Byte := At_Byte - 1;
+         end loop;
+         return At_Byte;
+      end Back;
+
+      function On (From : Natural) return Natural is
+         At_Byte : Natural := From;
+      begin
+         if At_Byte >= Length (Text) then
+            return Length (Text);
+         end if;
+         At_Byte := At_Byte + 1;
+         while At_Byte < Length (Text) and then Character'Pos (Element (Text, At_Byte + 1)) in 16#80# .. 16#BF# loop
+            At_Byte := At_Byte + 1;
+         end loop;
+         return At_Byte;
+      end On;
+
+      procedure Take (From, To : Natural) is
+      begin
+         if To > From then
+            Delete (Text, From + 1, To);
+         end if;
+      end Take;
+
+      procedure Show_History (Index : Positive) is
+      begin
+         Text := To_Unbounded_String (if Index > Natural (History.Length) then To_String (Typing)
+                                      else History (Index));
+         Cursor := Length (Text);
+      end Show_History;
+
+      --  Read one byte, where one comes within a wait in milliseconds.
+      function Next (Wait : Integer := -1; Into : out Character) return Boolean is
+      begin
+         if Wait >= 0 and then not Hostkit.Descriptors.Wait_Readable (Input, Wait) then
+            return False;
+         end if;
+         if Hostkit.Descriptors.Read (Input, Buffer, Last) /= Hostkit.Descriptors.Transfer_Ok
+           or else Last < Buffer'First
+         then
+            return False;
+         end if;
+         Into := Character'Val (Buffer (Buffer'First));
+         return True;
+      end Next;
+
+      Key : Character;
+   begin
+      Outcome := Unavailable;
+      if not Is_Available (Screen) or else not Term.Save_Mode (Input, Guard.Saved) then
+         return "";
+      end if;
+      Guard.Held := True;
+      if not Term.Set_Raw (Input) then
+         return "";
+      end if;
+      Redraw;
+      loop
+         if not Next (Into => Key) then
+            Outcome := Ended;
+            exit;
+         end if;
+         case Key is
+            when ASCII.CR | ASCII.LF =>
+               Outcome := Entered;
+               exit;
+            when ASCII.ETX =>
+               Outcome := Interrupted;
+               exit;
+            when ASCII.EOT =>
+               if Length (Text) = 0 then
+                  Outcome := Ended;
+                  exit;
+               end if;
+               Take (Cursor, On (Cursor));
+            when ASCII.DEL | ASCII.BS =>
+               declare
+                  From : constant Natural := Back (Cursor);
+               begin
+                  Take (From, Cursor);
+                  Cursor := From;
+               end;
+            when ASCII.SOH =>
+               Cursor := 0;
+            when ASCII.ENQ =>
+               Cursor := Length (Text);
+            when ASCII.STX =>
+               Cursor := Back (Cursor);
+            when ASCII.ACK =>
+               Cursor := On (Cursor);
+            when ASCII.VT =>
+               Take (Cursor, Length (Text));
+            when ASCII.NAK =>
+               Take (0, Cursor);
+               Cursor := 0;
+            when ASCII.ETB =>
+               declare
+                  From : Natural := Cursor;
+               begin
+                  while From > 0 and then Element (Text, From) = ' ' loop
+                     From := From - 1;
+                  end loop;
+                  while From > 0 and then Element (Text, From) /= ' ' loop
+                     From := From - 1;
+                  end loop;
+                  Take (From, Cursor);
+                  Cursor := From;
+               end;
+            when ASCII.FF =>
+               Put (ASCII.ESC & "[H" & ASCII.ESC & "[2J");
+               Drawn_Row := 0;
+            when ASCII.DLE =>
+               if Looking > 1 then
+                  if Looking > Natural (History.Length) then
+                     Typing := Text;
+                  end if;
+                  Looking := Looking - 1;
+                  Show_History (Looking);
+               end if;
+            when ASCII.SO =>
+               if Looking <= Natural (History.Length) then
+                  Looking := Looking + 1;
+                  Show_History (Looking);
+               end if;
+            when ASCII.ESC =>
+               --  Escape alone drops the line; a key's sequence is that key.
+               declare
+                  Second : Character;
+               begin
+                  if not Next (30, Second) then
+                     Outcome := Escaped;
+                     exit;
+                  elsif Second in '[' | 'O' then
+                     declare
+                        Number : Natural := 0;
+                        Final  : Character := ASCII.NUL;
+                        Part   : Character;
+                     begin
+                        while Next (30, Part) loop
+                           if Part in '0' .. '9' then
+                              Number := Number * 10 + (Character'Pos (Part) - Character'Pos ('0'));
+                           elsif Part /= ';' then
+                              Final := Part;
+                              exit;
+                           end if;
+                        end loop;
+                        case Final is
+                           when 'A' =>
+                              if Looking > 1 then
+                                 if Looking > Natural (History.Length) then
+                                    Typing := Text;
+                                 end if;
+                                 Looking := Looking - 1;
+                                 Show_History (Looking);
+                              end if;
+                           when 'B' =>
+                              if Looking <= Natural (History.Length) then
+                                 Looking := Looking + 1;
+                                 Show_History (Looking);
+                              end if;
+                           when 'C' =>
+                              Cursor := On (Cursor);
+                           when 'D' =>
+                              Cursor := Back (Cursor);
+                           when 'H' =>
+                              Cursor := 0;
+                           when 'F' =>
+                              Cursor := Length (Text);
+                           when '~' =>
+                              if Number in 1 | 7 then
+                                 Cursor := 0;
+                              elsif Number in 4 | 8 then
+                                 Cursor := Length (Text);
+                              elsif Number = 3 then
+                                 Take (Cursor, On (Cursor));
+                              end if;
+                           when others =>
+                              null;
+                        end case;
+                     end;
+                  elsif Second = 'b' then
+                     while Cursor > 0 and then Element (Text, Cursor) = ' ' loop
+                        Cursor := Cursor - 1;
+                     end loop;
+                     while Cursor > 0 and then Element (Text, Cursor) /= ' ' loop
+                        Cursor := Cursor - 1;
+                     end loop;
+                  elsif Second = 'f' then
+                     while Cursor < Length (Text) and then Element (Text, Cursor + 1) = ' ' loop
+                        Cursor := Cursor + 1;
+                     end loop;
+                     while Cursor < Length (Text) and then Element (Text, Cursor + 1) /= ' ' loop
+                        Cursor := Cursor + 1;
+                     end loop;
+                  end if;
+               end;
+            when ASCII.HT =>
+               null;
+            when others =>
+               if Key >= ' ' then
+                  Insert (Text, Cursor + 1, [1 => Key]);
+                  Cursor := Cursor + 1;
+               end if;
+         end case;
+         --  Bytes still coming -- a paste, the rest of a character -- are
+         --  taken before it is drawn again.
+         if not Hostkit.Descriptors.Wait_Readable (Input, 0) then
+            Redraw;
+         end if;
+      end loop;
+      --  Drawn as it ended, the cursor after it, and the line left.
+      Cursor := Length (Text);
+      Redraw;
+      Put (ASCII.CR & ASCII.LF);
+      Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
+      Finalize (Guard);
+      if Outcome = Entered and then Length (Text) > 0
+        and then (History.Is_Empty or else History.Last_Element /= To_String (Text))
+      then
+         History.Append (To_String (Text));
+      end if;
+      return To_String (Text);
+   end Edited_Line;
+
    ------------------
    -- Answered_Yes --
    ------------------

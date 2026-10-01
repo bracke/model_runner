@@ -228,6 +228,115 @@ package body Model_Runner.Presentation is
       Put_Line (Item, Ada.Strings.Unbounded.To_String (Line));
    end Put_Record;
 
+   --  A text with the commands it names coloured, as a terminal shows
+   --  them: /task accept TASK-001 -- the command and its actions in one
+   --  colour, what they are given -- an identifier, a placeholder, a
+   --  setting, a path -- in another, the words around them left as they
+   --  are. Only the session's own commands: a path is not one.
+   function Commands_Coloured (Text : String) return String is
+      Commands : constant String :=
+        " init bootstrap state config reconfigure task accept reject work cancel check req decision spec"
+        & " result scan tree sym refs deps users impact trace git sandbox instruct help exit reset settings"
+        & " stats context system tools tool save load image video projects ";
+      Actions  : constant String :=
+        " list new show accept reject reconsider obsolete verify revise link unlink supersede govern move"
+        & " block unblock cancel complete reopen edit note grant withhold depend split rehome plan diff"
+        & " integrate kept restore drop add remove dismiss dismissed derive audit context all withdraw"
+        & " consistency full anyway resolved discard none project ";
+
+      function Lower_Word (Word : String) return Boolean
+      is (Word /= "" and then (for all C of Word => C in 'a' .. 'z' | '_'));
+
+      --  Something a command is given: not a plain word of the sentence.
+      function Given_Word (Word : String) return Boolean is
+         Bare : constant String :=
+           (if Word'Length > 1 and then Word (Word'Last) in ',' | ';' | ':' | '.' | ')'
+            then Word (Word'First .. Word'Last - 1) else Word);
+      begin
+         return Bare /= ""
+           and then not Lower_Word (Bare)
+           and then (for all C of Bare => C not in '(' | '"')
+           and then (for some C of Bare =>
+                       C in 'A' .. 'Z' | '0' .. '9' | '=' | '.' | '/' | '-' | '_' | '|' | '[' | ']');
+      end Given_Word;
+
+      Result : Ada.Strings.Unbounded.Unbounded_String;
+      At_Char : Natural := Text'First;
+   begin
+      if Ada.Strings.Fixed.Index (Text, "/") = 0 or else Ada.Strings.Fixed.Index (Text, [1 => ASCII.ESC]) > 0 then
+         return Text;
+      end if;
+      while At_Char <= Text'Last loop
+         if Text (At_Char) = '/'
+           and then (At_Char = Text'First or else Text (At_Char - 1) in ' ' | '(' | '`' | '"' | ASCII.HT)
+           and then At_Char < Text'Last and then Text (At_Char + 1) in 'a' .. 'z'
+         then
+            declare
+               Stop : Natural := At_Char + 1;
+            begin
+               while Stop < Text'Last and then Text (Stop + 1) in 'a' .. 'z' | '_' loop
+                  Stop := Stop + 1;
+               end loop;
+               if Ada.Strings.Fixed.Index (Commands, " " & Text (At_Char + 1 .. Stop) & " ") > 0
+                 and then (Stop = Text'Last or else Text (Stop + 1) not in '/' | '.' | '-')
+               then
+                  --  The command, then its actions, then what it is given.
+                  declare
+                     Head_End : Natural := Stop;
+                     Args_End : Natural := Stop;
+                     Cursor   : Natural := Stop + 1;
+                     In_Args  : Boolean := False;
+                  begin
+                     while Cursor <= Text'Last and then Text (Cursor) = ' ' loop
+                        declare
+                           Word_End : Natural := Cursor;
+                        begin
+                           while Word_End < Text'Last and then Text (Word_End + 1) /= ' ' loop
+                              Word_End := Word_End + 1;
+                           end loop;
+                           declare
+                              Word : constant String := Text (Cursor + 1 .. Word_End);
+                              Bare : constant String :=
+                                (if Word'Length > 1 and then Word (Word'Last) in ',' | ';' | ':' | ')'
+                                 then Word (Word'First .. Word'Last - 1) else Word);
+                           begin
+                              exit when Word = "";
+                              if not In_Args and then Ada.Strings.Fixed.Index (Actions, " " & Bare & " ") > 0 then
+                                 Head_End := Cursor + Bare'Length;
+                                 Args_End := Head_End;
+                              elsif Given_Word (Word) then
+                                 In_Args := True;
+                                 Args_End := Cursor + Bare'Length;
+                              else
+                                 exit;
+                              end if;
+                              exit when Bare'Length < Word'Length;
+                              Cursor := Word_End + 1;
+                           end;
+                        end;
+                     end loop;
+                     Ada.Strings.Unbounded.Append
+                       (Result, Terminal_Styles.Decorate (Text (At_Char .. Head_End), Terminal_Styles.Role_Info));
+                     if Args_End > Head_End then
+                        Ada.Strings.Unbounded.Append
+                          (Result, Terminal_Styles.Decorate (Text (Head_End + 1 .. Args_End),
+                                                             Terminal_Styles.Role_Header));
+                     end if;
+                     At_Char := Args_End + 1;
+                  end;
+               else
+                  Ada.Strings.Unbounded.Append (Result, Text (At_Char .. Stop));
+                  At_Char := Stop + 1;
+               end if;
+            end;
+         else
+            Ada.Strings.Unbounded.Append (Result, Text (At_Char));
+            At_Char := At_Char + 1;
+         end if;
+      end loop;
+      return Ada.Strings.Unbounded.To_String (Result);
+   end Commands_Coloured;
+
    procedure Put_Message
      (Item      : in out Console;
       Key       : String;
@@ -237,7 +346,8 @@ package body Model_Runner.Presentation is
          Put_Record (Item, "message", Key, Arguments, Message (Item, Key, Arguments));
          return;
       end if;
-      Put_Line (Item, Message (Item, Key, Arguments));
+      Put_Line (Item, (if Styles (Item, Answer) then Commands_Coloured (Message (Item, Key, Arguments))
+                       else Message (Item, Key, Arguments)));
    end Put_Message;
 
    ----------------
@@ -327,7 +437,7 @@ package body Model_Runner.Presentation is
       then
          return Bad;
       elsif Word in "candidate" | "proposed" | "accepted" | "running" | "verification" | "implemented"
-        | "waiting" | "open" | "pending" | "warning" | "stale"
+        | "waiting" | "open" | "pending" | "warning" | "stale" | "stopped"
       then
          return Pending;
       else
@@ -461,7 +571,7 @@ package body Model_Runner.Presentation is
             Lead & Line (Line'First .. At_Name - 1)
             & Terminal_Styles.Decorate (Trimmed, Terminal_Styles.Role_Muted)
             & Line (At_Name + Trimmed'Length .. At_Value - 1)
-            & (if Value_Tone = Plain then Value else Terminal_Styles.Decorate (Value, Role))
+            & (if Value_Tone = Plain then Commands_Coloured (Value) else Terminal_Styles.Decorate (Value, Role))
             & Line (At_Value + Value'Length .. Line'Last));
       end;
    end Put_Pair;
@@ -546,7 +656,8 @@ package body Model_Runner.Presentation is
             then Terminal_Styles.Decorate (Label, Terminal_Styles.Role_Muted)
             else Label)
          & String'(1 .. Padding => ' ')
-         & (if Value_Tone = Plain or else not Styles (Item, Where) then Value
+         & (if not Styles (Item, Where) then Value
+            elsif Value_Tone = Plain then Commands_Coloured (Value)
             else Terminal_Styles.Decorate (Value, Role_Of (Value_Tone))));
    end Put_Field;
 
@@ -698,15 +809,11 @@ package body Model_Runner.Presentation is
    -- Put_Help_Line --
    -------------------
 
-   --  A line with its first word -- a command -- bold where colour shows.
+   --  A line with the commands it names coloured where colour shows.
    function Command_Bold (Item : Console; Line : String) return String is
-      Space : constant Natural := Ada.Strings.Fixed.Index (Line & " ", " ");
    begin
-      if not Styles_Diagnostics (Item) or else Line = "" or else Line (Line'First) /= '/' then
-         return Line;
-      end if;
-      return Terminal_Styles.Decorate (Line (Line'First .. Space - 1), Terminal_Styles.Role_Header)
-        & Line (Space .. Line'Last);
+      --  The command it is about coloured as every command is.
+      return (if Styles_Diagnostics (Item) then Commands_Coloured (Line) else Line);
    end Command_Bold;
 
    procedure Put_Help_Line (Item : in out Console; Key : String) is
@@ -805,7 +912,11 @@ package body Model_Runner.Presentation is
       --  The way on set apart from what it says at a terminal that shows
       --  colour: its "next:" muted, coloured after the line is rendered.
       declare
-         Line    : constant String := Message (Item, "diagnostic.note", [Loc.Named ("detail", Said)]);
+         --  Coloured once rendered: an argument's escapes are escaped.
+         Line    : constant String :=
+           (if Styles_Diagnostics (Item)
+            then Commands_Coloured (Message (Item, "diagnostic.note", [Loc.Named ("detail", Said)]))
+            else Message (Item, "diagnostic.note", [Loc.Named ("detail", Said)]));
          Lead    : constant String := Message (Item, "diagnostic.next_lead");
          At_Lead : constant Natural :=
            (if Lead = "" or else Key'Length <= 9 or else Key (Key'First .. Key'First + 8) /= "cli.next."
@@ -839,7 +950,8 @@ package body Model_Runner.Presentation is
          Put_Record (Item, "note", Key, Arguments, Message (Item, Key, Arguments));
          return;
       end if;
-      Error_Line (Item, Lead & Message (Item, Key, Arguments));
+      Error_Line (Item, Lead & (if Styles_Diagnostics (Item) then Commands_Coloured (Message (Item, Key, Arguments))
+                                else Message (Item, Key, Arguments)));
    end Put_Aside;
 
    -----------------
@@ -963,6 +1075,9 @@ package body Model_Runner.Presentation is
       when others =>
          null;
    end Put_Prompt;
+
+   function Coloured_Commands (Item : Console; Text : String) return String
+   is (if Styles_Diagnostics (Item) then Commands_Coloured (Text) else Text);
 
    procedure Clear_Screen (Item : in out Console) is
    begin

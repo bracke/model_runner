@@ -68,6 +68,14 @@ package Model_Runner.Framework.Work is
    --  @return The seconds.
    function Time_Allowed (Item : Stores.Store; Task_Id : String) return Natural;
 
+   --  How many steps an agent may take on a task: its kind's scalar
+   --  task.max_steps.KIND, else agents.max_steps, else 24.
+   --
+   --  @param Item The store.
+   --  @param Task_Id The task.
+   --  @return The steps.
+   function Steps_Allowed (Item : Stores.Store; Task_Id : String) return Positive;
+
    --  Run the agent.
    --
    --  @param Self The runner.

@@ -1065,6 +1065,31 @@ package body Model_Runner.CLI.Intents is
                                         then To_String (Held.Criteria)
                                         else To_String (One.Criteria)),
                                        Result, Status);
+                                    --  What changed, said; and the tasks named
+                                    --  by its title named by the new one.
+                                    if E.Is_Ok (Status) then
+                                       if One.Text /= Held.Text then
+                                          Pres.Put_Note
+                                            (Screen, "cli.intent.text_changed",
+                                             [Loc.Named ("name", Word (2)),
+                                              Loc.Named ("value", To_String (Held.Text)),
+                                              Loc.Named ("detail", To_String (One.Text))]);
+                                       end if;
+                                       if Nt."=" (Kind, Nt.Requirement) then
+                                          declare
+                                             Retitled : Names.Vector;
+                                          begin
+                                             Model_Runner.Framework.Tasks.Retitle_Derived
+                                               (Store, Change, Word (2), To_String (Held.Title),
+                                                To_String (One.Title), Retitled);
+                                             for Id of Retitled loop
+                                                Pres.Put_Note
+                                                  (Screen, "cli.intent.task_retitled",
+                                                   [Loc.Named ("name", Id), Loc.Named ("value", Word (2))]);
+                                             end loop;
+                                          end;
+                                       end if;
+                                    end if;
 
                                     --  Taken from the document: what it says is
                                     --  what it was imported as, so a later edit
@@ -1172,6 +1197,24 @@ package body Model_Runner.CLI.Intents is
                      (if Given ("criteria") = "" then To_String (Held.Criteria)
                       else Given ("criteria")),
                      Result, Status);
+                  --  A new title: the open tasks derived from it follow.
+                  if E.Is_Ok (Status) and then Nt."=" (Kind, Nt.Requirement) then
+                     declare
+                        Retitled : Names.Vector;
+                     begin
+                        Model_Runner.Framework.Tasks.Retitle_Derived
+                          (Store, Change, Word (2), To_String (Held.Title),
+                           (if Given ("title") /= "" then Given ("title")
+                            elsif Given ("text") /= "" and then Title_From_Text (Held)
+                            then Headline (Given ("text"))
+                            else To_String (Held.Title)),
+                           Retitled);
+                        for Id of Retitled loop
+                           Pres.Put_Note (Screen, "cli.intent.task_retitled",
+                                          [Loc.Named ("name", Id), Loc.Named ("value", Word (2))]);
+                        end loop;
+                     end;
+                  end if;
                end if;
                Settle (Store, Change, Status, Screen, "cli.task.revised", Word (2));
                if E.Is_Ok (Status) and then Result.Invalidated then
@@ -1205,7 +1248,9 @@ package body Model_Runner.CLI.Intents is
                else
                   Nt.Unlink (Store, Change, Kind, Word (2), Relation, From (4), Status);
                end if;
-               Settle (Store, Change, Status, Screen, "cli.intent.unlinked", Word (2));
+               --  Which link: its kind and what it named.
+               Settle (Store, Change, Status, Screen, "cli.intent.unlinked",
+                       Word (2) & "'s " & Lower (Word (3)) & " link to " & From (4));
             end;
          end if;
 
@@ -2112,8 +2157,11 @@ package body Model_Runner.CLI.Intents is
                      Pres.Put_Section (Screen, "cli.intent.section.work");
                      Item ("served by", (if Serving = Null_Unbounded_String then "no task yet"
                                          else To_String (Serving)));
+                     --  Verified by it only while it is verified; evidence
+                     --  taken before is said as that.
                      if Verified_By /= Null_Unbounded_String then
-                        Item ("verified by", To_String (Verified_By));
+                        Item ((if To_String (Held.State) = "verified" then "verified by" else "evidence taken"),
+                              To_String (Verified_By));
                      end if;
                      --  Recorded verified, where its evidence no longer holds.
                      if To_String (Held.State) = "verified" and then Why /= "" then
@@ -2142,7 +2190,17 @@ package body Model_Runner.CLI.Intents is
 
                   --  Where it came from, what it replaced, what it is tied to.
                   Pres.Put_Section (Screen, "cli.intent.section.origin");
-                  Item ("source", To_String (Held.Source));
+                  --  A document no longer there: marked, as a missing link is.
+                  if Length (Held.Source) > 0 and then To_String (Held.Source) /= "user"
+                    and then Ada.Strings.Fixed.Index (To_String (Held.Source), ":") = 0
+                    and then not Ada.Directories.Exists
+                                   (Hostkit.Fs.Join (Ada.Directories.Containing_Directory (S.Root (Store)),
+                                                     To_String (Held.Source)))
+                  then
+                     Item ("source", To_String (Held.Source) & " (missing: the document is gone)", Pres.Bad);
+                  else
+                     Item ("source", To_String (Held.Source));
+                  end if;
                   if Held.Supersedes /= Null_Unbounded_String then
                      Item ("supersedes", To_String (Held.Supersedes));
                   end if;

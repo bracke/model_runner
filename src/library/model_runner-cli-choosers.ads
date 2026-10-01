@@ -173,6 +173,32 @@ package Model_Runner.CLI.Choosers is
    --  @return What was typed; empty unless it was Entered.
    function Typed_Line (Outcome : out Line_End) return String;
 
+   --  A question said, then a yes or no read as Answered_Yes reads one.
+   --
+   --  @param Screen Where it is asked.
+   --  @param Question The question, with its (yes/no).
+   --  @return Whether the answer was yes.
+   function Confirmed_Line (Screen : in out Model_Runner.Presentation.Console; Question : String) return Boolean;
+
+   --  A line typed at the session's prompt, edited as it is typed and its
+   --  commands coloured as they are: the cursor moves with the arrows,
+   --  Home and End (Ctrl-A, Ctrl-E), Backspace and Delete take a character,
+   --  Ctrl-U, Ctrl-K and Ctrl-W what is before or after the cursor or the
+   --  word before it, Up and Down step through the lines typed before,
+   --  Ctrl-L clears the screen. Enter ends it; Escape and Ctrl-C end it at
+   --  once, dropping it; Ctrl-D on an empty line ends the input.
+   --  Unavailable where there is no terminal to read it from that way; the
+   --  caller shows the prompt and reads a line then.
+   --
+   --  @param Screen Where it is shown, and how commands are coloured.
+   --  @param Prompt The prompt, as shown before the line.
+   --  @param Outcome How it ended.
+   --  @return What was typed.
+   function Edited_Line
+     (Screen  : Model_Runner.Presentation.Console;
+      Prompt  : String;
+      Outcome : out Line_End) return String;
+
    --  A yes or no read from the person: anything else asked again, a
    --  command typed in its place said and not run, and no answer, Escape
    --  or Ctrl-C a no -- at a terminal at once, with nothing more to press.

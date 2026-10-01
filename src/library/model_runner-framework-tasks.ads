@@ -418,6 +418,24 @@ package Model_Runner.Framework.Tasks is
       Fields : Field_Map;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Give the open tasks derived from a requirement its title as it is
+   --  now: REQ-003 (FR-1): the new words. A title a person changed is
+   --  theirs, and kept.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Requirement The requirement.
+   --  @param Old_Title Its title before.
+   --  @param New_Title Its title now.
+   --  @param Retitled The tasks given the new title.
+   procedure Retitle_Derived
+     (Item        : Stores.Store;
+      Change      : in out Stores.Transaction;
+      Requirement : String;
+      Old_Title   : String;
+      New_Title   : String;
+      Retitled    : out Name_Lists.Vector);
+
    --  Decompose a task into child tasks, one for each title, of its kind and
    --  component and recording it as their parent. An accepted parent is
    --  then blocked on them, its work theirs -- unless the project's

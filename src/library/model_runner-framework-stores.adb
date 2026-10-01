@@ -466,6 +466,19 @@ package body Model_Runner.Framework.Stores is
          else Records.Create ("", 1, "", 0));
    end Pending;
 
+   function Pending_Names (Change : Transaction; Where : Area) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+   begin
+      for One of Change.Operations loop
+         if One.Kind = Put_Operation and then One.Where = Where
+           and then not Result.Contains (To_String (One.Name))
+         then
+            Result.Append (To_String (One.Name));
+         end if;
+      end loop;
+      return Result;
+   end Pending_Names;
+
    ------------------
    -- Change_Count --
    ------------------

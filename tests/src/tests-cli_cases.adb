@@ -2081,7 +2081,7 @@ package body Tests.CLI_Cases is
       Run ("req");
       Assert (Shows ("no requirements yet"), "an empty register did not say how to begin");
       Run ("reconfigure|work.lease=90|confirm=yes");
-      Assert (Code = 0 and then Shows ("changes work.lease"),
+      Assert (Code = 0 and then Shows ("changes scalar.work.lease"),
               "a setting named without its kind was not found: " & To_String (Said));
 
       --  3. With no agent to run, that is said before the task is touched;
@@ -2374,7 +2374,7 @@ package body Tests.CLI_Cases is
          Assert (Shows ("not one of the project's components"),
                  "a link to no component was not said: " & To_String (Said));
          Run ("req|unlink|" & New_Id & "|component|nowhere");
-         Assert (Code = 0 and then Shows ("link is taken off"),
+         Assert (Code = 0 and then Shows ("link to nowhere is taken off"),
                  "a link could not be taken off: " & To_String (Said));
       end;
       --  A dependency is taken off, and a task left waiting is named.

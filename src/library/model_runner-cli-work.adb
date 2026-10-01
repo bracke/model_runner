@@ -984,12 +984,17 @@ package body Model_Runner.CLI.Work is
          then
             Outcome := E.Make (E.Framework_Task_Not_Ready);
             E.Add_Text (Outcome, "name", To_String (Chosen));
+            --  Failed or stopped: said in a word, its whole reason being
+            --  what /task show and /result give.
             E.Add_Text (Outcome, "detail",
-                        (if Tk.Ready (Store, To_String (Chosen)).Reasons.Is_Empty then "it is not ready"
+                        (if Tk.State_Of (Store, To_String (Chosen)) = "failed"
+                         then "it failed; /task show " & To_String (Chosen) & " says why"
+                         elsif Tk.Ready (Store, To_String (Chosen)).Reasons.Is_Empty then "it is not ready"
                          else Tk.Ready (Store, To_String (Chosen)).Reasons.First_Element));
             Fail (Outcome);
             if Way_On (To_String (Chosen)) /= ""
-              and then Ada.Strings.Fixed.Index (E.Text_Of (Outcome, "detail"), "task ") = 0
+              and then (Ada.Strings.Fixed.Index (E.Text_Of (Outcome, "detail"), "task ") = 0
+                        or else Tk.State_Of (Store, To_String (Chosen)) = "failed")
             then
                Pres.Put_Note (Screen, "cli.next.way_on",
                               [Loc.Named ("detail", Way_On (To_String (Chosen)))]);
@@ -1113,10 +1118,30 @@ package body Model_Runner.CLI.Work is
                  (Store, To_String (Chosen), Given_Runner.all, Model, Done, Outcome,
                   Starting => Announce'Access);
             elsif Path /= "" then
+               --  More steps asked than the task may take: the lower, said.
+               if Setting ("steps", "") /= ""
+                 and then Positive'Value (Setting ("steps", "")) > W.Steps_Allowed (Store, To_String (Chosen))
+               then
+                  Pres.Put_Note (Screen, "cli.work.steps_capped",
+                                 [Loc.Named ("value", Setting ("steps", "")),
+                                  Loc.Named ("name", To_String (Chosen)),
+                                  Loc.Named ("count", T.Image (Long_Long_Integer
+                                                                 (W.Steps_Allowed (Store, To_String (Chosen)))))]);
+               end if;
                W.Execute
                  (Store, To_String (Chosen),
                   Model_Agent'(Model   => To_Unbounded_String (Path),
-                               Steps   => To_Unbounded_String (Setting ("steps", "")),
+                               --  At most what the task is allowed, and that
+                               --  where steps= says nothing.
+                               Steps   => To_Unbounded_String
+                                            (Ada.Strings.Fixed.Trim
+                                               (Positive'Image
+                                                  (if Setting ("steps", "") = ""
+                                                   then W.Steps_Allowed (Store, To_String (Chosen))
+                                                   else Positive'Min
+                                                          (Positive'Value (Setting ("steps", "")),
+                                                           W.Steps_Allowed (Store, To_String (Chosen)))),
+                                                Ada.Strings.Both)),
                                Timeout => Positive'Max
                                             (60, W.Time_Allowed (Store, To_String (Chosen))),
                                Context => Model.Context_Limit,

@@ -412,7 +412,8 @@ package body Model_Runner.Framework.Work is
                & " back what should not be,")
        --  A cancelled task is not completed but taken up again.
        & (if Cancelled then " or /task reopen " & Task_Id & " takes it up again"
-          else " or /task complete " & Task_Id & " once it is done by hand"));
+          else " or, where what it changed does the task, /task complete " & Task_Id
+               & " takes it as done, its checks passing"));
 
    --  A task's kind, as its definition says.
    function Kind_Of_Task (Item : Stores.Store; Task_Id : String) return String is
@@ -1801,13 +1802,14 @@ package body Model_Runner.Framework.Work is
             Kind_Named : Boolean := False;
             Capability : constant String :=
               (if Lacks = "write a file" then "write_source"
-               elsif Lacks = "read the source" then "read_source" else "");
+               elsif Lacks in "read the source" | "anything" then "read_source" else "");
          begin
             Configurations.Read (Item, Config, Got);
             for Index in 1 .. Records.Field_Count (Config) loop
                Kind_Named := Kind_Named
                  or else Ada.Strings.Fixed.Index (Records.Field_Name (Config, Index),
-                                                  "map.permission.kind." & Kind & ".") = 1;
+                                                  "map.permission.kind." & Kind & ".") = 1
+                 or else Records.Field_Name (Config, Index) = "map.permission.kind." & Kind;
             end loop;
             declare
                --  Which level withholds it: the task's own field only where
@@ -1825,7 +1827,7 @@ package body Model_Runner.Framework.Work is
                Level : constant String :=
                  (if Kind_Named and then Grants (Of_Project) then "kind." & Kind else "project");
             begin
-               return "it would not be let " & Lacks
+               return (if Lacks = "anything" then "it may do nothing at all" else "it would not be let " & Lacks)
                  & (if Lacks = "write a file" then ", which its gate implementation_present needs" else "")
                  & (if Capability = "" or else Permissions."/=" (Permissions.Sandbox, Permissions.Unrestricted)
                       or else Own_Narrows
@@ -1837,8 +1839,8 @@ package body Model_Runner.Framework.Work is
                     then "; " & Permissions.Sandbox_Source & " confines it -- /sandbox off lifts that"
                     else "")
                  & (if Own_Narrows
-                    then "; its own permissions narrow it -- /task edit " & Task_Id
-                         & " permissions=inherit takes its kind's"
+                    then "; its own permissions narrow it -- /task grant " & Task_Id & " " & Capability
+                         & " gives it back, or /task edit " & Task_Id & " permissions=inherit takes its kind's"
                     else "");
             end;
          end;
@@ -2122,6 +2124,15 @@ package body Model_Runner.Framework.Work is
    ------------------
    -- Time_Allowed --
    ------------------
+
+   function Steps_Allowed (Item : Stores.Store; Task_Id : String) return Positive is
+      Kind : constant String := Kind_Of_Task (Item, Task_Id);
+   begin
+      return Positive'Max
+        (1, Number_Of ((if Tasks.Kind_Policy (Item, Kind, "max_steps") /= ""
+                        then Tasks.Kind_Policy (Item, Kind, "max_steps")
+                        else Scalar (Item, "agents.max_steps")), 24));
+   end Steps_Allowed;
 
    function Time_Allowed (Item : Stores.Store; Task_Id : String) return Natural is
       Defined : Records.Item;
@@ -2880,11 +2891,8 @@ package body Model_Runner.Framework.Work is
                       & " -- /task integrate " & Task_Id & " checks it and takes it in, /task integrate "
                       & Task_Id & " discard gives it up and does the task afresh",
                       "failed");
-         elsif not Result.Changed_Files.Is_Empty then
-            Conclude ("blocked",
-                      Why & " -- where what it changed does the task, /task complete " & Task_Id
-                      & " takes it as done, its checks passing",
-                      "failed");
+         --  What it left in the project, and /task complete for it, are
+         --  said once, with the files, where the run's end is said.
          else
             Conclude ("blocked", Why, "failed");
          end if;
@@ -4445,6 +4453,18 @@ package body Model_Runner.Framework.Work is
             State_Value : Records.Item;
             Read        : E.Error_Info;
             Had         : Unbounded_String;
+
+            --  How a workspace it had ended: integrated, abandoned; "".
+            function Space_Status return String is
+               Space_Value : Records.Item;
+               Space_Read  : E.Error_Info;
+            begin
+               if Had = Null_Unbounded_String then
+                  return "";
+               end if;
+               Stores.Read (Item, Workspaces_Area, To_String (Had), Space_Value, Space_Read);
+               return (if E.Is_Error (Space_Read) then "" else Records.Get (Space_Value, "status"));
+            end Space_Status;
          begin
             Stores.Read (Item, Tasks_Area, Task_Id & ".state", State_Value, Read);
             Had := To_Unbounded_String (Records.Get (State_Value, "current_workspace"));
@@ -4463,6 +4483,9 @@ package body Model_Runner.Framework.Work is
                 elsif Had = Null_Unbounded_String
                 then "it has no workspace -- it wrote in the project itself -- so there is nothing"
                      & " to take in"
+                elsif Tasks.State_Of (Item, Task_Id) = "complete" and then Space_Status = "abandoned"
+                then "it is complete, and " & To_String (Had) & " was given up: nothing of it waits to be"
+                     & " taken in"
                 elsif Tasks.State_Of (Item, Task_Id) = "complete"
                 then To_String (Had) & " was taken in already"
                 elsif Tasks.State_Of (Item, Task_Id) = "cancelled"

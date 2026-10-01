@@ -285,16 +285,38 @@ package body Model_Runner.Framework.Permissions is
      (Text   : String;
       Result : out Permission_Set;
       Status : out Model_Runner.Errors.Error_Info) is
+      Entries : constant Name_Lists.Vector :=
+        Parts (Ada.Strings.Fixed.Translate (Text, Ada.Strings.Maps.To_Mapping ([1 => ASCII.LF], ";")), ';');
    begin
       Result := Nothing;
       Status := E.Success;
+      --  Only what it takes away -- -use_network -- leaves the rest as the
+      --  levels above give it: everything, here, before they narrow it.
+      if not Entries.Is_Empty
+        and then (for all One of Entries => Trim (One) = "" or else Trim (One) (Trim (One)'First) = '-')
+      then
+         Result := Unrestricted;
+      end if;
       --  As written -- write_source: roots=docs/, max_depth=1; read_source
       --  -- or as it is shown, a capability a line with its constraints
       --  after a space: write_source roots=docs/.
-      for Entry_Text of Parts (Ada.Strings.Fixed.Translate
-                                 (Text, Ada.Strings.Maps.To_Mapping ([1 => ASCII.LF], ";")), ';')
-      loop
+      for Raw_Entry of Entries loop
+         --  -CAP: withheld, whatever else says it.
+         if Trim (Raw_Entry)'Length > 1 and then Trim (Raw_Entry) (Trim (Raw_Entry)'First) = '-' then
+            declare
+               Found : Boolean;
+               Which : Capability;
+               Name  : constant String := Trim (Raw_Entry) (Trim (Raw_Entry)'First + 1 .. Trim (Raw_Entry)'Last);
+            begin
+               Named (Name, Found, Which);
+               if Found then
+                  Result (Which) := (Granted => False, others => <>);
+               end if;
+            end;
+            goto Next_Entry;
+         end if;
          declare
+            Entry_Text : constant String := Raw_Entry;
             Colon : constant Natural := Ada.Strings.Fixed.Index (Entry_Text, ":");
             Space : constant Natural := Ada.Strings.Fixed.Index (Entry_Text, " ");
             Cut   : constant Natural :=
@@ -334,6 +356,7 @@ package body Model_Runner.Framework.Permissions is
             end if;
             Result (Which) := Constrained (Rest);
          end;
+         <<Next_Entry>>
       end loop;
    end Restriction;
 
@@ -398,6 +421,14 @@ package body Model_Runner.Framework.Permissions is
                      G.Deny.Append (Path);
                   end if;
                end loop;
+               --  Every root it has denied: it reaches nothing, and is not
+               --  had -- roots=secret/ under deny=secret/.
+               if not G.Roots.Is_Empty and then not G.Deny.Is_Empty
+                 and then (for all Root of G.Roots =>
+                             (for some Denied of G.Deny => Within (Root, Denied)))
+               then
+                  G.Granted := False;
+               end if;
 
                if L.Profiles.Is_Empty then
                   G.Profiles := R.Profiles;
@@ -1098,7 +1129,12 @@ package body Model_Runner.Framework.Permissions is
             elsif Name = "request_integration" then "ask for integration (no tool uses this yet)"
             else Line);
       begin
-         if Line /= "" then
+         if Line'Length > 1 and then Line (Line'First) = '-' then
+            --  Taken away from what the levels above give.
+            Ada.Strings.Unbounded.Append
+              (Said, (if Ada.Strings.Unbounded.Length (Said) = 0 then "" else ", ")
+                     & "not " & Line (Line'First + 1 .. Line'Last));
+         elsif Line /= "" then
             Ada.Strings.Unbounded.Append
               (Said, (if Ada.Strings.Unbounded.Length (Said) = 0 then "" else ", ") & Words);
          end if;
@@ -1127,5 +1163,13 @@ package body Model_Runner.Framework.Permissions is
       end if;
       return Value;
    end Value_Said;
+
+   function Only_Withholds (Text : String) return Boolean is
+      Entries : constant Name_Lists.Vector :=
+        Parts (Ada.Strings.Fixed.Translate (Text, Ada.Strings.Maps.To_Mapping ([1 => ASCII.LF], ";")), ';');
+   begin
+      return (for some One of Entries => Trim (One) /= "")
+        and then (for all One of Entries => Trim (One) = "" or else Trim (One) (Trim (One)'First) = '-');
+   end Only_Withholds;
 
 end Model_Runner.Framework.Permissions;

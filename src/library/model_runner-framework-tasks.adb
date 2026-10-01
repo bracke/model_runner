@@ -820,7 +820,10 @@ package body Model_Runner.Framework.Tasks is
          E.Add_Text (Status, "value", Records.Get (Value, "state"));
          E.Add_Text (Status, "expected", Next);
          E.Add_Text (Status, "detail",
-                     (if Next = "complete"
+                     (if Next = "complete" and then Records.Get (Value, "state") in "failed" | "blocked"
+                      then "the harness makes this move: /task accept " & Id & " takes it up again and /work "
+                           & Id & " then does it, or /task complete " & Id & " once it is done by hand"
+                      elsif Next = "complete"
                       then "the harness makes this move: /work " & Id & " does it, or /task complete "
                            & Id & " once it is done by hand"
                       elsif Next in "running" | "verification"
@@ -2387,5 +2390,45 @@ package body Model_Runner.Framework.Tasks is
       end loop;
       return Result;
    end Cycles;
+
+   ---------------------
+   -- Retitle_Derived --
+   ---------------------
+
+   procedure Retitle_Derived
+     (Item        : Stores.Store;
+      Change      : in out Stores.Transaction;
+      Requirement : String;
+      Old_Title   : String;
+      New_Title   : String;
+      Retitled    : out Name_Lists.Vector)
+   is
+      Was : constant String := Derived_Title (Requirement, Old_Title);
+      Now : constant String := Derived_Title (Requirement, New_Title);
+   begin
+      Retitled.Clear;
+      if Was = Now then
+         return;
+      end if;
+      for Id of List (Item) loop
+         declare
+            Defined : Records.Item;
+            Got     : E.Error_Info;
+            Fields  : Field_Map;
+            Status  : E.Error_Info;
+         begin
+            Definition (Item, Id, Defined, Got);
+            if E.Is_Ok (Got) and then Records.Get (Defined, "title") = Was
+              and then State_Of (Item, Id) not in "complete" | "cancelled" | "rejected"
+            then
+               Fields.Include ("title", Now);
+               Revise (Item, Change, Id, Fields, Status);
+               if E.Is_Ok (Status) then
+                  Retitled.Append (Id);
+               end if;
+            end if;
+         end;
+      end loop;
+   end Retitle_Derived;
 
 end Model_Runner.Framework.Tasks;

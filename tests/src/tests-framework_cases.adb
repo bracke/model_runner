@@ -2774,6 +2774,24 @@ package body Tests.Framework_Cases is
                  "a requirement's new meaning left a second task, or the first unchanged: "
                  & R.Get (Defined, "origin"));
       end;
+
+      --  A new title, from its document or by hand: the open task derived
+      --  from it is titled by it; one a person titled is theirs.
+      declare
+         Retitled : Model_Runner.Framework.Name_Lists.Vector;
+         Defined  : R.Item;
+         Only     : constant String := Tk.List (Store).First_Element;
+      begin
+         Tk.Definition (Store, Only, Defined, Status);
+         Tk.Retitle_Derived (Store, Change, To_String (Req), "Read it", "Read and close", Retitled);
+         S.Commit (Store, Change, Status);
+         Tk.Definition (Store, Only, Defined, Status);
+         Assert (Natural (Retitled.Length) = 1
+                 and then R.Get (Defined, "title") = To_String (Req) & ": Read and close",
+                 "a derived task kept its requirement's old title: " & R.Get (Defined, "title"));
+         Tk.Retitle_Derived (Store, Change, To_String (Req), "Something else", "Again", Retitled);
+         Assert (Retitled.Is_Empty, "a task titled otherwise was retitled");
+      end;
       S.Close (Store);
 
       Change := S.No_Changes;

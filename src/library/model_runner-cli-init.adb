@@ -841,7 +841,9 @@ package body Model_Runner.CLI.Init is
                                     if Length (Kept) > 2 then
                                        Fixes.Include (Name, Slice (Kept, 1, Length (Kept) - 2));
                                     end if;
-                                    Append (Kept, To_String (One.Label) & ": COMMAND");
+                                    --  What the hint gives is the tests' command,
+                                    --  whichever check of that directory came first.
+                                    Append (Kept, "tests: COMMAND");
                                     Say ("cli.init.check_no_crate",
                                          [Loc.Named ("name", To_String (One.Label)), Loc.Named ("value", Command),
                                           Loc.Named ("path", To_String (One.Directory)),

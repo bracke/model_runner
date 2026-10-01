@@ -52,6 +52,10 @@ package Model_Runner.Framework.Bootstrap is
 
       --  The identifier the document gives it, where it gives one.
       Given_Id   : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  What a record says of its own standing -- Accepted, Proposed --
+      --  where it says it: a decision's status line, field or cell.
+      Status     : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    --  Things found.
@@ -128,8 +132,10 @@ package Model_Runner.Framework.Bootstrap is
    --  setting, the Markdown at the top and in docs.
    --
    --  @param Item The store.
+   --  @param Patterns Patterns to look with in place of the setting's, a
+   --    line each; then only what they find, not what was read before.
    --  @return Their paths within the project, sorted, each once.
-   function Documents (Item : Stores.Store) return Name_Lists.Vector;
+   function Documents (Item : Stores.Store; Patterns : String := "") return Name_Lists.Vector;
 
    --  Apply what was found, making only what the state does not already
    --  hold, and only what the bootstrap policy lets it make: set

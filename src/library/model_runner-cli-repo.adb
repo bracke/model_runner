@@ -3,7 +3,9 @@ with Ada.Containers.Vectors;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 with Ada.Strings.Unbounded;
+with Ada.Text_IO;
 
 with Hostkit.Fs;
 
@@ -62,6 +64,44 @@ package body Model_Runner.CLI.Repo is
       end if;
       return Result;
    end Roots_In;
+
+   --  A node as a person names it: no file: or symbol: before it, no
+   --  @revision after it.
+   function Node_Said (Node : String) return String is
+      Bare : constant String :=
+        (if Node'Length > 5 and then Node (Node'First .. Node'First + 4) = "file:"
+         then Node (Node'First + 5 .. Node'Last)
+         elsif Node'Length > 7 and then Node (Node'First .. Node'First + 6) = "symbol:"
+         then Node (Node'First + 7 .. Node'Last)
+         elsif Node'Length > 10 and then Node (Node'First .. Node'First + 9) = "component:"
+         then "the component " & Node (Node'First + 10 .. Node'Last)
+         else Node);
+      At_Mark : constant Natural := Ada.Strings.Fixed.Index (Bare, "@", Ada.Strings.Backward);
+   begin
+      return (if At_Mark > Bare'First and then (for all C of Bare (At_Mark + 1 .. Bare'Last) => C in '0' .. '9')
+              then Bare (Bare'First .. At_Mark - 1) else Bare);
+   end Node_Said;
+
+   --  An edge of the trace as a sentence.
+   function Edge_Said (From, Kind, To : String; Sure : Boolean) return String is
+      Missing : constant Boolean := Ada.Strings.Fixed.Index (Kind, ", missing") > 0;
+      Bare    : constant String :=
+        (if Missing then Kind (Kind'First .. Ada.Strings.Fixed.Index (Kind, ", missing") - 1) else Kind);
+      F       : constant String := Node_Said (From);
+      To_Said : constant String := Node_Said (To) & (if Missing then " (missing)" else "");
+   begin
+      return (if Bare = "sources" then Node_Said (To) & " comes from " & F & (if Missing then " (missing)" else "")
+              elsif Bare = "served_by" then F & " is served by " & To_Said
+              elsif Bare = "implemented_by" then F & " is implemented by " & To_Said
+              elsif Bare = "tested_by" then F & " is tested by " & To_Said
+              elsif Bare = "verified_by" then F & " is verified by " & To_Said
+              elsif Bare = "depends_on" then F & " depends on " & To_Said
+              elsif Bare in "scope" | "belongs_to" then F & " belongs to " & To_Said
+              elsif Bare = "serves" then F & " serves " & To_Said
+              else F & " " & Ada.Strings.Fixed.Translate (Bare, Ada.Strings.Maps.To_Mapping ("_", " "))
+                   & " " & To_Said)
+        & (if Sure then "" else ", probably");
+   end Edge_Said;
 
    ---------
    -- Run --
@@ -320,8 +360,9 @@ package body Model_Runner.CLI.Repo is
       then
          Outcome := E.Make (E.Framework_Input_Missing);
          --  Named with how it is given: the command and what it takes.
-         E.Add_Text (Outcome, "name", (if Action in "deps" | "users" then "a unit: /" & Action & " UNIT, as /tree lists"
-                                                                          & " them"
+         E.Add_Text (Outcome, "name", (if Action in "deps" | "users"
+                                       then "a unit or a file: /" & Action & " UNIT-or-FILE, as /deps"
+                                            & " src/main.c or /deps a unit /sym names"
                                        elsif Action = "impact" then "a file or a symbol: /impact FILE-or-SYMBOL"
                                        elsif Action = "trace" then "what to trace: /trace ID-or-FILE-or-SYMBOL, as"
                                                                    & " /trace REQ-001 or /trace src/main.c"
@@ -575,6 +616,49 @@ package body Model_Runner.CLI.Repo is
                         end if;
                      end;
                   end loop;
+                  --  A label -- FR-1, REQ-9 -- is no symbol: the lines that
+                  --  name it, as the text has them.
+                  if not Any and then Ada.Strings.Fixed.Index (Argument, "-") > Argument'First
+                    and then Argument (Argument'Last) in '0' .. '9'
+                  then
+                     for Index in 1 .. Rp.File_Count (Found) loop
+                        declare
+                           use Ada.Text_IO;
+                           Path : constant String := To_String (Rp.File_At (Found, Index).Path);
+                           File : File_Type;
+                           Line_Number : Natural := 0;
+                        begin
+                           Open (File, In_File, Hostkit.Fs.Join (Directory, Path));
+                           while not End_Of_File (File) loop
+                              declare
+                                 Line : constant String := Get_Line (File);
+                                 At_Word : constant Natural := Ada.Strings.Fixed.Index (Line, Argument);
+                              begin
+                                 Line_Number := Line_Number + 1;
+                                 if At_Word > 0
+                                   and then (At_Word + Argument'Length > Line'Last
+                                             or else Line (At_Word + Argument'Length) not in '0' .. '9')
+                                   and then (At_Word = Line'First
+                                             or else Line (At_Word - 1) not in 'A' .. 'Z' | 'a' .. 'z' | '-')
+                                 then
+                                    Any := True;
+                                    Pres.Put_Message
+                                      (Screen, "cli.repo.reference",
+                                       [Loc.Named ("name", Argument),
+                                        Loc.Named ("path", Path & ":" & Image (Line_Number)),
+                                        Loc.Named ("detail", "named in the text")]);
+                                 end if;
+                              end;
+                           end loop;
+                           Close (File);
+                        exception
+                           when others =>
+                              if Is_Open (File) then
+                                 Close (File);
+                              end if;
+                        end;
+                     end loop;
+                  end if;
                   if not Any then
                      Not_Found;
                   end if;
@@ -696,12 +780,18 @@ package body Model_Runner.CLI.Repo is
                               if not Shown.Contains (Line) then
                                  Shown.Append (Line);
                                  declare
+                                    --  In words: REQ-001 comes from README.md, its
+                                    --  revision and how sure only when asked for.
                                     Said : constant String :=
-                                      To_String (One.From) & " " & To_String (One.Kind) & " "
-                                      & To_String (One.To) & " ("
-                                      & Ada.Characters.Handling.To_Lower
-                                          (Rp.Derivation'Image (One.Source) & ", "
-                                           & Rp.Confidence'Image (One.Sure)) & ")";
+                                      (if Verbose
+                                       then To_String (One.From) & " " & To_String (One.Kind) & " "
+                                            & To_String (One.To) & " ("
+                                            & Ada.Characters.Handling.To_Lower
+                                                (Rp.Derivation'Image (One.Source) & ", "
+                                                 & Rp.Confidence'Image (One.Sure)) & ")"
+                                       else Edge_Said (To_String (One.From), To_String (One.Kind),
+                                                       To_String (One.To),
+                                                       Rp."=" (One.Sure, Rp.Certain)));
                                  begin
                                     if Ada.Strings.Fixed.Index (Line, "REQ-") > 0
                                       or else Ada.Strings.Fixed.Index (Line, "TASK-") > 0
@@ -1088,10 +1178,13 @@ package body Model_Runner.CLI.Repo is
                                           Pres.Put_Indented
                                             (Screen, "cli.repo.reached",
                                              [Loc.Named ("value", Kind),
-                                              Loc.Named ("name", To_String (One.Id)),
+                                              Loc.Named ("name", (if Verbose then To_String (One.Id)
+                                                                  else Node_Said (To_String (One.Id)))),
                                               Loc.Named ("detail",
-                                                         Ada.Characters.Handling.To_Lower
-                                                           (Rp.Confidence'Image (One.Sure)))]);
+                                                         (if Verbose or else Rp."/=" (One.Sure, Rp.Certain)
+                                                          then Ada.Characters.Handling.To_Lower
+                                                                 (Rp.Confidence'Image (One.Sure))
+                                                          else ""))]);
                                        end if;
                                     end if;
                                  end;

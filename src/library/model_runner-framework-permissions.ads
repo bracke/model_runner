@@ -310,6 +310,13 @@ package Model_Runner.Framework.Permissions is
    --  @return The value, or "granted (no limits)".
    function Value_Said (Subject, Value : String) return String;
 
+   --  Whether a task's permissions only take capabilities away -- each
+   --  entry a -CAPABILITY -- leaving the rest as the levels above give it.
+   --
+   --  @param Text The permissions field.
+   --  @return True when every entry is one taken away.
+   function Only_Withholds (Text : String) return Boolean;
+
 private
 
    Unrestricted : constant Permission_Set := [others => (Granted => True, others => <>)];

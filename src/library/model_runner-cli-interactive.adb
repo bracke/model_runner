@@ -9,6 +9,7 @@ with Hostkit.Descriptors;
 with Hostkit.Terminal_Control;
 
 with Model_Runner.CLI.Checkpoint;
+with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Project_Commands;
 with Model_Runner.Clocks;
 with Model_Runner.Conversation;
@@ -1070,11 +1071,15 @@ package body Model_Runner.CLI.Interactive is
       while not Leaving loop
          --  The prompt marker goes to standard error so that a redirected
          --  standard output still receives only generated text.
-         Pres.Put_Prompt
-           (Screen,
-            (if Pending (Typing) = ""
-             then "cli.interactive.prompt"
-             else "cli.interactive.continuation"));
+         --  At a terminal the line is edited, and its prompt drawn, as it is
+         --  typed; elsewhere the prompt is said and a line read.
+         if not Model_Runner.CLI.Choosers.Is_Available (Screen) then
+            Pres.Put_Prompt
+              (Screen,
+               (if Pending (Typing) = ""
+                then "cli.interactive.prompt"
+                else "cli.interactive.continuation"));
+         end if;
 
          --  No End_Of_File before the line: at a terminal it reads ahead
          --  past the line mark, and waits for the line after the one typed.
@@ -1094,6 +1099,9 @@ package body Model_Runner.CLI.Interactive is
             --  loop at all.
             Room : String (1 .. 8192);
             Stop : Natural;
+
+            --  Whether the line was edited as it was typed, coloured then.
+            Edited : Boolean := False;
 
             Effect  : Line_Effect;
             Handled : Boolean;
@@ -1118,7 +1126,32 @@ package body Model_Runner.CLI.Interactive is
                   Asked_At : constant Ada.Calendar.Time := Ada.Calendar.Clock;
                   use type Ada.Calendar.Time;
                begin
-                  Ada.Text_IO.Get_Line (Ada.Text_IO.Current_Input, Room, Stop);
+                  declare
+                     use type Model_Runner.CLI.Choosers.Line_End;
+                     Key    : constant String :=
+                       (if Pending (Typing) = "" then "cli.interactive.prompt" else "cli.interactive.continuation");
+                     Ending : Model_Runner.CLI.Choosers.Line_End;
+                     Got    : constant String :=
+                       Model_Runner.CLI.Choosers.Edited_Line
+                         (Screen, Pres.Message_Value (Screen, Key) & " ", Ending);
+                     --  Escape and Ctrl-C drop the line, as when a cooked
+                     --  terminal passes them on: the key after what was typed.
+                     Whole  : constant String :=
+                       (case Ending is
+                          when Model_Runner.CLI.Choosers.Escaped     => Got & ASCII.ESC,
+                          when Model_Runner.CLI.Choosers.Interrupted => Got & ASCII.ETX,
+                          when others                                => Got);
+                  begin
+                     if Ending = Model_Runner.CLI.Choosers.Unavailable then
+                        Ada.Text_IO.Get_Line (Ada.Text_IO.Current_Input, Room, Stop);
+                     elsif Ending = Model_Runner.CLI.Choosers.Ended then
+                        raise Ada.Text_IO.End_Error;
+                     else
+                        Edited := True;
+                        Stop := Natural'Min (Whole'Length, Room'Length);
+                        Room (1 .. Stop) := Whole (Whole'First .. Whole'First + Stop - 1);
+                     end if;
+                  end;
                   --  Ctrl-L asks for a clear screen, as a shell's line does:
                   --  the screen cleared, and the key not part of the line.
                   if Ada.Strings.Fixed.Index (Room (Room'First .. Stop), [1 => ASCII.FF]) > 0 then
@@ -1196,7 +1229,9 @@ package body Model_Runner.CLI.Interactive is
                      --  An Esc the terminal echoed as it is leaves a sequence
                      --  open the next output would end, losing its first
                      --  character: cancelled first.
-                     Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CAN);
+                     if not Edited then
+                        Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CAN);
+                     end if;
                      --  Something before the key was dropped: said. Nothing
                      --  was -- the key pressed on an empty line -- nothing
                      --  to say; and what follows it, shown, as the echo of

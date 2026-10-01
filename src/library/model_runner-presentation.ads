@@ -483,6 +483,14 @@ package Model_Runner.Presentation is
    --  @param Key Stable message identifier of the marker.
    procedure Put_Prompt (Item : in out Console; Key : String);
 
+   --  A command line with its commands coloured, where colour shows on the
+   --  diagnostic stream; as it is otherwise.
+   --
+   --  @param Item The console.
+   --  @param Text The line.
+   --  @return It, coloured or not.
+   function Coloured_Commands (Item : Console; Text : String) return String;
+
    --  Clear a terminal's screen, its cursor at the top: nothing where
    --  standard error is no terminal.
    --

@@ -2391,6 +2391,17 @@ package body Model_Runner.Framework.Verification is
       if not Any then
          return Lacks ("no task serves it");
       elsif not Built then
+         --  Linked to a file that is gone: that said, not that none is linked.
+         for Target of Intent.Links (Item, Intent.Requirement, Requirement, Intent.Implementation) loop
+            if Ada.Strings.Fixed.Index (Target, "/") > 0
+              and then not Ada.Directories.Exists
+                             (Hostkit.Fs.Join (Ada.Directories.Containing_Directory (Stores.Root (Item)), Target))
+            then
+               return Lacks ("its linked implementation " & Target & " is gone: /scan shows where it went, and /req"
+                             & " link " & Requirement & " implementation FILE follows it, /req unlink "
+                             & Requirement & " implementation " & Target & " taking the old one off");
+            end if;
+         end loop;
          return Lacks ("no implementation is known for it: no task serving it changed a file, and no"
                        & " file is linked as its implementation; where the code is there already, /req link "
                        & Requirement & " implementation FILE names it, and /check " & Requirement

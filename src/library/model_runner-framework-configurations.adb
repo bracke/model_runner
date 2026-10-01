@@ -1812,10 +1812,51 @@ package body Model_Runner.Framework.Configurations is
               and then (Value'Length not in 1 .. 9
                         or else (for some C of Value => C not in '0' .. '9'))
             then
-               return Name & " is a whole number"
+               return Name & " is a count"
                  & (if Starts (Name, "scalar.task.max_seconds.") then " of seconds"
                     elsif Starts (Name, "scalar.task.token_budget.") then " of tokens" else "")
-                 & ", not " & Value;
+                 & ", 1 or more in digits, not " & Value;
+            end if;
+            --  A model profile says what Context reads, each in its kind:
+            --  a word it does not know would be dropped without a word.
+            if Starts (Name, "map.model.") then
+               declare
+                  Start : Natural := Value'First;
+               begin
+                  for Index in Value'First .. Value'Last + 1 loop
+                     if Index > Value'Last or else Value (Index) = ',' then
+                        declare
+                           Pair  : constant String := Ada.Strings.Fixed.Trim (Value (Start .. Index - 1),
+                                                                             Ada.Strings.Both);
+                           Equal : constant Natural := Ada.Strings.Fixed.Index (Pair, "=");
+                           Key   : constant String :=
+                             (if Equal = 0 then Pair
+                              else Ada.Characters.Handling.To_Lower (Pair (Pair'First .. Equal - 1)));
+                           Given : constant String := (if Equal = 0 then "" else Pair (Equal + 1 .. Pair'Last));
+                        begin
+                           if Pair = "" then
+                              null;
+                           elsif Key not in "context" | "reserve" | "overhead" | "tools" | "structured"
+                                          | "reasoning" | "streaming" | "parallel" | "class" | "provider"
+                           then
+                              return Name & " takes context=N, reserve=N, overhead=N, tools=yes|no,"
+                                & " structured=yes|no, reasoning=yes|no, streaming=yes|no, parallel=yes|no,"
+                                & " class=NAME and provider=NAME, a comma apart; " & Key & " is none of them";
+                           elsif Key in "context" | "reserve" | "overhead"
+                             and then (Given'Length not in 1 .. 9
+                                       or else (for some C of Given => C not in '0' .. '9'))
+                           then
+                              return Name & "'s " & Key & " is a whole number of tokens, not " & Given;
+                           elsif Key in "tools" | "structured" | "reasoning" | "streaming" | "parallel"
+                             and then Ada.Characters.Handling.To_Lower (Given) not in "yes" | "no" | "true" | "false"
+                           then
+                              return Name & "'s " & Key & " is yes or no, not " & Given;
+                           end if;
+                        end;
+                        Start := Index + 1;
+                     end if;
+                  end loop;
+               end;
             end if;
             --  The model profile used names one the configuration has: a
             --  file name there is no profile, and nothing would read it.
@@ -1855,12 +1896,14 @@ package body Model_Runner.Framework.Configurations is
               and then (Value'Length not in 1 .. 9
                         or else (for some C of Value => C not in '0' .. '9'))
             then
-               return Name & " is a whole number"
+               return Name & " is a count"
                  & (if Ada.Strings.Fixed.Index (Name, "seconds") > 0 or else Name in "scalar.work.lease"
                          | "scalar.execution.timeout"
                     then " of seconds" elsif Ada.Strings.Fixed.Index (Name, "token") > 0 then " of tokens"
                     elsif Name = "scalar.execution.output_limit" then " of bytes" else "")
-                 & ", not " & Value;
+                 & (if Name in "scalar.agents.max_steps" | "scalar.agents.token_budget" | "scalar.work.lease"
+                    then ", 1 or more" else ", 0 or more")
+                 & " in digits, not " & Value;
             end if;
          end;
       end loop;
@@ -1927,6 +1970,10 @@ package body Model_Runner.Framework.Configurations is
          Dot    : constant Natural := Ada.Strings.Fixed.Index (Name, ".", Ada.Strings.Backward);
          Prefix : constant String := (if Dot = 0 then Name else Name (Name'First .. Dot));
       begin
+         --  A level said to grant none says so: what it names is all it has.
+         if Dot > Name'First and then Records.Get (Result.Before, Name (Name'First .. Dot - 1)) = "none" then
+            return True;
+         end if;
          for Index in 1 .. Records.Field_Count (Result.Before) loop
             if Starts (Records.Field_Name (Result.Before, Index), Prefix) then
                return True;
@@ -2590,6 +2637,8 @@ package body Model_Runner.Framework.Configurations is
                      begin
                         Result.Changed.Append
                           (Name & ": " & (if Old /= "" then Old
+                                          --  Set, with no limits: granted, as /config says.
+                                          elsif Records.Has (Result.Before, Name) then "granted (no limits)"
                                           elsif Project_Level then (if Had_It then "(granted)" else "off")
                                           elsif Level_Said (Name)
                                           then "(not granted: this level grants only what it names)"
@@ -2686,6 +2735,12 @@ package body Model_Runner.Framework.Configurations is
                      end if;
                      Result.Changed.Append
                        (Name & ": " & (if not Was and then Level_Said (Name)
+                                         and then Records.Get (Result.Before,
+                                                               Name (Name'First .. Ada.Strings.Fixed.Index
+                                                                       (Name, ".", Ada.Strings.Backward) - 1))
+                                                  = "none"
+                                       then "(not granted: this level grants none)"
+                                       elsif not Was and then Level_Said (Name)
                                        then "(not granted: this level grants only what it names)"
                                        elsif not Was then Inherited
                                        elsif Old = "" then "granted" else Old)

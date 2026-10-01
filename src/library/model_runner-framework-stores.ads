@@ -242,6 +242,14 @@ package Model_Runner.Framework.Stores is
       Value  : out Records.Item;
       Found  : out Boolean);
 
+   --  The names a transaction writes records under in an area, in the
+   --  order it stages them.
+   --
+   --  @param Change The transaction.
+   --  @param Where Its area.
+   --  @return The names.
+   function Pending_Names (Change : Transaction; Where : Area) return Name_Lists.Vector;
+
    --  How many changes a transaction holds.
    --
    --  @param Change The transaction.

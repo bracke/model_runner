@@ -276,6 +276,13 @@ package body Model_Runner.Framework.Consistency is
             if Known.Contains (Subject) then
                return Subject;
             end if;
+            --  A capability of the project's permissions is a setting too.
+            if Subject'Length > 23 and then Subject (Subject'First .. Subject'First + 22) = "map.permission.project."
+              and then (for some One in Permissions.Capability =>
+                          Permissions.Word (One) = Subject (Subject'First + 23 .. Subject'Last))
+            then
+               return Subject;
+            end if;
             for Prefix of Name_Lists.Vector'(["scalar.", "set.", "list."]) loop
                if Known.Contains (Prefix & Subject) then
                   return Prefix & Subject;
@@ -291,16 +298,33 @@ package body Model_Runner.Framework.Consistency is
               (if Name'Length > 7 and then Name (Name'First .. Name'First + 6) = "scalar."
                then Name (Name'First + 7 .. Name'Last) else Name);
          begin
-            if Name /= "" and then not Records.Has (Config, Name)
-              and then Configurations.Default_Of (Name) /= Said
-            then
-               Found (Unapplied_Ruling, Name,
-                      Source & " rules " & Bare & " = " & Said & ", and the configuration does not set it,"
-                      & " so the harness keeps to "
-                      & (if Configurations.Default_Of (Name) = "" then "its default"
-                         else Configurations.Default_Of (Name))
-                      & "; /reconfigure " & Bare & "=" & Said & " makes it hold");
-            end if;
+            --  A capability not set has the project's default: granted or
+            --  not, and a ruling saying the same is no disagreement.
+            declare
+               Is_Capability : constant Boolean :=
+                 Name'Length > 15 and then Name (Name'First .. Name'First + 14) = "map.permission.";
+               Default_Granted : constant Boolean :=
+                 Is_Capability
+                 and then (for some One in Permissions.Capability =>
+                             Permissions.Word (One)
+                               = Name (Ada.Strings.Fixed.Index (Name, ".", Ada.Strings.Backward) + 1 .. Name'Last)
+                             and then Permissions.Project_Default (One).Granted);
+               Ruled_Granted : constant Boolean := Said not in "off" | "none";
+            begin
+               if Name /= "" and then not Records.Has (Config, Name)
+                 and then (if Is_Capability then Default_Granted /= Ruled_Granted
+                           else Configurations.Default_Of (Name) /= Said)
+               then
+                  Found (Unapplied_Ruling, Name,
+                         Source & " rules " & Bare & " = " & Said & ", and the configuration does not set it,"
+                         & " so the harness keeps to "
+                         & (if Is_Capability then (if Default_Granted then "its default, granted"
+                                                   else "its default, withheld")
+                            elsif Configurations.Default_Of (Name) = "" then "its default"
+                            else Configurations.Default_Of (Name))
+                         & "; /reconfigure " & Bare & "=" & Said & " makes it hold");
+               end if;
+            end;
          end Judge;
       begin
          Configurations.Read (Item, Config, Read);
@@ -413,7 +437,9 @@ package body Model_Runner.Framework.Consistency is
                Parsed  : E.Error_Info;
             begin
                Tasks.Definition (Item, Id, Defined, Read);
-               if E.Is_Ok (Read) and then Records.Get (Defined, "permissions") /= "" then
+               if E.Is_Ok (Read) and then Records.Get (Defined, "permissions") /= ""
+                 and then not Permissions.Only_Withholds (Records.Get (Defined, "permissions"))
+               then
                   Permissions.Restriction (Records.Get (Defined, "permissions"), Asked, Parsed);
                   if E.Is_Ok (Parsed) then
                      declare
@@ -425,7 +451,8 @@ package body Model_Runner.Framework.Consistency is
                         if Clipped /= "" then
                            Found (Permission_Widening, Id,
                                   "its permissions ask for more than its kind " & Records.Get (Defined, "kind")
-                                  & " gives -- " & Clipped & "; /task edit " & Id
+                                  & " gives -- " & Clipped & "; /task withhold " & Id
+                                  & " CAPABILITY narrows it, or /task edit " & Id
                                   & " permissions=inherit takes its kind's");
                         end if;
                      end;

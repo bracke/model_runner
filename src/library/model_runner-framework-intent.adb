@@ -431,6 +431,19 @@ package body Model_Runner.Framework.Intent is
 
       In_Code : constant Label_Sets.Set := Code_Labels (Item);
 
+      --  The register as it will be: what is kept, and what this change
+      --  makes; a kept earlier revision is no entry.
+      function Register_Now return Name_Lists.Vector is
+         Result : Name_Lists.Vector := List (Item, Kind);
+      begin
+         for Name of Stores.Pending_Names (Change, Area_Of (Kind)) loop
+            if Ada.Strings.Fixed.Index (Name, History_Mark) = 0 and then not Result.Contains (Name) then
+               Result.Append (Name);
+            end if;
+         end loop;
+         return Result;
+      end Register_Now;
+
       --  Whether something has an identifier already, in the state or in
       --  this transaction.
       function Taken (Name : String) return Boolean is
@@ -452,7 +465,7 @@ package body Model_Runner.Framework.Intent is
          elsif In_Code.Contains (Same) then
             return True;
          end if;
-         for Held of List (Item, Kind) loop
+         for Held of Register_Now loop
             if Held /= Name and then Numbered (Held) = Same then
                return True;
             end if;
@@ -472,8 +485,9 @@ package body Model_Runner.Framework.Intent is
             return "";
          end if;
          --  The style most of the register is in: REQ-1 beside one REQ-001
-         --  made before is still a register of REQ-n.
-         for Held of List (Item, Kind) loop
+         --  made before is still a register of REQ-n -- those made in this
+         --  change too, as a document's REQ-1 to REQ-3 read just before.
+         for Held of Register_Now loop
             if Held'Length > Prefix'Length and then Held (Held'First .. Held'First + Prefix'Length - 1) = Prefix
               and then (for all C of Held (Held'First + Prefix'Length .. Held'Last) => C in '0' .. '9')
               and then Held'Length - Prefix'Length <= 9
@@ -1191,6 +1205,30 @@ package body Model_Runner.Framework.Intent is
             end if;
          end if;
       end loop;
+      --  In the order a person counts them: REQ-2 before REQ-10, and
+      --  REQ-004 among REQ-3 and REQ-5, each prefix together.
+      declare
+         function Before (Left, Right : String) return Boolean is
+            Left_Dash  : constant Natural := Ada.Strings.Fixed.Index (Left, "-", Ada.Strings.Backward);
+            Right_Dash : constant Natural := Ada.Strings.Fixed.Index (Right, "-", Ada.Strings.Backward);
+            function Number (Name : String; Dash : Natural) return Natural
+            is (if Dash = 0 or else Dash = Name'Last or else Name'Last - Dash > 9
+                  or else (for some C of Name (Dash + 1 .. Name'Last) => C not in '0' .. '9')
+                then Natural'Last else Natural'Value (Name (Dash + 1 .. Name'Last)));
+            Left_Stem  : constant String := (if Left_Dash = 0 then Left else Left (Left'First .. Left_Dash));
+            Right_Stem : constant String := (if Right_Dash = 0 then Right else Right (Right'First .. Right_Dash));
+         begin
+            if Left_Stem /= Right_Stem then
+               return Left_Stem < Right_Stem;
+            elsif Number (Left, Left_Dash) /= Number (Right, Right_Dash) then
+               return Number (Left, Left_Dash) < Number (Right, Right_Dash);
+            end if;
+            return Left < Right;
+         end Before;
+         package Counting is new Name_Lists.Generic_Sorting (Before);
+      begin
+         Counting.Sort (Result);
+      end;
       return Result;
    end List;
 

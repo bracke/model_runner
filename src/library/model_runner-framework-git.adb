@@ -97,13 +97,32 @@ package body Model_Runner.Framework.Git is
       if not Result.Found then
          return Result;
       end if;
-      for Line of Lines_Of (To_String (Text)) loop
-         if Line'Length > 3 and then Line (Line'First .. Line'First + 2) = "## " then
-            Result.Branch := To_Unbounded_String (Line (Line'First + 3 .. Line'Last));
-         elsif Line'Length > 3 then
-            Result.Changes.Append (Line);
-         end if;
-      end loop;
+      declare
+         --  Git names a path from the repository's top: within a project
+         --  further down, from the project's, as everything else does.
+         Top    : constant String := Top_Level (Project_Directory);
+         Here   : constant String := Ada.Directories.Full_Name (Project_Directory);
+         Prefix : constant String :=
+           (if Top /= "" and then Here'Length > Top'Length + 1
+              and then Here (Here'First .. Here'First + Top'Length - 1) = Top
+            then Here (Here'First + Top'Length + 1 .. Here'Last) & "/" else "");
+      begin
+         for Line of Lines_Of (To_String (Text)) loop
+            if Line'Length > 3 and then Line (Line'First .. Line'First + 2) = "## " then
+               Result.Branch := To_Unbounded_String (Line (Line'First + 3 .. Line'Last));
+            elsif Line'Length > 3 then
+               declare
+                  Path : constant String := Line (Line'First + 3 .. Line'Last);
+               begin
+                  Result.Changes.Append
+                    (if Prefix /= "" and then Path'Length > Prefix'Length
+                       and then Path (Path'First .. Path'First + Prefix'Length - 1) = Prefix
+                     then Line (Line'First .. Line'First + 2) & Path (Path'First + Prefix'Length .. Path'Last)
+                     else Line);
+               end;
+            end if;
+         end loop;
+      end;
       return Result;
    end Status_Of;
 
