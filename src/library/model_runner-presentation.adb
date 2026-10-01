@@ -253,6 +253,37 @@ package body Model_Runner.Presentation is
       end if;
    end Put_Header;
 
+   ------------------
+   -- Put_Indented --
+   ------------------
+
+   procedure Put_Indented
+     (Item      : in out Console;
+      Key       : String;
+      Arguments : Loc.Argument_List;
+      Indent    : Positive := 2)
+   is
+      Lead : constant String (1 .. Indent) := [others => ' '];
+   begin
+      if Item.Structured then
+         Put_Message (Item, Key, Arguments);
+      else
+         Put_Line (Item, Lead & Message (Item, Key, Arguments));
+      end if;
+   end Put_Indented;
+
+   -----------------
+   -- Put_Section --
+   -----------------
+
+   procedure Put_Section (Item : in out Console; Key : String) is
+   begin
+      if not Item.Structured then
+         Put_Line (Item, "");
+      end if;
+      Put_Header (Item, Key);
+   end Put_Section;
+
    -------------
    -- Tone_Of --
    -------------
@@ -363,10 +394,16 @@ package body Model_Runner.Presentation is
       Key        : String;
       Name       : String;
       Value      : String;
-      Value_Tone : Tone := Plain) is
+      Value_Tone : Tone := Plain;
+      Indent     : Natural := 0)
+   is
+      Lead : constant String (1 .. Indent) := [others => ' '];
    begin
-      if Item.Structured or else not Styles (Item, Answer) then
+      if Item.Structured then
          Put_Message (Item, Key, [Loc.Named ("name", Name), Loc.Named ("value", Value)]);
+         return;
+      elsif not Styles (Item, Answer) then
+         Put_Line (Item, Lead & Message (Item, Key, [Loc.Named ("name", Name), Loc.Named ("value", Value)]));
          return;
       end if;
       --  Coloured in the line as the catalog words it, not in what it is
@@ -389,12 +426,12 @@ package body Model_Runner.Presentation is
          --  Either not found as given -- the catalog changed it -- the line
          --  is said plain.
          if At_Name = 0 or else At_Value = 0 or else At_Value < At_Name + Trimmed'Length then
-            Put_Line (Item, Line);
+            Put_Line (Item, Lead & Line);
             return;
          end if;
          Put_Line
            (Item,
-            Line (Line'First .. At_Name - 1)
+            Lead & Line (Line'First .. At_Name - 1)
             & Terminal_Styles.Decorate (Trimmed, Terminal_Styles.Role_Muted)
             & Line (At_Name + Trimmed'Length .. At_Value - 1)
             & (if Value_Tone = Plain then Value else Terminal_Styles.Decorate (Value, Role))

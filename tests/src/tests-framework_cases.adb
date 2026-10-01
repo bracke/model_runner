@@ -8710,6 +8710,12 @@ package body Tests.Framework_Cases is
              Model_Runner.Localization.Named ("value", "ready"),
              Model_Runner.Localization.Named ("detail", "Toned")],
             "ready", Model_Runner.Presentation.Good);
+         --  A group's title, and a line set in under it.
+         Model_Runner.Presentation.Put_Section (Screen, "cli.task.section.what");
+         Model_Runner.Presentation.Put_Indented
+           (Screen, "cli.task.field",
+            [Model_Runner.Localization.Named ("name", "kind"),
+             Model_Runner.Localization.Named ("value", "analysis")]);
          Model_Runner.Presentation.Put_Diff_Line (Screen, "+added");
          Model_Runner.Presentation.Put_Diff_Line (Screen, "-removed");
          Set_Output (Standard_Output);

@@ -413,13 +413,6 @@ package body Model_Runner.CLI.Intents is
          return To_String (Text);
       end From;
 
-      --  A field, its name muted and its value in its tone at a terminal
-      --  that shows colour.
-      procedure Field (Name, Value : String; Value_Tone : Pres.Tone := Pres.Plain) is
-      begin
-         Pres.Put_Pair (Screen, "cli.task.field", Name, Value, Value_Tone);
-      end Field;
-
       procedure Needs (Count : Positive; What : String) is
       begin
          if Natural (Plain.Length) < Count then
@@ -1880,104 +1873,127 @@ package body Model_Runner.CLI.Intents is
                Nt.Read (Store, Kind, Named, Held, Status);
             end if;
             if E.Is_Ok (Status) then
-               --  It, by its identifier and title, set apart; then how it
-               --  stands, coloured by that: an accepted decision or
-               --  specification governs, an accepted requirement waits.
+               --  It, by its identifier and title, set apart; then its
+               --  fields in groups, each under its title, as /task show has
+               --  them: what it says, where it stands, its work and its
+               --  evidence, what it governs, and where it came from.
                Pres.Put_Header (Screen, "cli.task.heading",
                                 [Loc.Named ("name", Named), Loc.Named ("value", To_String (Held.Title))]);
-               Field ("state", (if Length (Held.Superseded_By) > 0
-                                then "superseded by " & To_String (Held.Superseded_By)
-                                     & " (" & To_String (Held.State) & ")"
-                                else To_String (Held.State)),
-                      (if Length (Held.Superseded_By) > 0 then Pres.Bad
-                       elsif To_String (Held.State) = "accepted" and then not Nt."=" (Kind, Nt.Requirement)
-                       then Pres.Good
-                       else Pres.Tone_Of (To_String (Held.State))));
-               Field ("revision", Ada.Strings.Fixed.Trim (Natural'Image (Held.Revision), Ada.Strings.Both));
-               Field ("scope", To_String (Held.Scope));
-               Field ("text", To_String (Held.Text));
-               if Length (Held.Criteria) > 0 then
-                  Field ("criteria", To_String (Held.Criteria));
-               end if;
-               if Nt.Blocked_Because (Store, Kind, Named) /= "" then
-                  Field ("blocked because", Nt.Blocked_Because (Store, Kind, Named), Pres.Bad);
-               end if;
-               if Nt.Governs (Store, Kind, Named) /= "" then
-                  Field ((if To_String (Held.State) in "obsolete" | "superseded" | "rejected"
-                          then "governed" else "governs"),
-                         Nt.Governs (Store, Kind, Named));
-               end if;
-               --  A requirement's work and what verified it.
-               if Nt."=" (Kind, Nt.Requirement) then
-                  declare
-                     Serving : Unbounded_String;
-                     Raw     : Model_Runner.Framework.Records.Item;
-                     Got     : E.Error_Info;
+               declare
+                  Is_Requirement : constant Boolean := Nt."=" (Kind, Nt.Requirement);
+                  Retired        : constant Boolean :=
+                    To_String (Held.State) in "obsolete" | "superseded" | "rejected";
+                  Why            : constant String :=
+                    (if Is_Requirement
+                     then Model_Runner.Framework.Verification.Why_Not_Verified (Store, Named) else "");
+                  Serving        : Unbounded_String;
+                  Verified_By    : Unbounded_String;
+
+                  procedure Item (Name, Value : String; Value_Tone : Pres.Tone := Pres.Plain) is
                   begin
-                     for Id of Model_Runner.Framework.Tasks.List (Store) loop
-                        declare
-                           Defined : Model_Runner.Framework.Records.Item;
-                        begin
-                           Model_Runner.Framework.Tasks.Definition (Store, Id, Defined, Got);
-                           if E.Is_Ok (Got)
-                             and then Model_Runner.Framework.Lines_Of
-                                        (Model_Runner.Framework.Records.Get (Defined, "requirements"))
-                                        .Contains (Named)
-                           then
-                              Append (Serving, (if Serving = Null_Unbounded_String then "" else ", ")
-                                      & Id & " (" & Model_Runner.Framework.Tasks.State_Of (Store, Id) & ")");
-                           end if;
-                        end;
+                     Pres.Put_Pair (Screen, "cli.task.field", Name, Value, Value_Tone, Indent => 2);
+                  end Item;
+               begin
+                  --  A requirement's work and what verified it, gathered first.
+                  if Is_Requirement then
+                     declare
+                        Raw : Model_Runner.Framework.Records.Item;
+                        Got : E.Error_Info;
+                     begin
+                        for Id of Model_Runner.Framework.Tasks.List (Store) loop
+                           declare
+                              Defined : Model_Runner.Framework.Records.Item;
+                           begin
+                              Model_Runner.Framework.Tasks.Definition (Store, Id, Defined, Got);
+                              if E.Is_Ok (Got)
+                                and then Model_Runner.Framework.Lines_Of
+                                           (Model_Runner.Framework.Records.Get (Defined, "requirements"))
+                                           .Contains (Named)
+                              then
+                                 Append (Serving, (if Serving = Null_Unbounded_String then "" else ", ")
+                                         & Id & " (" & Model_Runner.Framework.Tasks.State_Of (Store, Id) & ")");
+                              end if;
+                           end;
+                        end loop;
+                        S.Read (Store, Model_Runner.Framework.Requirements_Area, Named, Raw, Got);
+                        if E.Is_Ok (Got) then
+                           Verified_By := To_Unbounded_String
+                             (Model_Runner.Framework.Records.Get (Raw, "verified_by"));
+                        end if;
+                     end;
+                  end if;
+
+                  Pres.Put_Section (Screen, "cli.intent.section.says");
+                  Item ("text", To_String (Held.Text));
+                  if Length (Held.Criteria) > 0 then
+                     Item ("criteria", To_String (Held.Criteria));
+                  end if;
+
+                  --  How it stands, coloured by that: an accepted decision
+                  --  or specification governs, an accepted requirement waits.
+                  Pres.Put_Section (Screen, "cli.task.section.stands");
+                  Item ("state", (if Length (Held.Superseded_By) > 0
+                                  then "superseded by " & To_String (Held.Superseded_By)
+                                       & " (" & To_String (Held.State) & ")"
+                                  else To_String (Held.State)),
+                        (if Length (Held.Superseded_By) > 0 then Pres.Bad
+                         elsif To_String (Held.State) = "accepted" and then not Is_Requirement
+                         then Pres.Good
+                         else Pres.Tone_Of (To_String (Held.State))));
+                  Item ("revision", Ada.Strings.Fixed.Trim (Natural'Image (Held.Revision), Ada.Strings.Both));
+                  Item ("scope", To_String (Held.Scope));
+                  if Nt.Blocked_Because (Store, Kind, Named) /= "" then
+                     Item ("blocked because", Nt.Blocked_Because (Store, Kind, Named), Pres.Bad);
+                  end if;
+
+                  --  Its work, and what shows it done.
+                  if Is_Requirement then
+                     Pres.Put_Section (Screen, "cli.intent.section.work");
+                     Item ("served by", (if Serving = Null_Unbounded_String then "no task yet"
+                                         else To_String (Serving)));
+                     if Verified_By /= Null_Unbounded_String then
+                        Item ("verified by", To_String (Verified_By));
+                     end if;
+                     --  Recorded verified, where its evidence no longer holds.
+                     if To_String (Held.State) = "verified" and then Why /= "" then
+                        Item ("no longer holds", Why, Pres.Bad);
+                     end if;
+                     --  Not verified yet: what it still lacks, and what supplies it.
+                     if To_String (Held.State) in "accepted" | "implemented" then
+                        Item ("not verified",
+                              (if Why /= "" then Why
+                               else "its evidence holds; check " & Named & " records it verified"),
+                              Pres.Pending);
+                     end if;
+                  end if;
+
+                  --  What it rules on, where it rules on anything.
+                  if Nt.Governs (Store, Kind, Named) /= "" or else not Nt.Also_Governs (Store, Kind, Named).Is_Empty
+                  then
+                     Pres.Put_Section (Screen, "cli.intent.section.governs");
+                     if Nt.Governs (Store, Kind, Named) /= "" then
+                        Item ((if Retired then "governed" else "governs"), Nt.Governs (Store, Kind, Named));
+                     end if;
+                     for Other of Nt.Also_Governs (Store, Kind, Named) loop
+                        Item ((if Retired then "governed" else "governs"), Other);
                      end loop;
-                     if Serving /= Null_Unbounded_String then
-                        Field ("served by", To_String (Serving));
-                     end if;
-                     S.Read (Store, Model_Runner.Framework.Requirements_Area, Named, Raw, Got);
-                     if E.Is_Ok (Got) and then Model_Runner.Framework.Records.Get (Raw, "verified_by") /= ""
-                     then
-                        Field ("verified by", Model_Runner.Framework.Records.Get (Raw, "verified_by"));
-                     end if;
-                  end;
-               end if;
-               for Other of Nt.Also_Governs (Store, Kind, Named) loop
-                  Field ((if To_String (Held.State) in "obsolete" | "superseded" | "rejected"
-                          then "governed" else "governs"), Other);
-               end loop;
+                  end if;
 
-               --  Recorded verified, where its evidence no longer holds.
-               if Nt."=" (Kind, Nt.Requirement) and then To_String (Held.State) = "verified"
-                 and then Model_Runner.Framework.Verification.Why_Not_Verified (Store, Named) /= ""
-               then
-                  Field ("no longer holds",
-                         Model_Runner.Framework.Verification.Why_Not_Verified (Store, Named), Pres.Bad);
-               end if;
-
-               --  Not verified yet: what it still lacks, and what supplies it.
-               if Nt."=" (Kind, Nt.Requirement)
-                 and then To_String (Held.State) in "accepted" | "implemented"
-               then
-                  declare
-                     Why : constant String :=
-                       Model_Runner.Framework.Verification.Why_Not_Verified (Store, Named);
-                  begin
-                     Field ("not verified",
-                            (if Why /= "" then Why
-                             else "its evidence holds; check " & Named & " records it verified"),
-                            Pres.Pending);
-                  end;
-               end if;
-               Field ("source", To_String (Held.Source));
-               if Held.Supersedes /= Null_Unbounded_String then
-                  Field ("supersedes", To_String (Held.Supersedes));
-               end if;
-               if Held.Superseded_By /= Null_Unbounded_String then
-                  Field ("superseded_by", To_String (Held.Superseded_By));
-               end if;
-               for Relation in Nt.Link_Kind loop
-                  for Target of Nt.Links (Store, Kind, Named, Relation) loop
-                     Field ("link." & Lower (Nt.Link_Kind'Image (Relation)), Target);
+                  --  Where it came from, what it replaced, what it is tied to.
+                  Pres.Put_Section (Screen, "cli.intent.section.origin");
+                  Item ("source", To_String (Held.Source));
+                  if Held.Supersedes /= Null_Unbounded_String then
+                     Item ("supersedes", To_String (Held.Supersedes));
+                  end if;
+                  if Held.Superseded_By /= Null_Unbounded_String then
+                     Item ("superseded_by", To_String (Held.Superseded_By));
+                  end if;
+                  for Relation in Nt.Link_Kind loop
+                     for Target of Nt.Links (Store, Kind, Named, Relation) loop
+                        Item ("link." & Lower (Nt.Link_Kind'Image (Relation)), Target);
+                     end loop;
                   end loop;
-               end loop;
+               end;
             end if;
          end;
       end if;

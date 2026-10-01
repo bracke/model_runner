@@ -992,6 +992,9 @@ package body Model_Runner.CLI.Work is
             --  Said only for a task that can start: one that cannot is
             --  refused with why, and nothing is announced for it.
             if Tk.Ready (Store, To_String (Chosen)).Ready then
+               --  In groups, as /task show is: how it starts, the run, and
+               --  how it came out.
+               Pres.Put_Header (Screen, "cli.work.section.start", [Loc.Named ("name", To_String (Chosen))]);
                --  An outside program an earlier version was told to run
                --  is not run: said, with how to take it out.
                if R.Get (Config, "scalar.work.agent") not in "" | "off" then
@@ -1031,6 +1034,9 @@ package body Model_Runner.CLI.Work is
                   Say ("cli.work.runner", Pres.Message_Value (Screen, "cli.work.runner.session"),
                        To_String (Chosen));
                end if;
+            end if;
+            if Tk.Ready (Store, To_String (Chosen)).Ready then
+               Pres.Put_Section (Screen, "cli.work.section.run");
             end if;
             if Given_Runner /= null and then Path = "" then
                W.Execute
@@ -1078,6 +1084,7 @@ package body Model_Runner.CLI.Work is
             return;
          end if;
 
+         Pres.Put_Section (Screen, "cli.work.section.outcome");
          --  Each as what happened to it: a file the work took away is
          --  removed, not changed.
          declare

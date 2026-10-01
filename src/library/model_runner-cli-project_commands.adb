@@ -1911,11 +1911,14 @@ package body Model_Runner.CLI.Project_Commands is
          return To_String (Text);
       end Rest;
 
+      --  Whether fields are said under a group's title, set in from it.
+      Sectioned : Boolean := False;
+
       --  A field, its name muted and its value in its tone at a terminal
       --  that shows colour.
       procedure Field (Name, Value : String; Value_Tone : Pres.Tone := Pres.Plain) is
       begin
-         Pres.Put_Pair (Screen, "cli.task.field", Name, Value, Value_Tone);
+         Pres.Put_Pair (Screen, "cli.task.field", Name, Value, Value_Tone, Indent => (if Sectioned then 2 else 0));
       end Field;
 
       --  Of tasks named together, the first now ready: what to work on next.
@@ -2018,7 +2021,7 @@ package body Model_Runner.CLI.Project_Commands is
 
          procedure Line_Of (Key : String; Value : String) is
          begin
-            Pres.Put_Message
+            Pres.Put_Indented
               (Screen, "cli.task.field",
                [Loc.Named ("name", Pres.Message_Value (Screen, Key)),
                 Loc.Named ("value", Value)]);
@@ -2034,11 +2037,11 @@ package body Model_Runner.CLI.Project_Commands is
                declare
                   Reasons : constant Names.Vector := Tk.Ready (Store, Id).Reasons;
                begin
-                  Pres.Put_Message
+                  Pres.Put_Indented
                     (Screen, "cli.project.which",
                      [Loc.Named ("name", Id),
                       Loc.Named ("value", (if Reasons.Is_Empty then State_Name
-                                           else Reasons.First_Element))]);
+                                           else Reasons.First_Element))], Indent => 4);
                end;
             end loop;
          end Which;
@@ -2046,6 +2049,10 @@ package body Model_Runner.CLI.Project_Commands is
          Ready : Natural := 0;
       begin
          Model_Runner.Framework.Configurations.Read (Store, Config, Read);
+         --  In groups, each under its title, as /task show has a task: the
+         --  project, its registers, its tasks, its checks, its agents, and
+         --  what needs a person.
+         Pres.Put_Header (Screen, "cli.state.section.project");
          Line_Of ("cli.project.template", R.Get (Config, "template_id"));
          Line_Of ("cli.project.configuration", Image (R.Revision (Config)));
          --  A project with nothing in it yet: said in a line, with how to
@@ -2058,6 +2065,7 @@ package body Model_Runner.CLI.Project_Commands is
          end if;
          --  Requirements that still stand: none rejected, retired or
          --  replaced; those waiting to be decided counted apart.
+         Pres.Put_Section (Screen, "cli.state.section.registers");
          declare
             Standing : Natural := 0;
          begin
@@ -2105,27 +2113,6 @@ package body Model_Runner.CLI.Project_Commands is
                Line_Of ("cli.project.proposed_decisions", Image (Decisions));
             end if;
          end;
-         --  Done and not verified: each, and how it is.
-         for Id of Nt.List (Store, Nt.Requirement, "implemented") loop
-            Pres.Put_Note (Screen, "cli.project.not_verified",
-                           [Loc.Named ("name", Id),
-                            Loc.Named ("detail",
-                                       (if Vf.Why_Not_Verified (Store, Id) = ""
-                                        then "its evidence holds; check " & Id & " records it verified"
-                                        else Vf.Why_Not_Verified (Store, Id)))]);
-         end loop;
-         --  Recorded verified, and its evidence no longer holds: said, not
-         --  counted on until it is judged again.
-         for Id of Nt.List (Store, Nt.Requirement, "verified") loop
-            declare
-               Why : constant String := Vf.Why_Not_Verified (Store, Id);
-            begin
-               if Why /= "" then
-                  Pres.Put_Note (Screen, "cli.project.stale_verified",
-                                 [Loc.Named ("name", Id), Loc.Named ("detail", Why)]);
-               end if;
-            end;
-         end loop;
          --  Accepted, and nothing open or done serves it: no work will
          --  carry it out unless some is made.
          for Id of Nt.List (Store, Nt.Requirement, "accepted") loop
@@ -2155,6 +2142,7 @@ package body Model_Runner.CLI.Project_Commands is
                Ready := Ready + 1;
             end if;
          end loop;
+         Pres.Put_Section (Screen, "cli.state.section.tasks");
          Line_Of ("cli.project.candidates", Count ("candidate"));
          Line_Of ("cli.project.accepted", Count ("accepted"));
          Line_Of ("cli.project.ready", Image (Ready));
@@ -2167,11 +2155,11 @@ package body Model_Runner.CLI.Project_Commands is
                   Now : constant Tk.Readiness := Tk.Ready (Store, Id);
                begin
                   if not Now.Ready then
-                     Pres.Put_Message
+                     Pres.Put_Indented
                        (Screen, "cli.project.which",
                         [Loc.Named ("name", Id),
                          Loc.Named ("value", (if Now.Reasons.Is_Empty then "waiting"
-                                              else Now.Reasons.First_Element))]);
+                                              else Now.Reasons.First_Element))], Indent => 4);
                   end if;
                end;
             end loop;
@@ -2188,10 +2176,10 @@ package body Model_Runner.CLI.Project_Commands is
             if not Waiting.Is_Empty then
                Line_Of ("cli.project.to_integrate", Image (Natural (Waiting.Length)));
                for Id of Waiting loop
-                  Pres.Put_Message
+                  Pres.Put_Indented
                     (Screen, "cli.project.which",
                      [Loc.Named ("name", Id),
-                      Loc.Named ("value", Tk.Ready (Store, Id).Reasons.First_Element)]);
+                      Loc.Named ("value", Tk.Ready (Store, Id).Reasons.First_Element)], Indent => 4);
                end loop;
             end if;
          end;
@@ -2203,11 +2191,11 @@ package body Model_Runner.CLI.Project_Commands is
             declare
                Runs_It : constant String := Model_Runner.Framework.Agents.Working_On (Store, Id);
             begin
-               Pres.Put_Message
+               Pres.Put_Indented
                  (Screen, "cli.project.which",
                   [Loc.Named ("name", Id),
                    Loc.Named ("value", (if Runs_It = "" then "running"
-                                        else "its agent " & Runs_It & " is working on it"))]);
+                                        else "its agent " & Runs_It & " is working on it"))], Indent => 4);
             end;
          end loop;
          Line_Of ("cli.project.complete", Count ("complete"));
@@ -2218,7 +2206,9 @@ package body Model_Runner.CLI.Project_Commands is
               S.Names (Store, Model_Runner.Framework.Verification_Area);
             Held : R.Item;
          begin
+            --  Checks, where any has run.
             if not Last.Is_Empty then
+               Pres.Put_Section (Screen, "cli.state.section.checks");
                S.Read (Store, Model_Runner.Framework.Verification_Area,
                        Last.Last_Element, Held, Read);
                Last_Check := To_Unbounded_String (Last.Last_Element);
@@ -2226,60 +2216,6 @@ package body Model_Runner.CLI.Project_Commands is
                         Last.Last_Element & " "
                         & (if R.Get (Held, "passed") = "true" then "PASS" else "FAIL"));
             end if;
-         end;
-         Line_Of ("cli.project.agents_active",
-                  Image (Model_Runner.Framework.Agents.Active_Count (Store)));
-         --  What confines every agent the session starts, where anything does.
-         if Model_Runner.Framework.Permissions.Sandbox_Source /= "" then
-            declare
-               Shown : Unbounded_String;
-            begin
-               for Part of Model_Runner.Framework.Lines_Of
-                 (Model_Runner.Framework.Permissions.Image (Model_Runner.Framework.Permissions.Sandbox))
-               loop
-                  Append (Shown, (if Shown = Null_Unbounded_String then "" else "; ") & Part);
-               end loop;
-               Line_Of ("cli.project.sandbox",
-                        Model_Runner.Framework.Permissions.Sandbox_Source & ": " & To_String (Shown));
-            end;
-         end if;
-         --  What waits on a person besides tasks: issues not yet dealt
-         --  with, and what does not hold together.
-         declare
-            Dismissed : constant Names.Vector := Dismissed_List (Store);
-            Open      : Natural := 0;
-            Counted   : Names.Vector;
-         begin
-            for Name of S.Names (Store, Model_Runner.Framework.Results_Area) loop
-               declare
-                  Result_Id : constant String :=
-                    (if Name'Length > 4 and then Name (Name'Last - 3 .. Name'Last) = ".rec"
-                     then Name (Name'First .. Name'Last - 4) else Name);
-                  One       : Rs.Result;
-                  Got       : E.Error_Info;
-               begin
-                  Rs.Read (Store, Result_Id, One, Got);
-                  if E.Is_Ok (Got) and then Rs."=" (One.Kind, Rs.Diagnostic)
-                    and then not Dismissed.Contains (Result_Id)
-                    and then not Acted_On (Store, Result_Id, To_String (One.Summary))
-                    --  As /result counts: an attempt's issue whose task was
-                    --  taken up again since, or ended, is acted on.
-                    and then not (Task_Of_Issue (Store, One) /= ""
-                                  and then Tk.State_Of (Store, Task_Of_Issue (Store, One))
-                                             in "accepted" | "running" | "verification" | "complete"
-                                              | "cancelled" | "rejected")
-                    and then not Counted.Contains
-                                   (To_String (One.Summary) & ASCII.LF & To_String (One.Payload))
-                  then
-                     Counted.Append (To_String (One.Summary) & ASCII.LF & To_String (One.Payload));
-                     Open := Open + 1;
-                  end if;
-               end;
-            end loop;
-            Line_Of ("cli.project.open_issues", Image (Open));
-            Line_Of ("cli.project.inconsistent",
-                     Image (Model_Runner.Framework.Consistency.Length
-                              (Model_Runner.Framework.Consistency.Check (Store))));
          end;
          declare
             --  The last run of every profile the full verification is made
@@ -2322,6 +2258,83 @@ package body Model_Runner.CLI.Project_Commands is
             end if;
          end;
 
+         Pres.Put_Section (Screen, "cli.state.section.agents");
+         Line_Of ("cli.project.agents_active",
+                  Image (Model_Runner.Framework.Agents.Active_Count (Store)));
+         --  What confines every agent the session starts, where anything does.
+         if Model_Runner.Framework.Permissions.Sandbox_Source /= "" then
+            declare
+               Shown : Unbounded_String;
+            begin
+               for Part of Model_Runner.Framework.Lines_Of
+                 (Model_Runner.Framework.Permissions.Image (Model_Runner.Framework.Permissions.Sandbox))
+               loop
+                  Append (Shown, (if Shown = Null_Unbounded_String then "" else "; ") & Part);
+               end loop;
+               Line_Of ("cli.project.sandbox",
+                        Model_Runner.Framework.Permissions.Sandbox_Source & ": " & To_String (Shown));
+            end;
+         end if;
+         Pres.Put_Section (Screen, "cli.state.section.attention");
+         --  What waits on a person besides tasks: issues not yet dealt
+         --  with, and what does not hold together.
+         declare
+            Dismissed : constant Names.Vector := Dismissed_List (Store);
+            Open      : Natural := 0;
+            Counted   : Names.Vector;
+         begin
+            for Name of S.Names (Store, Model_Runner.Framework.Results_Area) loop
+               declare
+                  Result_Id : constant String :=
+                    (if Name'Length > 4 and then Name (Name'Last - 3 .. Name'Last) = ".rec"
+                     then Name (Name'First .. Name'Last - 4) else Name);
+                  One       : Rs.Result;
+                  Got       : E.Error_Info;
+               begin
+                  Rs.Read (Store, Result_Id, One, Got);
+                  if E.Is_Ok (Got) and then Rs."=" (One.Kind, Rs.Diagnostic)
+                    and then not Dismissed.Contains (Result_Id)
+                    and then not Acted_On (Store, Result_Id, To_String (One.Summary))
+                    --  As /result counts: an attempt's issue whose task was
+                    --  taken up again since, or ended, is acted on.
+                    and then not (Task_Of_Issue (Store, One) /= ""
+                                  and then Tk.State_Of (Store, Task_Of_Issue (Store, One))
+                                             in "accepted" | "running" | "verification" | "complete"
+                                              | "cancelled" | "rejected")
+                    and then not Counted.Contains
+                                   (To_String (One.Summary) & ASCII.LF & To_String (One.Payload))
+                  then
+                     Counted.Append (To_String (One.Summary) & ASCII.LF & To_String (One.Payload));
+                     Open := Open + 1;
+                  end if;
+               end;
+            end loop;
+            Line_Of ("cli.project.open_issues", Image (Open));
+            Line_Of ("cli.project.inconsistent",
+                     Image (Model_Runner.Framework.Consistency.Length
+                              (Model_Runner.Framework.Consistency.Check (Store))));
+         end;
+         --  Done and not verified: each, and how it is.
+         for Id of Nt.List (Store, Nt.Requirement, "implemented") loop
+            Pres.Put_Note (Screen, "cli.project.not_verified",
+                           [Loc.Named ("name", Id),
+                            Loc.Named ("detail",
+                                       (if Vf.Why_Not_Verified (Store, Id) = ""
+                                        then "its evidence holds; check " & Id & " records it verified"
+                                        else Vf.Why_Not_Verified (Store, Id)))]);
+         end loop;
+         --  Recorded verified, and its evidence no longer holds: said, not
+         --  counted on until it is judged again.
+         for Id of Nt.List (Store, Nt.Requirement, "verified") loop
+            declare
+               Why : constant String := Vf.Why_Not_Verified (Store, Id);
+            begin
+               if Why /= "" then
+                  Pres.Put_Note (Screen, "cli.project.stale_verified",
+                                 [Loc.Named ("name", Id), Loc.Named ("detail", Why)]);
+               end if;
+            end;
+         end loop;
          --  Accepted, and nothing serves it: after the counts, with a task
          --  that served it once and was cancelled, taken back.
          for Id of Unserved loop
@@ -2430,6 +2443,43 @@ package body Model_Runner.CLI.Project_Commands is
          function Asked (Name : String) return Boolean
          is (Argument (1) = ""
              or else Ada.Strings.Fixed.Index ("." & Name & ".", "." & Argument (1)) > 0);
+
+         --  What a setting is about, for the group it is shown in.
+         function Area_Of (Name : String) return String is
+            function Starts (Prefix : String) return Boolean
+            is (Ada.Strings.Fixed.Index (Name, Prefix) = Name'First);
+         begin
+            return (if Starts ("input.") or else Starts ("template_") or else Name = "configuration_fingerprint"
+                    then "project"
+                    elsif Starts ("map.permission.") then "permissions"
+                    elsif Starts ("scalar.work.") or else Starts ("scalar.agents.")
+                      or else Starts ("scalar.task.max_") or else Starts ("scalar.task.token_budget")
+                      or else Starts ("scalar.task.coordination") or else Starts ("scalar.recovery.")
+                      or else Starts ("scalar.model.") or else Starts ("scalar.context.")
+                    then "work"
+                    elsif Starts ("profile.") or else Starts ("scalar.verification.")
+                      or else Starts ("list.verification.") or else Starts ("scalar.profile_capability.")
+                      or else Starts ("scalar.task.profile.") or else Starts ("set.execution.")
+                      or else Starts ("scalar.execution.")
+                    then "verification"
+                    elsif Starts ("set.components") or else Starts ("map.component.")
+                      or else Starts ("set.repository.") or else Starts ("scalar.repository.")
+                    then "components"
+                    elsif Starts ("scalar.bootstrap.") or else Starts ("set.bootstrap.") then "bootstrap"
+                    else "rules");
+         end Area_Of;
+
+         --  The first group's title, with no blank line above it.
+         First_Group : Boolean := True;
+
+         Areas : constant Names.Vector :=
+           (if Argument (1) = ""
+            then Names.Vector'(["project", "work", "permissions", "verification", "components", "bootstrap",
+                                "rules"])
+            else Names.Vector'(["all"]));
+
+         function In_Area (Name, Area : String) return Boolean
+         is (Area = "all" or else Area_Of (Name) = Area);
       begin
          Model_Runner.Framework.Configurations.Read (Store, Config, Read);
          if E.Is_Error (Read) then
@@ -2459,227 +2509,257 @@ package body Model_Runner.CLI.Project_Commands is
                end;
             end if;
          end loop;
-         for Index in 1 .. R.Field_Count (Config) loop
-            declare
-               Name  : constant String := R.Field_Name (Config, Index);
-               Value : constant String := R.Get (Config, Name);
-
-               --  A set's items on one line a comma apart, as the other lines
-               --  name several things; a list's -- commands, in order -- a line
-               --  each.
-               function Shown return String is
-               begin
-                  --  A permission granted with nothing more: said so, not a
-                  --  bare colon.
-                  if Ada.Strings.Fixed.Index (Name, "map.permission.") = Name'First and then Value = ""
-                    and then Name'Length > 12 and then Name (Name'Last - 11 .. Name'Last) = ".write_specs"
-                  then
-                     return "(granted, in " & Model_Runner.Framework.Permissions.Specification_Places & ")";
-                  elsif Ada.Strings.Fixed.Index (Name, "map.permission.") = Name'First and then Value = "" then
-                     return "(granted, no limits)";
-                  elsif not (Name'Length > 4 and then Name (Name'First .. Name'First + 3) in "set." | "list")
-                  then
-                     return Value;
-                  end if;
-                  declare
-                     Result : Unbounded_String;
-                     Start  : Positive := Value'First;
-                  begin
-                     for Index in Value'First .. Value'Last + 1 loop
-                        --  A set's items are words: a space parts them as a
-                        --  comma does, however they were written.
-                        if Index > Value'Last or else Value (Index) in ASCII.LF | ASCII.HT | ','
-                          or else (Value (Index) = ' ' and then Name (Name'First .. Name'First + 3) = "set.")
-                        then
-                           declare
-                              Item : constant String :=
-                                Ada.Strings.Fixed.Trim (Value (Start .. Index - 1), Ada.Strings.Both);
-                           begin
-                              if Item /= "" then
-                                 Append (Result, (if Result = Null_Unbounded_String then ""
-                                                  elsif Name (Name'First .. Name'First + 3) = "set."
-                                                  then ", "
-                                                  else [1 => ASCII.LF] & "") & Item);
-                              end if;
-                           end;
-                           Start := Index + 1;
-                        end if;
-                     end loop;
-                     return To_String (Result);
-                  end;
-               end Shown;
-
-               --  The agents' bound set, where the project's own grant is
-               --  lower: the lower is what an agent meets, said beside it.
-               function Bound_Note return String is
-                  package Pm renames Model_Runner.Framework.Permissions;
-                  Present : Boolean;
-                  Grant   : constant Pm.Permission_Set := Pm.Level_Of (Config, "project", Present);
-                  Granted : constant Natural :=
-                    (if Name = "scalar.agents.max_children" then Grant (Pm.Create_Children).Max_Children
-                     elsif Name = "scalar.agents.max_depth" then Grant (Pm.Create_Children).Max_Depth
-                     else Natural'Last);
-               begin
-                  if Granted = Natural'Last or else not Grant (Pm.Create_Children).Granted
-                    or else Value'Length not in 1 .. 6 or else not (for all C of Value => C in '0' .. '9')
-                    or else Granted >= Natural'Value (Value)
-                  then
-                     return "";
-                  end if;
-                  return " (the project's create_children grants " & Image (Granted)
-                    & ", and an agent meets the lower: " & Image (Granted) & ")";
-               end Bound_Note;
-            begin
-               --  Those NAME names, when one is given.
-               if (Name'Length < 5 or else Name (Name'First .. Name'First + 4) /= "file.")
-                 and then Asked (Name)
-                 --  A level's inherited capabilities are said together below.
-                 and then not (Ada.Strings.Fixed.Index (Name, "map.permission.") = Name'First
-                               and then Value = "inherit")
-               then
-                  --  An input is what /init was given: the settings it made
-                  --  may have been changed since, and are shown as they are.
-                  Field (Name, (if Name'Length > 6 and then Name (Name'First .. Name'First + 5) = "input."
-                                then Shown & " (given at /init" & Since_Init (Name, Value) & ")"
-                                elsif Ruled.Contains (Name)
-                                then Shown & " (" & Ruled (Name)
-                                     & (if Ada.Characters.Handling.To_Lower
-                                             (Ada.Strings.Fixed.Tail (Ruled (Name), Value'Length + 7))
-                                           = " rules " & Ada.Characters.Handling.To_Lower (Value)
-                                        then ")"
-                                        else "; they disagree -- /check consistency says how to settle it)")
-                                else Shown & Bound_Note),
-                         --  Ruled on, and agreeing, apart from a default;
-                         --  disagreeing, as something gone wrong.
-                         (if not Ruled.Contains (Name)
-                            or else (Name'Length > 6 and then Name (Name'First .. Name'First + 5) = "input.")
-                          then Pres.Plain
-                          elsif Ada.Characters.Handling.To_Lower
-                                  (Ada.Strings.Fixed.Tail (Ruled (Name), Value'Length + 7))
-                                = " rules " & Ada.Characters.Handling.To_Lower (Value)
-                          then Pres.Good
-                          else Pres.Bad));
+         --  Set out by what each setting is about, a group a title, where
+         --  the whole is asked for; a name asked for, as one list.
+         Sectioned := Argument (1) = "";
+         for Area of Areas loop
+            if Argument (1) = ""
+              and then ((for some Index in 1 .. R.Field_Count (Config) =>
+                           In_Area (R.Field_Name (Config, Index), Area)
+                           and then Ada.Strings.Fixed.Index (R.Field_Name (Config, Index), "file.") /= 1)
+                        or else Area in "permissions" | "components")
+            then
+               if First_Group then
+                  First_Group := False;
+               elsif not Pres.Is_Structured (Screen) then
+                  Pres.Put_Line (Screen, "");
                end if;
-            end;
-         end loop;
-
-         --  Each permission level the configuration names: what it takes
-         --  from the level above in one line, and each capability it does
-         --  not grant said, not left to be missed.
-         declare
-            package Pm renames Model_Runner.Framework.Permissions;
-            Levels : Names.Vector;
-         begin
+               Pres.Put_Header
+                 (Screen,
+                  (if Area = "project" then "cli.config.section.project"
+                   elsif Area = "work" then "cli.config.section.work"
+                   elsif Area = "permissions" then "cli.config.section.permissions"
+                   elsif Area = "verification" then "cli.config.section.verification"
+                   elsif Area = "components" then "cli.config.section.components"
+                   elsif Area = "bootstrap" then "cli.config.section.bootstrap"
+                   else "cli.config.section.rules"));
+            end if;
             for Index in 1 .. R.Field_Count (Config) loop
                declare
-                  Name : constant String := R.Field_Name (Config, Index);
-                  Rest : constant String :=
-                    (if Ada.Strings.Fixed.Index (Name, "map.permission.") = Name'First
-                     then Name (Name'First + 15 .. Name'Last) else "");
-                  Dot  : constant Natural := Ada.Strings.Fixed.Index (Rest, ".", Ada.Strings.Backward);
-               begin
-                  if Dot > Rest'First and then not Levels.Contains (Rest (Rest'First .. Dot - 1)) then
-                     Levels.Append (Rest (Rest'First .. Dot - 1));
-                  end if;
-               end;
-            end loop;
-            for Level of Levels loop
-               declare
-                  Whole     : constant String := "map.permission." & Level;
-                  Inherited : Unbounded_String;
-                  Withheld  : Unbounded_String;
-                  Above     : constant Pm.Permission_Set := Pm.Effective (Store, "", "", Within_Sandbox => False);
-               begin
-                  if Asked (Whole) then
-                     for One in Pm.Capability loop
-                        declare
-                           Field : constant String := Whole & "." & Pm.Word (One);
-                        begin
-                           --  Inherited from a level that withholds it is
-                           --  not had: said apart.
-                           if R.Get (Config, Field) = "inherit" and then Level /= "project"
-                             and then not Above (One).Granted
-                           then
-                              Append (Withheld, (if Withheld = Null_Unbounded_String then "" else ", ")
-                                                & Pm.Word (One) & " (withheld above)");
-                           elsif R.Get (Config, Field) = "inherit" then
-                              Append (Inherited, (if Inherited = Null_Unbounded_String then "" else ", ")
-                                                 & Pm.Word (One));
-                           elsif not R.Has (Config, Field) then
-                              Append (Withheld, (if Withheld = Null_Unbounded_String then "" else ", ")
-                                                & Pm.Word (One));
-                           end if;
-                        end;
-                     end loop;
-                     if Withheld /= Null_Unbounded_String then
-                        Field (Whole & " withholds", To_String (Withheld));
-                     end if;
-                     if Inherited /= Null_Unbounded_String then
-                        Field (Whole & " inherits",
-                               To_String (Inherited)
-                               & (if Level = "project" then " (the defaults)" else " (from the level above)"));
-                     end if;
-                  end if;
-               end;
-            end loop;
-         end;
+                  Name  : constant String := R.Field_Name (Config, Index);
+                  Value : constant String := R.Get (Config, Name);
 
-         --  The components tasks may name, however each was declared:
-         --  listed in set.components or placed with map.component.
-         if Argument (1) = "" or else Ada.Strings.Fixed.Index ("components", Argument (1)) > 0 then
-            declare
-               Named : Unbounded_String;
-            begin
-               for One of Tk.Components (Store) loop
-                  Append (Named, (if Named = Null_Unbounded_String then "" else ", ") & One);
-               end loop;
-               Field ("components (listed or placed)", To_String (Named));
-               --  Open tasks that name a component the project no longer has.
-               declare
-                  Stray : Unbounded_String;
-               begin
-                  for Id of Tk.List (Store) loop
+                  --  A set's items on one line a comma apart, as the other lines
+                  --  name several things; a list's -- commands, in order -- a line
+                  --  each.
+                  function Shown return String is
+                  begin
+                     --  A permission granted with nothing more: said so, not a
+                     --  bare colon.
+                     if Ada.Strings.Fixed.Index (Name, "map.permission.") = Name'First and then Value = ""
+                       and then Name'Length > 12 and then Name (Name'Last - 11 .. Name'Last) = ".write_specs"
+                     then
+                        return "(granted, in " & Model_Runner.Framework.Permissions.Specification_Places & ")";
+                     elsif Ada.Strings.Fixed.Index (Name, "map.permission.") = Name'First and then Value = "" then
+                        return "(granted, no limits)";
+                     elsif not (Name'Length > 4 and then Name (Name'First .. Name'First + 3) in "set." | "list")
+                     then
+                        return Value;
+                     end if;
                      declare
-                        Defined : R.Item;
-                        Got     : E.Error_Info;
+                        Result : Unbounded_String;
+                        Start  : Positive := Value'First;
                      begin
-                        Tk.Definition (Store, Id, Defined, Got);
-                        if E.Is_Ok (Got) and then R.Get (Defined, "component") /= ""
-                          and then not Tk.Components (Store).Contains (R.Get (Defined, "component"))
-                          and then Tk.State_Of (Store, Id) not in "complete" | "cancelled" | "rejected"
-                        then
-                           Append (Stray, (if Stray = Null_Unbounded_String then "" else ", ")
-                                   & Id & " in " & R.Get (Defined, "component"));
+                        for Index in Value'First .. Value'Last + 1 loop
+                           --  A set's items are words: a space parts them as a
+                           --  comma does, however they were written.
+                           if Index > Value'Last or else Value (Index) in ASCII.LF | ASCII.HT | ','
+                             or else (Value (Index) = ' ' and then Name (Name'First .. Name'First + 3) = "set.")
+                           then
+                              declare
+                                 Item : constant String :=
+                                   Ada.Strings.Fixed.Trim (Value (Start .. Index - 1), Ada.Strings.Both);
+                              begin
+                                 if Item /= "" then
+                                    Append (Result, (if Result = Null_Unbounded_String then ""
+                                                     elsif Name (Name'First .. Name'First + 3) = "set."
+                                                     then ", "
+                                                     else [1 => ASCII.LF] & "") & Item);
+                                 end if;
+                              end;
+                              Start := Index + 1;
+                           end if;
+                        end loop;
+                        return To_String (Result);
+                     end;
+                  end Shown;
+
+                  --  The agents' bound set, where the project's own grant is
+                  --  lower: the lower is what an agent meets, said beside it.
+                  function Bound_Note return String is
+                     package Pm renames Model_Runner.Framework.Permissions;
+                     Present : Boolean;
+                     Grant   : constant Pm.Permission_Set := Pm.Level_Of (Config, "project", Present);
+                     Granted : constant Natural :=
+                       (if Name = "scalar.agents.max_children" then Grant (Pm.Create_Children).Max_Children
+                        elsif Name = "scalar.agents.max_depth" then Grant (Pm.Create_Children).Max_Depth
+                        else Natural'Last);
+                  begin
+                     if Granted = Natural'Last or else not Grant (Pm.Create_Children).Granted
+                       or else Value'Length not in 1 .. 6 or else not (for all C of Value => C in '0' .. '9')
+                       or else Granted >= Natural'Value (Value)
+                     then
+                        return "";
+                     end if;
+                     return " (the project's create_children grants " & Image (Granted)
+                       & ", and an agent meets the lower: " & Image (Granted) & ")";
+                  end Bound_Note;
+               begin
+                  --  Those NAME names, when one is given.
+                  if (Name'Length < 5 or else Name (Name'First .. Name'First + 4) /= "file.")
+                    and then Asked (Name)
+                    and then In_Area (Name, Area)
+                    --  A level's inherited capabilities are said together below.
+                    and then not (Ada.Strings.Fixed.Index (Name, "map.permission.") = Name'First
+                                  and then Value = "inherit")
+                  then
+                     --  An input is what /init was given: the settings it made
+                     --  may have been changed since, and are shown as they are.
+                     Field (Name, (if Name'Length > 6 and then Name (Name'First .. Name'First + 5) = "input."
+                                   then Shown & " (given at /init" & Since_Init (Name, Value) & ")"
+                                   elsif Ruled.Contains (Name)
+                                   then Shown & " (" & Ruled (Name)
+                                        & (if Ada.Characters.Handling.To_Lower
+                                                (Ada.Strings.Fixed.Tail (Ruled (Name), Value'Length + 7))
+                                              = " rules " & Ada.Characters.Handling.To_Lower (Value)
+                                           then ")"
+                                           else "; they disagree -- /check consistency says how to settle it)")
+                                   else Shown & Bound_Note),
+                            --  Ruled on, and agreeing, apart from a default;
+                            --  disagreeing, as something gone wrong.
+                            (if not Ruled.Contains (Name)
+                               or else (Name'Length > 6 and then Name (Name'First .. Name'First + 5) = "input.")
+                             then Pres.Plain
+                             elsif Ada.Characters.Handling.To_Lower
+                                     (Ada.Strings.Fixed.Tail (Ruled (Name), Value'Length + 7))
+                                   = " rules " & Ada.Characters.Handling.To_Lower (Value)
+                             then Pres.Good
+                             else Pres.Bad));
+                  end if;
+               end;
+            end loop;
+            if Area in "permissions" | "all" then
+               --  Each permission level the configuration names: what it takes
+               --  from the level above in one line, and each capability it does
+               --  not grant said, not left to be missed.
+               declare
+                  package Pm renames Model_Runner.Framework.Permissions;
+                  Levels : Names.Vector;
+               begin
+                  for Index in 1 .. R.Field_Count (Config) loop
+                     declare
+                        Name : constant String := R.Field_Name (Config, Index);
+                        Rest : constant String :=
+                          (if Ada.Strings.Fixed.Index (Name, "map.permission.") = Name'First
+                           then Name (Name'First + 15 .. Name'Last) else "");
+                        Dot  : constant Natural := Ada.Strings.Fixed.Index (Rest, ".", Ada.Strings.Backward);
+                     begin
+                        if Dot > Rest'First and then not Levels.Contains (Rest (Rest'First .. Dot - 1)) then
+                           Levels.Append (Rest (Rest'First .. Dot - 1));
                         end if;
                      end;
                   end loop;
-                  if Stray /= Null_Unbounded_String then
-                     Field ("tasks in no component of the project", To_String (Stray));
-                  end if;
+                  for Level of Levels loop
+                     declare
+                        Whole     : constant String := "map.permission." & Level;
+                        Inherited : Unbounded_String;
+                        Withheld  : Unbounded_String;
+                        Above     : constant Pm.Permission_Set := Pm.Effective (Store, "", "", Within_Sandbox => False);
+                     begin
+                        if Asked (Whole) then
+                           for One in Pm.Capability loop
+                              declare
+                                 Field : constant String := Whole & "." & Pm.Word (One);
+                              begin
+                                 --  Inherited from a level that withholds it is
+                                 --  not had: said apart.
+                                 if R.Get (Config, Field) = "inherit" and then Level /= "project"
+                                   and then not Above (One).Granted
+                                 then
+                                    Append (Withheld, (if Withheld = Null_Unbounded_String then "" else ", ")
+                                                      & Pm.Word (One) & " (withheld above)");
+                                 elsif R.Get (Config, Field) = "inherit" then
+                                    Append (Inherited, (if Inherited = Null_Unbounded_String then "" else ", ")
+                                                       & Pm.Word (One));
+                                 elsif not R.Has (Config, Field) then
+                                    Append (Withheld, (if Withheld = Null_Unbounded_String then "" else ", ")
+                                                      & Pm.Word (One));
+                                 end if;
+                              end;
+                           end loop;
+                           if Withheld /= Null_Unbounded_String then
+                              Field (Whole & " withholds", To_String (Withheld));
+                           end if;
+                           if Inherited /= Null_Unbounded_String then
+                              Field (Whole & " inherits",
+                                     To_String (Inherited)
+                                     & (if Level = "project" then " (the defaults)" else " (from the level above)"));
+                           end if;
+                        end if;
+                     end;
+                  end loop;
                end;
-            end;
-         end if;
-
-         --  The project's permissions where the configuration says none:
-         --  what agents are given all the same.
-         if (Argument (1) = "" or else Ada.Strings.Fixed.Index ("map.permission.project", Argument (1)) > 0)
-           and then not (for some Index in 1 .. R.Field_Count (Config) =>
-                           Ada.Strings.Fixed.Index (R.Field_Name (Config, Index),
-                                                    "map.permission.project") = 1)
-         then
-            declare
-               Given : Unbounded_String;
-            begin
-               for Line of Model_Runner.Framework.Lines_Of
-                 (Model_Runner.Framework.Permissions.Image
-                    (Model_Runner.Framework.Permissions.Effective
-                       (Store, "", "", Within_Sandbox => False)))
-               loop
-                  Append (Given, (if Given = Null_Unbounded_String then "" else "; ") & Line);
-               end loop;
-               Field ("map.permission.project", "(the default) " & To_String (Given));
-            end;
-         end if;
+            end if;
+            if Area in "permissions" | "all" then
+               --  The project's permissions where the configuration says none:
+               --  what agents are given all the same.
+               if (Argument (1) = "" or else Ada.Strings.Fixed.Index ("map.permission.project", Argument (1)) > 0)
+                 and then not (for some Index in 1 .. R.Field_Count (Config) =>
+                                 Ada.Strings.Fixed.Index (R.Field_Name (Config, Index),
+                                                          "map.permission.project") = 1)
+               then
+                  declare
+                     Given : Unbounded_String;
+                  begin
+                     for Line of Model_Runner.Framework.Lines_Of
+                       (Model_Runner.Framework.Permissions.Image
+                          (Model_Runner.Framework.Permissions.Effective
+                             (Store, "", "", Within_Sandbox => False)))
+                     loop
+                        Append (Given, (if Given = Null_Unbounded_String then "" else "; ") & Line);
+                     end loop;
+                     Field ("map.permission.project", "(the default) " & To_String (Given));
+                  end;
+               end if;
+            end if;
+            if Area in "components" | "all" then
+               --  The components tasks may name, however each was declared:
+               --  listed in set.components or placed with map.component.
+               if Argument (1) = "" or else Ada.Strings.Fixed.Index ("components", Argument (1)) > 0 then
+                  declare
+                     Named : Unbounded_String;
+                  begin
+                     for One of Tk.Components (Store) loop
+                        Append (Named, (if Named = Null_Unbounded_String then "" else ", ") & One);
+                     end loop;
+                     Field ("components (listed or placed)", To_String (Named));
+                     --  Open tasks that name a component the project no longer has.
+                     declare
+                        Stray : Unbounded_String;
+                     begin
+                        for Id of Tk.List (Store) loop
+                           declare
+                              Defined : R.Item;
+                              Got     : E.Error_Info;
+                           begin
+                              Tk.Definition (Store, Id, Defined, Got);
+                              if E.Is_Ok (Got) and then R.Get (Defined, "component") /= ""
+                                and then not Tk.Components (Store).Contains (R.Get (Defined, "component"))
+                                and then Tk.State_Of (Store, Id) not in "complete" | "cancelled" | "rejected"
+                              then
+                                 Append (Stray, (if Stray = Null_Unbounded_String then "" else ", ")
+                                         & Id & " in " & R.Get (Defined, "component"));
+                              end if;
+                           end;
+                        end loop;
+                        if Stray /= Null_Unbounded_String then
+                           Field ("tasks in no component of the project", To_String (Stray));
+                        end if;
+                     end;
+                  end;
+               end if;
+            end if;
+         end loop;
 
          --  Settings a name picks out that are not set: said so, as they
          --  mean something unset too.
@@ -3154,31 +3234,39 @@ package body Model_Runner.CLI.Project_Commands is
             Pres.Report (Screen, Read);
             return;
          end if;
+         --  In groups, as /task show is: what it is, what it says, and
+         --  where it came from.
+         Sectioned := True;
+         Pres.Put_Header (Screen, "cli.result.heading", [Loc.Named ("name", Id)]);
+         Pres.Put_Section (Screen, "cli.result.section.what");
          Field ("kind", Rs.Kind_Word (Held.Kind));
          Field ("producer", To_String (Held.Producer));
          Field ("created_at", To_String (Held.Created_At));
-         Field ("summary", With_Id (Id, To_String (Held.Summary)));
-         --  What it came from, without an empty part before its colon.
-         Field ("provenance", Ada.Strings.Fixed.Trim (To_String (Held.Provenance),
-                                                      Ada.Strings.Maps.To_Set (": "), Ada.Strings.Maps.Null_Set));
          if Dismissed_List (Store).Contains (Id) then
             Field ("dismissed", "yes: /result no longer lists it");
          end if;
-         for Other of Model_Runner.Framework.Lines_Of (To_String (Held.References)) loop
-            Field ("references", Other);
-         end loop;
+         Pres.Put_Section (Screen, "cli.result.section.says");
+         Field ("summary", With_Id (Id, To_String (Held.Summary)));
          --  Whole, as it is: a line at a time, not cut to fit a message.
          if Whole and then Pres.Is_Structured (Screen) then
             Field ("payload", To_String (Held.Payload));
          elsif Whole then
             Field ("payload", "");
             for Line of Model_Runner.Framework.Lines_Of (To_String (Held.Payload)) loop
-               Pres.Put_Line (Screen, "    " & Line);
+               Pres.Put_Line (Screen, "      " & Line);
             end loop;
          else
             Field ("payload", "(" & Image (Size) & " bytes; /result " & Argument (1)
                    & " full shows them)");
          end if;
+         Pres.Put_Section (Screen, "cli.result.section.from");
+         --  What it came from, without an empty part before its colon.
+         Field ("provenance", Ada.Strings.Fixed.Trim (To_String (Held.Provenance),
+                                                      Ada.Strings.Maps.To_Set (": "), Ada.Strings.Maps.Null_Set));
+         for Other of Model_Runner.Framework.Lines_Of (To_String (Held.References)) loop
+            Field ("references", Other);
+         end loop;
+         Sectioned := False;
          --  An issue still open: how to let it go.
          if Rs."=" (Held.Kind, Rs.Diagnostic) and then not Dismissed_List (Store).Contains (Id) then
             Pres.Put_Note (Screen, "cli.next.result_dismiss_one", [Loc.Named ("name", Id)]);

@@ -145,6 +145,13 @@ package Model_Runner.Presentation is
       Arguments : Model_Runner.Localization.Argument_List :=
         Model_Runner.Localization.Empty_Arguments);
 
+   --  Begin a group of a record's fields: a blank line and its title set
+   --  apart as a heading; in structured output, the title alone.
+   --
+   --  @param Item Console to write through.
+   --  @param Key Stable message identifier of the title.
+   procedure Put_Section (Item : in out Console; Key : String);
+
    --  Write a localized NAME and VALUE line to standard output: at a
    --  terminal that shows colour, the name muted and the value in its
    --  tone; anywhere else, and in structured output, as Put_Message.
@@ -154,12 +161,29 @@ package Model_Runner.Presentation is
    --  @param Name The name.
    --  @param Value The value.
    --  @param Value_Tone How the value stands.
+   --  @param Indent How many spaces the line is set in by, as a field of a
+   --    group; none in structured output.
    procedure Put_Pair
      (Item       : in out Console;
       Key        : String;
       Name       : String;
       Value      : String;
-      Value_Tone : Tone := Plain);
+      Value_Tone : Tone := Plain;
+      Indent     : Natural := 0);
+
+   --  Write a localized line to standard output set in by some spaces, as
+   --  a field of a group is under its title; in structured output, as
+   --  Put_Message.
+   --
+   --  @param Item Console to write through.
+   --  @param Key Stable message identifier.
+   --  @param Arguments Message arguments.
+   --  @param Indent How many spaces it is set in by.
+   procedure Put_Indented
+     (Item      : in out Console;
+      Key       : String;
+      Arguments : Model_Runner.Localization.Argument_List;
+      Indent    : Positive := 2);
 
    --  Write a localized line to standard output with one word of it in
    --  its tone at a terminal that shows colour: a list's state, a check's

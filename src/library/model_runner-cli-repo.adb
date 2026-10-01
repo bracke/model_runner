@@ -628,12 +628,24 @@ package body Model_Runner.CLI.Repo is
                            end;
                         end loop;
                      end loop;
+                     --  What the project's state says of it, and what the
+                     --  code does, each under its title.
+                     if not State_Edges.Is_Empty then
+                        Pres.Put_Header (Screen, "cli.repo.section.state");
+                     end if;
                      for Line of State_Edges loop
-                        Pres.Put_Message (Screen, "cli.repo.unit", [Loc.Named ("name", Line)]);
+                        Pres.Put_Indented (Screen, "cli.repo.unit", [Loc.Named ("name", Line)]);
                      end loop;
+                     if not Code_Edges.Is_Empty then
+                        if State_Edges.Is_Empty then
+                           Pres.Put_Header (Screen, "cli.repo.section.code");
+                        else
+                           Pres.Put_Section (Screen, "cli.repo.section.code");
+                        end if;
+                     end if;
                      for Index in 1 .. Natural (Code_Edges.Length) loop
                         if Verbose or else Index <= 30 then
-                           Pres.Put_Message
+                           Pres.Put_Indented
                              (Screen, "cli.repo.unit", [Loc.Named ("name", Code_Edges (Index))]);
                         end if;
                      end loop;
@@ -828,6 +840,20 @@ package body Model_Runner.CLI.Repo is
                      end;
                      Reach := Tr.Impact_Of (Graph, Changed);
 
+                     --  In groups, each under its title: what changes, what it
+                     --  reaches, and the tests to run.
+                     Pres.Put_Header (Screen, "cli.repo.section.changes");
+                     for Index in 1 .. Natural (Changed.Length) loop
+                        exit when not Verbose and then Index > 10;
+                        Pres.Put_Indented (Screen, "cli.repo.unit",
+                                          [Loc.Named ("name", Changed (Index))]);
+                     end loop;
+                     if not Verbose and then Natural (Changed.Length) > 10 then
+                        Pres.Put_Message (Screen, "cli.repo.more",
+                                          [Loc.Named ("count", Image (Natural (Changed.Length) - 10)),
+                                           Loc.Named ("name", "changed")]);
+                     end if;
+                     Pres.Put_Section (Screen, "cli.repo.section.reaches");
                      --  What matters first first: requirements, tasks and
                      --  tests before files and symbols; a long run of one
                      --  kind cut to its first ten unless asked for whole.
@@ -906,7 +932,7 @@ package body Model_Runner.CLI.Repo is
                                     if To_String (One.Kind) = Kind then
                                        Of_Kind := Of_Kind + 1;
                                        if Verbose or else Of_Kind <= 10 then
-                                          Pres.Put_Message
+                                          Pres.Put_Indented
                                             (Screen, "cli.repo.reached",
                                              [Loc.Named ("value", Kind),
                                               Loc.Named ("name", To_String (One.Id)),
@@ -929,14 +955,15 @@ package body Model_Runner.CLI.Repo is
                               end if;
                            end;
                         end loop;
-                        Pres.Put_Message
+                        Pres.Put_Indented
                           (Screen, "cli.repo.impact_summary",
                            [Loc.Named ("name", (if Argument = "" then "the project" else Argument)),
                             Loc.Named ("count", Image (Natural (All_Reached.Length))),
                             Loc.Named ("detail", To_String (Counts))]);
                      end;
                      Chosen := Tr.Select_Tests (Store, Reach);
-                     Pres.Put_Message
+                     Pres.Put_Section (Screen, "cli.repo.section.tests");
+                     Pres.Put_Indented
                        (Screen, "cli.repo.selection",
                         [Loc.Named ("value",
                                     (case Chosen.Width is
@@ -1030,7 +1057,7 @@ package body Model_Runner.CLI.Repo is
                   [Loc.Named ("name", Argument)]);
             end if;
             for Unit of Units loop
-               Pres.Put_Message
+               Pres.Put_Indented
                  (Screen, "cli.repo.unit", [Loc.Named ("name", Unit)]);
             end loop;
             if Units.Is_Empty then
