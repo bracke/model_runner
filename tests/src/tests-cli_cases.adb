@@ -2166,7 +2166,7 @@ package body Tests.CLI_Cases is
       Run ("task|new|Big|--set|kind=implementation");
       Run ("task|accept|TASK-003");
       Run ("work|TASK-003");
-      Assert (Code = 0 and then Shows ("waiting for its children"),
+      Assert (Code = 0 and then Shows ("waiting for its parts"),
               "a split task did not wait for its parts, or ended as a failure: " & To_String (Said));
       for Part of Model_Runner.Framework.Name_Lists.Vector'(["TASK-004", "TASK-005"]) loop
          Run ("task|accept|" & Part);
@@ -2189,7 +2189,7 @@ package body Tests.CLI_Cases is
              & "Arguments SHALL be quoted." & LF & "Acceptance: a space survives" & LF & LF
              & "- DEC-001: We use posix_spawn." & LF & LF & "It SHOULD retry once." & LF);
       Run ("bootstrap");
-      Assert (Shows ("REQ-SHELL-001") and then Shows ("DEC-001") and then Shows ("next: /accept lists what waits")
+      Assert (Shows ("REQ-SHELL-001") and then Shows ("DEC-001") and then Shows ("next: /accept takes what waits")
               and then Shows ("made REQ-SHELL-001 ""Quoting"", accepted"),
               "bootstrap did not keep the document's identifiers, or say what it made is: "
               & To_String (Said));

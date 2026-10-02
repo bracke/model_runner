@@ -311,6 +311,17 @@ package body Model_Runner.Framework.Permissions is
                Named (Name, Found, Which);
                if Found then
                   Result (Which) := (Granted => False, others => <>);
+               else
+                  --  A name no capability has takes nothing away: refused.
+                  Status := E.Make (E.Framework_Schema_Violation);
+                  E.Add_Text (Status, "name", "permissions");
+                  E.Add_Text (Status, "detail", "no capability is called " & Trim (Name)
+                              & "; they are read_source, write_source, read_specs, write_specs,"
+                              & " run_build, run_tests, run_static_analysis, create_children,"
+                              & " propose_tasks, request_integration, use_network and"
+                              & " execute_external_process");
+                  Result := Nothing;
+                  return;
                end if;
             end;
             goto Next_Entry;
@@ -339,8 +350,7 @@ package body Model_Runner.Framework.Permissions is
                            & "; they are read_source, write_source, read_specs, write_specs,"
                            & " run_build, run_tests, run_static_analysis, create_children,"
                            & " propose_tasks, request_integration, use_network and"
-                           & " execute_external_process, written in quotes as"
-                           & " permissions=""write_source roots=docs/; read_source"""
+                           & " execute_external_process"
                            & (if Ada.Strings.Fixed.Index (Name, "=") > 0
                               then " -- on and off are for a level's, by /reconfigure map.permission.LEVEL.NAME=off"
                               else ""));

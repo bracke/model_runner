@@ -288,8 +288,35 @@ package body Model_Runner.Framework.Consistency is
                   return Prefix & Subject;
                end if;
             end loop;
+            --  A kind's own limit: scalar.task.LIMIT.KIND.
+            for Limit of Name_Lists.Vector'(["max_seconds", "max_tool_calls", "max_steps", "token_budget"]) loop
+               for Prefix of Name_Lists.Vector'(["scalar.task.", "task."]) loop
+                  if Subject'Length > Prefix'Length + Limit'Length + 1
+                    and then Subject (Subject'First .. Subject'First + Prefix'Length + Limit'Length)
+                             = Prefix & Limit & "."
+                  then
+                     return (if Prefix = "task." then "scalar." & Subject else Subject);
+                  end if;
+               end loop;
+            end loop;
             return "";
          end Whole;
+
+         --  What holds where a setting is not set: its default, or for a
+         --  kind's own limit, the agents' limit it falls back to.
+         function Holds_Unset (Name : String) return String is
+         begin
+            for Limit of Name_Lists.Vector'(["max_seconds", "max_tool_calls", "max_steps", "token_budget"]) loop
+               if Name'Length > 13 + Limit'Length
+                 and then Name (Name'First .. Name'First + 12 + Limit'Length) = "scalar.task." & Limit & "."
+               then
+                  return (if Records.Has (Config, "scalar.agents." & Limit)
+                          then Records.Get (Config, "scalar.agents." & Limit)
+                          else Configurations.Default_Of ("scalar.agents." & Limit));
+               end if;
+            end loop;
+            return Configurations.Default_Of (Name);
+         end Holds_Unset;
 
          procedure Judge (Source, Subject, Ruling : String) is
             Name : constant String := Whole (Ada.Strings.Fixed.Trim (Subject, Ada.Strings.Both));
@@ -313,15 +340,15 @@ package body Model_Runner.Framework.Consistency is
             begin
                if Name /= "" and then not Records.Has (Config, Name)
                  and then (if Is_Capability then Default_Granted /= Ruled_Granted
-                           else Configurations.Default_Of (Name) /= Said)
+                           else Holds_Unset (Name) /= Said)
                then
                   Found (Unapplied_Ruling, Name,
                          Source & " rules " & Bare & " = " & Said & ", and the configuration does not set it,"
                          & " so the harness keeps to "
                          & (if Is_Capability then (if Default_Granted then "its default, granted"
                                                    else "its default, withheld")
-                            elsif Configurations.Default_Of (Name) = "" then "its default"
-                            else Configurations.Default_Of (Name))
+                            elsif Holds_Unset (Name) = "" then "its default"
+                            else Holds_Unset (Name))
                          & "; /reconfigure " & Bare & "=" & Said & " makes it hold");
                end if;
             end;

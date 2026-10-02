@@ -1,9 +1,12 @@
 with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
+with Ada.Text_IO;
 
 with Model_Runner.CLI.Interactive;
 with Model_Runner.CLI.Intents;
+with Model_Runner.CLI.Project_Commands;
 with Model_Runner.Errors;
 with Model_Runner.Framework.Authority;
 with Model_Runner.Framework.Configurations;
@@ -52,9 +55,10 @@ package body Model_Runner.CLI.Completion is
    is (if Command = "/task"
        then "list new show accept reject cancel reopen reconsider complete verify diff integrate kept edit note"
             & " grant withhold link depend split rehome move plan derive audit context"
-       elsif Command in "/req" | "/spec" | "/decision"
-       then "list new show accept reject reconsider obsolete verify revise link unlink supersede govern move"
-            & " block unblock"
+       elsif Command = "/req"
+       then "list new show accept reject reconsider obsolete verify revise link unlink supersede move block unblock"
+       elsif Command in "/spec" | "/decision"
+       then "list new show accept reject reconsider obsolete revise link unlink supersede govern"
        elsif Command = "/reconfigure" then "add remove"
        elsif Command = "/result" then "dismiss dismissed restore"
        elsif Command = "/instruct" then "withdraw"
@@ -68,7 +72,14 @@ package body Model_Runner.CLI.Completion is
       Result : Names.Vector;
       Slash  : constant Natural := Ada.Strings.Fixed.Index (Prefix, "/", Ada.Strings.Backward);
       Dir    : constant String := (if Slash = 0 then "" else Prefix (Prefix'First .. Slash));
-      Where  : constant String := (if Dir = "" then "." else Dir);
+      --  Where the session was started, below the project's top: what is
+      --  typed is from there, as the commands take it.
+      Below  : constant String := Model_Runner.CLI.Project_Commands.Started_Below;
+      Where  : constant String :=
+        (if Below /= "" and then Ada.Directories.Exists (Below & "/" & (if Dir = "" then "." else Dir))
+           and then not (Dir /= "" and then Ada.Directories.Exists (Dir))
+         then Below & "/" & (if Dir = "" then "." else Dir)
+         elsif Dir = "" then "." else Dir);
       Search : Ada.Directories.Search_Type;
       Found  : Ada.Directories.Directory_Entry_Type;
    begin
@@ -95,6 +106,33 @@ package body Model_Runner.CLI.Completion is
       when others =>
          return Result;
    end Paths;
+
+   --  Whether a template is only a part others include: standalone = false.
+   function Is_Part (Path : String) return Boolean is
+      File : Ada.Text_IO.File_Type;
+   begin
+      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
+      while not Ada.Text_IO.End_Of_File (File) loop
+         declare
+            Line : constant String := Ada.Text_IO.Get_Line (File);
+         begin
+            if Ada.Strings.Fixed.Index (Line, "standalone") = Line'First
+              and then Ada.Strings.Fixed.Index (Line, "false") > 0
+            then
+               Ada.Text_IO.Close (File);
+               return True;
+            end if;
+         end;
+      end loop;
+      Ada.Text_IO.Close (File);
+      return False;
+   exception
+      when others =>
+         if Ada.Text_IO.Is_Open (File) then
+            Ada.Text_IO.Close (File);
+         end if;
+         return False;
+   end Is_Part;
 
    function Candidates (Before : String) return Names.Vector is
       Words   : constant Names.Vector := Words_Of (Before);
@@ -137,8 +175,10 @@ package body Model_Runner.CLI.Completion is
              else Nt.Decision);
 
          procedure Settings is
+            package Pm renames Model_Runner.Framework.Permissions;
             Config : R.Item;
             Got    : E.Error_Info;
+            Before : constant Natural := Natural (Offered.Length);
          begin
             Offer_All (Model_Runner.Framework.Configurations.Known_Names);
             Model_Runner.Framework.Configurations.Read (Store, Config, Got);
@@ -149,6 +189,43 @@ package body Model_Runner.CLI.Completion is
                   then
                      Offer (R.Field_Name (Config, Index));
                   end if;
+               end loop;
+            end if;
+            --  Those there may be, set or not: every level's capability,
+            --  and every kind's own limits and profile.
+            Offer ("map.permission.project");
+            Offer ("map.model.default");
+            for One in Pm.Capability loop
+               Offer ("map.permission.project." & Pm.Word (One));
+            end loop;
+            for Kind of Tk.Kinds (Store) loop
+               Offer ("map.permission.kind." & Kind);
+               for One in Pm.Capability loop
+                  Offer ("map.permission.kind." & Kind & "." & Pm.Word (One));
+               end loop;
+               for Limit of Names.Vector'
+                 (["max_seconds", "max_tool_calls", "max_steps", "token_budget", "profile", "coordination",
+                   "isolation"])
+               loop
+                  Offer ("scalar.task." & Limit & "." & Kind);
+               end loop;
+            end loop;
+            --  Typed without its kind -- work.isolation -- as the commands
+            --  take it: offered so too.
+            if Current /= ""
+              and then not (for some Prefix of Names.Vector'(["scalar.", "set.", "list.", "map."]) =>
+                              Prefix'Length <= Current'Length
+                              and then Current (Current'First .. Current'First + Prefix'Length - 1) = Prefix)
+            then
+               for Index in Before + 1 .. Natural (Offered.Length) loop
+                  declare
+                     Name : constant String := Offered (Index);
+                     Dot  : constant Natural := Ada.Strings.Fixed.Index (Name, ".");
+                  begin
+                     if Dot > 0 and then Name (Name'First .. Dot) in "scalar." | "set." | "list." then
+                        Offer (Name (Dot + 1 .. Name'Last));
+                     end if;
+                  end;
                end loop;
             end if;
          end Settings;
@@ -190,7 +267,9 @@ package body Model_Runner.CLI.Completion is
          elsif Command = "/task" and then Position = 4 then
             if Action = "kept" then
                Offer_All (Model_Runner.Framework.Workspaces.Kept_Copies (Store));
-               Offer ("all");
+               if Words (3) = "drop" then
+                  Offer ("all");
+               end if;
             elsif Action in "grant" | "withhold" then
                Capabilities;
             elsif Action = "link" then
@@ -205,7 +284,9 @@ package body Model_Runner.CLI.Completion is
          elsif Command = "/task" and then Position = 5 and then Action = "depend" then
             Offer ("remove");
          elsif Command in "/req" | "/spec" | "/decision" and then Position = 3 then
-            Offer_All (Nt.List (Store, Register (Command)));
+            --  Accepting or rejecting is of what waits: the candidates.
+            Offer_All (if Action in "accept" | "reject" then Nt.List (Store, Register (Command), "candidate")
+                       else Nt.List (Store, Register (Command)));
             if Action in "accept" | "reject" | "obsolete" | "verify" then
                Offer ("all");
             end if;
@@ -237,26 +318,55 @@ package body Model_Runner.CLI.Completion is
                Offer (Which (Ada.Strings.Fixed.Index (Which, ":") + 1 .. Which'Last));
             end loop;
          elsif Command = "/work" and then Position >= 2 then
-            Offer_All (Tk.List (Store, "accepted"));
-            Offer_Words ("model= steps= profile= all=yes");
+            --  Only those it would start: ready.
+            for Id of Tk.List (Store, "accepted") loop
+               if Tk.Ready (Store, Id).Ready then
+                  Offer (Id);
+               end if;
+            end loop;
+            Offer_Words ("model= steps= profile=");
+            if Position = 2 then
+               Offer ("all");
+            end if;
          elsif Command = "/cancel" and then Position = 2 then
-            Offer_All (Tk.List (Store, "running"));
+            for Id of Tk.List (Store) loop
+               if Tk.State_Of (Store, Id) not in "complete" | "cancelled" | "rejected" then
+                  Offer (Id);
+               end if;
+            end loop;
          elsif Command = "/result" and then Position = 2 then
             for Name of S.Names (Store, Model_Runner.Framework.Results_Area) loop
                Offer (if Name'Length > 4 and then Name (Name'Last - 3 .. Name'Last) = ".rec"
                       then Name (Name'First .. Name'Last - 4) else Name);
             end loop;
-         elsif Command = "/result" and then Position = 3 and then Action in "dismiss" | "restore" then
+         elsif Command = "/result" and then Position = 3 and then Action = "restore" then
+            --  Only those dismissed come back.
             Offer ("all");
-            for Name of S.Names (Store, Model_Runner.Framework.Results_Area) loop
-               Offer (if Name'Length > 4 and then Name (Name'Last - 3 .. Name'Last) = ".rec"
-                      then Name (Name'First .. Name'Last - 4) else Name);
-            end loop;
+            Offer_All (Model_Runner.CLI.Project_Commands.Dismissed_Issues (Store));
+         elsif Command = "/result" and then Position >= 3 and then Action = "dismiss" then
+            Offer ("all");
+            Offer_All (Model_Runner.CLI.Project_Commands.Open_Issues (Store));
          elsif Command = "/config" and then Position = 2 then
             Settings;
             Capabilities;
          elsif Command = "/reconfigure" and then Position >= 2 then
-            if Action in "add" | "remove" and then Position = 3 then
+            --  What a set holds, to take out; a path, to add to one of paths.
+            if Action = "remove" and then Position >= 4 then
+               declare
+                  Config : R.Item;
+                  Got    : E.Error_Info;
+               begin
+                  Model_Runner.Framework.Configurations.Read (Store, Config, Got);
+                  if E.Is_Ok (Got) then
+                     Offer_All (Model_Runner.Framework.Lines_Of
+                                  (Ada.Strings.Fixed.Translate
+                                     (R.Get (Config, Words (3)) & ASCII.LF & R.Get (Config, "set." & Words (3)),
+                                      Ada.Strings.Maps.To_Mapping (", ", ASCII.LF & ASCII.LF))));
+                  end if;
+               end;
+            elsif Action = "add" and then Position >= 4 then
+               Offer_All (Paths (Current));
+            elsif Action in "add" | "remove" and then Position = 3 then
                for Name of Model_Runner.Framework.Configurations.Known_Names loop
                   if Ada.Strings.Fixed.Index (Name, "set.") = 1 or else Ada.Strings.Fixed.Index (Name, "list.") = 1
                   then
@@ -282,6 +392,8 @@ package body Model_Runner.CLI.Completion is
             Offer_All (Nt.List (Store, Nt.Requirement));
          elsif Command = "/trace" and then Position = 2 then
             Offer_All (Nt.List (Store, Nt.Requirement));
+            Offer_All (Nt.List (Store, Nt.Specification));
+            Offer_All (Nt.List (Store, Nt.Decision));
             Offer_All (Tk.List (Store));
             Offer_All (Paths (Current));
          end if;
@@ -323,7 +435,10 @@ package body Model_Runner.CLI.Completion is
                Ada.Directories.Start_Search (Search, Where, "*.template");
                while Ada.Directories.More_Entries (Search) loop
                   Ada.Directories.Get_Next_Entry (Search, Found);
-                  Offer (Ada.Directories.Base_Name (Ada.Directories.Simple_Name (Found)));
+                  --  A kind of project, not a part others include.
+                  if not Is_Part (Ada.Directories.Full_Name (Found)) then
+                     Offer (Ada.Directories.Base_Name (Ada.Directories.Simple_Name (Found)));
+                  end if;
                end loop;
                Ada.Directories.End_Search (Search);
             end if;

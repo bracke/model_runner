@@ -200,6 +200,16 @@ package body Model_Runner.Framework.Bootstrap is
    begin
       Label := Null_Unbounded_String;
       Rest := Null_Unbounded_String;
+      --  Requirement REQ-1: ... -- the word before the label is the label's.
+      if Item'Length > 14
+        and then Ada.Characters.Handling.To_Lower (Item (Item'First .. Item'First + 11)) = "requirement "
+        and then Item (Item'First + 12) in 'A' .. 'Z'
+      then
+         Label_Split (Item (Item'First + 12 .. Item'Last), Label, Rest);
+         if Label /= Null_Unbounded_String then
+            return;
+         end if;
+      end if;
       Skip ("*[`_");
       First_Letter := Index;
       while Index <= Item'Last and then Item (Index) in 'A' .. 'Z' loop
@@ -659,6 +669,22 @@ package body Model_Runner.Framework.Bootstrap is
             end if;
          end if;
 
+         --  A table's head -- | ID | Requirement | -- and the rule under
+         --  it name its columns: nothing the document says, so passed by.
+         if Line'Length > 1 and then Line (Line'First) = '|'
+           and then not Row_Cells.Is_Empty
+           and then ((for all Cell of Row_Cells =>
+                        (for all C of Cell => C in '-' | ':' | ' '))
+                     or else (for all Cell of Row_Cells =>
+                                Ada.Characters.Handling.To_Lower (Trim (Cell))
+                                in "id" | "#" | "no" | "no." | "number" | "label" | "requirement" | "requirements"
+                                 | "title" | "name" | "description" | "statement" | "text" | "status" | "priority"
+                                 | "notes" | "rationale" | "type" | "owner" | "criteria" | "acceptance criteria"
+                                 | "decision" | "date" | "adr" | "state"))
+         then
+            return;
+         end if;
+
          --  A row of a register of decisions -- ADR-1 | Title | Accepted --
          --  is that decision, with the status its row gives it.
          if Line'Length > 1 and then Line (Line'First) = '|' then
@@ -695,15 +721,38 @@ package body Model_Runner.Framework.Bootstrap is
          if Todo_Document and then Line'Length > 6 and then Line (Line'First) in '-' | '*' | '+'
            and then Ada.Characters.Handling.To_Lower (Line (Line'First + 1 .. Line'First + 5)) in " [ ] " | " [x] "
          then
-            if Line (Line'First + 3) = ' ' and then not Seen.Contains (Fingerprint (Item)) then
+            Label_Split (Item, Label, Rest);
+            --  - [ ] REQ-2: ... -- under the project's own label, as a line
+            --  of a requirements document is.
+            if Line (Line'First + 3) = ' ' and then Length (Label) > 4 and then Slice (Label, 1, 4) = "REQ-"
+              and then Identifiers.Is_Valid (To_String (Label))
+              and then not Seen.Contains (Fingerprint (Item))
+            then
+               Seen.Append (Fingerprint (Item));
+               declare
+                  Said : constant String :=
+                    Trim (Ada.Strings.Fixed.Trim (To_String (Rest), Ada.Strings.Maps.To_Set ("|:-* "),
+                                                  Ada.Strings.Maps.Null_Set));
+               begin
+                  Found (Imported_Item, Path & "#" & To_String (Label), Headline (Said), Said,
+                         Given => To_String (Label));
+               end;
+            elsif Line (Line'First + 3) = ' ' and then not Seen.Contains (Fingerprint (Item)) then
                Seen.Append (Fingerprint (Item));
                Found (Requirement_Candidate, Path & "#" & Fingerprint (Item), Headline (Item), Item);
-            elsif Line (Line'First + 3) /= ' ' then
+            elsif Line (Line'First + 3) /= ' '
+              and then not (Length (Label) > 4 and then Slice (Label, 1, 4) = "REQ-")
+            then
                --  Ticked: done, so not proposed -- said, not left unsaid.
                Found (Issue, Path & "#" & Fingerprint (Item) & "#retired",
                       "an item ticked as done in " & Path & ", so it is not proposed: " & Headline (Item), "done");
             end if;
-            return;
+            --  Ticked under the project's own label: made as a labelled line
+            --  ticked done is, below, with its task to complete.
+            if not (Line (Line'First + 3) /= ' ' and then Length (Label) > 4 and then Slice (Label, 1, 4) = "REQ-")
+            then
+               return;
+            end if;
          end if;
 
          --  A ticked box -- - [x] -- is done already: said, as work taken
@@ -1770,10 +1819,15 @@ package body Model_Runner.Framework.Bootstrap is
                   Words : Unbounded_String;
                   Next  : Natural := Index + 1;
                begin
+                  --  Indented under it -- or, where the indent was lost, the
+                  --  first line of words after it.
                   while Next <= Natural (Lines.Length)
                     and then (String'(Lines (Next)) = ""
                               or else Ada.Strings.Fixed.Index (String'(Lines (Next)), " ") = 1
-                              or else Ada.Strings.Fixed.Index (String'(Lines (Next)), [1 => ASCII.HT]) = 1)
+                              or else Ada.Strings.Fixed.Index (String'(Lines (Next)), [1 => ASCII.HT]) = 1
+                              or else (Words = Null_Unbounded_String
+                                       and then Ada.Strings.Fixed.Index (String'(Lines (Next)), "..") /= 1
+                                       and then Ada.Strings.Fixed.Index (String'(Lines (Next)), ":") /= 1))
                   loop
                      declare
                         Body_Line : constant String := Ada.Strings.Fixed.Trim (Lines (Next), Ada.Strings.Both);
@@ -1839,8 +1893,43 @@ package body Model_Runner.Framework.Bootstrap is
       return To_String (Output);
    end As_Markdown;
 
+   --  A document without its YAML front matter -- the lines between a
+   --  first line of --- and the next --- -- but for its status, kept as
+   --  a Status: line: the rest is its tooling's, not what it says.
+   function Without_Front_Matter (Text : String) return String is
+      Lines  : constant Name_Lists.Vector := Lines_Of_All (Text);
+      Result : Unbounded_String;
+      Inside : Boolean := False;
+      Closed : Boolean := False;
+   begin
+      if Lines.Is_Empty or else Trim (Lines.First_Element) /= "---" then
+         return Text;
+      end if;
+      for Index in Lines.First_Index .. Lines.Last_Index loop
+         declare
+            Line : constant String := Lines (Index);
+         begin
+            if Index = Lines.First_Index then
+               Inside := True;
+            elsif Inside and then Trim (Line) = "---" then
+               Inside := False;
+               Closed := True;
+            elsif Inside then
+               if Line'Length > 7
+                 and then Ada.Characters.Handling.To_Lower (Line (Line'First .. Line'First + 6)) = "status:"
+               then
+                  Append (Result, "Status: " & Trim (Line (Line'First + 7 .. Line'Last)) & ASCII.LF);
+               end if;
+            else
+               Append (Result, Line & ASCII.LF);
+            end if;
+         end;
+      end loop;
+      return (if Closed then To_String (Result) else Text);
+   end Without_Front_Matter;
+
    function Scan (Path : String; Text : String) return Output_List
-   is (Scan_Markdown (Path, As_Markdown (Path, Text)));
+   is (Scan_Markdown (Path, As_Markdown (Path, Without_Front_Matter (Text))));
 
    -----------
    -- Apply --
@@ -1970,9 +2059,9 @@ package body Model_Runner.Framework.Bootstrap is
                     (Search, Where, Part, [Ada.Directories.Directory => True, others => False]);
                   while Ada.Directories.More_Entries (Search) loop
                      Ada.Directories.Get_Next_Entry (Search, Found);
-                     if Ada.Directories.Simple_Name (Found) (Ada.Directories.Simple_Name (Found)'First) /= '.'
-                       and then not Ada.Directories.Exists (Ada.Directories.Full_Name (Found) & "/" & State_Directory)
-                     then
+                     --  A project of its own below too: a pattern that
+                     --  names its place -- packages/*/README.md -- reads it.
+                     if Ada.Directories.Simple_Name (Found) (Ada.Directories.Simple_Name (Found)'First) /= '.' then
                         Below.Append (Ada.Directories.Simple_Name (Found));
                      end if;
                   end loop;
@@ -3030,200 +3119,226 @@ package body Model_Runner.Framework.Bootstrap is
                end;
             end loop;
          end;
-         for Kind in Intent.Intent_Kind loop
-            for Known of Intent.List (Item, Kind) loop
-               declare
-                  Held : Intent.Entity;
-                  Read : E.Error_Info;
-               begin
-                  Intent.Read (Item, Kind, Known, Held, Read);
-                  --  Its document read now, or gone altogether -- deleted,
-                  --  or moved without this part of it -- either way no
-                  --  longer saying it.
-                  if E.Is_Ok (Read)
-                    and then (Read_From.Contains (To_String (Held.Source))
-                              or else (Length (Held.Source) > 0
-                                       and then not Ada.Directories.Exists
-                                                      (Hostkit.Fs.Join
-                                                         (Ada.Directories.Containing_Directory (Stores.Root (Item)),
-                                                          To_String (Held.Source)))
-                                       and then not (for some Line of Result.Moved =>
-                                                       Ada.Strings.Fixed.Index (Line, Known & " ") = Line'First)))
-                    and then Length (Held.Provenance) > 0
-                    and then not Said_Now.Contains (To_String (Held.Provenance))
-                    and then not Rewritten.Contains (Known)
-                    and then not Gone_Entries.Contains (Known)
-                    and then To_String (Held.State) not in "obsolete" | "superseded" | "rejected"
-                  then
-                     declare
-                        Instead : Unbounded_String;
-                        Said    : Results.Result;
-                        --  A record that marks itself retired says so: that is
-                        --  why, not that the line went.
-                        function Retired_As return String is
-                        begin
-                           for Next of Found.Outputs loop
-                              if Field (Next.Provenance) = To_String (Held.Provenance) & "#retired" then
-                                 return Field (Next.Text);
-                              end if;
-                           end loop;
-                           return "";
-                        end Retired_As;
-                        Why     : constant String :=
-                          Known & ": " & To_String (Held.Source)
-                          & (if Retired_As = "" then " no longer says it"
-                             else " now marks it " & Retired_As);
-
-                        --  The decision made of the record it says replaced it
-                        --  -- superseded by ADR-0003 -- now or before; "".
-                        function Replaced_By return String is
-                           Said_As : constant String := Retired_As;
-                           By      : constant Natural := Ada.Strings.Fixed.Index (Said_As, "superseded by ");
-                           Label   : Unbounded_String;
-                        begin
-                           if By = 0 or else not Intent."=" (Kind, Intent.Decision) then
-                              return "";
-                           end if;
-                           for C of Said_As (By + 14 .. Said_As'Last) loop
-                              exit when C in ' ' | '(' | ',' | ';';
-                              Append (Label, C);
-                           end loop;
-                           if Length (Label) = 0 then
-                              return "";
-                           end if;
-                           for Index in 1 .. Natural (Result.Made.Length) loop
-                              declare
-                                 Mark : constant String := Made_Provenances (Index);
-                              begin
-                                 if Mark'Length > Length (Label)
-                                   and then Mark (Mark'Last - Length (Label) .. Mark'Last) = "#" & To_String (Label)
-                                 then
-                                    return Result.Made (Index);
-                                 end if;
-                              end;
-                           end loop;
-                           for Other of Intent.List (Item, Intent.Decision) loop
-                              declare
-                                 That : Intent.Entity;
-                                 Got  : E.Error_Info;
-                                 Mark : Unbounded_String;
-                              begin
-                                 Intent.Read (Item, Intent.Decision, Other, That, Got);
-                                 Mark := That.Provenance;
-                                 if E.Is_Ok (Got) and then Other /= Known and then Length (Mark) > Length (Label)
-                                   and then Slice (Mark, Length (Mark) - Length (Label), Length (Mark))
-                                            = "#" & To_String (Label)
-                                 then
-                                    return Other;
-                                 end if;
-                              end;
-                           end loop;
-                           return "";
-                        end Replaced_By;
-                        Successor : constant String := Replaced_By;
-
-                        --  Of its own register: a decision is not replaced by
-                        --  a requirement.
-                        function Same_Kind (Made : String) return Boolean
-                        is (Made'Length > 4 and then Known'Length > 4
-                            and then Made (Made'First .. Made'First + 3)
-                                     = Known (Known'First .. Known'First + 3));
-                     begin
-
-                        --  The one made now whose words are most like its own,
-                        --  where more than half of them are: its new wording,
-                        --  most likely.
+         declare
+            --  Whether a document has a heading of just these words.
+            function Heading_Still_There (Source, Title : String) return Boolean is
+               Whole : constant String :=
+                 Hostkit.Fs.Join (Ada.Directories.Containing_Directory (Stores.Root (Item)), Source);
+               Text  : Unbounded_String;
+               Got   : E.Error_Info;
+            begin
+               if Source = "" or else Title = "" or else not Ada.Directories.Exists (Whole) then
+                  return False;
+               end if;
+               Files.Read_Text (Whole, Text, Got);
+               return E.Is_Ok (Got)
+                 and then (for some Line of Lines_Of_All (To_String (Text)) =>
+                             Line'Length > 2 and then Line (Line'First) in '#' | '='
+                             and then Trim (Ada.Strings.Fixed.Trim (Line, Ada.Strings.Maps.To_Set ("#= "),
+                                                                    Ada.Strings.Maps.Null_Set)) = Title);
+            end Heading_Still_There;
+         begin
+            for Kind in Intent.Intent_Kind loop
+               for Known of Intent.List (Item, Kind) loop
+                  declare
+                     Held : Intent.Entity;
+                     Read : E.Error_Info;
+                  begin
+                     Intent.Read (Item, Kind, Known, Held, Read);
+                     --  Its document read now, or gone altogether -- deleted,
+                     --  or moved without this part of it -- either way no
+                     --  longer saying it.
+                     if E.Is_Ok (Read)
+                       and then (Read_From.Contains (To_String (Held.Source))
+                                 or else (Length (Held.Source) > 0
+                                          and then not Ada.Directories.Exists
+                                                         (Hostkit.Fs.Join
+                                                            (Ada.Directories.Containing_Directory (Stores.Root (Item)),
+                                                             To_String (Held.Source)))
+                                          and then not (for some Line of Result.Moved =>
+                                                          Ada.Strings.Fixed.Index (Line, Known & " ") = Line'First)))
+                       and then Length (Held.Provenance) > 0
+                       and then not Said_Now.Contains (To_String (Held.Provenance))
+                       and then not Rewritten.Contains (Known)
+                       and then not Gone_Entries.Contains (Known)
+                       and then To_String (Held.State) not in "obsolete" | "superseded" | "rejected"
+                       --  A specification whose heading its document still has
+                       --  says it still: a line of it become a requirement is
+                       --  that line moved, not the specification gone.
+                       and then not (Intent."=" (Kind, Intent.Specification)
+                                     and then Heading_Still_There (To_String (Held.Source), To_String (Held.Title)))
+                     then
                         declare
-                           Best  : Natural := 0;
-                           Score : Float := 0.5;
-                        begin
-                           for Index in 1 .. Natural (Result.Made.Length) loop
-                              if Made_Sources (Index) = To_String (Held.Source)
-                                and then Same_Kind (Result.Made (Index))
-                                and then Likeness (To_String (Held.Text), Made_Texts (Index)) > Score
-                              then
-                                 Score := Likeness (To_String (Held.Text), Made_Texts (Index));
-                                 Best := Index;
+                           Instead : Unbounded_String;
+                           Said    : Results.Result;
+                           --  A record that marks itself retired says so: that is
+                           --  why, not that the line went.
+                           function Retired_As return String is
+                           begin
+                              for Next of Found.Outputs loop
+                                 if Field (Next.Provenance) = To_String (Held.Provenance) & "#retired" then
+                                    return Field (Next.Text);
+                                 end if;
+                              end loop;
+                              return "";
+                           end Retired_As;
+                           Why     : constant String :=
+                             Known & ": " & To_String (Held.Source)
+                             & (if Retired_As = "" then " no longer says it"
+                                else " now marks it " & Retired_As);
+
+                           --  The decision made of the record it says replaced it
+                           --  -- superseded by ADR-0003 -- now or before; "".
+                           function Replaced_By return String is
+                              Said_As : constant String := Retired_As;
+                              By      : constant Natural := Ada.Strings.Fixed.Index (Said_As, "superseded by ");
+                              Label   : Unbounded_String;
+                           begin
+                              if By = 0 or else not Intent."=" (Kind, Intent.Decision) then
+                                 return "";
                               end if;
-                           end loop;
-                           if Best > 0 then
-                              Instead := To_Unbounded_String
-                                (Result.Made (Best) & ", most like it -- "
-                                 & (if Intent."=" (Kind, Intent.Decision) then "/decision"
-                                    elsif Intent."=" (Kind, Intent.Specification) then "/spec" else "/req")
-                                 & " supersede " & Known
-                                 & " " & Result.Made (Best) & " keeps it as that one's history");
+                              for C of Said_As (By + 14 .. Said_As'Last) loop
+                                 exit when C in ' ' | '(' | ',' | ';';
+                                 Append (Label, C);
+                              end loop;
+                              if Length (Label) = 0 then
+                                 return "";
+                              end if;
+                              for Index in 1 .. Natural (Result.Made.Length) loop
+                                 declare
+                                    Mark : constant String := Made_Provenances (Index);
+                                 begin
+                                    if Mark'Length > Length (Label)
+                                      and then Mark (Mark'Last - Length (Label) .. Mark'Last) = "#" & To_String (Label)
+                                    then
+                                       return Result.Made (Index);
+                                    end if;
+                                 end;
+                              end loop;
+                              for Other of Intent.List (Item, Intent.Decision) loop
+                                 declare
+                                    That : Intent.Entity;
+                                    Got  : E.Error_Info;
+                                    Mark : Unbounded_String;
+                                 begin
+                                    Intent.Read (Item, Intent.Decision, Other, That, Got);
+                                    Mark := That.Provenance;
+                                    if E.Is_Ok (Got) and then Other /= Known and then Length (Mark) > Length (Label)
+                                      and then Slice (Mark, Length (Mark) - Length (Label), Length (Mark))
+                                               = "#" & To_String (Label)
+                                    then
+                                       return Other;
+                                    end if;
+                                 end;
+                              end loop;
+                              return "";
+                           end Replaced_By;
+                           Successor : constant String := Replaced_By;
+
+                           --  Of its own register: a decision is not replaced by
+                           --  a requirement.
+                           function Same_Kind (Made : String) return Boolean
+                           is (Made'Length > 4 and then Known'Length > 4
+                               and then Made (Made'First .. Made'First + 3)
+                                        = Known (Known'First .. Known'First + 3));
+                        begin
+
+                           --  The one made now whose words are most like its own,
+                           --  where more than half of them are: its new wording,
+                           --  most likely.
+                           declare
+                              Best  : Natural := 0;
+                              Score : Float := 0.5;
+                           begin
+                              for Index in 1 .. Natural (Result.Made.Length) loop
+                                 if Made_Sources (Index) = To_String (Held.Source)
+                                   and then Same_Kind (Result.Made (Index))
+                                   and then Likeness (To_String (Held.Text), Made_Texts (Index)) > Score
+                                 then
+                                    Score := Likeness (To_String (Held.Text), Made_Texts (Index));
+                                    Best := Index;
+                                 end if;
+                              end loop;
+                              if Best > 0 then
+                                 Instead := To_Unbounded_String
+                                   (Result.Made (Best) & ", most like it -- "
+                                    & (if Intent."=" (Kind, Intent.Decision) then "/decision"
+                                       elsif Intent."=" (Kind, Intent.Specification) then "/spec" else "/req")
+                                    & " supersede " & Known
+                                    & " " & Result.Made (Best) & " keeps it as that one's history");
+                              end if;
+                           end;
+                           --  A candidate no one took up, its document no
+                           --  longer saying it: let go, and said so -- there
+                           --  is nothing for a person to weigh.
+                           --  Ticked as done in its document: done, not unwanted --
+                           --  kept, and said as work to complete.
+                           if Retired_As = "done" then
+                              Said :=
+                                (Kind       => Results.Diagnostic,
+                                 Producer   => To_Unbounded_String ("bootstrap"),
+                                 Summary    => To_Unbounded_String
+                                                 (Known & " is marked done in " & To_String (Held.Source)
+                                                  & ": once it is accepted, /task complete takes the task derived"
+                                                  & " for it as done, its checks passing, rather than /work doing"
+                                                  & " it again"),
+                                 Payload    => Held.Text,
+                                 Provenance => Held.Provenance & "#done",
+                                 others     => <>);
+                              Raise_Issue (Said);
+                              goto Next_Known;
                            end if;
-                        end;
-                        --  A candidate no one took up, its document no
-                        --  longer saying it: let go, and said so -- there
-                        --  is nothing for a person to weigh.
-                        --  Ticked as done in its document: done, not unwanted --
-                        --  kept, and said as work to complete.
-                        if Retired_As = "done" then
+                           if To_String (Held.State) = Intent.First_State (Kind)
+                             and then Instead = Null_Unbounded_String
+                           then
+                              declare
+                                 Moved   : E.Error_Info;
+                              begin
+                                 Intent.Move (Item, Change, Kind, Known, "rejected",
+                                              Model_Runner.Framework.Transitions.Ordinary_Only, Moved,
+                                              Actor => "bootstrap");
+                                 if E.Is_Ok (Moved) then
+                                    Result.Stale.Append
+                                      (Why & "; it was a candidate, and is rejected with it");
+                                    goto Next_Known;
+                                 end if;
+                              end;
+                           end if;
                            Said :=
                              (Kind       => Results.Diagnostic,
                               Producer   => To_Unbounded_String ("bootstrap"),
                               Summary    => To_Unbounded_String
-                                              (Known & " is marked done in " & To_String (Held.Source)
-                                               & ": once it is accepted, /task complete takes the task derived"
-                                               & " for it as done, its checks passing, rather than /work doing"
-                                               & " it again"),
+                                              (if Successor /= ""
+                                               then Why & "; /decision supersede " & Known & " " & Successor
+                                                    & " records it replaced by " & Successor
+                                                    & ", the decision made of that record -- or keep it as it is,"
+                                                    & " and /result dismiss ID takes this off the list"
+                                               else Why & "; "
+                                               & (if Intent."=" (Kind, Intent.Decision) then "/decision "
+                                                  elsif Intent."=" (Kind, Intent.Specification) then "/spec "
+                                                  else "/req ")
+                                               & (if To_String (Held.State) = Intent.First_State (Kind)
+                                                  then "reject " else "obsolete ")
+                                               & Known & " retires it, or keep it as it is -- nothing"
+                                               & " needs doing then, this is not raised again, and"
+                                               & " /result dismiss ID takes it off the list"
+                                               & (if Instead = Null_Unbounded_String then ""
+                                                  else "; made from the document now: "
+                                                       & To_String (Instead))),
                               Payload    => Held.Text,
-                              Provenance => Held.Provenance & "#done",
+                              Provenance => Held.Provenance,
                               others     => <>);
                            Raise_Issue (Said);
-                           goto Next_Known;
-                        end if;
-                        if To_String (Held.State) = Intent.First_State (Kind) and then Instead = Null_Unbounded_String
-                        then
-                           declare
-                              Moved   : E.Error_Info;
-                           begin
-                              Intent.Move (Item, Change, Kind, Known, "rejected",
-                                           Model_Runner.Framework.Transitions.Ordinary_Only, Moved,
-                                           Actor => "bootstrap");
-                              if E.Is_Ok (Moved) then
-                                 Result.Stale.Append
-                                   (Why & "; it was a candidate, and is rejected with it");
-                                 goto Next_Known;
-                              end if;
-                           end;
-                        end if;
-                        Said :=
-                          (Kind       => Results.Diagnostic,
-                           Producer   => To_Unbounded_String ("bootstrap"),
-                           Summary    => To_Unbounded_String
-                                           (if Successor /= ""
-                                            then Why & "; /decision supersede " & Known & " " & Successor
-                                                 & " records it replaced by " & Successor
-                                                 & ", the decision made of that record -- or keep it as it is,"
-                                                 & " and /result dismiss ID takes this off the list"
-                                            else Why & "; "
-                                            & (if Intent."=" (Kind, Intent.Decision) then "/decision "
-                                               elsif Intent."=" (Kind, Intent.Specification) then "/spec "
-                                               else "/req ")
-                                            & (if To_String (Held.State) = Intent.First_State (Kind)
-                                               then "reject " else "obsolete ")
-                                            & Known & " retires it, or keep it as it is -- nothing"
-                                            & " needs doing then, this is not raised again, and"
-                                            & " /result dismiss ID takes it off the list"
-                                            & (if Instead = Null_Unbounded_String then ""
-                                               else "; made from the document now: "
-                                                    & To_String (Instead))),
-                           Payload    => Held.Text,
-                           Provenance => Held.Provenance,
-                           others     => <>);
-                        Raise_Issue (Said);
-                        if E.Is_Error (Status) then
-                           return;
-                        end if;
-                     end;
-                  end if;
-               end;
-               <<Next_Known>>
+                           if E.Is_Error (Status) then
+                              return;
+                           end if;
+                        end;
+                     end if;
+                  end;
+                  <<Next_Known>>
+               end loop;
             end loop;
-         end loop;
+         end;
       end;
 
       --  What it did, kept as a result: each output it was given, and how

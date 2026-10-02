@@ -190,11 +190,14 @@ package Model_Runner.Framework.Workspaces is
    function Changed_Since_Kept (Item : Stores.Store; Name : String) return Name_Lists.Vector;
 
    --  The copy Restore_Kept keeps what the project held of a copy's files,
-   --  where they differed: replaced-NAME.
+   --  where they differed: before-restore-NAME, or the copy it swaps back
+   --  to while the project still holds what that put there, else a
+   --  numbered one.
    --
+   --  @param Item The store.
    --  @param Name The copy put back.
    --  @return Its name.
-   function Replaced_Copy (Name : String) return String;
+   function Replaced_Copy (Item : Stores.Store; Name : String) return String;
 
    --  Put a kept copy's files back in the project, each over what is there;
    --  a file the project holds otherwise is kept first, as Replaced_Copy.
@@ -213,6 +216,14 @@ package Model_Runner.Framework.Workspaces is
    --  @param Name The copy.
    --  @return True once Restore_Kept put it back.
    function Was_Restored (Item : Stores.Store; Name : String) return Boolean;
+
+   --  Take out of a kept copy each file the project holds just so still:
+   --  it keeps nothing the project has not -- a write that failed left the
+   --  file as it was -- and a copy left empty goes.
+   --
+   --  @param Item The store.
+   --  @param Name The copy.
+   procedure Prune_Kept (Item : Stores.Store; Name : String);
 
    --  Remove a kept copy.
    --

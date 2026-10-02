@@ -1339,18 +1339,6 @@ package body Model_Runner.Framework.Workspaces is
    -- Restore_Kept --
    ------------------
 
-   --  What a restore swaps out is kept as before-restore-NAME; putting that
-   --  back swaps the two again, the files going back to the copy that was
-   --  restored, so the names never stack.
-   function Replaced_Copy (Name : String) return String
-   is (if Name'Length > 15 and then Name (Name'First .. Name'First + 14) = "before-restore-"
-          and then Is_Kept_Name (Name (Name'First + 15 .. Name'Last))
-       then Name (Name'First + 15 .. Name'Last)
-       elsif Name'Length > 9 and then Name (Name'First .. Name'First + 8) = "replaced-"
-          and then Is_Kept_Name (Name (Name'First + 9 .. Name'Last))
-       then Name (Name'First + 9 .. Name'Last)
-       else "before-restore-" & Name);
-
    function Changed_Since_Kept (Item : Stores.Store; Name : String) return Name_Lists.Vector is
       Project : constant String := Dirs.Containing_Directory (Stores.Root (Item));
       Where   : constant String := Hostkit.Fs.Join (Runtime_Of (Item), Name);
@@ -1366,6 +1354,41 @@ package body Model_Runner.Framework.Workspaces is
       return Result;
    end Changed_Since_Kept;
 
+   --  What a restore swaps out is kept as before-restore-NAME; putting that
+   --  back swaps the two again, the files going back to the copy that was
+   --  restored -- only while the project holds what that copy put there:
+   --  edited since, they are kept under a number of their own, and the
+   --  copy left as it was. The names never stack.
+   function Replaced_Copy (Item : Stores.Store; Name : String) return String is
+      function Starts (Prefix : String) return Boolean
+      is (Name'Length > Prefix'Length and then Name (Name'First .. Name'First + Prefix'Length - 1) = Prefix
+          and then Is_Kept_Name (Name (Name'First + Prefix'Length .. Name'Last)));
+      Back : constant String :=
+        (if Starts ("before-restore-") then Name (Name'First + 15 .. Name'Last)
+         elsif Starts ("replaced-") then Name (Name'First + 9 .. Name'Last)
+         else "");
+      Base : constant String := (if Back /= "" then Name else "before-restore-" & Name);
+   begin
+      if Back /= ""
+        and then (not Dirs.Exists (Hostkit.Fs.Join (Runtime_Of (Item), Back))
+                  or else Changed_Since_Kept (Item, Back).Is_Empty)
+      then
+         return Back;
+      elsif not Dirs.Exists (Hostkit.Fs.Join (Runtime_Of (Item), Base)) then
+         return Base;
+      end if;
+      for Number in 2 .. 999 loop
+         declare
+            Numbered : constant String := Base & "-" & Ada.Strings.Fixed.Trim (Number'Image, Ada.Strings.Both);
+         begin
+            if not Dirs.Exists (Hostkit.Fs.Join (Runtime_Of (Item), Numbered)) then
+               return Numbered;
+            end if;
+         end;
+      end loop;
+      return Base;
+   end Replaced_Copy;
+
    procedure Restore_Kept
      (Item   : Stores.Store;
       Name   : String;
@@ -1374,7 +1397,7 @@ package body Model_Runner.Framework.Workspaces is
       Project : constant String := Dirs.Containing_Directory (Stores.Root (Item));
       Where   : constant String := Hostkit.Fs.Join (Runtime_Of (Item), Name);
       Listed  : constant Name_Lists.Vector := Kept_Files (Item, Name);
-      Aside   : constant String := Hostkit.Fs.Join (Runtime_Of (Item), Replaced_Copy (Name));
+      Aside   : constant String := Hostkit.Fs.Join (Runtime_Of (Item), Replaced_Copy (Item, Name));
    begin
       if Listed.Is_Empty then
          Status := E.Make (E.Framework_Not_Found);
@@ -1416,6 +1439,31 @@ package body Model_Runner.Framework.Workspaces is
          E.Add_Text (Status, "name", Name);
          E.Add_Text (Status, "detail", Ada.Exceptions.Exception_Message (Occurrence));
    end Restore_Kept;
+
+   ----------------
+   -- Prune_Kept --
+   ----------------
+
+   procedure Prune_Kept (Item : Stores.Store; Name : String) is
+      Project : constant String := Dirs.Containing_Directory (Stores.Root (Item));
+      Where   : constant String := Hostkit.Fs.Join (Runtime_Of (Item), Name);
+      Differs : constant Name_Lists.Vector := Changed_Since_Kept (Item, Name);
+   begin
+      if not Is_Kept_Name (Name) or else not Dirs.Exists (Where) then
+         return;
+      end if;
+      for Path of Kept_Files (Item, Name) loop
+         if Dirs.Exists (Hostkit.Fs.Join (Project, Path)) and then not Differs.Contains (Path) then
+            Dirs.Delete_File (Hostkit.Fs.Join (Where, Path));
+         end if;
+      end loop;
+      if Kept_Files (Item, Name).Is_Empty then
+         Files.Remove_Tree (Where);
+      end if;
+   exception
+      when others =>
+         null;
+   end Prune_Kept;
 
    ---------------
    -- Drop_Kept --

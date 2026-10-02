@@ -3,7 +3,9 @@ with Ada.Strings.Unbounded;
 with Model_Runner.Cancellation;
 with Model_Runner.CLI.Options;
 with Model_Runner.Errors;
+with Model_Runner.Framework;
 with Model_Runner.Framework.Context;
+with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Work;
 with Model_Runner.Llama;
 with Model_Runner.Presentation;
@@ -158,6 +160,25 @@ package Model_Runner.CLI.Project_Commands is
    --
    --  @return The refusals, a semicolon apart; empty for none.
    function Last_Refusals return String;
+
+   --  Where the session was started, as a path within the project it
+   --  moved up to: src/shop, for paths typed there to be found.
+   --
+   --  @return The path; "" where it was started at the project's top.
+   function Started_Below return String;
+
+   --  The issues /result lists: kept, not dismissed, not acted on.
+   --
+   --  @param Store The project's state, open.
+   --  @return Their identifiers.
+   function Open_Issues (Store : Model_Runner.Framework.Stores.Store) return Model_Runner.Framework.Name_Lists.Vector;
+
+   --  The issues taken off /result's list, which /result restore puts back.
+   --
+   --  @param Store The project's state, open.
+   --  @return Their identifiers.
+   function Dismissed_Issues
+     (Store : Model_Runner.Framework.Stores.Store) return Model_Runner.Framework.Name_Lists.Vector;
 
    --  The same, with the agent /work runs supplied: a test's own, in
    --  place of a model.

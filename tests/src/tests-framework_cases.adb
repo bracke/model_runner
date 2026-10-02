@@ -9079,21 +9079,31 @@ package body Tests.Framework_Cases is
                   Assert (Model_Runner.Framework.Workspaces.Changed_Since_Kept
                             (Kept_Store, Copies.First_Element).Contains ("src/kept.txt"),
                           "a file the project holds otherwise was not said to have changed");
-                  Model_Runner.Framework.Workspaces.Restore_Kept (Kept_Store, Copies.First_Element, Got);
-                  Assert (Model_Runner.Framework.Workspaces.Kept_Copies (Kept_Store).Contains
-                            (Model_Runner.Framework.Workspaces.Replaced_Copy (Copies.First_Element)),
-                          "what a restore overwrote was not kept aside");
-                  Assert (E.Is_Ok (Got)
-                          and then Ada.Strings.Fixed.Trim
-                                     (Read_Whole (Project & "/src/kept.txt"), Ada.Strings.Both) = "before"
-                          and then Model_Runner.Framework.Workspaces.Was_Restored
-                                     (Kept_Store, Copies.First_Element),
-                          "a kept copy was not put back, or not marked so");
+                  declare
+                     Aside : constant String :=
+                       Model_Runner.Framework.Workspaces.Replaced_Copy (Kept_Store, Copies.First_Element);
+                  begin
+                     Model_Runner.Framework.Workspaces.Restore_Kept (Kept_Store, Copies.First_Element, Got);
+                     Assert (Model_Runner.Framework.Workspaces.Kept_Copies (Kept_Store).Contains (Aside),
+                             "what a restore overwrote was not kept aside");
+                     Assert (E.Is_Ok (Got)
+                             and then Ada.Strings.Fixed.Trim
+                                        (Read_Whole (Project & "/src/kept.txt"), Ada.Strings.Both) = "before"
+                             and then Model_Runner.Framework.Workspaces.Was_Restored
+                                        (Kept_Store, Copies.First_Element),
+                             "a kept copy was not put back, or not marked so");
+                     --  Pruned, a copy keeps what the project has otherwise,
+                     --  and nothing it holds just so.
+                     Model_Runner.Framework.Workspaces.Prune_Kept (Kept_Store, Aside);
+                     Assert (Model_Runner.Framework.Workspaces.Kept_Copies (Kept_Store).Contains (Aside),
+                             "a copy holding what the project has otherwise was pruned");
+                     Model_Runner.Framework.Workspaces.Prune_Kept (Kept_Store, Copies.First_Element);
+                     Assert (not Model_Runner.Framework.Workspaces.Kept_Copies (Kept_Store)
+                                   .Contains (Copies.First_Element),
+                             "a copy holding only what the project has was kept");
+                  end;
                   Model_Runner.Framework.Workspaces.Drop_Kept (Kept_Store, Copies.First_Element, Got);
-                  Assert (E.Is_Ok (Got)
-                          and then not Model_Runner.Framework.Workspaces.Kept_Copies (Kept_Store)
-                                         .Contains (Copies.First_Element),
-                          "a kept copy was not removed");
+                  Assert (E.Is_Error (Got), "a pruned copy was there still to remove");
                   Model_Runner.Framework.Workspaces.Drop_Kept (Kept_Store, "../escape", Got);
                   Assert (E.Is_Error (Got), "a name outside the kept copies was removed");
                   S.Close (Kept_Store);

@@ -198,6 +198,10 @@ package body Model_Runner.Framework.Repository is
          return "Python";
       elsif Ends (".md") then
          return "Markdown";
+      elsif Ends (".adoc") or else Ends (".asciidoc") then
+         return "AsciiDoc";
+      elsif Ends (".rst") then
+         return "reStructuredText";
       elsif Ends (".toml") then
          return "TOML";
       elsif Ends (".json") then
@@ -456,7 +460,7 @@ package body Model_Runner.Framework.Repository is
          return Generated;
       elsif Named_By (Within.Tests, Path) then
          return Test;
-      elsif Language = "Markdown" or else Named_By (Within.Documentation, Path)
+      elsif Language in "Markdown" | "AsciiDoc" | "reStructuredText" or else Named_By (Within.Documentation, Path)
       then
          return Documentation;
       elsif Language in "GPR" | "TOML" | "JSON" | "Shell"

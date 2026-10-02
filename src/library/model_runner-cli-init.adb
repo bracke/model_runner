@@ -1075,6 +1075,18 @@ package body Model_Runner.CLI.Init is
                         Changing := True;
                      else
                         Allowing := Picked = 2 and then not Fixes.Is_Empty;
+                        --  The plan taken, kept on the screen: the selector
+                        --  cleared it with itself.
+                        if Choosers.Is_Available (Screen) then
+                           declare
+                              Lines : constant Model_Runner.Framework.Name_Lists.Vector :=
+                                Model_Runner.Framework.Lines_Of (Heading);
+                           begin
+                              for Index in Lines.First_Index .. Lines.Last_Index - 1 loop
+                                 Pres.Put_Line (Screen, Lines (Index));
+                              end loop;
+                           end;
+                        end if;
                      end if;
                   end;
                end;

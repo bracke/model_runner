@@ -10,6 +10,7 @@ with Ada.Text_IO;
 with Hostkit.Fs;
 
 with Model_Runner.CLI.Options;
+with Model_Runner.CLI.Project_Commands;
 with Model_Runner.Errors;
 with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework;
@@ -123,13 +124,21 @@ package body Model_Runner.CLI.Repo is
       Typed     : constant String := T.To_String (Item.Action_Argument);
       --  A path as the project names it: ./src/x.adb and a whole path into
       --  the project are src/x.adb, and . is the project itself.
+      --  Typed where the session was started, below the project's top:
+      --  basket.py in src/shop is src/shop/basket.py, where only that is.
+      Below     : constant String := Model_Runner.CLI.Project_Commands.Started_Below;
+      Top       : constant String :=
+        Ada.Directories.Full_Name
+          (if T.Is_Empty (Item.Project_Directory) then "." else T.To_String (Item.Project_Directory));
+      From_Here : constant String :=
+        (if Below /= "" and then Typed /= "" and then Typed (Typed'First) /= '/'
+           and then not Ada.Directories.Exists (Hostkit.Fs.Join (Top, Typed))
+           and then Ada.Directories.Exists (Hostkit.Fs.Join (Hostkit.Fs.Join (Top, Below), Typed))
+         then Below & "/" & Typed else Typed);
       Argument  : constant String :=
-        (if Typed = "." or else Ada.Strings.Fixed.Index (Typed, "/") > 0
-         then Rp.Relative_Path
-                (Ada.Directories.Full_Name
-                   (if T.Is_Empty (Item.Project_Directory) then "."
-                    else T.To_String (Item.Project_Directory)), Typed)
-         else Typed);
+        (if From_Here = "." or else Ada.Strings.Fixed.Index (From_Here, "/") > 0
+         then Rp.Relative_Path (Top, From_Here)
+         else From_Here);
       Recovered : Model_Runner.Framework.Name_Lists.Vector;
       Within    : constant Rp.Roots := Roots_In (Directory, Recovered);
       Found     : constant Rp.Graph := Rp.Scan (Directory, Within);
@@ -820,8 +829,9 @@ package body Model_Runner.CLI.Repo is
                                                        To_String (One.To),
                                                        Rp."=" (One.Sure, Rp.Certain)));
                                  begin
-                                    if Ada.Strings.Fixed.Index (Line, "REQ-") > 0
-                                      or else Ada.Strings.Fixed.Index (Line, "TASK-") > 0
+                                    if (for some Prefix of Model_Runner.Framework.Name_Lists.Vector'
+                                          (["REQ-", "TASK-", "DEC-", "SPEC-"]) =>
+                                          Ada.Strings.Fixed.Index (Line, Prefix) > 0)
                                     then
                                        State_Edges.Append (Said);
                                     else
@@ -926,14 +936,63 @@ package body Model_Runner.CLI.Repo is
                                  end if;
                               end;
                            end loop;
+                           --  A label bootstrap made an entry of: that entry, by
+                           --  its own identifier.
+                           declare
+                              package Nt renames Model_Runner.Framework.Intent;
+                              Made_As : Unbounded_String;
+                           begin
+                              for Kind in Nt.Intent_Kind loop
+                                 for Known of Nt.List (Store, Kind) loop
+                                    declare
+                                       Held : Nt.Entity;
+                                       Got  : E.Error_Info;
+                                       Mark : Unbounded_String;
+                                    begin
+                                       Nt.Read (Store, Kind, Known, Held, Got);
+                                       Mark := Held.Provenance;
+                                       if E.Is_Ok (Got) and then Made_As = Null_Unbounded_String
+                                         and then (Ada.Strings.Unbounded.Index (Mark, "#" & Argument) > 0
+                                                   and then Ada.Strings.Unbounded.Index (Mark, "#" & Argument)
+                                                            + Argument'Length = Length (Mark))
+                                       then
+                                          Made_As := To_Unbounded_String (Known);
+                                       end if;
+                                    end;
+                                 end loop;
+                              end loop;
+                              if Made_As /= Null_Unbounded_String then
+                                 Pres.Put_Message (Screen, "cli.repo.trace_label_is",
+                                                   [Loc.Named ("name", Argument),
+                                                    Loc.Named ("value", To_String (Made_As))]);
+                                 S.Close (Store);
+                                 return;
+                              end if;
+                           end;
                            Pres.Put_Message (Screen, (if In_Read then "cli.repo.trace_unknown_read"
                                                       else "cli.repo.trace_unknown"),
                                              [Loc.Named ("name", Argument),
                                               Loc.Named ("detail", (if Count = 0 then "nothing in the code names it"
-                                                                    else To_String (Naming) & " names it"))]);
+                                                                    elsif Count = 1
+                                                                    then To_String (Naming) & " names it"
+                                                                    else To_String (Naming) & " name it"))]);
                         end;
                      elsif Shown.Is_Empty then
                         Pres.Put_Message (Screen, "cli.repo.no_edges", [Loc.Named ("name", Argument)]);
+                        --  An entry: how a link is made.
+                        if (for some Prefix of Model_Runner.Framework.Name_Lists.Vector'
+                              (["REQ-", "SPEC-", "DEC-"]) =>
+                              Ada.Strings.Fixed.Index (Argument, Prefix) = Argument'First)
+                        then
+                           Pres.Put_Note (Screen, "cli.next.trace_link",
+                                          [Loc.Named ("name", Argument),
+                                           Loc.Named
+                                             ("value",
+                                              (if Ada.Strings.Fixed.Index (Argument, "REQ-") = Argument'First
+                                               then "req"
+                                               elsif Ada.Strings.Fixed.Index (Argument, "SPEC-") = Argument'First
+                                               then "spec" else "decision"))]);
+                        end if;
                      end if;
 
                      --  A requirement the code names -- by its identifier or

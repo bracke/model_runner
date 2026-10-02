@@ -293,7 +293,14 @@ package body Model_Runner.Framework.Context is
           or else (for some Place of Places =>
                      Ada.Strings.Fixed.Index (Place, "*") = 0
                      and then (Permissions.Allows (Allowed, Permissions.Write_Source, Place & "/x")
-                               or else Permissions.Allows (Allowed, Permissions.Write_Specs, Place & "/x"))));
+                               or else Permissions.Allows (Allowed, Permissions.Write_Specs, Place & "/x")
+                               --  Or a root of its own within the place: tests/unit/ within tests.
+                               or else (Allowed (Permissions.Write_Source).Granted
+                                        and then (for some Root of Allowed (Permissions.Write_Source).Roots =>
+                                                    Ada.Strings.Fixed.Index
+                                                      (Root, Ada.Strings.Fixed.Trim
+                                                               (Place, Ada.Strings.Maps.Null_Set,
+                                                                Ada.Strings.Maps.To_Set ("/")) & "/") = Root'First)))));
 
       --  The fields of a record whose names start with a prefix, one a
       --  line.

@@ -455,9 +455,13 @@ package body Model_Runner.CLI.Interactive is
          then
             --  One command's line: /help result, /help /work.
             declare
-               Named : constant String :=
+               --  The command alone: /help task list is /help task.
+               Whole : constant String :=
                  (if Line (Asked.First) = '/' then Line (Asked.First + 1 .. Asked.Last)
                   else Line (Asked.First .. Asked.Last));
+               Named : constant String :=
+                 (if Ada.Strings.Fixed.Index (Whole, " ") > 0
+                  then Whole (Whole'First .. Ada.Strings.Fixed.Index (Whole, " ") - 1) else Whole);
                --  The commands a line of help is kept for.
                Known : constant String :=
                  " projects exit reset help settings stats context system tools tool save load"

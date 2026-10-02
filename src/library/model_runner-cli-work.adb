@@ -648,6 +648,12 @@ package body Model_Runner.CLI.Work is
          end;
       end loop;
 
+      --  /work all is all=yes: every task the plan can start.
+      if Ada.Characters.Handling.To_Lower (To_String (Chosen)) = "all" then
+         Chosen := Null_Unbounded_String;
+         Given.Include ("all", "yes");
+      end if;
+
       --  What --set may name, and a sandbox that reads: said before
       --  anything is opened, not found out by an agent confined to nothing.
       for Position in Given.Iterate loop
@@ -685,7 +691,9 @@ package body Model_Runner.CLI.Work is
         and then not R.Has (Config, "map.model." & Given ("profile"))
       then
          declare
-            Known : Unbounded_String;
+            Known : Unbounded_String :=
+              (if R.Has (Config, "map.model.default") then Null_Unbounded_String
+               else To_Unbounded_String ("default (built in)"));
          begin
             for Index in 1 .. R.Field_Count (Config) loop
                if Ada.Strings.Fixed.Index (R.Field_Name (Config, Index), "map.model.") = 1 then
@@ -1240,7 +1248,11 @@ package body Model_Runner.CLI.Work is
                end loop;
             end if;
             --  Written over in the project itself: what was there kept, and
-            --  said -- an edit not committed is not lost without a word.
+            --  said -- an edit not committed is not lost without a word. A
+            --  file the project still holds just so was not written over.
+            if Length (Done.Workspace_Id) = 0 then
+               Model_Runner.Framework.Workspaces.Prune_Kept (Store, "overwritten-" & To_String (Chosen));
+            end if;
             if Length (Done.Workspace_Id) = 0
               and then Model_Runner.Framework.Workspaces.Kept_Copies (Store).Contains
                          ("overwritten-" & To_String (Chosen))
@@ -1418,7 +1430,7 @@ package body Model_Runner.CLI.Work is
                then "in conflict (verification)"
                elsif Final = "verification"
                  and then Model_Runner.Framework.Workspaces.Active_For (Store, To_String (Done.Task_Id)) /= ""
-               then "to integrate (verification)"
+               then "waiting to be integrated (verification)"
                elsif Final = "verification" then "in verification"
                elsif Final = "blocked" and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "you stopped") = 1
                then "stopped"
@@ -1435,7 +1447,12 @@ package body Model_Runner.CLI.Work is
                  (Screen, (if Final = "failed" then "cli.work.failed_because"
                            elsif Final = "complete" then "cli.work.complete_but"
                            else "cli.work.ended_because"),
-                  [Loc.Named ("name", Shown), Loc.Named ("detail", To_String (Done.Reason))],
+                  --  Its parts, as /task show calls them.
+                  [Loc.Named ("name", Shown),
+                   Loc.Named ("detail",
+                              (if Ada.Strings.Fixed.Index (To_String (Done.Reason), "waiting for its children: ") = 1
+                               then "waiting for its parts: " & Slice (Done.Reason, 27, Length (Done.Reason))
+                               else To_String (Done.Reason)))],
                   Shown, (if Shown = "stopped" then Pres.Pending else Pres.Tone_Of (Final)));
             end if;
          end;
@@ -1604,6 +1621,11 @@ package body Model_Runner.CLI.Work is
                                      Loc.Named ("value", "given-up-" & To_String (Done.Task_Id) & "-"
                                                          & To_String (Done.Workspace_Id))]);
                   end if;
+               --  Told already, and outside again: no permission reaches
+               --  there; its model keeps naming whole paths.
+               elsif Ada.Strings.Fixed.Index (To_String (Done.Reason), "outside the project") > 0 then
+                  Pres.Put_Note (Screen, "cli.next.refused_outside_again",
+                                 [Loc.Named ("name", To_String (Done.Task_Id))]);
                elsif Ada.Strings.Fixed.Index (To_String (Done.Reason), "sandbox") > 0 then
                   Pres.Put_Note (Screen, "cli.next.sandbox_refused",
                                  [Loc.Named ("name", To_String (Done.Task_Id))]);

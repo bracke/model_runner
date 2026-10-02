@@ -455,6 +455,13 @@ package body Model_Runner.CLI.Intents is
 
       --  What a retired decision governed is governed no more: said, with
       --  what the setting is now, or what governs it still.
+      --  A ruling's value without what it holds over.
+      function Ruled_Value (Said : String) return String is
+         Over : constant Natural := Ada.Strings.Fixed.Index (Said, " (over ");
+      begin
+         return (if Over = 0 then Said else Said (Said'First .. Over - 1));
+      end Ruled_Value;
+
       procedure Say_Ruling_Gone (Id, Governed : String) is
       begin
          if Governed /= "" and then Ada.Strings.Fixed.Index (Governed, " = ") > 0 then
@@ -493,7 +500,12 @@ package body Model_Runner.CLI.Intents is
                                         (Setting, Model_Runner.Framework.Records.Get (Config, Setting))))]);
                --  What the ruling wrote into the configuration stays there:
                --  said, with how it changes.
-               if Model_Runner.Framework.Records.Has (Config, Setting) then
+               --  Only where it did write it: the configuration holding
+               --  what it ruled.
+               if Model_Runner.Framework.Records.Has (Config, Setting)
+                 and then Model_Runner.Framework.Records.Get (Config, Setting)
+                          = Ruled_Value (Governed (Ada.Strings.Fixed.Index (Governed, " = ") + 3 .. Governed'Last))
+               then
                   Pres.Put_Note (Screen, "cli.intent.ruling_value_stays",
                                  [Loc.Named ("name", Setting)]);
                end if;
@@ -1062,8 +1074,13 @@ package body Model_Runner.CLI.Intents is
                         E.Add_Text (Status, "detail", Word (2) & " was made by hand; it has no document to"
                                     & " take words from, and text=... revises it");
                      elsif not Ada.Directories.Exists (Path) then
-                        Status := E.Make (E.Framework_Not_Found);
-                        E.Add_Text (Status, "name", "the document " & Word (2) & " came from");
+                        --  Gone: no words to take, and how it is retired.
+                        Status := E.Make (E.Framework_Input_Invalid);
+                        E.Add_Text (Status, "name", "from-document");
+                        E.Add_Text (Status, "value", Word (2));
+                        E.Add_Text (Status, "detail", To_String (Held.Source) & ", which " & Word (2)
+                                    & " came from, is gone from the project; " & Word_Of_Command (Kind)
+                                    & " obsolete " & Word (2) & " retires it, and text=... revises it by hand");
                      else
                         Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
                         while not Ada.Text_IO.End_Of_File (File) loop
@@ -1799,6 +1816,16 @@ package body Model_Runner.CLI.Intents is
             end;
          end if;
 
+      --  A requirement says what is wanted, not how the harness runs: a
+      --  ruling on a setting is a decision's, or a specification's.
+      elsif Action = "govern" and then Nt."=" (Kind, Nt.Requirement) then
+         Status := E.Make (E.Framework_Input_Invalid);
+         E.Add_Text (Status, "name", "what a requirement does");
+         E.Add_Text (Status, "value", "govern");
+         E.Add_Text (Status, "detail", "a requirement rules on no setting; /decision govern ID SETTING RULING"
+                     & " does, a decision saying why");
+         Pres.Report (Screen, Status);
+         return;
       elsif Action = "govern"
         and then (Natural (Plain.Length) = 3 or else (Natural (Plain.Length) = 4 and then Lower (Word (4)) = "none"))
       then
@@ -1831,8 +1858,22 @@ package body Model_Runner.CLI.Intents is
                E.Add_Text (Status, "name", "a setting " & Word (2) & " governs");
                E.Add_Text (Status, "value", Word (3));
                E.Add_Text (Status, "detail",
-                           (if Listed = Null_Unbounded_String then Word (2) & " governs none"
-                            else "it governs " & To_String (Listed)));
+                           (if Listed = Null_Unbounded_String then Word (2) & " rules on no setting"
+                            else "it rules on " & To_String (Listed) & " only")
+                           & ", and none takes a ruling it has off"
+                           & (if Ada.Strings.Fixed.Index (Word (3), "map.permission.") = 1
+                                and then not (for some One in Model_Runner.Framework.Permissions.Capability =>
+                                                Ada.Strings.Fixed.Tail
+                                                  (Word (3), Model_Runner.Framework.Permissions.Word (One)'Length + 1)
+                                                = "." & Model_Runner.Framework.Permissions.Word (One))
+                              then "; that a level grants nothing is ruled a capability at a time, as "
+                                   & Word_Of_Command (Kind) & " govern " & Word (2) & " " & Word (3)
+                                   & ".write_source off, or set by /reconfigure " & Word (3) & "=none"
+                              elsif Listed /= Null_Unbounded_String
+                              then "; " & Word_Of_Command (Kind) & " govern " & Word (2) & " SETTING none takes one"
+                                   & " of those off, and " & Word_Of_Command (Kind)
+                                   & " new TITLE text=... makes another to rule on " & Word (3)
+                              else ""));
                Pres.Report (Screen, Status);
                return;
             end if;
@@ -2006,9 +2047,22 @@ package body Model_Runner.CLI.Intents is
             end;
          end if;
          if E.Is_Ok (Status) then
-            Nt.Govern (Store, Change, Kind, Word (2), To_String (Governed_Setting), From (4), Given ("overrides"),
-                       Status);
-            Settle (Store, Change, Status, Screen, "", Word (2));
+            declare
+               --  The ruling it had on the setting, which this one replaces.
+               Before : constant String := Nt.Governs (Store, Kind, Word (2));
+               Prefix : constant String := To_String (Governed_Setting) & " = ";
+            begin
+               Nt.Govern (Store, Change, Kind, Word (2), To_String (Governed_Setting), From (4), Given ("overrides"),
+                          Status);
+               Settle (Store, Change, Status, Screen, "", Word (2));
+               if E.Is_Ok (Status) and then Ada.Strings.Fixed.Index (Before, Prefix) = Before'First
+                 and then Before'Length > Prefix'Length
+               then
+                  Pres.Put_Note (Screen, "cli.intent.ruling_replaced",
+                                 [Loc.Named ("name", Word (2)),
+                                  Loc.Named ("value", Before (Before'First + Prefix'Length .. Before'Last))]);
+               end if;
+            end;
             if E.Is_Ok (Status) then
                --  Only an accepted one governs; one waiting will once it is.
                Pres.Put_Message (Screen, (if Nt.State_Of (Store, Kind, Word (2)) = "accepted"
