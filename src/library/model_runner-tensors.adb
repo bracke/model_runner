@@ -1,12 +1,26 @@
 with Ada.Unchecked_Deallocation;
 
 with Interfaces;
+with System.Atomic_Operations.Modular_Arithmetic;
 
 with Model_Runner.Arithmetic;
 with Model_Runner.Quantization;
 with Model_Runner.Quantization.Interleave;
 
 package body Model_Runner.Tensors is
+
+   --  The rows the fallback read out of their panels, every task's.
+   type Row_Count is mod 2 ** 64
+     with Atomic;
+   Fallback_Count : aliased Row_Count := 0;
+   package Counting is new System.Atomic_Operations.Modular_Arithmetic (Row_Count);
+
+   -------------------
+   -- Fallback_Rows --
+   -------------------
+
+   function Fallback_Rows return Natural
+   is (Natural (Row_Count'Min (Fallback_Count, Row_Count (Natural'Last))));
 
    use type System.Address;
 
@@ -338,6 +352,7 @@ package body Model_Runner.Tensors is
             Alone    : B.Byte_Array (0 .. Row_Span - 1);
             Taken    : Boolean;
          begin
+            Counting.Atomic_Add (Fallback_Count, 1);
             Model_Runner.Quantization.Interleave.Extract_Row
               (Format => Item.Format,
                Source => Held,
@@ -432,6 +447,7 @@ package body Model_Runner.Tensors is
             Alone    : B.Byte_Array (0 .. Row_Span - 1);
             Taken    : Boolean;
          begin
+            Counting.Atomic_Add (Fallback_Count, 1);
             Model_Runner.Quantization.Interleave.Extract_Row
               (Format => Item.Format,
                Source => Held,
@@ -584,6 +600,7 @@ package body Model_Runner.Tensors is
             Alone    : B.Byte_Array (0 .. Row_Span - 1);
             Taken    : Boolean;
          begin
+            Counting.Atomic_Add (Fallback_Count, Row_Count (Last - First + 1));
             for Row in First .. Last loop
                Sums := [others => 0.0];
 

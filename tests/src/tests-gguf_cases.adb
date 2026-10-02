@@ -2100,8 +2100,15 @@ package body Tests.GGUF_Cases is
         (Vectors, Count, Columns, Values, Scales, Totals, Halves, Ok);
       Assert (Ok, "the activations could not be quantized");
 
-      Model_Runner.Tensors.Mat_Mul_Range
-        (Item, Vectors, Count, Floated, 0, Rows - 1);
+      declare
+         Fallen_Before : constant Natural := Model_Runner.Tensors.Fallback_Rows;
+      begin
+         Model_Runner.Tensors.Mat_Mul_Range
+           (Item, Vectors, Count, Floated, 0, Rows - 1);
+         --  A matrix in rows is read where it lies: no fallback counted.
+         Assert (Model_Runner.Tensors.Fallback_Rows = Fallen_Before,
+                 "a product over rows was counted as the panels' fallback");
+      end;
       Model_Runner.Tensors.Mat_Mul_Range_Packed
         (Item, Values, Scales, Totals, Halves, Count, Packed, 0, Rows - 1,
          Handled);

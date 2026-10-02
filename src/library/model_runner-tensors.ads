@@ -328,6 +328,13 @@ package Model_Runner.Tensors is
       First   : Element_Count;
       Last    : Element_Count);
 
+   --  How many rows were read out of their panels to be computed the
+   --  ordinary way -- the readers' fallback, a missing kernel where it
+   --  happens in a token -- since the program started.
+   --
+   --  @return The count; zero where every product had its kernel.
+   function Fallback_Rows return Natural;
+
    --  The same product with the activations already quantized to a byte.
    --
    --  Row for row this computes what Mat_Mul_Range computes against

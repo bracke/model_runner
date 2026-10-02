@@ -22,6 +22,7 @@ with Model_Runner.Clocks;
 with Model_Runner.Conversation;
 with Model_Runner.Entropy;
 with Model_Runner.GGUF;
+with Model_Runner.Quantization.Integers;
 with Model_Runner.Quantization;
 with Model_Runner.Quantization.Interleave;
 with Model_Runner.GGUF.Containers.Reader;
@@ -2673,6 +2674,37 @@ package body Model_Runner.CLI.Execute is
          return Item;
    end Resolved_Backend;
 
+   --  A run on the processor with no rewrite asked for: its weights in
+   --  panels, where this processor has the kernels that read them, the
+   --  model is one panels cover and it fits in what memory is free.
+   --  Without them Q2_K, Q3_K and the four-bit lookups run on the
+   --  floating-point path: TinyLlama Q2_K generates 12 tokens a second as
+   --  stored and 73 in panels.
+   function With_Panels (Item : Opt.Command) return Opt.Command is
+      Result : Opt.Command := Item;
+      Path   : constant String :=
+        Model_Runner.Platform.Resolve_Model_Path (T.To_String (Item.Model_Path));
+      Weights : constant Interfaces.Unsigned_64 :=
+        (if Ada.Directories.Exists (Path) then Interfaces.Unsigned_64 (Ada.Directories.Size (Path)) else 0);
+   begin
+      if Model_Runner.Backend."=" (Item.Backend, Model_Runner.Backend.Backend_CPU)
+        and then L."=" (Item.Repack, L.No_Repack)
+        and then T.Is_Empty (Item.Adapter_Path)
+        and then Model_Runner.Quantization.Integers.Has_Integer_Kernel
+                   (Model_Runner.GGUF.Type_Q2_K, Interleaved => True)
+        and then Weights > 0
+        --  The panels are held, the file's pages only cached and given back:
+        --  room for the panels and a margin is what it takes.
+        and then Interfaces."<=" (Interfaces."+" (Weights, 2 ** 30), Model_Runner.Platform.Available_Memory)
+      then
+         Result.Repack := L.To_Rows;
+      end if;
+      return Result;
+   exception
+      when others =>
+         return Item;
+   end With_Panels;
+
    procedure Do_Run
      (Item    : Opt.Command;
       Screen  : in out Pres.Console;
@@ -4596,6 +4628,13 @@ package body Model_Runner.CLI.Execute is
                else
                   Pres.Put_Statistics (Screen, Outcome);
                end if;
+               --  Rows a product read out of their panels, a kernel missing:
+               --  said where there were any, as a cost a token should not pay.
+               if Model_Runner.Tensors.Fallback_Rows > 0 then
+                  Pres.Put_Note (Screen, "cli.run.fallback_rows",
+                                 [Loc.Named ("count", T.Image (Long_Long_Integer
+                                                                 (Model_Runner.Tensors.Fallback_Rows)))]);
+               end if;
             end if;
 
             Free_Text (Prompt);
@@ -5757,7 +5796,7 @@ package body Model_Runner.CLI.Execute is
                begin
                   Choose_Model (Screen, Chosen.Model_Path, Picked);
                   if Picked then
-                     Do_Run (Resolved_Backend (Chosen, Screen), Screen,
+                     Do_Run (With_Panels (Resolved_Backend (Chosen, Screen)), Screen,
                              Catalog, Status);
                   else
                      Pres.Report (Screen, E.Make (E.CLI_Missing_Model_Path));
@@ -5765,7 +5804,7 @@ package body Model_Runner.CLI.Execute is
                   end if;
                end;
             else
-               Do_Run (Resolved_Backend (Item, Screen), Screen, Catalog,
+               Do_Run (With_Panels (Resolved_Backend (Item, Screen)), Screen, Catalog,
                        Status);
             end if;
 
