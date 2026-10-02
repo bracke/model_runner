@@ -1533,8 +1533,8 @@ package body Model_Runner.Framework.Workspaces is
                   null;
             end;
          end loop;
-         --  The same as a copy kept of an earlier attempt: that one says it,
-         --  and a second is no more.
+         --  The same as a copy kept of an earlier attempt: this one, which
+         --  what is said now names, is kept, and the earlier goes.
          declare
             Mine : constant String := Dirs.Simple_Name (Into);
          begin
@@ -1546,7 +1546,7 @@ package body Model_Runner.Framework.Workspaces is
                              Print_Of (Hostkit.Fs.Join (Into, Path))
                              = Print_Of (Hostkit.Fs.Join (Hostkit.Fs.Join (Runtime_Of (Item), Other), Path)))
                then
-                  Files.Remove_Tree (Into);
+                  Files.Remove_Tree (Hostkit.Fs.Join (Runtime_Of (Item), Other));
                end if;
             end loop;
          end;

@@ -1090,6 +1090,22 @@ package body Model_Runner.CLI.Choosers is
          Line  : constant String := To_String (Text);
       begin
          Ghost := Null_Unbounded_String;
+         --  A line typed before that this one begins, the newest: the rest
+         --  of it, as it was typed.
+         if Complete /= null and then Line /= "" and then Cursor = Line'Length and then Line (Line'First) = '/' then
+            for Index in reverse 1 .. Natural (History.Length) loop
+               declare
+                  Earlier : constant String := History (Index);
+               begin
+                  if Earlier'Length > Line'Length
+                    and then Earlier (Earlier'First .. Earlier'First + Line'Length - 1) = Line
+                  then
+                     Ghost := To_Unbounded_String (Earlier (Earlier'First + Line'Length .. Earlier'Last));
+                     return;
+                  end if;
+               end;
+            end loop;
+         end if;
          --  Only at the end of the line, a word begun, and only for the
          --  command and its action: the words a person types most.
          if Complete = null or else Line = "" or else Cursor /= Line'Length or else Line (Line'Last) = ' '
@@ -1464,8 +1480,25 @@ package body Model_Runner.CLI.Choosers is
                                  Show_History (Looking);
                               end if;
                            when 'C' =>
-                              --  At the end, with a suggestion: taken.
-                              if Cursor = Length (Text) and then Ghost /= Null_Unbounded_String then
+                              --  At the end, with a suggestion: taken -- with
+                              --  Ctrl or Alt, only its next word.
+                              if Number in 13 | 15 and then Cursor = Length (Text)
+                                and then Ghost /= Null_Unbounded_String
+                              then
+                                 declare
+                                    Rest : constant String := To_String (Ghost);
+                                    Upto : Natural := Rest'First;
+                                 begin
+                                    while Upto <= Rest'Last and then Rest (Upto) = ' ' loop
+                                       Upto := Upto + 1;
+                                    end loop;
+                                    while Upto <= Rest'Last and then Rest (Upto) /= ' ' loop
+                                       Upto := Upto + 1;
+                                    end loop;
+                                    Append (Text, Rest (Rest'First .. Upto - 1));
+                                    Cursor := Length (Text);
+                                 end;
+                              elsif Cursor = Length (Text) and then Ghost /= Null_Unbounded_String then
                                  Append (Text, Ghost);
                                  Cursor := Length (Text);
                               else

@@ -176,17 +176,23 @@ package body Model_Runner.Framework.Consistency is
                 "its lease has run out: /state, or any command that changes the project, lets it go");
       end loop;
 
-      --  A task that waits on its parts, one of which failed or ended
-      --  undone: it waits for ever unless a person acts.
+      --  A task that waits on its parts, one of which failed: it waits for
+      --  ever unless a person acts. A part cancelled or rejected is gone
+      --  on without; one blocked otherwise -- not for its parts -- waits
+      --  on no part.
       for Id of Tasks.List (Item, "blocked") loop
-         for Child of Tasks.Children (Item, Id) loop
-            if Tasks.State_Of (Item, Child) in "failed" | "cancelled" | "rejected" then
-               Found (Waits_On_Ended_Part, Id,
-                      "it waits for its parts, and " & Child & " is " & Tasks.State_Of (Item, Child)
-                      & ": /task accept " & Child & " does it again, or /task accept " & Id
-                      & " takes the whole up again");
-            end if;
-         end loop;
+         if (for some Reason of Tasks.Ready (Item, Id).Reasons =>
+               Ada.Strings.Fixed.Index (Reason, "waiting for its children") > 0)
+         then
+            for Child of Tasks.Children (Item, Id) loop
+               if Tasks.State_Of (Item, Child) = "failed" then
+                  Found (Waits_On_Ended_Part, Id,
+                         "it waits for its parts, and " & Child & " failed: /task accept " & Child
+                         & " tries it again, /task cancel " & Child & " goes on without it, or /task accept "
+                         & Id & " takes the whole up again");
+               end if;
+            end loop;
+         end if;
       end loop;
 
       --  A requirement depended on is one there is.
@@ -491,22 +497,32 @@ package body Model_Runner.Framework.Consistency is
                      end loop;
                      return Result;
                   end Kind_Asks;
+                  Asked_Set : constant Permissions.Permission_Set :=
+                    (if E.Is_Error (Read) then Permissions.Nothing
+                     elsif Records.Get (Defined, "permissions") /= ""
+                       and then not Permissions.Only_Withholds (Records.Get (Defined, "permissions"))
+                     then Asked_Of (Records.Get (Defined, "permissions"))
+                     elsif Present then Kind_Asks
+                     else Permissions.Nothing);
+                  Project_Set : constant Permissions.Permission_Set :=
+                    Permissions.Effective (Item, "", "", Within_Sandbox => False);
                   Withheld : constant String :=
-                    (if E.Is_Error (Read) then ""
-                     else Permissions.Clipped
-                            ((if Records.Get (Defined, "permissions") /= ""
-                                and then not Permissions.Only_Withholds (Records.Get (Defined, "permissions"))
-                              then Asked_Of (Records.Get (Defined, "permissions"))
-                              elsif Present then Kind_Asks
-                              else Permissions.Nothing),
-                             Permissions.Effective (Item, "", "", Within_Sandbox => False)));
+                    (if E.Is_Error (Read) then "" else Permissions.Clipped (Asked_Set, Project_Set));
+                  --  Granted by the project, only narrower: its bounds or
+                  --  roots are what widen it, not turning it on.
+                  Only_Narrower : constant Boolean :=
+                    (for all One in Permissions.Capability =>
+                       not Asked_Set (One).Granted or else Project_Set (One).Granted);
                begin
                   if Withheld /= "" then
                      Found (Permission_Widening, Id,
                             "it asks for what the project withholds -- " & Withheld
                             & "; nothing below the project is given more, so it cannot have it:"
                             & " /config permission.project shows the project's, and /reconfigure"
-                            & " map.permission.project.CAPABILITY=on grants one");
+                            & (if Only_Narrower
+                               then " map.permission.project.CAPABILITY=... with wider roots or bounds"
+                                    & " (create_children=max_depth=N max_children=N) widens it there"
+                               else " map.permission.project.CAPABILITY=on grants one"));
                      goto Next_Task;
                   end if;
                end;

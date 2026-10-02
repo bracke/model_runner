@@ -326,11 +326,21 @@ package body Model_Runner.Framework.Configurations is
       Status   : out Model_Runner.Errors.Error_Info)
    is
       procedure Refuse (Detail : String) is
+         --  A name refused: the one nearest it that would do, said.
+         Near  : constant String :=
+           (if Declared.Kind in Templates.Identifier_Input | Templates.Crate_Input
+            then Nearest_Identifier (Value, Declared.Kind = Templates.Crate_Input) else "");
+         Takes : E.Error_Info := E.Success;
       begin
+         if Near /= "" and then Near /= Value then
+            Check_Input (Declared, Near, Takes);
+         end if;
          Status := E.Make (E.Framework_Input_Invalid);
          E.Add_Text (Status, "name", To_String (Declared.Id));
          E.Add_Text (Status, "value", Value);
-         E.Add_Text (Status, "detail", Detail);
+         E.Add_Text (Status, "detail", Detail
+                     & (if Near /= "" and then Near /= Value and then E.Is_Ok (Takes)
+                        then "; " & Near & " would do" else ""));
       end Refuse;
    begin
       Status := E.Success;
@@ -1644,8 +1654,10 @@ package body Model_Runner.Framework.Configurations is
             end loop;
          end;
       --  A kind's or a role's level whole: none of it, or the level above's.
-      elsif (Starts (Name, "map.permission.kind.") or else Starts (Name, "map.permission.role."))
-        and then Ada.Strings.Fixed.Count (Name (Name'First + 20 .. Name'Last), ".") = 0
+      elsif (((Starts (Name, "map.permission.kind.") or else Starts (Name, "map.permission.role."))
+              and then Ada.Strings.Fixed.Count (Name (Name'First + 20 .. Name'Last), ".") = 0)
+             --  The project's whole too: each capability off, or its default.
+             or else Name = "map.permission.project")
         and then Value in "none" | "inherit"
       then
          null;
@@ -1658,13 +1670,22 @@ package body Model_Runner.Framework.Configurations is
          begin
             Permissions.Restriction
               (Name (Last_Dot + 1 .. Name'Last) & ": " & Value, Level, Read);
+            --  Bounds of nothing: no helper made, so withheld in all but name.
+            if E.Is_Ok (Read) and then Name (Last_Dot + 1 .. Name'Last) = "create_children"
+              and then (Ada.Strings.Fixed.Index (Value & " ", "max_depth=0 ") > 0
+                        or else Ada.Strings.Fixed.Index (Value & " ", "max_children=0 ") > 0)
+            then
+               return "a bound of 0 lets it make no helper -- " & Name & "=off withholds it so, and"
+                 & " max_depth=1 lets it make helpers that make none";
+            end if;
             if E.Is_Error (Read)
               and then Name (Last_Dot + 1 .. Name'Last) in "project" | "kind" | "role" | "task"
             then
                --  A whole level at once: each of its capabilities is set.
                return "a level is not set whole: set each capability as " & Name
                  & ".CAPABILITY=..., as " & Name & ".read_source=off"
-                 & (if Name = "map.permission.project" then "" else ", or " & Name & "=none or =inherit");
+                 & ", or " & Name & "=none to withhold all, " & Name & "=inherit for "
+                 & (if Name = "map.permission.project" then "the defaults" else "the level above's");
             elsif E.Is_Error (Read)
               and then (Starts (Name, "map.permission.kind.") or else Starts (Name, "map.permission.role."))
               and then Ada.Strings.Fixed.Count (Name (Name'First + 20 .. Name'Last), ".") = 0
@@ -2088,6 +2109,16 @@ package body Model_Runner.Framework.Configurations is
 
    function Meaning_Of (Name : String) return String is
    begin
+      --  A kind's own limit: the agents' one, for that kind, over it.
+      for Limit of Name_Lists.Vector'(["max_seconds", "max_tool_calls", "max_steps", "token_budget"]) loop
+         if Starts (Name, "scalar.task." & Limit & ".")
+           and then Name'Length > 13 + Limit'Length
+           and then Meaning_Of ("scalar.agents." & Limit) /= ""
+         then
+            return Meaning_Of ("scalar.agents." & Limit) & " -- for tasks of kind "
+              & Name (Name'First + 13 + Limit'Length .. Name'Last) & ", over agents." & Limit;
+         end if;
+      end loop;
       if Name = "list.automation.rules" then
          return "rules run when something happens, one a line: WHEN -> DO";
       elsif Name = "list.verification.full" then
@@ -2224,6 +2255,14 @@ package body Model_Runner.Framework.Configurations is
               and then Ada.Strings.Fixed.Count (Name (Name'First + 20 .. Name'Last), ".") = 0
             then
                Normal.Include (Name, "inherit");
+            --  The project's level whole -- none, or inherit: the harness's
+            --  defaults -- is each of its capabilities so.
+            elsif Name = "map.permission.project" and then Value_Maps.Element (Position) in "none" | "inherit" then
+               Normal.Delete (Name);
+               for One in Permissions.Capability loop
+                  Normal.Include ("map.permission.project." & Permissions.Word (One),
+                                  (if Value_Maps.Element (Position) = "none" then "off" else "inherit"));
+               end loop;
             end if;
          end;
       end loop;
@@ -2810,7 +2849,7 @@ package body Model_Runner.Framework.Configurations is
                      end if;
                   end loop;
                end if;
-               return (if Found = Null_Unbounded_String then "" else "; did you mean " & To_String (Found));
+               return (if Found = Null_Unbounded_String then "" else "; did you mean " & To_String (Found) & "?");
             end Near;
          begin
             if Starts (Name, "input.")
@@ -3274,10 +3313,16 @@ package body Model_Runner.Framework.Configurations is
                  (Name & ": "
                   & (if Old = "" and then (for some Known of Known_Settings => Known.all = Name)
                      then Not_Set (Name)
+                     --  The model profile built in: there before it is written.
+                     elsif Old = "" and then Name = "map.model.default"
+                     then "(built in: context=8192, reserve=1024, overhead=0, tools=no, structured=yes,"
+                          & " reasoning=no, streaming=yes, parallel=no)"
                      elsif Old = "" then "(none)" else On_One_Line (Old)) & " -> "
                   & (if Value = "" and then (for some Known of Known_Settings => Known.all = Name)
                      then Not_Set (Name)
-                     elsif Value = "" then "(none)" else On_One_Line (Value)));
+                     elsif Value = "" then "(none)"
+                     elsif Starts (Name, "map.model.") then On_One_Line (Value) & " (what it does not name as built in)"
+                     else On_One_Line (Value)));
                <<Changed_Said>>
                if not Result.Impact.Contains (Reach (Name)) then
                   Result.Impact.Append (Reach (Name));

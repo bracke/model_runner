@@ -15,6 +15,7 @@ with Model_Runner.Errors;
 with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Events;
+with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Bootstrap;
 with Model_Runner.Framework.Intent;
@@ -171,7 +172,17 @@ package body Model_Runner.CLI.Repo is
          if Unread then
             Pres.Put_Message (Screen, "cli.repo.unread_language", [Loc.Named ("name", Argument)]);
          else
-            Pres.Put_Message (Screen, "cli.repo.none", [Loc.Named ("name", Argument)]);
+            --  A file's path, and no such file now: gone, said so -- not as
+            --  a name nothing is called.
+            if Ada.Strings.Fixed.Index (Argument, "/") > 0 and then Ada.Strings.Fixed.Index (Argument, ".") > 0
+              and then not Ada.Directories.Exists (Argument)
+              --  One the history holds: there before; never there is nothing.
+              and then Model_Runner.Framework.Git.Last_Commit_At (".", Argument) /= ""
+            then
+               Pres.Put_Message (Screen, "cli.repo.file_gone", [Loc.Named ("name", Argument)]);
+            else
+               Pres.Put_Message (Screen, "cli.repo.none", [Loc.Named ("name", Argument)]);
+            end if;
             --  A file gone that what is left still uses: named, as what its
             --  going breaks.
             if Action in "impact" | "users" | "deps" and then Ada.Strings.Fixed.Index (Argument, ".") > 0 then
@@ -225,6 +236,9 @@ package body Model_Runner.CLI.Repo is
                   => Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Upper (Argument), Prefix) = 1)
             then
                Pres.Put_Note (Screen, "cli.repo.trace_instead", [Loc.Named ("name", Argument)]);
+            --  A path is a file's, of its own kind: no other language holds it.
+            elsif Ada.Strings.Fixed.Index (Argument, "/") > 0 then
+               null;
             else
                declare
                   Kinds : Unbounded_String;

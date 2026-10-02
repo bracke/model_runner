@@ -310,6 +310,15 @@ package Model_Runner.Framework.Permissions is
    --  @return The value, or "granted, no limits".
    function Value_Said (Subject, Value : String) return String;
 
+   --  The places a grant names -- its roots= and deny= -- that are not in
+   --  the project: each with the directory most like it, where one is.
+   --
+   --  @param Project The project's top directory.
+   --  @param Text The grant, as roots=src/ deny=src/gen/.
+   --  @return As "scr/ (no such directory here; src/ is)", a comma apart;
+   --    empty where every place is there.
+   function Missing_Places (Project, Text : String) return String;
+
    --  Whether a task's permissions only take capabilities away -- each
    --  entry a -CAPABILITY -- leaving the rest as the levels above give it.
    --

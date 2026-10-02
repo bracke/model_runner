@@ -643,11 +643,14 @@ package body Model_Runner.CLI.Init is
                declare
                   Id     : constant String := Cf.Value_Maps.Key (Position);
                   Secret : Boolean := False;
+                  --  As it is asked for, where that is not its name.
+                  Label  : Unbounded_String;
                begin
                   --  A secret is not shown, not even here.
                   for Index in 1 .. Tp.Input_Count (Composed) loop
                      if To_String (Tp.Input_At (Composed, Index).Id) = Id then
                         Secret := Tp.Input_At (Composed, Index).Secret;
+                        Label := Tp.Input_At (Composed, Index).Label;
                      end if;
                   end loop;
                   Say ("cli.init.input",
@@ -656,7 +659,12 @@ package body Model_Runner.CLI.Init is
                                              else Cf.Value_Maps.Element (Position))),
                         Loc.Named ("detail", Described (Id))]);
                   Append (Inputs_Said, (if Inputs_Said = Null_Unbounded_String then "" else ", ")
-                                       & Id & " = "
+                                       & (if Label = Null_Unbounded_String
+                                            or else Ada.Characters.Handling.To_Lower (To_String (Label))
+                                                    = Ada.Strings.Fixed.Translate
+                                                        (Id, Ada.Strings.Maps.To_Mapping ("_", " "))
+                                          then Id else To_String (Label) & " (" & Id & ")")
+                                       & " = "
                                        & (if Secret then Pres.Message_Value (Screen, "cli.init.secret")
                                           else Cf.Value_Maps.Element (Position))
                                        --  The command true is a check of nothing, not a yes.
@@ -778,7 +786,13 @@ package body Model_Runner.CLI.Init is
                  (if Ada.Directories.Exists (Hostkit.Fs.Join (Here, ".git")) then ""
                   else Model_Runner.Framework.Git.Top_Level (Here));
             begin
-               if Top /= "" and then Ada.Directories.Full_Name (Top) /= Here then
+               --  A project there already: this one would be inside it.
+               if Top /= "" and then Ada.Directories.Full_Name (Top) /= Here and then S.Is_Initialized (Top) then
+                  Say ("cli.init.inside_project", [Loc.Named ("path", Top)]);
+                  Append (Warned, Pres.Next_Step_Value
+                                    (Screen, "cli.init.inside_project", [Loc.Named ("path", Top)])
+                                  & ASCII.LF);
+               elsif Top /= "" and then Ada.Directories.Full_Name (Top) /= Here then
                   Say ("cli.init.inside_repository", [Loc.Named ("path", Top)]);
                   Append (Warned, Pres.Next_Step_Value
                                     (Screen, "cli.init.inside_repository", [Loc.Named ("path", Top)])
@@ -900,6 +914,47 @@ package body Model_Runner.CLI.Init is
                                                         Loc.Named ("other", Name),
                                                         Loc.Named ("detail", To_String (Kept))])
                                                     & ASCII.LF);
+                                 end;
+                              end if;
+                              --  npm test where package.json names no test
+                              --  script: npm says so and fails -- said first.
+                              if Why = "" and then Missing = "" and then Natural (Words.Length) >= 2
+                                and then Words.First_Element = "npm" and then Words (2) in "test" | "t"
+                                and then not Refused.Contains (Command)
+                              then
+                                 declare
+                                    Manifest : constant String :=
+                                      Hostkit.Fs.Join (Hostkit.Fs.Join (Directory, To_String (One.Directory)),
+                                                       "package.json");
+                                    File     : Ada.Text_IO.File_Type;
+                                    Has_Test : Boolean := False;
+                                 begin
+                                    if Ada.Directories.Exists (Manifest) then
+                                       Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Manifest);
+                                       while not Ada.Text_IO.End_Of_File (File) loop
+                                          if Ada.Strings.Fixed.Index (Ada.Text_IO.Get_Line (File), """test""") > 0 then
+                                             Has_Test := True;
+                                          end if;
+                                       end loop;
+                                       Ada.Text_IO.Close (File);
+                                       if not Has_Test then
+                                          Refused.Append (Command);
+                                          Say ("cli.init.check_no_script",
+                                               [Loc.Named ("name", To_String (One.Label)),
+                                                Loc.Named ("value", Command), Loc.Named ("path", Manifest)]);
+                                          Append (Warned, Pres.Next_Step_Value
+                                                            (Screen, "cli.init.check_no_script",
+                                                             [Loc.Named ("name", To_String (One.Label)),
+                                                              Loc.Named ("value", Command),
+                                                              Loc.Named ("path", Manifest)])
+                                                          & ASCII.LF);
+                                       end if;
+                                    end if;
+                                 exception
+                                    when others =>
+                                       if Ada.Text_IO.Is_Open (File) then
+                                          Ada.Text_IO.Close (File);
+                                       end if;
                                  end;
                               end if;
                               if Why = "" and then Missing /= "" and then not Refused.Contains (Command) then
@@ -1231,10 +1286,65 @@ package body Model_Runner.CLI.Init is
                Pres.Put_Note (Screen, "cli.next.init_documents",
                               [Loc.Named ("detail", To_String (Listed) & (if Count > 5 then ", ..." else ""))]);
             end if;
+            --  A package of its own below -- a manifest beside its README --
+            --  whose README is not read: named, with how it would be.
+            declare
+               Unread : Unbounded_String;
+
+               procedure Look (Dir : String; Depth : Natural) is
+                  Search : Ada.Directories.Search_Type;
+                  One    : Ada.Directories.Directory_Entry_Type;
+                  Top    : constant String := Ada.Directories.Full_Name (Directory);
+                  Rel    : constant String :=
+                    (if Dir'Length > Top'Length + 1 then Dir (Dir'First + Top'Length + 1 .. Dir'Last) else "");
+               begin
+                  if Depth > 0
+                    and then (for some Manifest of Model_Runner.Framework.Name_Lists.Vector'
+                                (["package.json", "Cargo.toml", "go.mod", "alire.toml", "pyproject.toml"]) =>
+                                Ada.Directories.Exists (Hostkit.Fs.Join (Dir, Manifest)))
+                    and then Ada.Directories.Exists (Hostkit.Fs.Join (Dir, "README.md"))
+                    and then not Found.Contains (Rel & "/README.md")
+                  then
+                     Append (Unread, (if Unread = Null_Unbounded_String then "" else " ") & Rel & "/README.md");
+                  end if;
+                  if Depth >= 3 then
+                     return;
+                  end if;
+                  Ada.Directories.Start_Search (Search, Dir, "", [Ada.Directories.Directory => True, others => False]);
+                  while Ada.Directories.More_Entries (Search) loop
+                     Ada.Directories.Get_Next_Entry (Search, One);
+                     declare
+                        Simple : constant String := Ada.Directories.Simple_Name (One);
+                     begin
+                        if Simple (Simple'First) /= '.'
+                          and then Simple not in "node_modules" | "target" | "obj" | "bin" | "alire" | "build"
+                                               | "dist" | "venv" | "__pycache__"
+                        then
+                           Look (Ada.Directories.Full_Name (One), Depth + 1);
+                        end if;
+                     end;
+                  end loop;
+                  Ada.Directories.End_Search (Search);
+               exception
+                  when others =>
+                     null;
+               end Look;
+            begin
+               Look (Ada.Directories.Full_Name (Directory), 0);
+               if Unread /= Null_Unbounded_String then
+                  Pres.Put_Note (Screen, "cli.next.init_packages_unread", [Loc.Named ("detail", To_String (Unread))]);
+               end if;
+            end;
          end;
       end if;
       --  Started elsewhere: each of those in the directory it names.
-      if not T.Is_Empty (Item.Project_Directory) then
+      if not T.Is_Empty (Item.Project_Directory)
+        --  A session with no project of its own, inside the one made: it
+        --  goes on there, said so -- no need to start another.
+        and then not (Pres.In_Session (Screen) and then not S.Is_Initialized (Ada.Directories.Current_Directory)
+                      and then Ada.Strings.Fixed.Index (Ada.Directories.Current_Directory & "/",
+                                                        Ada.Directories.Full_Name (Directory) & "/") = 1)
+      then
          Pres.Put_Note
            (Screen,
             (if Pres.In_Session (Screen) then "cli.next.in_directory_session"

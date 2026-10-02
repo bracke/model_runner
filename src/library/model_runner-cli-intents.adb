@@ -49,8 +49,10 @@ package body Model_Runner.CLI.Intents is
    function From_Start (Project, Word : String) return String is
       Below : constant String := Model_Runner.CLI.Project_Commands.Started_Below;
    begin
+      --  From where it was started first, as Tab and /impact take it.
       if Below = "" or else Word = "" or else Word (Word'First) = '/'
-        or else Ada.Directories.Exists (Hostkit.Fs.Join (Project, Word))
+        or else (Ada.Directories.Exists (Hostkit.Fs.Join (Project, Word))
+                 and then not Ada.Directories.Exists (Hostkit.Fs.Join (Hostkit.Fs.Join (Project, Below), Word)))
       then
          return Word;
       end if;
@@ -738,6 +740,9 @@ package body Model_Runner.CLI.Intents is
             Pres.Hold_Next_Steps (Screen, False);
             if Ada.Strings.Fixed.Index (To_String (Collected), " ") > 0 then
                Pres.Put_Note (Screen, "cli.next.accept_tasks", [Loc.Named ("detail", To_String (Collected))]);
+            elsif Collected /= Null_Unbounded_String and then Marked_Done (Store, To_String (Collected)) then
+               --  Its document marks it done: taken as done, not done again.
+               Pres.Put_Note (Screen, "cli.next.accept_marked_done", [Loc.Named ("name", To_String (Collected))]);
             elsif Collected /= Null_Unbounded_String then
                Pres.Put_Note (Screen, "cli.next.accept_task", [Loc.Named ("name", To_String (Collected))]);
             end if;
@@ -1976,7 +1981,7 @@ package body Model_Runner.CLI.Intents is
                            (if Listed = Null_Unbounded_String then Word (2) & " rules on no setting"
                             else "it rules on " & To_String (Listed) & " only")
                            & ", and none takes a ruling it has off"
-                           & (if Ada.Strings.Fixed.Index (Word (3), "map.permission.") = 1
+                           & (if Ada.Strings.Fixed.Index (Word (3), "map.permission.") = Word (3)'First
                                 and then not (for some One in Model_Runner.Framework.Permissions.Capability =>
                                                 Ada.Strings.Fixed.Tail
                                                   (Word (3), Model_Runner.Framework.Permissions.Word (One)'Length + 1)
@@ -1985,7 +1990,7 @@ package body Model_Runner.CLI.Intents is
                                    & Word_Of_Command (Kind) & " govern " & Word (2) & " " & Word (3)
                                    & ".write_source off, or set by /reconfigure " & Word (3) & "=none"
                               --  A capability: withheld is ruled off, not none.
-                              elsif Ada.Strings.Fixed.Index (Word (3), "map.permission.") = 1
+                              elsif Ada.Strings.Fixed.Index (Word (3), "map.permission.") = Word (3)'First
                               then "; that it is withheld is ruled off: " & Word_Of_Command (Kind) & " govern "
                                    & Word (2) & " " & Word (3) & " off"
                               elsif Listed /= Null_Unbounded_String
@@ -2035,6 +2040,10 @@ package body Model_Runner.CLI.Intents is
                      if Model_Runner.Framework.Records.Has (Config, Prefix & Word (3))
                        or else Model_Runner.Framework.Configurations.Known_Names.Contains
                                  (Prefix & Word (3))
+                       --  A level or capability of it, as /config takes it:
+                       --  permission.project.use_network.
+                       or else (Prefix = "map."
+                                and then Ada.Strings.Fixed.Index (Word (3), "permission.") = Word (3)'First)
                        --  A kind's own limit, as /reconfigure takes it: task.max_steps.test.
                        or else (Prefix = "scalar."
                                 and then (for some Limit of Names.Vector'
@@ -2181,6 +2190,19 @@ package body Model_Runner.CLI.Intents is
                           Status);
                Settle (Store, Change, Status, Screen, "", Word (2));
                if E.Is_Ok (Status) and then Ada.Strings.Fixed.Index (Before, Prefix) = Before'First
+                 and then Before'Length > Prefix'Length
+                 --  The same ruling, now over another source: said as that.
+                 and then Before (Before'First + Prefix'Length
+                                  .. (if Ada.Strings.Fixed.Index (Before, " (over ") > 0
+                                      then Ada.Strings.Fixed.Index (Before, " (over ") - 1 else Before'Last))
+                          = From (4)
+               then
+                  if Given ("overrides") /= "" then
+                     Pres.Put_Note (Screen, "cli.intent.ruling_now_over",
+                                    [Loc.Named ("name", Word (2)), Loc.Named ("value", From (4)),
+                                     Loc.Named ("other", Given ("overrides"))]);
+                  end if;
+               elsif E.Is_Ok (Status) and then Ada.Strings.Fixed.Index (Before, Prefix) = Before'First
                  and then Before'Length > Prefix'Length
                then
                   Pres.Put_Note (Screen, "cli.intent.ruling_replaced",
@@ -2381,6 +2403,29 @@ package body Model_Runner.CLI.Intents is
                                  end if;
                               end;
                            end loop;
+                           --  A document that is one decision or specification
+                           --  whole -- an ADR -- is known by its words, which
+                           --  changed: the one of its kind it holds now.
+                           if Said_Now = Null_Unbounded_String and then Kind in Nt.Decision | Nt.Specification then
+                              declare
+                                 package Bs renames Model_Runner.Framework.Bootstrap;
+                                 Wanted : constant Bs.Output_Kind :=
+                                   (if Nt."=" (Kind, Nt.Decision) then Bs.Decision_Candidate
+                                    else Bs.Specification_Candidate);
+                                 Count  : Natural := 0;
+                                 Last   : Unbounded_String;
+                              begin
+                                 for Index in 1 .. Bs.Length (Found) loop
+                                    if Bs."=" (Bs.Element (Found, Index).Kind, Wanted) then
+                                       Count := Count + 1;
+                                       Last := Bs.Element (Found, Index).Text;
+                                    end if;
+                                 end loop;
+                                 if Count = 1 and then Last /= Held.Text then
+                                    Said_Now := Last;
+                                 end if;
+                              end;
+                           end if;
                         end;
                         if Said_Now /= Null_Unbounded_String then
                            Item ("its document says", To_String (Said_Now) & " -- " & Word_Of_Command (Kind)

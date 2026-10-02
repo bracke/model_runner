@@ -1333,7 +1333,7 @@ package body Model_Runner.Framework.Work is
       --  NAME VALUE, joined; the name without so much of it as Kept says
       --  not to keep.
       function Fields_With
-        (Value : Records.Item; Prefix : String; Kept : Natural := 0) return String
+        (Value : Records.Item; Prefix : String; Kept : Natural := 0; Between : String := " ") return String
       is
          Text : Unbounded_String;
       begin
@@ -1345,7 +1345,7 @@ package body Model_Runner.Framework.Work is
                  and then Field (Field'First .. Field'First + Prefix'Length - 1) = Prefix
                then
                   Append (Text, (if Text = Null_Unbounded_String then "" else ", ")
-                          & Field (Field'First + Prefix'Length - Kept .. Field'Last) & " "
+                          & Field (Field'First + Prefix'Length - Kept .. Field'Last) & Between
                           & Records.Get (Value, Field));
                end if;
             end;
@@ -1407,11 +1407,11 @@ package body Model_Runner.Framework.Work is
          end if;
          Say ("worked", "never");
       else
-         Say ("requirement revisions", Fields_With (Plan, "applies.REQ", Kept => 3));
+         Say ("requirement revisions", Fields_With (Plan, "applies.REQ", Kept => 3, Between => " at revision "));
       end if;
       Say ("task definition revision", Trim (Natural'Image (Records.Revision (Defined))));
       Say ("why it could start", Records.Get (State, "admission"));
-      Say ("decisions", Fields_With (Plan, "applies.DEC", Kept => 3));
+      Say ("decisions", Fields_With (Plan, "applies.DEC", Kept => 3, Between => " at revision "));
       Say ("context", Records.Get (Call, "context_manifest")
            & (if Records.Get (Plan, "rendered") = "" then ""
               else ", rendered as " & Records.Get (Plan, "rendered")));
@@ -1471,7 +1471,10 @@ package body Model_Runner.Framework.Work is
                                 & Name (Name'First + 6 .. Name'Last)
                                 & (if Records.Get (Value, "invocation") = "" then ""
                                    else " in " & Records.Get (Value, "invocation"))
-                                & " " & (if Records.Get (Value, "outcome") /= ""
+                                & " " & (if Records.Get (Value, "outcome") = "blocked"
+                                           and then Ada.Strings.Fixed.Index (Why, "you stopped its work") > 0
+                                         then "left it stopped"
+                                         elsif Records.Get (Value, "outcome") /= ""
                                          then "left it " & Records.Get (Value, "outcome")
                                          else Records.Get (Value, "state"))
                                 & (if Why = "" then "" else ": " & Why));
@@ -1496,8 +1499,22 @@ package body Model_Runner.Framework.Work is
                   Result.Append
                     ("history: " & To_String (One.Occurred_At) & " "
                      --  In words: Task_Became_Ready is became ready.
-                     & Words_Of_Kind (To_String (One.Kind_Word))
-                     & (if Length (One.Detail) = 0 then "" else " -- " & To_String (One.Detail)));
+                     & (if Ada.Strings.Fixed.Index (To_String (One.Detail), "-> blocked: you stopped its work") > 0
+                        then "stopped"
+                        --  Never worked, and taken to running: on its way to
+                        --  being completed by hand.
+                        elsif Invocation = "" and then Words_Of_Kind (To_String (One.Kind_Word)) = "started"
+                        then "taken up to be completed by hand"
+                        else Words_Of_Kind (To_String (One.Kind_Word)))
+                     & (if Length (One.Detail) = 0 then ""
+                        --  Stopped by the person: said so, as /state says it.
+                        elsif Ada.Strings.Fixed.Index (To_String (One.Detail), "-> blocked: you stopped its work") > 0
+                        then " -- " & Ada.Strings.Fixed.Replace_Slice
+                                        (To_String (One.Detail),
+                                         Ada.Strings.Fixed.Index (To_String (One.Detail), "-> blocked"),
+                                         Ada.Strings.Fixed.Index (To_String (One.Detail), "-> blocked") + 9,
+                                         "-> stopped")
+                        else " -- " & To_String (One.Detail)));
                end if;
             end;
          end loop;
@@ -1868,6 +1885,13 @@ package body Model_Runner.Framework.Work is
             then "write a file"
             elsif not Permissions.Allows (Allowed, Permissions.Read_Source) then "read the source"
             elsif Elsewhere then "write where its component's files are"
+            --  Roots it may write under, none of them in the project.
+            elsif Writes and then Permissions.Allows (Allowed, Permissions.Write_Source)
+              and then not Allowed (Permissions.Write_Source).Roots.Is_Empty
+              and then (for all Root of Allowed (Permissions.Write_Source).Roots =>
+                          not Ada.Directories.Exists
+                                (Hostkit.Fs.Join (Ada.Directories.Containing_Directory (Stores.Root (Item)), Root)))
+            then "write anywhere there is: no place it may write under is in the project"
             elsif Named_Out_Of_Reach /= "" then "write " & Named_Out_Of_Reach & ", which its task names"
             else "");
       begin
@@ -4598,6 +4622,21 @@ package body Model_Runner.Framework.Work is
                 elsif Tasks.State_Of (Item, Task_Id) = "accepted"
                 then "no work of it waits to be taken in -- " & To_String (Had) & " went with its last"
                      & " attempt; /work " & Task_Id & " does it"
+                --  Stopped by the person: said so, with where its work was kept.
+                elsif Tasks.State_Of (Item, Task_Id) = "blocked"
+                  and then (for some Reason of Tasks.Ready (Item, Task_Id).Reasons =>
+                              Ada.Strings.Fixed.Index (Reason, "you stopped its work") > 0)
+                then To_String (Had) & " was given up when you stopped it"
+                     & (if Ada.Directories.Exists (Workspaces.Kept_Copy (Item, To_String (Had)))
+                        then ", what it changed kept in "
+                             & Ada.Directories.Simple_Name (Workspaces.Kept_Copy (Item, To_String (Had)))
+                             & " -- /task kept diff "
+                             & Ada.Directories.Simple_Name (Workspaces.Kept_Copy (Item, To_String (Had)))
+                             & " shows it, /task kept restore "
+                             & Ada.Directories.Simple_Name (Workspaces.Kept_Copy (Item, To_String (Had)))
+                             & " puts it in the project; or"
+                        else ";")
+                     & " /task accept " & Task_Id & " does its work again"
                 else To_String (Had) & " was given up when it " & Tasks.State_Of (Item, Task_Id)
                      & "; /task accept " & Task_Id & " does its work again"));
          end;
@@ -4779,6 +4818,19 @@ package body Model_Runner.Framework.Work is
                for Path of Workspaces.Last_Joined loop
                   Append (Joined, Path & ASCII.LF);
                end loop;
+               --  Settled by hand, both sides' lines in it: joined too.
+               if Text_Resolved then
+                  declare
+                     Unsettled : constant Name_Lists.Vector :=
+                       Workspaces.Conflict_Files (Item, Id, Unsettled_Only => True);
+                  begin
+                     for Path of Workspaces.Conflict_Files (Item, Id) loop
+                        if not Unsettled.Contains (Path) and then Ada.Strings.Unbounded.Index (Joined, Path) = 0 then
+                           Append (Joined, Path & ASCII.LF);
+                        end if;
+                     end loop;
+                  end;
+               end if;
                Annotate (Item, Change, Task_Id, "joined_files", To_String (Joined));
             end;
          end;

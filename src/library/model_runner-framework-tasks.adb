@@ -103,7 +103,11 @@ package body Model_Runner.Framework.Tasks is
                   & (if Kind'Length > 0 and then Kind (Kind'First) in 'a' | 'e' | 'i' | 'o' | 'u'
                      then "an " else "a ") & Kind & " task");
       E.Add_Text (Status, "value", Name);
-      E.Add_Text (Status, "detail", "no field is called so; they are " & To_String (Fields));
+      E.Add_Text (Status, "detail", "no field is called so; they are " & To_String (Fields)
+                  --  A requirement's text= is a task's notes=.
+                  & (if Name in "text" | "description" | "body" then " -- notes= says what the task is to do"
+                     elsif Name in "requirement" | "req" then " -- requirements= names what it serves"
+                     else ""));
    end No_Such_Field;
 
    function Is_Core_Field (Name : String) return Boolean renames Is_Core;

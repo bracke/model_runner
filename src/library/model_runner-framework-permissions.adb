@@ -1256,4 +1256,78 @@ package body Model_Runner.Framework.Permissions is
       end;
    end Ruling_Agrees;
 
+   --------------------
+   -- Missing_Places --
+   --------------------
+
+   function Missing_Places (Project, Text : String) return String is
+      Said  : Ada.Strings.Unbounded.Unbounded_String;
+      Start : Natural := Text'First;
+
+      --  The directories at the project's top, to say the nearest of.
+      function Top_Directories return Name_Lists.Vector is
+         Result : Name_Lists.Vector;
+         Search : Ada.Directories.Search_Type;
+         Found  : Ada.Directories.Directory_Entry_Type;
+      begin
+         Ada.Directories.Start_Search
+           (Search, Project, "", [Ada.Directories.Directory => True, others => False]);
+         while Ada.Directories.More_Entries (Search) loop
+            Ada.Directories.Get_Next_Entry (Search, Found);
+            if Ada.Directories.Simple_Name (Found) (Ada.Directories.Simple_Name (Found)'First) /= '.' then
+               Result.Append (String'(Ada.Directories.Simple_Name (Found) & "/"));
+            end if;
+         end loop;
+         Ada.Directories.End_Search (Search);
+         return Result;
+      exception
+         when others =>
+            return Result;
+      end Top_Directories;
+
+      procedure Check (Place : String) is
+         Bare : constant String :=
+           (if Place'Length > 2 and then Place (Place'First .. Place'First + 1) = "./"
+            then Place (Place'First + 2 .. Place'Last) else Place);
+      begin
+         if Bare /= "" and then Bare not in "." | "./" | "/"
+           and then Ada.Strings.Fixed.Index (Bare, "*") = 0
+           and then not Ada.Directories.Exists (Hostkit.Fs.Join (Project, Bare))
+         then
+            declare
+               Near : constant String := Nearest (Bare, Top_Directories);
+            begin
+               Ada.Strings.Unbounded.Append
+                 (Said, (if Ada.Strings.Unbounded.Length (Said) = 0 then "" else ", ") & Bare
+                  & " (no such place here" & (if Near = "" then "" else "; " & Near & " is") & ")");
+            end;
+         end if;
+      end Check;
+   begin
+      --  Each word roots= or deny= begins, its places a comma or | apart.
+      for Index in Text'First .. Text'Last + 1 loop
+         if Index > Text'Last or else Text (Index) in ' ' | ASCII.LF | ';' then
+            declare
+               Word : constant String := Text (Start .. Index - 1);
+               Eq   : constant Natural := Ada.Strings.Fixed.Index (Word, "=");
+            begin
+               if Eq > Word'First and then Word (Word'First .. Eq - 1) in "roots" | "deny" then
+                  declare
+                     From : Natural := Eq + 1;
+                  begin
+                     for At_Index in Eq + 1 .. Word'Last + 1 loop
+                        if At_Index > Word'Last or else Word (At_Index) in ',' | '|' then
+                           Check (Word (From .. At_Index - 1));
+                           From := At_Index + 1;
+                        end if;
+                     end loop;
+                  end;
+               end if;
+            end;
+            Start := Index + 1;
+         end if;
+      end loop;
+      return Ada.Strings.Unbounded.To_String (Said);
+   end Missing_Places;
+
 end Model_Runner.Framework.Permissions;

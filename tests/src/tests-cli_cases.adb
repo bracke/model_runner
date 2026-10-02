@@ -1822,7 +1822,7 @@ package body Tests.CLI_Cases is
       Assert (Command ("task|context|TASK-002|--set|--verbose") = 0 and then Shows ("## Rules"),
               "task context --verbose did not show the text the agent reads: " & Last_Output);
 
-      Assert (Command ("task|split|TASK-001|One; Two") = 0 and then Shows ("is waiting for parts (blocked)"),
+      Assert (Command ("task|split|TASK-001|One; Two") = 0 and then Shows ("is waiting for parts"),
               "task split did not make the parts and block the parent: " & Last_Output);
       Assert (Command ("task|depend|TASK-004|TASK-003") = 0 and then Shows ("waits for"),
               "task depend did not make one wait for the other: " & Last_Output);
@@ -2524,6 +2524,23 @@ package body Tests.CLI_Cases is
          begin
             Ada.Directories.Set_Directory (Root & "/g");
             Model_Runner.CLI.Project_Commands.Run_Without_Model ("/req show REQ-404", Screen, Status);
+            --  Tab in a project: a number to its ID, a field's values, a
+            --  list's next item, and an ID given before not offered again.
+            Assert (Model_Runner.CLI.Completion.Candidates ("/task show 1").Contains ("TASK-001"),
+                    "a number was not completed to its task");
+            Assert (Model_Runner.CLI.Completion.Candidates ("/task edit TASK-001 depends_on=")
+                      .Contains ("depends_on=TASK-001"),
+                    "a field's values were not offered");
+            Assert (Model_Runner.CLI.Completion.Candidates ("/task new t requirements=")
+                      .Contains ("requirements=REQ-001")
+                    and then not Model_Runner.CLI.Completion.Candidates ("/task new t requirements=REQ-001,")
+                                   .Contains ("requirements=REQ-001,REQ-001"),
+                    "a list's items were not offered once each");
+            Assert (not Model_Runner.CLI.Completion.Candidates ("/task depend TASK-001 ").Contains ("TASK-001"),
+                    "an ID given before was offered again");
+            Assert (Model_Runner.CLI.Completion.Candidates ("/reconfigure scalar.model.default=")
+                      .Contains ("scalar.model.default=default"),
+                    "the model profiles were not offered");
             Ada.Directories.Set_Directory (Here);
          end;
          Assert (Status /= 0 and then Model_Runner.Presentation.Errors_Reported (Screen) = Before + 1
@@ -12994,6 +13011,10 @@ package body Tests.CLI_Cases is
               "a command typed in capitals was not completed");
       Assert (Model_Runner.CLI.Completion.Candidates ("/figure").Contains ("/reconfigure"),
               "a command was not completed from a part of it");
+      Assert (Model_Runner.CLI.Completion.Candidates ("/task sider").Contains ("reconsider"),
+              "an action was not completed from a part of it");
+      Assert (Model_Runner.CLI.Completion.Candidates ("hello wor").Is_Empty,
+              "a word of a message was completed");
    end Tab_Completes_Commands;
 
    overriding procedure Register_Tests (T : in out Case_Type) is

@@ -192,7 +192,10 @@ package Model_Runner.CLI.Choosers is
    --  Ctrl-L clears the screen. Enter ends it; Escape and Ctrl-C end it at
    --  once, dropping it; Ctrl-D on an empty line ends the input. Tab
    --  completes the word at the cursor: the one word it can be, or what
-   --  those it can be share, and pressed again, those words listed.
+   --  those it can be share, and pressed again, those words listed. A line
+   --  typed before that this one begins, or what Tab would complete to, is
+   --  shown dimmed after the cursor: Right takes it, Ctrl-Right its next
+   --  word.
    --  Unavailable where there is no terminal to read it from that way; the
    --  caller shows the prompt and reads a line then.
    --

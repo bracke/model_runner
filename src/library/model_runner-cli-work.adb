@@ -467,8 +467,25 @@ package body Model_Runner.CLI.Work is
       end Joined_Ids;
 
       procedure Say_What_Is_Ready is
+         --  Blocked or stopped, not waiting for parts: those taken up again.
+         function Taken_Up return Model_Runner.Framework.Name_Lists.Vector is
+            Result : Model_Runner.Framework.Name_Lists.Vector;
+         begin
+            for Id of Tk.List (Store, "blocked") loop
+               if not (for some Reason of Tk.Ready (Store, Id).Reasons =>
+                         Ada.Strings.Fixed.Index (Reason, "waiting for its children") > 0)
+               then
+                  Result.Append (Id);
+               end if;
+            end loop;
+            return Result;
+         end Taken_Up;
+
          Ready       : Natural := 0;
          Integrating : Natural := 0;
+         --  A waiting task's failed one said, with how to try it again: the
+         --  failed are not said a second time.
+         On_Failed   : Boolean := False;
          Candidate : constant Natural := Natural (Tk.List (Store, "candidate").Length);
       begin
          for Id of Tk.List (Store, "accepted") loop
@@ -516,13 +533,14 @@ package body Model_Runner.CLI.Work is
                         if Ada.Strings.Fixed.Index (Now.Reasons.First_Element, "waits for " & Failed) > 0 then
                            Pres.Put_Note (Screen, "cli.next.waits_on_failed",
                                           [Loc.Named ("name", Id), Loc.Named ("value", Failed)]);
+                           On_Failed := True;
                         end if;
                      end loop;
                   end if;
                end;
             end loop;
             --  The failed, counted: there to try again.
-            if Natural (Tk.List (Store, "failed").Length) > 1 then
+            if Natural (Tk.List (Store, "failed").Length) > 1 and then not On_Failed then
                Pres.Put_Note (Screen, "cli.next.retry_all",
                               [Loc.Named ("detail", Joined_Ids (Tk.List (Store, "failed")))]);
             end if;
@@ -533,6 +551,8 @@ package body Model_Runner.CLI.Work is
                [Loc.Named ("count", T.Image (Long_Long_Integer (Candidate)))]);
          --  What there is, before making more: a failed task to try again,
          --  entries waiting to be accepted.
+         elsif Ready = 0 and then not Tk.List (Store, "failed").Is_Empty and then On_Failed then
+            null;
          elsif Ready = 0 and then not Tk.List (Store, "failed").Is_Empty then
             Pres.Put_Note (Screen, "cli.next.retry_only",
                            [Loc.Named ("name", Tk.List (Store, "failed").First_Element)]);
@@ -541,6 +561,9 @@ package body Model_Runner.CLI.Work is
               (Screen, "cli.next.entries_wait",
                [Loc.Named ("count", T.Image (Long_Long_Integer
                                                (Model_Runner.CLI.Intents.Pending (Store).Length)))]);
+         --  Blocked or stopped: taken up again, not new work made.
+         elsif Ready = 0 and then not Taken_Up.Is_Empty then
+            Pres.Put_Note (Screen, "cli.next.take_up_blocked", [Loc.Named ("detail", Joined_Ids (Taken_Up))]);
          elsif Ready = 0 and then Integrating = 0 then
             Pres.Put_Note (Screen, "cli.next.create");
          end if;
@@ -1211,16 +1234,28 @@ package body Model_Runner.CLI.Work is
                   Starting => Announce'Access);
             elsif Path /= "" then
                --  More steps asked than the task may take: the lower, said.
-               if Setting ("steps", "") /= ""
-                 and then Positive'Value (Setting ("steps", "")) > W.Steps_Allowed (Store, To_String (Chosen))
-               then
-                  Pres.Put_Note (Screen, "cli.work.steps_capped",
-                                 [Loc.Named ("value", Setting ("steps", "")),
-                                  Loc.Named ("name", To_String (Chosen)),
-                                  Loc.Named ("other", "task.max_steps." & Kind_Of_Chosen),
-                                  Loc.Named ("count", T.Image (Long_Long_Integer
-                                                                 (W.Steps_Allowed (Store, To_String (Chosen)))))]);
-               end if;
+               declare
+                  function Kind_Steps_Set return Boolean is
+                     Config : R.Item;
+                     Got    : E.Error_Info;
+                  begin
+                     Model_Runner.Framework.Configurations.Read (Store, Config, Got);
+                     return E.Is_Ok (Got) and then R.Get (Config, "scalar.task.max_steps." & Kind_Of_Chosen) /= "";
+                  end Kind_Steps_Set;
+               begin
+                  if Setting ("steps", "") /= ""
+                    and then Positive'Value (Setting ("steps", "")) > W.Steps_Allowed (Store, To_String (Chosen))
+                  then
+                     Pres.Put_Note (Screen, "cli.work.steps_capped",
+                                    [Loc.Named ("value", Setting ("steps", "")),
+                                     Loc.Named ("name", To_String (Chosen)),
+                                     --  The one in force: the kind's own, where set.
+                                     Loc.Named ("other", (if Kind_Steps_Set then "task.max_steps." & Kind_Of_Chosen
+                                                          else "agents.max_steps")),
+                                     Loc.Named ("count", T.Image (Long_Long_Integer
+                                                                    (W.Steps_Allowed (Store, To_String (Chosen)))))]);
+                  end if;
+               end;
                W.Execute
                  (Store, To_String (Chosen),
                   Model_Agent'(Model   => To_Unbounded_String (Path),
@@ -1485,10 +1520,10 @@ package body Model_Runner.CLI.Work is
                                 (Store, Model_Runner.Framework.Workspaces.Active_For
                                           (Store, To_String (Done.Task_Id)),
                                  Unsettled_Only => True).Is_Empty
-               then "in conflict (verification)"
+               then "conflict"
                elsif Final = "verification"
                  and then Model_Runner.Framework.Workspaces.Active_For (Store, To_String (Done.Task_Id)) /= ""
-               then "waiting to be integrated (verification)"
+               then "to integrate"
                elsif Final = "verification" then "in verification"
                elsif Final = "blocked" and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "you stopped") = 1
                then "stopped"
@@ -1938,7 +1973,16 @@ package body Model_Runner.CLI.Work is
          --  All of them: what the plan can start now, of those not tried,
          --  once those it named first are done -- a failure stops none.
          Tried.Append (To_String (Chosen));
-         Ended.Append (To_String (Chosen) & " " & Model_Runner.Framework.State_Said (To_String (Done.Final_State)));
+         --  Named as /task list names it: work to take in, a stop.
+         Ended.Append
+           (To_String (Chosen) & " "
+            & (if To_String (Done.Final_State) = "verification"
+                 and then Model_Runner.Framework.Workspaces.Active_For (Store, To_String (Chosen)) /= ""
+               then "to integrate"
+               elsif To_String (Done.Final_State) = "blocked"
+                 and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "you stopped") > 0
+               then "stopped"
+               else Model_Runner.Framework.State_Said (To_String (Done.Final_State))));
          if Remaining.Is_Empty and then Setting ("all", "") = "yes" then
             for Id of Model_Runner.Framework.Orchestration.Plan (Store).Start loop
                if not Tried.Contains (Id) then

@@ -278,6 +278,30 @@ package body Model_Runner.CLI.Completion is
             end if;
          end Settings;
 
+         --  The model profiles the configuration names: map.model.ID.
+         function Profiles return Names.Vector is
+            Config : R.Item;
+            Got    : E.Error_Info;
+            --  The built-in one is there whether named or not.
+            Result : Names.Vector := ["default"];
+         begin
+            Model_Runner.Framework.Configurations.Read (Store, Config, Got);
+            if E.Is_Ok (Got) then
+               for Index in 1 .. R.Field_Count (Config) loop
+                  declare
+                     Field : constant String := R.Field_Name (Config, Index);
+                  begin
+                     if Ada.Strings.Fixed.Index (Field, "map.model.") = Field'First
+                       and then Field /= "map.model.default"
+                     then
+                        Result.Append (Field (Field'First + 10 .. Field'Last));
+                     end if;
+                  end;
+               end loop;
+            end if;
+            return Result;
+         end Profiles;
+
          procedure Capabilities is
          begin
             for One in Model_Runner.Framework.Permissions.Capability loop
@@ -293,7 +317,11 @@ package body Model_Runner.CLI.Completion is
             return;
          end if;
          --  A setting as NAME=: its values where it has a few.
-         if Command = "/reconfigure" and then Ada.Strings.Fixed.Index (Current, "=") > Current'First then
+         if (Command = "/reconfigure" or else (Command in "/spec" | "/decision" and then Action = "govern"
+                                                and then Position >= 4))
+           and then Ada.Strings.Fixed.Index (Current, "=") > Current'First
+           and then Ada.Strings.Fixed.Index (Current, "model=") /= Current'First
+         then
             declare
                Eq   : constant Natural := Ada.Strings.Fixed.Index (Current, "=");
                Name : constant String := Current (Current'First .. Eq - 1);
@@ -301,6 +329,14 @@ package body Model_Runner.CLI.Completion is
                for Value of Values_Of (Name) loop
                   Offer (Name & "=" & Value);
                end loop;
+               --  A kind's profile, or the default: the profiles there are.
+               if Ada.Strings.Fixed.Index (Name, "task.profile.") > 0
+                 or else Name in "model.default" | "scalar.model.default"
+               then
+                  for Profile of Profiles loop
+                     Offer (Name & "=" & Profile);
+                  end loop;
+               end if;
             end;
          elsif Ada.Strings.Fixed.Index (Current, "permissions=") = Current'First then
             --  A task's permissions: a capability, or one taken away.
@@ -313,6 +349,65 @@ package body Model_Runner.CLI.Completion is
             for Kind of Tk.Kinds (Store) loop
                Offer ("kind=" & Kind);
             end loop;
+         elsif (for some Key of Names.Vector'(["component=", "requirement=", "requirements=", "depends_on=",
+                                               "parent=", "profile=", "model="]) =>
+                  Ada.Strings.Fixed.Index (Current, Key) = Current'First)
+         then
+            --  A field's values; in a list, the item after the last comma,
+            --  those before kept and not offered again.
+            declare
+               Eq     : constant Natural := Ada.Strings.Fixed.Index (Current, "=");
+               Key    : constant String := Current (Current'First .. Eq - 1);
+               Comma  : constant Natural := Ada.Strings.Fixed.Index (Current, ",", Ada.Strings.Backward);
+               Kept   : constant String := Current (Current'First .. Natural'Max (Eq, Comma));
+               Listed : constant Names.Vector :=
+                 Words_Of (Ada.Strings.Fixed.Translate (Kept (Eq + 1 .. Kept'Last),
+                                                        Ada.Strings.Maps.To_Mapping (",", " ")));
+               Values : Names.Vector;
+            begin
+               if Key = "component" then
+                  Values := Tk.Components (Store);
+               elsif Key in "requirement" | "requirements" then
+                  Values := Nt.List (Store, Nt.Requirement);
+               elsif Key in "depends_on" | "parent" then
+                  Values := Tk.List (Store);
+               elsif Key = "profile" then
+                  Values := Profiles;
+               elsif Ada.Strings.Fixed.Index (Current, "/") > 0 then
+                  --  A model by its path.
+                  for Path of Paths (Current (Eq + 1 .. Current'Last)) loop
+                     if Path (Path'Last) = '/'
+                       or else (Path'Length > 5 and then Path (Path'Last - 4 .. Path'Last) = ".gguf")
+                     then
+                        Values.Append (Path);
+                     end if;
+                  end loop;
+               else
+                  --  A model by its name among the models, as model= takes it.
+                  declare
+                     Where  : constant String := Model_Runner.Platform.Models_Directory;
+                     Search : Ada.Directories.Search_Type;
+                     Found  : Ada.Directories.Directory_Entry_Type;
+                  begin
+                     if Where /= "" and then Ada.Directories.Exists (Where) then
+                        Ada.Directories.Start_Search (Search, Where, "*.gguf");
+                        while Ada.Directories.More_Entries (Search) loop
+                           Ada.Directories.Get_Next_Entry (Search, Found);
+                           Values.Append (Ada.Directories.Simple_Name (Found));
+                        end loop;
+                        Ada.Directories.End_Search (Search);
+                     end if;
+                  exception
+                     when others =>
+                        null;
+                  end;
+               end if;
+               for Value of Values loop
+                  if not Listed.Contains (Value) then
+                     Offer (Kept & Value);
+                  end if;
+               end loop;
+            end;
          elsif Ada.Strings.Fixed.Index (Current, "state=") = Current'First then
             Offer_Words ("state=candidate state=accepted state=ready state=waiting state=refused state=running"
                          & " state=verification state=blocked state=stopped state=failed state=complete"
@@ -337,13 +432,17 @@ package body Model_Runner.CLI.Completion is
                          then State not in "complete" | "cancelled" | "rejected"
                          elsif Action = "reopen" then State in "complete" | "cancelled" | "failed" | "blocked"
                          elsif Action = "reconsider" then State = "rejected"
+                         elsif Action = "verify" then State in "complete" | "verification"
                          else True)
                      then
                         Offer (Id);
                      end if;
                   end;
                end loop;
-               if Action in "accept" | "reject" | "complete" | "verify" | "integrate" then
+               --  All of them, where there is one at least.
+               if Action in "accept" | "reject" | "complete" | "verify" | "integrate"
+                 and then Natural (Offered.Length) > 0
+               then
                   Offer ("all");
                end if;
             end if;
@@ -423,7 +522,7 @@ package body Model_Runner.CLI.Completion is
                   end if;
                end loop;
             end if;
-            if Action in "accept" | "reject" | "obsolete" | "verify" then
+            if Action in "accept" | "reject" | "obsolete" | "verify" and then Natural (Offered.Length) > 0 then
                Offer ("all");
             end if;
          elsif Command in "/req" | "/spec" | "/decision" and then Position = 4 then
@@ -436,7 +535,37 @@ package body Model_Runner.CLI.Completion is
             elsif Action = "revise" then
                Offer_Words ("from-document title= text= criteria=");
             end if;
-         elsif Command in "/req" | "/spec" | "/decision" and then Position = 5 and then Action in "link" | "unlink"
+         elsif Command in "/req" | "/spec" | "/decision" and then Position = 5 and then Action = "unlink" then
+            --  Only what it is linked to -- a file gone since too.
+            declare
+               Relation : constant String := Words (4);
+            begin
+               for One in Nt.Link_Kind loop
+                  if (case One is
+                        when Nt.Dependency     => Relation = "dependency",
+                        when Nt.Component      => Relation = "component",
+                        when Nt.Implementation => Relation = "implementation",
+                        when Nt.Task_Link      => Relation = "task",
+                        when Nt.Test           => Relation = "test",
+                        when Nt.Verification   => Relation = "verification")
+                  then
+                     Offer_All (Nt.Links (Store, Register (Command), Words (3), One));
+                  end if;
+               end loop;
+            end;
+         elsif Command in "/spec" | "/decision" and then Position = 5 and then Action = "govern" then
+            --  The ruling: what the setting takes.
+            for Value of Values_Of (Words (4)) loop
+               Offer (Value);
+            end loop;
+            if Ada.Strings.Fixed.Index (Words (4), "task.profile.") > 0
+              or else Words (4) in "model.default" | "scalar.model.default"
+            then
+               Offer_All (Profiles);
+            end if;
+         elsif Command in "/spec" | "/decision" and then Position >= 6 and then Action = "govern" then
+            Offer ("overrides=CONFIG");
+         elsif Command in "/req" | "/spec" | "/decision" and then Position = 5 and then Action = "link"
          then
             if Words (4) = "task" then
                Offer_All (Tk.List (Store));
@@ -448,11 +577,13 @@ package body Model_Runner.CLI.Completion is
                Offer_All (Paths (Current));
             end if;
          elsif Command in "/accept" | "/reject" and then Position = 2 then
-            Offer ("all");
             Offer_All (Tk.List (Store, "candidate"));
             for Which of Model_Runner.CLI.Intents.Pending (Store) loop
                Offer (Which (Ada.Strings.Fixed.Index (Which, ":") + 1 .. Which'Last));
             end loop;
+            if Natural (Offered.Length) > 0 then
+               Offer ("all");
+            end if;
          elsif Command = "/work" and then Position >= 2 then
             --  Only those it would start: ready.
             for Id of Tk.List (Store, "accepted") loop
@@ -460,10 +591,10 @@ package body Model_Runner.CLI.Completion is
                   Offer (Id);
                end if;
             end loop;
-            Offer_Words ("model= steps= profile=");
-            if Position = 2 then
+            if Position = 2 and then Natural (Offered.Length) > 0 then
                Offer ("all");
             end if;
+            Offer_Words ("model= steps= profile=");
          elsif Command = "/cancel" and then Position = 2 then
             for Id of Tk.List (Store) loop
                if Tk.State_Of (Store, Id) not in "complete" | "cancelled" | "rejected" then
@@ -657,6 +788,15 @@ package body Model_Runner.CLI.Completion is
          Lower_Current : constant String := Ada.Characters.Handling.To_Lower (Current);
          function Lower (Text : String) return String renames Ada.Characters.Handling.To_Lower;
       begin
+         --  A word already given before it -- an ID among several -- is not
+         --  offered again.
+         for Index in reverse 1 .. Natural (Offered.Length) loop
+            if (for some Place in 2 .. Natural (Words.Length) - (if Fresh then 0 else 1) =>
+                  Words (Place) = Offered (Index))
+            then
+               Offered.Delete (Index);
+            end if;
+         end loop;
          for One of Offered loop
             if One'Length >= Current'Length and then One (One'First .. One'First + Current'Length - 1) = Current
             then
@@ -672,8 +812,34 @@ package body Model_Runner.CLI.Completion is
                end if;
             end loop;
          end if;
+         --  A number, as the commands take one for an ID: those it numbers,
+         --  and those whose number it begins.
+         if Result.Is_Empty and then Current /= "" and then (for all C of Current => C in '0' .. '9') then
+            declare
+               Typed : constant String := Ada.Strings.Fixed.Trim (Current, Ada.Strings.Maps.To_Set ("0"),
+                                                                    Ada.Strings.Maps.Null_Set);
+            begin
+               for One of Offered loop
+                  declare
+                     Dash   : constant Natural := Ada.Strings.Fixed.Index (One, "-", Ada.Strings.Backward);
+                     Number : constant String :=
+                       (if Dash = 0 then "" else Ada.Strings.Fixed.Trim (One (Dash + 1 .. One'Last),
+                                                                         Ada.Strings.Maps.To_Set ("0"),
+                                                                         Ada.Strings.Maps.Null_Set));
+                  begin
+                     if Dash > One'First and then Number /= "" and then (for all C of Number => C in '0' .. '9')
+                       and then Number'Length >= Typed'Length
+                       and then Number (Number'First .. Number'First + Typed'Length - 1) = Typed
+                     then
+                        Result.Append (One);
+                     end if;
+                  end;
+               end loop;
+            end;
+         end if;
          --  Part of a word: only for a few letters typed, and not a path's.
-         if Result.Is_Empty and then Current'Length >= 3 and then Ada.Strings.Fixed.Index (Current, "/", 2) = 0
+         if Result.Is_Empty and then Current'Length >= 3
+           and then Ada.Strings.Fixed.Index (Current, "/", Current'First + 1) = 0
          then
             declare
                Bare : constant String :=
@@ -692,6 +858,10 @@ package body Model_Runner.CLI.Completion is
       end;
       Sorting.Sort (Result);
       return Result;
+   exception
+      --  Tab never ends the session: what cannot be worked out offers nothing.
+      when others =>
+         return Names.Empty_Vector;
    end Candidates;
 
 end Model_Runner.CLI.Completion;

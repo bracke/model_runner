@@ -487,6 +487,15 @@ package body Model_Runner.CLI.Tasks is
          end;
       end Serves_Only_Retired;
 
+      --  A reason as a person reads it: a task's parts, not its children.
+      function Parts_Worded (Text : String) return String is
+         At_Children : constant Natural := Ada.Strings.Fixed.Index (Text, "waiting for its children");
+      begin
+         return (if At_Children = 0 then Text
+                 else Text (Text'First .. At_Children - 1) & "waiting for its parts"
+                      & Parts_Worded (Text (At_Children + 24 .. Text'Last)));
+      end Parts_Worded;
+
       function Listed_State (Id : String) return String is
          State : constant String := Tk.State_Of (Store, Id);
          Space : constant String :=
@@ -520,14 +529,12 @@ package body Model_Runner.CLI.Tasks is
                           Ada.Strings.Fixed.Index (Reason, "did not pass") > 0)
             then "checks failed"
             elsif Space /= "" then "to integrate"
-            --  Waiting for parts still being done; one whose part
-            --  failed or ended undone is blocked, and shown so.
+            --  Waiting for its parts -- one failed among them too, as
+            --  /state says it, its why naming the one that failed.
             elsif State = "blocked"
               and then (for some Reason of Tk.Ready (Store, Id).Reasons =>
                           Ada.Strings.Fixed.Index (Reason, "waiting for its children") > 0
                           or else Ada.Strings.Fixed.Index (Reason, "its child ") = Reason'First)
-              and then not (for some Child of Tk.Children (Store, Id) =>
-                              Tk.State_Of (Store, Child) in "failed" | "cancelled" | "rejected")
             then "waiting for parts"
             --  Stopped by the person, not by anything wrong with it.
             elsif State = "blocked"
@@ -546,6 +553,9 @@ package body Model_Runner.CLI.Tasks is
           --  Accepted, and its permissions keep it from the work: said so.
           elsif Listed_State (Id) = "refused"
           then "refused (" & Tk.State_Of (Store, Id) & ", but its permissions keep it from starting)"
+          --  Named as /state counts them: no blocked beside.
+          elsif Listed_State (Id) in "waiting for parts" | "stopped" | "to integrate" | "conflict" | "checks failed"
+          then Listed_State (Id)
           --  As /task list names it first, the state it is a case of after.
           else Listed_State (Id) & " (" & Tk.State_Of (Store, Id) & ")");
 
@@ -905,7 +915,8 @@ package body Model_Runner.CLI.Tasks is
                                         and then Root (Root'First .. Root'First + Kind_Root'Length - 1) = Kind_Root)
                               then
                                  Outcome := E.Make (E.Framework_Input_Invalid);
-                                 E.Add_Text (Outcome, "name", "the roots to grant");
+                                 E.Add_Text (Outcome, "name", "the roots its permissions= names for "
+                                             & Pm.Word (One));
                                  E.Add_Text (Outcome, "value", Root);
                                  E.Add_Text (Outcome, "detail", "it is outside what its kind " & Fields ("kind")
                                              & " gives -- " & Pm.Grant_Text (Of_Kind (One))
@@ -1225,9 +1236,13 @@ package body Model_Runner.CLI.Tasks is
          Own  : R.Item;
          Seen : E.Error_Info;
       begin
-         --  A part let go: its parent is said.
+         --  A part let go: its parent is said, while it still waits for
+         --  others -- one that goes on now is said to be ready instead.
          Tk.Definition (Store, Ended, Own, Seen);
-         if E.Is_Ok (Seen) and then R.Get (Own, "parent") /= "" then
+         if E.Is_Ok (Seen) and then R.Get (Own, "parent") /= ""
+           and then (for some Reason of Tk.Ready (Store, R.Get (Own, "parent")).Reasons =>
+                       Ada.Strings.Fixed.Index (Reason, "waiting for its children") > 0)
+         then
             Pres.Put_Note
               (Screen, "cli.task.part_of",
                [Loc.Named ("name", R.Get (Own, "parent")), Loc.Named ("value", Ended)]);
@@ -1320,8 +1335,8 @@ package body Model_Runner.CLI.Tasks is
             begin
                --  Said as /task show says it: why it cannot start.
                Pres.Put_Pair (Screen, "cli.task.field", "why it cannot start",
-                              (if Ada.Strings.Fixed.Index (Why, "it is blocked: ") = Why'First
-                               then Why (Why'First + 15 .. Why'Last) else Why),
+                              Parts_Worded (if Ada.Strings.Fixed.Index (Why, "it is blocked: ") = Why'First
+                                            then Why (Why'First + 15 .. Why'Last) else Why),
                               Pres.Pending);
                --  Waiting for its parts: the first of them is what to do.
                if First /= "" then
@@ -1431,6 +1446,15 @@ package body Model_Runner.CLI.Tasks is
       end Diff_Files;
 
       --  The files a task's attempts changed, a comma apart; "" for none.
+      --  What a task changed, a line each, as its state keeps it.
+      function Changed_By_Lines (Id : String) return String is
+         Held : R.Item;
+         Read : E.Error_Info;
+      begin
+         S.Read (Store, Model_Runner.Framework.Tasks_Area, Id & ".state", Held, Read);
+         return (if E.Is_Error (Read) then "" else R.Get (Held, "changed_files"));
+      end Changed_By_Lines;
+
       function Changed_By (Id : String) return String is
          Held : R.Item;
          Read : E.Error_Info;
@@ -1439,6 +1463,21 @@ package body Model_Runner.CLI.Tasks is
          return (if E.Is_Error (Read) then ""
                  else Joined (Model_Runner.Framework.Lines_Of (R.Get (Held, "changed_files"))));
       end Changed_By;
+
+      --  The other task whose work, taken in, changed a file: the one
+      --  complete that names it among what it changed; empty for none.
+      function Taken_In_By (Path, Not_Of : String) return String is
+         Found : Unbounded_String;
+      begin
+         for Id of Tk.List (Store, "complete") loop
+            if Id /= Not_Of
+              and then (for some Line of Model_Runner.Framework.Lines_Of (Changed_By_Lines (Id)) => Line = Path)
+            then
+               Found := To_Unbounded_String (Id);
+            end if;
+         end loop;
+         return To_String (Found);
+      end Taken_In_By;
 
       --  A complete task's changes the last commit does not hold yet,
       --  shown as git diff shows them; False where there are none to show.
@@ -2516,6 +2555,17 @@ package body Model_Runner.CLI.Tasks is
             end if;
             Given.Include ("permissions", To_String (Kept));
             Edit (First_Word, Given, Inputs => False);
+            --  A place it names that the project has not: said, as a typo
+            --  grants nothing where it was meant to.
+            if Granting
+              and then Pm.Missing_Places (Ada.Directories.Containing_Directory (S.Root (Store)), Limits) /= ""
+            then
+               Pres.Put_Note (Screen, "cli.project.places_missing",
+                              [Loc.Named ("name", First_Word & " " & Cap),
+                               Loc.Named ("detail",
+                                          Pm.Missing_Places
+                                            (Ada.Directories.Containing_Directory (S.Root (Store)), Limits))]);
+            end if;
          end;
       end Grant_Or_Withhold;
 
@@ -2924,6 +2974,10 @@ package body Model_Runner.CLI.Tasks is
                   declare
                      G : constant String := Ada.Strings.Fixed.Trim (Gate, Ada.Strings.Both);
                   begin
+                     --  Its parts, where it has none: nothing to say.
+                     if G = "children" and then Tk.Children (Store, Argument).Is_Empty then
+                        goto Next_Gate;
+                     end if;
                      Append (Said, (if Said = Null_Unbounded_String then "" else ", ")
                              & (if G = "children" then "its parts are done"
                                 elsif G = "implementation_present" then "it changed something"
@@ -2932,6 +2986,7 @@ package body Model_Runner.CLI.Tasks is
                                 elsif G = "verification" then "its checks pass"
                                 else G));
                   end;
+                  <<Next_Gate>>
                end loop;
                return To_String (Said);
             end Gates_Said;
@@ -2989,6 +3044,17 @@ package body Model_Runner.CLI.Tasks is
                   Model_Runner.Framework.Configurations.Read (Store, Config, Read);
                   return (if E.Is_Ok (Read) then R.Get (Config, Setting) else "");
                end Configured;
+
+               --  Whether a ruling on a capability holds as the configuration
+               --  now gives it, however that is written.
+               function Holds (Setting, Ruling : String) return Boolean is
+                  Config : R.Item;
+                  Read   : E.Error_Info;
+               begin
+                  Model_Runner.Framework.Configurations.Read (Store, Config, Read);
+                  return E.Is_Ok (Read)
+                    and then Model_Runner.Framework.Permissions.Ruling_Agrees (Store, Config, Setting, Ruling);
+               end Holds;
 
                --  A rule's text without where the baseline keeps it.
                function Shown_Value return String is
@@ -3075,17 +3141,12 @@ package body Model_Runner.CLI.Tasks is
                           elsif (Ada.Strings.Fixed.Index (Name, "authority.scalar.") = Name'First
                                  or else Ada.Strings.Fixed.Index (Name, "authority.map.") = Name'First
                                  or else Ada.Strings.Fixed.Index (Name, "authority.set.") = Name'First)
-                            and then (Configured (Name (Name'First + 10 .. Name'Last)) = Value (Colon + 2 .. Value'Last)
-                                      --  Off, where the project's default withholds it already.
-                                      or else (Value (Colon + 2 .. Value'Last) = "off"
-                                               and then Configured (Name (Name'First + 10 .. Name'Last)) = ""
-                                               and then Ada.Strings.Fixed.Index
-                                                          (Name, "authority.map.permission.project.") = Name'First
-                                               and then (for some One in Model_Runner.Framework.Permissions.Capability
-                                                         => Model_Runner.Framework.Permissions.Word (One)
-                                                              = Name (Name'First + 33 .. Name'Last)
-                                                            and then not Model_Runner.Framework.Permissions
-                                                                           .Project_Default (One).Granted)))
+                            and then (if Ada.Strings.Fixed.Index (Name, "authority.map.permission.") = Name'First
+                                      --  A capability as it holds: off withheld
+                                      --  however, by default or written whole.
+                                      then Holds (Name (Name'First + 10 .. Name'Last), Value (Colon + 2 .. Value'Last))
+                                      else Configured (Name (Name'First + 10 .. Name'Last))
+                                           = Value (Colon + 2 .. Value'Last))
                           then Value (Colon + 2 .. Value'Last) & " (" & Value (Space + 1 .. Colon - 1)
                                & "; applied: the configuration holds it)"
                           elsif Ada.Strings.Fixed.Index (Name, "authority.scalar.") = Name'First
@@ -3289,7 +3350,8 @@ package body Model_Runner.CLI.Tasks is
                      --  Its state is said above: not again before why.
                      elsif Shown_Name = "blocked_by" and then Shown_Value'Length > 15
                        and then Shown_Value (Shown_Value'First .. Shown_Value'First + 14) = "it is blocked: "
-                     then Shown_Value (Shown_Value'First + 15 .. Shown_Value'Last)
+                     then Parts_Worded (Shown_Value (Shown_Value'First + 15 .. Shown_Value'Last))
+                     elsif Shown_Name = "blocked_by" then Parts_Worded (Shown_Value)
                      else Shown_Value);
                begin
                   Grouped ("  " & Label, Value);
@@ -3718,6 +3780,16 @@ package body Model_Runner.CLI.Tasks is
          Passed   : Boolean;
       begin
          if not Needs_Task then
+            return;
+         end if;
+         --  Checked again is work done: complete, or waiting to be taken in.
+         if Action = "verify" and then Tk.State_Of (Store, Argument) not in "complete" | "verification" then
+            Outcome := E.Make (E.Framework_Input_Invalid);
+            E.Add_Text (Outcome, "name", "the task to verify");
+            E.Add_Text (Outcome, "value", Argument);
+            E.Add_Text (Outcome, "detail", "it is " & Listed_State (Argument) & ": /task verify checks again work"
+                        & " that is done -- /task complete " & Argument & " checks it and takes it as done");
+            Fail (Outcome);
             return;
          end if;
          if Profile = "" then
@@ -4246,8 +4318,12 @@ package body Model_Runner.CLI.Tasks is
                   Pres.Put_Section (Screen, "cli.task.section.judged");
                end if;
                --  Each check's outcome in its colour: passed, set aside,
-               --  or what stopped it.
-               if Lead = "" then
+               --  or what stopped it -- its parts not said where it has none.
+               if To_String (One.Name) = "children" and then One.Passed
+                 and then Model_Runner.Framework.Tasks.Children (Store, Argument).Is_Empty
+               then
+                  null;
+               elsif Lead = "" then
                   Pres.Put_Pair (Screen, "cli.task.field", Named, Detail, Pres.Bad, Indent => 2);
                else
                   Pres.Put_Marked
@@ -4532,14 +4608,32 @@ package body Model_Runner.CLI.Tasks is
                          (Store, Space, Unsettled_Only => True));
             begin
                if not Unsettled.Is_Empty then
-                  Outcome := E.Make (E.Framework_Integration_Conflict);
-                  E.Add_Text (Outcome, "name", Space);
-                  E.Add_Text (Outcome, "detail", Joined (Unsettled)
-                              & ", not changed since the conflict was found; settle "
-                              & (if Natural (Unsettled.Length) = 1 then "it" else "them")
-                              & " in the workspace's tree/ -- or in merge/, its markers taken out -- or"
-                              & " /task integrate " & First_Word
-                              & " resolved anyway takes the workspace's copy over the project's");
+                  declare
+                     Held  : Model_Runner.Framework.Workspaces.Workspace;
+                     Got   : E.Error_Info;
+                     --  merge/ only where one was written: a file both sides
+                     --  made has no lines in common to mark.
+                     Merge : Boolean := False;
+                  begin
+                     Model_Runner.Framework.Workspaces.Read (Store, Space, Held, Got);
+                     if E.Is_Ok (Got) and then Length (Held.Path) > 0 then
+                        Merge := (for some File of Unsettled =>
+                                    Ada.Directories.Exists
+                                      (Ada.Directories.Containing_Directory (To_String (Held.Path))
+                                       & "/merge/" & File));
+                     end if;
+                     Outcome := E.Make (E.Framework_Integration_Conflict);
+                     E.Add_Text (Outcome, "name", Space);
+                     E.Add_Text (Outcome, "detail", Joined (Unsettled)
+                                 & ", not changed since the conflict was found; settle "
+                                 & (if Natural (Unsettled.Length) = 1 then "it" else "them")
+                                 & " in the workspace's tree/"
+                                 & (if Merge then " -- or in merge/, its markers taken out --"
+                                    else " -- no merge of it was written: both made it whole --")
+                                 & " or"
+                                 & " /task integrate " & First_Word
+                                 & " resolved anyway takes the workspace's copy over the project's");
+                  end;
                   Fail (Outcome);
                   return;
                end if;
@@ -5361,16 +5455,15 @@ package body Model_Runner.CLI.Tasks is
       elsif Action = "reopen" then
          declare
             Was_Complete : constant Boolean := Tk.State_Of (Store, Argument) = "complete";
+            Had_Changed  : constant String := Changed_By (Argument);
          begin
-            Move_Granted ("accepted", Model_Runner.Framework.Transitions.Reopen);
             --  Its work done before is not undone: said, so a run starts
-            --  from it knowingly.
-            if Was_Complete and then Tk.State_Of (Store, Argument) = "accepted"
-              and then Changed_By (Argument) /= ""
-            then
+            --  from it knowingly -- before what comes next is.
+            if Was_Complete and then Had_Changed /= "" then
                Pres.Put_Note (Screen, "cli.task.reopened_work_stays",
-                              [Loc.Named ("name", Argument), Loc.Named ("detail", Changed_By (Argument))]);
+                              [Loc.Named ("name", Argument), Loc.Named ("detail", Had_Changed)]);
             end if;
+            Move_Granted ("accepted", Model_Runner.Framework.Transitions.Reopen);
          end;
       elsif Action = "reconsider" and then Argument /= ""
         and then Tk.State_Of (Store, First_Word) not in "rejected" | ""
@@ -5783,10 +5876,10 @@ package body Model_Runner.CLI.Tasks is
                   Aside   : constant String := Ws.Replaced_Copy (Store, Name);
                   Over    : constant String :=
                     (if Natural (Changed.Length) = 0 then ""
-                     else "; the project's " & Joined (Changed)
+                     else " The project's " & Joined (Changed)
                           & (if Natural (Changed.Length) = 1 then " differs" else " differ")
                           & " from these now, and " & (if Natural (Changed.Length) = 1 then "is" else "are")
-                          & " kept first as " & Aside);
+                          & " kept first as " & Aside & ".");
 
                   --  Each file, said as going over the project's or added.
                   function Files_Said return String is
@@ -5801,7 +5894,14 @@ package body Model_Runner.CLI.Tasks is
                      return To_String (Text);
                   end Files_Said;
                begin
-                  if Confirmed ("cli.task.kept_restore_confirm", Name, Files_Said & Over)
+                  --  The project holds it as kept already: nothing to put back.
+                  if Natural (Changed.Length) = 0
+                    and then (for all File of Ws.Kept_Files (Store, Name) =>
+                                Ada.Directories.Exists
+                                  (Hostkit.Fs.Join (Ada.Directories.Containing_Directory (S.Root (Store)), File)))
+                  then
+                     Pres.Put_Note (Screen, "cli.task.kept_diff_same", [Loc.Named ("name", Name)]);
+                  elsif Confirmed ("cli.task.kept_restore_confirm", Name, Files_Said & "?" & Over)
                   then
                      Ws.Restore_Kept (Store, Name, Outcome);
                      if E.Is_Error (Outcome) then
@@ -5900,11 +6000,16 @@ package body Model_Runner.CLI.Tasks is
          begin
             if not Needs_Task then
                null;
-            elsif Space = "" and then Tk.State_Of (Store, First_Word) = "complete"
+            --  Its work in the project, uncommitted: shown, complete or
+            --  reopened since -- what it wrote is there all the same.
+            elsif Space = "" and then Tk.State_Of (Store, First_Word) in "complete" | "accepted" | "failed" | "blocked"
               and then Changed_By (First_Word) /= ""
               and then Shown_Uncommitted (First_Word)
             then
-               null;
+               if Tk.State_Of (Store, First_Word) /= "complete" then
+                  Pres.Put_Note (Screen, "cli.task.diff_reopened",
+                                 [Loc.Named ("name", First_Word), Loc.Named ("value", Moved_State (First_Word))]);
+               end if;
             elsif Space = "" then
                --  Nothing waits: said as a state, with where its work is.
                Pres.Put_Note
@@ -6032,6 +6137,28 @@ package body Model_Runner.CLI.Tasks is
                                           [Loc.Named ("path", File), Loc.Named ("name", First_Word)]);
                            Clashing.Append (File);
                         end if;
+                        --  The project's change since: by which task, where one
+                        --  took it in.
+                        if (From = Mine or else not Same (Base, Mine)) and then Ada.Directories.Exists (Mine)
+                          and then Taken_In_By (File, First_Word) /= ""
+                        then
+                           Pres.Put_Note (Screen, "cli.task.diff_changed_by",
+                                          [Loc.Named ("path", File),
+                                           Loc.Named ("name", Taken_In_By (File, First_Word))]);
+                        end if;
+                        --  Another task's work waiting to be taken in changes
+                        --  it too: the second of the two taken in meets the first.
+                        for Other of Tk.List (Store, "verification") loop
+                           if Other /= First_Word
+                             and then Model_Runner.Framework.Workspaces.Active_For (Store, Other) /= ""
+                             and then Model_Runner.Framework.Workspaces.Changes
+                                        (Store, Model_Runner.Framework.Workspaces.Active_For (Store, Other))
+                                        .Contains (File)
+                           then
+                              Pres.Put_Note (Screen, "cli.task.diff_other_waiting",
+                                             [Loc.Named ("path", File), Loc.Named ("name", Other)]);
+                           end if;
+                        end loop;
                      end;
                      if Differ /= "" then
                         declare

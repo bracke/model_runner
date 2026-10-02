@@ -5720,6 +5720,11 @@ package body Tests.Framework_Cases is
       end;
       Assert (Pm.Intersect (Pm.Unrestricted, Pm.Nothing) (Pm.Read_Source).Granted = False,
               "the intersection with nothing granted something");
+      --  A place a grant names that the project has not: said, a place
+      --  there is not.
+      Assert (Ada.Strings.Fixed.Index (Pm.Missing_Places (".", "roots=nosuchdir/"), "nosuchdir/") > 0
+              and then Pm.Missing_Places (".", "roots=src/") = "",
+              "a missing place was not named, or one there was");
 
       declare
          Findings : constant Cn.Finding_List := Cn.Check (Store);

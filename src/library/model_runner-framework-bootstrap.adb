@@ -745,42 +745,31 @@ package body Model_Runner.Framework.Bootstrap is
          end if;
 
          --  A to-do list's open box is work wanted: a candidate requirement
-         --  in its words; a ticked one is done, and nothing is made of it.
-         if Todo_Document and then Line'Length > 6 and then Line (Line'First) in '-' | '*' | '+'
+         --  in its words. A labelled one is read as every labelled line is,
+         --  below -- the same in any document. A ticked one unlabelled is
+         --  done: in a to-do list nothing is made of it; in a requirements
+         --  document or a specification it is made, and said to be done.
+         Label_Split (Item, Label, Rest);
+         if Todo_Document and then Label = Null_Unbounded_String
+           and then Line'Length > 6 and then Line (Line'First) in '-' | '*' | '+'
            and then Ada.Characters.Handling.To_Lower (Line (Line'First + 1 .. Line'First + 5)) in " [ ] " | " [x] "
          then
-            Label_Split (Item, Label, Rest);
-            --  - [ ] REQ-2: ... -- under the project's own label, as a line
-            --  of a requirements document is.
-            if Line (Line'First + 3) = ' ' and then Length (Label) > 4 and then Slice (Label, 1, 4) = "REQ-"
-              and then Identifiers.Is_Valid (To_String (Label))
-              and then not Seen.Contains (Fingerprint (Item))
-            then
-               Seen.Append (Fingerprint (Item));
-               declare
-                  Said : constant String :=
-                    Trim (Ada.Strings.Fixed.Trim (To_String (Rest), Ada.Strings.Maps.To_Set ("|:-* "),
-                                                  Ada.Strings.Maps.Null_Set));
-               begin
-                  Found (Imported_Item, Path & "#" & To_String (Label), Headline (Said), Said,
-                         Given => To_String (Label));
-               end;
-            elsif Line (Line'First + 3) = ' ' and then not Seen.Contains (Fingerprint (Item)) then
+            if Line (Line'First + 3) = ' ' and then not Seen.Contains (Fingerprint (Item)) then
                Seen.Append (Fingerprint (Item));
                Found (Requirement_Candidate, Path & "#" & Fingerprint (Item), Headline (Item), Item);
-            elsif Line (Line'First + 3) /= ' '
-              and then not (Length (Label) > 4 and then Slice (Label, 1, 4) = "REQ-")
-            then
+            elsif Line (Line'First + 3) /= ' ' and then Ada.Strings.Fixed.Index (Lower_Name, "todo") > 0 then
                --  Ticked: done, so not proposed -- said, not left unsaid.
                Found (Issue, Path & "#" & Fingerprint (Item) & "#retired",
                       "an item ticked as done in " & Path & ", so it is not proposed: " & Headline (Item), "done");
+            elsif Line (Line'First + 3) /= ' ' and then not Seen.Contains (Fingerprint (Item)) then
+               Seen.Append (Fingerprint (Item));
+               Found (Requirement_Candidate, Path & "#" & Fingerprint (Item), Headline (Item), Item);
+               Found (Issue, Path & "#" & Fingerprint (Item) & "#done",
+                      Headline (Item) & " is marked done in " & Path & ": once it is accepted, /task complete"
+                      & " takes the task derived for it as done, its checks passing, rather than /work doing it"
+                      & " again", Item);
             end if;
-            --  Ticked under the project's own label: made as a labelled line
-            --  ticked done is, below, with its task to complete.
-            if not (Line (Line'First + 3) /= ' ' and then Length (Label) > 4 and then Slice (Label, 1, 4) = "REQ-")
-            then
-               return;
-            end if;
+            return;
          end if;
 
          --  A ticked box -- - [x] -- is done already: said, as work taken
@@ -789,10 +778,12 @@ package body Model_Runner.Framework.Bootstrap is
          Label_Split (Item, Label, Rest);
          if Line'Length > 6 and then Line (Line'First) in '-' | '*' | '+'
            and then Ada.Characters.Handling.To_Lower (Line (Line'First + 1 .. Line'First + 5)) = " [x] "
-           and then Label /= Null_Unbounded_String
-           --  Only what is made a requirement has a task to take as done.
-           and then (Says_Requirement (Item, True) or else Requirements_Here
-                     or else (Length (Label) > 4 and then Slice (Label, 1, 4) = "REQ-"))
+           --  Only what is made a requirement has a task to take as done:
+           --  labelled, or unlabelled and stating one.
+           and then ((Label /= Null_Unbounded_String
+                      and then (Says_Requirement (Item, True) or else Requirements_Here
+                                or else (Length (Label) > 4 and then Slice (Label, 1, 4) = "REQ-")))
+                     or else (Label = Null_Unbounded_String and then Says_Requirement (Item, True)))
          then
             Found (Issue, Path & "#" & (if Label /= Null_Unbounded_String then To_String (Label)
                                         else Fingerprint (Item)) & "#done",
@@ -1093,8 +1084,15 @@ package body Model_Runner.Framework.Bootstrap is
                     (if Label = Null_Unbounded_String then Item else Trim (To_String (Rest)));
                   Mark : constant String :=
                     (if Label = Null_Unbounded_String then Headline (Item) else To_String (Label));
+                  --  DEC-1: the project's own form -- made under it, as
+                  --  REQ-1 is, not kept in its title.
+                  Own : constant Boolean :=
+                    Length (Label) > 4 and then Slice (Label, 1, 4) = "DEC-"
+                    and then Identifiers.Is_Valid (To_String (Label));
                begin
-                  if Said /= "" then
+                  if Said /= "" and then Own then
+                     Found (Decision_Candidate, Path & "#" & Mark, Headline (Said), Said, Given => Mark);
+                  elsif Said /= "" then
                      Found (Decision_Candidate, Path & "#" & Mark,
                             (if Label = Null_Unbounded_String then Headline (Said)
                              else Mark & ": " & Headline (Said)), Said);
@@ -1116,6 +1114,7 @@ package body Model_Runner.Framework.Bootstrap is
            and then Colon > Item'First + 1
            and then Item (Item'First) in 'A' .. 'Z'
            and then not Starts_With (Item, "REQ-")
+           and then not (Starts_With (Item, "DEC-") and then Identifiers.Is_Valid (Item (Item'First .. Colon - 1)))
            and then (for all C of Item (Item'First .. Colon - 1) => C in 'A' .. 'Z' | '0' .. '9' | '-')
            and then (for some C of Item (Item'First .. Colon - 1) => C in '0' .. '9')
          then
@@ -1257,7 +1256,13 @@ package body Model_Runner.Framework.Bootstrap is
             return;
          end if;
 
-         if not Process_Here and then Says_Requirement (Item, Listed or else Requirements_Here) then
+         --  Under a heading of process -- a release checklist -- only a
+         --  firm SHALL or MUST is one: its steps are not.
+         if (not Process_Here and then Says_Requirement (Item, Listed or else Requirements_Here))
+           or else (Process_Here
+                    and then (Has_Word (Ada.Characters.Handling.To_Lower (Item), "shall")
+                              or else Has_Word (Item, "MUST")))
+         then
             declare
                Print : constant String := Fingerprint (Item);
             begin
@@ -1917,20 +1922,28 @@ package body Model_Runner.Framework.Bootstrap is
                   Id_Given : Unbounded_String;
                   Status   : Unbounded_String;
                   Next     : Natural := Index + 1;
-               begin
                   --  Indented under it -- or, where the indent was lost, the
                   --  first line of words after it.
+                  --  Whether a line begins with a text: its own bounds, as
+                  --  a line kept from a longer one has.
+                  function Begins (Line, Prefix : String) return Boolean
+                  is (Line'Length >= Prefix'Length
+                      and then Line (Line'First .. Line'First + Prefix'Length - 1) = Prefix);
+               begin
                   while Next <= Natural (Lines.Length)
                     and then (String'(Lines (Next)) = ""
-                              or else Ada.Strings.Fixed.Index (String'(Lines (Next)), " ") = 1
-                              or else Ada.Strings.Fixed.Index (String'(Lines (Next)), [1 => ASCII.HT]) = 1
+                              or else Begins (Lines (Next), " ")
+                              or else Begins (Lines (Next), [1 => ASCII.HT])
                               or else (Words = Null_Unbounded_String
-                                       and then Ada.Strings.Fixed.Index (String'(Lines (Next)), "..") /= 1
-                                       and then Ada.Strings.Fixed.Index (String'(Lines (Next)), ":") /= 1))
+                                       and then not Begins (Lines (Next), "..")
+                                       and then not Begins (Lines (Next), ":")))
                   loop
                      exit when String'(Lines (Next)) = "" and then Words /= Null_Unbounded_String
                        and then Next < Natural (Lines.Length)
-                       and then Ada.Strings.Fixed.Index (String'(Lines (Next + 1)), " ") /= 1;
+                       and then not Begins (Lines (Next + 1), " ");
+                     --  The next directive ends this one, a blank line or not.
+                     exit when String'(Lines (Next)) = "" and then Next < Natural (Lines.Length)
+                       and then Begins (Lines (Next + 1), "..");
                      declare
                         Body_Line : constant String := Ada.Strings.Fixed.Trim (Lines (Next), Ada.Strings.Both);
                      begin
@@ -2116,6 +2129,20 @@ package body Model_Runner.Framework.Bootstrap is
                elsif Value_Of (Line, "title:") /= "" then
                   Title := To_Unbounded_String (Value_Of (Line, "title:"));
                end if;
+            --  Its first words a heading: that is its title, as title:
+            --  would have been -- its # not part of it.
+            elsif Lead /= Null_Unbounded_String and then Trim (Line) /= ""
+              and then Trim (Line) (Trim (Line)'First) = '#'
+            then
+               Append (Result, "## "
+                       & (if Id = Null_Unbounded_String then "" else To_String (Id) & " ")
+                       & Trim (Ada.Strings.Fixed.Trim (Trim (Line), Ada.Strings.Maps.To_Set ("#"),
+                                                       Ada.Strings.Maps.Null_Set))
+                       & ASCII.LF);
+               if Status /= Null_Unbounded_String then
+                  Append (Result, "Status: " & To_String (Status) & ASCII.LF);
+               end if;
+               Lead := Null_Unbounded_String;
             elsif Lead /= Null_Unbounded_String and then Trim (Line) /= "" then
                Append (Result, To_String (Lead) & Trim (Line) & ASCII.LF);
                Lead := Null_Unbounded_String;
@@ -2478,7 +2505,15 @@ package body Model_Runner.Framework.Bootstrap is
                   then
                      --  Of the same thing: the same issue where it says the
                      --  same words, whatever its summary adds; words the
-                     --  document has changed since are another issue.
+                     --  document has changed since are another issue. An
+                     --  item marked done is the same issue while it is
+                     --  there: its document and label say which.
+                     if Held.Provenance = Said.Provenance and then Length (Said.Provenance) > 5
+                       and then Slice (Said.Provenance, Length (Said.Provenance) - 4, Length (Said.Provenance))
+                                = "#done"
+                     then
+                        return;
+                     end if;
                      Results.Read (Item, Kept, Held, Read);
                      if E.Is_Ok (Read) and then Held.Payload = Said.Payload
                        and then Gist (To_String (Held.Summary)) = Gist (To_String (Said.Summary))
