@@ -377,7 +377,10 @@ package body Model_Runner.Framework.Repository is
             declare
                R : constant String := Clean (Root);
             begin
-               if File = R or else (File'Length > R'Length
+               --  The project's top holds every file, least closely.
+               if R in "." | "" then
+                  Best := Integer'Max (Best, 0);
+               elsif File = R or else (File'Length > R'Length
                                     and then File (File'First .. File'First + R'Length - 1) = R
                                     and then File (File'First + R'Length) = '/')
                then

@@ -1400,6 +1400,7 @@ package body Model_Runner.CLI.Repo is
                           ["requirement", "task", "test", "specification", "decision",
                            "component", "file", "unit", "symbol", "other"];
                         Counts : Unbounded_String;
+                        Counted : Natural := 0;
 
                         --  What it reaches, and the open tasks serving a
                         --  requirement it reaches: their work is what the
@@ -1468,12 +1469,50 @@ package body Model_Runner.CLI.Repo is
                            declare
                               Text : Unbounded_String;
                               File : Ada.Text_IO.File_Type;
+                              Read_Files : Natural := 0;
+
+                              --  A file's lines, or a directory's files' -- what
+                              --  is under a directory names its requirements too.
+                              procedure Take (Path : String; Depth : Natural) is
+                                 use Ada.Directories;
+                              begin
+                                 if Kind (Path) = Ada.Directories.Directory then
+                                    if Depth = 0 then
+                                       return;
+                                    end if;
+                                    declare
+                                       Search : Search_Type;
+                                       Next   : Directory_Entry_Type;
+                                       Below  : Model_Runner.Framework.Name_Lists.Vector;
+                                    begin
+                                       Start_Search (Search, Path, "");
+                                       while More_Entries (Search) loop
+                                          Get_Next_Entry (Search, Next);
+                                          if Simple_Name (Next) (Simple_Name (Next)'First) /= '.' then
+                                             Below.Append (Full_Name (Next));
+                                          end if;
+                                       end loop;
+                                       End_Search (Search);
+                                       for One of Below loop
+                                          Take (One, Depth - 1);
+                                       end loop;
+                                    end;
+                                 elsif Read_Files < 200 and then Size (Path) < 1_000_000 then
+                                    Read_Files := Read_Files + 1;
+                                    Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
+                                    while not Ada.Text_IO.End_Of_File (File) loop
+                                       Append (Text, Ada.Text_IO.Get_Line (File) & ASCII.LF);
+                                    end loop;
+                                    Ada.Text_IO.Close (File);
+                                 end if;
+                              exception
+                                 when others =>
+                                    if Ada.Text_IO.Is_Open (File) then
+                                       Ada.Text_IO.Close (File);
+                                    end if;
+                              end Take;
                            begin
-                              Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Argument);
-                              while not Ada.Text_IO.End_Of_File (File) loop
-                                 Append (Text, Ada.Text_IO.Get_Line (File) & ASCII.LF);
-                              end loop;
-                              Ada.Text_IO.Close (File);
+                              Take (Argument, 5);
                               for Req of Model_Runner.Framework.Intent.List
                                            (Store, Model_Runner.Framework.Intent.Requirement)
                               loop
@@ -1622,13 +1661,15 @@ package body Model_Runner.CLI.Repo is
                               if Of_Kind > 0 then
                                  Append (Counts, (if Counts = Null_Unbounded_String then "" else ", ")
                                          & Kind & ": " & Image (Of_Kind));
+                                 Counted := Counted + Of_Kind;
                               end if;
                            end;
                         end loop;
                         Pres.Put_Indented
                           (Screen, "cli.repo.impact_summary",
                            [Loc.Named ("name", (if Argument = "" then "the project" else Argument)),
-                            Loc.Named ("count", Image (Natural (All_Reached.Length))),
+                            --  What was counted above, so the sum adds up.
+                            Loc.Named ("count", Image (Counted)),
                             Loc.Named ("detail", To_String (Counts))]);
                      end;
                      Chosen := Tr.Select_Tests (Store, Reach);

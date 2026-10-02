@@ -297,8 +297,19 @@ package body Model_Runner.Framework.Work is
    procedure Note_Undone (Item : in out Stores.Store; Task_Id, Copy : String) is
       Change : Stores.Transaction;
       Status : E.Error_Info;
+      Held   : Records.Item;
+      Got    : E.Error_Info;
+      Event  : Unbounded_String;
    begin
+      Stores.Read (Item, Tasks_Area, Task_Id & ".state", Held, Got);
       Annotate (Item, Change, Task_Id, "undone_by", Copy);
+      --  In its history too, where it changes how its work stands.
+      if E.Is_Ok (Got) and then Records.Get (Held, "undone_by") /= Copy then
+         Events.Emit (Item, Change, Events.Task_Revised, Task_Id,
+                      (if Copy /= "" then "its work undone in the project: " & Copy & " was put back over it"
+                       else "its work back in the project, as a kept copy put it there"),
+                      Event, Status);
+      end if;
       Stores.Commit (Item, Change, Status);
    end Note_Undone;
 
@@ -1534,7 +1545,11 @@ package body Model_Runner.Framework.Work is
                           --  Stopped by the person: stopped, as the task is said.
                           & (if Records.Get (Value, "state") = "cancelled"
                                and then Ada.Strings.Fixed.Index (Records.Get (Value, "summary"), "you stopped") > 0
-                             then "stopped" else Records.Get (Value, "state"))
+                             then "stopped"
+                             --  Its work left to be taken in: what the task shows.
+                             elsif Records.Get (Value, "outcome") = "verification"
+                             then "done, its work to integrate"
+                             else Records.Get (Value, "state"))
                           & (if Records.Get (Value, "parent") = "" then ""
                              else " (a child of " & Records.Get (Value, "parent")
                                   & (if Records.Get (Value, "retry_of") = "" then ""
@@ -1561,6 +1576,9 @@ package body Model_Runner.Framework.Work is
                                 & " " & (if Records.Get (Value, "outcome") = "blocked"
                                            and then Ada.Strings.Fixed.Index (Why, "you stopped its work") > 0
                                          then "left it stopped"
+                                         --  As the list says the task: to integrate.
+                                         elsif Records.Get (Value, "outcome") = "verification"
+                                         then "left its work to integrate"
                                          elsif Records.Get (Value, "outcome") /= ""
                                          then "left it " & Records.Get (Value, "outcome")
                                          else Records.Get (Value, "state"))
@@ -1581,6 +1599,8 @@ package body Model_Runner.Framework.Work is
          Was_Stopped : Boolean := False;
          --  This move is from a stop: said as taken up again.
          Was_Stopped_Before : Boolean := False;
+         --  On its way to being completed by hand: the completion said so.
+         By_Hand : Boolean := False;
       begin
          for Index in 1 .. Events.Length (Happened) loop
             declare
@@ -1593,7 +1613,16 @@ package body Model_Runner.Framework.Work is
                   then "stopped -> " & Raw (Raw'First + 11 .. Raw'Last)
                   else Raw);
             begin
-               if To_String (One.Subject) = Task_Id then
+               --  A move a completion by hand went through on its way --
+               --  taken to running, then to its checks, at the same moment:
+               --  the completion says it, not a run that never was.
+               if To_String (One.Subject) = Task_Id
+                 and then (Ada.Strings.Fixed.Index (Raw, "-> running") > 0
+                           or else Ada.Strings.Fixed.Index (Raw, "running -> verification") > 0)
+                 and then Ada.Strings.Fixed.Index (Raw, "completed by hand") > 0
+               then
+                  By_Hand := True;
+               elsif To_String (One.Subject) = Task_Id then
                   Was_Stopped_Before := Was_Stopped and then Detail /= Raw;
                   Was_Stopped := Ada.Strings.Fixed.Index (Raw, "-> blocked: you stopped its work") > 0;
                   Result.Append
@@ -1608,6 +1637,8 @@ package body Model_Runner.Framework.Work is
                         then "taken up to be completed by hand"
                         elsif Ada.Strings.Fixed.Index (Raw, "rejected -> candidate") = Raw'First then "reconsidered"
                         elsif Was_Stopped_Before then "taken up again"
+                        elsif By_Hand and then Ada.Strings.Fixed.Index (Raw, "-> complete") > 0
+                        then "completed by hand"
                         else Words_Of_Kind (To_String (One.Kind_Word)))
                      & (if Length (One.Detail) = 0 then ""
                         --  Stopped by the person: said so, as /state says it.
@@ -2064,7 +2095,7 @@ package body Model_Runner.Framework.Work is
                Of_Kind_Alone : constant Permissions.Permission_Set :=
                  Permissions.Effective (Item, Kind, "", Within_Sandbox => False);
                By_Role : constant Boolean :=
-                 Lacks /= "write a file" and then Grants (Of_Kind_Alone) and then not Grants (Of_Kind)
+                 Grants (Of_Kind_Alone) and then not Grants (Of_Kind)
                  and then Ada.Strings.Fixed.Index (Lacks, "write anywhere") = 0;
                Own_Narrows : constant Boolean :=
                  Records.Get (View, "definition.permissions") /= "" and then Grants (Of_Kind) and then not By_Role;
@@ -2102,6 +2133,10 @@ package body Model_Runner.Framework.Work is
                     then "; " & Level & " withholds " & Capability & " and " & Also & " -- /reconfigure"
                          & " map.permission." & Level & "." & Capability & "=on map.permission." & Level & "."
                          & Also & "=on grants them"
+                    --  The role's own withholding is taken away, not granted over.
+                    elsif By_Role
+                    then "; " & Level & " withholds " & Capability & " -- /reconfigure map.permission."
+                         & Level & "." & Capability & "=inherit gives it back"
                     else "; " & Level & " withholds " & Capability & " -- /reconfigure map.permission."
                          & Level & "." & Capability & "=on grants it")
                  & (if Elsewhere then " (" & Comma_Separated (Homes) & ")" else "")
@@ -3799,8 +3834,15 @@ package body Model_Runner.Framework.Work is
          Keep_Proposals_Aside;
          declare
             Why : constant String :=
-              "its answer did not keep to the work contract: "
-              & E.Text_Of (Held, "name") & ": " & E.Text_Of (Held, "detail")
+              --  In words: the field the answer lacked, not the record's name.
+              (if E.Text_Of (Held, "name") = "work_claim.status"
+               then "its answer did not end with the status: line that says how the work stands"
+               else "its answer did not say what the harness needs: "
+                    & (if Ada.Strings.Fixed.Index (E.Text_Of (Held, "name"), "work_claim.") = 1
+                       then E.Text_Of (Held, "name") (E.Text_Of (Held, "name")'First + 11
+                                                      .. E.Text_Of (Held, "name")'Last)
+                       else E.Text_Of (Held, "name"))
+                    & ": " & E.Text_Of (Held, "detail"))
               --  A call written out as text is no call: said, since the
               --  model meant one and nothing ran.
               & (if Index (Answer, """name""") > 0 and then Index (Answer, """arguments""") > 0

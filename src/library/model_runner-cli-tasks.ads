@@ -23,8 +23,9 @@ package Model_Runner.CLI.Tasks is
       Screen : in out Model_Runner.Presentation.Console;
       Status : out Natural);
 
-   --  The open tasks that wait for a task, said for a question about
-   --  ending it: "; TASK-003 waits on it", or "" for none.
+   --  The open tasks that wait for a task, and its parts still open, said
+   --  for a question about ending it: "; TASK-003 waits on it", or "" for
+   --  none.
    --
    --  @param Store The project's state.
    --  @param Id The task.

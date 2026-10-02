@@ -356,6 +356,8 @@ package body Model_Runner.Framework.Consistency is
                if Name /= "" and then not Records.Has (Config, Name)
                  and then (if Is_Capability then Default_Granted /= Ruled_Granted
                            else Holds_Unset (Name) /= Said)
+                 --  A level written whole holds its capabilities so: as it holds.
+                 and then not (Is_Capability and then Permissions.Ruling_Agrees (Item, Config, Name, Said))
                then
                   Found (Unapplied_Ruling, Name,
                          Source & " rules " & Bare & " = " & Said & ", and the configuration does not set it,"
@@ -380,6 +382,30 @@ package body Model_Runner.Framework.Consistency is
                   if Intent.State_Of (Item, Intent.Decision, Id) = "accepted" and then Equal > 0 then
                      Judge (Id, Rule (Rule'First .. Equal - 1),
                             Rule (Equal + 3 .. (if Over = 0 then Rule'Last else Over - 1)));
+                     --  A ruling on a kind the project has not: it rules nothing.
+                     declare
+                        Subject : constant String := Whole (Rule (Rule'First .. Equal - 1));
+                        Rest    : constant String :=
+                          (if Ada.Strings.Fixed.Index (Subject, "map.permission.kind.") = Subject'First
+                           then Subject (Subject'First + 20 .. Subject'Last)
+                           elsif Ada.Strings.Fixed.Index (Subject, "scalar.task.") = Subject'First
+                             and then Ada.Strings.Fixed.Index (Subject (Subject'First + 12 .. Subject'Last), ".") > 0
+                           then Subject (Ada.Strings.Fixed.Index (Subject (Subject'First + 12 .. Subject'Last), ".")
+                                         + 1 .. Subject'Last)
+                           else "");
+                        Kind    : constant String :=
+                          (if Ada.Strings.Fixed.Index (Subject, "map.permission.kind.") = Subject'First
+                             and then Ada.Strings.Fixed.Index (Rest, ".") > 0
+                           then Rest (Rest'First .. Ada.Strings.Fixed.Index (Rest, ".") - 1)
+                           else Rest);
+                     begin
+                        if Kind /= "" and then not Tasks.Kinds (Item).Contains (Kind) then
+                           Found (Unapplied_Ruling, Subject,
+                                  Id & " rules " & Subject & ", and " & Kind & " is no kind of task the project has:"
+                                  & " it rules nothing -- /decision govern " & Id & " " & Subject
+                                  & " none takes it off");
+                        end if;
+                     end;
                      --  A kind's own limit above the agents' limit ruled:
                      --  the kind's is what its tasks run with, past the
                      --  ruling.

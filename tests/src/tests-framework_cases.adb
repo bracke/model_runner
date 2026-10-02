@@ -2816,6 +2816,9 @@ package body Tests.Framework_Cases is
                Put_File (Project & "/restored.txt", "edited since" & ASCII.LF);
                Assert (Model_Runner.Framework.Work.Holder_Of (Store, "restored.txt") = "",
                        "a file changed since was still credited to the task");
+               --  No task of a kind the project has none of is open.
+               Assert (Tk.First_Open_Of_Kind (Store, "no-such-kind") = "",
+                       "a task of a kind there is none of was found open");
             end;
          end;
          --  Another identifier for a requirement: under it, and the old gone.
@@ -9532,7 +9535,7 @@ package body Tests.Framework_Cases is
                        and then Ada.Strings.Fixed.Index (Text, "checks:") > 0,
                        "/trace or /check said nothing of what it was asked: " & Text);
                Assert (Ada.Strings.Fixed.Index (Text, "kind: ") > 0
-                       and then Ada.Strings.Fixed.Index (Text, "payload: ") > 0,
+                       and then Ada.Strings.Fixed.Index (Text, "summary: ") > 0,
                        "/result did not show the result it names");
                Assert (Ada.Strings.Fixed.Index (Text, "nothing is running in the foreground") > 0,
                        "/cancel with nothing running did not say so");

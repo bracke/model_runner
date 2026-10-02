@@ -29,6 +29,15 @@ package body Model_Runner.Framework.Execution is
    function Trim (Text : String) return String
    is (Ada.Strings.Fixed.Trim (Text, Ada.Strings.Both));
 
+   --  Resolve the command before env clears PATH. This matters especially on
+   --  Windows, where the native PATH uses semicolons but the MSYS env utility
+   --  interprets the replacement PATH as a POSIX search path.
+   function Executable (Name : String) return String is
+      Located : constant String := Hostkit.Process.Locate (Name);
+   begin
+      return (if Located = "" then Name else Located);
+   end Executable;
+
    ---------------
    -- Policy_Of --
    ---------------
@@ -525,8 +534,12 @@ package body Model_Runner.Framework.Execution is
             Arguments.Append (To_Unbounded_String ("-c"));
             Arguments.Append (To_Unbounded_String (Command));
          else
-            for Word of Words loop
-               Arguments.Append (To_Unbounded_String (Word));
+            for Index in Words.First_Index .. Words.Last_Index loop
+               Arguments.Append
+                 (To_Unbounded_String
+                    (if Index = Words.First_Index
+                     then Executable (Words (Index))
+                     else Words (Index)));
             end loop;
          end if;
 
@@ -645,7 +658,7 @@ package body Model_Runner.Framework.Execution is
       for Assignment of Added loop
          Words.Append (To_Unbounded_String (Assignment));
       end loop;
-      Words.Append (To_Unbounded_String (Program));
+      Words.Append (To_Unbounded_String (Executable (Program)));
       for Word of Arguments loop
          Words.Append (To_Unbounded_String (Word));
          Append (Command, " " & Word);

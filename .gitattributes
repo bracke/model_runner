@@ -3,6 +3,7 @@
 #  checkout would make a Windows working tree disagree with the generator
 #  about a file neither had edited, so these are pinned.
 docs/error-codes.md text eol=lf
+docs/spec_driven_development_framework_v3_revised.md text eol=lf
 
 #  The message catalog is read by the program itself rather than by a text
 #  editor, and its values are compared exactly.

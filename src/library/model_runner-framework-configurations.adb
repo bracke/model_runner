@@ -3130,7 +3130,7 @@ package body Model_Runner.Framework.Configurations is
                Status := Refused (Name, Problem (Name, Value));
                return;
             elsif Starts (Name, "map.permission.") and then Level_Problem (Name) /= "" then
-               Status := Refused (Name, Level_Problem (Name));
+               Status := Unknown (Name, Level_Problem (Name));
             elsif Kind_Problem (Name) /= "" then
                Status := Unknown (Name, Kind_Problem (Name));
                return;
@@ -3251,7 +3251,7 @@ package body Model_Runner.Framework.Configurations is
                                           elsif Records.Has (Result.Before, Name) then "granted, no limits"
                                           elsif Project_Level then (if Had_It then "granted" else "withheld")
                                           elsif Level_Said (Name)
-                                          then "withheld (this level grants only what it names)"
+                                          then "withheld here"
                                           else "(as the level above has it)") & " -> inherit, "
                            & (if Project_Level then "the harness's default"
                               else "as the level above gives it")
@@ -3372,7 +3372,7 @@ package body Model_Runner.Framework.Configurations is
                                        then "withheld (this level grants none)"
                                        elsif not Was and then Level_Said (Name)
                                          and then Ada.Strings.Fixed.Index (Name, "map.permission.project.") = 0
-                                       then "withheld (this level grants only what it names)"
+                                       then "withheld here"
                                        elsif not Was and then Level_Said (Name) then "withheld"
                                        elsif not Was then Inherited
                                        elsif Old = "" and then Level = "project" and then Capable
@@ -3555,25 +3555,43 @@ package body Model_Runner.Framework.Configurations is
                   end loop;
                   if Had then
                      declare
-                        Named : Unbounded_String;
+                        Named, Withheld : Unbounded_String;
+                        Inherited : Natural := 0;
                      begin
                         for Index in 1 .. Records.Field_Count (Result.Before) loop
                            declare
                               Field : constant String := Records.Field_Name (Result.Before, Index);
                               Value : constant String := Records.Get (Result.Before, Field);
+                              Cap   : constant String :=
+                                (if Starts (Field, Level_Name & ".")
+                                 then Field (Field'First + Level_Name'Length + 1 .. Field'Last) else "");
                            begin
-                              if Starts (Field, Level_Name & ".") and then Value not in "off" | "inherit" then
+                              if Cap = "" then
+                                 null;
+                              elsif Value = "inherit" then
+                                 Inherited := Inherited + 1;
+                              elsif Value = "off" then
+                                 Append (Withheld, (if Withheld = Null_Unbounded_String then "" else ", ") & Cap);
+                              else
                                  Append (Named, (if Named = Null_Unbounded_String then "" else "; ")
-                                         & Field (Field'First + Level_Name'Length + 1 .. Field'Last)
-                                         & (if Value in "" | "on" then "" else " " & Value));
+                                         & Cap & (if Value in "" | "on" then "" else " " & Value));
                               end if;
                            end;
                         end loop;
+                        --  As it was written: what it granted, what it withheld,
+                        --  and the rest inherited -- not "nothing" for a level
+                        --  that followed the one above.
                         Result.Changed.Append
                           (Level_Name & ": "
                            & (if Records.Get (Result.Before, Level_Name) = "none" then "none"
-                              elsif Named = Null_Unbounded_String then "nothing granted"
-                              else To_String (Named))
+                              elsif Named = Null_Unbounded_String and then Withheld = Null_Unbounded_String
+                              then (if Inherited > 0 then "everything as the level above gives it"
+                                    else "nothing granted")
+                              else To_String (Named)
+                                   & (if Withheld = Null_Unbounded_String then ""
+                                      else (if Named = Null_Unbounded_String then "" else "; ")
+                                           & "withholds " & To_String (Withheld))
+                                   & (if Inherited > 0 then "; the rest as the level above gives it" else ""))
                            & " -> " & (if Whole = "inherit" then "inherit, as the level above gives it"
                                        else "none (every capability withheld)"));
                      end;

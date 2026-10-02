@@ -958,7 +958,9 @@ package body Model_Runner.Framework.Intent is
          E.Add_Text (Status, "detail", New_Id & " is taken: give that one another first, or choose another");
          return;
       end if;
-      --  The record under its new name, every field as it was.
+      --  The record under its new name, every field as it was -- and what
+      --  it was before, with how often it had changed: a new record counts
+      --  its own changes from one.
       declare
          Fresh : Records.Item :=
            Records.Create (Records.Schema_Id (Value), Records.Schema_Version (Value), New_Id, 1);
@@ -967,6 +969,8 @@ package body Model_Runner.Framework.Intent is
             Records.Set (Fresh, Records.Field_Name (Value, Index),
                          Records.Get (Value, Records.Field_Name (Value, Index)));
          end loop;
+         Records.Set (Fresh, "renumbered_from",
+                      Old_Id & ", after" & Natural'Image (Records.Revision (Value)) & " record changes");
          Stores.Put (Change, Area_Of (Kind), New_Id, Fresh);
          Stores.Remove (Change, Area_Of (Kind), Old_Id);
       end;
@@ -1005,6 +1009,48 @@ package body Model_Runner.Framework.Intent is
             end if;
          end loop;
       end loop;
+      --  Every task serving it, whatever its state -- done work too: its
+      --  link and a derived title follow, in the same change, so nothing
+      --  is left half renumbered.
+      if Kind = Requirement then
+         for Name of Stores.Names (Item, Tasks_Area) loop
+            if Ada.Strings.Fixed.Index (Name, ".") = 0 then
+               declare
+                  Held   : Records.Item;
+                  Got    : E.Error_Info;
+                  Staged : Boolean;
+               begin
+                  Stores.Pending (Change, Tasks_Area, Name, Held, Staged);
+                  if not Staged then
+                     Stores.Read (Item, Tasks_Area, Name, Held, Got);
+                  else
+                     Got := E.Success;
+                  end if;
+                  if E.Is_Ok (Got) and then Split_Lines (Records.Get (Held, "requirements")).Contains (Old_Id) then
+                     declare
+                        Lines : Unbounded_String;
+                        Title : constant String := Records.Get (Held, "title");
+                        At_Id : constant Natural := Ada.Strings.Fixed.Index (Title, "(" & Old_Id);
+                     begin
+                        for Line of Split_Lines (Records.Get (Held, "requirements")) loop
+                           Append (Lines, (if Lines = Null_Unbounded_String then "" else [1 => ASCII.LF])
+                                   & (if Line = Old_Id then New_Id else Line));
+                        end loop;
+                        Records.Set (Held, "requirements", To_String (Lines));
+                        if At_Id > 0 then
+                           Records.Set (Held, "title", Title (Title'First .. At_Id) & New_Id
+                                                        & Title (At_Id + 1 + Old_Id'Length .. Title'Last));
+                        end if;
+                        if not Staged then
+                           Records.Set_Revision (Held, Records.Revision (Held) + 1);
+                        end if;
+                        Stores.Put (Change, Tasks_Area, Name, Held);
+                     end;
+                  end if;
+               end;
+            end if;
+         end loop;
+      end if;
       Status := E.Success;
    end Renumber;
 

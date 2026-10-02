@@ -155,13 +155,16 @@ package Model_Runner.Framework.Bootstrap is
    --  @param Accept_Numbered Whether an item a document numbers is taken
    --    as accepted, as the policy says; False has it proposed however the
    --    policy has it -- a person asked, and said no.
+   --  @param Only_Read Whether only the documents read are judged: the
+   --    rest, not read this time, are not said to say nothing.
    procedure Apply
      (Item   : Stores.Store;
       Change : in out Stores.Transaction;
       Found  : Output_List;
       Result : out Report;
       Status : out Model_Runner.Errors.Error_Info;
-      Accept_Numbered : Boolean := True);
+      Accept_Numbered : Boolean := True;
+      Only_Read       : Boolean := False);
 
 private
 

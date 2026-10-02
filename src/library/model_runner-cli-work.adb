@@ -643,6 +643,21 @@ package body Model_Runner.CLI.Work is
          return To_String (Joined);
       end On_One_Line;
 
+      --  A task's first part not ended, where it waits for its parts; ""
+      --  where it does not.
+      function Open_Part (Id : String) return String is
+      begin
+         if Tk.State_Of (Store, Id) /= "blocked" then
+            return "";
+         end if;
+         for Child of Tk.Children (Store, Id) loop
+            if Tk.State_Of (Store, Child) not in "complete" | "cancelled" | "rejected" then
+               return Child;
+            end if;
+         end loop;
+         return "";
+      end Open_Part;
+
       function Way_On (Id : String) return String is
          Defined : R.Item;
          Read    : E.Error_Info;
@@ -720,6 +735,13 @@ package body Model_Runner.CLI.Work is
                [Loc.Named ("name", Id), Loc.Named ("value", To_String (First)),
                 Loc.Named ("other", (if Tk.State_Of (Store, To_String (First)) = "rejected"
                                      then "reconsider" else "reopen"))]);
+         elsif First /= Null_Unbounded_String and then Open_Part (To_String (First)) /= "" then
+            --  Waiting for its parts: the first of them is the way on.
+            return Pres.Next_Step_Value
+              (Screen, "cli.next.waits_on_parts",
+               [Loc.Named ("name", Id), Loc.Named ("value", To_String (First)),
+                Loc.Named ("detail", (if Tk.State_Of (Store, Open_Part (To_String (First))) = "candidate"
+                                      then "/task accept " else "/work ") & Open_Part (To_String (First)))]);
          elsif First /= Null_Unbounded_String
            and then Tk.State_Of (Store, To_String (First)) in "blocked" | "failed"
          then
@@ -1311,6 +1333,10 @@ package body Model_Runner.CLI.Work is
                   --  Which model that is, by the profile it is planned with.
                   Say ("cli.work.runner", Pres.Message_Value (Screen, "cli.work.runner.session")
                                           & (if Length (Model.Id) = 0 then ""
+                                             --  No profile named: the session model's own room.
+                                             elsif not R.Has (Config, "map.model." & To_String (Model.Id))
+                                             then ", planned with the session model's own room ("
+                                                  & To_String (Model.Id) & ")"
                                              else ", planned with the profile " & To_String (Model.Id)),
                        To_String (Chosen));
                end if;
@@ -1521,7 +1547,14 @@ package body Model_Runner.CLI.Work is
             Say ("cli.work.evidence", To_String (Done.Evidence_Id), "");
             --  Its checks passed with no test to run: said, not read as tests passing.
             if Model_Runner.Framework.Verification.Found_No_Tests (Store, To_String (Done.Evidence_Id)) then
-               Pres.Put_Note (Screen, "cli.check.no_tests_yet", [Loc.Named ("name", "its checks")]);
+               Pres.Put_Note (Screen, "cli.check.no_tests_yet",
+                              [Loc.Named ("name", "its checks"),
+                               --  A test task open already: that, not another.
+                               Loc.Named ("detail",
+                                          (if Model_Runner.Framework.Tasks.First_Open_Of_Kind (Store, "test") /= ""
+                                           then "/work " & Model_Runner.Framework.Tasks.First_Open_Of_Kind
+                                                             (Store, "test") & " writes one"
+                                           else "a test task, /task new TITLE kind=test, writes the first"))]);
             end if;
          end if;
          --  Whatever its end, the requirements judged again on what it

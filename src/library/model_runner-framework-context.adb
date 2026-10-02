@@ -146,6 +146,9 @@ package body Model_Runner.Framework.Context is
       begin
          Result.Context_Limit := Positive'Min (Session.Context_Limit, Named.Context_Limit);
          Result.Output_Reserve := Natural'Max (Session.Output_Reserve, Named.Output_Reserve);
+         if Session.Output_Reserve > Named.Output_Reserve then
+            Result.Profile_Reserve := Named.Output_Reserve;
+         end if;
          Result.Tool_Overhead := Natural'Max (Session.Tool_Overhead, Named.Tool_Overhead);
          Result.Id := Named.Id;
       end;
@@ -209,7 +212,13 @@ package body Model_Runner.Framework.Context is
                   & ", as planned with the profile " & To_String (Result.Model.Id) & " (context"
                   & Natural'Image (Result.Model.Context_Limit) & ", reserve"
                   & Natural'Image (Result.Model.Output_Reserve) & ", overhead"
-                  & Natural'Image (Result.Model.Tool_Overhead) & ") -- /reconfigure map.model."
+                  & Natural'Image (Result.Model.Tool_Overhead) & ")"
+                  --  The profile's own reserve, held over by the session's.
+                  & (if Result.Model.Profile_Reserve > 0
+                     then ", the session keeping" & Natural'Image (Result.Model.Output_Reserve)
+                          & " for its answer, more than the profile's" & Natural'Image (Result.Model.Profile_Reserve)
+                     else "")
+                  & " -- /reconfigure map.model."
                   & To_String (Result.Model.Id) & "=context=N gives it more, or /work " & Task_Id
                   & " profile=NAME plans it with another");
                return;

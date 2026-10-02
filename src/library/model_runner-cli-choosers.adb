@@ -635,7 +635,7 @@ package body Model_Runner.CLI.Choosers is
             --  A key's sequence part way: the rest is waited for, briefly,
             --  before an escape is taken for Escape.
             exit when Incomplete (Pending (1 .. Held))
-              and then Hostkit.Descriptors.Wait_Readable (Input, 50);
+              and then Hostkit.Descriptors.Wait_Readable (Input, 250);
             declare
                Used    : Natural;
                Pressed : constant Key := Decode (Pending (1 .. Held), Used);

@@ -19,6 +19,7 @@ with Model_Runner.Framework.Verification;
 with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
+with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Templates;
 with Model_Runner.Localization;
 with Model_Runner.Platform;
@@ -1205,14 +1206,33 @@ package body Model_Runner.CLI.Init is
                         begin
                            for Position in Planned.Inputs.Iterate loop
                               Ids.Append (Cf.Value_Maps.Key (Position));
-                              Choosers.Append
-                                (Offer, (Label      => To_Unbounded_String
-                                                         (Cf.Value_Maps.Key (Position) & " = "
-                                                          & Cf.Value_Maps.Element (Position)),
-                                         Tag        => Null_Unbounded_String,
-                                         Details    => To_Unbounded_String
-                                                         (Described (Cf.Value_Maps.Key (Position))),
-                                         Selectable => True));
+                              declare
+                                 --  As the plan names it: Label (name).
+                                 Shown_Label : Unbounded_String :=
+                                   To_Unbounded_String (Cf.Value_Maps.Key (Position));
+                                 Secret : Boolean := False;
+                              begin
+                                 for Index in 1 .. Tp.Input_Count (Composed) loop
+                                    if To_String (Tp.Input_At (Composed, Index).Id) = Cf.Value_Maps.Key (Position)
+                                    then
+                                       Secret := Tp.Input_At (Composed, Index).Secret;
+                                       if Length (Tp.Input_At (Composed, Index).Label) > 0 then
+                                          Shown_Label := Tp.Input_At (Composed, Index).Label & " ("
+                                            & Cf.Value_Maps.Key (Position) & ")";
+                                       end if;
+                                    end if;
+                                 end loop;
+                                 Choosers.Append
+                                   (Offer, (Label      => To_Unbounded_String
+                                                            (To_String (Shown_Label) & " = "
+                                                             & (if Secret
+                                                                then Pres.Message_Value (Screen, "cli.init.secret")
+                                                                else Cf.Value_Maps.Element (Position))),
+                                            Tag        => Null_Unbounded_String,
+                                            Details    => To_Unbounded_String
+                                                            (Described (Cf.Value_Maps.Key (Position))),
+                                            Selectable => True));
+                              end;
                            end loop;
                            declare
                               Which : constant Natural :=
@@ -1426,6 +1446,22 @@ package body Model_Runner.CLI.Init is
                   Pres.Put_Note (Screen, "cli.next.init_packages_unread", [Loc.Named ("detail", To_String (Unread))]);
                end if;
                if Packages /= Null_Unbounded_String then
+                  --  The project's own component kept beside them, for what is
+                  --  in none of the packages: rooted at its top.
+                  declare
+                     Store  : S.Store;
+                     Opened : E.Error_Info;
+                  begin
+                     S.Open_To_Read (Store, Directory, Opened);
+                     if E.Is_Ok (Opened) and then not Model_Runner.Framework.Tasks.Components (Store).Is_Empty then
+                        Append (Packages, " map.component." & Model_Runner.Framework.Tasks.Components (Store)
+                                                                .First_Element & "=roots=.");
+                     end if;
+                     S.Close (Store);
+                  exception
+                     when others =>
+                        null;
+                  end;
                   Pres.Put_Note (Screen, "cli.next.init_packages_components",
                                  [Loc.Named ("detail", To_String (Packages))]);
                end if;
@@ -1439,6 +1475,9 @@ package body Model_Runner.CLI.Init is
         and then not (Pres.In_Session (Screen) and then not S.Is_Initialized (Ada.Directories.Current_Directory)
                       and then Ada.Strings.Fixed.Index (Ada.Directories.Current_Directory & "/",
                                                         Ada.Directories.Full_Name (Directory) & "/") = 1)
+        --  A session with no project of its own goes to the one made: it
+        --  says so itself.
+        and then not (Pres.In_Session (Screen) and then not S.Is_Initialized (Ada.Directories.Current_Directory))
       then
          Pres.Put_Note
            (Screen,

@@ -1068,13 +1068,20 @@ package body Model_Runner.Framework.Tasks is
 
       for Other of Split (Records.Get (Defined, "depends_on")) loop
          if Counts_As (Item, State_In (Item, Change, Other)) /= "complete" then
-            Result.Reasons.Append
-              ("it waits for " & Other & ", which is "
-               & (if State_In (Item, Change, Other) = "" then "not there"
-                  elsif State_In (Item, Change, Other) = "accepted" then "not done yet"
-                  elsif State_In (Item, Change, Other) = "blocked" and then Stopped_By_Person (Item, Other)
-                  then "stopped"
-                  else State_Said (State_In (Item, Change, Other))));
+            declare
+               State : constant String := State_In (Item, Change, Other);
+            begin
+               Result.Reasons.Append
+                 ("it waits for " & Other & ", which "
+                  & (if State = "failed" then "failed"
+                     elsif State = "" then "is not there"
+                     elsif State = "accepted" then "is not done yet"
+                     elsif State = "blocked" and then Stopped_By_Person (Item, Other) then "is stopped"
+                     --  Its parts open: what it waits on in turn, by name.
+                     elsif State = "blocked" and then not Open_Children (Item, Change, Other).Is_Empty
+                     then "is waiting for its parts " & Joined (Open_Children (Item, Change, Other), ", ")
+                     else "is " & State_Said (State)));
+            end;
          end if;
       end loop;
 
@@ -1098,7 +1105,9 @@ package body Model_Runner.Framework.Tasks is
                     not in "accepted" | "implemented" | "verified"
             then
                Result.Reasons.Append
-                 (Requirement & " is " & To_String (Held.State));
+                 (if To_String (Held.State) = "candidate"
+                  then Requirement & " is a candidate: /req accept " & Requirement & " accepts it"
+                  else Requirement & " is " & To_String (Held.State));
             end if;
          end;
       end loop;
@@ -2074,6 +2083,28 @@ package body Model_Runner.Framework.Tasks is
    -----------------------
    -- Component_Problem --
    -----------------------
+
+   ------------------------
+   -- First_Open_Of_Kind --
+   ------------------------
+
+   function First_Open_Of_Kind (Item : Stores.Store; Kind : String) return String is
+   begin
+      for Id of List (Item) loop
+         declare
+            Defined : Records.Item;
+            Status  : E.Error_Info;
+         begin
+            Definition (Item, Id, Defined, Status);
+            if E.Is_Ok (Status) and then Records.Get (Defined, "kind") = Kind
+              and then State_Of (Item, Id) not in "complete" | "cancelled" | "rejected"
+            then
+               return Id;
+            end if;
+         end;
+      end loop;
+      return "";
+   end First_Open_Of_Kind;
 
    function Components (Item : Stores.Store) return Name_Lists.Vector is
       Settings : Records.Item;

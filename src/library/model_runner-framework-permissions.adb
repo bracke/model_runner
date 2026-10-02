@@ -782,6 +782,10 @@ package body Model_Runner.Framework.Permissions is
    function Clipped (Asked, Allowed : Permission_Set) return String is
       Both   : constant Permission_Set := Intersect (Asked, Allowed);
       Result : Unbounded_String;
+      --  Those not granted there at all, asked for with nothing more: said
+      --  together, once, not a line each.
+      Plain_Not : Unbounded_String;
+      Count_Not : Natural := 0;
    begin
       for Name of Widenings (Asked, Allowed) loop
          declare
@@ -793,6 +797,11 @@ package body Model_Runner.Framework.Permissions is
                end if;
             end loop;
             --  What it asks, what the level grants, and so what it gets.
+            if not Allowed (Which).Granted and then Grant_Text (Asked (Which)) = "" then
+               Append (Plain_Not, (if Plain_Not = Null_Unbounded_String then "" else ", ") & Name);
+               Count_Not := Count_Not + 1;
+               goto Next_Name;
+            end if;
             Append (Result, (if Result = Null_Unbounded_String then "" else "; ") & Name
                     & (if Grant_Text (Asked (Which)) = "" then "" else " " & Grant_Text (Asked (Which)))
                     & ": "
@@ -802,7 +811,13 @@ package body Model_Runner.Framework.Permissions is
                        elsif Grant_Text (Both (Which)) = "" then "it gets it"
                        else "it gets " & Grant_Text (Both (Which))));
          end;
+         <<Next_Name>>
       end loop;
+      if Plain_Not /= Null_Unbounded_String then
+         Append (Result, (if Result = Null_Unbounded_String then "" else "; ") & To_String (Plain_Not)
+                 & ": not granted there, so it gets "
+                 & (if Count_Not = 1 then "none" else "none of them"));
+      end if;
       return To_String (Result);
    end Clipped;
 
@@ -1345,7 +1360,8 @@ package body Model_Runner.Framework.Permissions is
                Ada.Strings.Unbounded.Append
                  (Said, (if Ada.Strings.Unbounded.Length (Said) = 0 then "" else ", ") & Bare
                   & " (no such place here" & (if Near = "" then "" else "; " & Near & " is")
-                  & (if Denied then ": nothing there to keep from it" else ": it grants nothing there") & ")");
+                  & (if Denied then ": nothing there to keep from it"
+                     else ": not there yet -- an agent may make it, and a typo grants nothing") & ")");
             end;
          end if;
       end Check;

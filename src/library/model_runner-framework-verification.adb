@@ -1591,7 +1591,7 @@ package body Model_Runner.Framework.Verification is
                   end if;
                end loop;
                Judge (Name, Open = Null_Unbounded_String,
-                      "these children are not done: " & To_String (Open));
+                      "these parts are not done: " & To_String (Open));
             end;
          elsif Name = "no_blocking_issue" then
             declare
@@ -2252,6 +2252,10 @@ package body Model_Runner.Framework.Verification is
                        & (if not Intent.Links (Item, Intent.Requirement, Requirement, Intent.Test).Is_Empty
                           then "; its linked test is not in what the suite runs yet -- add it to the suite, then"
                                & " /check full"
+                          --  A candidate is accepted first: work for it waits until then.
+                          elsif Intent.State_Of (Item, Intent.Requirement, Requirement) = "candidate"
+                          then "; it is a candidate -- /req accept " & Requirement & " first, then /task new TITLE"
+                               & " kind=test requirements=" & Requirement & " writes a test that shows it"
                           else "; /task new TITLE kind=test requirements=" & Requirement & " writes a test that"
                                & " shows it, /req link " & Requirement & " test FILE ties one there is, then"
                                & " /check full"));

@@ -364,30 +364,47 @@ package body Model_Runner.Framework.Authority is
       end loop;
 
       --  Every other statement, against the one governing its subject.
-      for Next of From.Statements loop
-         declare
-            Rule : constant Statement := Result.Governing (Place_Of (Next.Subject));
+      --  Two values that say the same: in any case -- Alire is alire --
+      --  and a capability on is one granted with nothing more.
+      declare
+         function Same_Value (Subject, Left, Right : String) return Boolean is
+            function Plain (Value : String) return String is
+               Lower : constant String := Ada.Characters.Handling.To_Lower
+                                            (Ada.Strings.Fixed.Trim (Value, Ada.Strings.Both));
+            begin
+               return (if Ada.Strings.Fixed.Index (Subject, "permission.") = 0 then Lower
+                       elsif Lower in "on" | "" | "granted" then ""
+                       elsif Lower in "off" | "none" | "withheld" then "off"
+                       else Lower);
+            end Plain;
          begin
-            if Rule /= Next then
-               Result.Standings.Append
-                 (Standing_Of'
-                    (Governing => Rule,
-                     Other     => Next,
-                     Relation  =>
-                       --  The same in any case: Alire is alire.
-                       (if Ada.Characters.Handling.To_Lower (To_String (Rule.Value))
-                           = Ada.Characters.Handling.To_Lower (To_String (Next.Value))
-                        then Agreement
-                        elsif Overrides (Rule, Next) then Explicit_Override
-                        --  A person's instruction stands above every other
-                        --  source by what it is: over one below it, not
-                        --  against it.
-                        elsif Rule.Standing = Human_Instruction and then Next.Standing /= Human_Instruction
-                        then Explicit_Override
-                        else Conflict)));
-            end if;
-         end;
-      end loop;
+            return Plain (Left) = Plain (Right);
+         end Same_Value;
+      begin
+         for Next of From.Statements loop
+            declare
+               Rule : constant Statement := Result.Governing (Place_Of (Next.Subject));
+            begin
+               if Rule /= Next then
+                  Result.Standings.Append
+                    (Standing_Of'
+                       (Governing => Rule,
+                        Other     => Next,
+                        Relation  =>
+                          --  The same in any case: Alire is alire.
+                          (if Same_Value (To_String (Rule.Subject), To_String (Rule.Value), To_String (Next.Value))
+                           then Agreement
+                           elsif Overrides (Rule, Next) then Explicit_Override
+                           --  A person's instruction stands above every other
+                           --  source by what it is: over one below it, not
+                           --  against it.
+                           elsif Rule.Standing = Human_Instruction and then Next.Standing /= Human_Instruction
+                           then Explicit_Override
+                           else Conflict)));
+               end if;
+            end;
+         end loop;
+      end;
 
       --  A narrower subject refines a broader one.
       for Narrow of Result.Governing loop

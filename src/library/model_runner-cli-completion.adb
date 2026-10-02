@@ -17,6 +17,7 @@ with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
+with Model_Runner.Framework.Transitions;
 with Model_Runner.Framework.Workspaces;
 with Model_Runner.Platform;
 
@@ -458,7 +459,7 @@ package body Model_Runner.CLI.Completion is
                end;
             end;
          elsif (for some Key of Names.Vector'(["component=", "requirement=", "requirements=", "depends_on=",
-                                               "parent=", "profile=", "model="]) =>
+                                               "parent=", "profile=", "model=", "scope="]) =>
                   Ada.Strings.Fixed.Index (Current, Key) = Current'First)
          then
             --  A field's values; in a list, the item after the last comma,
@@ -475,6 +476,10 @@ package body Model_Runner.CLI.Completion is
             begin
                if Key = "component" then
                   Values := Tk.Components (Store);
+               --  An entry's scope: the whole project, or a component.
+               elsif Key = "scope" then
+                  Values := Tk.Components (Store);
+                  Values.Prepend ("project");
                elsif Key in "requirement" | "requirements" then
                   Values := Nt.List (Store, Nt.Requirement);
                elsif Key in "depends_on" | "parent" then
@@ -622,13 +627,27 @@ package body Model_Runner.CLI.Completion is
             if Action in "accept" | "reject" then
                Offer_All (Nt.List (Store, Register (Command), "candidate"));
             else
-               --  What is retired is shown, not revised or linked.
+               --  What is retired is shown, not revised or linked; what a move
+               --  takes, only those its lifecycle lets make it.
                for Id of Nt.List (Store, Register (Command)) loop
-                  if Action in "show" | "reconsider"
-                    or else Nt.State_Of (Store, Register (Command), Id) not in "obsolete" | "superseded" | "rejected"
-                  then
-                     Offer (Id);
-                  end if;
+                  declare
+                     Now     : constant String := Nt.State_Of (Store, Register (Command), Id);
+                     Checked : Model_Runner.Errors.Error_Info := Model_Runner.Errors.Success;
+                  begin
+                     if Action in "block" | "unblock" | "obsolete" then
+                        Model_Runner.Framework.Transitions.Check
+                          (Nt.Lifecycle_Of (Store, Register (Command)), Id, Now,
+                           (if Action = "block" then "blocked" elsif Action = "obsolete" then "obsolete"
+                            else "accepted"),
+                           Model_Runner.Framework.Transitions.Ordinary_Only, Checked);
+                     end if;
+                     if Model_Runner.Errors.Is_Ok (Checked)
+                       and then (Action in "show" | "reconsider"
+                                 or else Now not in "obsolete" | "superseded" | "rejected")
+                     then
+                        Offer (Id);
+                     end if;
+                  end;
                end loop;
             end if;
             if Action in "accept" | "reject" | "obsolete" | "verify" and then Natural (Offered.Length) > 0 then
@@ -642,9 +661,34 @@ package body Model_Runner.CLI.Completion is
             elsif Action = "supersede" then
                Offer_All (Nt.List (Store, Register (Command)));
             elsif Action = "move" then
-               --  The states its register has.
-               Offer_Words (if Command = "/req" then "candidate accepted blocked implemented obsolete rejected"
-                            else "candidate accepted rejected obsolete superseded");
+               --  The states it may move to from where it is, as its
+               --  register's lifecycle allows.
+               declare
+                  Machine : constant Model_Runner.Framework.Transitions.Machine :=
+                    Nt.Lifecycle_Of (Store, Register (Command));
+                  Id      : constant String := Ada.Characters.Handling.To_Upper (Words (3));
+                  Now     : constant String := Nt.State_Of (Store, Register (Command), Id);
+               begin
+                  for Next of Model_Runner.Framework.Name_Lists.Vector'
+                                (if Command = "/req"
+                                 then ["candidate", "accepted", "blocked", "implemented", "obsolete", "rejected"]
+                                 else ["candidate", "accepted", "rejected", "obsolete", "superseded"])
+                  loop
+                     declare
+                        Checked : Model_Runner.Errors.Error_Info;
+                     begin
+                        if Now = "" then
+                           Offer (Next);
+                        else
+                           Model_Runner.Framework.Transitions.Check
+                             (Machine, Id, Now, Next, Model_Runner.Framework.Transitions.Ordinary_Only, Checked);
+                           if Model_Runner.Errors.Is_Ok (Checked) then
+                              Offer (Next);
+                           end if;
+                        end if;
+                     end;
+                  end loop;
+               end;
             elsif Action = "revise" then
                Offer_Words ("from-document title= text= criteria=");
             end if;
@@ -760,11 +804,15 @@ package body Model_Runner.CLI.Completion is
                end if;
             end loop;
          elsif Command = "/result" and then Position = 3 and then Action = "restore" then
-            --  Only those dismissed come back.
-            Offer ("all");
+            --  Only those dismissed come back; all only where there are any.
+            if not Model_Runner.CLI.Project_Commands.Dismissed_Issues (Store).Is_Empty then
+               Offer ("all");
+            end if;
             Offer_All (Model_Runner.CLI.Project_Commands.Dismissed_Issues (Store));
          elsif Command = "/result" and then Position >= 3 and then Action = "dismiss" then
-            Offer ("all");
+            if not Model_Runner.CLI.Project_Commands.Open_Issues (Store).Is_Empty then
+               Offer ("all");
+            end if;
             Offer_All (Model_Runner.CLI.Project_Commands.Open_Issues (Store));
          elsif Command = "/config" and then Position = 2 then
             Settings;

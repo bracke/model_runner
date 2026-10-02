@@ -347,6 +347,14 @@ package Model_Runner.Framework.Tasks is
    --  @return Their names; none when the project has no name either.
    function Components (Item : Stores.Store) return Name_Lists.Vector;
 
+   --  The first task of a kind not ended yet: one to work on, where there
+   --  is one.
+   --
+   --  @param Item The store.
+   --  @param Kind The kind, as test.
+   --  @return Its identifier; "" where none is open.
+   function First_Open_Of_Kind (Item : Stores.Store; Kind : String) return String;
+
    --  The components a configuration names, as Components reads them: for
    --  a change not yet made.
    --

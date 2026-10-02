@@ -38,6 +38,10 @@ package Model_Runner.Framework.Context is
       Streaming      : Boolean := True;
       Parallel_Calls : Boolean := False;
       Resource_Class : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  What the configured profile itself keeps for the answer, where the
+      --  session keeps more and so holds over it; 0 where it does not.
+      Profile_Reserve : Natural := 0;
    end record;
 
    --  How much an item matters, most first.
