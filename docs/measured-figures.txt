@@ -23890,3 +23890,26 @@ panels 32309E5A1BE7C019 src/library/model_runner-quantization-interleave.ads src
 #   outside EF030EFCE2D63F23 -> CB68DF931E112D03,
 #   panels DDEF32FCD8DB67D9 -> 32309E5A1BE7C019.
 # model: as named
+
+# 2026-10-02: the two- and three-bit k-quants on the device, measured again
+# against plan-mixture.md's 2026-09-11 reading (Q3_K 21 GB/s, Q2_K 39, Q4_K
+# 59 inside a token). TinyLlama, `tests speed --backend device --max-tokens
+# 128 --repeats 3`, release build, against llama-bench 95b8e33e1 -ngl 99
+# tg128 -r 3 in the same sitting (tokens a second; GB/s as the file's bytes
+# a token):
+#
+#                ours              llama.cpp
+#   Q3_K       100.7  (55 GB/s)    101.6
+#   Q2_K       101.5  (49)         109.4
+#   Q4_0        93.3  (60)          92.7   (ours stopped at 28 tokens)
+#   Q5_K_M      76.1  (60)          77.3
+#   Q8_0        57.8  (68)          56.3
+#
+# Q3_K is level; the subgroup kernels of 2026-09-24/25 closed it. Q2_K is
+# the one left, 7 per cent behind. `tests device-bench`'s one-vector table
+# (4096 x 2048, about 0.1 ms a call) still reads Q3_K 24 GB/s and Q2_K 26
+# against Q4_K 36: a call's fixed cost is some 60 us there (256 x 2048 takes
+# 64), so that table measures small products, not what a token streams.
+# Nothing changed: no figure moves and no group is restamped.
+# load:  one-minute average 1.3 to 1.5
+# model: TinyLlama 1.1B chat, Q2_K, Q3_K, Q4_0, Q5_K_M, Q8_0

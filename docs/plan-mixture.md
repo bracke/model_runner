@@ -105,6 +105,11 @@ Budget a second entry for that.
 
 ## 2. The two-bit row product on the device (one week)
 
+**Re-measured 2026-10-02** (`docs/measured-figures.txt`): inside a token
+Q3_K is level with llama.cpp (TinyLlama 100.7 against 101.6 t/s) and Q2_K
+is 7 per cent behind (101.5 against 109.4); the mixture runs whole on the
+device ahead of llama.cpp. What is left of this section is Q2_K's 7 per cent.
+
 **The mechanism.** Inside a token Q2_K streams at 39 GB/s where Q4_K
 streams at 59 and Q8_0 at 56; `tests device-bench` says Q3_K is worse, 21.
 The mixture is 1.15 GB of Q2_K a token. Factoring the minimum out of the
