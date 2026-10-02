@@ -2787,7 +2787,7 @@ package body Tests.Framework_Cases is
          S.Commit (Store, Change, Status);
          Tk.Definition (Store, Only, Defined, Status);
          Assert (Natural (Retitled.Length) = 1
-                 and then R.Get (Defined, "title") = To_String (Req) & ": Read and close",
+                 and then R.Get (Defined, "title") = "Read and close (" & To_String (Req) & ")",
                  "a derived task kept its requirement's old title: " & R.Get (Defined, "title"));
          Tk.Retitle_Derived (Store, Change, To_String (Req), "Something else", "Again", Retitled);
          Assert (Retitled.Is_Empty, "a task titled otherwise was retitled");
@@ -2803,6 +2803,32 @@ package body Tests.Framework_Cases is
             Model_Runner.Framework.Work.Forget_Last_Answer (Store, Only);
             S.Read (Store, Model_Runner.Framework.Tasks_Area, Only & ".state", Held, Status);
             Assert (R.Get (Held, "last_result") = "", "a task's last answer was kept after it was forgotten");
+            --  A copy of its work put back: the file as it is now is its,
+            --  by what it holds; changed after, no task's.
+            declare
+               Project : constant String := Ada.Directories.Containing_Directory (S.Root (Store));
+            begin
+               Put_File (Project & "/restored.txt", "its work" & ASCII.LF);
+               Model_Runner.Framework.Work.Note_Restored
+                 (Store, Only, Model_Runner.Framework.Name_Lists.To_Vector ("restored.txt", 1));
+               Assert (Model_Runner.Framework.Work.Holder_Of (Store, "restored.txt") = Only,
+                       "a file put back as a task's work was not found to be its");
+               Put_File (Project & "/restored.txt", "edited since" & ASCII.LF);
+               Assert (Model_Runner.Framework.Work.Holder_Of (Store, "restored.txt") = "",
+                       "a file changed since was still credited to the task");
+            end;
+         end;
+         --  Another identifier for a requirement: under it, and the old gone.
+         declare
+            Moved : S.Transaction;
+         begin
+            Nt.Renumber (Store, Moved, Nt.Requirement, To_String (Req), "REQ-900", Status);
+            if E.Is_Ok (Status) then
+               S.Commit (Store, Moved, Status);
+            end if;
+            Assert (E.Is_Ok (Status) and then Nt.State_Of (Store, Nt.Requirement, "REQ-900") /= ""
+                    and then Nt.State_Of (Store, Nt.Requirement, To_String (Req)) = "",
+                    "a requirement renumbered was not under its new identifier alone: " & Code_Of (Status));
          end;
       end;
       S.Close (Store);
@@ -5431,6 +5457,10 @@ package body Tests.Framework_Cases is
          Assert (To_String (Held.Status) = "abandoned"
                  and then not Dirs.Exists (To_String (Made.Path)),
                  "an abandoned workspace was not removed");
+         --  No earlier copy of the same was there to replace: none said, and
+         --  said once, none the second time it is asked.
+         Assert (Ws.Last_Replaced_Copy = "" and then Ws.Last_Replaced_Copy = "",
+                 "an earlier copy was said to be replaced where none was");
       end;
 
       --  No file on both sides, but the code joins them: the workspace

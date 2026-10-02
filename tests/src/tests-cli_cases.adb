@@ -16,6 +16,7 @@ with Captured_Output;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Completion;
 with Model_Runner.CLI.Project_Commands;
+with Model_Runner.CLI.Tasks;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Stores;
@@ -2111,7 +2112,7 @@ package body Tests.CLI_Cases is
       Assert (Shows ("agent: the test agent") and then Shows ("answer: RES-"),
               "the audit did not say which agent ran and what it answered: " & To_String (Said));
       Run ("result|INV-000001");
-      Assert (Shows ("result: RES-"), "result did not show an invocation: " & To_String (Said));
+      Assert (Shows ("what it left: RES-"), "result did not show an invocation: " & To_String (Said));
 
       --  4. What goes wrong says why and what next.
       Working := (Answer => To_Unbounded_String ("hello" & LF), others => <>);
@@ -2568,6 +2569,9 @@ package body Tests.CLI_Cases is
                             (Model_Runner.Framework.Execution.Policy_Of (Store), "make x") = ""
                  and then not Model_Runner.Framework.Execution.Cancel_Requested,
                  "the policy's refusal was not said before running");
+         --  A task nobody's document ticks done: nothing to say of it.
+         Assert (Model_Runner.CLI.Tasks.Ticked_Done (Store, "TASK-999") = "",
+                 "a task there is not was said to be ticked done");
          S.Close (Store);
       end;
       Working := (others => <>);
@@ -13025,6 +13029,11 @@ package body Tests.CLI_Cases is
               "a word of a message was completed");
       Assert (Model_Runner.CLI.Completion.Candidates ("/tsak").Contains ("/task"),
               "a mistyped command was not completed to the one it was most likely meant to be");
+      --  A refused line forgotten: with none typed in this run, nothing to
+      --  forget, and nothing goes wrong.
+      Model_Runner.CLI.Choosers.Forget_Last_Line;
+      Assert (Model_Runner.CLI.Completion.Candidates ("/ta").Contains ("/task"),
+              "forgetting the last line typed disturbed what Tab offers");
    end Tab_Completes_Commands;
 
    overriding procedure Register_Tests (T : in out Case_Type) is

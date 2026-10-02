@@ -1041,6 +1041,25 @@ package body Model_Runner.CLI.Intents is
                                  [Loc.Named ("name", Word (2)),
                                   Loc.Named ("value", (if Next in "accepted" | "rejected" | "obsolete" | "blocked"
                                                        then Next else "a " & Next))]);
+                  --  Accepted, its task waiting to be decided: that is next.
+                  if Next = "accepted" and then Nt."=" (Kind, Nt.Requirement) then
+                     for Id of Model_Runner.Framework.Tasks.List (Store, "candidate") loop
+                        declare
+                           Defined : Model_Runner.Framework.Records.Item;
+                           Got     : E.Error_Info;
+                        begin
+                           Model_Runner.Framework.Tasks.Definition (Store, Id, Defined, Got);
+                           if E.Is_Ok (Got)
+                             and then Model_Runner.Framework.Lines_Of
+                                        (Model_Runner.Framework.Records.Get (Defined, "requirements"))
+                                        .Contains (Word (2))
+                           then
+                              Pres.Put_Note (Screen, "cli.next.accept_one_task", [Loc.Named ("name", Id)]);
+                              exit;
+                           end if;
+                        end;
+                     end loop;
+                  end if;
                   return;
                end if;
                --  Obsolete is final: asked first, where there is someone to ask.
@@ -1067,6 +1086,15 @@ package body Model_Runner.CLI.Intents is
                end if;
                if E.Is_Error (Status) then
                   Pres.Report (Screen, Status);
+                  --  Accepted, and asked back or rejected: not a move there
+                  --  is -- retiring it, or replacing it, is the way.
+                  if E."=" (Status.Code, E.Framework_Transition_Invalid)
+                    and then Action in "reject" | "reconsider"
+                    and then Nt.State_Of (Store, Kind, Word (2)) = "accepted"
+                  then
+                     Pres.Put_Note (Screen, "cli.next.retire_entry",
+                                    [Loc.Named ("name", Word (2)), Loc.Named ("value", Word_Of_Command (Kind))]);
+                  end if;
                   return;
                end if;
                Pres.Put_Message
@@ -1243,9 +1271,21 @@ package body Model_Runner.CLI.Intents is
                         Status := E.Make (E.Framework_Input_Invalid);
                         E.Add_Text (Status, "name", "the document " & Word (2) & " came from");
                         E.Add_Text (Status, "value", To_String (Held.Source));
-                        E.Add_Text (Status, "detail", "it is gone from the project, so there are no words of it to"
-                                    & " take; " & Word_Of_Command (Kind) & " obsolete " & Word (2)
-                                    & " retires it, and text=... revises it by hand");
+                        declare
+                           Became : constant String :=
+                             Model_Runner.Framework.Git.Renamed_In_History
+                               (Ada.Directories.Containing_Directory (S.Root (Store)), To_String (Held.Source));
+                        begin
+                           E.Add_Text (Status, "detail",
+                                       (if Became /= ""
+                                        then "it is moved: git shows it renamed to " & Became
+                                             & " -- /bootstrap " & Became & " follows it there, and then "
+                                             & Word_Of_Command (Kind) & " revise " & Word (2)
+                                             & " from-document takes its words"
+                                        else "it is gone from the project, so there are no words of it to"
+                                             & " take; " & Word_Of_Command (Kind) & " obsolete " & Word (2)
+                                             & " retires it, and text=... revises it by hand"));
+                        end;
                      else
                         Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
                         while not Ada.Text_IO.End_Of_File (File) loop
@@ -1822,6 +1862,65 @@ package body Model_Runner.CLI.Intents is
             end;
          end if;
 
+      elsif Action = "renumber" then
+         --  Another identifier for one: its record and every link to it,
+         --  tasks serving it among them.
+         Needs (3, "the " & Word_Of (Kind) & " and its new identifier: " & Word_Of_Command (Kind)
+                   & " renumber ID NEW-ID");
+         if E.Is_Ok (Status) then
+            declare
+               Old_Id : constant String := Ada.Characters.Handling.To_Upper (Word (2));
+               New_Id : constant String := Ada.Characters.Handling.To_Upper (Word (3));
+            begin
+               Nt.Renumber (Store, Change, Kind, Old_Id, New_Id, Status);
+               --  Kept first: a task is told the identifier the project has.
+               if E.Is_Ok (Status) then
+                  S.Commit (Store, Change, Status);
+               end if;
+               if E.Is_Ok (Status) and then Nt."=" (Kind, Nt.Requirement) then
+                  for Id of Model_Runner.Framework.Tasks.List (Store) loop
+                     declare
+                        Defined : Model_Runner.Framework.Records.Item;
+                        Read    : E.Error_Info;
+                        Fields  : Model_Runner.Framework.Tasks.Field_Map;
+                        Lines   : Unbounded_String;
+                     begin
+                        Model_Runner.Framework.Tasks.Definition (Store, Id, Defined, Read);
+                        if E.Is_Ok (Read)
+                          and then Model_Runner.Framework.Lines_Of
+                                     (Model_Runner.Framework.Records.Get (Defined, "requirements")).Contains (Old_Id)
+                        then
+                           for Line of Model_Runner.Framework.Lines_Of
+                                         (Model_Runner.Framework.Records.Get (Defined, "requirements"))
+                           loop
+                              Append (Lines, (if Lines = Null_Unbounded_String then "" else [1 => ASCII.LF])
+                                      & (if Line = Old_Id then New_Id else Line));
+                           end loop;
+                           Fields.Include ("requirements", To_String (Lines));
+                           --  A derived title names it too: by its new identifier.
+                           declare
+                              Title : constant String := Model_Runner.Framework.Records.Get (Defined, "title");
+                              At_Id : constant Natural := Ada.Strings.Fixed.Index (Title, "(" & Old_Id);
+                           begin
+                              if At_Id > 0 then
+                                 Fields.Include ("title", Title (Title'First .. At_Id) & New_Id
+                                                          & Title (At_Id + 1 + Old_Id'Length .. Title'Last));
+                              end if;
+                           end;
+                           Model_Runner.Framework.Tasks.Revise (Store, Change, Id, Fields, Status);
+                        end if;
+                     end;
+                     exit when E.Is_Error (Status);
+                  end loop;
+               end if;
+               Settle (Store, Change, Status, Screen, "", Old_Id);
+               if E.Is_Ok (Status) then
+                  Pres.Put_Message (Screen, "cli.intent.renumbered",
+                                    [Loc.Named ("name", Old_Id), Loc.Named ("value", New_Id)]);
+               end if;
+            end;
+         end if;
+
       elsif Action = "supersede" then
          Needs (3, "the " & Word_Of (Kind) & " replaced and the one replacing it");
          if E.Is_Ok (Status) then
@@ -2094,6 +2193,7 @@ package body Model_Runner.CLI.Intents is
                Config  : Model_Runner.Framework.Records.Item;
                Read    : E.Error_Info;
                Near    : Unbounded_String;
+               Ending_In : Unbounded_String;
 
                --  A name without its kind, as reconfigure takes it: the one
                --  setting of that name there is, whole.
@@ -2159,6 +2259,13 @@ package body Model_Runner.CLI.Intents is
                               Among.Append (Model_Runner.Framework.Records.Field_Name (Config, Index));
                            end if;
                         end loop;
+                        --  Those it is a part of: several, named.
+                        for Name of Among loop
+                           if Ada.Strings.Fixed.Index (Name & ".", "." & Setting & ".") > 0 then
+                              Append (Ending_In, (if Ending_In = Null_Unbounded_String then "" else ", ")
+                                                 & Name);
+                           end if;
+                        end loop;
                         Near := To_Unbounded_String (Model_Runner.Framework.Nearest (Setting, Among));
                         if Near = Null_Unbounded_String then
                            Near := To_Unbounded_String (Model_Runner.Framework.Nearest ("scalar." & Setting, Among));
@@ -2172,6 +2279,9 @@ package body Model_Runner.CLI.Intents is
                                         Model_Runner.Framework.Permissions.Word (One) = Setting)
                                   then "a capability is ruled at its level: map.permission.project." & Setting
                                        & " for the project, map.permission.kind.KIND." & Setting & " for a kind"
+                                  elsif Ending_In /= Null_Unbounded_String
+                                  then "several settings are called so -- " & To_String (Ending_In)
+                                       & " -- name the one whole"
                                   else "no setting is called so; a decision governs one /config shows"
                                        & (if Near = Null_Unbounded_String then ""
                                           else "; did you mean " & To_String (Near) & "?")));
@@ -2344,13 +2454,15 @@ package body Model_Runner.CLI.Intents is
                         & (if Model_Runner.Framework.Nearest
                                 (Word (1), Names.Vector'(["list", "new", "accept", "reject", "reconsider",
                                                           "obsolete", "revise", "move", "link", "unlink",
-                                                          "supersede", "verify", "block", "unblock", "govern",
+                                                          "supersede", "renumber",
+                                                          "verify", "block", "unblock", "govern",
                                                           "show"])) /= ""
                            then " (did you mean "
                                 & Model_Runner.Framework.Nearest
                                     (Word (1), Names.Vector'(["list", "new", "accept", "reject", "reconsider",
                                                               "obsolete", "revise", "move", "link", "unlink",
-                                                              "supersede", "verify", "block", "unblock", "govern",
+                                                              "supersede", "renumber",
+                                                              "verify", "block", "unblock", "govern",
                                                               "show"]))
                                 & "?)"
                            else "")
@@ -2374,6 +2486,9 @@ package body Model_Runner.CLI.Intents is
          declare
             Held  : Nt.Entity;
             Named : constant String := (if Action = "show" then Word (2) else Word (1));
+            --  Its document says it no more: its way on is letting it go,
+            --  not accepting it.
+            Unsaid : Boolean := False;
          begin
             if E.Is_Ok (Status) then
                Nt.Read (Store, Kind, Named, Held, Status);
@@ -2509,8 +2624,14 @@ package body Model_Runner.CLI.Intents is
                         elsif not Still_Said and then Nt."=" (Kind, Nt.Requirement)
                           and then To_String (Held.State) not in "obsolete" | "superseded" | "rejected"
                         then
-                           Item ("its document", "no longer says it -- " & Word_Of_Command (Kind) & " obsolete "
-                                 & Named & " retires it", Pres.Pending);
+                           Unsaid := True;
+                           Item ("its document",
+                                 "no longer says it -- "
+                                 & (if To_String (Held.State) = Nt.First_State (Kind)
+                                    then Word_Of_Command (Kind) & " reject " & Named & " lets it go, as the next"
+                                         & " /bootstrap does"
+                                    else Word_Of_Command (Kind) & " obsolete " & Named & " retires it"),
+                                 Pres.Pending);
                         end if;
                      end if;
                      --  Not read here, as bootstrap found it otherwise: said.
@@ -2576,7 +2697,7 @@ package body Model_Runner.CLI.Intents is
                   elsif Nt.Moved_By (Store, Kind, Named, "accepted") /= "" then
                      Item ("accepted by", Nt.Moved_By (Store, Kind, Named, "accepted"));
                   end if;
-                  if To_String (Held.State) = Nt.First_State (Kind) then
+                  if To_String (Held.State) = Nt.First_State (Kind) and then not Unsaid then
                      Item ("to start", "it is a candidate: " & Word_Of_Command (Kind) & " accept " & Named
                                        & " accepts it first", Pres.Pending);
                   end if;
@@ -2651,6 +2772,8 @@ package body Model_Runner.CLI.Intents is
                         Item ("source", To_String (Held.Source)
                               & (if Became /= ""
                                  then " (moved: git shows it renamed to " & Became & " -- /bootstrap follows it)"
+                                 elsif To_String (Held.State) in "obsolete" | "superseded" | "rejected"
+                                 then " (missing: the document is gone)"
                                  else " (missing: the document is gone -- " & Word_Of_Command (Kind) & " obsolete "
                                       & Named & " retires it)"),
                               Pres.Bad);

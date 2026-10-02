@@ -153,13 +153,15 @@ package Model_Runner.CLI.Choosers is
    --  @param Items The choices.
    --  @param Heading Words that say what is chosen, in place of the
    --    title's, where the caller has them.
+   --  @param Initial The choice the cursor starts on.
    --  @return The chosen choice's position, or zero when the reader gave
    --    up or there is no terminal to ask at.
    function Choose
      (Screen  : Model_Runner.Presentation.Console;
       Title   : String;
       Items   : Choice_List;
-      Heading : String := "") return Natural;
+      Heading : String := "";
+      Initial : Positive := 1) return Natural;
 
    --  How a line typed by Typed_Line ended.
    type Line_End is (Entered, Escaped, Interrupted, Ended, Unavailable);
@@ -215,6 +217,10 @@ package Model_Runner.CLI.Choosers is
       Outcome  : out Line_End;
       Complete : Completer := null;
       Describe : Describer := null) return String;
+
+   --  Take the line typed last out of what Up and the dimmed suggestion
+   --  offer again: a command refused is not one to be offered back.
+   procedure Forget_Last_Line;
 
    --  A yes or no read from the person: anything else asked again, a
    --  command typed in its place said and not run, and no answer, Escape

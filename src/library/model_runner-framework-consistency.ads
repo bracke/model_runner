@@ -35,6 +35,7 @@ package Model_Runner.Framework.Consistency is
       Completed_Without_Gate,
       Workspace_Assignment,
       Permission_Widening,
+      Permission_Withheld,
       Missing_Component,
       Ready_With_Open_Dependency,
       Waits_On_Ended_Part,

@@ -13,6 +13,7 @@ with Hostkit.Fs;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Intents;
 with Model_Runner.CLI.Project_Commands;
+with Model_Runner.CLI.Tasks;
 with Model_Runner.Errors;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Configurations;
@@ -498,7 +499,7 @@ package body Model_Runner.CLI.Work is
          Said : Unbounded_String;
       begin
          for One of Listed loop
-            Append (Said, (if Said = Null_Unbounded_String then "" else " ") & One);
+            Append (Said, (if Said = Null_Unbounded_String then "" else ", ") & One);
          end loop;
          return To_String (Said);
       end Joined_Ids;
@@ -527,6 +528,8 @@ package body Model_Runner.CLI.Work is
          --  A waiting task's failed one said, with how to try it again: the
          --  failed are not said a second time.
          On_Failed   : Boolean := False;
+         --  A refused one said with what lets it start: no new work offered.
+         Refused     : Boolean := False;
          Candidate : constant Natural := Natural (Tk.List (Store, "candidate").Length);
       begin
          for Id of Tk.List (Store, "accepted") loop
@@ -565,7 +568,20 @@ package body Model_Runner.CLI.Work is
                declare
                   Now : constant Tk.Readiness := Tk.Ready (Store, Id);
                begin
-                  if not Now.Ready and then not Now.Reasons.Is_Empty then
+                  if not Now.Ready and then not Now.Reasons.Is_Empty
+                    --  Held back by what it may do, not by another task:
+                    --  refused, as /state and /task list say it.
+                    and then not (for some Reason of Now.Reasons =>
+                                    Ada.Strings.Fixed.Index (Reason, "waits for") > 0
+                                    or else Ada.Strings.Fixed.Index (Reason, "waiting for") > 0
+                                    or else Ada.Strings.Fixed.Index (Reason, "a candidate") > 0)
+                    and then W.Unable_Reason (Store, Id) /= ""
+                  then
+                     Refused := True;
+                     Pres.Put_Note (Screen, "cli.work.refused_because",
+                                    [Loc.Named ("name", Id), Loc.Named ("value", Title_Of (Id)),
+                                     Loc.Named ("detail", W.Unable_Reason (Store, Id))]);
+                  elsif not Now.Ready and then not Now.Reasons.Is_Empty then
                      Pres.Put_Note (Screen, "cli.work.waits_because",
                                     [Loc.Named ("name", Id), Loc.Named ("value", Title_Of (Id)),
                                      Loc.Named ("detail", Now.Reasons.First_Element)]);
@@ -594,6 +610,9 @@ package body Model_Runner.CLI.Work is
          --  entries waiting to be accepted.
          elsif Ready = 0 and then not Tk.List (Store, "failed").Is_Empty and then On_Failed then
             null;
+         --  Several failed are said above, all at once: not one again.
+         elsif Ready = 0 and then Natural (Tk.List (Store, "failed").Length) > 1 then
+            null;
          elsif Ready = 0 and then not Tk.List (Store, "failed").Is_Empty then
             Pres.Put_Note (Screen, "cli.next.retry_only",
                            [Loc.Named ("name", Tk.List (Store, "failed").First_Element)]);
@@ -605,7 +624,7 @@ package body Model_Runner.CLI.Work is
          --  Blocked or stopped: taken up again, not new work made.
          elsif Ready = 0 and then not Taken_Up.Is_Empty then
             Pres.Put_Note (Screen, "cli.next.take_up_blocked", [Loc.Named ("detail", Joined_Ids (Taken_Up))]);
-         elsif Ready = 0 and then Integrating = 0 then
+         elsif Ready = 0 and then Integrating = 0 and then not Refused then
             Pres.Put_Note (Screen, "cli.next.create");
          end if;
       end Say_What_Is_Ready;
@@ -869,18 +888,27 @@ package body Model_Runner.CLI.Work is
          declare
             Planned : constant Model_Runner.Framework.Orchestration.Dispatch_Plan :=
               Model_Runner.Framework.Orchestration.Plan (Store);
+            --  One its document ticks as done is not worked again unasked:
+            --  left out, said, with the ways to take it.
+            To_Start : Model_Runner.Framework.Name_Lists.Vector;
          begin
-            if Planned.Start.Is_Empty then
+            for Id of Planned.Start loop
+               if Model_Runner.CLI.Tasks.Ticked_Done (Store, Id) /= "" then
+                  Pres.Put_Note (Screen, "cli.work.skipped_done",
+                                 [Loc.Named ("name", Id),
+                                  Loc.Named ("detail", Model_Runner.CLI.Tasks.Ticked_Done (Store, Id))]);
+               else
+                  To_Start.Append (Id);
+               end if;
+            end loop;
+            if To_Start.Is_Empty then
                Pres.Put_Note (Screen, "cli.work.nothing_ready");
                Say_What_Is_Ready;
                S.Close (Store);
                return;
             end if;
-            for Id of Planned.Start loop
-               Chosen := To_Unbounded_String (Id);
-               exit;
-            end loop;
-            Remaining := Planned.Start;
+            Chosen := To_Unbounded_String (To_Start.First_Element);
+            Remaining := To_Start;
             Remaining.Delete_First;
          end;
       end if;
@@ -1066,7 +1094,9 @@ package body Model_Runner.CLI.Work is
                            (Label      => To_Unbounded_String
                                             (Id & "  " & R.Get (Defined, "title")),
                             Tag        => To_Unbounded_String
-                                            (if Now.Ready then "[ready]"
+                                            (if Now.Ready and then Model_Runner.CLI.Tasks.Ticked_Done (Store, Id) /= ""
+                                             then "[ready, marked done]"
+                                             elsif Now.Ready then "[ready]"
                                              elsif Tk.State_Of (Store, Id) = "accepted"
                                              then "[waiting]"
                                              elsif Tk.State_Of (Store, Id) = "verification"
@@ -1216,6 +1246,24 @@ package body Model_Runner.CLI.Work is
                   end if;
                end;
             end if;
+            --  A context that cannot be built for the profile it is planned
+            --  with: refused before anything starts, the task left as it is.
+            if Tk.Ready (Store, To_String (Chosen)).Ready then
+               declare
+                  Built : Model_Runner.Framework.Context.Built;
+                  Got   : E.Error_Info;
+               begin
+                  Model_Runner.Framework.Context.Build
+                    (Store, To_String (Chosen), Model, Built, Got,
+                     Instructions => W.Instructions_Of (Store, To_String (Chosen)));
+                  if E."=" (Got.Code, E.Framework_Context_Overflow) then
+                     Fail (Got);
+                     Pres.Put_Note (Screen, "cli.work.nothing_started", [Loc.Named ("name", To_String (Chosen))]);
+                     S.Close (Store);
+                     return;
+                  end if;
+               end;
+            end if;
             --  Which agent does the work, said before it starts: the one the
             --  project configures, wherever the work is started from.
             --  Said only for a task that can start: one that cannot is
@@ -1270,6 +1318,13 @@ package body Model_Runner.CLI.Work is
             if Tk.Ready (Store, To_String (Chosen)).Ready then
                Pres.Put_Section (Screen, "cli.work.section.run");
             end if;
+            --  What an earlier command replaced is not this run's to say.
+            declare
+               Earlier : constant String := Model_Runner.Framework.Workspaces.Last_Replaced_Copy;
+               pragma Unreferenced (Earlier);
+            begin
+               null;
+            end;
             if Given_Runner /= null and then Path = "" then
                W.Execute
                  (Store, To_String (Chosen), Given_Runner.all, Model, Done, Outcome,
@@ -1464,6 +1519,10 @@ package body Model_Runner.CLI.Work is
          end if;
          if Done.Evidence_Id /= Null_Unbounded_String then
             Say ("cli.work.evidence", To_String (Done.Evidence_Id), "");
+            --  Its checks passed with no test to run: said, not read as tests passing.
+            if Model_Runner.Framework.Verification.Found_No_Tests (Store, To_String (Done.Evidence_Id)) then
+               Pres.Put_Note (Screen, "cli.check.no_tests_yet", [Loc.Named ("name", "its checks")]);
+            end if;
          end if;
          --  Whatever its end, the requirements judged again on what it
          --  left: a whole suite that failed takes verification away.
@@ -1605,6 +1664,15 @@ package body Model_Runner.CLI.Work is
             --  A path outside the project is no permission's: its model
             --  named a whole path, and is told paths are relative.
             if Ada.Strings.Fixed.Index (Model_Runner.CLI.Project_Commands.Last_Refusals, "outside the project") > 0
+              --  Its notes say so already: not suggested again.
+              and then Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Title_Of (To_String (Done.Task_Id))
+                                                  & " " & Notes_Of (To_String (Done.Task_Id))),
+                                                "relative to the project") > 0
+            then
+               Pres.Put_Note (Screen, "cli.work.refused_outside_noted",
+                              [Loc.Named ("detail", Model_Runner.CLI.Project_Commands.Last_Refusals),
+                               Loc.Named ("name", To_String (Done.Task_Id))]);
+            elsif Ada.Strings.Fixed.Index (Model_Runner.CLI.Project_Commands.Last_Refusals, "outside the project") > 0
             then
                Pres.Put_Note (Screen, "cli.work.refused_outside_on_way",
                               [Loc.Named ("detail", Model_Runner.CLI.Project_Commands.Last_Refusals),
@@ -1615,6 +1683,16 @@ package body Model_Runner.CLI.Work is
                                Loc.Named ("name", Kind_Of_Chosen)]);
             end if;
          end if;
+
+         --  An earlier attempt's copy holding the same: gone, and said, so
+         --  it is not missed in /task kept.
+         declare
+            Replaced : constant String := Model_Runner.Framework.Workspaces.Last_Replaced_Copy;
+         begin
+            if Replaced /= "" then
+               Pres.Put_Note (Screen, "cli.work.copy_replaced", [Loc.Named ("value", Replaced)]);
+            end if;
+         end;
 
          --  And what a person does next, where it did not complete.
          if To_String (Done.Final_State) = "blocked"

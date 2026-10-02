@@ -254,10 +254,11 @@ package body Model_Runner.CLI.Tasks is
       return Result;
    end Sorted_Words;
 
-   --  The document's label of a requirement a task serves that the
-   --  document ticks as done -- FR-1, from bootstrap's issue -- with where;
-   --  "" where none is.
-   function Ticked_Done (Store : S.Store; Task_Id : String) return String is
+   -----------------
+   -- Ticked_Done --
+   -----------------
+
+   function Ticked_Done (Store : Model_Runner.Framework.Stores.Store; Task_Id : String) return String is
       package Nt renames Model_Runner.Framework.Intent;
       package Rs renames Model_Runner.Framework.Results;
       Defined : R.Item;
@@ -478,6 +479,25 @@ package body Model_Runner.CLI.Tasks is
                            & " reject, complete, verify and integrate");
                Fail (Outcome);
                return False;
+            --  A state where a task is named: no task, said with what takes
+            --  the tasks in it.
+            elsif Ada.Characters.Handling.To_Lower (Id)
+                    in "failed" | "stopped" | "blocked" | "ready" | "candidate" | "candidates" | "accepted"
+                     | "refused" | "complete" | "cancelled" | "rejected"
+            then
+               Outcome := E.Make (E.Framework_Input_Invalid);
+               E.Add_Text (Outcome, "name", "the task to " & Action);
+               E.Add_Text (Outcome, "value", Id);
+               E.Add_Text (Outcome, "detail", Id & " is a state, not a task; /task list state="
+                           & Ada.Characters.Handling.To_Lower (Id) & " lists those in it"
+                           & (if Action = "accept"
+                              and then Ada.Characters.Handling.To_Lower (Id) in "failed" | "stopped" | "blocked"
+                              then ", and /task accept all takes up the failed and stopped ones"
+                              elsif Action in "accept" | "reject"
+                              then ", and /task " & Action & " all takes every candidate"
+                              else ""));
+               Fail (Outcome);
+               return False;
             elsif Tk.State_Of (Store, Id) = "" then
                --  Named, with the nearest there is, and where they are.
                declare
@@ -654,7 +674,11 @@ package body Model_Runner.CLI.Tasks is
                   Cut  : constant Natural := Ada.Strings.Fixed.Index (Pair, "=");
                begin
                   if Cut > Pair'First and then Pair (Pair'First .. Cut - 1) = Name then
-                     return Pair (Cut + 1 .. Pair'Last);
+                     --  to-integrate, as Tab offers it, is to integrate.
+                     return (if Name = "state"
+                             then Ada.Strings.Fixed.Translate
+                                    (Pair (Cut + 1 .. Pair'Last), Ada.Strings.Maps.To_Mapping ("-_", "  "))
+                             else Pair (Cut + 1 .. Pair'Last));
                   end if;
                end;
             end loop;
@@ -981,6 +1005,24 @@ package body Model_Runner.CLI.Tasks is
                Read  : E.Error_Info;
             begin
                Pm.Restriction (Fields ("permissions"), Asked, Read);
+               --  A root that is no place here grants nothing: refused, as
+               --  /task grant refuses it.
+               if E.Is_Ok (Read)
+                 and then Ada.Strings.Fixed.Index
+                            (Pm.Missing_Places (Ada.Directories.Containing_Directory (S.Root (Store)),
+                                                Fields ("permissions")),
+                             "grants nothing") > 0
+               then
+                  Outcome := E.Make (E.Framework_Input_Invalid);
+                  E.Add_Text (Outcome, "name", "permissions");
+                  E.Add_Text (Outcome, "value", Fields ("permissions"));
+                  E.Add_Text (Outcome, "detail",
+                              Pm.Missing_Places (Ada.Directories.Containing_Directory (S.Root (Store)),
+                                                 Fields ("permissions"))
+                              & "; nothing was made");
+                  Fail (Outcome);
+                  return;
+               end if;
                --  A root outside its kind's: said as /task grant says it.
                if E.Is_Ok (Read) then
                   declare
@@ -1684,6 +1726,21 @@ package body Model_Runner.CLI.Tasks is
                   end;
                end loop;
             end loop;
+            --  What a file holds says whose it is, over when each ran: a copy
+            --  put back since makes the order of the runs no guide.
+            for File of Model_Runner.Framework.Lines_Of (R.Get (Held, "changed_files")) loop
+               declare
+                  Holder : constant String := Model_Runner.Framework.Work.Holder_Of (Store, File);
+               begin
+                  if Holder = Id and then Later.Contains (File) then
+                     Later_By.Delete (Later.Find_Index (File));
+                     Later.Delete (Later.Find_Index (File));
+                  elsif Holder not in "" | Id and then not Later.Contains (File) then
+                     Later.Append (File);
+                     Later_By.Append (Holder);
+                  end if;
+               end;
+            end loop;
          end;
          for File of Model_Runner.Framework.Lines_Of (R.Get (Held, "changed_files")) loop
             declare
@@ -1837,7 +1894,12 @@ package body Model_Runner.CLI.Tasks is
               and then not Said_Ready.Contains (Id)
             then
                Said_Ready.Append (Id);
-               Pres.Put_Note (Screen, "cli.task.ready", [Loc.Named ("name", Id)]);
+               --  Its parts all let go: ready as a whole, said so.
+               if Ada.Strings.Fixed.Index (State_Field (Id, "accepted_by"), "its parts ended") = 1 then
+                  Pres.Put_Note (Screen, "cli.task.ready_whole", [Loc.Named ("name", Id)]);
+               else
+                  Pres.Put_Note (Screen, "cli.task.ready", [Loc.Named ("name", Id)]);
+               end if;
             end if;
          end loop;
          Became_Ready.Clear;
@@ -2226,6 +2288,24 @@ package body Model_Runner.CLI.Tasks is
             begin
                Tk.Definition (Store, Id, Defined, Read);
                Pm.Restriction (Fields ("permissions"), Asked, Read);
+               --  A root that is no place here grants nothing: refused, as
+               --  /task grant refuses it.
+               if E.Is_Ok (Read)
+                 and then Ada.Strings.Fixed.Index
+                            (Pm.Missing_Places (Ada.Directories.Containing_Directory (S.Root (Store)),
+                                                Fields ("permissions")),
+                             "grants nothing") > 0
+               then
+                  Outcome := E.Make (E.Framework_Input_Invalid);
+                  E.Add_Text (Outcome, "name", "permissions");
+                  E.Add_Text (Outcome, "value", Fields ("permissions"));
+                  E.Add_Text (Outcome, "detail",
+                              Pm.Missing_Places (Ada.Directories.Containing_Directory (S.Root (Store)),
+                                                 Fields ("permissions"))
+                              & "; nothing was changed");
+                  Fail (Outcome);
+                  return;
+               end if;
                if E.Is_Ok (Read) then
                   declare
                      Left : constant Pm.Permission_Set :=
@@ -2567,6 +2647,33 @@ package body Model_Runner.CLI.Tasks is
               (for all Line of Own_Lines =>
                  Ada.Strings.Fixed.Index (Ada.Strings.Fixed.Trim (Line, Ada.Strings.Both), "-") = 1);
          begin
+            --  Several capabilities named: one at a time, said so.
+            for Word of Model_Runner.Framework.Lines_Of
+                          (Ada.Strings.Fixed.Translate (Limits, Ada.Strings.Maps.To_Mapping (" ", [1 => ASCII.LF])))
+            loop
+               if (for some One in Pm.Capability => Pm.Word (One) = Word) then
+                  Outcome := E.Make (E.Framework_Input_Invalid);
+                  E.Add_Text (Outcome, "name", "what to " & (if Granting then "grant" else "withhold"));
+                  E.Add_Text (Outcome, "value", Cap & " " & Word);
+                  E.Add_Text (Outcome, "detail", "/task " & (if Granting then "grant" else "withhold")
+                              & " takes one capability at a time: /task " & (if Granting then "grant" else "withhold")
+                              & " " & First_Word & " " & Cap & ", then /task "
+                              & (if Granting then "grant" else "withhold") & " " & First_Word & " " & Word
+                              & "; nothing was changed");
+                  Fail (Outcome);
+                  return;
+               end if;
+            end loop;
+            --  Had already, as asked: said, and no revision made.
+            if Granting and then Limits = ""
+              and then (Own_Lines.Contains (Cap)
+                        or else (Minus_Only and then not Own_Lines.Contains (Minus_Line)
+                                 and then Of_Kind (Which).Granted and then Of_Kind (Which).Roots.Is_Empty))
+            then
+               Pres.Put_Note (Screen, "cli.task.granted_already",
+                              [Loc.Named ("name", First_Word), Loc.Named ("value", Cap)]);
+               return;
+            end if;
             if not Granting and then Limits /= "" then
                Outcome := E.Make (E.Framework_Input_Invalid);
                E.Add_Text (Outcome, "name", "what to withhold");
@@ -2610,6 +2717,35 @@ package body Model_Runner.CLI.Tasks is
                   --  The project above withholding it too: both said at once.
                   By_Project : constant Boolean :=
                     not Pm.Effective (Store, "", "", Within_Sandbox => False) (Which).Granted;
+                  --  A decision ruling the setting the hint would change:
+                  --  named, as changing it would go against the ruling.
+                  function Ruled (Setting : String) return String is
+                     package Nt renames Model_Runner.Framework.Intent;
+                     Said : Unbounded_String;
+                  begin
+                     for Dec of Nt.List (Store, Nt.Decision) loop
+                        if Nt.State_Of (Store, Nt.Decision, Dec) = "accepted" then
+                           declare
+                              All_Of : Model_Runner.Framework.Name_Lists.Vector :=
+                                Nt.Also_Governs (Store, Nt.Decision, Dec);
+                           begin
+                              All_Of.Append (Nt.Governs (Store, Nt.Decision, Dec));
+                              for One of All_Of loop
+                                 if Ada.Strings.Fixed.Index (One, Setting & " = ") = One'First then
+                                    Append (Said, "; " & Dec & " rules it " & One (One'First + Setting'Length + 3
+                                                                                  .. One'Last)
+                                            & " -- /decision govern " & Dec & " " & Setting
+                                            & " on, or a decision superseding it, first");
+                                 end if;
+                              end loop;
+                           end;
+                        end if;
+                     end loop;
+                     return To_String (Said);
+                  end Ruled;
+                  Rulings : constant String :=
+                    (if By_Project then Ruled ("map.permission.project." & Cap) else "")
+                    & (if By_Kind then Ruled ("map.permission.kind." & Kind & "." & Cap) else "");
                begin
                   Outcome := E.Make (E.Framework_Input_Invalid);
                   E.Add_Text (Outcome, "name", "the capability to grant");
@@ -2625,7 +2761,8 @@ package body Model_Runner.CLI.Tasks is
                                     & " /reconfigure map.permission.kind." & Kind & "." & Cap
                                     & "=on grants it to the kind"
                                else "the project withholds it, and neither a kind nor a task is given more than the"
-                                    & " project; /reconfigure map.permission.project." & Cap & "=on grants it"));
+                                    & " project; /reconfigure map.permission.project." & Cap & "=on grants it")
+                              & Rulings);
                end;
                Fail (Outcome);
                return;
@@ -3432,17 +3569,27 @@ package body Model_Runner.CLI.Tasks is
                   --  take, beside the words above.
                   declare
                      package Pm renames Model_Runner.Framework.Permissions;
+                     --  As its agent has them, at work: what role.worker
+                     --  withholds is not among them, and said apart.
                      Allowed : constant Pm.Permission_Set :=
+                       Pm.Effective (Store, R.Get (View, "definition.kind"), "worker",
+                                     Task_Level => R.Get (View, "definition.permissions"), Within_Sandbox => False);
+                     Unroled : constant Pm.Permission_Set :=
                        Pm.Effective (Store, R.Get (View, "definition.kind"), "",
                                      Task_Level => R.Get (View, "definition.permissions"), Within_Sandbox => False);
                      Named   : Unbounded_String;
+                     By_Role : Unbounded_String;
                   begin
                      for One in Pm.Capability loop
                         if Allowed (One).Granted then
                            Append (Named, (if Named = Null_Unbounded_String then "" else ", ") & Pm.Word (One));
+                        elsif Unroled (One).Granted then
+                           Append (By_Role, (if By_Role = Null_Unbounded_String then "" else ", ") & Pm.Word (One));
                         end if;
                      end loop;
-                     Grouped ("  " & "by name", (if Named = Null_Unbounded_String then "none" else To_String (Named)));
+                     Grouped ("  " & "by name", (if Named = Null_Unbounded_String then "none" else To_String (Named))
+                                                & (if By_Role = Null_Unbounded_String then ""
+                                                   else " (role.worker withholds " & To_String (By_Role) & ")"));
                   end;
                   return;
                end if;
@@ -3506,6 +3653,10 @@ package body Model_Runner.CLI.Tasks is
                            elsif State = "blocked"
                              and then Ada.Strings.Fixed.Index (R.Get (View, "runtime.blocked_by"), "you stopped") > 0
                            then "why it stopped"
+                           --  Blocked by how a run of it ended: why it stopped.
+                           elsif State = "blocked" and then not Never_Worked (Argument)
+                             and then Ada.Strings.Fixed.Index (R.Get (View, "runtime.blocked_by"), "children") = 0
+                           then "why it stopped"
                            else "why it cannot start")
                      elsif Shown_Name = "depends_on" then "waits for"
                      elsif Shown_Name = "accepted_by" then "accepted by"
@@ -3529,7 +3680,12 @@ package body Model_Runner.CLI.Tasks is
                            if E.Is_Ok (Read) and then Length (Held.Criteria) > 0 then
                               return "";
                            end if;
-                           Append (Said, (if Said = Null_Unbounded_String then "" else ", ") & Req);
+                           --  A retired one is revised no more: not offered.
+                           if not (E.Is_Ok (Read)
+                                   and then To_String (Held.State) in "obsolete" | "superseded" | "rejected")
+                           then
+                              Append (Said, (if Said = Null_Unbounded_String then "" else ", ") & Req);
+                           end if;
                         end;
                      end loop;
                      return To_String (Said);
@@ -3647,6 +3803,12 @@ package body Model_Runner.CLI.Tasks is
             --  for, its parts and its waiting work.
             Section ("cli.task.section.stands");
             Once ("runtime.state");
+            --  Its work put back out of the project since: said where it
+            --  stands, not left to /task diff.
+            if State_Field (Argument, "undone_by") /= "" then
+               Grouped ("  its work", "undone in the project: " & State_Field (Argument, "undone_by")
+                                      & " was put back over it -- /task reopen " & Argument & " does it again");
+            end if;
             if Ended then
                Said.Append ("blocked_by");
             end if;
@@ -3933,18 +4095,78 @@ package body Model_Runner.CLI.Tasks is
       --  what it was can be looked up by its identifier afterwards.
       procedure Show_Context is
          Built : Model_Runner.Framework.Context.Built;
+         Id    : constant String := First_Word;
+
+         --  profile=NAME: the profile it is planned with, as /work takes
+         --  it; nothing else is taken.
+         function Profile_Given return String is
+            Words : constant String := After_First;
+            Start : Natural := Words'First;
+         begin
+            for Index in Words'First .. Words'Last + 1 loop
+               if Index > Words'Last or else Words (Index) = ' ' then
+                  if Index > Start and then Ada.Strings.Fixed.Head (Words (Start .. Index - 1), 8) = "profile=" then
+                     return Words (Start + 8 .. Index - 1);
+                  end if;
+                  Start := Index + 1;
+               end if;
+            end loop;
+            return "";
+         end Profile_Given;
+
+         --  A word it does not take: the first, or none.
+         function Not_Taken return String is
+            Words : constant String := After_First;
+            Start : Natural := Words'First;
+         begin
+            for Index in Words'First .. Words'Last + 1 loop
+               if Index > Words'Last or else Words (Index) = ' ' then
+                  if Index > Start and then Ada.Strings.Fixed.Head (Words (Start .. Index - 1), 8) /= "profile=" then
+                     return Words (Start .. Index - 1);
+                  end if;
+                  Start := Index + 1;
+               end if;
+            end loop;
+            return "";
+         end Not_Taken;
       begin
          if not Needs_Task then
             return;
          end if;
+         if Not_Taken /= "" then
+            Outcome := E.Make (E.Framework_Input_Invalid);
+            E.Add_Text (Outcome, "name", "what /task context takes");
+            E.Add_Text (Outcome, "value", Not_Taken);
+            E.Add_Text (Outcome, "detail", "a task, and profile=NAME to plan it with another model profile, as"
+                        & " /task context " & Id & " profile=small; --verbose shows it whole");
+            Fail (Outcome);
+            return;
+         end if;
+         --  A profile it names is one the configuration has, as /work's.
+         declare
+            Config : R.Item;
+            Got    : E.Error_Info;
+         begin
+            Model_Runner.Framework.Configurations.Read (Store, Config, Got);
+            if Profile_Given not in "" | "default" and then not R.Has (Config, "map.model." & Profile_Given) then
+               Outcome := E.Make (E.Framework_Input_Invalid);
+               E.Add_Text (Outcome, "name", "profile");
+               E.Add_Text (Outcome, "value", Profile_Given);
+               E.Add_Text (Outcome, "detail", "there is no map.model." & Profile_Given
+                           & "; /config map.model lists those there are");
+               Fail (Outcome);
+               return;
+            end if;
+         end;
          --  Built as /work builds it: for the model it would run on, with
          --  the instructions after it counted in.
          Model_Runner.Framework.Context.Build
-           (Store, Argument,
-            (if Item.Has_Session_Profile
+           (Store, Id,
+            (if Profile_Given /= "" then Model_Runner.Framework.Context.Profile (Store, Profile_Given)
+             elsif Item.Has_Session_Profile
              then Model_Runner.Framework.Context.Within_Configured (Store, Item.Session_Profile)
              else Model_Runner.Framework.Context.Profile (Store, "")),
-            Built, Outcome, Instructions => Model_Runner.Framework.Work.Instructions_Of (Store, Argument));
+            Built, Outcome, Instructions => Model_Runner.Framework.Work.Instructions_Of (Store, Id));
          if E.Is_Ok (Outcome) then
             Model_Runner.Framework.Context.Keep (Store, Change, Built, Outcome);
          end if;
@@ -3982,7 +4204,7 @@ package body Model_Runner.CLI.Tasks is
          if Model_Runner.CLI.Options."=" (Item.Level, Model_Runner.CLI.Options.Verbose) then
             Pres.Put_Line (Screen, Model_Runner.Framework.Context.Rendered (Built));
          else
-            Pres.Put_Note (Screen, "cli.next.context_whole", [Loc.Named ("name", Argument)]);
+            Pres.Put_Note (Screen, "cli.next.context_whole", [Loc.Named ("name", Id)]);
          end if;
       end Show_Context;
 
@@ -4099,6 +4321,15 @@ package body Model_Runner.CLI.Tasks is
                 Loc.Named ("total", T.Image (Long_Long_Integer
                              (Model_Runner.Framework.Verification.Length (Said))))],
                (if Passed then "passed" else "failed"), (if Passed then Pres.Good else Pres.Bad));
+            --  Passed with no test to run: said, not read as tests passing.
+            if Passed and then Model_Runner.Framework.Verification.Found_No_Tests (Store, To_String (Evidence)) then
+               Pres.Put_Note (Screen, "cli.check.no_tests_yet", [Loc.Named ("name", Profile)]);
+            end if;
+            --  Its work put back out since: what passed is the project, not it.
+            if State_Field (Argument, "undone_by") /= "" then
+               Pres.Put_Note (Screen, "cli.task.work_undone",
+                              [Loc.Named ("name", Argument), Loc.Named ("value", State_Field (Argument, "undone_by"))]);
+            end if;
          end;
          if not Passed then
             declare
@@ -6153,8 +6384,12 @@ package body Model_Runner.CLI.Tasks is
                      else "");
                   function Holder (File : String) return String is
                      Found : Unbounded_String;
+                     --  By what the file holds, where a task's work is just that.
+                     By_Content : constant String := Model_Runner.Framework.Work.Holder_Of (Store, File);
                   begin
-                     if Ada.Strings.Fixed.Index (Name, "overwritten-") = Name'First then
+                     if By_Content /= "" then
+                        return (if By_Content = Own_Task then "" else By_Content);
+                     elsif Ada.Strings.Fixed.Index (Name, "overwritten-") = Name'First then
                         return (if Model_Runner.Framework.Lines_Of (Changed_By_Lines (Own_Task)).Contains (File)
                                 then Own_Task else "");
                      end if;
@@ -6261,10 +6496,36 @@ package body Model_Runner.CLI.Tasks is
                                  --  history, so nothing there is credited to it.
                                  if Undo and then State /= "" then
                                     Model_Runner.Framework.Work.Note_Undone (Store, Owner, Name);
-                                 --  Its work back in the project: undone no more.
+                                 --  Its work back in the project: undone no more,
+                                 --  and the files as they are now its.
                                  elsif State /= "" then
                                     Model_Runner.Framework.Work.Note_Undone (Store, Owner, "");
+                                    Model_Runner.Framework.Work.Note_Restored
+                                      (Store, Owner, Ws.Kept_Files (Store, Name));
                                  end if;
+                                 --  Work a restore brings back of another task --
+                                 --  what its file holds is that task's again --
+                                 --  undone no more; work it puts out, undone.
+                                 for File of Ws.Kept_Files (Store, Name) loop
+                                    declare
+                                       Now_Holder : constant String :=
+                                         Model_Runner.Framework.Work.Holder_Of (Store, File);
+                                    begin
+                                       for Other of Tk.List (Store) loop
+                                          if Other /= Owner and then Tk.State_Of (Store, Other) = "complete"
+                                            and then Model_Runner.Framework.Lines_Of (Changed_By_Lines (Other))
+                                                       .Contains (File)
+                                          then
+                                             if Now_Holder = Other then
+                                                Model_Runner.Framework.Work.Note_Undone (Store, Other, "");
+                                             elsif Now_Holder /= "" and then State_Field (Other, "undone_by") = ""
+                                             then
+                                                Model_Runner.Framework.Work.Note_Undone (Store, Other, Name);
+                                             end if;
+                                          end if;
+                                       end loop;
+                                    end;
+                                 end loop;
                                  if State /= "" then
                                     Pres.Put_Note
                                       (Screen, "cli.task.after_restore",
@@ -6375,11 +6636,20 @@ package body Model_Runner.CLI.Tasks is
                                     & (if not Model_Runner.Framework.Git.Status_Of
                                                 (Ada.Directories.Containing_Directory (S.Root (Store))).Found
                                        then ""
-                                       --  Committed since: the log holds it, not /git.
-                                       elsif Model_Runner.Framework.Git.Status_Of
-                                               (Ada.Directories.Containing_Directory (S.Root (Store))).Changes
-                                               .Is_Empty
-                                         and then Changed_By (First_Word) /= ""
+                                       --  Committed since -- none of its files among what
+                                       --  is uncommitted: the log holds it, not /git.
+                                       elsif Changed_By (First_Word) /= ""
+                                         and then not (for some Change of Model_Runner.Framework.Git.Status_Of
+                                                                            (Ada.Directories.Containing_Directory
+                                                                               (S.Root (Store))).Changes =>
+                                                         (for some File of Model_Runner.Framework.Lines_Of
+                                                                             (Ada.Strings.Fixed.Translate
+                                                                                (Changed_By (First_Word),
+                                                                                 Ada.Strings.Maps.To_Mapping
+                                                                                   (",", [1 => ASCII.LF]))) =>
+                                                            Ada.Strings.Fixed.Index
+                                                              (Change, Ada.Strings.Fixed.Trim
+                                                                         (File, Ada.Strings.Both)) > 0))
                                        then "; it is committed: git log -p -- "
                                             & Spaced (Changed_By (First_Word)) & " shows it"
                                        else "; /git shows what changed")))]);

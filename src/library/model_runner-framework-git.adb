@@ -224,6 +224,35 @@ package body Model_Runner.Framework.Git is
             end loop;
          end loop;
       end;
+      --  And a rename not yet committed -- git mv, edited since or not:
+      --  as the index has it, R  old -> new.
+      declare
+         Staged : Name_Lists.Vector;
+         Seen   : Unbounded_String;
+         Got    : E.Error_Info;
+      begin
+         Staged.Append ("status");
+         Staged.Append ("--porcelain=v1");
+         Staged.Append ("-M");
+         Execution.Run_Harness (Project_Directory, "git", Staged, Project_Directory, Output, 60, Happened);
+         if Ada.Directories.Exists (Output) then
+            Files.Read_Text (Output, Seen, Got);
+            Files.Discard (Output);
+         end if;
+         if Happened.Started and then not Happened.Timed_Out and then Happened.Exit_Status = 0 then
+            for Line of Lines_Of (To_String (Seen)) loop
+               declare
+                  Arrow : constant Natural := Ada.Strings.Fixed.Index (Line, " -> ");
+               begin
+                  if Line'Length > 3 and then Line (Line'First) = 'R' and then Arrow > Line'First + 3
+                    and then Line (Line'First + 3 .. Arrow - 1) = To_String (Now)
+                  then
+                     Now := To_Unbounded_String (Line (Arrow + 4 .. Line'Last));
+                  end if;
+               end;
+            end loop;
+         end if;
+      end;
       if To_String (Now) = Prefix & Path then
          return "";
       end if;

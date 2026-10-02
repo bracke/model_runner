@@ -31,6 +31,27 @@ package Model_Runner.Framework.Intent is
    --  Which register an entity is in.
    type Intent_Kind is (Specification, Requirement, Decision);
 
+   --  Give an entity another identifier: its record kept under the new
+   --  one, the old one gone, and every entry linked to it linked to the
+   --  new -- what a document's own identifier asks for where an earlier
+   --  reading gave that number to another.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Kind Which register.
+   --  @param Old_Id Its identifier now.
+   --  @param New_Id The identifier it takes.
+   --  @param Status Framework_Not_Found when there is no such entity,
+   --    Framework_Input_Invalid when the new one is taken or is no
+   --    identifier of that register.
+   procedure Renumber
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Kind   : Intent_Kind;
+      Old_Id : String;
+      New_Id : String;
+      Status : out Model_Runner.Errors.Error_Info);
+
    --  What an entity is linked to.
    type Link_Kind is
      (Dependency,

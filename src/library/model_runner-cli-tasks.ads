@@ -31,4 +31,12 @@ package Model_Runner.CLI.Tasks is
    --  @return The words.
    function Waiting_On_It (Store : Model_Runner.Framework.Stores.Store; Id : String) return String;
 
+   --  The document's label of a requirement a task serves that its document
+   --  ticks as done -- FR-1, from bootstrap's issue -- with where.
+   --
+   --  @param Store The project's state.
+   --  @param Task_Id The task.
+   --  @return As "FR-1 in README.md"; "" where none is.
+   function Ticked_Done (Store : Model_Runner.Framework.Stores.Store; Task_Id : String) return String;
+
 end Model_Runner.CLI.Tasks;

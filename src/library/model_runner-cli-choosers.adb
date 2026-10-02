@@ -494,7 +494,8 @@ package body Model_Runner.CLI.Choosers is
      (Screen  : Model_Runner.Presentation.Console;
       Title   : String;
       Items   : Choice_List;
-      Heading : String := "") return Natural
+      Heading : String := "";
+      Initial : Positive := 1) return Natural
    is
       Guard : Raw_Guard;
       State : Selector := Start (Items);
@@ -561,7 +562,15 @@ package body Model_Runner.CLI.Choosers is
          return (if Term.Size (Output, Size) and then Size.Rows > 6
                  then Size.Rows - 5 else 10);
       end Window_Rows;
+      --  The cursor where the caller puts it: the safe choice, where one is.
+      procedure Place_Cursor is
+      begin
+         if Initial > 1 and then Initial <= Natural (State.Visible.Length) then
+            State.Cursor := Initial;
+         end if;
+      end Place_Cursor;
    begin
+      Place_Cursor;
       if not Is_Available (Screen) or else Length (Items) = 0 then
          return 0;
       end if;
@@ -993,6 +1002,32 @@ package body Model_Runner.CLI.Choosers is
    end History_Ready;
 
    --  A line kept for the next session, the last 500 kept.
+   ----------------------
+   -- Forget_Last_Line --
+   ----------------------
+
+   procedure Forget_Last_Line is
+      File : Ada.Text_IO.File_Type;
+   begin
+      if History.Is_Empty then
+         return;
+      end if;
+      History.Delete_Last;
+      if History_File = "" then
+         return;
+      end if;
+      Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, History_File);
+      for One of History loop
+         Ada.Text_IO.Put_Line (File, One);
+      end loop;
+      Ada.Text_IO.Close (File);
+   exception
+      when others =>
+         if Ada.Text_IO.Is_Open (File) then
+            Ada.Text_IO.Close (File);
+         end if;
+   end Forget_Last_Line;
+
    procedure Keep_In_History (Line : String) is
       File : Ada.Text_IO.File_Type;
    begin
@@ -1091,20 +1126,62 @@ package body Model_Runner.CLI.Choosers is
       --  would offer now: a link taken off since, a task done, is not
       --  suggested again. Where Tab offers nothing, any word is.
       function Still_Offered (Line, Rest : String) return Boolean is
-         Space   : constant Natural := Ada.Strings.Fixed.Index (Rest, " ");
+         --  An identifier as typed or as listed, alike: req-4 is REQ-004.
+         function Normal (Word : String) return String is
+            Upper : constant String := Ada.Characters.Handling.To_Upper (Word);
+            Dash  : constant Natural := Ada.Strings.Fixed.Index (Upper, "-", Ada.Strings.Backward);
+            First : Natural := Dash + 1;
+         begin
+            if Dash = 0 or else Dash = Upper'Last
+              or else not (for all C of Upper (Dash + 1 .. Upper'Last) => C in '0' .. '9')
+            then
+               return Upper;
+            end if;
+            while First < Upper'Last and then Upper (First) = '0' loop
+               First := First + 1;
+            end loop;
+            return Upper (Upper'First .. Dash) & Upper (First .. Upper'Last);
+         end Normal;
+
+         --  The word that goes on from Before is one Tab offers there.
+         function Offered_At (Before, Word : String) return Boolean is
+            Choices : constant Model_Runner.Framework.Name_Lists.Vector := Complete (Before);
+         begin
+            return Choices.Is_Empty or else Word = ""
+              or else (for some One of Choices => Normal (One) = Normal (Word))
+              --  A number for an ID, a NAME= with its value: as typed then.
+              or else (for all C of Word => C in '0' .. '9')
+              or else (for some One of Choices =>
+                         One'Length > 0 and then One (One'Last) = '=' and then Word'Length > One'Length
+                         and then Word (Word'First .. Word'First + One'Length - 1) = One);
+         end Offered_At;
+
          Partial : constant Natural := Ada.Strings.Fixed.Index (Line, " ", Ada.Strings.Backward);
-         Typed   : constant String :=
-           (if Partial = 0 then Line else Line (Partial + 1 .. Line'Last));
-         Word    : constant String :=
-           Typed & (if Space = 0 then Rest else Rest (Rest'First .. Space - 1));
-         Choices : constant Model_Runner.Framework.Name_Lists.Vector := Complete (Line);
+         Typed   : constant String := (if Partial = 0 then Line else Line (Partial + 1 .. Line'Last));
+         Whole   : constant String := Line & Rest;
+         Start   : Natural := (if Partial = 0 then Line'First else Partial + 1);
       begin
-         return Choices.Is_Empty or else Word = "" or else Choices.Contains (Word)
-           --  A number for an ID, a NAME= with its value: as typed then.
-           or else (for all C of Word => C in '0' .. '9')
-           or else (for some One of Choices =>
-                      One'Length > 0 and then One (One'Last) = '=' and then Word'Length > One'Length
-                      and then Word (Word'First .. Word'First + One'Length - 1) = One);
+         --  Each word from the one begun on: an identifier among them that
+         --  is no longer offered -- a task cancelled since -- and the line
+         --  is not suggested again.
+         pragma Unreferenced (Typed);
+         for Index in Start .. Whole'Last + 1 loop
+            if Index > Whole'Last or else Whole (Index) = ' ' then
+               if Index > Start + 1
+                 and then Whole (Start) /= '/'
+                 --  Only an identifier's: free words -- a title, a note --
+                 --  are what they were.
+                 and then Ada.Strings.Fixed.Index (Whole (Start .. Index - 1), "-") > 0
+                 and then Whole (Index - 1) in '0' .. '9'
+                 and then not Offered_At (Whole (Whole'First .. Start - 1) & Whole (Start .. Start),
+                                          Whole (Start .. Index - 1))
+               then
+                  return False;
+               end if;
+               Start := Index + 1;
+            end if;
+         end loop;
+         return True;
       exception
          when others =>
             return True;

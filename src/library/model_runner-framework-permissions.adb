@@ -1027,6 +1027,13 @@ package body Model_Runner.Framework.Permissions is
                       --  A short one -- /dir/file -- not a whole path of the
                       --  machine's, which names no place of the project's.
                       and then Ada.Strings.Fixed.Count (Path, "/") <= 2
+                      --  Its directory one the project has: /project/x is no
+                      --  project/ to make, but x.
+                      and then (Ada.Strings.Fixed.Count (Path, "/") = 1
+                                or else Ada.Directories.Exists
+                                          (Base & Path (Path'First + 1
+                                                        .. Ada.Strings.Fixed.Index (Path, "/", Ada.Strings.Backward)
+                                                           - 1)))
                     then Path (Path'First + 1 .. Path'Last)
                     elsif Writing or else (Tail /= "" and then Ada.Directories.Exists (Base & Tail)) then Tail
                     else "");
@@ -1282,8 +1289,13 @@ package body Model_Runner.Framework.Permissions is
                   end if;
                end;
             end if;
-            return (if Ruling in "off" | "none" then not Given
-                    elsif Ruling in "on" | "" | "inherit" then Given
+            --  Written as ruled is agreeing; inherit is what the level
+            --  above gives -- the harness's default, for the project.
+            return (if Records.Get (Config, Setting) = Ruling then True
+                    elsif Ruling in "off" | "none" then not Given
+                    elsif Ruling = "inherit" and then Level = "project" then Given = Project_Default (Which).Granted
+                    elsif Ruling = "inherit" then Given = Of_Project (Which).Granted
+                    elsif Ruling in "on" | "" then Given
                     else Records.Get (Config, Setting) = Ruling);
          end;
       end;
@@ -1333,7 +1345,7 @@ package body Model_Runner.Framework.Permissions is
                Ada.Strings.Unbounded.Append
                  (Said, (if Ada.Strings.Unbounded.Length (Said) = 0 then "" else ", ") & Bare
                   & " (no such place here" & (if Near = "" then "" else "; " & Near & " is")
-                  & (if Denied then ": kept from being made" else ": it grants nothing there") & ")");
+                  & (if Denied then ": nothing there to keep from it" else ": it grants nothing there") & ")");
             end;
          end if;
       end Check;

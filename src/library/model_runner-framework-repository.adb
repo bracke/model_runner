@@ -330,7 +330,10 @@ package body Model_Runner.Framework.Repository is
          Start := Mark + 6;
          for Index in Mark + 6 .. Text'Last + 1 loop
             if Index > Text'Last or else Text (Index) in '|' | ',' | ' ' then
-               if Index > Start then
+               --  packages/web/ is packages/web: a directory, however written.
+               if Index - 1 > Start and then Text (Index - 1) = '/' then
+                  Result.Append (Text (Start .. Index - 2));
+               elsif Index > Start then
                   Result.Append (Text (Start .. Index - 1));
                end if;
                Start := Index + 1;

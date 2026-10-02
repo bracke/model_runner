@@ -349,7 +349,9 @@ package body Model_Runner.Framework.Consistency is
                              Permissions.Word (One)
                                = Name (Ada.Strings.Fixed.Index (Name, ".", Ada.Strings.Backward) + 1 .. Name'Last)
                              and then Permissions.Project_Default (One).Granted);
-               Ruled_Granted : constant Boolean := Said not in "off" | "none";
+               --  inherit is what the level above gives: the default, unset.
+               Ruled_Granted : constant Boolean :=
+                 (if Said = "inherit" then Default_Granted else Said not in "off" | "none");
             begin
                if Name /= "" and then not Records.Has (Config, Name)
                  and then (if Is_Capability then Default_Granted /= Ruled_Granted
@@ -378,6 +380,42 @@ package body Model_Runner.Framework.Consistency is
                   if Intent.State_Of (Item, Intent.Decision, Id) = "accepted" and then Equal > 0 then
                      Judge (Id, Rule (Rule'First .. Equal - 1),
                             Rule (Equal + 3 .. (if Over = 0 then Rule'Last else Over - 1)));
+                     --  A kind's own limit above the agents' limit ruled:
+                     --  the kind's is what its tasks run with, past the
+                     --  ruling.
+                     for Limit of Name_Lists.Vector'(["max_seconds", "max_tool_calls", "max_steps", "token_budget"])
+                     loop
+                        declare
+                           Ruled : constant String :=
+                             Ada.Strings.Fixed.Trim
+                               (Rule (Equal + 3 .. (if Over = 0 then Rule'Last else Over - 1)), Ada.Strings.Both);
+                           Lead  : constant String := "scalar.task." & Limit & ".";
+                        begin
+                           if Whole (Rule (Rule'First .. Equal - 1)) = "scalar.agents." & Limit
+                             and then Ruled'Length in 1 .. 9 and then (for all C of Ruled => C in '0' .. '9')
+                           then
+                              for Index in 1 .. Records.Field_Count (Config) loop
+                                 declare
+                                    Field : constant String := Records.Field_Name (Config, Index);
+                                    Own   : constant String := Records.Get (Config, Field);
+                                 begin
+                                    if Field'Length > Lead'Length
+                                      and then Field (Field'First .. Field'First + Lead'Length - 1) = Lead
+                                      and then Own'Length in 1 .. 9 and then (for all C of Own => C in '0' .. '9')
+                                      and then Natural'Value (Own) > Natural'Value (Ruled)
+                                    then
+                                       Found (Unapplied_Ruling, "scalar.agents." & Limit,
+                                              Id & " rules agents." & Limit & " = " & Ruled & ", and "
+                                              & Field (Field'First + 7 .. Field'Last) & " = " & Own
+                                              & " goes past it: the kind's own limit is what its tasks run with"
+                                              & " -- /reconfigure " & Field (Field'First + 7 .. Field'Last) & "="
+                                              & Ruled & " keeps to the ruling");
+                                    end if;
+                                 end;
+                              end loop;
+                           end if;
+                        end;
+                     end loop;
                   end if;
                end;
             end loop;
@@ -538,11 +576,15 @@ package body Model_Runner.Framework.Consistency is
                                                            Within_Sandbox => False));
                      begin
                         if Clipped /= "" then
-                           Found (Permission_Widening, Id,
-                                  "its permissions ask for more than its kind " & Records.Get (Defined, "kind")
-                                  & " gives -- " & Clipped & "; /task withhold " & Id
-                                  & " CAPABILITY narrows it, or /task edit " & Id
-                                  & " permissions=inherit takes its kind's");
+                           --  Refused, as /state says it: the kind withholds
+                           --  what its own permissions ask for, and granting
+                           --  it there is what lets it start.
+                           Found (Permission_Withheld, Id,
+                                  "it is refused: kind." & Records.Get (Defined, "kind") & " withholds "
+                                  & Clipped & ", which its own permissions ask for -- /reconfigure"
+                                  & " map.permission.kind." & Records.Get (Defined, "kind")
+                                  & ".CAPABILITY=on grants it there, or /task edit " & Id
+                                  & " permissions=inherit takes only what its kind gives");
                         end if;
                      end;
                   end if;

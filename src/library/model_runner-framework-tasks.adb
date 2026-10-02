@@ -8,6 +8,7 @@ with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Leases;
 with Model_Runner.Framework.Permissions;
+with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Schemas;
 with Model_Runner.Framework.Work;
 with Model_Runner.Framework.Workspaces;
@@ -30,9 +31,10 @@ package body Model_Runner.Framework.Tasks is
       return Title;
    end Unlabelled;
 
-   --  A derived task's title: the requirement's identifier, the document's
-   --  own label beside it where it had one -- REQ-003 (FR-1) -- and its
-   --  title without that label.
+   --  A derived task's title: the requirement's title without its label,
+   --  then the requirement's identifier and the document's own label where
+   --  it had one -- Report totals (REQ-003, FR-1). Its words first: a title
+   --  an identifier begins reads to a model as a name to call.
    function Derived_Title (Requirement, Title : String) return String is
       Bare : constant String := Unlabelled (Title);
    begin
@@ -41,11 +43,11 @@ package body Model_Runner.Framework.Tasks is
             Label : constant String := Title (Title'First .. Title'Last - Bare'Length - 2);
          begin
             if Label /= Requirement then
-               return Requirement & " (" & Label & "): " & Bare;
+               return Bare & " (" & Requirement & ", " & Label & ")";
             end if;
          end;
       end if;
-      return Requirement & ": " & Bare;
+      return Bare & " (" & Requirement & ")";
    end Derived_Title;
 
    use Ada.Strings.Unbounded;
@@ -1041,6 +1043,14 @@ package body Model_Runner.Framework.Tasks is
                                               & " makes it workable again"
                elsif State = "rejected" then "it is rejected: /task reconsider " & Id
                                              & " makes it a candidate again"
+               --  Serving only what is retired: accepting is refused, so
+               --  letting it go or giving it another is the way on.
+               elsif State = "candidate"
+                 and then not Lines_Of (Records.Get (Defined, "requirements")).Is_Empty
+                 and then (for all Req of Lines_Of (Records.Get (Defined, "requirements")) =>
+                             Intent.State_Of (Item, Intent.Requirement, Req) in "obsolete" | "superseded" | "rejected")
+               then "it serves only retired requirements: /task reject " & Id & " lets it go, or /task edit " & Id
+                    & " requirements=REQ-ID gives it one that stands"
                elsif State = "candidate" then "it is a candidate: /task accept " & Id
                                               & " accepts it first"
                --  Blocked with nothing said why: by hand, and how it goes on.
@@ -1191,7 +1201,14 @@ package body Model_Runner.Framework.Tasks is
                   Open : constant Name_Lists.Vector := Open_Children (Item, Change, Id);
                begin
                   if Open.Is_Empty then
-                     Move (Item, Change, Id, "accepted", "its children are done",
+                     --  Done, or ended undone every one: said as which, as
+                     --  a parent with nothing done of it is worked whole.
+                     Move (Item, Change, Id, "accepted",
+                           (if not Children (Item, Id).Is_Empty
+                              and then (for all Child of Children (Item, Id) =>
+                                          State_In (Item, Change, Child) in "cancelled" | "rejected")
+                            then "its parts ended, none of them done: it is to be done as a whole"
+                            else "its parts are done"),
                            Status => Status);
                      if E.Is_Error (Status) then
                         return;
@@ -1217,7 +1234,10 @@ package body Model_Runner.Framework.Tasks is
             Held  : E.Error_Info;
          begin
             Stores.Read (Item, Tasks_Area, Id & State_Suffix, Value, Held);
-            if E.Is_Ok (Held) and then Records.Get (Value, "accepted_by") = "its children are done" then
+            if E.Is_Ok (Held)
+              and then (Records.Get (Value, "accepted_by") = "its children are done"
+                        or else Ada.Strings.Fixed.Index (Records.Get (Value, "accepted_by"), "its parts ") = 1)
+            then
                declare
                   Open : constant Name_Lists.Vector := Open_Children (Item, Change, Id);
                begin
@@ -1504,7 +1524,13 @@ package body Model_Runner.Framework.Tasks is
                end loop;
             end loop;
             return (Named = "" or else Named = Own_Kind)
-              and then (Limit_Kind = Null_Unbounded_String or else To_String (Limit_Kind) = Own_Kind);
+              and then (Limit_Kind = Null_Unbounded_String or else To_String (Limit_Kind) = Own_Kind)
+              --  A ruling on the agents' limit where the kind sets its own:
+              --  the kind's is what its tasks run with, not the ruling's.
+              and then not (for some Limit of Name_Lists.Vector'(["max_seconds", "max_steps", "max_tool_calls",
+                                                                   "token_budget"]) =>
+                              Subject = "scalar.agents." & Limit
+                              and then Records.Get (Settings, "scalar.task." & Limit & "." & Own_Kind) /= "");
          end Reaches;
       begin
          for Index in 1 .. Authority.Governing_Count (Resolved) loop
@@ -1621,10 +1647,12 @@ package body Model_Runner.Framework.Tasks is
          Source : constant String := "/" & Ada.Characters.Handling.To_Lower (To_String (Held.Source));
          Title  : constant String := " " & Ada.Characters.Handling.To_Lower (To_String (Held.Title)) & " ";
       begin
-         return Lower'Length >= 2
+         return (To_String (Held.Source) /= ""
+                 and then Repository.In_Component (Item, Component, To_String (Held.Source)))
+           or else (Lower'Length >= 2
            and then (Ada.Strings.Fixed.Index (Source, "/" & Lower & "/") > 0
                      or else Ada.Strings.Fixed.Index (Source, "/" & Lower & ".") > 0
-                     or else Ada.Strings.Fixed.Index (Title, " " & Lower & " ") > 0);
+                     or else Ada.Strings.Fixed.Index (Title, " " & Lower & " ") > 0));
       end Names_Component;
 
       --  What a task serves, as this change leaves it.
@@ -1833,8 +1861,12 @@ package body Model_Runner.Framework.Tasks is
                                 and then State_In (Item, Change, Other)
                                            in "candidate" | "accepted" | "blocked" | "failed"
                                 and then Records.Get (Defined, "title") /= Title
-                                and then Ada.Strings.Fixed.Index
-                                           (Records.Get (Defined, "title"), Requirement & ": ") = 1
+                                and then (Ada.Strings.Fixed.Index
+                                            (Records.Get (Defined, "title"), "(" & Requirement & ")") > 0
+                                          or else Ada.Strings.Fixed.Index
+                                                    (Records.Get (Defined, "title"), "(" & Requirement & ", ") > 0
+                                          or else Ada.Strings.Fixed.Index
+                                                    (Records.Get (Defined, "title"), Requirement & ": ") = 1)
                               then
                                  if not Staged then
                                     Keep_Revision (Change, Other, Defined);

@@ -22,6 +22,10 @@ package body Model_Runner.Framework.Workspaces is
    --  What the last Integrate joined, for Last_Joined.
    Joined_Last : Name_Lists.Vector;
 
+   --  The earlier copy the last Abandon's copy replaced, for
+   --  Last_Replaced_Copy.
+   Replaced_Last : Ada.Strings.Unbounded.Unbounded_String;
+
    use Ada.Strings.Unbounded;
    use type Model_Runner.Errors.Error_Code;
 
@@ -1232,6 +1236,18 @@ package body Model_Runner.Framework.Workspaces is
 
    function Last_Joined return Name_Lists.Vector is (Joined_Last);
 
+   ------------------------
+   -- Last_Replaced_Copy --
+   ------------------------
+
+   function Last_Replaced_Copy return String is
+      Said : constant String := To_String (Replaced_Last);
+   begin
+      --  Said once: a later run that replaced nothing does not say it again.
+      Replaced_Last := Null_Unbounded_String;
+      return Said;
+   end Last_Replaced_Copy;
+
    function Kept_Copy (Item : Stores.Store; Id : String) return String is
       Held : Workspace;
       Got  : E.Error_Info;
@@ -1511,6 +1527,7 @@ package body Model_Runner.Framework.Workspaces is
    is
       Held : Workspace;
    begin
+      Replaced_Last := Null_Unbounded_String;
       Read (Item, Id, Held, Status);
       if E.Is_Error (Status) then
          return;
@@ -1547,6 +1564,7 @@ package body Model_Runner.Framework.Workspaces is
                              = Print_Of (Hostkit.Fs.Join (Hostkit.Fs.Join (Runtime_Of (Item), Other), Path)))
                then
                   Files.Remove_Tree (Hostkit.Fs.Join (Runtime_Of (Item), Other));
+                  Replaced_Last := To_Unbounded_String (Other);
                end if;
             end loop;
          end;

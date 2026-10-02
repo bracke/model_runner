@@ -302,6 +302,68 @@ package body Model_Runner.Framework.Work is
       Stores.Commit (Item, Change, Status);
    end Note_Undone;
 
+   -------------------
+   -- Note_Restored --
+   -------------------
+
+   procedure Note_Restored (Item : in out Stores.Store; Task_Id : String; Files : Name_Lists.Vector) is
+      Change  : Stores.Transaction;
+      Status  : E.Error_Info;
+      Held    : Records.Item;
+      Project : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
+      Prints  : Unbounded_String;
+   begin
+      Stores.Read (Item, Tasks_Area, Task_Id & ".state", Held, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      --  Its other files as they were taken in; these as they are now.
+      for Line of Lines_Of (Records.Get (Held, "taken_in")) loop
+         declare
+            Tab : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
+         begin
+            if Tab = 0 or else not Files.Contains (Line (Line'First .. Tab - 1)) then
+               Append (Prints, Line & ASCII.LF);
+            end if;
+         end;
+      end loop;
+      for Path of Files loop
+         Append (Prints, Path & ASCII.HT & File_Print (Hostkit.Fs.Join (Project, Path)) & ASCII.LF);
+      end loop;
+      Annotate (Item, Change, Task_Id, "taken_in", To_String (Prints));
+      Stores.Commit (Item, Change, Status);
+   end Note_Restored;
+
+   ---------------
+   -- Holder_Of --
+   ---------------
+
+   function Holder_Of (Item : Stores.Store; Path : String) return String is
+      Now   : constant String :=
+        File_Print (Hostkit.Fs.Join (Ada.Directories.Containing_Directory (Stores.Root (Item)), Path));
+      Found : Unbounded_String;
+   begin
+      if Now = "-" then
+         return "";
+      end if;
+      for Id of Tasks.List (Item) loop
+         declare
+            Held   : Records.Item;
+            Status : E.Error_Info;
+         begin
+            Stores.Read (Item, Tasks_Area, Id & ".state", Held, Status);
+            if E.Is_Ok (Status) then
+               for Line of Lines_Of (Records.Get (Held, "taken_in")) loop
+                  if Line = Path & ASCII.HT & Now then
+                     Found := To_Unbounded_String (Id);
+                  end if;
+               end loop;
+            end if;
+         end;
+      end loop;
+      return To_String (Found);
+   end Holder_Of;
+
    ------------------------
    -- Forget_Last_Answer --
    ------------------------
@@ -1468,7 +1530,11 @@ package body Model_Runner.Framework.Work is
                end if;
                if E.Is_Ok (Read) and then Records.Get (Value, "task") = Task_Id then
                   Append (Workers, (if Workers = Null_Unbounded_String then "" else ", ")
-                          & Name (Name'First + 6 .. Name'Last) & " " & Records.Get (Value, "state")
+                          & Name (Name'First + 6 .. Name'Last) & " "
+                          --  Stopped by the person: stopped, as the task is said.
+                          & (if Records.Get (Value, "state") = "cancelled"
+                               and then Ada.Strings.Fixed.Index (Records.Get (Value, "summary"), "you stopped") > 0
+                             then "stopped" else Records.Get (Value, "state"))
                           & (if Records.Get (Value, "parent") = "" then ""
                              else " (a child of " & Records.Get (Value, "parent")
                                   & (if Records.Get (Value, "retry_of") = "" then ""
@@ -1476,6 +1542,9 @@ package body Model_Runner.Framework.Work is
                                   & ")")
                           --  An ended one says why, where it was stopped.
                           & (if Records.Get (Value, "state") = "cancelled"
+                               and then Ada.Strings.Fixed.Index (Records.Get (Value, "summary"), "you stopped") > 0
+                             then ""
+                             elsif Records.Get (Value, "state") = "cancelled"
                                and then Records.Get (Value, "summary") /= ""
                              then ": " & Records.Get (Value, "summary") else ""));
 
@@ -1590,6 +1659,10 @@ package body Model_Runner.Framework.Work is
       Say ("completion",
            (if Tasks.State_Of (Item, Task_Id) /= "complete"
             then (if Tasks.State_Of (Item, Task_Id) = "failed" then "it has failed"
+                  --  Stopped by the person: said so, with the way on.
+                  elsif (for some Reason of Tasks.Ready (Item, Task_Id).Reasons =>
+                           Ada.Strings.Fixed.Index (Reason, "you stopped its work") > 0)
+                  then "it is stopped (Ctrl-C) -- /task accept " & Task_Id & " takes it up again"
                   else "it is " & Tasks.State_Of (Item, Task_Id))
             elsif Records.Get (State, "completed_by") = "hand"
             then "completed by hand"
@@ -1909,6 +1982,21 @@ package body Model_Runner.Framework.Work is
             end loop;
             return To_String (Out_Of);
          end Named_Out_Of_Reach;
+         --  Whether the directory a place would be made in is there.
+         function Parent_Exists (Root : String) return Boolean is
+            Bare : constant String :=
+              (if Root'Length > 1 and then Root (Root'Last) = '/' then Root (Root'First .. Root'Last - 1) else Root);
+            Slash : constant Natural := Ada.Strings.Fixed.Index (Bare, "/", Ada.Strings.Backward);
+         begin
+            return Bare /= ""
+              and then (Slash = 0
+                        or else Ada.Directories.Exists
+                                  (Hostkit.Fs.Join (Ada.Directories.Containing_Directory (Stores.Root (Item)),
+                                                    Bare (Bare'First .. Slash - 1))));
+         exception
+            when others =>
+               return False;
+         end Parent_Exists;
          Lacks   : constant String :=
            (if Permissions.Image (Allowed) = "" then "anything"
             --  Specifications alone are writing only for documentation:
@@ -1922,9 +2010,12 @@ package body Model_Runner.Framework.Work is
             --  Roots it may write under, none of them in the project.
             elsif Writes and then Permissions.Allows (Allowed, Permissions.Write_Source)
               and then not Allowed (Permissions.Write_Source).Roots.Is_Empty
+              --  One it can make -- docs/ in the project's top -- is a place
+              --  all the same: what is above it is there.
               and then (for all Root of Allowed (Permissions.Write_Source).Roots =>
                           not Ada.Directories.Exists
-                                (Hostkit.Fs.Join (Ada.Directories.Containing_Directory (Stores.Root (Item)), Root)))
+                                (Hostkit.Fs.Join (Ada.Directories.Containing_Directory (Stores.Root (Item)), Root))
+                          and then not Parent_Exists (Root))
             then "write anywhere there is: no place it may write under is in the project"
             elsif Named_Out_Of_Reach /= "" then "write " & Named_Out_Of_Reach & ", which its task names"
             else "");
@@ -1969,12 +2060,33 @@ package body Model_Runner.Framework.Work is
                  and then Ada.Strings.Fixed.Index (Lacks, "write anywhere") = 0;
                Own_Narrows : constant Boolean :=
                  Records.Get (View, "definition.permissions") /= "" and then Grants (Of_Kind) and then not By_Role;
+               --  The task's own field withholding it as well as a level
+               --  above: both said, the task's first, or granting the one
+               --  leaves the other.
+               function Own_Withholds return Boolean is
+                  Own    : constant String := Records.Get (View, "definition.permissions");
+                  Parsed : Permissions.Permission_Set;
+                  Bad    : E.Error_Info;
+               begin
+                  if Own = "" or else Capability = "" or else Own = "inherit" then
+                     return False;
+                  elsif Permissions.Only_Withholds (Own) then
+                     return Ada.Strings.Fixed.Index (Own, "-" & Capability) > 0;
+                  end if;
+                  Permissions.Restriction (Own, Parsed, Bad);
+                  return E.Is_Ok (Bad) and then not Grants (Parsed);
+               end Own_Withholds;
+               Own_Too : constant Boolean := not Own_Narrows and then Own_Withholds;
                Level : constant String :=
                  (if By_Role then "role.worker"
                   elsif Kind_Named and then Grants (Of_Project) then "kind." & Kind else "project");
             begin
                return (if Lacks = "anything" then "it may do nothing at all" else "it would not be let " & Lacks)
                  & (if Lacks = "write a file" then ", which its gate implementation_present needs" else "")
+                 & (if Own_Too
+                    then "; its own permissions withhold " & Capability & " -- /task grant " & Task_Id & " "
+                         & Capability & " gives it back"
+                    else "")
                  & (if Capability = "" or else Permissions."/=" (Permissions.Sandbox, Permissions.Unrestricted)
                       or else Own_Narrows
                     then ""

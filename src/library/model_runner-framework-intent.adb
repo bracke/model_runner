@@ -922,6 +922,92 @@ package body Model_Runner.Framework.Intent is
       end;
    end Link;
 
+   --------------
+   -- Renumber --
+   --------------
+
+   procedure Renumber
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Kind   : Intent_Kind;
+      Old_Id : String;
+      New_Id : String;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Value : Records.Item;
+      Stem  : constant String := Namespace (Kind) & "-";
+   begin
+      Stores.Read (Item, Area_Of (Kind), Old_Id, Value, Status);
+      if E.Is_Error (Status) then
+         Status := E.Make (E.Framework_Not_Found);
+         E.Add_Text (Status, "name", Old_Id);
+         return;
+      end if;
+      if New_Id'Length <= Stem'Length or else New_Id (New_Id'First .. New_Id'First + Stem'Length - 1) /= Stem
+        or else not Identifiers.Is_Valid (New_Id)
+      then
+         Status := E.Make (E.Framework_Input_Invalid);
+         E.Add_Text (Status, "name", "the identifier to give " & Old_Id);
+         E.Add_Text (Status, "value", New_Id);
+         E.Add_Text (Status, "detail", "it is no identifier of this register, as " & Stem & "12 is");
+         return;
+      elsif Stores.Exists (Item, Area_Of (Kind), New_Id) then
+         Status := E.Make (E.Framework_Input_Invalid);
+         E.Add_Text (Status, "name", "the identifier to give " & Old_Id);
+         E.Add_Text (Status, "value", New_Id);
+         E.Add_Text (Status, "detail", New_Id & " is taken: give that one another first, or choose another");
+         return;
+      end if;
+      --  The record under its new name, every field as it was.
+      declare
+         Fresh : Records.Item :=
+           Records.Create (Records.Schema_Id (Value), Records.Schema_Version (Value), New_Id, 1);
+      begin
+         for Index in 1 .. Records.Field_Count (Value) loop
+            Records.Set (Fresh, Records.Field_Name (Value, Index),
+                         Records.Get (Value, Records.Field_Name (Value, Index)));
+         end loop;
+         Stores.Put (Change, Area_Of (Kind), New_Id, Fresh);
+         Stores.Remove (Change, Area_Of (Kind), Old_Id);
+      end;
+      --  Every entry linked to it, linked to the new one.
+      for Other_Kind in Intent_Kind loop
+         for Other of List (Item, Other_Kind) loop
+            if Other /= Old_Id then
+               declare
+                  Held    : Records.Item;
+                  Got     : E.Error_Info;
+                  Touched : Boolean := False;
+               begin
+                  Current (Item, Change, Other_Kind, Other, Held, Got);
+                  if E.Is_Ok (Got) then
+                     for Relation in Link_Kind loop
+                        declare
+                           Field : constant String := Link_Field (Relation);
+                           Lines : Unbounded_String;
+                        begin
+                           if Split_Lines (Records.Get (Held, Field)).Contains (Old_Id) then
+                              for Line of Split_Lines (Records.Get (Held, Field)) loop
+                                 Append (Lines, (if Lines = Null_Unbounded_String then "" else [1 => ASCII.LF])
+                                         & (if Line = Old_Id then New_Id else Line));
+                              end loop;
+                              Records.Set (Held, Field, To_String (Lines));
+                              Touched := True;
+                           end if;
+                        end;
+                     end loop;
+                     if Touched then
+                        Keep_Earlier (Item, Change, Other_Kind, Other);
+                        Stores.Put (Change, Area_Of (Other_Kind), Other, Held);
+                     end if;
+                  end if;
+               end;
+            end if;
+         end loop;
+      end loop;
+      Status := E.Success;
+   end Renumber;
+
    ------------
    -- Unlink --
    ------------

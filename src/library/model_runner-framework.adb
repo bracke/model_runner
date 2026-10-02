@@ -99,26 +99,35 @@ package body Model_Runner.Framework is
       function Lower (Text : String) return String
         renames Ada.Characters.Handling.To_Lower;
 
-      --  How many letters apart two names are: added, taken out or changed.
+      --  How many letters apart two names are: added, taken out, changed,
+      --  or two side by side swapped -- /taks is a letter from /task.
       function Distance (Left, Right : String) return Natural is
-         Row : array (0 .. Right'Length) of Natural;
-         Before, Diagonal : Natural;
+         Cost : array (0 .. Left'Length, 0 .. Right'Length) of Natural;
       begin
-         for J in Row'Range loop
-            Row (J) := J;
+         for I in Cost'Range (1) loop
+            Cost (I, 0) := I;
+         end loop;
+         for J in Cost'Range (2) loop
+            Cost (0, J) := J;
          end loop;
          for I in 1 .. Left'Length loop
-            Diagonal := Row (0);
-            Row (0) := I;
             for J in 1 .. Right'Length loop
-               Before := Row (J);
-               Row (J) := Natural'Min
-                 (Natural'Min (Row (J) + 1, Row (J - 1) + 1),
-                  Diagonal + (if Left (Left'First + I - 1) = Right (Right'First + J - 1) then 0 else 1));
-               Diagonal := Before;
+               declare
+                  Same : constant Boolean := Left (Left'First + I - 1) = Right (Right'First + J - 1);
+               begin
+                  Cost (I, J) := Natural'Min
+                    (Natural'Min (Cost (I - 1, J) + 1, Cost (I, J - 1) + 1),
+                     Cost (I - 1, J - 1) + (if Same then 0 else 1));
+                  if I > 1 and then J > 1
+                    and then Left (Left'First + I - 1) = Right (Right'First + J - 2)
+                    and then Left (Left'First + I - 2) = Right (Right'First + J - 1)
+                  then
+                     Cost (I, J) := Natural'Min (Cost (I, J), Cost (I - 2, J - 2) + 1);
+                  end if;
+               end;
             end loop;
          end loop;
-         return Row (Right'Length);
+         return Cost (Left'Length, Right'Length);
       end Distance;
 
       Best  : Natural := Natural'Last;
@@ -126,6 +135,12 @@ package body Model_Runner.Framework is
       --  A letter or two, and no more than a third of the word.
       Limit : constant Natural := Natural'Max (1, Natural'Min (2, Word'Length / 3));
    begin
+      --  The same name in other letters' case: that one.
+      for Name of Among loop
+         if Lower (Name) = Lower (Word) and then Name /= Word then
+            return Name;
+         end if;
+      end loop;
       --  The one name it begins, first: ada-lib is ada-library, however
       --  near another's letters are.
       declare

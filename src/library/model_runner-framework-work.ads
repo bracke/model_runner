@@ -425,6 +425,22 @@ package Model_Runner.Framework.Work is
    --  @param Copy The kept copy put back.
    procedure Note_Undone (Item : in out Stores.Store; Task_Id, Copy : String);
 
+   --  Note in a task's history that a copy of its work was put back in the
+   --  project: the files as they are now are its, as if taken in.
+   --
+   --  @param Item The store.
+   --  @param Task_Id The task.
+   --  @param Files The files put back, as the project names them.
+   procedure Note_Restored (Item : in out Stores.Store; Task_Id : String; Files : Name_Lists.Vector);
+
+   --  The task whose work a file holds now, by what it holds: the one whose
+   --  taking in -- or a copy of its work put back -- left it just so.
+   --
+   --  @param Item The store.
+   --  @param Path The file, as the project names it.
+   --  @return The task; "" where no task's work is what it holds.
+   function Holder_Of (Item : Stores.Store; Path : String) return String;
+
    --  Forget what a task's last attempt answered: its work given up to be
    --  done afresh, the next attempt is not told it.
    --

@@ -428,7 +428,15 @@ package body Model_Runner.CLI.Interactive is
 
          --  The project's own commands, between turns.
          if Model_Runner.CLI.Project_Commands.Is_Project_Command (First) then
-            Model_Runner.CLI.Project_Commands.Run (Line, Screen, Worker);
+            declare
+               Errors_Before : constant Natural := Pres.Errors_Reported (Screen);
+            begin
+               Model_Runner.CLI.Project_Commands.Run (Line, Screen, Worker);
+               --  Refused: not offered back by Up or as a suggestion.
+               if Pres.Errors_Reported (Screen) > Errors_Before then
+                  Model_Runner.CLI.Choosers.Forget_Last_Line;
+               end if;
+            end;
             return True;
          end if;
 
@@ -510,11 +518,25 @@ package body Model_Runner.CLI.Interactive is
                   declare
                      Near : constant Model_Runner.Framework.Name_Lists.Vector :=
                        Model_Runner.CLI.Completion.Candidates ("/help " & Named);
+                     --  None it begins: the nearest by its letters, as an
+                     --  unknown command is answered.
+                     Close : constant String :=
+                       (if Near.Is_Empty
+                        then Model_Runner.Framework.Nearest
+                               (Named, Model_Runner.CLI.Completion.Candidates ("/help "))
+                        else "");
+                     --  A few it begins: each offered.
+                     function Offered (From : Positive := 1) return String
+                     is (if From > Natural'Min (3, Natural (Near.Length)) then ""
+                         else (if From = 1 then "" else " or ") & "/help " & Near (From)
+                              & String'(Offered (From => From + 1)));
                   begin
                      Pres.Put_Message (Screen, "cli.interactive.help_unknown",
                                        [Loc.Named ("value", T.Escape_Controls (Named)
-                                                   & (if Natural (Near.Length) = 1
-                                                      then " -- did you mean /help " & Near.First_Element & "?"
+                                                   & (if not Near.Is_Empty
+                                                      then " -- did you mean " & Offered & "?"
+                                                      elsif Close /= ""
+                                                      then " -- did you mean /help " & Close & "?"
                                                       else ""))]);
                   end;
                end if;
@@ -830,8 +852,27 @@ package body Model_Runner.CLI.Interactive is
                      end loop;
                      return (if Found = 0 then "" else Near (Found));
                   end Begun;
-                  Best  : constant String :=
+                  First_Near : constant String :=
                     (if Begun /= "" then Begun else Model_Runner.Framework.Nearest (Typed, Near));
+                  --  Another as near, where there is one: both offered, never
+                  --  only the one that would forget the conversation.
+                  function Also_Near return String is
+                     Rest_Of : Model_Runner.Framework.Name_Lists.Vector;
+                  begin
+                     if First_Near = "" or else Begun /= ""
+                       or else Ada.Characters.Handling.To_Lower (Typed) = Ada.Characters.Handling.To_Lower (First_Near)
+                     then
+                        return "";
+                     end if;
+                     for One of Near loop
+                        if One /= First_Near then
+                           Rest_Of.Append (One);
+                        end if;
+                     end loop;
+                     return Model_Runner.Framework.Nearest (Typed, Rest_Of);
+                  end Also_Near;
+                  Best  : constant String :=
+                    (if Also_Near = "" then First_Near else First_Near & " or " & Also_Near);
                begin
                   declare
                      --  An action of a register's command typed as a command of

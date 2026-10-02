@@ -1520,6 +1520,7 @@ package body Model_Runner.CLI.Repo is
                               --  a component with it: one line, not one each.
                               Shared  : Unbounded_String;
                               Shared_Count : Natural := 0;
+                              Listed_Ids   : Model_Runner.Framework.Name_Lists.Vector;
 
                               --  Whether the file changed names a requirement:
                               --  its identifier, or its document's label.
@@ -1563,6 +1564,15 @@ package body Model_Runner.CLI.Repo is
                               end Named_In_File;
                            begin
                               for One of All_Reached loop
+                                 --  One entry reached two ways -- by its label
+                                 --  and its identifier, as its source and named
+                                 --  in it -- is one: listed and counted once.
+                                 if To_String (One.Kind) = Kind then
+                                    if Listed_Ids.Contains (Bare_Id (To_String (One.Id))) then
+                                       goto Next_Reached;
+                                    end if;
+                                    Listed_Ids.Append (Bare_Id (To_String (One.Id)));
+                                 end if;
                                  if not Verbose and then To_String (One.Kind) = Kind
                                    and then Kind in "requirement" | "task"
                                    and then Rp."=" (One.Sure, Rp.Probable)

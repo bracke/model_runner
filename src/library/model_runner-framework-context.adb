@@ -83,7 +83,7 @@ package body Model_Runner.Framework.Context is
       begin
          Result.Id := To_Unbounded_String (Chosen);
          for Index in Spec'First .. Spec'Last + 1 loop
-            if Index > Spec'Last or else Spec (Index) = ',' then
+            if Index > Spec'Last or else Spec (Index) in ',' | ' ' then
                declare
                   Pair  : constant String :=
                     Ada.Strings.Fixed.Trim (Spec (Start .. Index - 1), Ada.Strings.Both);
@@ -208,8 +208,10 @@ package body Model_Runner.Framework.Context is
                   --  The profile it was planned with, and how to widen it.
                   & ", as planned with the profile " & To_String (Result.Model.Id) & " (context"
                   & Natural'Image (Result.Model.Context_Limit) & ", reserve"
-                  & Natural'Image (Result.Model.Output_Reserve) & ") -- /reconfigure map.model."
-                  & To_String (Result.Model.Id) & "=context=N gives it more, or /work ... profile=NAME another");
+                  & Natural'Image (Result.Model.Output_Reserve) & ", overhead"
+                  & Natural'Image (Result.Model.Tool_Overhead) & ") -- /reconfigure map.model."
+                  & To_String (Result.Model.Id) & "=context=N gives it more, or /work " & Task_Id
+                  & " profile=NAME plans it with another");
                return;
             end if;
          end loop;

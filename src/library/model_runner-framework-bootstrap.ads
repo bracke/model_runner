@@ -85,6 +85,9 @@ package Model_Runner.Framework.Bootstrap is
       --  Entries whose document moved -- renamed, or into another
       --  directory -- read from where it is now, each as ID from PATH.
       Moved    : Name_Lists.Vector;
+
+      --  Candidates its documents no longer say, rejected with them.
+      Rejected : Natural := 0;
    end record;
 
    --  Add an output.

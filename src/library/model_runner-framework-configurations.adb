@@ -443,6 +443,15 @@ package body Model_Runner.Framework.Configurations is
    end Check_Input;
 
    --  Whether a file at the top of a directory matches a pattern, as
+   --  Whether a project's package.json names a test script.
+   function Names_Npm_Test (Project_Directory : String) return Boolean is
+      Text : Unbounded_String;
+      Read : E.Error_Info;
+   begin
+      Files.Read_Text (Hostkit.Fs.Join (Project_Directory, "package.json"), Text, Read);
+      return E.Is_Ok (Read) and then Index (Text, """test""") > 0;
+   end Names_Npm_Test;
+
    --  *.gpr: what a discovery rule that names no one file looks for.
    function Matches_Any (Directory, Pattern : String) return Boolean is
       use Ada.Directories;
@@ -753,6 +762,12 @@ package body Model_Runner.Framework.Configurations is
                then
                   --  No pytest here: the runner Python has of its own.
                   Found.Include (To_String (Rule.Key), "python3 -m unittest discover");
+               --  npm test where package.json names no test script: npm
+               --  fails it, so it is no check to propose.
+               elsif Rule.To_Input and then To_String (Rule.Value) = "npm test"
+                 and then not Names_Npm_Test (Project_Directory)
+               then
+                  null;
                elsif Rule.To_Input then
                   Found.Include (To_String (Rule.Key), To_String (Rule.Value));
                else
@@ -1978,7 +1993,8 @@ package body Model_Runner.Framework.Configurations is
                            then
                               return Name & " takes context=N, reserve=N, overhead=N, tools=yes|no,"
                                 & " structured=yes|no, reasoning=yes|no, streaming=yes|no, parallel=yes|no,"
-                                & " class=NAME and provider=NAME, a comma apart; " & Key & " is none of them";
+                                & " class=NAME and provider=NAME, a comma or a space apart; " & Key
+                                & " is none of them";
                            elsif Key in "context" | "reserve" | "overhead" and then Given'Length > 9
                              and then (for all C of Given => C in '0' .. '9')
                            then
@@ -1988,7 +2004,7 @@ package body Model_Runner.Framework.Configurations is
                                        or else (for some C of Given => C not in '0' .. '9'))
                            then
                               return Name & ": " & Key & " is a whole number of tokens, not " & Given
-                                & " -- a profile's fields are a comma apart: context=2048,reserve=256";
+                                & " -- a profile's fields are a comma or a space apart: context=2048 reserve=256";
                            elsif Key = "context" and then (for all C of Given => C = '0') then
                               return Name & ": context is 1 or more tokens, not " & Given;
                            elsif Key in "tools" | "structured" | "reasoning" | "streaming" | "parallel"
@@ -2018,7 +2034,15 @@ package body Model_Runner.Framework.Configurations is
                                 else Natural'Value (Value (At_Key + Key'Length + 1 .. Stop - 1)));
                      end Number;
                   begin
-                     if Number ("context") > 0 and then Number ("reserve") >= Number ("context") then
+                     if Number ("context") > 0 and then Number ("reserve") < Number ("context")
+                       and then Ada.Strings.Fixed.Index (Value, "reserve=") > 0
+                       and then Number ("reserve") + Number ("overhead") >= Number ("context")
+                     then
+                        return Name & ": reserve and overhead together must be less than context, or nothing is"
+                          & " left for the task --" & Natural'Image (Number ("reserve")) & " +"
+                          & Natural'Image (Number ("overhead")) & " is not less than"
+                          & Natural'Image (Number ("context"));
+                     elsif Number ("context") > 0 and then Number ("reserve") >= Number ("context") then
                         return Name & ": reserve must be less than context, as the answer's room is kept of the"
                           & " whole --" & Natural'Image (Number ("reserve")) & " is not less than"
                           & Natural'Image (Number ("context"));
@@ -2029,7 +2053,7 @@ package body Model_Runner.Framework.Configurations is
                         return Name & ": context=" & Ada.Strings.Fixed.Trim (Natural'Image (Number ("context")),
                                                                            Ada.Strings.Both)
                           & " leaves no room: the answer's reserve, built in, is 1024 -- give more context, or"
-                          & " a smaller reserve with it, a comma apart: " & Name & "=context=N,reserve=N";
+                          & " a smaller reserve with it: " & Name & "=context=N reserve=N";
                      end if;
                   end;
                end;
@@ -3324,6 +3348,12 @@ package body Model_Runner.Framework.Configurations is
                      end if;
                      Result.Changed.Append
                        (Name & ": " & (if not Was and then Name = "map.permission.project"
+                                         and then (for some Index in 1 .. Records.Field_Count (Result.Before) =>
+                                                     Ada.Strings.Fixed.Index
+                                                       (Records.Field_Name (Result.Before, Index),
+                                                        "map.permission.project.") = 1)
+                                       then "its capabilities as written one by one"
+                                       elsif not Was and then Name = "map.permission.project"
                                        then "the defaults (not written)"
                                        elsif not Was and then Level_Said (Name)
                                          and then Records.Get (Result.Before,

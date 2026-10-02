@@ -335,6 +335,21 @@ package body Model_Runner.CLI.Init is
             return;
          end if;
 
+         --  Inside a project there already: said before a template is
+         --  chosen, not first at the end.
+         declare
+            Here : constant String := Ada.Directories.Full_Name (Directory);
+            Top  : constant String :=
+              (if not Ada.Directories.Exists (Here) or else Ada.Directories.Exists (Hostkit.Fs.Join (Here, ".git"))
+               then "" else Model_Runner.Framework.Git.Top_Level (Here));
+         begin
+            if Top /= "" and then Ada.Directories.Full_Name (Top) /= Here and then S.Is_Initialized (Top) then
+               Pres.Put_Note (Screen, "cli.init.inside_project", [Loc.Named ("path", Top)]);
+            end if;
+         exception
+            when others =>
+               null;
+         end;
          declare
             Picked : constant Natural :=
               Choosers.Choose (Screen, "cli.init.choose", Offered);
@@ -547,6 +562,8 @@ package body Model_Runner.CLI.Init is
             --  Where the project would better be made: the package's or the
             --  repository's root above, offered as a choice of its own.
             Root_Instead : Unbounded_String;
+            --  Inside a project there already: going on is not the default.
+            Nested_In : Boolean := False;
 
             --  Whether the plan writes a file beside a manifest kept: only
             --  then are the two to agree on the crate's name.
@@ -662,11 +679,9 @@ package body Model_Runner.CLI.Init is
                                              else Cf.Value_Maps.Element (Position))),
                         Loc.Named ("detail", Described (Id))]);
                   Append (Inputs_Said, (if Inputs_Said = Null_Unbounded_String then "" else ", ")
-                                       & (if Label = Null_Unbounded_String
-                                            or else Ada.Characters.Handling.To_Lower (To_String (Label))
-                                                    = Ada.Strings.Fixed.Translate
-                                                        (Id, Ada.Strings.Maps.To_Mapping ("_", " "))
-                                          then Id else To_String (Label) & " (" & Id & ")")
+                                       --  As it is asked for, by its name too: alike in every template.
+                                       & (if Label = Null_Unbounded_String then Id
+                                          else To_String (Label) & " (" & Id & ")")
                                        & " = "
                                        & (if Secret then Pres.Message_Value (Screen, "cli.init.secret")
                                           else Cf.Value_Maps.Element (Position))
@@ -792,6 +807,7 @@ package body Model_Runner.CLI.Init is
                --  A project there already: this one would be inside it.
                if Top /= "" and then Ada.Directories.Full_Name (Top) /= Here and then S.Is_Initialized (Top) then
                   Say ("cli.init.inside_project", [Loc.Named ("path", Top)]);
+                  Nested_In := True;
                   Append (Warned, Pres.Next_Step_Value
                                     (Screen, "cli.init.inside_project", [Loc.Named ("path", Top)])
                                   & ASCII.LF);
@@ -1160,7 +1176,8 @@ package body Model_Runner.CLI.Init is
                        & To_String (Warned)
                        & Pres.Message_Value (Screen, "cli.init.confirm");
                      Picked : constant Natural :=
-                       Choosers.Choose (Screen, "cli.init.confirm", Answers, Heading => Heading);
+                       Choosers.Choose (Screen, "cli.init.confirm", Answers, Heading => Heading,
+                                        Initial => (if Nested_In then Choosers.Length (Answers) else 1));
                      Change_At : constant Natural :=
                        (if Planned.Inputs.Is_Empty then 0 else Choosers.Length (Answers) - 1);
                   begin
@@ -1366,9 +1383,11 @@ package body Model_Runner.CLI.Init is
                                 (["package.json", "Cargo.toml", "go.mod", "alire.toml", "pyproject.toml"]) =>
                                 Ada.Directories.Exists (Hostkit.Fs.Join (Dir, Manifest)))
                   then
-                     Append (Packages, (if Packages = Null_Unbounded_String then "" else "; ")
-                                       & "/reconfigure map.component." & Ada.Directories.Simple_Name (Dir)
-                                       & "=roots=" & Rel & "/");
+                     --  One command for them all, as /reconfigure takes
+                     --  several settings: pasted whole, it works.
+                     Append (Packages, (if Packages = Null_Unbounded_String then "/reconfigure " else " ")
+                                       & "map.component." & Ada.Directories.Simple_Name (Dir)
+                                       & "=roots=" & Rel);
                   end if;
                   if Depth > 0
                     and then (for some Manifest of Model_Runner.Framework.Name_Lists.Vector'

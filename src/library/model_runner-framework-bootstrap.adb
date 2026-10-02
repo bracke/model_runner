@@ -460,6 +460,9 @@ package body Model_Runner.Framework.Bootstrap is
 
       --  Under a heading of decisions: each listed line is one.
       Decisions_Here : Boolean := False;
+      --  The level of that heading: a heading below it is one decision,
+      --  its section what it says.
+      Decisions_Level : Natural := 0;
 
       --  Under a heading of requirements: an item there that states none
       --  is said, not dropped without a word.
@@ -471,6 +474,9 @@ package body Model_Runner.Framework.Bootstrap is
       --  Under a heading of things to do -- TODO, backlog: its open boxes are
       --  work wanted, in any document, as a to-do list's are.
       Todo_Here : Boolean := False;
+      --  Labelled boxes under the heading: an unlabelled one among them is
+      --  said, not dropped as they are made.
+      Labelled_Boxes : Natural := 0;
 
       --  A heading a document's own label opens -- ### FR-001 Capacity --
       --  whose first line stating a requirement is that requirement.
@@ -736,7 +742,16 @@ package body Model_Runner.Framework.Bootstrap is
                                 in "id" | "#" | "no" | "no." | "number" | "label" | "requirement" | "requirements"
                                  | "title" | "name" | "description" | "statement" | "text" | "status" | "priority"
                                  | "notes" | "rationale" | "type" | "owner" | "criteria" | "acceptance criteria"
-                                 | "decision" | "date" | "adr" | "state"))
+                                 | "decision" | "date" | "adr" | "state" | "done" | "implemented" | "complete"
+                                 | "completed" | "verified" | "tested" | "met" | "source" | "section")
+                     --  Led by an identifier's heading, its other cells a
+                     --  few words each: a head whatever it names them.
+                     or else (Ada.Characters.Handling.To_Lower (Trim (Row_Cells.First_Element))
+                                in "id" | "#" | "no" | "no." | "number" | "label" | "ref"
+                              and then (for all Cell of Row_Cells =>
+                                          Trim (Cell)'Length <= 24
+                                          and then Ada.Strings.Fixed.Count (Trim (Cell), " ") <= 2
+                                          and then (for all C of Cell => C not in '0' .. '9' | '.' | ','))))
          then
             return;
          end if;
@@ -822,13 +837,17 @@ package body Model_Runner.Framework.Bootstrap is
          --  as done, not done again; what it says is read as ever. Only
          --  one the document labels is made at once, with a task for it.
          Label_Split (Item, Label, Rest);
+         if Label /= Null_Unbounded_String and then Line'Length > 6 and then Line (Line'First) in '-' | '*' | '+'
+           and then Ada.Characters.Handling.To_Lower (Line (Line'First + 1 .. Line'First + 5)) in " [ ] " | " [x] "
+         then
+            Labelled_Boxes := Labelled_Boxes + 1;
+         end if;
          if Line'Length > 6 and then Line (Line'First) in '-' | '*' | '+'
            and then Ada.Characters.Handling.To_Lower (Line (Line'First + 1 .. Line'First + 5)) = " [x] "
            --  Only what is made a requirement has a task to take as done:
            --  labelled, or unlabelled and stating one.
-           and then ((Label /= Null_Unbounded_String
-                      and then (Says_Requirement (Item, True) or else Requirements_Here
-                                or else (Length (Label) > 4 and then Slice (Label, 1, 4) = "REQ-")))
+           --  A labelled one is made whatever its words: done all the same.
+           and then (Label /= Null_Unbounded_String
                      or else (Label = Null_Unbounded_String and then Says_Requirement (Item, True)))
          then
             Found (Issue, Path & "#" & (if Label /= Null_Unbounded_String then To_String (Label)
@@ -879,6 +898,9 @@ package body Model_Runner.Framework.Bootstrap is
                   --  A document that says nothing past its headings
                   --  specifies nothing: not made a specification.
                   if not Process_Document and then not Describes_Only
+                    --  A requirement's own heading first: its document is that
+                    --  requirement, not a specification besides.
+                    and then not (First'Length > 4 and then First (First'First .. First'First + 3) = "REQ-")
                     and then (for some One of Lines_Of (Text) =>
                                 Trim (One) /= "" and then Trim (One) (Trim (One)'First) /= '#')
                     --  A heading with a placeholder under it -- None yet. --
@@ -888,6 +910,32 @@ package body Model_Runner.Framework.Bootstrap is
                      Found (Specification_Candidate, Path, Heading, Text);
                   end if;
                end if;
+               Labelled_Boxes := 0;
+               declare
+                  Level : constant Natural := Ada.Strings.Fixed.Index (Item & " ", " ") - Item'First;
+                  Named : constant String :=
+                    (if Heading'Length > 4
+                       and then Ada.Characters.Handling.To_Upper (Heading (Heading'First .. Heading'First + 3))
+                                = "DEC:"
+                     then Trim (Heading (Heading'First + 4 .. Heading'Last)) else Heading);
+               begin
+                  --  A heading below one of decisions: a decision, its
+                  --  section what it says -- ### Use a discriminated record.
+                  if Decisions_Level > 0 and then Level > Decisions_Level and then Named /= "" then
+                     --  Its words are its section's, not decisions of their own.
+                     Decisions_Here := False;
+                     Section := 0;
+                     Criteria_For := 0;
+                     Pending_Label := Null_Unbounded_String;
+                     Found (Decision_Candidate, Path & "#" & Fingerprint (Named), Named, "");
+                     Section := Length (Result);
+                     return;
+                  end if;
+                  Decisions_Level :=
+                    (if Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Heading), "decision") > 0
+                       and then Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Heading), "decision ") = 0
+                     then Level else 0);
+               end;
                Process_Here :=
                  (for some Word of Name_Lists.Vector'(["release", "checklist", "contributing", "how to contribute"])
                   => Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Heading), Word) > 0);
@@ -1382,6 +1430,19 @@ package body Model_Runner.Framework.Bootstrap is
                    & " it is not proposed: " & Headline (Item) & " -- reword it so, or /req new TITLE text=..."
                    & " makes it",
                    Item);
+         --  A box with no label, beside labelled ones it is read with: said,
+         --  not dropped unseen as its neighbours are made.
+         elsif Listed and then not Process_Here and then Labelled_Boxes > 0
+           and then Line'Length > 6 and then Line (Line'First) in '-' | '*' | '+'
+           and then Ada.Characters.Handling.To_Lower (Line (Line'First + 1 .. Line'First + 5)) in " [ ] " | " [x] "
+           and then not Seen.Contains (Fingerprint (Item) & "#box")
+         then
+            Seen.Append (Fingerprint (Item) & "#box");
+            Found (Issue, Path & "#" & Fingerprint (Item) & "#unstated",
+                   "a box in " & Path & " with no label beside labelled ones, and stating no SHALL, MUST or SHOULD,"
+                   & " so it is not proposed: " & Headline (Item) & " -- give it a label as its neighbours have,"
+                   & " or /req new TITLE text=... makes it",
+                   Item);
          end if;
       end Line_Of;
       --  A paragraph wrapped over several lines is one line of what the
@@ -1512,6 +1573,13 @@ package body Model_Runner.Framework.Bootstrap is
               and then Line (Line'First + 1) = ' '
             then
                Heading := To_Unbounded_String (Trim (Line (Line'First + 2 .. Line'Last)));
+            --  Its title given in front matter, as a heading of its own:
+            --  the first line, whatever its level.
+            elsif Heading = Null_Unbounded_String and then Content = 0 and then Line'Length > 3
+              and then Line (Line'First .. Line'First + 2) = "## "
+              and then Line = Every.First_Element
+            then
+               Heading := To_Unbounded_String (Trim (Line (Line'First + 3 .. Line'Last)));
             end if;
             Has_Status := Has_Status or else Starts_With (Bare (Line), "Status:") or else Status_Said (Line) /= ""
               or else Line = "## Status" or else Starts_With (Line, "## Status")
@@ -1550,6 +1618,7 @@ package body Model_Runner.Framework.Bootstrap is
          declare
             Title : constant String := To_String (Heading);
             Upper : constant String := Ada.Characters.Handling.To_Upper (Title);
+            Simple : constant String := Ada.Characters.Handling.To_Lower (Ada.Directories.Simple_Name (Path));
             Digits_End : Natural := Title'First - 1;
          begin
             while Digits_End < Title'Last and then Title (Digits_End + 1) in '0' .. '9' loop
@@ -1559,6 +1628,12 @@ package body Model_Runner.Framework.Bootstrap is
               or else not (Ada.Strings.Fixed.Index (Lower, "/adr/") > 0
                            or else Ada.Strings.Fixed.Index (Lower, "/decisions/") > 0
                            or else Ada.Strings.Fixed.Index (Upper, "ADR") = Upper'First
+                           --  Named as one: adr-0001-use-x.md, ADR_3.md.
+                           or else (Simple'Length > 4
+                                    and then Simple (Simple'First .. Simple'First + 2) = "adr"
+                                    and then Simple (Simple'First + 3) in '-' | '_' | '0' .. '9'
+                                    and then (Simple (Simple'First + 3) in '0' .. '9'
+                                              or else Simple (Simple'First + 4) in '0' .. '9'))
                            or else (Digits_End >= Title'First and then Digits_End < Title'Last
                                     and then Title (Digits_End + 1) = '.' and then Has_Status)
                            --  Wherever it is, a record by its sections.
@@ -1587,6 +1662,15 @@ package body Model_Runner.Framework.Bootstrap is
                           (if Title'Length > 4 and then Title (Title'First + 3) = ' '
                              and then Title (Title'First + 4) in '0' .. '9'
                            then Title'First + 4 else Title'First)) - 1);
+               --  The digits a text starts with.
+               function Leading_Digits (Text : String) return String is
+                  Stop : Natural := Text'First;
+               begin
+                  while Stop <= Text'Last and then Text (Stop) in '0' .. '9' loop
+                     Stop := Stop + 1;
+                  end loop;
+                  return Text (Text'First .. Stop - 1);
+               end Leading_Digits;
                Numbered_Word : constant Boolean :=
                  Word_End > Title'First + 3
                  and then Title (Word_End) in '0' .. '9'
@@ -1599,6 +1683,13 @@ package body Model_Runner.Framework.Bootstrap is
                                                  then Ada.Strings.Fixed.Index (Title, ":") - 1
                                                  else Title'First + 2)), Ada.Strings.Both)
                   elsif Base_End >= Base'First then "ADR-" & Base (Base'First .. Base_End)
+                  --  adr-0001-use-x: its number after the word.
+                  elsif Base'Length > 3 and then Ada.Characters.Handling.To_Lower (Base (Base'First .. Base'First + 2))
+                                                 = "adr"
+                    and then Ada.Strings.Fixed.Index (Base, Ada.Strings.Maps.To_Set ("0123456789")) > 0
+                  then "ADR-" & Leading_Digits
+                                  (Base (Ada.Strings.Fixed.Index (Base, Ada.Strings.Maps.To_Set ("0123456789"))
+                                         .. Base'Last))
                   elsif Digits_End >= Title'First then "ADR-" & Title (Title'First .. Digits_End)
                   else "ADR-" & Base);
                Name     : constant String :=
@@ -2074,12 +2165,19 @@ package body Model_Runner.Framework.Bootstrap is
                         --  A directive is a requirement by being one: an open
                         --  box, as a checklist's item asked for is.
                         if Status = Null_Unbounded_String or else Draft_Status (To_String (Status)) then
-                           Append (Output, "- [ ] " & Label & ": " & Said_Words & ASCII.LF);
+                           Append (Output, "- [ ] " & Label & ": "
+                                   & (if Title /= "" and then Words /= Null_Unbounded_String
+                                      then Title & " -- " else "")
+                                   & Said_Words & ASCII.LF);
                         --  Done: as a ticked item is.
                         elsif Ada.Characters.Handling.To_Lower (To_String (Status))
                                 in "done" | "implemented" | "complete" | "completed" | "verified" | "closed"
                         then
-                           Append (Output, "- [x] " & Label & ": " & Said_Words & ASCII.LF);
+                           --  Its title kept before its words, as an open one's is.
+                           Append (Output, "- [x] " & Label & ": "
+                                   & (if Title /= "" and then Words /= Null_Unbounded_String
+                                      then Title & " -- " else "")
+                                   & Said_Words & ASCII.LF);
                         else
                            --  With a status of its own: a heading, its words,
                            --  and its status, as a section says them.
@@ -2166,6 +2264,8 @@ package body Model_Runner.Framework.Bootstrap is
       --  Its status, said after its words, as a section says it: not read
       --  as the first of them.
       Tail : Unbounded_String;
+      --  Its title's own heading met in its text, and passed by.
+      Title_Said : Boolean := False;
 
       function Value_Of (Line, Key : String) return String
       is (if Line'Length > Key'Length
@@ -2260,6 +2360,16 @@ package body Model_Runner.Framework.Bootstrap is
             elsif Lead /= Null_Unbounded_String and then Trim (Line) /= "" then
                Append (Result, To_String (Lead) & Trim (Line) & ASCII.LF);
                Lead := Null_Unbounded_String;
+            --  The heading its title: given already, not a second one --
+            --  its words follow the title's heading as its statement.
+            elsif Title /= Null_Unbounded_String and then not Title_Said and then Trim (Line) /= ""
+              and then Trim (Line) (Trim (Line)'First) = '#'
+              and then Ada.Characters.Handling.To_Lower
+                         (Trim (Ada.Strings.Fixed.Trim (Trim (Line), Ada.Strings.Maps.To_Set ("#"),
+                                                        Ada.Strings.Maps.Null_Set)))
+                       = Ada.Characters.Handling.To_Lower (Trim (To_String (Title)))
+            then
+               Title_Said := True;
             --  Its first words, then its status right after them.
             elsif Tail /= Null_Unbounded_String and then Trim (Line) /= ""
               and then Trim (Line) (Trim (Line)'First) /= '#'
@@ -2557,6 +2667,33 @@ package body Model_Runner.Framework.Bootstrap is
         Items_Of (Records.Get (Settings, "set.bootstrap.propose"));
       Accept_Imports : constant Boolean :=
         Accept_Numbered and then Records.Get (Settings, "scalar.bootstrap.import") /= "candidate";
+
+      --  Whether an identifier a document gives is in the project's own
+      --  form: REQ-n, or REQ-NS-n numbered as the project numbers or where NS
+      --  names a component of it.
+      function Own_Form (Given : String) return Boolean is
+         First_Dash : constant Natural := Ada.Strings.Fixed.Index (Given, "-");
+         Last_Dash  : constant Natural := Ada.Strings.Fixed.Index (Given, "-", Ada.Strings.Backward);
+      begin
+         if First_Dash = 0 or else Last_Dash = Given'Last
+           or else not (for all C of Given (Last_Dash + 1 .. Given'Last) => C in '0' .. '9')
+         then
+            return False;
+         elsif First_Dash = Last_Dash then
+            return True;
+         end if;
+         declare
+            Space : constant String := Ada.Characters.Handling.To_Lower (Given (First_Dash + 1 .. Last_Dash - 1));
+         begin
+            return Ada.Strings.Fixed.Index (Space, "-") = 0
+              --  Numbered as the project numbers, REQ-IO-001, or of a
+              --  component of it: REQ-API-1 is a document's own label.
+              and then (Given'Last - Last_Dash >= 3
+                        or else Records.Has (Settings, "map.component." & Space)
+                        or else Ada.Strings.Fixed.Index (" " & Records.Get (Settings, "set.components") & " ",
+                                                         " " & Space & " ") > 0);
+         end;
+      end Own_Form;
 
       --  Whether a document's new words revise what it numbers without a
       --  person: only where the project says the documents rule, with
@@ -3224,6 +3361,26 @@ package body Model_Runner.Framework.Bootstrap is
                         if Adopted (Intent.Requirement, Given) then
                            goto Next_Output;
                         end if;
+                        --  Not in the project's own form -- REQ-n, or REQ-NS-n for
+                        --  a component of it -- it is the document's label: kept
+                        --  in its title, made under the project's numbering, a
+                        --  candidate for a person to accept.
+                        if not Own_Form (Given) then
+                           begin
+                              Intent.Propose
+                                (Item, Change, Intent.Requirement, Intent.Namespace (Intent.Requirement),
+                                 Given & ": " & Field (Next.Title), Field (Next.Text), Field (Next.Criteria),
+                                 Field (Next.Source), Provenance, "project", Id, Status);
+                              if E.Is_Ok (Status) then
+                                 Result.Created := Result.Created + 1;
+                                 Result.Made.Append (To_String (Id));
+                                 Made_Texts.Append (Field (Next.Text));
+                                 Made_Sources.Append (Field (Next.Source));
+                                 Made_Provenances.Append (Field (Next.Provenance));
+                              end if;
+                           end;
+                           goto Next_Output;
+                        end if;
                         Moved := False;
                         if Stores.Is_Name (Given) then
                            Stores.Pending (Change, Requirements_Area, Given, Held, Staged);
@@ -3265,7 +3422,10 @@ package body Model_Runner.Framework.Bootstrap is
                                                      then " twice; the second"
                                                      else ", which the project already has; it")
                                                   & " was made as " & To_String (Id)
-                                                  & ", a candidate"),
+                                                  & ", a candidate -- /req renumber " & Given
+                                                  & " NEW-ID gives the one there another identifier,"
+                                                  & " and /req renumber " & To_String (Id) & " " & Given
+                                                  & " then gives this one its own"),
                                  Payload    => Next.Text,
                                  Provenance => Next.Provenance,
                                  others     => <>);
@@ -3724,6 +3884,7 @@ package body Model_Runner.Framework.Bootstrap is
                                               Model_Runner.Framework.Transitions.Ordinary_Only, Moved,
                                               Actor => "bootstrap");
                                  if E.Is_Ok (Moved) then
+                                    Result.Rejected := Result.Rejected + 1;
                                     Result.Stale.Append
                                       (Why & "; it was a candidate, and is rejected with it");
                                     goto Next_Known;

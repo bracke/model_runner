@@ -157,6 +157,13 @@ package Model_Runner.Framework.Workspaces is
    --  @return Their paths.
    function Last_Joined return Name_Lists.Vector;
 
+   --  The copy kept of an earlier attempt that the last Abandon removed,
+   --  as its own copy holds the same files, the same; said once, so asked
+   --  again it is "".
+   --
+   --  @return Its name; "" where none was.
+   function Last_Replaced_Copy return String;
+
    --  Whether a file the workspace and the project both changed since it
    --  was made would join, as taking the work in joins it: they change
    --  different lines.
