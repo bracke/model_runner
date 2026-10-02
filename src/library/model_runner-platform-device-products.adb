@@ -173,6 +173,7 @@ package body Model_Runner.Platform.Device.Products is
 
    --  And the IQ4 formats', their shader's NUM_ROWS.
    IQ4_Wave_Rows  : constant := 2;
+   Q2K_Wave_Rows  : constant := 4;
    Low_Wave_Lanes : constant := 64;
 
    --  Rows of the answer one workgroup of the matrix product computes, and
@@ -903,7 +904,13 @@ package body Model_Runner.Platform.Device.Products is
                   and then Item.NL_Wave_Line /= Null_Handle)
                  or else
                  (Packing = Packed_IQ4_XS
-                  and then Item.XS_Wave_Line /= Null_Handle))));
+                  and then Item.XS_Wave_Line /= Null_Handle)
+                 or else
+                 (Packing = Packed_Q2_K
+                  and then Item.Q2K_Wave_Line /= Null_Handle)
+                 or else
+                 (Packing = Packed_Q3_K
+                  and then Item.Q3K_Wave_Line /= Null_Handle))));
 
    --  Invocations a workgroup of the bound row kernel has. The super-block
    --  kernel's workgroup is a single subgroup of thirty-two; the half-group
@@ -913,7 +920,7 @@ package body Model_Runner.Platform.Device.Products is
       return Positive
    is (if Waved (Item, Packing, Count)
        then (if Packing in Low_Packing | Packed_Q8_0 | Packed_IQ4_NL
-                          | Packed_IQ4_XS
+                          | Packed_IQ4_XS | Packed_Q2_K | Packed_Q3_K
              then Low_Wave_Lanes
              else Wave_Lanes)
        elsif Half_Grouped (Item, Packing, Count) then Half_Group
@@ -927,7 +934,7 @@ package body Model_Runner.Platform.Device.Products is
       return Positive
    is (if Waved (Item, Packing, Count)
        then (if Packing in Low_Packing | Packed_Q8_0 | Packed_IQ4_NL
-                          | Packed_IQ4_XS
+                          | Packed_IQ4_XS | Packed_Q2_K | Packed_Q3_K
              then Low_Wave_Lanes
              else Wave_Lanes)
        else Row_Lanes);
@@ -940,6 +947,7 @@ package body Model_Runner.Platform.Device.Products is
        then Q8_Multi_Rows
        elsif Packing in Low_Packing then Low_Wave_Rows
        elsif Packing in Packed_IQ4_NL | Packed_IQ4_XS then IQ4_Wave_Rows
+       elsif Packing in Packed_Q2_K | Packed_Q3_K then Q2K_Wave_Rows
        elsif Packing = Packed_Q8_0 then Q8_Wave_Rows
        elsif Packing = Packed_Q6_K then Q6_Wave_Rows
        else Wave_Rows);
@@ -968,6 +976,10 @@ package body Model_Runner.Platform.Device.Products is
        then Item.NL_Wave_Line
        elsif Packing = Packed_IQ4_XS and then Waved (Item, Packing, Count)
        then Item.XS_Wave_Line
+       elsif Packing = Packed_Q2_K and then Waved (Item, Packing, Count)
+       then Item.Q2K_Wave_Line
+       elsif Packing = Packed_Q3_K and then Waved (Item, Packing, Count)
+       then Item.Q3K_Wave_Line
        elsif Packing in Low_Packing
        then (if Count in Row_Line_Array'Range
                and then Item.Low_Row_Lines (Count) /= Null_Handle
@@ -2537,6 +2549,10 @@ package body Model_Runner.Platform.Device.Products is
                     Item.NL_Wave_Shader);
             Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq4_Xs,
                     Item.XS_Wave_Shader);
+            Module (Model_Runner.Shaders.Low.Row_Product_Wave_Q2_K,
+                    Item.Q2K_Wave_Shader);
+            Module (Model_Runner.Shaders.Low.Row_Product_Wave_Q3_K,
+                    Item.Q3K_Wave_Shader);
          end;
       end if;
 
@@ -3461,6 +3477,16 @@ package body Model_Runner.Platform.Device.Products is
                if Item.XS_Wave_Shader /= Null_Handle then
                   Request.Stage.Module := Item.XS_Wave_Shader;
                   Line (Low_Wave_Lanes, 1, Item.XS_Wave_Line);
+               end if;
+
+               if Item.Q2K_Wave_Shader /= Null_Handle then
+                  Request.Stage.Module := Item.Q2K_Wave_Shader;
+                  Line (Low_Wave_Lanes, 1, Item.Q2K_Wave_Line);
+               end if;
+
+               if Item.Q3K_Wave_Shader /= Null_Handle then
+                  Request.Stage.Module := Item.Q3K_Wave_Shader;
+                  Line (Low_Wave_Lanes, 1, Item.Q3K_Wave_Line);
                end if;
 
                Request.Stage.Module := Item.Shader;
@@ -4561,6 +4587,8 @@ package body Model_Runner.Platform.Device.Products is
       end loop;
       Give_Back (Item.NL_Wave_Line, "vkDestroyPipeline");
       Give_Back (Item.XS_Wave_Line, "vkDestroyPipeline");
+      Give_Back (Item.Q2K_Wave_Line, "vkDestroyPipeline");
+      Give_Back (Item.Q3K_Wave_Line, "vkDestroyPipeline");
       Give_Back (Item.Low_Pipeline, "vkDestroyPipeline");
       Give_Back (Item.Low_Wide_Line, "vkDestroyPipeline");
       for Count in Item.Low_Row_Lines'Range loop
@@ -4677,6 +4705,8 @@ package body Model_Runner.Platform.Device.Products is
       end loop;
       Give_Back (Item.NL_Wave_Shader, "vkDestroyShaderModule");
       Give_Back (Item.XS_Wave_Shader, "vkDestroyShaderModule");
+      Give_Back (Item.Q2K_Wave_Shader, "vkDestroyShaderModule");
+      Give_Back (Item.Q3K_Wave_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Low_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Wave_Shader6, "vkDestroyShaderModule");
       Give_Back (Item.Long_Shader6, "vkDestroyShaderModule");

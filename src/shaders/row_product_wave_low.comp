@@ -2,7 +2,8 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 
-//  The generating row product for the twelve low-bit formats, on a subgroup
+//  The generating row product for the twelve low-bit formats -- and Q8_0,
+//  IQ4, Q2_K and Q3_K beside them -- on a subgroup
 //  of thirty-two: compiled once a format, the format named by a define, so
 //  each pipeline carries its own decode and codebook and nothing else.
 //
@@ -69,6 +70,18 @@ uint quad_at(uint at) {
     uint first = w[at >> 2u];
     return shift == 0u ? first
                        : (first >> shift) | (w[(at >> 2u) + 1u] << (32u - shift));
+}
+
+//  Sixteen bytes from an even position, as four words: five loads and a
+//  funnel, with no branch -- blocks on and off a word share a subgroup.
+//  The high word goes up one and then 31 less the shift, so a run on a word
+//  takes none of it without a shift of 32.
+uvec4 span_at(uint at) {
+    uint i = at >> 2u;
+    uint shift = (at & 2u) * 8u;
+    uvec4 lo = uvec4(w[i], w[i + 1u], w[i + 2u], w[i + 3u]);
+    uvec4 hi = uvec4(lo.yzw, w[i + 4u]);
+    return (lo >> shift) | ((hi << 1u) << (31u - shift));
 }
 
 float half_at(uint at) {
@@ -1605,6 +1618,81 @@ float lane_dot_own(uint at, uint lane, uint xg, out float total) {
     return dl
            * (dot(x4[xb],      nl4(q0, 0u)) + dot(x4[xb + 1u], nl4(q1, 0u))
             + dot(x4[xb + 4u], nl4(q0, 4u)) + dot(x4[xb + 5u], nl4(q1, 4u)));
+}
+#endif
+
+#ifdef Q2_K
+const uint BLOCK_ELEMS = 256u;
+const uint BLOCK_BYTES = 84u;
+
+//  Q2_K is a k-quant, not one of the low-bit formats, but its generating
+//  product is shaped as theirs: a lane's sixteen elements are exactly one
+//  sub-block -- one scale byte, a four-bit scale and a four-bit minimum --
+//  and sixteen quants at one shift of sixteen bytes, four words. Sixteen
+//  bytes of scales, then sixty-four of quants -- a half's thirty-two bytes
+//  carrying its four groups of thirty-two at shifts 0, 2, 4 and 6, the
+//  first sixteen of a group in the first sixteen bytes -- then the two
+//  half-precision factors. The minimum is applied once to the run's
+//  activation sum.
+float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
+    uint sub = within >> 4u;            // the sub-block, 0..15
+    uint side = sub >> 3u;              // which half of the super-block
+    uint group = (within & 127u) >> 5u; // which two bits of each byte
+    uint upper = sub & 1u;              // which sixteen bytes of the half
+    uint q = (at + 16u + 32u * side + 16u * upper) >> 2u;
+    uint shift = 2u * group;
+
+    vec4 q0 = vec4(unpack8((w[q]      >> shift) & 0x03030303u));
+    vec4 q1 = vec4(unpack8((w[q + 1u] >> shift) & 0x03030303u));
+    vec4 q2 = vec4(unpack8((w[q + 2u] >> shift) & 0x03030303u));
+    vec4 q3 = vec4(unpack8((w[q + 3u] >> shift) & 0x03030303u));
+
+    float sum = dot(a0, q0) + dot(a1, q1) + dot(a2, q2) + dot(a3, q3);
+    vec4 ones = vec4(1.0);
+    float total = dot(a0 + a1 + a2 + a3, ones);
+
+    uint scale = byte_at(at + sub);
+    vec2 dm = unpackHalf2x16(w[(at + 80u) >> 2u]);
+    return dm.x * float(scale & 15u) * sum - dm.y * float(scale >> 4u) * total;
+}
+#endif
+
+#ifdef Q3_K
+const uint BLOCK_ELEMS = 256u;
+const uint BLOCK_BYTES = 110u;
+
+//  Q3_K the same way: a lane's sixteen elements are one sub-block, its
+//  six-bit scale and its sixteen quants -- two low bits at one shift of
+//  sixteen bytes of quants and a high bit at one position of sixteen bytes
+//  of the high mask. Thirty-two bytes of mask (bit 4 * half + group of byte
+//  l carries element l of that group), sixty-four of quants laid as
+//  Q2_K's, twelve of scales -- a sub-block's low four bits a nibble of the
+//  first eight bytes, its top two a pair of the last four -- and the
+//  half-precision factor. A quant is its two bits less four where its mask
+//  bit is clear, so it is the two bits plus four times the mask bit, less
+//  four: the four taken off the run's activation sum once. A block of 110
+//  bytes lies on no word, so a run of sixteen is read as five words and
+//  funnelled once, its mask bit put beside its two before they unpack.
+float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
+    uint sub = within >> 4u;
+    uint side = sub >> 3u;
+    uint group = (within & 127u) >> 5u;
+    uint upper = sub & 1u;
+    uint shift = 2u * group;
+    uint bit = 4u * side + group;
+    uvec4 q = span_at(at + 32u + 32u * side + 16u * upper);
+    uvec4 h = span_at(at + 16u * upper);
+
+    uvec4 v = ((q >> shift) & 0x03030303u) | (((h >> bit) & 0x01010101u) << 2u);
+    float sum = dot(a0, vec4(unpack8(v.x))) + dot(a1, vec4(unpack8(v.y)))
+              + dot(a2, vec4(unpack8(v.z))) + dot(a3, vec4(unpack8(v.w)));
+    float total = dot(a0 + a1 + a2 + a3, vec4(1.0));
+
+    uint low = (byte_at(at + 96u + (sub & 7u)) >> (4u * (sub >> 3u))) & 15u;
+    uint high = (byte_at(at + 104u + (sub & 3u)) >> (2u * (sub >> 2u))) & 3u;
+    float scale = float(int(low | (high << 4u)) - 32);
+
+    return half_at(at + 108u) * scale * (sum - 4.0 * total);
 }
 #endif
 

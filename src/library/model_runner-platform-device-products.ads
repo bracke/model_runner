@@ -2891,6 +2891,14 @@ private
       XS_Wave_Shader : System.Address := System.Null_Address;
       XS_Wave_Line   : System.Address := System.Null_Address;
 
+      --  And Q2_K and Q3_K, a lane a sub-block: the generic row kernel's
+      --  eight lanes a row read a Q2_K model seven per cent behind
+      --  llama.cpp's generation, three quarters of it Q3_K.
+      Q2K_Wave_Shader : System.Address := System.Null_Address;
+      Q2K_Wave_Line   : System.Address := System.Null_Address;
+      Q3K_Wave_Shader : System.Address := System.Null_Address;
+      Q3K_Wave_Line   : System.Address := System.Null_Address;
+
       Wide_Line   : System.Address := System.Null_Address;
 
       --  The row product's LOW_BITS compilation and its pipelines, one for
