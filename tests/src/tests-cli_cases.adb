@@ -2083,7 +2083,7 @@ package body Tests.CLI_Cases is
       Run ("req");
       Assert (Shows ("no requirements yet"), "an empty register did not say how to begin");
       Run ("reconfigure|work.lease=90|confirm=yes");
-      Assert (Code = 0 and then Shows ("changes scalar.work.lease"),
+      Assert (Code = 0 and then Shows ("changes work.lease:"),
               "a setting named without its kind was not found: " & To_String (Said));
 
       --  3. With no agent to run, that is said before the task is touched;

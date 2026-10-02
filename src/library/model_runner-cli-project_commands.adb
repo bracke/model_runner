@@ -6625,10 +6625,12 @@ package body Model_Runner.CLI.Project_Commands is
                end;
             end if;
          end loop;
-         --  Named whole, as /config names it and every other kind of setting
-         --  is: scalar.work.lease, as map.permission.project.read_source.
          for Line of Planned.Changed loop
-            Pres.Put_Message (Screen, "cli.project.reconfigure.changed", [Loc.Named ("name", Line)]);
+            --  A scalar by the name it is typed with, work.lease, where that
+            --  names it alone; the rest whole, as they are typed whole.
+            Pres.Put_Message (Screen, "cli.project.reconfigure.changed",
+                              [Loc.Named ("name", (if Ada.Strings.Fixed.Index (Line, "scalar.") = Line'First
+                                                   then Line (Line'First + 7 .. Line'Last) else Line))]);
          end loop;
          for Line of Planned.Impact loop
             Pres.Put_Message (Screen, "cli.project.reconfigure.reaches", [Loc.Named ("name", Line)]);
@@ -8227,6 +8229,11 @@ package body Model_Runner.CLI.Project_Commands is
                end loop;
                if Made_Now /= Null_Unbounded_String and then Tasks_Waiting.Is_Empty then
                   Pres.Put_Note (Screen, "cli.next.accept_tasks", [Loc.Named ("detail", To_String (Made_Now))]);
+               --  Made now, and taken with the rest: said, so none is
+               --  accepted unseen.
+               elsif Made_Now /= Null_Unbounded_String and then Accepting then
+                  Pres.Put_Note (Screen, "cli.project.accept_all_derived",
+                                 [Loc.Named ("detail", To_String (Made_Now))]);
                end if;
             end;
             if not Tasks_Waiting.Is_Empty then

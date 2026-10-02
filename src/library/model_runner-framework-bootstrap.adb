@@ -2690,8 +2690,44 @@ package body Model_Runner.Framework.Bootstrap is
               else "---" & ASCII.LF & "status: " & To_String (Said) & ASCII.LF & "---" & ASCII.LF & To_String (Kept));
    end With_Attribute_Status;
 
-   function Scan (Path : String; Text : String) return Output_List
-   is (Scan_Markdown (Path, As_Markdown (Path, Without_Front_Matter (With_Attribute_Status (Path, Text)))));
+   function Scan (Path : String; Text : String) return Output_List is
+      Whole  : constant String := With_Attribute_Status (Path, Text);
+      Result : Output_List := Scan_Markdown (Path, As_Markdown (Path, Without_Front_Matter (Whole)));
+      Lines  : constant Name_Lists.Vector := Lines_Of_All (Whole);
+      Said   : Unbounded_String;
+   begin
+      --  The document's own status, in its front matter -- or an AsciiDoc
+      --  header's -- where it accepts or holds back all it says: every item
+      --  it gives without a status of its own has it, a table's rows too.
+      if not Lines.Is_Empty and then Trim (Lines.First_Element) = "---" then
+         for Index in Lines.First_Index + 1 .. Lines.Last_Index loop
+            exit when Trim (Lines (Index)) = "---";
+            if Ada.Characters.Handling.To_Lower (Ada.Strings.Fixed.Head (Trim (Lines (Index)), 7)) = "status:" then
+               Said := To_Unbounded_String
+                 (Ada.Characters.Handling.To_Lower (Trim (Trim (Lines (Index)) (Trim (Lines (Index))'First + 7
+                                                                               .. Trim (Lines (Index))'Last))));
+            end if;
+         end loop;
+      end if;
+      if To_String (Said) in "approved" | "accepted" | "agreed" | "baselined"
+        or else Draft_Status (To_String (Said))
+      then
+         for Index in Result.Outputs.First_Index .. Result.Outputs.Last_Index loop
+            declare
+               Held : Output := Result.Outputs (Index);
+            begin
+               if Held.Kind in Imported_Item | Requirement_Candidate | Decision_Candidate
+                 and then Held.Status = Null_Unbounded_String
+               then
+                  Held.Status := (if Draft_Status (To_String (Said)) then Said
+                                  else To_Unbounded_String ("accepted"));
+                  Result.Outputs (Index) := Held;
+               end if;
+            end;
+         end loop;
+      end if;
+      return Result;
+   end Scan;
 
    -----------
    -- Apply --

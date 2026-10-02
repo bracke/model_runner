@@ -969,8 +969,13 @@ package body Model_Runner.Framework.Intent is
             Records.Set (Fresh, Records.Field_Name (Value, Index),
                          Records.Get (Value, Records.Field_Name (Value, Index)));
          end loop;
-         Records.Set (Fresh, "renumbered_from",
-                      Old_Id & ", after" & Natural'Image (Records.Revision (Value)) & " record changes");
+         --  What it was, and its changes then: the count goes on from them.
+         Records.Set (Fresh, "renumbered_from", Old_Id);
+         Records.Set (Fresh, "earlier_changes",
+                      Ada.Strings.Fixed.Trim
+                        (Natural'Image (Records.Revision (Value)
+                                        + Natural'Value ("0" & Records.Get (Value, "earlier_changes"))),
+                         Ada.Strings.Both));
          Stores.Put (Change, Area_Of (Kind), New_Id, Fresh);
          Stores.Remove (Change, Area_Of (Kind), Old_Id);
       end;

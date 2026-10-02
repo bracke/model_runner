@@ -2869,20 +2869,30 @@ package body Model_Runner.CLI.Intents is
                          else Pres.Tone_Of (To_String (Held.State))));
                   --  How often its record changed: its moves count, its
                   --  words being what /req revise changes.
-                  Item ("record changes", Ada.Strings.Fixed.Trim (Natural'Image (Held.Revision), Ada.Strings.Both)
-                        & " (each revise and each move between states)");
-                  --  Renumbered: what it was, and its changes then.
+                  --  Renumbered: what it was, its changes then counted in.
                   declare
-                     Raw : Model_Runner.Framework.Records.Item;
-                     Got : E.Error_Info;
+                     Raw     : Model_Runner.Framework.Records.Item;
+                     Got     : E.Error_Info;
+                     Earlier : Natural := 0;
                   begin
                      S.Read (Store, (if Nt."=" (Kind, Nt.Requirement) then Model_Runner.Framework.Requirements_Area
                                      elsif Nt."=" (Kind, Nt.Decision) then Model_Runner.Framework.Decisions_Area
                                      else Model_Runner.Framework.Specs_Area),
                              Named, Raw, Got);
+                     if E.Is_Ok (Got) then
+                        Earlier := Natural'Value ("0" & Model_Runner.Framework.Records.Get (Raw, "earlier_changes"));
+                     end if;
+                     Item ("record changes",
+                           Ada.Strings.Fixed.Trim (Natural'Image (Held.Revision + Earlier), Ada.Strings.Both)
+                           & " (each revise and each move between states)");
                      if E.Is_Ok (Got) and then Model_Runner.Framework.Records.Get (Raw, "renumbered_from") /= "" then
                         Item ("renumbered from", Model_Runner.Framework.Records.Get (Raw, "renumbered_from"));
                      end if;
+                  exception
+                     when others =>
+                        Item ("record changes",
+                              Ada.Strings.Fixed.Trim (Natural'Image (Held.Revision), Ada.Strings.Both)
+                              & " (each revise and each move between states)");
                   end;
                   Item ("scope", To_String (Held.Scope));
                   if Nt.Blocked_Because (Store, Kind, Named) /= "" then
