@@ -9504,7 +9504,7 @@ package body Tests.Framework_Cases is
                        and then Ada.Strings.Fixed.Index (Text, "nonsense") > 0
                        and then Ada.Strings.Fixed.Index (Text, "Stars counted") > 0
                        and then Ada.Strings.Fixed.Index (Text, "moved from") > 0
-                       and then Ada.Strings.Fixed.Index (Text, "a proposal REQ-404") > 0
+                       and then Ada.Strings.Fixed.Index (Text, "REQ-404 is not in the project state") > 0
                        and then Ada.Strings.Fixed.Index (Text, "a document to read: nowhere.md will not do"
                                                            & " -- there is no such file") > 0
                        and then Ada.Strings.Fixed.Index (Text, "not given: confirm") > 0,

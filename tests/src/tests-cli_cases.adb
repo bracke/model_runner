@@ -12989,6 +12989,11 @@ package body Tests.CLI_Cases is
               "a command to help with was not completed");
       Assert (Model_Runner.CLI.Completion.Candidates ("/nosuch").Is_Empty,
               "a word nothing begins was completed");
+      --  Whatever its case, and by a part of it where nothing begins so.
+      Assert (Model_Runner.CLI.Completion.Candidates ("/RECON").Contains ("/reconfigure"),
+              "a command typed in capitals was not completed");
+      Assert (Model_Runner.CLI.Completion.Candidates ("/figure").Contains ("/reconfigure"),
+              "a command was not completed from a part of it");
    end Tab_Completes_Commands;
 
    overriding procedure Register_Tests (T : in out Case_Type) is

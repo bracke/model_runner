@@ -2,6 +2,7 @@ with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
+with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
 with Model_Runner.CLI.Interactive;
@@ -13,6 +14,7 @@ with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Records;
+with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Workspaces;
@@ -106,6 +108,52 @@ package body Model_Runner.CLI.Completion is
       when others =>
          return Result;
    end Paths;
+
+   --  The values a setting takes, where they are a few words: what Tab
+   --  offers after its =.
+   function Values_Of (Name : String) return Names.Vector is
+      Bare : constant String :=
+        (if Ada.Strings.Fixed.Index (Name, "scalar.") = Name'First then Name (Name'First + 7 .. Name'Last)
+         else Name);
+      Result : Names.Vector;
+   begin
+      if Ada.Strings.Fixed.Index (Bare, "permission.") > 0 then
+         --  A capability: on, off, as the level above, or its places; a
+         --  level whole: none, or as the level above.
+         if (for some One in Model_Runner.Framework.Permissions.Capability =>
+               Ada.Strings.Fixed.Tail (Bare, Model_Runner.Framework.Permissions.Word (One)'Length + 1)
+               = "." & Model_Runner.Framework.Permissions.Word (One))
+         then
+            Result := Words_Of ("on off inherit roots= deny=");
+         else
+            Result := Words_Of ("none inherit");
+         end if;
+      elsif Bare = "work.isolation" or else Ada.Strings.Fixed.Index (Bare, "task.isolation.") = Bare'First then
+         Result := Words_Of ("project workspace");
+      elsif Bare = "task.auto_accept" then
+         Result := Words_Of ("true false");
+      elsif Bare = "task.coordination" or else Ada.Strings.Fixed.Index (Bare, "task.coordination.") = Bare'First
+      then
+         Result := Words_Of ("parent_waits parent_runs");
+      elsif Bare = "agents.on_child_failure" then
+         Result := Words_Of ("block fail continue");
+      elsif Bare = "verification.escalation" then
+         Result := Words_Of ("conservative narrow");
+      elsif Bare = "bootstrap.import" then
+         Result := Words_Of ("candidate accepted");
+      elsif Bare in "execution.network" | "execution.shell" then
+         Result := Words_Of ("allowed denied");
+      elsif Bare = "verification.toolchain" then
+         Result := Words_Of ("recorded strict");
+      elsif Bare = "recovery.running" then
+         Result := Words_Of ("blocked failed accepted");
+      elsif Bare = "requirement.after_text_change" then
+         Result := Words_Of ("accepted blocked");
+      elsif Bare = "requirement.after_criteria_change" then
+         Result := Words_Of ("implemented accepted");
+      end if;
+      return Result;
+   end Values_Of;
 
    --  Whether a template is only a part others include: standalone = false.
    function Is_Part (Path : String) return Boolean is
@@ -245,7 +293,23 @@ package body Model_Runner.CLI.Completion is
             return;
          end if;
          --  A setting as NAME=: its values where it has a few.
-         if Ada.Strings.Fixed.Index (Current, "kind=") = Current'First then
+         if Command = "/reconfigure" and then Ada.Strings.Fixed.Index (Current, "=") > Current'First then
+            declare
+               Eq   : constant Natural := Ada.Strings.Fixed.Index (Current, "=");
+               Name : constant String := Current (Current'First .. Eq - 1);
+            begin
+               for Value of Values_Of (Name) loop
+                  Offer (Name & "=" & Value);
+               end loop;
+            end;
+         elsif Ada.Strings.Fixed.Index (Current, "permissions=") = Current'First then
+            --  A task's permissions: a capability, or one taken away.
+            for One in Model_Runner.Framework.Permissions.Capability loop
+               Offer ("permissions=" & Model_Runner.Framework.Permissions.Word (One));
+               Offer ("permissions=-" & Model_Runner.Framework.Permissions.Word (One));
+            end loop;
+            Offer ("permissions=inherit");
+         elsif Ada.Strings.Fixed.Index (Current, "kind=") = Current'First then
             for Kind of Tk.Kinds (Store) loop
                Offer ("kind=" & Kind);
             end loop;
@@ -306,17 +370,31 @@ package body Model_Runner.CLI.Completion is
                      Capabilities;
                   else
                      declare
-                        Allowed : constant Pm.Permission_Set :=
+                        Of_Kind : constant Pm.Permission_Set :=
+                          Pm.Effective (Store, R.Get (Defined, "kind"), "", Within_Sandbox => False);
+                        Has     : constant Pm.Permission_Set :=
                           Pm.Effective (Store, R.Get (Defined, "kind"), "",
-                                        Task_Level => (if Action = "withhold" then R.Get (Defined, "permissions")
-                                                       else ""),
-                                        Within_Sandbox => False);
+                                        Task_Level => R.Get (Defined, "permissions"), Within_Sandbox => False);
+                        Any     : Boolean := False;
                      begin
+                        --  To withhold, what it has; to grant, what its kind
+                        --  gives that it has not -- or, having all, any of
+                        --  its kind's, to narrow by roots=.
                         for One in Pm.Capability loop
-                           if Allowed (One).Granted then
+                           if (if Action = "withhold" then Has (One).Granted
+                               else Of_Kind (One).Granted and then not Has (One).Granted)
+                           then
                               Offer (Pm.Word (One));
+                              Any := True;
                            end if;
                         end loop;
+                        if not Any and then Action = "grant" then
+                           for One in Pm.Capability loop
+                              if Of_Kind (One).Granted then
+                                 Offer (Pm.Word (One));
+                              end if;
+                           end loop;
+                        end if;
                      end;
                   end if;
                end;
@@ -396,7 +474,12 @@ package body Model_Runner.CLI.Completion is
             --  Tasks first, then the issues it lists and the runs and checks
             --  it shows -- not every log a check kept.
             Offer ("all");
-            Offer_All (Tk.List (Store));
+            --  Tasks that have run: those with something to show.
+            for Id of Tk.List (Store) loop
+               if Tk.State_Of (Store, Id) in "failed" | "blocked" | "complete" | "verification" then
+                  Offer (Id);
+               end if;
+            end loop;
             Offer_All (Model_Runner.CLI.Project_Commands.Open_Issues (Store));
             for Name of S.Names (Store, Model_Runner.Framework.Invocations_Area) loop
                if Ada.Strings.Fixed.Index (Name, "INV-") = Name'First then
@@ -496,6 +579,11 @@ package body Model_Runner.CLI.Completion is
             Offer (Word (Word'First + 1 .. Word'Last));
          end loop;
          Offer ("project");
+      --  A project here already: no template to start one with.
+      elsif Command = "/init" and then Position = 2
+        and then S.Is_Initialized (Ada.Directories.Current_Directory)
+      then
+         null;
       elsif Command = "/init" and then Position = 2 then
          declare
             Search : Ada.Directories.Search_Type;
@@ -524,15 +612,84 @@ package body Model_Runner.CLI.Completion is
                      | "/load" | "/image" | "/video"
       then
          Offer_All (Paths (Current));
+         --  The symbols the repository knows, where a name is asked for:
+         --  whole, and by their last part.
+         if Command in "/refs" | "/sym" | "/users" | "/impact" and then Current /= ""
+           and then Ada.Strings.Fixed.Index (Current, "/") = 0
+           and then S.Is_Initialized (Ada.Directories.Current_Directory)
+         then
+            declare
+               package Rp renames Model_Runner.Framework.Repository;
+               Store : S.Store;
+               Read  : E.Error_Info;
+            begin
+               S.Open_To_Read (Store, Ada.Directories.Current_Directory, Read);
+               if E.Is_Ok (Read) then
+                  declare
+                     Graph : constant Rp.Graph := Rp.Now (Store);
+                  begin
+                     for Index in 1 .. Rp.Symbol_Count (Graph) loop
+                        declare
+                           Name : constant String := Ada.Strings.Unbounded.To_String (Rp.Symbol_At (Graph, Index).Name);
+                           Dot  : constant Natural := Ada.Strings.Fixed.Index (Name, ".", Ada.Strings.Backward);
+                        begin
+                           Offer (Name);
+                           if Dot > 0 then
+                              Offer (Name (Dot + 1 .. Name'Last));
+                           end if;
+                        end;
+                     end loop;
+                  end;
+                  S.Close (Store);
+               end if;
+            exception
+               when others =>
+                  S.Close (Store);
+            end;
+         end if;
       else
          From_Project;
       end if;
-      --  Those the word typed begins, in order.
-      for One of Offered loop
-         if One'Length >= Current'Length and then One (One'First .. One'First + Current'Length - 1) = Current then
-            Result.Append (One);
+      --  Those the word typed begins, in order; whatever its case where
+      --  none begins with it as typed; and, none begun by it, those it is
+      --  part of -- /figure is /reconfigure.
+      declare
+         Lower_Current : constant String := Ada.Characters.Handling.To_Lower (Current);
+         function Lower (Text : String) return String renames Ada.Characters.Handling.To_Lower;
+      begin
+         for One of Offered loop
+            if One'Length >= Current'Length and then One (One'First .. One'First + Current'Length - 1) = Current
+            then
+               Result.Append (One);
+            end if;
+         end loop;
+         if Result.Is_Empty then
+            for One of Offered loop
+               if One'Length >= Current'Length
+                 and then Lower (One (One'First .. One'First + Current'Length - 1)) = Lower_Current
+               then
+                  Result.Append (One);
+               end if;
+            end loop;
          end if;
-      end loop;
+         --  Part of a word: only for a few letters typed, and not a path's.
+         if Result.Is_Empty and then Current'Length >= 3 and then Ada.Strings.Fixed.Index (Current, "/", 2) = 0
+         then
+            declare
+               Bare : constant String :=
+                 (if Lower_Current (Lower_Current'First) = '/'
+                  then Lower_Current (Lower_Current'First + 1 .. Lower_Current'Last) else Lower_Current);
+            begin
+               for One of Offered loop
+                  if Bare /= "" and then Ada.Strings.Fixed.Index (Lower (One), Bare) > 0
+                    and then (Lower_Current (Lower_Current'First) /= '/' or else One (One'First) = '/')
+                  then
+                     Result.Append (One);
+                  end if;
+               end loop;
+            end;
+         end if;
+      end;
       Sorting.Sort (Result);
       return Result;
    end Candidates;

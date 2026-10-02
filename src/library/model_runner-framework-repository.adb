@@ -198,6 +198,8 @@ package body Model_Runner.Framework.Repository is
          return "Python";
       elsif Ends (".go") then
          return "Go";
+      elsif Ends ("/go.mod") or else Ends ("/go.sum") or else Name in "go.mod" | "go.sum" then
+         return "Go module";
       elsif Ends (".ts") or else Ends (".tsx") then
          return "TypeScript";
       elsif Ends (".js") or else Ends (".jsx") or else Ends (".mjs") then
@@ -471,7 +473,7 @@ package body Model_Runner.Framework.Repository is
       elsif Language in "Markdown" | "AsciiDoc" | "reStructuredText" or else Named_By (Within.Documentation, Path)
       then
          return Documentation;
-      elsif Language in "GPR" | "TOML" | "JSON" | "Shell"
+      elsif Language in "GPR" | "TOML" | "JSON" | "Shell" | "Go module"
         or else Has ("/makefile") or else Has ("/cmakelists.txt")
       then
          return Build;

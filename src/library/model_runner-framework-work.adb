@@ -1306,6 +1306,15 @@ package body Model_Runner.Framework.Work is
       return To_String (Found);
    end Proposals_Of;
 
+   --  An event's kind as words: Task_Became_Ready is "became ready".
+   function Words_Of_Kind (Kind : String) return String is
+      Lower : constant String :=
+        Ada.Strings.Fixed.Translate (Ada.Characters.Handling.To_Lower (Kind), Ada.Strings.Maps.To_Mapping ("_", " "));
+   begin
+      return (if Lower'Length > 5 and then Lower (Lower'First .. Lower'First + 4) = "task "
+              then Lower (Lower'First + 5 .. Lower'Last) else Lower);
+   end Words_Of_Kind;
+
    function Audit (Item : Stores.Store; Task_Id : String) return Name_Lists.Vector is
       Result  : Name_Lists.Vector;
       Defined : Records.Item;
@@ -1486,7 +1495,8 @@ package body Model_Runner.Framework.Work is
                if To_String (One.Subject) = Task_Id then
                   Result.Append
                     ("history: " & To_String (One.Occurred_At) & " "
-                     & To_String (One.Kind_Word)
+                     --  In words: Task_Became_Ready is became ready.
+                     & Words_Of_Kind (To_String (One.Kind_Word))
                      & (if Length (One.Detail) = 0 then "" else " -- " & To_String (One.Detail)));
                end if;
             end;
@@ -1500,6 +1510,32 @@ package body Model_Runner.Framework.Work is
               else ", profile " & Records.Get (Proof, "profile")
                    & (if Records.Get (Proof, "passed") = "true" then ", passed" else ", failed")));
       Say ("tool versions", Fields_With (Proof, "tool."));
+      --  Checks run for it on the way -- by its agent, or by hand -- each
+      --  with how it came out.
+      declare
+         Runs : Unbounded_String;
+      begin
+         for Name of Stores.Names (Item, Verification_Area) loop
+            declare
+               Evidence : constant String :=
+                 (if Name'Length > 4 and then Name (Name'Last - 3 .. Name'Last) = ".rec"
+                  then Name (Name'First .. Name'Last - 4) else Name);
+               Value : Records.Item;
+               Read  : E.Error_Info;
+            begin
+               if Ada.Strings.Fixed.Index (Evidence, "VER-") = Evidence'First then
+                  Stores.Read (Item, Verification_Area, Evidence, Value, Read);
+                  if E.Is_Ok (Read) and then Records.Get (Value, "task") = Task_Id
+                    and then Evidence /= Records.Get (State, "current_verification")
+                  then
+                     Append (Runs, (if Runs = Null_Unbounded_String then "" else ", ") & Evidence
+                             & (if Records.Get (Value, "passed") = "true" then " passed" else " failed"));
+                  end if;
+               end if;
+            end;
+         end loop;
+         Say ("checks run on the way", To_String (Runs));
+      end;
       Say ("completion",
            (if Tasks.State_Of (Item, Task_Id) /= "complete"
             then (if Tasks.State_Of (Item, Task_Id) = "failed" then "it has failed"
@@ -3375,6 +3411,20 @@ package body Model_Runner.Framework.Work is
          end if;
          Annotate (Item, Change, Task_Id, "changed_files", To_String (Files_Text));
          Annotate (Item, Change, Task_Id, "undone_by", "");
+         --  Written in the project itself: what it wrote, file by file, as
+         --  what a workspace's taking in keeps -- an edit after is not its.
+         if not Isolated then
+            declare
+               Project : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
+               Prints  : Unbounded_String;
+            begin
+               for Path of Result.Changed_Files loop
+                  Append (Prints, Path & ASCII.HT & File_Print (Hostkit.Fs.Join (Project, Path)) & ASCII.LF);
+               end loop;
+               Annotate (Item, Change, Task_Id, "taken_in", To_String (Prints));
+               Annotate (Item, Change, Task_Id, "joined_files", "");
+            end;
+         end if;
          if not Result.Changed_Files.Is_Empty and then not Isolated then
             declare
                Event : Unbounded_String;
@@ -4722,6 +4772,15 @@ package body Model_Runner.Framework.Work is
             end loop;
             Annotate (Item, Change, Task_Id, "taken_in", To_String (Prints));
             Annotate (Item, Change, Task_Id, "undone_by", "");
+            --  Joined with the project's own change: lines of it are not its.
+            declare
+               Joined : Unbounded_String;
+            begin
+               for Path of Workspaces.Last_Joined loop
+                  Append (Joined, Path & ASCII.LF);
+               end loop;
+               Annotate (Item, Change, Task_Id, "joined_files", To_String (Joined));
+            end;
          end;
       end if;
       if E.Is_Ok (Status) then

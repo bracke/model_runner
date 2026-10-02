@@ -253,6 +253,13 @@ package body Model_Runner.Framework.Consistency is
                                      then "/decision govern " & Mine & " " & Subject & " " & Ruling
                                           & " overrides=" & Over & " says " & Mine & " holds over "
                                           & Theirs
+                                     --  Two instructions: one is withdrawn.
+                                     elsif Ada.Strings.Fixed.Index (Mine, "INSTR-") = 1
+                                       and then Ada.Strings.Fixed.Index (Theirs, "INSTR-") = 1
+                                     then "/instruct withdraw " & Mine & " or /instruct withdraw " & Theirs
+                                          & " leaves the other"
+                                     elsif Ada.Strings.Fixed.Index (Mine, "INSTR-") = 1
+                                     then "/instruct withdraw " & Mine & " leaves " & Theirs
                                      else "/decision supersede, or a ruling that says which holds"));
                         end;
                      end if;
@@ -462,13 +469,35 @@ package body Model_Runner.Framework.Consistency is
                   Present : Boolean;
                   Of_Kind : constant Permissions.Permission_Set :=
                     Permissions.Level_Of (Item, "kind." & Records.Get (Defined, "kind"), Present);
+                  --  What the kind asks for by name: not what it follows
+                  --  the level above for, written out as inherit.
+                  function Kind_Asks return Permissions.Permission_Set is
+                     Config : Records.Item;
+                     Got    : E.Error_Info;
+                     Result : Permissions.Permission_Set := Of_Kind;
+                  begin
+                     Configurations.Read (Item, Config, Got);
+                     for One in Permissions.Capability loop
+                        declare
+                           Field : constant String :=
+                             "map.permission.kind." & Records.Get (Defined, "kind") & "." & Permissions.Word (One);
+                        begin
+                           if E.Is_Error (Got) or else not Records.Has (Config, Field)
+                             or else Records.Get (Config, Field) = "inherit"
+                           then
+                              Result (One) := Permissions.Nothing (One);
+                           end if;
+                        end;
+                     end loop;
+                     return Result;
+                  end Kind_Asks;
                   Withheld : constant String :=
                     (if E.Is_Error (Read) then ""
                      else Permissions.Clipped
                             ((if Records.Get (Defined, "permissions") /= ""
                                 and then not Permissions.Only_Withholds (Records.Get (Defined, "permissions"))
                               then Asked_Of (Records.Get (Defined, "permissions"))
-                              elsif Present then Of_Kind
+                              elsif Present then Kind_Asks
                               else Permissions.Nothing),
                              Permissions.Effective (Item, "", "", Within_Sandbox => False)));
                begin

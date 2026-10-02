@@ -1071,6 +1071,66 @@ package body Model_Runner.CLI.Choosers is
          return 80;
       end Columns;
 
+      --  A command's line of help, cut to the window: "" where it has none.
+      function Described (Command : String) return String is
+         Key  : constant String := "cli.interactive.help." & Command (Command'First + 1 .. Command'Last);
+         Said : constant String := Pres.Message_Value (Screen, Key);
+      begin
+         if Said = "" or else Ada.Strings.Fixed.Index (Said, "cli.interactive.help.") > 0 then
+            return "";
+         end if;
+         return (if Said'Length > Columns - 1 then Said (Said'First .. Said'First + Columns - 5) & "..." else Said);
+      end Described;
+
+      --  What the word at the end would be completed to, shown dimmed after
+      --  it: Right or End takes it.
+      Ghost : Unbounded_String;
+
+      procedure Find_Ghost is
+         Line  : constant String := To_String (Text);
+      begin
+         Ghost := Null_Unbounded_String;
+         --  Only at the end of the line, a word begun, and only for the
+         --  command and its action: the words a person types most.
+         if Complete = null or else Line = "" or else Cursor /= Line'Length or else Line (Line'Last) = ' '
+           or else Line (Line'First) /= '/' or else Ada.Strings.Fixed.Count (Line, " ") > 1
+         then
+            return;
+         end if;
+         declare
+            Start   : constant Natural := Ada.Strings.Fixed.Index (Line, " ", Ada.Strings.Backward);
+            Word    : constant String := Line ((if Start = 0 then Line'First else Start + 1) .. Line'Last);
+            Choices : constant Model_Runner.Framework.Name_Lists.Vector := Complete (Line);
+            Shared  : Unbounded_String;
+         begin
+            if Choices.Is_Empty
+              or else not (for all One of Choices =>
+                             One'Length >= Word'Length and then One (One'First .. One'First + Word'Length - 1) = Word)
+            then
+               return;
+            end if;
+            Shared := To_Unbounded_String (Choices.First_Element);
+            for One of Choices loop
+               declare
+                  Same : Natural := 0;
+               begin
+                  while Same < Length (Shared) and then Same < One'Length
+                    and then Element (Shared, Same + 1) = One (One'First + Same)
+                  loop
+                     Same := Same + 1;
+                  end loop;
+                  Shared := Head (Shared, Same);
+               end;
+            end loop;
+            if Length (Shared) > Word'Length then
+               Ghost := To_Unbounded_String (Slice (Shared, Word'Length + 1, Length (Shared)));
+            end if;
+         end;
+      exception
+         when others =>
+            Ghost := Null_Unbounded_String;
+      end Find_Ghost;
+
       --  The prompt and the line drawn again from the prompt's row, the
       --  cursor put where it is in the line.
       procedure Redraw is
@@ -1078,6 +1138,7 @@ package body Model_Runner.CLI.Choosers is
          Line     : constant String := To_String (Text);
          Before   : constant Natural := Width (Prompt);
          Total    : constant Natural := Before + Width (Line);
+         Shown_Total : constant Natural := Total + Length (Ghost);
          At_Cursor : constant Natural := Before + Width (Line (Line'First .. Line'First + Cursor - 1));
          Wrapped  : Boolean := False;
          End_Row  : Natural;
@@ -1086,13 +1147,18 @@ package body Model_Runner.CLI.Choosers is
             Put (ASCII.ESC & "[" & Image (Drawn_Row) & "A");
          end if;
          Put (ASCII.CR & ASCII.ESC & "[J" & Prompt & Pres.Coloured_Commands (Screen, Line));
+         --  What Right would take, dimmed after it.
+         if Ghost /= Null_Unbounded_String then
+            Put (ASCII.ESC & "[2m" & To_String (Ghost) & ASCII.ESC & "[0m");
+         end if;
          --  Ended exactly at the edge with the cursor there: on to the next
          --  row, as the terminal would only once another character came.
-         if Total > 0 and then Total mod W = 0 and then At_Cursor = Total then
+         if Shown_Total > 0 and then Shown_Total mod W = 0 and then At_Cursor = Shown_Total then
             Put (ASCII.LF & ASCII.CR);
             Wrapped := True;
          end if;
-         End_Row := (if Total > 0 and then Total mod W = 0 and then not Wrapped then Total / W - 1 else Total / W);
+         End_Row := (if Shown_Total > 0 and then Shown_Total mod W = 0 and then not Wrapped
+                     then Shown_Total / W - 1 else Shown_Total / W);
          if End_Row > At_Cursor / W then
             Put (ASCII.ESC & "[" & Image (End_Row - At_Cursor / W) & "A");
          end if;
@@ -1198,8 +1264,17 @@ package body Model_Runner.CLI.Choosers is
                Whole : constant String := Choices.First_Element;
                After : constant String :=
                  (if Whole (Whole'Last) in '/' | '=' then "" else " ");
+               Begun : constant Boolean :=
+                 Whole'Length >= Word'Length and then Whole (Whole'First .. Whole'First + Word'Length - 1) = Word;
             begin
-               Insert (Text, Cursor + 1, Whole (Whole'First + Word'Length .. Whole'Last) & After);
+               if Begun then
+                  Insert (Text, Cursor + 1, Whole (Whole'First + Word'Length .. Whole'Last) & After);
+               else
+                  --  Matched otherwise -- its case, a part of it: the word
+                  --  typed becomes it.
+                  Delete (Text, Cursor - Word'Length + 1, Cursor);
+                  Insert (Text, Cursor - Word'Length + 1, Whole & After);
+               end if;
                Cursor := Cursor + Whole'Length - Word'Length + After'Length;
             end;
             Tabbed := False;
@@ -1224,18 +1299,41 @@ package body Model_Runner.CLI.Choosers is
                end loop;
                Across := Positive'Max (1, Columns / (Widest + 2));
                Cursor := Length (Text);
+               Ghost := Null_Unbounded_String;
                Redraw;
                Put (ASCII.CR & ASCII.LF);
-               for One of Choices loop
-                  exit when Shown = 200;
-                  Put (One & [1 .. Widest + 2 - One'Length => ' ']);
-                  Column := Column + 1;
-                  Shown := Shown + 1;
-                  if Column = Across then
-                     Put (ASCII.CR & ASCII.LF);
-                     Column := 0;
-                  end if;
-               end loop;
+               --  Commands each with what it does, a line each.
+               if (for all One of Choices => One'Length > 1 and then One (One'First) = '/')
+                 and then (for all One of Choices => Described (One) /= "")
+               then
+                  for One of Choices loop
+                     exit when Shown = 200;
+                     Put (Pres.Coloured_Commands (Screen, Described (One)) & ASCII.CR & ASCII.LF);
+                     Shown := Shown + 1;
+                  end loop;
+               else
+                  for Whole of Choices loop
+                     exit when Shown = 200;
+                     declare
+                        --  After NAME= or a directory, what differs only.
+                        Cut : constant Natural :=
+                          Natural'Max (Ada.Strings.Fixed.Index (Word, "=", Ada.Strings.Backward),
+                                       Ada.Strings.Fixed.Index (Word, "/", Ada.Strings.Backward));
+                        One : constant String :=
+                          (if Cut > Word'First and then Whole'Length > Cut - Word'First + 1
+                             and then Whole (Whole'First .. Whole'First + Cut - Word'First) = Word (Word'First .. Cut)
+                           then Whole (Whole'First + Cut - Word'First + 1 .. Whole'Last) else Whole);
+                     begin
+                        Put (One & [1 .. Natural'Max (2, Widest + 2 - One'Length) => ' ']);
+                     end;
+                     Column := Column + 1;
+                     Shown := Shown + 1;
+                     if Column = Across then
+                        Put (ASCII.CR & ASCII.LF);
+                        Column := 0;
+                     end if;
+                  end loop;
+               end if;
                if Column > 0 then
                   Put (ASCII.CR & ASCII.LF);
                end if;
@@ -1289,7 +1387,12 @@ package body Model_Runner.CLI.Choosers is
             when ASCII.STX =>
                Cursor := Back (Cursor);
             when ASCII.ACK =>
-               Cursor := On (Cursor);
+               if Cursor = Length (Text) and then Ghost /= Null_Unbounded_String then
+                  Append (Text, Ghost);
+                  Cursor := Length (Text);
+               else
+                  Cursor := On (Cursor);
+               end if;
             when ASCII.VT =>
                Take (Cursor, Length (Text));
             when ASCII.NAK =>
@@ -1361,12 +1464,21 @@ package body Model_Runner.CLI.Choosers is
                                  Show_History (Looking);
                               end if;
                            when 'C' =>
-                              Cursor := On (Cursor);
+                              --  At the end, with a suggestion: taken.
+                              if Cursor = Length (Text) and then Ghost /= Null_Unbounded_String then
+                                 Append (Text, Ghost);
+                                 Cursor := Length (Text);
+                              else
+                                 Cursor := On (Cursor);
+                              end if;
                            when 'D' =>
                               Cursor := Back (Cursor);
                            when 'H' =>
                               Cursor := 0;
                            when 'F' =>
+                              if Cursor = Length (Text) and then Ghost /= Null_Unbounded_String then
+                                 Append (Text, Ghost);
+                              end if;
                               Cursor := Length (Text);
                            when '~' =>
                               if Number in 1 | 7 then
@@ -1412,11 +1524,14 @@ package body Model_Runner.CLI.Choosers is
          --  Bytes still coming -- a paste, the rest of a character -- are
          --  taken before it is drawn again.
          if not Hostkit.Descriptors.Wait_Readable (Input, 0) then
+            Find_Ghost;
             Redraw;
          end if;
       end loop;
-      --  Drawn as it ended, the cursor after it, and the line left.
+      --  Drawn as it ended, the cursor after it, and the line left: no
+      --  suggestion on it.
       Cursor := Length (Text);
+      Ghost := Null_Unbounded_String;
       Redraw;
       Put (ASCII.CR & ASCII.LF);
       Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);

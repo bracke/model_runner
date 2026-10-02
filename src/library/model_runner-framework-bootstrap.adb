@@ -413,8 +413,26 @@ package body Model_Runner.Framework.Bootstrap is
          => Ada.Strings.Fixed.Index (Lower_Name, Word) > 0)
         or else Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Path), "/adr/") > 0;
 
-      --  A to-do list: its open boxes are what is wanted.
-      Todo_Document : constant Boolean := Ada.Strings.Fixed.Index (Lower_Name, "todo") > 0;
+      --  A to-do list: its open boxes are what is wanted -- and so are a
+      --  specification's or a requirements document's.
+      Todo_Document : constant Boolean :=
+        Ada.Strings.Fixed.Index (Lower_Name, "todo") > 0
+        or else Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Path), "spec") > 0
+        or else Ada.Strings.Fixed.Index (Lower_Name, "requirement") > 0;
+
+      --  A project's README that only describes it -- no statement of what
+      --  it must do, no heading of requirements or design -- is no
+      --  specification: what it says is read, nothing is made of it whole.
+      Describes_Only : constant Boolean :=
+        Lower_Name'Length >= 6 and then Lower_Name (Lower_Name'First .. Lower_Name'First + 5) = "readme"
+        and then not (for some One of Lines_Of (Text) =>
+                        Says_Requirement (One, False)
+                        or else (Trim (One) /= "" and then Trim (One) (Trim (One)'First) in '#' | '='
+                                 and then (for some Word of Name_Lists.Vector'
+                                             (["requirement", "specification", "design", "architecture",
+                                               "behaviour", "behavior", "interface"]) =>
+                                             Ada.Strings.Fixed.Index
+                                               (Ada.Characters.Handling.To_Lower (One), Word) > 0)));
 
       --  Under a heading of decisions: each listed line is one.
       Decisions_Here : Boolean := False;
@@ -823,7 +841,7 @@ package body Model_Runner.Framework.Bootstrap is
                   Titled := True;
                   --  A document that says nothing past its headings
                   --  specifies nothing: not made a specification.
-                  if not Process_Document
+                  if not Process_Document and then not Describes_Only
                     and then (for some One of Lines_Of (Text) =>
                                 Trim (One) /= "" and then Trim (One) (Trim (One)'First) /= '#')
                   then
@@ -1036,13 +1054,32 @@ package body Model_Runner.Framework.Bootstrap is
          if Label /= Null_Unbounded_String
            and then not (Length (Label) > 4 and then Slice (Label, 1, 4) in "REQ-" | "DEC-")
            and then (Says_Requirement (To_String (Rest), True)
-                     or else (Requirements_Here and then Listed))
+                     or else (Requirements_Here and then Listed)
+                     --  An open box with a label: an item asked for, as a
+                     --  to-do list's and a REQ- label's are.
+                     or else (Line'Length > 6 and then Line (Line'First) in '-' | '*' | '+'
+                              and then Line (Line'First + 1 .. Line'First + 4) = " [ ]"))
          then
             Found (Requirement_Candidate, Path & "#" & To_String (Label),
                    To_String (Label) & ": " & Headline (To_String (Rest)), To_String (Rest));
             if To_String (Rest) (Length (Rest)) = ':' then
                Lead := Length (Result);
             end if;
+            return;
+         --  A labelled row or item stating nothing: said, not dropped unseen.
+         elsif Label /= Null_Unbounded_String and then Listed
+           and then not (Length (Label) > 3 and then Slice (Label, 1, 4) in "REQ-" | "DEC-" | "ADR-")
+           and then not Decisions_Here
+           and then Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Path), "decision") = 0
+           and then Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Path), "adr") = 0
+           and then Length (Rest) > 3
+           and then not Seen.Contains (Path & "#" & To_String (Label) & "#unstated")
+         then
+            Seen.Append (Path & "#" & To_String (Label) & "#unstated");
+            Found (Issue, Path & "#" & To_String (Label) & "#unstated",
+                   To_String (Label) & " in " & Path & " states no SHALL, MUST or SHOULD, so it is not proposed: "
+                   & Headline (Trim (To_String (Rest))) & " -- reword it so, or /req new TITLE text=... makes it",
+                   Trim (To_String (Rest)));
             return;
          end if;
 
@@ -1942,6 +1979,11 @@ package body Model_Runner.Framework.Bootstrap is
                         Taken_To := Next - 1;
                         if Status = Null_Unbounded_String then
                            Append (Output, "- " & Label & ": " & Said_Words & ASCII.LF);
+                        --  Done: as a ticked item is.
+                        elsif Ada.Characters.Handling.To_Lower (To_String (Status))
+                                in "done" | "implemented" | "complete" | "completed" | "verified" | "closed"
+                        then
+                           Append (Output, "- [x] " & Label & ": " & Said_Words & ASCII.LF);
                         else
                            --  With a status of its own: a heading, its words,
                            --  and its status, as a section says them.
@@ -2023,6 +2065,8 @@ package body Model_Runner.Framework.Bootstrap is
       Closed : Boolean := False;
       --  Its id and title, where it gives them: the heading it is read under.
       Id, Title, Status : Unbounded_String;
+      --  What its first line of words is led by, where it gives no title.
+      Lead : Unbounded_String;
 
       function Value_Of (Line, Key : String) return String
       is (if Line'Length > Key'Length
@@ -2044,14 +2088,25 @@ package body Model_Runner.Framework.Bootstrap is
             elsif Inside and then Trim (Line) = "---" then
                Inside := False;
                Closed := True;
-               --  Its heading, then its status, as a document says them.
-               if Id /= Null_Unbounded_String or else Title /= Null_Unbounded_String then
+               --  Its heading, then its status, as a document says them; with
+               --  no title, its label goes on its first line of words, and
+               --  done there as a ticked item is.
+               if Title /= Null_Unbounded_String then
                   Append (Result, "## "
                           & (if Id = Null_Unbounded_String then "" else To_String (Id) & " ")
                           & To_String (Title) & ASCII.LF);
-               end if;
-               if Status /= Null_Unbounded_String then
-                  Append (Result, "Status: " & To_String (Status) & ASCII.LF);
+                  if Status /= Null_Unbounded_String then
+                     Append (Result, "Status: " & To_String (Status) & ASCII.LF);
+                  end if;
+               else
+                  Lead := To_Unbounded_String
+                    ((if Ada.Characters.Handling.To_Lower (To_String (Status))
+                           in "implemented" | "done" | "complete" | "completed" | "verified"
+                      then "- [x] " else "")
+                     & (if Id = Null_Unbounded_String then "" else To_String (Id) & ": "));
+                  if Status /= Null_Unbounded_String and then Lead = Null_Unbounded_String then
+                     Append (Result, "Status: " & To_String (Status) & ASCII.LF);
+                  end if;
                end if;
             elsif Inside then
                if Value_Of (Line, "status:") /= "" then
@@ -2061,6 +2116,9 @@ package body Model_Runner.Framework.Bootstrap is
                elsif Value_Of (Line, "title:") /= "" then
                   Title := To_Unbounded_String (Value_Of (Line, "title:"));
                end if;
+            elsif Lead /= Null_Unbounded_String and then Trim (Line) /= "" then
+               Append (Result, To_String (Lead) & Trim (Line) & ASCII.LF);
+               Lead := Null_Unbounded_String;
             else
                Append (Result, Line & ASCII.LF);
             end if;

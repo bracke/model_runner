@@ -1546,6 +1546,27 @@ package body Model_Runner.Framework.Configurations is
    --  Whether a value reads as its field needs.
    function Problem (Name, Value : String) return String is
    begin
+      --  A constraint a capability does not take: places for reading and
+      --  writing, helpers' bounds for helpers.
+      if Starts (Name, "map.permission.") then
+         declare
+            Word : constant String := Name (Ada.Strings.Fixed.Index (Name, ".", Ada.Strings.Backward) + 1 .. Name'Last);
+         begin
+            if (Ada.Strings.Fixed.Index (Value, "roots=") > 0 or else Ada.Strings.Fixed.Index (Value, "deny=") > 0)
+              and then (for some One in Permissions.Capability => Permissions.Word (One) = Word)
+              and then Word not in "read_source" | "write_source" | "read_specs" | "write_specs"
+            then
+               return Word & " takes no roots= or deny=: places are for read_source, write_source, read_specs and"
+                 & " write_specs; " & Name & "=on grants it";
+            elsif (Ada.Strings.Fixed.Index (Value, "max_depth=") > 0
+                   or else Ada.Strings.Fixed.Index (Value, "max_children=") > 0)
+              and then (for some One in Permissions.Capability => Permissions.Word (One) = Word)
+              and then Word /= "create_children"
+            then
+               return Word & " takes no max_depth= or max_children=: those bound create_children";
+            end if;
+         end;
+      end if;
          --  A name in the agents', work's or tasks' family that nothing
          --  reads: refused, not kept to do nothing.
          if Value /= ""
@@ -1580,6 +1601,10 @@ package body Model_Runner.Framework.Configurations is
                          and then Rest in "max_seconds" | "max_tool_calls" | "max_steps" | "token_budget"
                        then Name & " is not read: a limit for one kind of task is " & Name
                             & ".KIND, and scalar.agents." & Rest & " is the one for every task"
+                       elsif Starts (Name, "scalar.task.max_depth") or else Starts (Name, "scalar.task.max_children")
+                       then "there is no setting " & Name & "; how deep helpers go and how many there are is"
+                            & " scalar.agents.max_depth and max_children for every agent, and a kind's"
+                            & " map.permission.kind.KIND.create_children=max_depth=N max_children=N"
                        elsif Nearest (Name, Near_Names) /= ""
                        then "there is no setting " & Name & "; did you mean " & Nearest (Name, Near_Names) & "?"
                        else "nothing reads " & Name & "; /config lists the settings there are");
@@ -1638,13 +1663,15 @@ package body Model_Runner.Framework.Configurations is
             then
                --  A whole level at once: each of its capabilities is set.
                return "a level is not set whole: set each capability as " & Name
-                 & ".CAPABILITY=..., as " & Name & ".read_source=";
+                 & ".CAPABILITY=..., as " & Name & ".read_source=off"
+                 & (if Name = "map.permission.project" then "" else ", or " & Name & "=none or =inherit");
             elsif E.Is_Error (Read)
               and then (Starts (Name, "map.permission.kind.") or else Starts (Name, "map.permission.role."))
               and then Ada.Strings.Fixed.Count (Name (Name'First + 20 .. Name'Last), ".") = 0
             then
                return "a level is not set whole: set each capability as " & Name
-                 & ".CAPABILITY=...";
+                 & ".CAPABILITY=..., or " & Name & "=none to withhold all, " & Name & "=inherit to follow the"
+                 & " level above";
             elsif E.Is_Error (Read) then
                return E.Text_Of (Read, "detail");
             end if;
@@ -1950,8 +1977,9 @@ package body Model_Runner.Framework.Configurations is
                      end Number;
                   begin
                      if Number ("context") > 0 and then Number ("reserve") >= Number ("context") then
-                        return Name & ": reserve is less than context, the room the answer keeps of the whole;"
-                          & " not" & Natural'Image (Number ("reserve")) & " of" & Natural'Image (Number ("context"));
+                        return Name & ": reserve must be less than context, as the answer's room is kept of the"
+                          & " whole --" & Natural'Image (Number ("reserve")) & " is not less than"
+                          & Natural'Image (Number ("context"));
                      end if;
                   end;
                end;
@@ -2171,7 +2199,38 @@ package body Model_Runner.Framework.Configurations is
    is (if Default_Of (Name) = "" then "(not set)"
        else "(not set: " & Default_Of (Name) & ")");
 
+   procedure Plan_Normalized
+     (Item    : Stores.Store;
+      Changes : Value_Maps.Map;
+      Result  : out Change_Plan;
+      Status  : out Model_Runner.Errors.Error_Info);
+
    procedure Plan_Change
+     (Item    : Stores.Store;
+      Changes : Value_Maps.Map;
+      Result  : out Change_Plan;
+      Status  : out Model_Runner.Errors.Error_Info)
+   is
+      --  A kind's or a role's level emptied -- LEVEL= -- is inherit: it
+      --  follows the level above, as NAME= takes any setting's own away.
+      Normal : Value_Maps.Map := Changes;
+   begin
+      for Position in Changes.Iterate loop
+         declare
+            Name : constant String := Value_Maps.Key (Position);
+         begin
+            if Value_Maps.Element (Position) = ""
+              and then (Starts (Name, "map.permission.kind.") or else Starts (Name, "map.permission.role."))
+              and then Ada.Strings.Fixed.Count (Name (Name'First + 20 .. Name'Last), ".") = 0
+            then
+               Normal.Include (Name, "inherit");
+            end if;
+         end;
+      end loop;
+      Plan_Normalized (Item, Normal, Result, Status);
+   end Plan_Change;
+
+   procedure Plan_Normalized
      (Item    : Stores.Store;
       Changes : Value_Maps.Map;
       Result  : out Change_Plan;
@@ -2246,8 +2305,22 @@ package body Model_Runner.Framework.Configurations is
                      end;
                   end if;
                end loop;
-               return Level (Level'First + 5 .. Level'Last) & " is no kind of task the project has;"
-                 & " they are " & To_String (Known);
+               declare
+                  Kinds : Name_Lists.Vector;
+               begin
+                  for Index in 1 .. Records.Field_Count (Result.Before) loop
+                     if Starts (Records.Field_Name (Result.Before, Index), "task_kind.") then
+                        Kinds.Append (Records.Field_Name (Result.Before, Index)
+                                        (Records.Field_Name (Result.Before, Index)'First + 10
+                                         .. Records.Field_Name (Result.Before, Index)'Last));
+                     end if;
+                  end loop;
+                  return Level (Level'First + 5 .. Level'Last) & " is no kind of task the project has"
+                    & (if Nearest (Level (Level'First + 5 .. Level'Last), Kinds) /= ""
+                       then " -- did you mean " & Nearest (Level (Level'First + 5 .. Level'Last), Kinds) & "?"
+                       else "")
+                    & "; they are " & To_String (Known);
+               end;
             end;
          elsif Starts (Level, "role.")
            and then Ada.Strings.Fixed.Index (Level (Level'First + 5 .. Level'Last), ".") = 0
@@ -2875,16 +2948,34 @@ package body Model_Runner.Framework.Configurations is
                Status := E.Make (E.Framework_Name_Invalid);
                E.Add_Text (Status, "value", Name);
                return;
+            --  A name nothing reads, or a kind there is not: the name is
+            --  what is wrong, said so.
+            elsif Problem (Name, Value) /= ""
+              and then (Ada.Strings.Fixed.Index (Problem (Name, Value), "nothing reads") = 1
+                        or else Ada.Strings.Fixed.Index (Problem (Name, Value), "there is no setting") = 1
+                        or else Ada.Strings.Fixed.Index (Problem (Name, Value), " is not read: a limit for one kind")
+                                > 0)
+            then
+               Status := Unknown (Name, Problem (Name, Value));
+               return;
             elsif Problem (Name, Value) /= "" then
                Status := Refused (Name, Problem (Name, Value));
                return;
             elsif Starts (Name, "map.permission.") and then Level_Problem (Name) /= "" then
                Status := Refused (Name, Level_Problem (Name));
             elsif Kind_Problem (Name) /= "" then
-               Status := Refused (Name, Kind_Problem (Name));
+               Status := Unknown (Name, Kind_Problem (Name));
                return;
             elsif Unused_Profile (Name) /= "" then
                Status := Refused (Name, Unused_Profile (Name));
+               return;
+            --  A model profile taken out that the default names: in use.
+            elsif Starts (Name, "map.model.") and then Given = ""
+              and then Records.Get (Result.Before, "scalar.model.default") = Name (Name'First + 10 .. Name'Last)
+              and then not Changes.Contains ("scalar.model.default")
+            then
+               Status := Refused (Name, Name & " is in use: scalar.model.default names it -- /reconfigure"
+                                  & " scalar.model.default= first, or both in one line");
                return;
             elsif Starts (Name, "map.permission.") and then Given = "off"
               and then (Ada.Strings.Fixed.Index (Name (Name'First + 15 .. Name'Last), ".") = 0
@@ -2893,9 +2984,9 @@ package body Model_Runner.Framework.Configurations is
                                              .. Name'Last)))
             then
                --  A level is not taken away whole: each capability is.
-               Status := Refused (Name, "a level is not taken away whole: set each capability "
-                                  & Name & ".CAPABILITY=off, or " & Name & "=inherit to follow the"
-                                  & " level above");
+               Status := Refused (Name, "a level is not taken away whole: " & Name & "=none withholds all it"
+                                  & " grants, " & Name & ".CAPABILITY=off one, and " & Name & "=inherit has it"
+                                  & " follow the level above");
                return;
             elsif Starts (Name, "map.component.") and then Missing_Root (Value) /= ""
               and then (Missing_Root (Value) (Missing_Root (Value)'First) = '/'
@@ -2948,6 +3039,12 @@ package body Model_Runner.Framework.Configurations is
                      if not Gone.Is_Empty then
                         Result.Changed.Append (Name & ": its own grants -> those of the level above");
                      end if;
+                  --  A level below the project that says nothing of its own
+                  --  has the level above's already: inherit changes nothing.
+                  elsif not Records.Has (Result.Before, Name) and then not Level_Said (Name)
+                    and then Rest (Rest'First .. Dot - 1) /= "project"
+                  then
+                     null;
                   elsif Records.Get (Result.After, Name) /= "inherit" then
                      --  Written as inherit: what the level above gives,
                      --  whenever it is asked; the project's default for the
@@ -3025,6 +3122,13 @@ package body Model_Runner.Framework.Configurations is
                      end if;
                   end loop;
 
+                  --  Withheld already, by the project's default: off is no
+                  --  change, and nothing is written out for it.
+                  if Level = "project" and then Capable and then Given = "off" and then not Was
+                    and then not Permissions.Project_Default (Which).Granted
+                  then
+                     goto Name_Done;
+                  end if;
                   --  A level that says nothing yet has what the one above
                   --  gives it; saying one thing there would take the rest
                   --  away, so what it had is written there first.
@@ -3087,6 +3191,9 @@ package body Model_Runner.Framework.Configurations is
                                        then "withheld (this level grants only what it names)"
                                        elsif not Was and then Level_Said (Name) then "withheld"
                                        elsif not Was then Inherited
+                                       elsif Old = "" and then Level = "project" and then Capable
+                                         and then not Above (Which).Granted
+                                       then "withheld"
                                        elsif Old = "" then "granted" else Old)
                         & " -> " & (if not Now then "withheld" elsif Given = "" then "granted"
                                     else Given));
@@ -3094,6 +3201,7 @@ package body Model_Runner.Framework.Configurations is
                         Result.Impact.Append (Reach (Name));
                      end if;
                   end if;
+                  <<Name_Done>>
                end;
             --  A component placed is unplaced by NAME=off, and a scalar or
             --  a set the harness has a default for goes back to it: its entry
@@ -3198,7 +3306,13 @@ package body Model_Runner.Framework.Configurations is
             end loop;
             Result.Changed := Kept;
          end;
-         if not (for some Line of Result.Changed => Starts (Line, Name & ":")) then
+         --  Withheld already by the project's default: no change at all.
+         if not (for some Line of Result.Changed => Starts (Line, Name & ":"))
+           and then not (Starts (Name, "map.permission.project.") and then not Records.Has (Result.Before, Name)
+                         and then (for some One in Permissions.Capability =>
+                                     Permissions.Word (One) = Name (Name'First + 23 .. Name'Last)
+                                     and then not Permissions.Project_Default (One).Granted))
+         then
             Result.Changed.Append (Name & ": granted -> withheld");
          end if;
       end loop;
@@ -3343,7 +3457,7 @@ package body Model_Runner.Framework.Configurations is
       Records.Set_Revision (Result.After, Records.Revision (Result.Before) + 1);
       Records.Set
         (Result.After, "configuration_fingerprint", Configuration_Fingerprint (Result.After));
-   end Plan_Change;
+   end Plan_Normalized;
 
    ------------------
    -- Stage_Change --

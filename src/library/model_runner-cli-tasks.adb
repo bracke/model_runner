@@ -27,6 +27,7 @@ with Model_Runner.Framework.Verification;
 with Model_Runner.Framework.Workspaces;
 with Model_Runner.Framework.Work;
 with Model_Runner.Framework.Records;
+with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Transitions;
@@ -317,6 +318,7 @@ package body Model_Runner.CLI.Tasks is
           elsif Name = "edit" then "/task edit TASK-ID NAME=VALUE ..., as title=... or kind=test"
           elsif Name = "link" then "/task link TASK-ID REQ-ID"
           elsif Name = "new" then "/task new TITLE kind=KIND"
+          elsif Name = "reconsider" then "/task reconsider TASK-ID -- a rejected task back to a candidate"
           elsif Name in "show" | "diff" | "audit" | "context" | "accept" | "reject" | "cancel" | "reopen"
                       | "complete" | "verify" | "integrate" | "rehome" | "step"
           then "/task " & Name & " TASK-ID, as /task " & Name & " TASK-001 or /task " & Name & " 1"
@@ -1457,6 +1459,9 @@ package body Model_Runner.CLI.Tasks is
          Ours    : Model_Runner.Framework.Name_Lists.Vector;
          Not_Its  : Model_Runner.Framework.Name_Lists.Vector;
          Fresh   : Model_Runner.Framework.Name_Lists.Vector;
+         --  Files another task changed after it, and which.
+         Later    : Model_Runner.Framework.Name_Lists.Vector;
+         Later_By : Model_Runner.Framework.Name_Lists.Vector;
          Status  : constant Git.Status_Report := Git.Status_Of (Project);
       begin
          S.Read (Store, Model_Runner.Framework.Tasks_Area, Id & ".state", Held, Read);
@@ -1481,11 +1486,52 @@ package body Model_Runner.CLI.Tasks is
                end if;
             end;
          end loop;
+         --  Each other task with when its last run ended: one that changed a
+         --  file after this one wrote it holds what is there.
+         declare
+            Others_Ended : Model_Runner.Framework.Configurations.Value_Maps.Map;
+         begin
+            for Call of S.Names (Store, Model_Runner.Framework.Invocations_Area) loop
+               declare
+                  Value : R.Item;
+                  Got   : E.Error_Info;
+               begin
+                  S.Read (Store, Model_Runner.Framework.Invocations_Area, Call, Value, Got);
+                  if E.Is_Ok (Got) and then R.Get (Value, "task") not in "" | Id
+                    and then (not Others_Ended.Contains (R.Get (Value, "task"))
+                              or else R.Get (Value, "ended_at") > Others_Ended (R.Get (Value, "task")))
+                  then
+                     Others_Ended.Include (R.Get (Value, "task"), R.Get (Value, "ended_at"));
+                  end if;
+               end;
+            end loop;
+            for File of Model_Runner.Framework.Lines_Of (R.Get (Held, "changed_files")) loop
+               for Position in Others_Ended.Iterate loop
+                  declare
+                     Other : constant String := Model_Runner.Framework.Configurations.Value_Maps.Key (Position);
+                     Their : R.Item;
+                     Got   : E.Error_Info;
+                  begin
+                     S.Read (Store, Model_Runner.Framework.Tasks_Area, Other & ".state", Their, Got);
+                     if E.Is_Ok (Got) and then R.Get (Their, "undone_by") = ""
+                       and then Model_Runner.Framework.Lines_Of (R.Get (Their, "changed_files")).Contains (File)
+                       and then Model_Runner.Framework.Configurations.Value_Maps.Element (Position) > To_String (Ended)
+                       and then not Later.Contains (File)
+                     then
+                        Later.Append (File);
+                        Later_By.Append (Other);
+                     end if;
+                  end;
+               end loop;
+            end loop;
+         end;
          for File of Model_Runner.Framework.Lines_Of (R.Get (Held, "changed_files")) loop
             declare
                Committed : constant String := Git.Last_Commit_At (Project, File);
             begin
-               if Committed = "" or else Ended = Null_Unbounded_String or else To_String (Ended) > Committed then
+               if Later.Contains (File) then
+                  null;
+               elsif Committed = "" or else Ended = Null_Unbounded_String or else To_String (Ended) > Committed then
                   --  Never committed: new to git, shown whole.
                   if Status.Found and then Status.Changes.Contains ("?? " & File) then
                      Fresh.Append (File);
@@ -1503,11 +1549,19 @@ package body Model_Runner.CLI.Tasks is
             Since : constant String :=
               (if Not_Its.Is_Empty then "" else Git.Uncommitted_Diff (Project, Not_Its, Found));
          begin
+            for Index in Later.First_Index .. Later.Last_Index loop
+               Pres.Put_Note (Screen, "cli.task.diff_later",
+                              [Loc.Named ("name", Id), Loc.Named ("path", Later (Index)),
+                               Loc.Named ("other", Later_By (Index))]);
+            end loop;
+            if Diff = "" and then Fresh.Is_Empty and then not Later.Is_Empty and then Since = "" then
+               return True;
+            end if;
             if Diff = "" and then Fresh.Is_Empty then
                --  Changed since its work was committed, by someone else.
                if Since /= "" then
                   Pres.Put_Note (Screen, "cli.task.diff_not_its",
-                                 [Loc.Named ("name", Id), Loc.Named ("detail", Joined (Not_Its))]);
+                                 [Loc.Named ("name", Id), Loc.Named ("detail", Spaced (Joined (Not_Its)))]);
                   return True;
                end if;
                return False;
@@ -1522,7 +1576,7 @@ package body Model_Runner.CLI.Tasks is
             end loop;
             if Since /= "" then
                Pres.Put_Note (Screen, "cli.task.diff_not_its",
-                              [Loc.Named ("name", Id), Loc.Named ("detail", Joined (Not_Its))]);
+                              [Loc.Named ("name", Id), Loc.Named ("detail", Spaced (Joined (Not_Its)))]);
             end if;
             --  Changed again after it was taken in: what shows is more than its.
             declare
@@ -1547,6 +1601,21 @@ package body Model_Runner.CLI.Tasks is
                   Pres.Put_Note (Screen, "cli.task.diff_changed_since",
                                  [Loc.Named ("name", Id), Loc.Named ("detail", Joined (Moved_On))]);
                end if;
+               --  Joined with the project's own change when taken in: the
+               --  project's lines are in what shows too.
+               declare
+                  Mixed : Model_Runner.Framework.Name_Lists.Vector;
+               begin
+                  for File of Model_Runner.Framework.Lines_Of (R.Get (Held, "joined_files")) loop
+                     if (Ours.Contains (File) or else Fresh.Contains (File)) and then not Moved_On.Contains (File) then
+                        Mixed.Append (File);
+                     end if;
+                  end loop;
+                  if not Mixed.Is_Empty then
+                     Pres.Put_Note (Screen, "cli.task.diff_joined",
+                                    [Loc.Named ("name", Id), Loc.Named ("detail", Joined (Mixed))]);
+                  end if;
+               end;
             end;
             return True;
          end;
@@ -1776,6 +1845,10 @@ package body Model_Runner.CLI.Tasks is
          Inputs : Boolean := True)
       is
          Fields : Tk.Field_Map := Given;
+         --  Kept from the work by its permissions before this edit.
+         Was_Refused : constant Boolean :=
+           Tk.State_Of (Store, Id) = "accepted" and then not Tk.Ready (Store, Id).Ready
+           and then Model_Runner.Framework.Work.Unable_Reason (Store, Id) /= "";
       begin
          if not Needs_Task then
             return;
@@ -2041,6 +2114,12 @@ package body Model_Runner.CLI.Tasks is
             end loop;
             Pres.Put_Message (Screen, "cli.task.revised_fields",
                               [Loc.Named ("name", Id), Loc.Named ("detail", To_String (Said))]);
+            --  Refused before, and given what it lacked: ready now, said.
+            if Was_Refused and then Tk.State_Of (Store, Id) = "accepted" and then Tk.Ready (Store, Id).Ready
+              and then Model_Runner.Framework.Work.Unable_Reason (Store, Id) = ""
+            then
+               Pres.Put_Note (Screen, "cli.task.ready_now", [Loc.Named ("name", Id)]);
+            end if;
             --  Narrowed so far its agent could not do it: said now, not at
             --  its acceptance.
             if (Fields.Contains ("permissions") or else Fields.Contains ("kind"))
@@ -2592,6 +2671,8 @@ package body Model_Runner.CLI.Tasks is
                             Loc.Named ("value", R.Get (Tk_Definition (First_Word), "kind")),
                             Loc.Named ("detail", Made.First_Element)]);
          end if;
+         --  What became ready, before what to do with it.
+         Say_Became_Ready;
          --  What comes next: a candidate parent is accepted with its parts,
          --  or it is left a candidate once they are done; accepted, the
          --  first part ready is worked.
@@ -2994,7 +3075,17 @@ package body Model_Runner.CLI.Tasks is
                           elsif (Ada.Strings.Fixed.Index (Name, "authority.scalar.") = Name'First
                                  or else Ada.Strings.Fixed.Index (Name, "authority.map.") = Name'First
                                  or else Ada.Strings.Fixed.Index (Name, "authority.set.") = Name'First)
-                            and then Configured (Name (Name'First + 10 .. Name'Last)) = Value (Colon + 2 .. Value'Last)
+                            and then (Configured (Name (Name'First + 10 .. Name'Last)) = Value (Colon + 2 .. Value'Last)
+                                      --  Off, where the project's default withholds it already.
+                                      or else (Value (Colon + 2 .. Value'Last) = "off"
+                                               and then Configured (Name (Name'First + 10 .. Name'Last)) = ""
+                                               and then Ada.Strings.Fixed.Index
+                                                          (Name, "authority.map.permission.project.") = Name'First
+                                               and then (for some One in Model_Runner.Framework.Permissions.Capability
+                                                         => Model_Runner.Framework.Permissions.Word (One)
+                                                              = Name (Name'First + 33 .. Name'Last)
+                                                            and then not Model_Runner.Framework.Permissions
+                                                                           .Project_Default (One).Granted)))
                           then Value (Colon + 2 .. Value'Last) & " (" & Value (Space + 1 .. Colon - 1)
                                & "; applied: the configuration holds it)"
                           elsif Ada.Strings.Fixed.Index (Name, "authority.scalar.") = Name'First
@@ -4114,6 +4205,14 @@ package body Model_Runner.CLI.Tasks is
                                         (if To_String (One.Name) = "integration" and then Space = ""
                                            and then Never_Apart
                                          then "set aside: it had no workspace, and nothing to take in"
+                                         --  Given up, and its kept copy put back since: the
+                                         --  change is there, as taking it in would have made it.
+                                         elsif Space /= ""
+                                           and then To_String (One.Name)
+                                                      in "implementation_present" | "integration"
+                                           and then Model_Runner.Framework.Workspaces.Was_Restored
+                                                      (Store, "given-up-" & Argument & "-" & Space)
+                                         then "passed: what " & Space & " changed was put back from its kept copy"
                                          elsif Space /= ""
                                            and then To_String (One.Name)
                                                       in "implementation_present" | "integration"
@@ -4130,7 +4229,8 @@ package body Model_Runner.CLI.Tasks is
                                          then "set aside: it is completed by hand"
                                          else To_String (One.Reason));
                Lead : constant String :=
-                 (if Detail = "passed" then "passed"
+                 (if Detail = "passed" or else Ada.Strings.Fixed.Index (Detail, "passed: ") = Detail'First
+                  then "passed"
                   elsif Ada.Strings.Fixed.Index (Detail, "set aside") = Detail'First then "set aside"
                   else "");
                --  The gate in words, as /task show's "done when" has it.
@@ -4226,9 +4326,44 @@ package body Model_Runner.CLI.Tasks is
                            if State = "implemented"
                              and then Ada.Strings.Fixed.Index (Why, "no implementation is known") = 1
                            then
-                              Pres.Put_Note
-                                (Screen, "cli.task.requirement_no_file",
-                                 [Loc.Named ("name", Requirement), Loc.Named ("other", Argument)]);
+                              declare
+                                 package Rp renames Model_Runner.Framework.Repository;
+                                 Graph : constant Rp.Graph := Rp.Now (Store);
+                                 Named : Unbounded_String;
+                              begin
+                                 --  A source file naming it: the one to link, named.
+                                 for Index in 1 .. Rp.File_Count (Graph) loop
+                                    exit when Named /= Null_Unbounded_String;
+                                    declare
+                                       use type Rp.File_Role;
+                                       Path : constant String := To_String (Rp.File_At (Graph, Index).Path);
+                                       File_In : Ada.Text_IO.File_Type;
+                                    begin
+                                       if Rp."=" (Rp.File_At (Graph, Index).Role, Rp.Source) then
+                                          Ada.Text_IO.Open (File_In, Ada.Text_IO.In_File, Path);
+                                          while not Ada.Text_IO.End_Of_File (File_In) loop
+                                             if Ada.Strings.Fixed.Index
+                                                  (Ada.Text_IO.Get_Line (File_In), Requirement) > 0
+                                             then
+                                                Named := To_Unbounded_String (Path);
+                                                exit;
+                                             end if;
+                                          end loop;
+                                          Ada.Text_IO.Close (File_In);
+                                       end if;
+                                    exception
+                                       when others =>
+                                          if Ada.Text_IO.Is_Open (File_In) then
+                                             Ada.Text_IO.Close (File_In);
+                                          end if;
+                                    end;
+                                 end loop;
+                                 Pres.Put_Note
+                                   (Screen, "cli.task.requirement_no_file",
+                                    [Loc.Named ("name", Requirement), Loc.Named ("other", Argument),
+                                     Loc.Named ("path", (if Named = Null_Unbounded_String then "FILE"
+                                                         else To_String (Named)))]);
+                              end;
                            else
                               Pres.Put_Note
                                 (Screen, "cli.task.requirement_unverified",
@@ -4268,6 +4403,8 @@ package body Model_Runner.CLI.Tasks is
                E.Add_Text (Outcome, "name",
                            "the task whose work is taken in"
                            & (if Waiting = Null_Unbounded_String then " (none waits)"
+                              elsif Ada.Strings.Unbounded.Index (Waiting, ", ") > 0 and then Way = ""
+                              then ": " & To_String (Waiting) & ", or /task integrate all for every one"
                               else ": " & To_String (Waiting)));
                Fail (Outcome);
                return;
@@ -4909,6 +5046,23 @@ package body Model_Runner.CLI.Tasks is
                                     [Loc.Named ("name", Word), Loc.Named ("detail", Ticked_Done (Store, Word))]);
                   end if;
                end loop;
+               --  Several ready: all of them, in turn, as /state says it.
+               declare
+                  Ready_Ones : Model_Runner.Framework.Name_Lists.Vector;
+               begin
+                  for Id of Tk.List (Store, "accepted") loop
+                     if Tk.Ready (Store, Id).Ready then
+                        Ready_Ones.Append (Id);
+                     end if;
+                  end loop;
+                  if Natural (Ready_Ones.Length) > 1 then
+                     Pres.Put_Note (Screen, "cli.next.work_all",
+                                    [Loc.Named ("count", T.Image (Long_Long_Integer (Ready_Ones.Length))),
+                                     Loc.Named ("name", Ready_Ones.First_Element)]);
+                     S.Close (Store);
+                     return;
+                  end if;
+               end;
                --  The lowest that can start, as /state names it.
                for Word of Sorted_Words (Model_Runner.Framework.Lines_Of
                              (Ada.Strings.Fixed.Translate
@@ -5218,8 +5372,23 @@ package body Model_Runner.CLI.Tasks is
                               [Loc.Named ("name", Argument), Loc.Named ("detail", Changed_By (Argument))]);
             end if;
          end;
+      elsif Action = "reconsider" and then Argument /= ""
+        and then Tk.State_Of (Store, First_Word) not in "rejected" | ""
+      then
+         --  Reconsidered is what was rejected: said, with what this one takes.
+         Outcome := E.Make (E.Framework_Input_Invalid);
+         E.Add_Text (Outcome, "name", "the task to reconsider");
+         E.Add_Text (Outcome, "value", First_Word);
+         E.Add_Text (Outcome, "detail", "reconsider takes a rejected task back to a candidate; " & First_Word
+                     & " is " & Moved_State (First_Word)
+                     & (if Tk.State_Of (Store, First_Word) in "cancelled" | "complete" | "failed" | "blocked"
+                        then " -- /task reopen " & First_Word & " takes it up again" else ""));
+         Fail (Outcome);
       elsif Action = "reconsider" then
          Move_Granted ("candidate", Model_Runner.Framework.Transitions.Reconsideration);
+         if Tk.State_Of (Store, First_Word) = "candidate" then
+            Pres.Put_Note (Screen, "cli.next.accept_one_task", [Loc.Named ("name", First_Word)]);
+         end if;
       elsif Action = "move" then
          --  To any state the project's lifecycle allows: move TASK STATE.
          if First_Word = "" or else After_First = "" then
@@ -5688,6 +5857,9 @@ package body Model_Runner.CLI.Tasks is
                                  --  history, so nothing there is credited to it.
                                  if Undo and then State /= "" then
                                     Model_Runner.Framework.Work.Note_Undone (Store, Owner, Name);
+                                 --  Its work back in the project: undone no more.
+                                 elsif State /= "" then
+                                    Model_Runner.Framework.Work.Note_Undone (Store, Owner, "");
                                  end if;
                                  if State /= "" then
                                     Pres.Put_Note
@@ -5759,14 +5931,18 @@ package body Model_Runner.CLI.Tasks is
                                then "no attempt of it changed anything; /work " & First_Word & " does it again"
                                elsif Tk.State_Of (Store, First_Word) in "candidate" | "accepted" | "ready"
                                then "what its last attempt wrote -- " & Changed_By (First_Word)
-                                    & " -- is in the project itself; /git shows what changed, and /work "
-                                    & First_Word & " does it again"
+                                    & " -- is in the project itself; /work " & First_Word & " does it again"
                                elsif Tk.State_Of (Store, First_Word) = "complete" and then Changed_By (First_Word) /= ""
                                then "its work is in the project already, and committed: git log -p -- "
                                     & Spaced (Changed_By (First_Word))
                                     & " shows what it changed"
                                elsif Tk.State_Of (Store, First_Word) = "complete"
-                               then "its work is in the project already; /git shows what changed"
+                               then "its work is in the project already"
+                                    & (if Model_Runner.Framework.Git.Status_Of
+                                            (Ada.Directories.Containing_Directory (S.Root (Store))).Found
+                                       then "; /git shows what changed"
+                                       else "; with no repository there is nothing to compare it with -- git init"
+                                            & " in the project lets /git and /task diff show what tasks change")
                                elsif Kept_For (First_Word) /= ""
                                then "its workspace was given up, what it changed kept in " & Kept_For (First_Word)
                                     & "; /task kept diff " & Kept_For (First_Word) & " shows it, and /task kept"

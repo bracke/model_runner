@@ -368,6 +368,28 @@ package body Model_Runner.Framework.Permissions is
                Result := Nothing;
                return;
             end if;
+            --  A constraint means something only to its capabilities:
+            --  places to reading and writing, helpers' bounds to helpers.
+            if (Ada.Strings.Fixed.Index (Rest, "roots=") > 0 or else Ada.Strings.Fixed.Index (Rest, "deny=") > 0)
+              and then Which not in Read_Source | Write_Source | Read_Specs | Write_Specs
+            then
+               Status := E.Make (E.Framework_Schema_Violation);
+               E.Add_Text (Status, "name", "permissions");
+               E.Add_Text (Status, "detail", Trim (Name) & " takes no roots= or deny=: places are for read_source,"
+                           & " write_source, read_specs and write_specs");
+               Result := Nothing;
+               return;
+            elsif (Ada.Strings.Fixed.Index (Rest, "max_depth=") > 0
+                   or else Ada.Strings.Fixed.Index (Rest, "max_children=") > 0)
+              and then Which /= Create_Children
+            then
+               Status := E.Make (E.Framework_Schema_Violation);
+               E.Add_Text (Status, "name", "permissions");
+               E.Add_Text (Status, "detail", Trim (Name) & " takes no max_depth= or max_children=: those bound"
+                           & " create_children");
+               Result := Nothing;
+               return;
+            end if;
             Result (Which) := Constrained (Rest);
          end;
          <<Next_Entry>>

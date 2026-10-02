@@ -43,6 +43,34 @@ package body Model_Runner.CLI.Intents is
 
    --  Whether an entry's title is its text's headline, as one made from a
    --  document's line is: a new text brings a new title with it.
+   --  A path typed where the session was started, below the project's
+   --  top -- price.rs, ../../api/x.go -- as the project names it; as typed
+   --  where it is no place from there.
+   function From_Start (Project, Word : String) return String is
+      Below : constant String := Model_Runner.CLI.Project_Commands.Started_Below;
+   begin
+      if Below = "" or else Word = "" or else Word (Word'First) = '/'
+        or else Ada.Directories.Exists (Hostkit.Fs.Join (Project, Word))
+      then
+         return Word;
+      end if;
+      declare
+         Whole : constant String :=
+           Ada.Directories.Full_Name (Hostkit.Fs.Join (Hostkit.Fs.Join (Project, Below), Word));
+         Top   : constant String := Ada.Directories.Full_Name (Project);
+      begin
+         if Ada.Directories.Exists (Whole) and then Whole'Length > Top'Length + 1
+           and then Whole (Whole'First .. Whole'First + Top'Length - 1) = Top
+         then
+            return Whole (Whole'First + Top'Length + 1 .. Whole'Last);
+         end if;
+         return Word;
+      end;
+   exception
+      when others =>
+         return Word;
+   end From_Start;
+
    function Title_From_Text (Held : Nt.Entity) return Boolean is
       Title : constant String := To_String (Held.Title);
       Text  : constant String := To_String (Held.Text);
@@ -55,7 +83,12 @@ package body Model_Runner.CLI.Intents is
       --  theirs.
       return Title = Text
         or else (Stem /= Title and then Text'Length >= Stem'Length
-                 and then Text (Text'First .. Text'First + Stem'Length - 1) = Stem);
+                 and then Text (Text'First .. Text'First + Stem'Length - 1) = Stem)
+        --  Its first sentence, or the text without its stop, as a
+        --  document's headline is cut.
+        or else (Title /= "" and then Text'Length > Title'Length
+                 and then Text (Text'First .. Text'First + Title'Length - 1) = Title
+                 and then Text (Text'First + Title'Length) in '.' | ',' | ';' | ':' | '!' | '?');
    end Title_From_Text;
 
    function Lower (Text : String) return String
@@ -1481,12 +1514,7 @@ package body Model_Runner.CLI.Intents is
                   --  path into the project are src/x.
                   Project : constant String := Ada.Directories.Containing_Directory (S.Root (Store));
                   --  Typed where the session was started, below the top: from there.
-                  Below   : constant String := Model_Runner.CLI.Project_Commands.Started_Below;
-                  Given_Path : constant String :=
-                    (if Below /= "" and then From (4) /= "" and then From (4) (From (4)'First) /= '/'
-                       and then not Ada.Directories.Exists (Hostkit.Fs.Join (Project, From (4)))
-                       and then Ada.Directories.Exists (Hostkit.Fs.Join (Hostkit.Fs.Join (Project, Below), From (4)))
-                     then Below & "/" & From (4) else From (4));
+                  Given_Path : constant String := From_Start (Project, From (4));
                   --  A symbol by the name the repository's graph gives it:
                   --  checksum is parse.checksum where that is the one.
                   Symbols : constant Names.Vector :=
@@ -1694,8 +1722,11 @@ package body Model_Runner.CLI.Intents is
                      package Rp renames Model_Runner.Framework.Repository;
                      Now    : constant Rp.Graph := Rp.Now (Store);
                      Target : constant String :=
-                       (if Ada.Strings.Fixed.Index (From (4), "/") > 0
-                        then Rp.Relative_Path (Ada.Directories.Containing_Directory (S.Root (Store)), From (4))
+                       (if Ada.Strings.Fixed.Index
+                             (From_Start (Ada.Directories.Containing_Directory (S.Root (Store)), From (4)), "/") > 0
+                        then Rp.Relative_Path
+                               (Ada.Directories.Containing_Directory (S.Root (Store)),
+                                From_Start (Ada.Directories.Containing_Directory (S.Root (Store)), From (4)))
                         else From (4));
                      Known  : Boolean := not Rp.Find_Symbols (Now, Target).Is_Empty;
                   begin
@@ -1953,6 +1984,10 @@ package body Model_Runner.CLI.Intents is
                               then "; that a level grants nothing is ruled a capability at a time, as "
                                    & Word_Of_Command (Kind) & " govern " & Word (2) & " " & Word (3)
                                    & ".write_source off, or set by /reconfigure " & Word (3) & "=none"
+                              --  A capability: withheld is ruled off, not none.
+                              elsif Ada.Strings.Fixed.Index (Word (3), "map.permission.") = 1
+                              then "; that it is withheld is ruled off: " & Word_Of_Command (Kind) & " govern "
+                                   & Word (2) & " " & Word (3) & " off"
                               elsif Listed /= Null_Unbounded_String
                               then "; " & Word_Of_Command (Kind) & " govern " & Word (2) & " SETTING none takes one"
                                    & " of those off, and " & Word_Of_Command (Kind)
@@ -2053,9 +2088,14 @@ package body Model_Runner.CLI.Intents is
                      Status := E.Make (E.Framework_Input_Invalid);
                      E.Add_Text (Status, "name", "the setting a decision governs");
                      E.Add_Text (Status, "value", Setting);
-                     E.Add_Text (Status, "detail", "no setting is called so; a decision governs one /config"
-                                 & " shows" & (if Near = Null_Unbounded_String then ""
-                                               else "; did you mean " & To_String (Near) & "?"));
+                     E.Add_Text (Status, "detail",
+                                 (if (for some One in Model_Runner.Framework.Permissions.Capability =>
+                                        Model_Runner.Framework.Permissions.Word (One) = Setting)
+                                  then "a capability is ruled at its level: map.permission.project." & Setting
+                                       & " for the project, map.permission.kind.KIND." & Setting & " for a kind"
+                                  else "no setting is called so; a decision governs one /config shows"
+                                       & (if Near = Null_Unbounded_String then ""
+                                          else "; did you mean " & To_String (Near) & "?")));
                   elsif Model_Runner.Framework.Records.Has (Config, Setting)
                     or else Model_Runner.Framework.Configurations.Known_Names.Contains (Setting)
                     or else Ada.Strings.Fixed.Index (Setting, "scalar.task.") = 1
@@ -2309,6 +2349,50 @@ package body Model_Runner.CLI.Intents is
                   if Length (Held.Criteria) > 0 then
                      Item ("criteria", To_String (Held.Criteria));
                   end if;
+                  --  Its document read now, where it came from one: what it
+                  --  says there, where that is not what is held.
+                  declare
+                     Path : constant String :=
+                       Hostkit.Fs.Join (Ada.Directories.Containing_Directory (S.Root (Store)),
+                                        To_String (Held.Source));
+                     Text : Unbounded_String;
+                     File : Ada.Text_IO.File_Type;
+                     Said_Now : Unbounded_String;
+                  begin
+                     if Length (Held.Provenance) > 0 and then To_String (Held.Source) not in "" | "user"
+                       and then Ada.Directories.Exists (Path)
+                     then
+                        Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
+                        while not Ada.Text_IO.End_Of_File (File) loop
+                           Append (Text, Ada.Text_IO.Get_Line (File) & ASCII.LF);
+                        end loop;
+                        Ada.Text_IO.Close (File);
+                        declare
+                           Found : constant Model_Runner.Framework.Bootstrap.Output_List :=
+                             Model_Runner.Framework.Bootstrap.Scan (To_String (Held.Source), To_String (Text));
+                        begin
+                           for Index in 1 .. Model_Runner.Framework.Bootstrap.Length (Found) loop
+                              declare
+                                 One : constant Model_Runner.Framework.Bootstrap.Output :=
+                                   Model_Runner.Framework.Bootstrap.Element (Found, Index);
+                              begin
+                                 if One.Provenance = Held.Provenance and then One.Text /= Held.Text then
+                                    Said_Now := One.Text;
+                                 end if;
+                              end;
+                           end loop;
+                        end;
+                        if Said_Now /= Null_Unbounded_String then
+                           Item ("its document says", To_String (Said_Now) & " -- " & Word_Of_Command (Kind)
+                                 & " revise " & Named & " from-document takes it", Pres.Pending);
+                        end if;
+                     end if;
+                  exception
+                     when others =>
+                        if Ada.Text_IO.Is_Open (File) then
+                           Ada.Text_IO.Close (File);
+                        end if;
+                  end;
                   --  Its document saying otherwise now, as bootstrap found:
                   --  said here, with the step that takes the document's words.
                   for Name of S.Names (Store, Model_Runner.Framework.Results_Area) loop
@@ -2347,7 +2431,10 @@ package body Model_Runner.CLI.Intents is
                          elsif To_String (Held.State) = "accepted" and then not Is_Requirement
                          then Pres.Good
                          else Pres.Tone_Of (To_String (Held.State))));
-                  Item ("revision", Ada.Strings.Fixed.Trim (Natural'Image (Held.Revision), Ada.Strings.Both));
+                  --  How often its record changed: its moves count, its
+                  --  words being what /req revise changes.
+                  Item ("record changes", Ada.Strings.Fixed.Trim (Natural'Image (Held.Revision), Ada.Strings.Both)
+                        & " (each revise and each move between states)");
                   Item ("scope", To_String (Held.Scope));
                   if Nt.Blocked_Because (Store, Kind, Named) /= "" then
                      Item ("blocked because", Nt.Blocked_Because (Store, Kind, Named), Pres.Bad);

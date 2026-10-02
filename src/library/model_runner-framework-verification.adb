@@ -2223,6 +2223,20 @@ package body Model_Runner.Framework.Verification is
       end Failed_Server;
    begin
       Find_Project_Runs;
+      --  Served only by tasks let go: that first, with how one comes back.
+      if (for some Id of Everything => Serves_It (Id))
+        and then (for all Id of Everything =>
+                    not Serves_It (Id) or else Tasks.State_Of (Item, Id) in "cancelled" | "rejected")
+      then
+         for Id of Everything loop
+            if Serves_It (Id) then
+               return Lacks (Id & ", the task that serves it, was " & Tasks.State_Of (Item, Id) & ": /task "
+                             & (if Tasks.State_Of (Item, Id) = "rejected" then "reconsider " else "reopen ")
+                             & Id & " takes it back, or /task new TITLE kind=KIND requirements=" & Requirement
+                             & " makes another");
+            end if;
+         end loop;
+      end if;
       --  A suite that ran nothing passed nothing: said as that, with the
       --  way on -- a test that shows it -- not as a failure to fix.
       --  Work still open for it is the reason first: its task undone says

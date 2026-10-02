@@ -457,6 +457,15 @@ package body Model_Runner.CLI.Work is
          return (if E.Is_Ok (Read) then R.Get (Defined, "kind") else "");
       end Kind_Of_Chosen;
 
+      function Joined_Ids (Listed : Model_Runner.Framework.Name_Lists.Vector) return String is
+         Said : Unbounded_String;
+      begin
+         for One of Listed loop
+            Append (Said, (if Said = Null_Unbounded_String then "" else " ") & One);
+         end loop;
+         return To_String (Said);
+      end Joined_Ids;
+
       procedure Say_What_Is_Ready is
          Ready       : Natural := 0;
          Integrating : Natural := 0;
@@ -502,9 +511,21 @@ package body Model_Runner.CLI.Work is
                      Pres.Put_Note (Screen, "cli.work.waits_because",
                                     [Loc.Named ("name", Id), Loc.Named ("value", Title_Of (Id)),
                                      Loc.Named ("detail", Now.Reasons.First_Element)]);
+                     --  Waiting on a failed one: how either goes on.
+                     for Failed of Tk.List (Store, "failed") loop
+                        if Ada.Strings.Fixed.Index (Now.Reasons.First_Element, "waits for " & Failed) > 0 then
+                           Pres.Put_Note (Screen, "cli.next.waits_on_failed",
+                                          [Loc.Named ("name", Id), Loc.Named ("value", Failed)]);
+                        end if;
+                     end loop;
                   end if;
                end;
             end loop;
+            --  The failed, counted: there to try again.
+            if Natural (Tk.List (Store, "failed").Length) > 1 then
+               Pres.Put_Note (Screen, "cli.next.retry_all",
+                              [Loc.Named ("detail", Joined_Ids (Tk.List (Store, "failed")))]);
+            end if;
          end if;
          if Ready = 0 and then Candidate > 0 then
             Pres.Put_Note
@@ -1196,6 +1217,7 @@ package body Model_Runner.CLI.Work is
                   Pres.Put_Note (Screen, "cli.work.steps_capped",
                                  [Loc.Named ("value", Setting ("steps", "")),
                                   Loc.Named ("name", To_String (Chosen)),
+                                  Loc.Named ("other", "task.max_steps." & Kind_Of_Chosen),
                                   Loc.Named ("count", T.Image (Long_Long_Integer
                                                                  (W.Steps_Allowed (Store, To_String (Chosen)))))]);
                end if;
@@ -1710,6 +1732,10 @@ package body Model_Runner.CLI.Work is
                                                    & To_String (Done.Workspace_Id))]);
             --  The reason names completing it by hand already: the way on
             --  said once, as trying again.
+            --  Going round on a call that kept failing: a model too small
+            --  for the call, or one that needs telling.
+            elsif Ada.Strings.Fixed.Index (To_String (Done.Reason), "its calls kept failing: ") > 0 then
+               Pres.Put_Note (Screen, "cli.next.repeated_error", [Loc.Named ("name", To_String (Done.Task_Id))]);
             elsif Ada.Strings.Fixed.Index (To_String (Done.Reason), "/task complete " & To_String (Done.Task_Id)) > 0
             then
                Pres.Put_Note (Screen, "cli.next.retry_only", [Loc.Named ("name", To_String (Done.Task_Id))]);

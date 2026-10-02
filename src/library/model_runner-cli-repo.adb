@@ -162,7 +162,8 @@ package body Model_Runner.CLI.Repo is
          --  so, not as if there were no such file.
          for Index in 1 .. Rp.File_Count (Found) loop
             if To_String (Rp.File_At (Found, Index).Path) = Argument
-              and then To_String (Rp.File_At (Found, Index).Language) = ""
+              and then To_String (Rp.File_At (Found, Index).Language)
+                       not in "Ada" | "C" | "C++" | "Rust" | "Python"
             then
                Unread := True;
             end if;
@@ -171,6 +172,45 @@ package body Model_Runner.CLI.Repo is
             Pres.Put_Message (Screen, "cli.repo.unread_language", [Loc.Named ("name", Argument)]);
          else
             Pres.Put_Message (Screen, "cli.repo.none", [Loc.Named ("name", Argument)]);
+            --  A file gone that what is left still uses: named, as what its
+            --  going breaks.
+            if Action in "impact" | "users" | "deps" and then Ada.Strings.Fixed.Index (Argument, ".") > 0 then
+               declare
+                  use type Rp.Relation_Kind;
+                  Simple : constant String := Ada.Directories.Simple_Name (Argument);
+                  Dot    : constant Natural := Ada.Strings.Fixed.Index (Simple, ".", Ada.Strings.Backward);
+                  Stem   : constant String := (if Dot > Simple'First then Simple (Simple'First .. Dot - 1) else Simple);
+                  Users  : Model_Runner.Framework.Name_Lists.Vector;
+               begin
+                  for Index in 1 .. Rp.Relation_Count (Found) loop
+                     declare
+                        One : constant Rp.Relation := Rp.Relation_At (Found, Index);
+                        To  : constant String := Ada.Characters.Handling.To_Lower (To_String (One.To));
+                        Low : constant String := Ada.Characters.Handling.To_Lower (Stem);
+                     begin
+                        if One.Kind = Rp.Depends_On and then Low'Length > 2
+                          and then (To = Low
+                                    or else (To'Length > Low'Length
+                                             and then To (To'Last - Low'Length .. To'Last) in "." & Low | "/" & Low))
+                          and then not Users.Contains (To_String (One.From))
+                        then
+                           Users.Append (To_String (One.From));
+                        end if;
+                     end;
+                  end loop;
+                  if not Users.Is_Empty then
+                     declare
+                        Said : Unbounded_String;
+                     begin
+                        for One of Users loop
+                           Append (Said, (if Said = Null_Unbounded_String then "" else ", ") & Node_Said (One));
+                        end loop;
+                        Pres.Put_Note (Screen, "cli.repo.gone_used_by",
+                                       [Loc.Named ("name", Argument), Loc.Named ("detail", To_String (Said))]);
+                     end;
+                  end if;
+               end;
+            end if;
             --  A file, where a symbol was asked for: what takes a file.
             if Action in "refs" | "sym"
               and then (for some Index in 1 .. Rp.File_Count (Found) =>
@@ -195,7 +235,7 @@ package body Model_Runner.CLI.Repo is
                         Dot  : constant Natural := Ada.Strings.Fixed.Index (Path, ".", Ada.Strings.Backward);
                         Ext  : constant String := (if Dot = 0 then "" else Path (Dot .. Path'Last));
                      begin
-                        if To_String (Rp.File_At (Found, Index).Language) = ""
+                        if To_String (Rp.File_At (Found, Index).Language) not in "Ada" | "C" | "C++" | "Rust" | "Python"
                           and then Ext in ".js" | ".mjs" | ".cjs" | ".jsx" | ".ts" | ".tsx" | ".java" | ".go"
                                         | ".rb" | ".cs" | ".kt" | ".swift" | ".php" | ".scala" | ".lua" | ".pl"
                           and then Ada.Strings.Unbounded.Index (Kinds, Ext) = 0
@@ -393,6 +433,32 @@ package body Model_Runner.CLI.Repo is
             [Loc.Named ("count", Image (Rp.File_Count (Found))),
              Loc.Named ("total", Image (Rp.Relation_Count (Found))),
              Loc.Named ("value", Rp.Graph_Fingerprint (Found))]);
+         --  Source in a language whose symbols are not read: named, so a
+         --  /sym or /deps that finds nothing there is no surprise.
+         declare
+            Langs : Model_Runner.Framework.Name_Lists.Vector;
+         begin
+            for Index in 1 .. Rp.File_Count (Found) loop
+               declare
+                  Language : constant String := To_String (Rp.File_At (Found, Index).Language);
+               begin
+                  if Language in "Go" | "TypeScript" | "JavaScript" | "Java" and then not Langs.Contains (Language)
+                  then
+                     Langs.Append (Language);
+                  end if;
+               end;
+            end loop;
+            if not Langs.Is_Empty then
+               declare
+                  Said : Unbounded_String;
+               begin
+                  for One of Langs loop
+                     Append (Said, (if Said = Null_Unbounded_String then "" else ", ") & One);
+                  end loop;
+                  Pres.Put_Note (Screen, "cli.repo.languages_unread", [Loc.Named ("detail", To_String (Said))]);
+               end;
+            end if;
+         end;
          --  A file a requirement is linked to that the scan no longer
          --  finds -- removed, renamed: said now, not left to /check.
          declare
@@ -769,6 +835,8 @@ package body Model_Runner.CLI.Repo is
                      Nodes : Model_Runner.Framework.Name_Lists.Vector;
                      Shown : Model_Runner.Framework.Name_Lists.Vector;
                      State_Edges, Code_Edges : Model_Runner.Framework.Name_Lists.Vector;
+                     --  Links to files gone, each with what takes it off.
+                     Missing_Links : Model_Runner.Framework.Name_Lists.Vector;
                   begin
                      --  A component the project has not: said, not traced.
                      if Ada.Strings.Fixed.Index (Argument, "component:") = Argument'First
@@ -837,6 +905,27 @@ package body Model_Runner.CLI.Repo is
                                           Ada.Strings.Fixed.Index (Line, Prefix) > 0)
                                     then
                                        State_Edges.Append (Said);
+                                       --  A linked file gone: the way to take the
+                                       --  link off, or to the file it became.
+                                       if Ada.Strings.Fixed.Index (To_String (One.Kind), ", missing") > 0
+                                         and then Ada.Strings.Fixed.Index (To_String (One.From), "REQ-") = 1
+                                       then
+                                          declare
+                                             Bare : constant String :=
+                                               To_String (One.Kind)
+                                                 (To_String (One.Kind)'First
+                                                  .. Ada.Strings.Fixed.Index (To_String (One.Kind), ", missing") - 1);
+                                             Word : constant String :=
+                                               (if Bare = "implemented_by" then "implementation"
+                                                elsif Bare = "tested_by" then "test" else "");
+                                          begin
+                                             if Word /= "" then
+                                                Missing_Links.Append
+                                                  ("/req unlink " & To_String (One.From) & " " & Word & " "
+                                                   & Node_Said (To_String (One.To)));
+                                             end if;
+                                          end;
+                                       end if;
                                     else
                                        Code_Edges.Append (Said);
                                     end if;
@@ -852,6 +941,9 @@ package body Model_Runner.CLI.Repo is
                      end if;
                      for Line of State_Edges loop
                         Pres.Put_Indented (Screen, "cli.repo.unit", [Loc.Named ("name", Line)]);
+                     end loop;
+                     for Step of Missing_Links loop
+                        Pres.Put_Note (Screen, "cli.next.trace_missing", [Loc.Named ("value", Step)]);
                      end loop;
                      if not Code_Edges.Is_Empty then
                         if State_Edges.Is_Empty then

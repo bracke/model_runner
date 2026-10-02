@@ -783,6 +783,22 @@ package body Model_Runner.CLI.Init is
                   Append (Warned, Pres.Next_Step_Value
                                     (Screen, "cli.init.inside_repository", [Loc.Named ("path", Top)])
                                   & ASCII.LF);
+                  --  A package's manifest between here and the root: its
+                  --  directory is a place for the project too.
+                  declare
+                     Up : Unbounded_String := To_Unbounded_String (Ada.Directories.Containing_Directory (Here));
+                  begin
+                     while Length (Up) > Top'Length and then Ada.Strings.Fixed.Index (To_String (Up), Top) = 1 loop
+                        if (for some Manifest of Model_Runner.Framework.Name_Lists.Vector'
+                              (["package.json", "go.mod", "Cargo.toml", "alire.toml", "pyproject.toml"]) =>
+                              Ada.Directories.Exists (Hostkit.Fs.Join (To_String (Up), Manifest)))
+                        then
+                           Say ("cli.init.manifest_above", [Loc.Named ("path", To_String (Up))]);
+                           exit;
+                        end if;
+                        Up := To_Unbounded_String (Ada.Directories.Containing_Directory (To_String (Up)));
+                     end loop;
+                  end;
                end if;
             exception
                when others =>
@@ -1187,6 +1203,12 @@ package body Model_Runner.CLI.Init is
         (Screen, "cli.init.done",
          [Loc.Named ("name", S.Project_Name (Store)),
           Loc.Named ("path", S.Root (Store))]);
+      --  No repository: what one gives, said once here.
+      if not Model_Runner.Framework.Git.Status_Of (Ada.Directories.Full_Name (Directory)).Found
+        and then Model_Runner.Framework.Git.Top_Level (Ada.Directories.Full_Name (Directory)) = ""
+      then
+         Pres.Put_Note (Screen, "cli.init.no_git");
+      end if;
       --  In a session, the steps after it are the session's commands, which
       --  work where the session was started: not offered for elsewhere.
       if not (Pres.In_Session (Screen) and then not T.Is_Empty (Item.Project_Directory)) then
