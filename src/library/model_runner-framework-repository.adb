@@ -196,6 +196,14 @@ package body Model_Runner.Framework.Repository is
          return "Rust";
       elsif Ends (".py") then
          return "Python";
+      elsif Ends (".go") then
+         return "Go";
+      elsif Ends (".ts") or else Ends (".tsx") then
+         return "TypeScript";
+      elsif Ends (".js") or else Ends (".jsx") or else Ends (".mjs") then
+         return "JavaScript";
+      elsif Ends (".java") then
+         return "Java";
       elsif Ends (".md") then
          return "Markdown";
       elsif Ends (".adoc") or else Ends (".asciidoc") then

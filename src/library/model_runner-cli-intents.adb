@@ -8,6 +8,7 @@ with Ada.Text_IO;
 with Hostkit.Fs;
 
 with Model_Runner.CLI.Choosers;
+with Model_Runner.CLI.Project_Commands;
 with Model_Runner.Errors;
 with Model_Runner.Framework.Bootstrap;
 with Model_Runner.Framework.Configurations;
@@ -71,6 +72,42 @@ package body Model_Runner.CLI.Intents is
    --  Set while a caller that decides the derived tasks too runs Decide:
    --  their next steps are its to say.
    Next_Held : Boolean := False;
+
+   --  Set while several entries are moved in turn: the tasks they make
+   --  waiting are gathered, and said once after the last.
+   Collecting : Boolean := False;
+   Collected  : Unbounded_String;
+
+   --  Whether a task's document marks what it serves done: an issue
+   --  bootstrap raised so, naming one of its requirements.
+   function Marked_Done (Store : S.Store; Id : String) return Boolean is
+      Defined : Model_Runner.Framework.Records.Item;
+      Read    : E.Error_Info;
+   begin
+      Model_Runner.Framework.Tasks.Definition (Store, Id, Defined, Read);
+      if E.Is_Error (Read) then
+         return False;
+      end if;
+      for Name of S.Names (Store, Model_Runner.Framework.Results_Area) loop
+         declare
+            Result_Id : constant String :=
+              (if Name'Length > 4 and then Name (Name'Last - 3 .. Name'Last) = ".rec"
+               then Name (Name'First .. Name'Last - 4) else Name);
+            One : Model_Runner.Framework.Results.Result;
+            Got : E.Error_Info;
+         begin
+            Model_Runner.Framework.Results.Read (Store, Result_Id, One, Got, With_Payload => False);
+            if E.Is_Ok (Got) and then Ada.Strings.Unbounded.Index (One.Summary, " is marked done in ") > 0
+              and then (for some Requirement of Model_Runner.Framework.Lines_Of
+                                                   (Model_Runner.Framework.Records.Get (Defined, "requirements"))
+                        => Ada.Strings.Unbounded.Index (One.Summary, Requirement) > 0)
+            then
+               return True;
+            end if;
+         end;
+      end loop;
+      return False;
+   end Marked_Done;
 
    procedure Move_Along
      (Store  : in out S.Store;
@@ -151,6 +188,12 @@ package body Model_Runner.CLI.Intents is
       end loop;
       if Next_Held then
          null;
+      elsif Collecting then
+         Append (Collected, (if Collected = Null_Unbounded_String or else Candidates = Null_Unbounded_String
+                             then "" else " ") & To_String (Candidates));
+      elsif Count = 1 and then Marked_Done (Store, To_String (Candidates)) then
+         --  Its document marks it done: taken as done, not done again.
+         Pres.Put_Note (Screen, "cli.next.accept_marked_done", [Loc.Named ("name", To_String (Candidates))]);
       elsif Count = 1 then
          Pres.Put_Note (Screen, "cli.next.accept_task", [Loc.Named ("name", To_String (Candidates))]);
       elsif Count > 1 then
@@ -219,7 +262,12 @@ package body Model_Runner.CLI.Intents is
                         or else (Over = 0 and then E.Is_Ok (Read)
                                  and then not Model_Runner.Framework.Records.Has
                                                 (Config, One (One'First .. Equal - 1))
-                                 and then Cf.Known_Names.Contains (One (One'First .. Equal - 1))))
+                                 and then (Cf.Known_Names.Contains (One (One'First .. Equal - 1))
+                                           --  A kind's own limit is a setting too.
+                                           or else (for some Limit of Names.Vector'
+                                                      (["scalar.task.max_seconds.", "scalar.task.max_steps.",
+                                                        "scalar.task.max_tool_calls.", "scalar.task.token_budget."])
+                                                      => Ada.Strings.Fixed.Index (One, Limit) = One'First))))
             then
                declare
                   Setting : constant String := One (One'First .. Equal - 1);
@@ -639,7 +687,10 @@ package body Model_Runner.CLI.Intents is
                   end if;
                end loop;
             end if;
-            --  The way on said once, after the last: not after each.
+            --  The way on said once, after the last: not after each, and
+            --  the tasks they made waiting named together.
+            Collecting := True;
+            Collected := Null_Unbounded_String;
             for Index in 1 .. Natural (Named.Length) loop
                declare
                   One : Names.Vector;
@@ -650,7 +701,13 @@ package body Model_Runner.CLI.Intents is
                   Run (Store, Kind, One, Screen);
                end;
             end loop;
+            Collecting := False;
             Pres.Hold_Next_Steps (Screen, False);
+            if Ada.Strings.Fixed.Index (To_String (Collected), " ") > 0 then
+               Pres.Put_Note (Screen, "cli.next.accept_tasks", [Loc.Named ("detail", To_String (Collected))]);
+            elsif Collected /= Null_Unbounded_String then
+               Pres.Put_Note (Screen, "cli.next.accept_task", [Loc.Named ("name", To_String (Collected))]);
+            end if;
          end;
          return;
       end if;
@@ -1175,6 +1232,26 @@ package body Model_Runner.CLI.Intents is
                                  end if;
                               end;
                            end loop;
+                           --  Marked retired there now: said as bootstrap says it.
+                           if not Taken then
+                              for Index in 1 .. Model_Runner.Framework.Bootstrap.Length (Found) loop
+                                 declare
+                                    One : constant Model_Runner.Framework.Bootstrap.Output :=
+                                      Model_Runner.Framework.Bootstrap.Element (Found, Index);
+                                 begin
+                                    if not Taken and then One.Provenance = Held.Provenance & "#retired" then
+                                       Taken := True;
+                                       Status := E.Make (E.Framework_Input_Invalid);
+                                       E.Add_Text (Status, "name", "from-document");
+                                       E.Add_Text (Status, "value", Word (2));
+                                       E.Add_Text
+                                         (Status, "detail",
+                                          To_String (Held.Source) & " now marks it " & To_String (One.Text) & "; "
+                                          & Word_Of_Command (Kind) & " obsolete " & Word (2) & " retires it");
+                                    end if;
+                                 end;
+                              end loop;
+                           end if;
                            if not Taken then
                               Status := E.Make (E.Framework_Input_Invalid);
                               E.Add_Text (Status, "name", "from-document");
@@ -1403,25 +1480,32 @@ package body Model_Runner.CLI.Intents is
                   --  A path as the project names it: ./src/x and a whole
                   --  path into the project are src/x.
                   Project : constant String := Ada.Directories.Containing_Directory (S.Root (Store));
+                  --  Typed where the session was started, below the top: from there.
+                  Below   : constant String := Model_Runner.CLI.Project_Commands.Started_Below;
+                  Given_Path : constant String :=
+                    (if Below /= "" and then From (4) /= "" and then From (4) (From (4)'First) /= '/'
+                       and then not Ada.Directories.Exists (Hostkit.Fs.Join (Project, From (4)))
+                       and then Ada.Directories.Exists (Hostkit.Fs.Join (Hostkit.Fs.Join (Project, Below), From (4)))
+                     then Below & "/" & From (4) else From (4));
                   --  A symbol by the name the repository's graph gives it:
                   --  checksum is parse.checksum where that is the one.
                   Symbols : constant Names.Vector :=
                     (if Found and then Relation in Nt.Implementation | Nt.Test
-                       and then Ada.Strings.Fixed.Index (From (4), "/") = 0
-                       and then not Ada.Directories.Exists (Hostkit.Fs.Join (Project, From (4)))
+                       and then Ada.Strings.Fixed.Index (Given_Path, "/") = 0
+                       and then not Ada.Directories.Exists (Hostkit.Fs.Join (Project, Given_Path))
                      then Model_Runner.Framework.Repository.Find_Symbols
-                            (Model_Runner.Framework.Repository.Now (Store), From (4))
+                            (Model_Runner.Framework.Repository.Now (Store), Given_Path)
                      else Names.Empty_Vector);
                   Target : constant String :=
                     (if Found and then Relation in Nt.Implementation | Nt.Test
-                       and then Ada.Strings.Fixed.Index (From (4), "/") > 0
-                     then Model_Runner.Framework.Repository.Relative_Path (Project, From (4))
+                       and then Ada.Strings.Fixed.Index (Given_Path, "/") > 0
+                     then Model_Runner.Framework.Repository.Relative_Path (Project, Given_Path)
                      elsif Natural (Symbols.Length) = 1 then Symbols.First_Element
-                     else From (4));
+                     else Given_Path);
                begin
                   if Found and then Relation in Nt.Implementation | Nt.Test
-                    and then Ada.Strings.Fixed.Index (From (4), "/") = 0
-                    and then not Ada.Directories.Exists (Hostkit.Fs.Join (Project, From (4)))
+                    and then Ada.Strings.Fixed.Index (Given_Path, "/") = 0
+                    and then not Ada.Directories.Exists (Hostkit.Fs.Join (Project, Given_Path))
                     and then Natural (Symbols.Length) /= 1
                   then
                      --  None, or several: said, not linked to a name the
@@ -1916,6 +2000,12 @@ package body Model_Runner.CLI.Intents is
                      if Model_Runner.Framework.Records.Has (Config, Prefix & Word (3))
                        or else Model_Runner.Framework.Configurations.Known_Names.Contains
                                  (Prefix & Word (3))
+                       --  A kind's own limit, as /reconfigure takes it: task.max_steps.test.
+                       or else (Prefix = "scalar."
+                                and then (for some Limit of Names.Vector'
+                                            (["task.max_seconds.", "task.max_steps.", "task.max_tool_calls.",
+                                              "task.token_budget."]) =>
+                                            Ada.Strings.Fixed.Index (Word (3), Limit) = Word (3)'First))
                      then
                         Found := To_Unbounded_String (Prefix & Word (3));
                         Count := Count + 1;
@@ -1946,31 +2036,26 @@ package body Model_Runner.CLI.Intents is
                                                 (Setting, Model_Runner.Framework.Permissions.Word (One)'Length + 1)
                                               = "." & Model_Runner.Framework.Permissions.Word (One)))
                   then
-                     for Index in 1 .. Model_Runner.Framework.Records.Field_Count (Config) loop
-                        declare
-                           Name : constant String := Model_Runner.Framework.Records.Field_Name (Config, Index);
-                        begin
-                           --  Only names a decision could govern: not one under
-                           --  the agents' family a kind is not read by.
-                           if Setting'Length >= 4
-                             and then not (Ada.Strings.Fixed.Index (Name, "scalar.agents.") = 1
-                                           and then Ada.Strings.Fixed.Count (Name, ".") > 2)
-                             and then (Ada.Strings.Fixed.Index (Name, Setting) > 0
-                                       or else Ada.Strings.Fixed.Index
-                                                 (Name, Setting (Setting'First .. Setting'First + 3))
-                                               > 0)
-                             and then Length (Near) < 200
-                           then
-                              Append (Near, (if Near = Null_Unbounded_String then "" else ", ") & Name);
+                     --  The one most like it, by its letters, of those there are.
+                     declare
+                        Among : Names.Vector := Model_Runner.Framework.Configurations.Known_Names;
+                     begin
+                        for Index in 1 .. Model_Runner.Framework.Records.Field_Count (Config) loop
+                           if not Among.Contains (Model_Runner.Framework.Records.Field_Name (Config, Index)) then
+                              Among.Append (Model_Runner.Framework.Records.Field_Name (Config, Index));
                            end if;
-                        end;
-                     end loop;
+                        end loop;
+                        Near := To_Unbounded_String (Model_Runner.Framework.Nearest (Setting, Among));
+                        if Near = Null_Unbounded_String then
+                           Near := To_Unbounded_String (Model_Runner.Framework.Nearest ("scalar." & Setting, Among));
+                        end if;
+                     end;
                      Status := E.Make (E.Framework_Input_Invalid);
                      E.Add_Text (Status, "name", "the setting a decision governs");
                      E.Add_Text (Status, "value", Setting);
                      E.Add_Text (Status, "detail", "no setting is called so; a decision governs one /config"
                                  & " shows" & (if Near = Null_Unbounded_String then ""
-                                               else ", as " & To_String (Near)));
+                                               else "; did you mean " & To_String (Near) & "?"));
                   elsif Model_Runner.Framework.Records.Has (Config, Setting)
                     or else Model_Runner.Framework.Configurations.Known_Names.Contains (Setting)
                     or else Ada.Strings.Fixed.Index (Setting, "scalar.task.") = 1
@@ -2070,8 +2155,8 @@ package body Model_Runner.CLI.Intents is
                                  [Loc.Named ("name", Word (2)),
                                   Loc.Named ("value", Nt.Governs (Store, Kind, Word (2))),
                                   Loc.Named ("other", Word_Of_Command (Kind))]);
-               --  Its governing just said is not said again as applied.
-               Apply_Rulings (Store, Kind, Word (2), Screen, Said => False);
+               --  Written into the configuration as well: said so.
+               Apply_Rulings (Store, Kind, Word (2), Screen, Said => True);
                --  What else it rules on stays: said, so nothing seems lost.
                for Other of Nt.Also_Governs (Store, Kind, Word (2)) loop
                   Pres.Put_Message (Screen, "cli.intent.governs_still",
@@ -2106,6 +2191,17 @@ package body Model_Runner.CLI.Intents is
          --  An identifier -- or show and one: what it is.
          if Action = "show" then
             Needs (2, "the " & Word_Of (Kind));
+            --  How it is written, as /task show says it.
+            if E.Is_Error (Status) then
+               Pres.Report (Screen, Status);
+               Pres.Put_Note (Screen, "cli.task.usage_line",
+                              [Loc.Named ("value", Word_Of_Command (Kind) & " show "
+                                                   & (if Nt."=" (Kind, Nt.Requirement) then "REQ"
+                                                      elsif Nt."=" (Kind, Nt.Decision) then "DEC" else "SPEC")
+                                                   & "-ID, as " & Word_Of_Command (Kind) & " show 1 -- "
+                                                   & Word_Of_Command (Kind) & " lists them")]);
+               return;
+            end if;
          end if;
          --  A word that is no identifier: an action there is not.
          if E.Is_Ok (Status) and then Action /= "show"

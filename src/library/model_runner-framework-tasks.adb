@@ -1044,7 +1044,7 @@ package body Model_Runner.Framework.Tasks is
             Result.Reasons.Append
               ("it waits for " & Other & ", which is "
                & (if State_In (Item, Change, Other) = "" then "not there"
-                  elsif State_In (Item, Change, Other) = "accepted" then "accepted and not yet done"
+                  elsif State_In (Item, Change, Other) = "accepted" then "not done yet"
                   else State_Said (State_In (Item, Change, Other))));
          end if;
       end loop;
@@ -1455,13 +1455,46 @@ package body Model_Runner.Framework.Tasks is
            Authority.Resolve (Authority.Gather (Item, Records.Get (Defined, "component")));
          function Word (Standing : Authority.Level) return String
          is (Ada.Characters.Handling.To_Lower (Authority.Level'Image (Standing)));
+         Own_Kind : constant String := Records.Get (Defined, "kind");
+         --  Whether a ruling's setting reaches this task: one of another
+         --  kind's -- its permissions, its limits -- does not.
+         function Reaches (Subject : String) return Boolean is
+            function Of_Kind (Prefix : String) return String is
+               Rest : constant String :=
+                 (if Subject'Length > Prefix'Length
+                    and then Subject (Subject'First .. Subject'First + Prefix'Length - 1) = Prefix
+                  then Subject (Subject'First + Prefix'Length .. Subject'Last) else "");
+               Dot  : constant Natural := Ada.Strings.Fixed.Index (Rest, ".");
+            begin
+               return (if Dot = 0 then Rest else Rest (Rest'First .. Dot - 1));
+            end Of_Kind;
+            Named : constant String :=
+              (if Of_Kind ("map.permission.kind.") /= "" then Of_Kind ("map.permission.kind.")
+               else "");
+            Limit_Kind : Unbounded_String;
+         begin
+            for Limit of Name_Lists.Vector'(["max_seconds", "max_steps", "max_tool_calls", "token_budget",
+                                             "coordination", "isolation", "profile"])
+            loop
+               for Prefix of Name_Lists.Vector'(["scalar.task." & Limit & ".", "task." & Limit & "."]) loop
+                  if Subject'Length > Prefix'Length
+                    and then Subject (Subject'First .. Subject'First + Prefix'Length - 1) = Prefix
+                  then
+                     Limit_Kind := To_Unbounded_String (Subject (Subject'First + Prefix'Length .. Subject'Last));
+                  end if;
+               end loop;
+            end loop;
+            return (Named = "" or else Named = Own_Kind)
+              and then (Limit_Kind = Null_Unbounded_String or else To_String (Limit_Kind) = Own_Kind);
+         end Reaches;
       begin
          for Index in 1 .. Authority.Governing_Count (Resolved) loop
             declare
                One : constant Authority.Statement := Authority.Governing_At (Resolved, Index);
             begin
-               if One.Standing <= Authority.Project_Specification
-                 or else One.Standing in Authority.Project_Baseline | Authority.Language_Baseline
+               if (One.Standing <= Authority.Project_Specification
+                   or else One.Standing in Authority.Project_Baseline | Authority.Language_Baseline)
+                 and then Reaches (To_String (One.Subject))
                then
                   Records.Set
                     (Value, "authority." & To_String (One.Subject),
@@ -1475,7 +1508,9 @@ package body Model_Runner.Framework.Tasks is
                One     : constant Authority.Standing_Of := Authority.Element (Resolved, Index);
                Subject : constant String := To_String (One.Governing.Subject);
             begin
-               if One.Relation = Authority.Explicit_Override then
+               if not Reaches (Subject) then
+                  null;
+               elsif One.Relation = Authority.Explicit_Override then
                   Records.Set
                     (Value, "override." & Subject,
                      To_String (One.Governing.Source) & " overrides "
@@ -2107,10 +2142,10 @@ package body Model_Runner.Framework.Tasks is
          E.Add_Text (Status, "name", Id);
          return;
       elsif Now in "running" | "verification" | "complete" | "cancelled" | "rejected" then
-         Status := E.Make (E.Framework_Transition_Invalid);
-         E.Add_Text (Status, "name", Id);
-         E.Add_Text (Status, "value", Now);
-         E.Add_Text (Status, "expected", "being revised");
+         --  Said as what is asked, not as a move between states.
+         Status := E.Make (E.Framework_Input_Invalid);
+         E.Add_Text (Status, "name", "the task to revise");
+         E.Add_Text (Status, "value", Id);
          E.Add_Text (Status, "detail",
                      (if Now = "rejected"
                       then "a rejected task is not revised; /task reconsider " & Id & " first"

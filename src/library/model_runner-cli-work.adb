@@ -393,6 +393,9 @@ package body Model_Runner.CLI.Work is
       Config    : R.Item;
       Done      : W.Report;
       Remaining : Model_Runner.Framework.Name_Lists.Vector;
+      --  Under all: those started, and how each ended.
+      Tried     : Model_Runner.Framework.Name_Lists.Vector;
+      Ended     : Model_Runner.Framework.Name_Lists.Vector;
 
       --  The accepted tasks a textual selector matched.
       Matching  : Model_Runner.Framework.Name_Lists.Vector;
@@ -717,9 +720,23 @@ package body Model_Runner.CLI.Work is
          Outcome := E.Make (E.Framework_Input_Invalid);
          E.Add_Text (Outcome, "name", "steps");
          E.Add_Text (Outcome, "value", Given ("steps"));
-         E.Add_Text (Outcome, "detail", "steps= applies only with model=PATH, a model run apart; the"
-                     & " session's model takes its steps from agents.max_steps, or task.max_steps.KIND"
-                     & " -- /reconfigure scalar.task.max_steps.KIND=N sets one");
+         declare
+            --  The task's own kind, where it names one.
+            Defined : R.Item;
+            Got     : E.Error_Info;
+            Kind    : Unbounded_String := To_Unbounded_String ("KIND");
+         begin
+            if Chosen /= Null_Unbounded_String then
+               Tk.Definition (Store, To_String (Chosen), Defined, Got);
+               if E.Is_Ok (Got) and then R.Get (Defined, "kind") /= "" then
+                  Kind := To_Unbounded_String (R.Get (Defined, "kind"));
+               end if;
+            end if;
+            E.Add_Text (Outcome, "detail", "steps= applies only with model=PATH, a model run apart; the"
+                        & " session's model takes its steps from agents.max_steps, or task.max_steps."
+                        & To_String (Kind) & " -- /reconfigure scalar.task.max_steps." & To_String (Kind)
+                        & "=N sets one");
+         end;
          S.Close (Store);
          Fail (Outcome);
          return;
@@ -768,7 +785,7 @@ package body Model_Runner.CLI.Work is
               Model_Runner.Framework.Orchestration.Plan (Store);
          begin
             if Planned.Start.Is_Empty then
-               Pres.Put_Note (Screen, "cli.work.nothing");
+               Pres.Put_Note (Screen, "cli.work.nothing_ready");
                Say_What_Is_Ready;
                S.Close (Store);
                return;
@@ -976,6 +993,18 @@ package body Model_Runner.CLI.Work is
                   end loop;
                end Offer_All;
             begin
+               --  Several ready: all of them, in turn, as /work all.
+               if Natural (Ready.Length) > 1 then
+                  Model_Runner.CLI.Choosers.Append
+                    (Offer,
+                     (Label      => To_Unbounded_String ("all  every ready task, one after another"),
+                      Tag        => To_Unbounded_String ("[" & Ada.Strings.Fixed.Trim
+                                                              (Natural'Image (Natural (Ready.Length)),
+                                                               Ada.Strings.Both) & " ready]"),
+                      Details    => To_Unbounded_String ("as /work all: a failure stops none of the rest"),
+                      Selectable => True));
+                  Listed.Append ("all");
+               end if;
                Offer_All (Ready);
                Offer_All (Waiting);
             end;
@@ -1003,7 +1032,14 @@ package body Model_Runner.CLI.Work is
                   S.Close (Store);
                   return;
                end if;
-               Chosen := To_Unbounded_String (Listed (Picked));
+               if Listed (Picked) = "all" then
+                  Given.Include ("all", "yes");
+                  Chosen := To_Unbounded_String (Ready.First_Element);
+                  Remaining := Ready;
+                  Remaining.Delete_First;
+               else
+                  Chosen := To_Unbounded_String (Listed (Picked));
+               end if;
             end;
          end;
       end if;
@@ -1464,9 +1500,18 @@ package body Model_Runner.CLI.Work is
            and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "may not") = 0
            and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "outside the project") = 0
          then
-            Pres.Put_Note (Screen, "cli.work.refused_on_way",
-                           [Loc.Named ("detail", Model_Runner.CLI.Project_Commands.Last_Refusals),
-                            Loc.Named ("name", Kind_Of_Chosen)]);
+            --  A path outside the project is no permission's: its model
+            --  named a whole path, and is told paths are relative.
+            if Ada.Strings.Fixed.Index (Model_Runner.CLI.Project_Commands.Last_Refusals, "outside the project") > 0
+            then
+               Pres.Put_Note (Screen, "cli.work.refused_outside_on_way",
+                              [Loc.Named ("detail", Model_Runner.CLI.Project_Commands.Last_Refusals),
+                               Loc.Named ("name", To_String (Done.Task_Id))]);
+            else
+               Pres.Put_Note (Screen, "cli.work.refused_on_way",
+                              [Loc.Named ("detail", Model_Runner.CLI.Project_Commands.Last_Refusals),
+                               Loc.Named ("name", Kind_Of_Chosen)]);
+            end if;
          end if;
 
          --  And what a person does next, where it did not complete.
@@ -1864,10 +1909,32 @@ package body Model_Runner.CLI.Work is
             end;
          end if;
 
+         --  All of them: what the plan can start now, of those not tried,
+         --  once those it named first are done -- a failure stops none.
+         Tried.Append (To_String (Chosen));
+         Ended.Append (To_String (Chosen) & " " & Model_Runner.Framework.State_Said (To_String (Done.Final_State)));
+         if Remaining.Is_Empty and then Setting ("all", "") = "yes" then
+            for Id of Model_Runner.Framework.Orchestration.Plan (Store).Start loop
+               if not Tried.Contains (Id) then
+                  Remaining.Append (Id);
+               end if;
+            end loop;
+         end if;
          exit when Remaining.Is_Empty;
          Chosen := To_Unbounded_String (Remaining.First_Element);
          Remaining.Delete_First;
       end loop;
+      --  Several run: how each ended, in one line.
+      if Natural (Ended.Length) > 1 then
+         declare
+            Line : Unbounded_String;
+         begin
+            for One of Ended loop
+               Append (Line, (if Line = Null_Unbounded_String then "" else ", ") & One);
+            end loop;
+            Pres.Put_Message (Screen, "cli.work.all_ended", [Loc.Named ("detail", To_String (Line))]);
+         end;
+      end if;
 
       --  Cancelled, from here or from elsewhere, ends as a cancellation.
       if To_String (Done.Final_State) = "cancelled" then

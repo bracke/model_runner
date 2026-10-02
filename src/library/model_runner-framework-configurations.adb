@@ -1118,6 +1118,25 @@ package body Model_Runner.Framework.Configurations is
    -- Initialize --
    ----------------
 
+   --  Whether a directory holds anything of its own: a file or a
+   --  directory other than version control's and the project's state.
+   function Has_Own_Files (Directory : String) return Boolean is
+      Search : Ada.Directories.Search_Type;
+      Found  : Ada.Directories.Directory_Entry_Type;
+      Any    : Boolean := False;
+   begin
+      Ada.Directories.Start_Search (Search, Directory, "");
+      while Ada.Directories.More_Entries (Search) and then not Any loop
+         Ada.Directories.Get_Next_Entry (Search, Found);
+         Any := Ada.Directories.Simple_Name (Found) not in "." | ".." | ".git" | ".model_runner";
+      end loop;
+      Ada.Directories.End_Search (Search);
+      return Any;
+   exception
+      when others =>
+         return False;
+   end Has_Own_Files;
+
    procedure Initialize
      (Item              : in out Stores.Store;
       Project_Directory : String;
@@ -1190,8 +1209,14 @@ package body Model_Runner.Framework.Configurations is
       for Directory of Planned.Directories loop
          declare
             Path : constant String := Hostkit.Fs.Join (Project_Directory, Directory);
+            --  In a project with files of its own, a directory nothing
+            --  planned goes into is not made empty: its scaffold was left out.
+            Needed : constant Boolean :=
+              (for some Position in Planned.Files.Iterate =>
+                 Ada.Strings.Fixed.Index (Value_Maps.Key (Position), Directory & "/") = 1)
+              or else not Has_Own_Files (Project_Directory);
          begin
-            if not Ada.Directories.Exists (Path) then
+            if Needed and then not Ada.Directories.Exists (Path) then
                if not Files.Make_Directory (Path) then
                   Files.Write_Failed (Path, Status);
                   Undo;
@@ -1539,11 +1564,24 @@ package body Model_Runner.Framework.Configurations is
          then
             declare
                Rest : constant String := Name (Ada.Strings.Fixed.Index (Name, ".", Name'First + 7) + 1 .. Name'Last);
+               --  The settings there are, a kind's own limits for the kind it
+               --  ends with among them.
+               function Near_Names return Name_Lists.Vector is
+                  Result : Name_Lists.Vector := Known_Names;
+                  Last   : constant Natural := Ada.Strings.Fixed.Index (Name, ".", Ada.Strings.Backward);
+               begin
+                  for Limit of Name_Lists.Vector'(["max_seconds", "max_tool_calls", "max_steps", "token_budget"]) loop
+                     Result.Append ("scalar.task." & Limit & Name (Last .. Name'Last));
+                  end loop;
+                  return Result;
+               end Near_Names;
             begin
                return (if Starts (Name, "scalar.task.")
                          and then Rest in "max_seconds" | "max_tool_calls" | "max_steps" | "token_budget"
                        then Name & " is not read: a limit for one kind of task is " & Name
                             & ".KIND, and scalar.agents." & Rest & " is the one for every task"
+                       elsif Nearest (Name, Near_Names) /= ""
+                       then "there is no setting " & Name & "; did you mean " & Nearest (Name, Near_Names) & "?"
                        else "nothing reads " & Name & "; /config lists the settings there are");
             end;
          end if;
@@ -2461,7 +2499,63 @@ package body Model_Runner.Framework.Configurations is
             end Full_Name;
 
             Name  : constant String := Full_Name;
-            Raw   : constant String := Value_Maps.Element (Position);
+            --  A permission's places as the levels write them: ./src and src,
+            --  a directory, are src/.
+            function Normal_Places (Text : String) return String is
+               Project : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
+               Result  : Unbounded_String;
+               Start   : Natural := Text'First;
+
+               function One_Place (Place : String) return String is
+                  Bare : constant String :=
+                    (if Place'Length > 2 and then Place (Place'First .. Place'First + 1) = "./"
+                     then Place (Place'First + 2 .. Place'Last) else Place);
+                  Whole : constant String := Hostkit.Fs.Join (Project, Bare);
+               begin
+                  return (if Bare /= "" and then Bare (Bare'Last) /= '/' and then Ada.Directories.Exists (Whole)
+                            and then Ada.Directories."=" (Ada.Directories.Kind (Whole), Ada.Directories.Directory)
+                          then Bare & "/" else Bare);
+               exception
+                  when others =>
+                     return Bare;
+               end One_Place;
+
+               function One_Word (Word : String) return String is
+                  Eq : constant Natural := Ada.Strings.Fixed.Index (Word, "=");
+               begin
+                  if Eq = 0 or else Word (Word'First .. Eq) not in "roots=" | "deny=" then
+                     return Word;
+                  end if;
+                  declare
+                     Said : Unbounded_String := To_Unbounded_String (Word (Word'First .. Eq));
+                     From : Natural := Eq + 1;
+                  begin
+                     for Index in Eq + 1 .. Word'Last + 1 loop
+                        if Index > Word'Last or else Word (Index) = '|' then
+                           Append (Said, (if From = Eq + 1 then "" else "|") & One_Place (Word (From .. Index - 1)));
+                           From := Index + 1;
+                        end if;
+                     end loop;
+                     return To_String (Said);
+                  end;
+               end One_Word;
+            begin
+               if not Starts (Full_Name, "map.permission.") then
+                  return Text;
+               end if;
+               for Index in Text'First .. Text'Last + 1 loop
+                  if Index > Text'Last or else Text (Index) = ' ' then
+                     if Index > Start then
+                        Append (Result, (if Result = Null_Unbounded_String then "" else " ")
+                                & One_Word (Text (Start .. Index - 1)));
+                     end if;
+                     Start := Index + 1;
+                  end if;
+               end loop;
+               return To_String (Result);
+            end Normal_Places;
+
+            Raw   : constant String := Normal_Places (Value_Maps.Element (Position));
 
             --  One capability of a permission level: NAME= takes its entry
             --  out, as it does any setting's -- not granted there -- and on
@@ -2515,8 +2609,17 @@ package body Model_Runner.Framework.Configurations is
             end Bound_Held;
             Helpers : constant Boolean := One_Capability and then Name'Length > 16
               and then Name (Name'Last - 15 .. Name'Last) = ".create_children";
+            --  deny= alone, or deny=none, takes the deny away: what is left.
+            No_Deny : constant Boolean :=
+              One_Capability
+              and then (Raw in "deny=" | "deny=none"
+                        or else (Ada.Strings.Fixed.Index (Raw, " deny=none") > 0
+                                 and then Ada.Strings.Fixed.Index (Raw, " deny=none") + 9 = Raw'Last));
             Given : constant String :=
-              (if One_Capability and then Raw = "" then "off"
+              (if No_Deny and then Raw in "deny=" | "deny=none"
+               then (if Roots_Held = "" then "" else Roots_Held)
+               elsif No_Deny then Raw (Raw'First .. Ada.Strings.Fixed.Index (Raw, " deny=none") - 1)
+               elsif One_Capability and then Raw = "" then "off"
                --  One bound of the helpers given keeps the other it had.
                elsif Helpers and then Ada.Strings.Fixed.Index (Raw, "max_children=") > 0
                  and then Ada.Strings.Fixed.Index (Raw, "max_depth=") = 0 and then Bound_Held ("max_depth") /= ""
@@ -2714,9 +2817,19 @@ package body Model_Runner.Framework.Configurations is
                      else ""));
                return;
             elsif not (for some Prefix of Changeable => Starts (Name, Prefix.all)) then
-               Status := Unknown (Name, "there is no setting " & Name & Near
-                                  & "; a new one is named with its kind: scalar." & Name
-                                  & " for one value, set." & Name & " for several");
+               declare
+                  Dot   : constant Natural := Ada.Strings.Fixed.Index (Name, ".");
+                  First : constant String := (if Dot = 0 then Name else Name (Name'First .. Dot - 1));
+               begin
+                  --  A family the harness reads has only the settings it
+                  --  reads: no new one is made there.
+                  Status := Unknown (Name, "there is no setting " & Name & Near
+                                     & (if First in "agents" | "task" | "work" | "model" | "permission" | "execution"
+                                                  | "verification" | "repository" | "bootstrap" | "requirement"
+                                        then ""
+                                        else "; a new one is named with its kind: scalar." & Name
+                                             & " for one value, set." & Name & " for several"));
+               end;
                return;
             --  Named with its kind, and none such is set or known, but one
             --  is a letter or two from it: the one meant, most likely.
@@ -2943,7 +3056,12 @@ package body Model_Runner.Framework.Configurations is
                               end if;
                            end;
                         end loop;
-                        if Any then
+                        if Any
+                          and then not Result.Changed.Contains
+                                         ("map.permission." & Level & ": the capabilities not named keep "
+                                          & (if Level = "project" then "the defaults they had, now written out"
+                                             else "following the level above, now written out as inherit"))
+                        then
                            Result.Changed.Append
                              ("map.permission." & Level & ": the capabilities not named keep "
                               & (if Level = "project" then "the defaults they had, now written out"
@@ -3152,6 +3270,11 @@ package body Model_Runner.Framework.Configurations is
                            & " -> " & (if Whole = "inherit" then "inherit, as the level above gives it"
                                        else "none (every capability withheld)"));
                      end;
+                  --  Nothing of its own, taking the level above's: none
+                  --  withholds all of that.
+                  elsif Whole = "none" then
+                     Result.Changed.Append
+                       (Level_Name & ": as the level above gives it -> none (every capability withheld)");
                      if not Result.Impact.Contains (Reach (Level_Name)) then
                         Result.Impact.Append (Reach (Level_Name));
                      end if;

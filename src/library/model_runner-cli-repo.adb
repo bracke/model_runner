@@ -96,7 +96,10 @@ package body Model_Runner.CLI.Repo is
               elsif Bare = "served_by" then F & " is served by " & To_Said
               elsif Bare = "implemented_by" then F & " is implemented by " & To_Said
               elsif Bare = "tested_by" then F & " is tested by " & To_Said
-              elsif Bare = "verified_by" then F & " is verified by " & To_Said
+              --  Checked by evidence, which verifies it only while its
+              --  state says so: /req show says that.
+              elsif Bare = "verified_by" then F & " is checked by " & To_Said
+              elsif Bare = "part_of" then F & " is part of " & To_Said
               elsif Bare = "depends_on" then F & " depends on " & To_Said
               elsif Bare in "scope" | "belongs_to" then F & " belongs to " & To_Said
               elsif Bare = "serves" then F & " serves " & To_Said

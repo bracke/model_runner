@@ -801,8 +801,8 @@ package body Model_Runner.CLI.Interactive is
                     (if Ada.Strings.Fixed.Index (Line & " ", " ") > Line'First
                      then Line (Line'First .. Ada.Strings.Fixed.Index (Line & " ", " ") - 1) else Line);
                   Near  : constant Model_Runner.Framework.Name_Lists.Vector :=
-                    Model_Runner.CLI.Completion.Candidates
-                      (Typed (Typed'First .. Typed'First + Natural'Min (2, Typed'Length - 1)));
+                    --  Every command: a typo may be in its first letters too.
+                    Model_Runner.CLI.Completion.Candidates (Typed (Typed'First .. Typed'First));
                   --  One it begins -- /reqs is /req -- before one a letter away.
                   function Begun return String is
                      Found : Natural := 0;

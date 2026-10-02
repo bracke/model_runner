@@ -1,3 +1,4 @@
+with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
@@ -127,7 +128,34 @@ package body Model_Runner.CLI.Init is
                end if;
                return False;
          end Executables;
-         Runs : constant Boolean := Alire and then Executables;
+         --  A project file naming a main procedure: a program too.
+         function Gpr_Main return Boolean is
+            Search : Ada.Directories.Search_Type;
+            Found  : Ada.Directories.Directory_Entry_Type;
+            File   : Ada.Text_IO.File_Type;
+            Said   : Boolean := False;
+         begin
+            Ada.Directories.Start_Search
+              (Search, Directory, "*.gpr", [Ada.Directories.Ordinary_File => True, others => False]);
+            while Ada.Directories.More_Entries (Search) and then not Said loop
+               Ada.Directories.Get_Next_Entry (Search, Found);
+               Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Ada.Directories.Full_Name (Found));
+               while not Ada.Text_IO.End_Of_File (File) and then not Said loop
+                  Said := Ada.Strings.Fixed.Index
+                            (Ada.Characters.Handling.To_Lower (Ada.Text_IO.Get_Line (File)), "for main use") > 0;
+               end loop;
+               Ada.Text_IO.Close (File);
+            end loop;
+            Ada.Directories.End_Search (Search);
+            return Said;
+         exception
+            when others =>
+               if Ada.Text_IO.Is_Open (File) then
+                  Ada.Text_IO.Close (File);
+               end if;
+               return Said;
+         end Gpr_Main;
+         Runs : constant Boolean := Alire and then (Executables or else Gpr_Main);
 
          function Rank (Index : Positive) return Natural is
             Category : constant String := Tp.Category (Tp.Template_At (Registry, Index));

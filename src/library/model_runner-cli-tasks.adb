@@ -417,15 +417,27 @@ package body Model_Runner.CLI.Tasks is
             Id    : constant String :=
               (if Space = 0 then Argument else Argument (Argument'First .. Space - 1));
          begin
-            if Tk.State_Of (Store, Id) = "" then
+            if Ada.Characters.Handling.To_Lower (Id) = "all" then
+               --  all where the action takes one at a time: said so.
+               Outcome := E.Make (E.Framework_Input_Invalid);
+               E.Add_Text (Outcome, "name", "the task to " & Action);
+               E.Add_Text (Outcome, "value", "all");
+               E.Add_Text (Outcome, "detail", "/task " & Action & " takes one task at a time; all is for accept,"
+                           & " reject, complete, verify and integrate");
+               Fail (Outcome);
+               return False;
+            elsif Tk.State_Of (Store, Id) = "" then
                --  Named, with the nearest there is, and where they are.
                declare
                   Near : constant String := Model_Runner.Framework.Nearest (Id, Tk.List (Store));
                begin
                   Outcome := E.Make (E.Framework_Not_Found);
-                  E.Add_Text (Outcome, "name",
-                              Id & (if Near /= "" then " (did you mean " & Near & "?)" else ""));
+                  E.Add_Text (Outcome, "name", Id);
                   Fail (Outcome);
+                  --  The nearest there is after the sentence, not inside it.
+                  if Near /= "" then
+                     Pres.Put_Note (Screen, "cli.task.did_you_mean", [Loc.Named ("name", Near)]);
+                  end if;
                   Pres.Put_Note (Screen, "cli.next.task_list");
                end;
                return False;
@@ -766,6 +778,10 @@ package body Model_Runner.CLI.Tasks is
             Pres.Put_Note (Screen, "cli.task.none_match",
                            [Loc.Named ("detail", Filters_Said),
                             Loc.Named ("count", T.Image (Long_Long_Integer (Listed.Length)))]);
+            --  A state asked for: the states there are, said.
+            if Ada.Strings.Fixed.Index (Filters_Said, "state=") > 0 then
+               Pres.Put_Note (Screen, "cli.task.states_are", [Loc.Named ("detail", States_Said)]);
+            end if;
          elsif Listed.Is_Empty then
             --  None at all: said once, with how one is made.
             Pres.Put_Note (Screen, "cli.next.tasks");
@@ -871,6 +887,36 @@ package body Model_Runner.CLI.Tasks is
                Read  : E.Error_Info;
             begin
                Pm.Restriction (Fields ("permissions"), Asked, Read);
+               --  A root outside its kind's: said as /task grant says it.
+               if E.Is_Ok (Read) then
+                  declare
+                     Of_Kind : constant Pm.Permission_Set :=
+                       Pm.Effective (Store, Fields ("kind"), "", Within_Sandbox => False);
+                  begin
+                     for One in Pm.Capability loop
+                        if Asked (One).Granted and then Of_Kind (One).Granted
+                          and then not Of_Kind (One).Roots.Is_Empty
+                        then
+                           for Root of Asked (One).Roots loop
+                              if not (for some Kind_Root of Of_Kind (One).Roots =>
+                                        Root'Length >= Kind_Root'Length
+                                        and then Root (Root'First .. Root'First + Kind_Root'Length - 1) = Kind_Root)
+                              then
+                                 Outcome := E.Make (E.Framework_Input_Invalid);
+                                 E.Add_Text (Outcome, "name", "the roots to grant");
+                                 E.Add_Text (Outcome, "value", Root);
+                                 E.Add_Text (Outcome, "detail", "it is outside what its kind " & Fields ("kind")
+                                             & " gives -- " & Pm.Grant_Text (Of_Kind (One))
+                                             & " -- and a task is given no more than its kind; a root within"
+                                             & " those narrows it; nothing was made");
+                                 Fail (Outcome);
+                                 return;
+                              end if;
+                           end loop;
+                        end if;
+                     end loop;
+                  end;
+               end if;
                if E.Is_Ok (Read)
                  and then (for all One in Pm.Capability =>
                              not Pm.Intersect (Asked, Pm.Effective (Store, Fields ("kind"), "",
@@ -1232,6 +1278,11 @@ package body Model_Runner.CLI.Tasks is
              Loc.Named ("value", Model_Runner.Framework.State_Said (Moved_State (Argument)))]);
          if Next in "rejected" | "cancelled" then
             Say_Left_Waiting (Argument);
+            --  How a rejected one is taken up again; a cancel's ask said it.
+            if Next = "rejected" then
+               Pres.Put_Note (Screen, "cli.next.undo_end",
+                              [Loc.Named ("name", Argument), Loc.Named ("value", "reconsider")]);
+            end if;
          elsif Next = "accepted" and then Tk.Ready (Store, Argument).Ready then
             Pres.Put_Note (Screen, "cli.next.work", [Loc.Named ("name", Argument)]);
          elsif Next = "accepted" and then Tk.State_Of (Store, Argument) = "accepted"
@@ -1409,6 +1460,12 @@ package body Model_Runner.CLI.Tasks is
          Status  : constant Git.Status_Report := Git.Status_Of (Project);
       begin
          S.Read (Store, Model_Runner.Framework.Tasks_Area, Id & ".state", Held, Read);
+         --  Undone by a copy put back: none of it is there to show.
+         if R.Get (Held, "undone_by") /= "" then
+            Pres.Put_Note (Screen, "cli.task.diff_undone",
+                           [Loc.Named ("name", Id), Loc.Named ("value", R.Get (Held, "undone_by"))]);
+            return True;
+         end if;
          --  When its last run ended: a commit since holds what it changed,
          --  and what differs from that commit is not its.
          for Call of S.Names (Store, Model_Runner.Framework.Invocations_Area) loop
@@ -1467,6 +1524,30 @@ package body Model_Runner.CLI.Tasks is
                Pres.Put_Note (Screen, "cli.task.diff_not_its",
                               [Loc.Named ("name", Id), Loc.Named ("detail", Joined (Not_Its))]);
             end if;
+            --  Changed again after it was taken in: what shows is more than its.
+            declare
+               Moved_On : Model_Runner.Framework.Name_Lists.Vector;
+            begin
+               for Line of Model_Runner.Framework.Lines_Of (R.Get (Held, "taken_in")) loop
+                  declare
+                     Tab  : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
+                     Path : constant String := (if Tab = 0 then Line else Line (Line'First .. Tab - 1));
+                     Then_Print : constant String := (if Tab = 0 then "" else Line (Tab + 1 .. Line'Last));
+                     Whole : constant String := Hostkit.Fs.Join (Project, Path);
+                  begin
+                     if (Ours.Contains (Path) or else Fresh.Contains (Path))
+                       and then Then_Print /= ""
+                       and then Then_Print /= Model_Runner.Framework.Work.File_Print (Whole)
+                     then
+                        Moved_On.Append (Path);
+                     end if;
+                  end;
+               end loop;
+               if not Moved_On.Is_Empty then
+                  Pres.Put_Note (Screen, "cli.task.diff_changed_since",
+                                 [Loc.Named ("name", Id), Loc.Named ("detail", Joined (Moved_On))]);
+               end if;
+            end;
             return True;
          end;
       end Shown_Uncommitted;
@@ -2088,7 +2169,57 @@ package body Model_Runner.CLI.Tasks is
             end loop;
             return To_String (Said);
          end Constraints;
-         Limits  : constant String := Constraints;
+         --  Places as the kinds write them: ./src and src are src/.
+         function Normal_Places (Text : String) return String is
+            Result : Unbounded_String;
+            Start  : Natural := Text'First;
+
+            function One_Place (Place : String) return String is
+               Bare : constant String :=
+                 (if Place'Length > 2 and then Place (Place'First .. Place'First + 1) = "./"
+                  then Place (Place'First + 2 .. Place'Last) else Place);
+            begin
+               return (if Bare /= "" and then Bare (Bare'Last) /= '/'
+                         and then Ada.Directories.Exists (Bare)
+                         and then Ada.Directories."=" (Ada.Directories.Kind (Bare), Ada.Directories.Directory)
+                       then Bare & "/" else Bare);
+            exception
+               when others =>
+                  return Bare;
+            end One_Place;
+
+            function One_Word (Word : String) return String is
+               Eq : constant Natural := Ada.Strings.Fixed.Index (Word, "=");
+            begin
+               if Eq = 0 or else Word (Word'First .. Eq) not in "roots=" | "deny=" then
+                  return Word;
+               end if;
+               declare
+                  Said  : Unbounded_String := To_Unbounded_String (Word (Word'First .. Eq));
+                  From  : Natural := Eq + 1;
+               begin
+                  for Index in Eq + 1 .. Word'Last + 1 loop
+                     if Index > Word'Last or else Word (Index) = '|' then
+                        Append (Said, (if From = Eq + 1 then "" else "|") & One_Place (Word (From .. Index - 1)));
+                        From := Index + 1;
+                     end if;
+                  end loop;
+                  return To_String (Said);
+               end;
+            end One_Word;
+         begin
+            for Index in Text'First .. Text'Last + 1 loop
+               if Index > Text'Last or else Text (Index) = ' ' then
+                  if Index > Start then
+                     Append (Result, (if Result = Null_Unbounded_String then "" else " ")
+                             & One_Word (Text (Start .. Index - 1)));
+                  end if;
+                  Start := Index + 1;
+               end if;
+            end loop;
+            return To_String (Result);
+         end Normal_Places;
+         Limits  : constant String := Normal_Places (Constraints);
          Defined : R.Item;
          Read    : E.Error_Info;
          Given   : Tk.Field_Map;
@@ -2107,10 +2238,13 @@ package body Model_Runner.CLI.Tasks is
          end loop;
          if not Known then
             Outcome := (if Cap = "" then E.Make (E.Framework_Input_Missing) else E.Make (E.Framework_Input_Invalid));
-            E.Add_Text (Outcome, "name", "the capability to " & (if Granting then "grant" else "withhold")
-                        & ": /task " & (if Granting then "grant " else "withhold ") & First_Word
-                        & " CAPABILITY" & (if Granting then " [roots=DIR ...]" else ""));
-            if Cap /= "" then
+            E.Add_Text (Outcome, "name", "the capability to " & (if Granting then "grant" else "withhold"));
+            if Cap'Length > 1 and then Cap (Cap'First) = '-' then
+               --  -CAP is how permissions= takes one away: withhold it.
+               E.Add_Text (Outcome, "value", Cap);
+               E.Add_Text (Outcome, "detail", "-CAP is written in permissions=; /task withhold " & First_Word & " "
+                           & Cap (Cap'First + 1 .. Cap'Last) & " takes it away");
+            elsif Cap /= "" then
                E.Add_Text (Outcome, "value", Cap);
                E.Add_Text (Outcome, "detail", (if Capability_Near (Cap) /= ""
                                                then "did you mean " & Capability_Near (Cap) & "? " else "")
@@ -2191,12 +2325,20 @@ package body Model_Runner.CLI.Tasks is
                   Present  : Boolean;
                   Of_Level : constant Pm.Permission_Set := Pm.Level_Of (Store, "kind." & Kind, Present);
                   By_Kind  : constant Boolean := Present and then not Of_Level (Which).Granted;
+                  --  The project above withholding it too: both said at once.
+                  By_Project : constant Boolean :=
+                    not Pm.Effective (Store, "", "", Within_Sandbox => False) (Which).Granted;
                begin
                   Outcome := E.Make (E.Framework_Input_Invalid);
                   E.Add_Text (Outcome, "name", "the capability to grant");
                   E.Add_Text (Outcome, "value", Cap);
                   E.Add_Text (Outcome, "detail",
-                              (if By_Kind
+                              (if By_Kind and then By_Project
+                               then "its kind " & Kind & " and the project both withhold it, and a task is given"
+                                    & " no more than either; /reconfigure map.permission.project." & Cap
+                                    & "=on and /reconfigure map.permission.kind." & Kind & "." & Cap
+                                    & "=on grant it to both"
+                               elsif By_Kind
                                then "its kind " & Kind & " withholds it, and a task is given no more than its kind;"
                                     & " /reconfigure map.permission.kind." & Kind & "." & Cap
                                     & "=on grants it to the kind"
@@ -3053,6 +3195,10 @@ package body Model_Runner.CLI.Tasks is
                      elsif Shown_Name = "acceptance" and then Shown_Value = "from_requirements"
                      then "the criteria of the requirements it serves"
                      elsif Shown_Name = "gates" then Gates_Said (Shown_Value)
+                     --  Its state is said above: not again before why.
+                     elsif Shown_Name = "blocked_by" and then Shown_Value'Length > 15
+                       and then Shown_Value (Shown_Value'First .. Shown_Value'First + 14) = "it is blocked: "
+                     then Shown_Value (Shown_Value'First + 15 .. Shown_Value'Last)
                      else Shown_Value);
                begin
                   Grouped ("  " & Label, Value);
@@ -3408,6 +3554,9 @@ package body Model_Runner.CLI.Tasks is
               and then Ada.Strings.Fixed.Index (R.Get (View, "blocked_by"), "waiting for its children") = 0
             then
                Pres.Put_Note (Screen, "cli.next.retry", [Loc.Named ("name", Argument)]);
+            --  Done by an agent: what it answered is a command away.
+            elsif R.Get (View, "runtime.state") = "complete" and then R.Get (View, "definition.kind") = "analysis" then
+               Pres.Put_Note (Screen, "cli.next.result_answer", [Loc.Named ("name", Argument)]);
             end if;
          end;
       end Show;
@@ -4150,7 +4299,7 @@ package body Model_Runner.CLI.Tasks is
                   --  Nothing waits: said as a state, with where its work is.
                   Pres.Put_Note
                     (Screen, "cli.task.diff_none",
-                     [Loc.Named ("name", First_Word), Loc.Named ("value", Tk.State_Of (Store, First_Word)),
+                     [Loc.Named ("name", First_Word), Loc.Named ("value", Moved_State (First_Word)),
                       Loc.Named ("detail",
                                  (if Never_Worked (First_Word) then "it has not been worked on yet"
                                   elsif Tk.State_Of (Store, First_Word) in "failed" | "blocked"
@@ -4184,7 +4333,8 @@ package body Model_Runner.CLI.Tasks is
                Pres.Put_Note (Screen, "cli.task.workspace_given_up",
                               [Loc.Named ("name", Space), Loc.Named ("detail", Given_Up_Detail (Space, Lost))]);
                Pres.Put_Message (Screen, "cli.task.moved",
-                                 [Loc.Named ("name", First_Word), Loc.Named ("value", "accepted")]);
+                                 [Loc.Named ("name", First_Word),
+                                  Loc.Named ("value", Model_Runner.Framework.State_Said (Moved_State (First_Word)))]);
                Said_Ready.Append (First_Word);
                Pres.Put_Note (Screen, "cli.next.work", [Loc.Named ("name", First_Word)]);
                return;
@@ -4194,6 +4344,48 @@ package body Model_Runner.CLI.Tasks is
          --  Settled, it says, with a file as it was when the conflict was
          --  found: taken over the project's change only when that is said.
          if After_First = "resolved" then
+            --  A file settled in merge/, its markers gone: taken as the
+            --  workspace's, as if settled there.
+            declare
+               Space : constant String := Model_Runner.Framework.Workspaces.Active_For (Store, First_Word);
+               Place : Model_Runner.Framework.Workspaces.Workspace;
+               Read  : E.Error_Info;
+            begin
+               if Space /= "" then
+                  Model_Runner.Framework.Workspaces.Read (Store, Space, Place, Read);
+                  if E.Is_Ok (Read) then
+                     for File of Model_Runner.Framework.Workspaces.Conflict_Files
+                                   (Store, Space, Unsettled_Only => True)
+                     loop
+                        declare
+                           Merged : constant String :=
+                             Hostkit.Fs.Join (Hostkit.Fs.Join (Ada.Directories.Containing_Directory
+                                                                 (To_String (Place.Path)), "merge"), File);
+                           Tree   : constant String := Hostkit.Fs.Join (To_String (Place.Path), File);
+                           Text   : Unbounded_String;
+                           File_In : Ada.Text_IO.File_Type;
+                        begin
+                           if Ada.Directories.Exists (Merged) then
+                              Ada.Text_IO.Open (File_In, Ada.Text_IO.In_File, Merged);
+                              while not Ada.Text_IO.End_Of_File (File_In) loop
+                                 Append (Text, Ada.Text_IO.Get_Line (File_In) & ASCII.LF);
+                              end loop;
+                              Ada.Text_IO.Close (File_In);
+                              if Index (Text, "<<<<<<<") = 0 and then Index (Text, ">>>>>>>") = 0 then
+                                 Ada.Directories.Copy_File (Merged, Tree);
+                                 Pres.Put_Note (Screen, "cli.task.merge_taken", [Loc.Named ("path", File)]);
+                              end if;
+                           end if;
+                        exception
+                           when others =>
+                              if Ada.Text_IO.Is_Open (File_In) then
+                                 Ada.Text_IO.Close (File_In);
+                              end if;
+                        end;
+                     end loop;
+                  end if;
+               end if;
+            end;
             declare
                Space     : constant String :=
                  Model_Runner.Framework.Workspaces.Active_For (Store, First_Word);
@@ -4208,7 +4400,8 @@ package body Model_Runner.CLI.Tasks is
                   E.Add_Text (Outcome, "detail", Joined (Unsettled)
                               & ", not changed since the conflict was found; settle "
                               & (if Natural (Unsettled.Length) = 1 then "it" else "them")
-                              & " in the workspace, or /task integrate " & First_Word
+                              & " in the workspace's tree/ -- or in merge/, its markers taken out -- or"
+                              & " /task integrate " & First_Word
                               & " resolved anyway takes the workspace's copy over the project's");
                   Fail (Outcome);
                   return;
@@ -4458,7 +4651,7 @@ package body Model_Runner.CLI.Tasks is
          Pres.Put_Message
            (Screen, "cli.task.moved",
             [Loc.Named ("name", First_Word),
-             Loc.Named ("value", Model_Runner.Framework.State_Said (To_String (Done.Final_State)))]);
+             Loc.Named ("value", Model_Runner.Framework.State_Said (Moved_State (First_Word)))]);
          --  Held back by its parts: the first of them is what to do; a
          --  retry would only wait for them again.
          if To_String (Done.Final_State) in "failed" | "blocked" then
@@ -5048,6 +5241,24 @@ package body Model_Runner.CLI.Tasks is
             E.Add_Text (Outcome, "detail", "ready and waiting are how /task list says accepted -- ready when"
                         & " nothing stands in its way; /task move " & First_Word & " accepted moves it there");
             Fail (Outcome);
+         elsif Ada.Strings.Fixed.Head (After_First & " ", 8) = "stopped "
+           or else Ada.Strings.Fixed.Head (After_First & " ", 13) = "to integrate "
+           or else Ada.Strings.Fixed.Head (After_First & " ", 8) = "refused "
+         then
+            --  How /task list says a state, not one of its own: which.
+            Outcome := E.Make (E.Framework_Input_Invalid);
+            E.Add_Text (Outcome, "name", "the state to move " & First_Word & " to");
+            E.Add_Text (Outcome, "value", After_First);
+            E.Add_Text (Outcome, "detail",
+                        (if Ada.Strings.Fixed.Head (After_First & " ", 8) = "stopped "
+                         then "stopped is how /task list says blocked by you; /task move " & First_Word
+                              & " blocked stops it"
+                         elsif Ada.Strings.Fixed.Head (After_First & " ", 8) = "refused "
+                         then "refused is how /task list says accepted and kept from the work by its permissions;"
+                              & " /task grant gives it what it lacks"
+                         else "to integrate is how /task list says verification with its work waiting; /work "
+                              & First_Word & " puts it there"));
+            Fail (Outcome);
          elsif Ada.Strings.Fixed.Head (After_First & " ", 9) in "complete " | "running  " then
             --  The harness's moves: by work, or completed by hand.
             Outcome := E.Make (E.Framework_Transition_Invalid);
@@ -5473,6 +5684,11 @@ package body Model_Runner.CLI.Tasks is
                                  end Holds_Work;
                                  Undo  : constant Boolean := not Holds_Work;
                               begin
+                                 --  Its work gone from the project: kept in its
+                                 --  history, so nothing there is credited to it.
+                                 if Undo and then State /= "" then
+                                    Model_Runner.Framework.Work.Note_Undone (Store, Owner, Name);
+                                 end if;
                                  if State /= "" then
                                     Pres.Put_Note
                                       (Screen, "cli.task.after_restore",
@@ -5481,6 +5697,10 @@ package body Model_Runner.CLI.Tasks is
                                                    (if Undo and then State = "complete"
                                                     then "its work is undone in the project now: /task reopen "
                                                          & Owner & " takes it up again"
+                                                    --  Taken up already: worked again, not accepted.
+                                                    elsif Undo and then State = "accepted"
+                                                    then "its work is undone in the project now: /work "
+                                                         & Owner & " does it again"
                                                     elsif Undo
                                                     then "its work is undone in the project now: /task accept "
                                                          & Owner & " tries it again"
@@ -5551,7 +5771,15 @@ package body Model_Runner.CLI.Tasks is
                                then "its workspace was given up, what it changed kept in " & Kept_For (First_Word)
                                     & "; /task kept diff " & Kept_For (First_Word) & " shows it, and /task kept"
                                     & " restore " & Kept_For (First_Word) & " puts it in the project"
-                               else "any work it did is in the project itself; /git shows what changed"))]);
+                               --  The files said where it names them; /git only
+                               --  where there is a repository to ask.
+                               else (if Changed_By (First_Word) /= ""
+                                     then "what it changed -- " & Changed_By (First_Word)
+                                          & " -- is in the project itself"
+                                     else "any work it did is in the project itself")
+                                    & (if Model_Runner.Framework.Git.Status_Of
+                                            (Ada.Directories.Containing_Directory (S.Root (Store))).Found
+                                       then "; /git shows what changed" else "")))]);
             else
                Model_Runner.Framework.Workspaces.Read (Store, Space, Place, Read);
                declare
@@ -5612,8 +5840,15 @@ package body Model_Runner.CLI.Tasks is
                         --  The project's copy moved on as well: said, as what
                         --  taking it in will check.
                         if From = Base and then Ada.Directories.Exists (Mine) and then not Same (Base, Mine) then
-                           Pres.Put_Note (Screen, "cli.task.diff_project_moved",
-                                          [Loc.Named ("path", File), Loc.Named ("name", First_Word)]);
+                           --  Said as taking it in will find it: joined, or a conflict.
+                           if Model_Runner.Framework.Workspaces.Joins_Cleanly (Store, Space, File) then
+                              Pres.Put_Note (Screen, "cli.task.diff_project_moved",
+                                             [Loc.Named ("path", File), Loc.Named ("name", First_Word)]);
+                           else
+                              Pres.Put_Note (Screen, "cli.task.diff_project_clashes",
+                                             [Loc.Named ("path", File), Loc.Named ("name", First_Word)]);
+                              Clashing.Append (File);
+                           end if;
                         --  Made in the project too since the work began: what
                         --  the diff shows taken away is the project's own.
                         elsif From = Mine and then Ada.Directories.Exists (Theirs) then

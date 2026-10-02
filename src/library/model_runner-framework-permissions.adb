@@ -351,8 +351,12 @@ package body Model_Runner.Framework.Permissions is
                            & " run_build, run_tests, run_static_analysis, create_children,"
                            & " propose_tasks, request_integration, use_network and"
                            & " execute_external_process"
-                           & (if Ada.Strings.Fixed.Index (Name, "=") > 0
+                           & (if Ada.Strings.Fixed.Tail (Trim (Name), 3) = "=on"
+                                or else Ada.Strings.Fixed.Tail (Trim (Name), 4) = "=off"
                               then " -- on and off are for a level's, by /reconfigure map.permission.LEVEL.NAME=off"
+                              elsif Ada.Strings.Fixed.Index (Name, ",") > 0
+                              then " -- a capability's places follow it after a space, as write_source roots=src/,"
+                                   & " and capabilities are a ; apart"
                               else ""));
                Result := Nothing;
                return;

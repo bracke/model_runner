@@ -259,7 +259,26 @@ package body Model_Runner.CLI.Completion is
             elsif Action in "list" | "plan" | "new" then
                Offer_Words ("kind= component= state= requirement=");
             else
-               Offer_All (Tk.List (Store));
+               --  Only those the action takes, by their state.
+               for Id of Tk.List (Store) loop
+                  declare
+                     State : constant String := Tk.State_Of (Store, Id);
+                  begin
+                     if (if Action = "accept" then State in "candidate" | "failed" | "blocked"
+                         elsif Action = "reject" then State = "candidate"
+                         elsif Action = "complete" then State in "accepted" | "failed" | "blocked" | "verification"
+                         elsif Action = "integrate"
+                         then Model_Runner.Framework.Workspaces.Active_For (Store, Id) /= ""
+                         elsif Action in "cancel" | "split" | "depend" | "edit" | "note" | "grant" | "withhold"
+                         then State not in "complete" | "cancelled" | "rejected"
+                         elsif Action = "reopen" then State in "complete" | "cancelled" | "failed" | "blocked"
+                         elsif Action = "reconsider" then State = "rejected"
+                         else True)
+                     then
+                        Offer (Id);
+                     end if;
+                  end;
+               end loop;
                if Action in "accept" | "reject" | "complete" | "verify" | "integrate" then
                   Offer ("all");
                end if;
@@ -271,7 +290,36 @@ package body Model_Runner.CLI.Completion is
                   Offer ("all");
                end if;
             elsif Action in "grant" | "withhold" then
-               Capabilities;
+               --  Those it could be given -- its kind's -- or has, to take away.
+               declare
+                  package Pm renames Model_Runner.Framework.Permissions;
+                  Typed   : constant String := Words (3);
+                  Id      : constant String :=
+                    (if Typed /= "" and then (for all C of Typed => C in '0' .. '9')
+                     then "TASK-" & (if Typed'Length >= 3 then Typed else [1 .. 3 - Typed'Length => '0'] & Typed)
+                     else Ada.Characters.Handling.To_Upper (Typed));
+                  Defined : R.Item;
+                  Got     : E.Error_Info;
+               begin
+                  Tk.Definition (Store, Id, Defined, Got);
+                  if E.Is_Error (Got) then
+                     Capabilities;
+                  else
+                     declare
+                        Allowed : constant Pm.Permission_Set :=
+                          Pm.Effective (Store, R.Get (Defined, "kind"), "",
+                                        Task_Level => (if Action = "withhold" then R.Get (Defined, "permissions")
+                                                       else ""),
+                                        Within_Sandbox => False);
+                     begin
+                        for One in Pm.Capability loop
+                           if Allowed (One).Granted then
+                              Offer (Pm.Word (One));
+                           end if;
+                        end loop;
+                     end;
+                  end if;
+               end;
             elsif Action = "link" then
                Offer_All (Nt.List (Store, Nt.Requirement));
             elsif Action = "depend" then
@@ -285,8 +333,18 @@ package body Model_Runner.CLI.Completion is
             Offer ("remove");
          elsif Command in "/req" | "/spec" | "/decision" and then Position = 3 then
             --  Accepting or rejecting is of what waits: the candidates.
-            Offer_All (if Action in "accept" | "reject" then Nt.List (Store, Register (Command), "candidate")
-                       else Nt.List (Store, Register (Command)));
+            if Action in "accept" | "reject" then
+               Offer_All (Nt.List (Store, Register (Command), "candidate"));
+            else
+               --  What is retired is shown, not revised or linked.
+               for Id of Nt.List (Store, Register (Command)) loop
+                  if Action in "show" | "reconsider"
+                    or else Nt.State_Of (Store, Register (Command), Id) not in "obsolete" | "superseded" | "rejected"
+                  then
+                     Offer (Id);
+                  end if;
+               end loop;
+            end if;
             if Action in "accept" | "reject" | "obsolete" | "verify" then
                Offer ("all");
             end if;
@@ -335,9 +393,22 @@ package body Model_Runner.CLI.Completion is
                end if;
             end loop;
          elsif Command = "/result" and then Position = 2 then
-            for Name of S.Names (Store, Model_Runner.Framework.Results_Area) loop
-               Offer (if Name'Length > 4 and then Name (Name'Last - 3 .. Name'Last) = ".rec"
-                      then Name (Name'First .. Name'Last - 4) else Name);
+            --  Tasks first, then the issues it lists and the runs and checks
+            --  it shows -- not every log a check kept.
+            Offer ("all");
+            Offer_All (Tk.List (Store));
+            Offer_All (Model_Runner.CLI.Project_Commands.Open_Issues (Store));
+            for Name of S.Names (Store, Model_Runner.Framework.Invocations_Area) loop
+               if Ada.Strings.Fixed.Index (Name, "INV-") = Name'First then
+                  Offer (if Name'Length > 4 and then Name (Name'Last - 3 .. Name'Last) = ".rec"
+                         then Name (Name'First .. Name'Last - 4) else Name);
+               end if;
+            end loop;
+            for Name of S.Names (Store, Model_Runner.Framework.Verification_Area) loop
+               if Ada.Strings.Fixed.Index (Name, "VER-") = Name'First then
+                  Offer (if Name'Length > 4 and then Name (Name'Last - 3 .. Name'Last) = ".rec"
+                         then Name (Name'First .. Name'Last - 4) else Name);
+               end if;
             end loop;
          elsif Command = "/result" and then Position = 3 and then Action = "restore" then
             --  Only those dismissed come back.

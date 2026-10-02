@@ -416,6 +416,21 @@ package Model_Runner.Framework.Work is
       Said   : out Name_Lists.Vector;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Note in a task's history that what its work wrote was put back as
+   --  the project had it: its work is in the project no more, and no change
+   --  there is credited to it until it is taken in again.
+   --
+   --  @param Item The store.
+   --  @param Task_Id The task.
+   --  @param Copy The kept copy put back.
+   procedure Note_Undone (Item : in out Stores.Store; Task_Id, Copy : String);
+
+   --  A file's content as a fingerprint, as what a task took in is kept.
+   --
+   --  @param Path The file.
+   --  @return Its fingerprint; "-" where there is no such file.
+   function File_Print (Path : String) return String;
+
    --  Everything a project's state needs looked at when it is opened, with
    --  no conversation to go on: what the store's own recovery did to its
    --  transactions and index; tasks left running with no one running them

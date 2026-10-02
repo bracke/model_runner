@@ -157,6 +157,16 @@ package Model_Runner.Framework.Workspaces is
    --  @return Their paths.
    function Last_Joined return Name_Lists.Vector;
 
+   --  Whether a file the workspace and the project both changed since it
+   --  was made would join, as taking the work in joins it: they change
+   --  different lines.
+   --
+   --  @param Item The store.
+   --  @param Id The workspace.
+   --  @param Path The file, as the project names it.
+   --  @return True where it joins without a conflict.
+   function Joins_Cleanly (Item : Stores.Store; Id, Path : String) return Boolean;
+
    --  Where a workspace's work is kept once it is given up: under the
    --  project's runtime, named by its task and itself, so a later give-up
    --  of the same task keeps its own.

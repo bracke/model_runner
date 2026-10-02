@@ -444,8 +444,43 @@ package body Model_Runner.Framework.Consistency is
                Read    : E.Error_Info;
                Asked   : Permissions.Permission_Set;
                Parsed  : E.Error_Info;
+
+               --  A restriction as the set it asks for; nothing where it
+               --  does not read.
+               function Asked_Of (Text : String) return Permissions.Permission_Set is
+                  Result : Permissions.Permission_Set;
+                  Bad    : E.Error_Info;
+               begin
+                  Permissions.Restriction (Text, Result, Bad);
+                  return (if E.Is_Ok (Bad) then Result else Permissions.Nothing);
+               end Asked_Of;
             begin
                Tasks.Definition (Item, Id, Defined, Read);
+               --  What the project withholds, which no kind or task below it
+               --  can have: named as the project's, with what grants it.
+               declare
+                  Present : Boolean;
+                  Of_Kind : constant Permissions.Permission_Set :=
+                    Permissions.Level_Of (Item, "kind." & Records.Get (Defined, "kind"), Present);
+                  Withheld : constant String :=
+                    (if E.Is_Error (Read) then ""
+                     else Permissions.Clipped
+                            ((if Records.Get (Defined, "permissions") /= ""
+                                and then not Permissions.Only_Withholds (Records.Get (Defined, "permissions"))
+                              then Asked_Of (Records.Get (Defined, "permissions"))
+                              elsif Present then Of_Kind
+                              else Permissions.Nothing),
+                             Permissions.Effective (Item, "", "", Within_Sandbox => False)));
+               begin
+                  if Withheld /= "" then
+                     Found (Permission_Widening, Id,
+                            "it asks for what the project withholds -- " & Withheld
+                            & "; nothing below the project is given more, so it cannot have it:"
+                            & " /config permission.project shows the project's, and /reconfigure"
+                            & " map.permission.project.CAPABILITY=on grants one");
+                     goto Next_Task;
+                  end if;
+               end;
                if E.Is_Ok (Read) and then Records.Get (Defined, "permissions") /= ""
                  and then not Permissions.Only_Withholds (Records.Get (Defined, "permissions"))
                then
@@ -469,6 +504,7 @@ package body Model_Runner.Framework.Consistency is
                end if;
             end;
          end if;
+         <<Next_Task>>
       end loop;
 
       --  Tasks: every task named is one there is, no dependency or parent

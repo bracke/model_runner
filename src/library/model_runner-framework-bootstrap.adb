@@ -160,6 +160,15 @@ package body Model_Runner.Framework.Bootstrap is
                 Ada.Strings.Fixed.Index (Lower, Word) > 0);
    end Retired_Status;
 
+   --  A status that says it is not decided yet: open, draft, proposed.
+   function Draft_Status (Said : String) return Boolean is
+      Lower : constant String := Ada.Characters.Handling.To_Lower (Ada.Strings.Fixed.Trim (Said, Ada.Strings.Both));
+   begin
+      return (for some Word of Name_Lists.Vector'(["open", "draft", "proposed", "new", "candidate", "in review",
+                                                    "under review", "tbd"]) =>
+                Lower'Length >= Word'Length and then Lower (Lower'First .. Lower'First + Word'Length - 1) = Word);
+   end Draft_Status;
+
    function Says_Requirement (Item : String; Listed : Boolean) return Boolean is
       Lower : constant String := Ada.Characters.Handling.To_Lower (Item);
    begin
@@ -464,9 +473,10 @@ package body Model_Runner.Framework.Bootstrap is
          First  : constant Natural := Ada.Strings.Fixed.Index (Title, "**");
          Second : constant Natural :=
            (if First = 0 then 0 else Ada.Strings.Fixed.Index (Title (First + 2 .. Title'Last), "**"));
+         --  A bold lead-in begins the line; bold inside it -- The store
+         --  **shall** ... -- is emphasis, and the words go on.
          Cut    : constant Natural :=
-           (if Second > 0 then Second
-            elsif First > Title'First + 1 then First
+           (if Second > 0 and then First = Title'First then Second
             else 0);
          Kept   : constant String :=
            Trim (Plain (if Cut = 0 then Title else Title (Title'First .. Cut - 1)));
@@ -1155,6 +1165,28 @@ package body Model_Runner.Framework.Bootstrap is
             end;
             return;
          end if;
+         --  A requirement's own status: retired, it is not proposed; not
+         --  decided yet, it waits as a candidate.
+         if Section > 0 and then Status_Said (Line) /= ""
+           and then Result.Outputs (Section).Kind in Imported_Item | Requirement_Candidate
+           and then (Retired_Status (Status_Said (Line)) or else Draft_Status (Status_Said (Line)))
+         then
+            declare
+               Held : Output := Result.Outputs (Section);
+            begin
+               Held.Status := To_Unbounded_String (Status_Said (Line));
+               if Retired_Status (Status_Said (Line)) then
+                  Held.Kind := Issue;
+                  Held.Provenance := Held.Provenance & "#retired";
+                  Held.Title := (if Held.Given_Id /= Null_Unbounded_String then Held.Given_Id & ": " else
+                                   Null_Unbounded_String)
+                    & Held.Title & " is " & Ada.Characters.Handling.To_Lower (Status_Said (Line))
+                    & " in " & Path & ", so it is not proposed";
+               end if;
+               Result.Outputs (Section) := Held;
+            end;
+            return;
+         end if;
          if Section > 0 and then Status_Said (Line) /= "" then
             --  Its status is no part of what it says: done already, it is
             --  said, as work a person takes as done, not does again.
@@ -1747,6 +1779,9 @@ package body Model_Runner.Framework.Bootstrap is
       --  A table's row of an identifier and its words: a labelled line, as
       --  a list says it; one marked done, ticked. A row marked retired is
       --  left as it is, to be said so.
+      --  The head of the table being read: its columns' names.
+      Heads : Name_Lists.Vector;
+
       function Row (Line : String) return String is
          Cells : Name_Lists.Vector;
          Start : Positive := Line'First + 1;
@@ -1761,20 +1796,46 @@ package body Model_Runner.Framework.Bootstrap is
          if Natural (Cells.Length) < 2 or else not Is_Label (Cells (1)) or else Cells (2) = "" then
             return Line;
          end if;
-         for Cell of Cells loop
+         for Index in Cells.First_Index .. Cells.Last_Index loop
             declare
-               Lower_Cell : constant String := Ada.Characters.Handling.To_Lower (Cell);
+               Lower_Cell : constant String := Ada.Characters.Handling.To_Lower (Cells (Index));
+               --  Its column's head, where the table has one: Done | yes.
+               Head       : constant String :=
+                 (if Index <= Heads.Last_Index then Ada.Characters.Handling.To_Lower (Heads (Index)) else "");
             begin
                if Lower_Cell in "superseded" | "deprecated" | "rejected" | "withdrawn" | "obsolete" then
                   return Line;
                end if;
-               Done := Done or else Lower_Cell in "done" | "implemented" | "complete" | "completed";
+               Done := Done or else Lower_Cell in "done" | "implemented" | "complete" | "completed"
+                 or else (Head in "done" | "implemented" | "complete" | "completed"
+                          and then Lower_Cell in "yes" | "y" | "x" | "true" | "[x]");
             end;
          end loop;
          return "- " & (if Done then "[x] " else "") & Cells (1) & ": " & Cells (2);
       end Row;
    begin
       for Index in 1 .. Natural (Lines.Length) loop
+         --  A rule under a row: that row is the table's head.
+         declare
+            Rule : constant String := Ada.Strings.Fixed.Trim (Lines (Index), Ada.Strings.Both);
+         begin
+            if Index > 1 and then Rule'Length > 2 and then Rule (Rule'First) = '|'
+              and then (for all C of Rule => C in '|' | '-' | ':' | ' ')
+            then
+               Heads.Clear;
+               declare
+                  Head  : constant String := Ada.Strings.Fixed.Trim (Lines (Index - 1), Ada.Strings.Both);
+                  Start : Natural := Head'First + 1;
+               begin
+                  for At_Index in Head'First + 1 .. Head'Last loop
+                     if Head (At_Index) = '|' then
+                        Heads.Append (Ada.Strings.Fixed.Trim (Head (Start .. At_Index - 1), Ada.Strings.Both));
+                        Start := At_Index + 1;
+                     end if;
+                  end loop;
+               end;
+            end if;
+         end;
          declare
             Line : constant String := Lines (Index);
             Said : Unbounded_String := To_Unbounded_String (Line);
@@ -1805,19 +1866,20 @@ package body Model_Runner.Framework.Bootstrap is
             elsif Asciidoc and then Table_Heads and then Bare /= "" then
                Table_Heads := False;
             end if;
-            --  reStructuredText's directive -- .. req:: REQ-20 -- with its
-            --  body indented under it: that labelled item, its body its words.
+            --  reStructuredText's directive -- .. req:: REQ-20, or a title
+            --  with :id: REQ-20 under it -- its body indented under it: that
+            --  labelled item, its body its words, its :status: its status.
             if Rst and then Bare'Length > 4 and then Bare (Bare'First .. Bare'First + 2) = ".. "
               and then Ada.Strings.Fixed.Index (Bare, ":: ") > 0
-              and then Is_Label (Ada.Strings.Fixed.Trim
-                                   (Bare (Ada.Strings.Fixed.Index (Bare, ":: ") + 3 .. Bare'Last), Ada.Strings.Both))
             then
                declare
-                  Label : constant String :=
+                  Argument : constant String :=
                     Ada.Strings.Fixed.Trim (Bare (Ada.Strings.Fixed.Index (Bare, ":: ") + 3 .. Bare'Last),
                                             Ada.Strings.Both);
-                  Words : Unbounded_String;
-                  Next  : Natural := Index + 1;
+                  Words    : Unbounded_String;
+                  Id_Given : Unbounded_String;
+                  Status   : Unbounded_String;
+                  Next     : Natural := Index + 1;
                begin
                   --  Indented under it -- or, where the indent was lost, the
                   --  first line of words after it.
@@ -1829,22 +1891,80 @@ package body Model_Runner.Framework.Bootstrap is
                                        and then Ada.Strings.Fixed.Index (String'(Lines (Next)), "..") /= 1
                                        and then Ada.Strings.Fixed.Index (String'(Lines (Next)), ":") /= 1))
                   loop
+                     exit when String'(Lines (Next)) = "" and then Words /= Null_Unbounded_String
+                       and then Next < Natural (Lines.Length)
+                       and then Ada.Strings.Fixed.Index (String'(Lines (Next + 1)), " ") /= 1;
                      declare
                         Body_Line : constant String := Ada.Strings.Fixed.Trim (Lines (Next), Ada.Strings.Both);
                      begin
-                        --  Its options -- :status: open -- are no part of what it says.
-                        if Body_Line /= "" and then Body_Line (Body_Line'First) /= ':' then
+                        --  Its options -- :id:, :status: -- are what it is,
+                        --  not what it says.
+                        if Body_Line'Length > 4 and then Body_Line (Body_Line'First .. Body_Line'First + 3) = ":id:"
+                        then
+                           Id_Given := To_Unbounded_String
+                             (Ada.Strings.Fixed.Trim (Body_Line (Body_Line'First + 4 .. Body_Line'Last),
+                                                      Ada.Strings.Both));
+                        elsif Body_Line'Length > 8
+                          and then Body_Line (Body_Line'First .. Body_Line'First + 7) = ":status:"
+                        then
+                           Status := To_Unbounded_String
+                             (Ada.Strings.Fixed.Trim (Body_Line (Body_Line'First + 8 .. Body_Line'Last),
+                                                      Ada.Strings.Both));
+                        elsif Body_Line /= "" and then Body_Line (Body_Line'First) /= ':' then
                            Append (Words, (if Words = Null_Unbounded_String then "" else " ") & Body_Line);
                         end if;
                      end;
                      Next := Next + 1;
                   end loop;
-                  Taken_To := Next - 1;
-                  Append (Output, "- " & Label & ": " & To_String (Words) & ASCII.LF);
+                  declare
+                     Label : constant String :=
+                       (if Is_Label (Argument) then Argument
+                        elsif Is_Label (To_String (Id_Given)) then To_String (Id_Given)
+                        else "");
+                     Title : constant String := (if Is_Label (Argument) then "" else Argument);
+                     --  The words without a label they repeat: Requirement REQ-2: ...
+                     function Unrepeated (Text : String) return String is
+                     begin
+                        for Lead of Name_Lists.Vector'(["Requirement " & Label & ":", Label & ":"]) loop
+                           if Text'Length > Lead'Length
+                             and then Text (Text'First .. Text'First + Lead'Length - 1) = Lead
+                           then
+                              return Ada.Strings.Fixed.Trim (Text (Text'First + Lead'Length .. Text'Last),
+                                                             Ada.Strings.Both);
+                           end if;
+                        end loop;
+                        return Text;
+                     end Unrepeated;
+                     Said_Words : constant String :=
+                       (if Words = Null_Unbounded_String then Title else Unrepeated (To_String (Words)));
+                  begin
+                     if Label /= "" then
+                        Taken_To := Next - 1;
+                        if Status = Null_Unbounded_String then
+                           Append (Output, "- " & Label & ": " & Said_Words & ASCII.LF);
+                        else
+                           --  With a status of its own: a heading, its words,
+                           --  and its status, as a section says them.
+                           Append (Output, "## " & Label & " "
+                                   & (if Title = "" or else Words = Null_Unbounded_String
+                                      then Said_Words else Title)
+                                   & ASCII.LF & Said_Words & ASCII.LF & "Status: " & To_String (Status)
+                                   & ASCII.LF & ASCII.LF);
+                        end if;
+                        goto Next_Line;
+                     end if;
+                  end;
                end;
-               goto Next_Line;
             end if;
-            if Bare'Length > 2 and then Bare (Bare'First) = '|' then
+            if Asciidoc and then Bare'Length > 6 and then Bare (Bare'First) in '*' | '-'
+              and then Bare (Bare'First + 1 .. Bare'First + 4) in " [*]" | " [x]" | " [X]" | " [ ]"
+              and then Bare (Bare'First + 5) = ' '
+            then
+               --  AsciiDoc's checklist -- * [*] done, * [ ] open -- as a
+               --  Markdown one says it.
+               Said := To_Unbounded_String
+                 ((if Bare (Bare'First + 3) = ' ' then "- [ ] " else "- [x] ") & Bare (Bare'First + 6 .. Bare'Last));
+            elsif Bare'Length > 2 and then Bare (Bare'First) = '|' then
                Said := To_Unbounded_String (Row (Bare));
             --  reStructuredText's list-table: * - ID, then - its words.
             elsif Rst and then Bare'Length > 4 and then Bare (Bare'First .. Bare'First + 3) = "* - "
@@ -1901,6 +2021,16 @@ package body Model_Runner.Framework.Bootstrap is
       Result : Unbounded_String;
       Inside : Boolean := False;
       Closed : Boolean := False;
+      --  Its id and title, where it gives them: the heading it is read under.
+      Id, Title, Status : Unbounded_String;
+
+      function Value_Of (Line, Key : String) return String
+      is (if Line'Length > Key'Length
+            and then Ada.Characters.Handling.To_Lower (Line (Line'First .. Line'First + Key'Length - 1)) = Key
+          then Ada.Strings.Fixed.Trim
+                 (Ada.Strings.Fixed.Trim (Line (Line'First + Key'Length .. Line'Last), Ada.Strings.Both),
+                  Ada.Strings.Maps.To_Set (""" '"), Ada.Strings.Maps.To_Set (""" '"))
+          else "");
    begin
       if Lines.Is_Empty or else Trim (Lines.First_Element) /= "---" then
          return Text;
@@ -1914,11 +2044,22 @@ package body Model_Runner.Framework.Bootstrap is
             elsif Inside and then Trim (Line) = "---" then
                Inside := False;
                Closed := True;
+               --  Its heading, then its status, as a document says them.
+               if Id /= Null_Unbounded_String or else Title /= Null_Unbounded_String then
+                  Append (Result, "## "
+                          & (if Id = Null_Unbounded_String then "" else To_String (Id) & " ")
+                          & To_String (Title) & ASCII.LF);
+               end if;
+               if Status /= Null_Unbounded_String then
+                  Append (Result, "Status: " & To_String (Status) & ASCII.LF);
+               end if;
             elsif Inside then
-               if Line'Length > 7
-                 and then Ada.Characters.Handling.To_Lower (Line (Line'First .. Line'First + 6)) = "status:"
-               then
-                  Append (Result, "Status: " & Trim (Line (Line'First + 7 .. Line'Last)) & ASCII.LF);
+               if Value_Of (Line, "status:") /= "" then
+                  Status := To_Unbounded_String (Value_Of (Line, "status:"));
+               elsif Value_Of (Line, "id:") /= "" then
+                  Id := To_Unbounded_String (Value_Of (Line, "id:"));
+               elsif Value_Of (Line, "title:") /= "" then
+                  Title := To_Unbounded_String (Value_Of (Line, "title:"));
                end if;
             else
                Append (Result, Line & ASCII.LF);
@@ -2881,7 +3022,9 @@ package body Model_Runner.Framework.Bootstrap is
                         if E.Is_Ok (Status) then
                            Mark_Imported (Intent.Requirement, To_String (Id));
                         end if;
-                        if E.Is_Ok (Status) and then Accept_Imports and then not Moved then
+                        if E.Is_Ok (Status) and then Accept_Imports and then not Moved
+                          and then not Draft_Status (Field (Next.Status))
+                        then
                            Intent.Move
                              (Item, Change, Intent.Requirement, To_String (Id),
                               "accepted", Transitions.Ordinary_Only, Status);

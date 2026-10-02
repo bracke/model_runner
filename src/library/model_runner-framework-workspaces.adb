@@ -745,6 +745,24 @@ package body Model_Runner.Framework.Workspaces is
          Clean := False;
    end Joined_File;
 
+   -------------------
+   -- Joins_Cleanly --
+   -------------------
+
+   function Joins_Cleanly (Item : Stores.Store; Id, Path : String) return Boolean is
+      Held   : Workspace;
+      Got    : E.Error_Info;
+      Joined : Unbounded_String;
+      Clean  : Boolean;
+   begin
+      Read (Item, Id, Held, Got);
+      if E.Is_Error (Got) then
+         return False;
+      end if;
+      Joined_File (Item, Held, Path, Joined, Clean);
+      return Clean;
+   end Joins_Cleanly;
+
    function Conflicts (Item : Stores.Store; Id : String) return Name_Lists.Vector is
       Baseline : constant Maps.Map := Baseline_Of (Item, Id);
       Project  : constant String := Project_Of (Item);
@@ -1515,6 +1533,23 @@ package body Model_Runner.Framework.Workspaces is
                   null;
             end;
          end loop;
+         --  The same as a copy kept of an earlier attempt: that one says it,
+         --  and a second is no more.
+         declare
+            Mine : constant String := Dirs.Simple_Name (Into);
+         begin
+            for Other of Kept_Copies (Item) loop
+               if Other /= Mine and then Dirs.Exists (Into)
+                 and then Ada.Strings.Fixed.Index (Other, "given-up-" & To_String (Held.Task_Id) & "-") = Other'First
+                 and then Name_Lists."=" (Kept_Files (Item, Other), Kept_Files (Item, Mine))
+                 and then (for all Path of Kept_Files (Item, Mine) =>
+                             Print_Of (Hostkit.Fs.Join (Into, Path))
+                             = Print_Of (Hostkit.Fs.Join (Hostkit.Fs.Join (Runtime_Of (Item), Other), Path)))
+               then
+                  Files.Remove_Tree (Into);
+               end if;
+            end loop;
+         end;
       end;
       Remove_Tree (Item, Held);
       Set_Status (Item, Change, Id, "abandoned", "");

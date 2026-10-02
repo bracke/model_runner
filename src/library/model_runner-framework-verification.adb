@@ -2309,7 +2309,8 @@ package body Model_Runner.Framework.Verification is
                if State /= "complete" then
                   --  The way on first -- the work done -- and taking what is
                   --  there as done only after, for code written already.
-                  return Lacks (Id & " serves it and is " & State
+                  return Lacks (Id & " serves it and "
+                                & (if State = "failed" then "has failed" else "is " & State)
                                 & "; it is verified once that is complete"
                                 & (if State = "candidate"
                                    then ": /task accept " & Id & ", then /work " & Id & " does it"

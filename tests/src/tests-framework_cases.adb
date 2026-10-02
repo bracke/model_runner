@@ -2791,6 +2791,15 @@ package body Tests.Framework_Cases is
                  "a derived task kept its requirement's old title: " & R.Get (Defined, "title"));
          Tk.Retitle_Derived (Store, Change, To_String (Req), "Something else", "Again", Retitled);
          Assert (Retitled.Is_Empty, "a task titled otherwise was retitled");
+         --  Its work put back out of the project: kept in its history.
+         declare
+            Held : R.Item;
+         begin
+            Model_Runner.Framework.Work.Note_Undone (Store, Only, "given-up-" & Only & "-WS-000001");
+            S.Read (Store, Model_Runner.Framework.Tasks_Area, Only & ".state", Held, Status);
+            Assert (R.Get (Held, "undone_by") = "given-up-" & Only & "-WS-000001",
+                    "a task whose work was put back out was not noted so: " & R.Get (Held, "undone_by"));
+         end;
       end;
       S.Close (Store);
 

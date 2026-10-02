@@ -275,6 +275,33 @@ package body Model_Runner.Framework.Work is
       Stores.Put (Change, Tasks_Area, Task_Id & ".state", Held);
    end Annotate;
 
+   ----------------
+   -- File_Print --
+   ----------------
+
+   function File_Print (Path : String) return String is
+      Text : Unbounded_String;
+      Got  : E.Error_Info;
+   begin
+      if not Ada.Directories.Exists (Path) then
+         return "-";
+      end if;
+      Files.Read_Text (Path, Text, Got);
+      return (if E.Is_Ok (Got) then Fingerprint (To_String (Text)) else "-");
+   end File_Print;
+
+   -----------------
+   -- Note_Undone --
+   -----------------
+
+   procedure Note_Undone (Item : in out Stores.Store; Task_Id, Copy : String) is
+      Change : Stores.Transaction;
+      Status : E.Error_Info;
+   begin
+      Annotate (Item, Change, Task_Id, "undone_by", Copy);
+      Stores.Commit (Item, Change, Status);
+   end Note_Undone;
+
    --  What was taken in, kept as a result -- the files, and the project's
    --  revision they made, which integration made the state it is in --
    --  named on the task, and said as a change to the source.
@@ -1475,7 +1502,8 @@ package body Model_Runner.Framework.Work is
       Say ("tool versions", Fields_With (Proof, "tool."));
       Say ("completion",
            (if Tasks.State_Of (Item, Task_Id) /= "complete"
-            then "it is " & Tasks.State_Of (Item, Task_Id)
+            then (if Tasks.State_Of (Item, Task_Id) = "failed" then "it has failed"
+                  else "it is " & Tasks.State_Of (Item, Task_Id))
             elsif Records.Get (State, "completed_by") = "hand"
             then "completed by hand"
                  & (if Records.Get (State, "current_verification") = "" then ", with no evidence"
@@ -2072,8 +2100,11 @@ package body Model_Runner.Framework.Work is
             E.Add_Text (Status, "name", "time");
             return;
          end if;
+         --  Run for its task: credited to it, where its agents work in the
+         --  project itself and the checks see what it holds.
          Verification.Run_Profile
-           (Host.Item.all, Change, Profile, "", Evidence, Passed, Status,
+           (Host.Item.all, Change, Profile, (if Host.Apart then "" else To_String (Host.Task_Id)),
+            Evidence, Passed, Status,
             Offline => not May (Host, Permissions.Use_Network, ""),
             Within  => (if Host.Bounded then Natural (Duration'Max (1.0, Time_Left (Host))) else 0));
          if E.Is_Ok (Status) then
@@ -3343,6 +3374,7 @@ package body Model_Runner.Framework.Work is
             end loop;
          end if;
          Annotate (Item, Change, Task_Id, "changed_files", To_String (Files_Text));
+         Annotate (Item, Change, Task_Id, "undone_by", "");
          if not Result.Changed_Files.Is_Empty and then not Isolated then
             declare
                Event : Unbounded_String;
@@ -4677,6 +4709,20 @@ package body Model_Runner.Framework.Work is
 
       if E.Is_Ok (Status) then
          Report_Integration (Item, Change, Id, Task_Id, Taken, Status);
+      end if;
+      --  What it took in, file by file as it was then: what differs later
+      --  is not its; and taken in again, it is undone no more.
+      if E.Is_Ok (Status) then
+         declare
+            Project : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
+            Prints  : Unbounded_String;
+         begin
+            for Path of Taken loop
+               Append (Prints, Path & ASCII.HT & File_Print (Hostkit.Fs.Join (Project, Path)) & ASCII.LF);
+            end loop;
+            Annotate (Item, Change, Task_Id, "taken_in", To_String (Prints));
+            Annotate (Item, Change, Task_Id, "undone_by", "");
+         end;
       end if;
       if E.Is_Ok (Status) then
          Stores.Commit (Item, Change, Status);
