@@ -2272,7 +2272,7 @@ package body Tests.Framework_Cases is
       Document : constant String :=
         "# The parser" & LF
         & "" & LF
-        & "- REQ-PARSE-003: Input is read in one pass." & LF
+        & "- REQ-003: Input is read in one pass." & LF
         & "The parser SHALL reject invalid UTF-8." & LF
         & "It MUST report the offset of the first bad byte." & LF
         & "Decision: errors are values, not exceptions." & LF
@@ -2341,8 +2341,8 @@ package body Tests.Framework_Cases is
               & " new and revise what changed:" & Report.Created'Image);
       Assert (Natural (Nt.List (Store, Nt.Requirement).Length) = 4
               and then Nt.Find_By_Provenance
-                         (Store, Nt.Requirement, "docs/parser.md#REQ-PARSE-003")
-                       = "REQ-PARSE-003",
+                         (Store, Nt.Requirement, "docs/parser.md#REQ-003")
+                       = "REQ-003",
               "the requirements bootstrap made are not the ones it found, under"
               & " the identifier the document gives");
 
@@ -2350,13 +2350,13 @@ package body Tests.Framework_Cases is
       --  an issue, the requirement as it was, and not another item.
       Bs.Apply (Store, Change,
                 Bs.Scan ("docs/parser.md",
-                         "- REQ-PARSE-003: Input is read in one pass, and never twice." & LF),
+                         "- REQ-003: Input is read in one pass, and never twice." & LF),
                 Report, Status);
       S.Commit (Store, Change, Status);
       declare
          Held : Nt.Entity;
       begin
-         Nt.Read (Store, Nt.Requirement, "REQ-PARSE-003", Held, Status);
+         Nt.Read (Store, Nt.Requirement, "REQ-003", Held, Status);
          Assert (E.Is_Ok (Status) and then Report.Created = 0 and then Natural (Report.Revised.Length) = 0
                  and then Report.Issues >= 1 and then Held.Revision = 1
                  and then Ada.Strings.Fixed.Index (To_String (Held.Text), "never twice") = 0
@@ -2367,14 +2367,14 @@ package body Tests.Framework_Cases is
       --  An imported requirement made obsolete is not revised, and does
       --  not stop bootstrap.
       declare
-         Imported : constant String := "REQ-PARSE-003";
+         Imported : constant String := "REQ-003";
       begin
          Nt.Move (Store, Change, Nt.Requirement, Imported, "obsolete", Tr.Ordinary_Only, Status);
          S.Commit (Store, Change, Status);
       end;
       Bs.Apply (Store, Change,
                 Bs.Scan ("docs/parser.md",
-                         "- REQ-PARSE-003: Input is read in two passes." & LF),
+                         "- REQ-003: Input is read in two passes." & LF),
                 Report, Status);
       S.Commit (Store, Change, Status);
       Assert (E.Is_Ok (Status),
@@ -4075,7 +4075,7 @@ package body Tests.Framework_Cases is
       Dirs.Create_Path (Fresh_Root (Store) & "/notes");
       Put_File (Fresh_Root (Store) & "/README.md", "The tool SHALL be ignored here." & LF);
       Put_File (Fresh_Root (Store) & "/notes/io.txt",
-                "- REQ-IO-001: Input is read once." & LF
+                "- REQ-001: Input is read once." & LF
                 & "The reader SHALL stop at the end." & LF
                 & "Decision: errors are values." & LF);
       Assert (Bs.Documents (Store) = Model_Runner.Framework.Name_Lists.To_Vector ("notes/io.txt", 1),
@@ -4129,7 +4129,7 @@ package body Tests.Framework_Cases is
                     "bootstrap run again put the document's words over a person's: "
                     & To_String (Held.Text));
             Bs.Apply (Store, Change,
-                      Bs.Scan ("notes/io.txt", "- REQ-IO-001: Input is read in chunks." & LF),
+                      Bs.Scan ("notes/io.txt", "- REQ-001: Input is read in chunks." & LF),
                       Report, Status);
             S.Commit (Store, Change, Status);
             Nt.Read (Store, Nt.Requirement, Imported, Held, Status);
@@ -4150,11 +4150,11 @@ package body Tests.Framework_Cases is
          Req : Unbounded_String;
       begin
          Nt.Propose (Store, Change, Nt.Requirement, "IO", "Other", "It SHALL be other.", "",
-                     "user", "", "io", Req, Status, Given => "REQ-IO-001");
+                     "user", "", "io", Req, Status, Given => "REQ-001");
          S.Commit (Store, Change, Status);
-         Assert (To_String (Req) = "REQ-IO-001", "the identifier given was not taken");
+         Assert (To_String (Req) = "REQ-001", "the identifier given was not taken");
       end;
-      Found := Bs.Scan ("notes/io.txt", "- REQ-IO-001: Input is read once." & LF);
+      Found := Bs.Scan ("notes/io.txt", "- REQ-001: Input is read once." & LF);
       Bs.Apply (Store, Change, Found, Report, Status);
       S.Commit (Store, Change, Status);
       Assert (E.Is_Ok (Status) and then Report.Issues = 1

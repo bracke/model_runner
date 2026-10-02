@@ -2669,8 +2669,7 @@ package body Model_Runner.Framework.Bootstrap is
         Accept_Numbered and then Records.Get (Settings, "scalar.bootstrap.import") /= "candidate";
 
       --  Whether an identifier a document gives is in the project's own
-      --  form: REQ-n, or REQ-NS-n numbered as the project numbers or where NS
-      --  names a component of it.
+      --  form: REQ-n, or REQ-NS-n where NS names a component of it.
       function Own_Form (Given : String) return Boolean is
          First_Dash : constant Natural := Ada.Strings.Fixed.Index (Given, "-");
          Last_Dash  : constant Natural := Ada.Strings.Fixed.Index (Given, "-", Ada.Strings.Backward);
@@ -2686,10 +2685,9 @@ package body Model_Runner.Framework.Bootstrap is
             Space : constant String := Ada.Characters.Handling.To_Lower (Given (First_Dash + 1 .. Last_Dash - 1));
          begin
             return Ada.Strings.Fixed.Index (Space, "-") = 0
-              --  Numbered as the project numbers, REQ-IO-001, or of a
-              --  component of it: REQ-API-1 is a document's own label.
-              and then (Given'Last - Last_Dash >= 3
-                        or else Records.Has (Settings, "map.component." & Space)
+              --  Of a component of it: REQ-API-1 elsewhere is a document's
+              --  own label.
+              and then (Records.Has (Settings, "map.component." & Space)
                         or else Ada.Strings.Fixed.Index (" " & Records.Get (Settings, "set.components") & " ",
                                                          " " & Space & " ") > 0);
          end;

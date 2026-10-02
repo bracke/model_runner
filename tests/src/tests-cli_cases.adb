@@ -2186,32 +2186,32 @@ package body Tests.CLI_Cases is
       --  7. A document's own identifiers, criteria and decisions are kept;
       --     what it no longer says is named.
       Write (Root & "/g/docs/spec.md",
-             "# Shell" & LF & LF & "## REQ-SHELL-001 Quoting" & LF
+             "# Shell" & LF & LF & "## REQ-001 Quoting" & LF
              & "Arguments SHALL be quoted." & LF & "Acceptance: a space survives" & LF & LF
              & "- DEC-001: We use posix_spawn." & LF & LF & "It SHOULD retry once." & LF);
       Run ("bootstrap");
-      Assert (Shows ("REQ-SHELL-001") and then Shows ("DEC-001") and then Shows ("next: /accept takes what waits")
-              and then Shows ("made REQ-SHELL-001 ""Quoting"", accepted"),
+      Assert (Shows ("REQ-001") and then Shows ("DEC-001") and then Shows ("next: /accept takes what waits")
+              and then Shows ("made REQ-001 ""Quoting"", accepted"),
               "bootstrap did not keep the document's identifiers, or say what it made is: "
               & To_String (Said));
-      Run ("req|show|REQ-SHELL-001");
-      Assert (Shows ("criteria: a space survives") and then Shows ("REQ-SHELL-001: Quoting"),
+      Run ("req|show|REQ-001");
+      Assert (Shows ("criteria: a space survives") and then Shows ("REQ-001: Quoting"),
               "a requirement's criteria and title were not read: " & To_String (Said));
-      Run ("repo|impact|REQ-SHELL-001");
-      Assert (Shows ("requirement  REQ-SHELL-001") and then Shows ("task  TASK-"),
+      Run ("repo|impact|REQ-001");
+      Assert (Shows ("requirement  REQ-001") and then Shows ("task  TASK-"),
               "impact of a requirement did not reach it and the task serving it: "
               & To_String (Said));
       Write (Root & "/g/docs/spec.md",
-             "# Shell" & LF & LF & "## REQ-SHELL-001 Quoting" & LF
+             "# Shell" & LF & LF & "## REQ-001 Quoting" & LF
              & "Arguments SHALL be quoted." & LF & "Acceptance: a space survives" & LF & LF
              & "- DEC-001: We use posix_spawn." & LF & LF & "It SHOULD retry twice." & LF);
       Run ("bootstrap");
       --  Its words changed, and nothing else like them: its new wording, the
       --  same requirement revised -- not a second one beside it.
-      Assert (Shows ("revised REQ-001") and then Shows ("made: 0"),
+      Assert (Shows ("revised REQ-002") and then Shows ("made: 0"),
               "a sentence reworded was not taken as the requirement revised: " & To_String (Said));
       Write (Root & "/g/docs/spec.md",
-             "# Shell" & LF & LF & "## REQ-SHELL-001 Quoting" & LF
+             "# Shell" & LF & LF & "## REQ-001 Quoting" & LF
              & "Arguments SHALL be quoted." & LF & "Acceptance: a space survives" & LF & LF
              & "- DEC-001: We use posix_spawn." & LF & LF & "Output MUST be flushed at exit." & LF);
       Run ("bootstrap");
@@ -2330,15 +2330,15 @@ package body Tests.CLI_Cases is
       end;
       --  A heading's requirement takes its section and its criteria.
       Write (Root & "/g/docs/spec.md",
-             "# Shell" & LF & LF & "## REQ-FS-001 Case" & LF & "Paths differing in case are one." & LF
+             "# Shell" & LF & LF & "## REQ-101 Case" & LF & "Paths differing in case are one." & LF
              & "Acceptance: a and A are equal" & LF & LF & "It SHOULD log each step." & LF);
       Run ("bootstrap");
-      Run ("req|show|REQ-FS-001");
+      Run ("req|show|REQ-101");
       Assert (Shows ("text: Paths differing in case are one.")
               and then Shows ("criteria: a and A are equal"),
               "a heading's requirement did not take its section: " & To_String (Said));
       Write (Root & "/g/docs/spec.md",
-             "# Shell" & LF & LF & "## REQ-FS-001 Case" & LF & "Paths differing in case are one." & LF
+             "# Shell" & LF & LF & "## REQ-101 Case" & LF & "Paths differing in case are one." & LF
              & "Acceptance: a and A are equal" & LF & LF & "It SHOULD log every step." & LF);
       Run ("bootstrap");
       --  An edited line is the requirement it was, revised to its new words.
@@ -2348,9 +2348,9 @@ package body Tests.CLI_Cases is
       --  12. A third round.
       --  A heading's statement may follow a blank line.
       Write (Root & "/g/docs/third.md",
-             "# Third" & LF & LF & "## REQ-TH-001 Spaced" & LF & LF & "Its text is here." & LF);
+             "# Third" & LF & LF & "## REQ-102 Spaced" & LF & LF & "Its text is here." & LF);
       Run ("bootstrap|docs/third.md");
-      Run ("req|show|REQ-TH-001");
+      Run ("req|show|REQ-102");
       Assert (Shows ("text: Its text is here."),
               "a heading's statement after a blank line was lost: " & To_String (Said));
       --  A requirement is superseded, and a wrong link taken off.
