@@ -1614,6 +1614,19 @@ package body Model_Runner.Framework.Tasks is
       --  The keys of the derivations already made.
       Done : Name_Lists.Vector;
 
+      --  Whether a requirement names a component: a part of its document's
+      --  path, or a word of its title.
+      function Names_Component (Component : String; Held : Intent.Entity) return Boolean is
+         Lower  : constant String := Ada.Characters.Handling.To_Lower (Component);
+         Source : constant String := "/" & Ada.Characters.Handling.To_Lower (To_String (Held.Source));
+         Title  : constant String := " " & Ada.Characters.Handling.To_Lower (To_String (Held.Title)) & " ";
+      begin
+         return Lower'Length >= 2
+           and then (Ada.Strings.Fixed.Index (Source, "/" & Lower & "/") > 0
+                     or else Ada.Strings.Fixed.Index (Source, "/" & Lower & ".") > 0
+                     or else Ada.Strings.Fixed.Index (Title, " " & Lower & " ") > 0);
+      end Names_Component;
+
       --  What a task serves, as this change leaves it.
       function Staged_Requirements (Id : String) return String is
          Value  : Records.Item;
@@ -1761,6 +1774,14 @@ package body Model_Runner.Framework.Tasks is
                               end loop;
                            elsif To_String (Held.Scope) /= "project" then
                               Fields.Include ("component", To_String (Held.Scope));
+                           --  A component its document's path or its title names:
+                           --  docs/web.md, "The web app ..." -- that one.
+                           elsif (for some C of Components (Item) => Names_Component (C, Held)) then
+                              for C of Components (Item) loop
+                                 if Names_Component (C, Held) and then not Fields.Contains ("component") then
+                                    Fields.Include ("component", C);
+                                 end if;
+                              end loop;
                            elsif Project_Component /= ""
                              and then Required_Fields (Item, Kind).Contains ("component")
                            then

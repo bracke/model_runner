@@ -967,11 +967,12 @@ package body Model_Runner.CLI.Init is
                                        if not Has_Test then
                                           Refused.Append (Command);
                                           Say ("cli.init.check_no_script",
-                                               [Loc.Named ("name", To_String (One.Label)),
+                                               [Loc.Named ("name", To_String (One.Label)), Loc.Named ("other", Name),
                                                 Loc.Named ("value", Command), Loc.Named ("path", Manifest)]);
                                           Append (Warned, Pres.Next_Step_Value
                                                             (Screen, "cli.init.check_no_script",
                                                              [Loc.Named ("name", To_String (One.Label)),
+                                                              Loc.Named ("other", Name),
                                                               Loc.Named ("value", Command),
                                                               Loc.Named ("path", Manifest)])
                                                           & ASCII.LF);
@@ -987,11 +988,12 @@ package body Model_Runner.CLI.Init is
                               if Why = "" and then Missing /= "" and then not Refused.Contains (Command) then
                                  Refused.Append (Command);
                                  Say ("cli.init.check_missing",
-                                      [Loc.Named ("name", To_String (One.Label)),
+                                      [Loc.Named ("name", To_String (One.Label)), Loc.Named ("other", Name),
                                        Loc.Named ("value", Command), Loc.Named ("detail", Missing)]);
                                  Append (Warned, Pres.Next_Step_Value
                                                    (Screen, "cli.init.check_missing",
                                                     [Loc.Named ("name", To_String (One.Label)),
+                                                     Loc.Named ("other", Name),
                                                      Loc.Named ("value", Command),
                                                      Loc.Named ("detail", Missing)])
                                                  & ASCII.LF);
@@ -1355,12 +1357,18 @@ package body Model_Runner.CLI.Init is
                   Rel    : constant String :=
                     (if Dir'Length > Top'Length + 1 then Dir (Dir'First + Top'Length + 1 .. Dir'Last) else "");
                begin
+                  --  A package of its own, as the command that makes it a
+                  --  component -- not the test crate a template makes beside
+                  --  the project, which is the project's.
                   if Depth > 0 and then Rel /= ""
+                    and then Ada.Directories.Simple_Name (Dir) not in "tests" | "test"
                     and then (for some Manifest of Model_Runner.Framework.Name_Lists.Vector'
                                 (["package.json", "Cargo.toml", "go.mod", "alire.toml", "pyproject.toml"]) =>
                                 Ada.Directories.Exists (Hostkit.Fs.Join (Dir, Manifest)))
                   then
-                     Append (Packages, (if Packages = Null_Unbounded_String then "" else " ") & Rel & "/");
+                     Append (Packages, (if Packages = Null_Unbounded_String then "" else "; ")
+                                       & "/reconfigure map.component." & Ada.Directories.Simple_Name (Dir)
+                                       & "=roots=" & Rel & "/");
                   end if;
                   if Depth > 0
                     and then (for some Manifest of Model_Runner.Framework.Name_Lists.Vector'
@@ -1415,7 +1423,9 @@ package body Model_Runner.CLI.Init is
       then
          Pres.Put_Note
            (Screen,
-            (if Pres.In_Session (Screen) then "cli.next.in_directory_session"
+            (if Pres.In_Session (Screen) and then not S.Is_Initialized (Ada.Directories.Current_Directory)
+             then "cli.next.in_directory_none"
+             elsif Pres.In_Session (Screen) then "cli.next.in_directory_session"
              else "cli.next.in_directory"),
             [Loc.Named ("path", Directory)]);
       end if;

@@ -1668,6 +1668,15 @@ package body Model_Runner.Framework.Configurations is
         and then Value in "none" | "inherit"
       then
          null;
+      --  A level named that is none: said as that, not as a value.
+      elsif Starts (Name, "map.permission.")
+        and then (Name in "map.permission.kind" | "map.permission.role"
+                  or else (Ada.Strings.Fixed.Count (Name, ".") = 2 and then Name /= "map.permission.project")
+                  or else (Ada.Strings.Fixed.Count (Name, ".") >= 4
+                           and then Ada.Strings.Fixed.Tail (Name, 8) = ".project"))
+      then
+         return Name (Name'First + 15 .. Name'Last) & " is no level permissions are read at: they are project,"
+           & " kind.KIND and role.worker -- map.permission.kind.KIND=none withholds all a kind may do";
       elsif Starts (Name, "map.permission.") and then Value not in "off" | "inherit" then
          declare
             Last_Dot : constant Natural :=
@@ -1970,11 +1979,16 @@ package body Model_Runner.Framework.Configurations is
                               return Name & " takes context=N, reserve=N, overhead=N, tools=yes|no,"
                                 & " structured=yes|no, reasoning=yes|no, streaming=yes|no, parallel=yes|no,"
                                 & " class=NAME and provider=NAME, a comma apart; " & Key & " is none of them";
+                           elsif Key in "context" | "reserve" | "overhead" and then Given'Length > 9
+                             and then (for all C of Given => C in '0' .. '9')
+                           then
+                              return Name & ": " & Key & "=" & Given & " is too large -- at most 999999999 tokens";
                            elsif Key in "context" | "reserve" | "overhead"
                              and then (Given'Length not in 1 .. 9
                                        or else (for some C of Given => C not in '0' .. '9'))
                            then
-                              return Name & ": " & Key & " is a whole number of tokens, not " & Given;
+                              return Name & ": " & Key & " is a whole number of tokens, not " & Given
+                                & " -- a profile's fields are a comma apart: context=2048,reserve=256";
                            elsif Key = "context" and then (for all C of Given => C = '0') then
                               return Name & ": context is 1 or more tokens, not " & Given;
                            elsif Key in "tools" | "structured" | "reasoning" | "streaming" | "parallel"
@@ -2015,7 +2029,7 @@ package body Model_Runner.Framework.Configurations is
                         return Name & ": context=" & Ada.Strings.Fixed.Trim (Natural'Image (Number ("context")),
                                                                            Ada.Strings.Both)
                           & " leaves no room: the answer's reserve, built in, is 1024 -- give more context, or"
-                          & " a smaller reserve= with it";
+                          & " a smaller reserve with it, a comma apart: " & Name & "=context=N,reserve=N";
                      end if;
                   end;
                end;
@@ -2270,6 +2284,13 @@ package body Model_Runner.Framework.Configurations is
               and then Ada.Strings.Fixed.Count (Name (Name'First + 20 .. Name'Last), ".") = 0
             then
                Normal.Include (Name, "inherit");
+            --  A model profile's fields a space apart: a comma apart, as it is read.
+            elsif Starts (Name, "map.model.") and then Ada.Strings.Fixed.Index (Value_Maps.Element (Position), " ") > 0
+            then
+               Normal.Include
+                 (Name, Ada.Strings.Fixed.Translate
+                          (Ada.Strings.Fixed.Trim (Value_Maps.Element (Position), Ada.Strings.Both),
+                           Ada.Strings.Maps.To_Mapping (" ", ",")));
             --  The project's level whole: none, written so, as a kind's is --
             --  nothing granted -- or inherit, its own taken away, the
             --  harness's defaults holding. What it says of each capability
@@ -2309,6 +2330,44 @@ package body Model_Runner.Framework.Configurations is
       --  The permissions this change takes away: taken away after all else,
       --  so that one level's defaults written out do not grant them again.
       Taken_Away : Name_Lists.Vector;
+
+      --  The profiles the configuration has, a comma apart.
+      function Known_Profiles return String is
+         Said : Unbounded_String;
+      begin
+         for Index in 1 .. Records.Field_Count (Result.Before) loop
+            if Starts (Records.Field_Name (Result.Before, Index), "profile.") then
+               Append (Said, (if Said = Null_Unbounded_String then "" else ", ")
+                       & Records.Field_Name (Result.Before, Index)
+                           (Records.Field_Name (Result.Before, Index)'First + 8
+                            .. Records.Field_Name (Result.Before, Index)'Last));
+            end if;
+         end loop;
+         return (if Said = Null_Unbounded_String then "none" else To_String (Said));
+      end Known_Profiles;
+
+      --  The first profile a profiles= names that the configuration has not.
+      function Unknown_Profile (Value : String) return String is
+         At_Key : constant Natural := Ada.Strings.Fixed.Index (Value, "profiles=");
+         Stop   : Natural := At_Key + 9;
+         Start  : Natural := At_Key + 9;
+      begin
+         while Stop <= Value'Last and then Value (Stop) not in ' ' | ',' loop
+            Stop := Stop + 1;
+         end loop;
+         for Index in At_Key + 9 .. Stop loop
+            if Index = Stop or else Value (Index) = '|' then
+               if Index > Start
+                 and then not Records.Has (Result.Before, "profile." & Value (Start .. Index - 1))
+                 and then not Records.Has (Result.After, "profile." & Value (Start .. Index - 1))
+               then
+                  return Value (Start .. Index - 1);
+               end if;
+               Start := Index + 1;
+            end if;
+         end loop;
+         return "";
+      end Unknown_Profile;
 
       --  Whether the level a permission belongs to grants anything: a level
       --  that says something grants only what it says.
@@ -2401,7 +2460,7 @@ package body Model_Runner.Framework.Configurations is
                                  Starts (Records.Field_Name (Result.Before, Index), "map.permission." & Level))
                     then ""
                     else Level (Level'First + 5 .. Level'Last) & " is no role an agent works in, so nothing would"
-                         & " read it; the role there is is worker: map.permission.role.worker.CAPABILITY=...");
+                         & " read it; the only role is worker: map.permission.role.worker.CAPABILITY=...");
          elsif Starts (Level, "task.") then
             return "a task's permissions are its own field: /task edit "
               & Level (Level'First + 5 .. Level'Last) & " permissions=... sets them";
@@ -3082,6 +3141,14 @@ package body Model_Runner.Framework.Configurations is
                              & " src/terminal"));
                   return;
                end;
+            --  A capability's profiles= naming one the project has not:
+            --  its checks would never run.
+            elsif Starts (Name, "map.permission.") and then Ada.Strings.Fixed.Index (Value, "profiles=") > 0
+              and then Unknown_Profile (Value) /= ""
+            then
+               Status := Refused (Name, "profiles= names " & Unknown_Profile (Value)
+                                  & ", which the project has not -- its profiles are " & Known_Profiles);
+               return;
             elsif Starts (Name, "map.component.") and then Shared_Root (Name, Value) /= "" then
                Status := Refused (Name, Shared_Root (Name, Value));
                return;
@@ -3398,6 +3465,9 @@ package body Model_Runner.Framework.Configurations is
                                      and then not Permissions.Project_Default (One).Granted))
          then
             Result.Changed.Append (Name & ": granted -> withheld");
+            if not Result.Impact.Contains (Reach (Name)) then
+               Result.Impact.Append (Reach (Name));
+            end if;
          end if;
       end loop;
 

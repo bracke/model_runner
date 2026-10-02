@@ -132,7 +132,19 @@ package body Model_Runner.CLI.Completion is
                Ada.Strings.Fixed.Tail (Bare, Model_Runner.Framework.Permissions.Word (One)'Length + 1)
                = "." & Model_Runner.Framework.Permissions.Word (One))
          then
-            Result := Words_Of ("on off inherit roots= deny=");
+            --  What the capability takes: places for reading and writing,
+            --  bounds for helpers, profiles for checks.
+            declare
+               Word : constant String := Bare (Ada.Strings.Fixed.Index (Bare, ".", Ada.Strings.Backward) + 1
+                                               .. Bare'Last);
+            begin
+               Result := Words_Of
+                 ("on off inherit"
+                  & (if Word in "read_source" | "write_source" | "read_specs" | "write_specs" then " roots= deny="
+                     elsif Word = "create_children" then " max_depth= max_children="
+                     elsif Word in "run_build" | "run_tests" | "run_static_analysis" then " profiles="
+                     else ""));
+            end;
          else
             Result := Words_Of ("none inherit");
          end if;
@@ -250,6 +262,7 @@ package body Model_Runner.CLI.Completion is
             --  Those there may be, set or not: every level's capability,
             --  and every kind's own limits and profile.
             Offer ("map.permission.project");
+            Offer ("map.permission.role.worker");
             Offer ("map.model.default");
             for One in Pm.Capability loop
                Offer ("map.permission.project." & Pm.Word (One));
@@ -278,7 +291,7 @@ package body Model_Runner.CLI.Completion is
                      Name : constant String := Offered (Index);
                      Dot  : constant Natural := Ada.Strings.Fixed.Index (Name, ".");
                   begin
-                     if Dot > 0 and then Name (Name'First .. Dot) in "scalar." | "set." | "list." then
+                     if Dot > 0 and then Name (Name'First .. Dot) in "scalar." | "set." | "list." | "map." then
                         Offer (Name (Dot + 1 .. Name'Last));
                      end if;
                   end;
@@ -337,6 +350,22 @@ package body Model_Runner.CLI.Completion is
                for Value of Values_Of (Name) loop
                   Offer (Name & "=" & Value);
                end loop;
+               --  profiles= after a check's capability: the profiles there are.
+               if Ada.Strings.Fixed.Index (Current, "=profiles=") > 0 then
+                  declare
+                     Config : R.Item;
+                     Got    : E.Error_Info;
+                  begin
+                     Model_Runner.Framework.Configurations.Read (Store, Config, Got);
+                     for Index in 1 .. R.Field_Count (Config) loop
+                        if Ada.Strings.Fixed.Index (R.Field_Name (Config, Index), "profile.") = 1 then
+                           Offer (Current (Current'First .. Ada.Strings.Fixed.Index (Current, "=profiles=") + 9)
+                                  & R.Field_Name (Config, Index) (R.Field_Name (Config, Index)'First + 8
+                                                                  .. R.Field_Name (Config, Index)'Last));
+                        end if;
+                     end loop;
+                  end;
+               end if;
                --  What it holds now, to change rather than type again.
                declare
                   Config : R.Item;
@@ -488,7 +517,8 @@ package body Model_Runner.CLI.Completion is
             end;
          elsif Ada.Strings.Fixed.Index (Current, "state=") = Current'First then
             Offer_Words ("state=candidate state=accepted state=ready state=waiting state=refused state=running"
-                         & " state=verification state=blocked state=stopped state=failed state=complete"
+                         & " state=verification state=to-integrate state=conflict state=checks-failed"
+                         & " state=blocked state=stopped state=waiting-for-parts state=failed state=complete"
                          & " state=cancelled state=rejected");
          elsif Command = "/task" and then Position = 3 then
             if Action = "kept" then
@@ -636,10 +666,32 @@ package body Model_Runner.CLI.Completion is
                end loop;
             end;
          elsif Command in "/spec" | "/decision" and then Position = 5 and then Action = "govern" then
-            --  The ruling: what the setting takes.
+            --  The ruling: what the setting takes, and what it holds now.
             for Value of Values_Of (Words (4)) loop
                Offer (Value);
             end loop;
+            declare
+               Config : R.Item;
+               Got    : E.Error_Info;
+            begin
+               Model_Runner.Framework.Configurations.Read (Store, Config, Got);
+               for Full of Names.Vector'([Words (4), "scalar." & Words (4), "map." & Words (4)]) loop
+                  if E.Is_Ok (Got) and then R.Get (Config, Full) /= ""
+                    and then Ada.Strings.Fixed.Index (R.Get (Config, Full), " ") = 0
+                    and then Ada.Strings.Fixed.Index (R.Get (Config, Full), [1 => ASCII.LF]) = 0
+                  then
+                     Offer (R.Get (Config, Full));
+                  end if;
+               end loop;
+               --  Unset, what holds instead: its default.
+               for Full of Names.Vector'([Words (4), "scalar." & Words (4)]) loop
+                  if Model_Runner.Framework.Configurations.Default_Of (Full) /= ""
+                    and then Ada.Strings.Fixed.Index (Model_Runner.Framework.Configurations.Default_Of (Full), " ") = 0
+                  then
+                     Offer (Model_Runner.Framework.Configurations.Default_Of (Full));
+                  end if;
+               end loop;
+            end;
             if Ada.Strings.Fixed.Index (Words (4), "task.profile.") > 0
               or else Words (4) in "model.default" | "scalar.model.default"
             then
@@ -1022,8 +1074,24 @@ package body Model_Runner.CLI.Completion is
          begin
             Tk.Definition (Store, Word, Defined, Got);
             if E.Is_Ok (Got) then
-               Said := Ada.Strings.Unbounded.To_Unbounded_String
-                 (Word & "  " & Tk.State_Of (Store, Word) & "  " & R.Get (Defined, "title"));
+               declare
+                  State   : constant String := Tk.State_Of (Store, Word);
+                  Reasons : constant Names.Vector := Tk.Ready (Store, Word).Reasons;
+                  function Said_For (Part : String) return Boolean
+                  is (for some Reason of Reasons => Ada.Strings.Fixed.Index (Reason, Part) > 0);
+                  --  Named as /task list names it.
+                  Shown   : constant String :=
+                    (if State = "verification" and then Model_Runner.Framework.Workspaces.Active_For (Store, Word) /= ""
+                     then "to integrate"
+                     elsif State = "blocked" and then Said_For ("you stopped its work") then "stopped"
+                     elsif State = "blocked" and then Said_For ("waiting for its children") then "waiting for parts"
+                     elsif State = "accepted" and then Tk.Ready (Store, Word).Ready then "ready"
+                     elsif State = "accepted" then "waiting"
+                     else State);
+               begin
+                  Said := Ada.Strings.Unbounded.To_Unbounded_String
+                    (Word & "  " & Shown & "  " & R.Get (Defined, "title"));
+               end;
             end if;
          end;
       else

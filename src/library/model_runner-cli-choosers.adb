@@ -1319,10 +1319,20 @@ package body Model_Runner.CLI.Choosers is
                Cursor := Cursor + Whole'Length - Word'Length + After'Length;
             end;
             Tabbed := False;
-         elsif Length (Shared) > Word'Length then
+         elsif Length (Shared) > Word'Length
+           and then Slice (Shared, 1, Word'Length) = Word
+         then
             Insert (Text, Cursor + 1, Slice (Shared, Word'Length + 1, Length (Shared)));
             Cursor := Cursor + Length (Shared) - Word'Length;
-            Tabbed := False;
+            --  The next Tab lists what is left, as a shell's does.
+            Tabbed := True;
+         --  What they share, begun otherwise -- a short name, map.permission.
+         --  -- the word typed becomes it.
+         elsif Length (Shared) > Word'Length then
+            Delete (Text, Cursor - Word'Length + 1, Cursor);
+            Insert (Text, Cursor - Word'Length + 1, To_String (Shared));
+            Cursor := Cursor + Length (Shared) - Word'Length;
+            Tabbed := True;
          elsif not Tabbed then
             Put ([1 => ASCII.BEL]);
             Tabbed := True;
@@ -1354,16 +1364,30 @@ package body Model_Runner.CLI.Choosers is
                   end loop;
                --  Identifiers each with what it is, a line each.
                elsif Describe /= null and then Natural (Choices.Length) <= 40
-                 and then (for all One of Choices => Describe (One) /= "")
+                 and then (for some One of Choices => Describe (One) /= "")
                then
-                  for One of Choices loop
-                     declare
-                        Said : constant String := Describe (One);
-                     begin
-                        Put ((if Said'Length > Columns - 1 then Said (Said'First .. Said'First + Columns - 5) & "..."
-                              else Said) & ASCII.CR & ASCII.LF);
-                     end;
-                  end loop;
+                  --  Each identifier a line, with what it is; the words beside
+                  --  them -- all, model= -- on one line after.
+                  declare
+                     Words_Beside : Unbounded_String;
+                  begin
+                     for One of Choices loop
+                        declare
+                           Said : constant String := Describe (One);
+                        begin
+                           if Said = "" then
+                              Append (Words_Beside, (if Words_Beside = Null_Unbounded_String then "" else "  ") & One);
+                           else
+                              Put ((if Said'Length > Columns - 1
+                                    then Said (Said'First .. Said'First + Columns - 5) & "..."
+                                    else Said) & ASCII.CR & ASCII.LF);
+                           end if;
+                        end;
+                     end loop;
+                     if Words_Beside /= Null_Unbounded_String then
+                        Put (To_String (Words_Beside) & ASCII.CR & ASCII.LF);
+                     end if;
+                  end;
                else
                   for Whole of Choices loop
                      exit when Shown = 200;

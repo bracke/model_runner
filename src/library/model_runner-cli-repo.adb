@@ -192,7 +192,17 @@ package body Model_Runner.CLI.Repo is
               --  One the history holds: there before; never there is nothing.
               and then Model_Runner.Framework.Git.Last_Commit_At (".", Argument) /= ""
             then
-               Pres.Put_Message (Screen, "cli.repo.file_gone", [Loc.Named ("name", Argument)]);
+               declare
+                  Became : constant String := Model_Runner.Framework.Git.Renamed_In_History (".", Argument);
+               begin
+                  --  Renamed, as git tells it: the new name, to ask of.
+                  if Became /= "" then
+                     Pres.Put_Message (Screen, "cli.repo.file_moved",
+                                       [Loc.Named ("name", Argument), Loc.Named ("value", Became)]);
+                  else
+                     Pres.Put_Message (Screen, "cli.repo.file_gone", [Loc.Named ("name", Argument)]);
+                  end if;
+               end;
             else
                Pres.Put_Message (Screen, "cli.repo.none", [Loc.Named ("name", Argument)]);
             end if;
@@ -249,6 +259,35 @@ package body Model_Runner.CLI.Repo is
                   => Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Upper (Argument), Prefix) = 1)
             then
                Pres.Put_Note (Screen, "cli.repo.trace_instead", [Loc.Named ("name", Argument)]);
+               --  Its document's label is what the code names: that, to look for.
+               declare
+                  Store : S.Store;
+                  Read  : E.Error_Info;
+                  Held  : Model_Runner.Framework.Intent.Entity;
+               begin
+                  S.Open_To_Read (Store, Directory, Read);
+                  if E.Is_Ok (Read) then
+                     Model_Runner.Framework.Intent.Read
+                       (Store, Model_Runner.Framework.Intent.Requirement,
+                        Ada.Characters.Handling.To_Upper (Argument), Held, Read);
+                     if E.Is_Ok (Read) and then Ada.Strings.Unbounded.Index (Held.Provenance, "#") > 0 then
+                        declare
+                           Whole : constant String := To_String (Held.Provenance);
+                           Label : constant String := Whole (Ada.Strings.Fixed.Index (Whole, "#") + 1 .. Whole'Last);
+                        begin
+                           if Label'Length in 3 .. 11 and then Label /= Ada.Characters.Handling.To_Upper (Argument)
+                           then
+                              Pres.Put_Note (Screen, "cli.repo.refs_label",
+                                             [Loc.Named ("name", Argument), Loc.Named ("value", Label)]);
+                           end if;
+                        end;
+                     end if;
+                     S.Close (Store);
+                  end if;
+               exception
+                  when others =>
+                     S.Close (Store);
+               end;
             --  A path is a file's, of its own kind: no other language holds it.
             elsif Ada.Strings.Fixed.Index (Argument, "/") > 0 then
                null;
@@ -1422,6 +1461,58 @@ package body Model_Runner.CLI.Repo is
                               end if;
                            end;
                         end loop;
+                        --  A requirement the file names -- its identifier, or its
+                        --  document's label -- reached whether or not the code
+                        --  graph links them.
+                        if Ada.Directories.Exists (Argument) then
+                           declare
+                              Text : Unbounded_String;
+                              File : Ada.Text_IO.File_Type;
+                           begin
+                              Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Argument);
+                              while not Ada.Text_IO.End_Of_File (File) loop
+                                 Append (Text, Ada.Text_IO.Get_Line (File) & ASCII.LF);
+                              end loop;
+                              Ada.Text_IO.Close (File);
+                              for Req of Model_Runner.Framework.Intent.List
+                                           (Store, Model_Runner.Framework.Intent.Requirement)
+                              loop
+                                 declare
+                                    Held : Model_Runner.Framework.Intent.Entity;
+                                    Read : E.Error_Info;
+                                    Whole : Unbounded_String;
+                                    Label : Unbounded_String;
+                                 begin
+                                    Model_Runner.Framework.Intent.Read
+                                      (Store, Model_Runner.Framework.Intent.Requirement, Req, Held, Read);
+                                    Whole := Held.Provenance;
+                                    if Ada.Strings.Unbounded.Index (Whole, "#") > 0 then
+                                       Label := Unbounded_Slice
+                                         (Whole, Ada.Strings.Unbounded.Index (Whole, "#") + 1, Length (Whole));
+                                    end if;
+                                    if not Ids.Contains ("requirement:" & Req) and then not Ids.Contains (Req)
+                                      and then E.Is_Ok (Read)
+                                      and then To_String (Held.State) not in "rejected" | "obsolete" | "superseded"
+                                      and then (Ada.Strings.Unbounded.Index (Text, Req) > 0
+                                                or else (Length (Label) in 3 .. 11
+                                                         and then Ada.Strings.Unbounded.Index
+                                                                    (Text, To_String (Label)) > 0))
+                                    then
+                                       Ids.Append (Req);
+                                       All_Reached.Append
+                                         (Tr.Reached'(Kind => To_Unbounded_String ("requirement"),
+                                                      Id   => To_Unbounded_String (Req),
+                                                      Sure => Rp.Certain));
+                                    end if;
+                                 end;
+                              end loop;
+                           exception
+                              when others =>
+                                 if Ada.Text_IO.Is_Open (File) then
+                                    Ada.Text_IO.Close (File);
+                                 end if;
+                           end;
+                        end if;
                         for Kind of Order loop
                            declare
                               Of_Kind : Natural := 0;

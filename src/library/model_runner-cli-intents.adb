@@ -13,6 +13,7 @@ with Model_Runner.Errors;
 with Model_Runner.Framework.Bootstrap;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Consistency;
+with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Orchestration;
 with Model_Runner.Framework.Permissions;
@@ -282,6 +283,10 @@ package body Model_Runner.CLI.Intents is
             then
                Pres.Put_Note (Screen, "cli.intent.ruling_disagrees",
                               [Loc.Named ("name", Id),
+                               --  Its own register's command: /spec for a specification.
+                               Loc.Named ("extra", (if Nt."=" (Kind, Nt.Specification) then "/spec"
+                                                    elsif Nt."=" (Kind, Nt.Requirement) then "/req"
+                                                    else "/decision")),
                                Loc.Named ("value", One (One'First .. Equal - 1)),
                                Loc.Named ("detail", One (Equal + 3 .. One'Last)),
                                Loc.Named ("other", Model_Runner.Framework.Permissions.Value_Said
@@ -321,8 +326,28 @@ package body Model_Runner.CLI.Intents is
                      if E.Is_Ok (Done) and then not Said then
                         null;
                      elsif E.Is_Ok (Done) then
+                        --  With what it held before: a change made, said as one.
                         Pres.Put_Message (Screen, "cli.intent.ruling_applied",
-                                          [Loc.Named ("name", Id), Loc.Named ("value", Setting & " = " & Ruling)]);
+                                          [Loc.Named ("name", Id),
+                                           Loc.Named ("value",
+                                                      Setting & ": "
+                                                      & (if Model_Runner.Framework.Records.Get (Config, Setting) /= ""
+                                                         then Model_Runner.Framework.Records.Get (Config, Setting)
+                                                         elsif Cf.Default_Of (Setting) /= ""
+                                                         then "(not set: " & Cf.Default_Of (Setting) & ")"
+                                                         else "(not set)")
+                                                      & " -> " & Ruling)]);
+                        --  A place it names that the project has not: said.
+                        if Ada.Strings.Fixed.Index (Setting, "map.permission.") = 1
+                          and then Model_Runner.Framework.Permissions.Missing_Places
+                                     (Ada.Directories.Containing_Directory (S.Root (Store)), Ruling) /= ""
+                        then
+                           Pres.Put_Note (Screen, "cli.project.places_missing",
+                                          [Loc.Named ("name", Setting),
+                                           Loc.Named ("detail", Model_Runner.Framework.Permissions.Missing_Places
+                                                                  (Ada.Directories.Containing_Directory
+                                                                     (S.Root (Store)), Ruling))]);
+                        end if;
                      else
                         Pres.Report (Screen, Done);
                      end if;
@@ -534,7 +559,8 @@ package body Model_Runner.CLI.Intents is
       end Needs;
 
       --  What was asked, read once the words are split.
-      function Action return String is (Lower (Word (1)));
+      --  edit, as /task says it, is revise here.
+      function Action return String is (if Lower (Word (1)) = "edit" then "revise" else Lower (Word (1)));
 
       --  What a retired decision governed is governed no more: said, with
       --  what the setting is now, or what governs it still.
@@ -645,6 +671,35 @@ package body Model_Runner.CLI.Intents is
             if Ruling /= Null_Unbounded_String then
                Plain.Append (To_String (Ruling));
                Settings := Kept;
+            end if;
+         end;
+      end if;
+
+      --  Another register's identifier: said as which, with its command --
+      --  not as one the project has not.
+      if Word (2) /= "" and then Action not in "new" | "list" then
+         declare
+            Upper : constant String := Ada.Characters.Handling.To_Upper (Word (2));
+            Other : constant String :=
+              (if Ada.Strings.Fixed.Head (Upper, 5) = "SPEC-" and then not Nt."=" (Kind, Nt.Specification)
+               then "/spec"
+               elsif Ada.Strings.Fixed.Head (Upper, 4) = "REQ-" and then not Nt."=" (Kind, Nt.Requirement)
+               then "/req"
+               elsif Ada.Strings.Fixed.Head (Upper, 4) = "DEC-" and then not Nt."=" (Kind, Nt.Decision)
+               then "/decision"
+               elsif Ada.Strings.Fixed.Head (Upper, 5) = "TASK-" then "/task"
+               else "");
+         begin
+            if Other /= "" then
+               Status := E.Make (E.Framework_Input_Invalid);
+               E.Add_Text (Status, "name", "the " & Word_Of (Kind));
+               E.Add_Text (Status, "value", Word (2));
+               E.Add_Text (Status, "detail", Word (2) & " is "
+                           & (if Other = "/spec" then "a specification" elsif Other = "/req" then "a requirement"
+                              elsif Other = "/decision" then "a decision" else "a task")
+                           & ": " & Other & " " & Action & " " & Word (2) & " is the command");
+               Pres.Report (Screen, Status);
+               return;
             end if;
          end;
       end if;
@@ -982,8 +1037,10 @@ package body Model_Runner.CLI.Intents is
                end if;
                --  Already there: said so, and nothing to do.
                if Nt.State_Of (Store, Kind, Word (2)) = Next then
-                  Pres.Put_Note (Screen, "cli.intent.already", [Loc.Named ("name", Word (2)),
-                                                                Loc.Named ("value", Next)]);
+                  Pres.Put_Note (Screen, "cli.intent.already",
+                                 [Loc.Named ("name", Word (2)),
+                                  Loc.Named ("value", (if Next in "accepted" | "rejected" | "obsolete" | "blocked"
+                                                       then Next else "a " & Next))]);
                   return;
                end if;
                --  Obsolete is final: asked first, where there is someone to ask.
@@ -1016,6 +1073,11 @@ package body Model_Runner.CLI.Intents is
                  (Screen, "cli.task.moved", [Loc.Named ("name", Word (2)),
                                              Loc.Named ("value", Model_Runner.Framework.State_Said (Next))]);
                Apply_Rulings (Store, Kind, Word (2), Screen);
+               --  A candidate again: how it is decided.
+               if Action = "reconsider" then
+                  Pres.Put_Note (Screen, "cli.next.accept_entry",
+                                 [Loc.Named ("name", Word (2)), Loc.Named ("value", Word_Of_Command (Kind))]);
+               end if;
                --  Rejected, and kept: how it comes back.
                if Next = "rejected" then
                   Pres.Put_Note (Screen, "cli.intent.rejected_back",
@@ -2388,6 +2450,8 @@ package body Model_Runner.CLI.Intents is
                      Text : Unbounded_String;
                      File : Ada.Text_IO.File_Type;
                      Said_Now : Unbounded_String;
+                     --  Whether its document says it at all now.
+                     Still_Said : Boolean := False;
                   begin
                      if Length (Held.Provenance) > 0 and then To_String (Held.Source) not in "" | "user"
                        and then Ada.Directories.Exists (Path)
@@ -2406,6 +2470,9 @@ package body Model_Runner.CLI.Intents is
                                  One : constant Model_Runner.Framework.Bootstrap.Output :=
                                    Model_Runner.Framework.Bootstrap.Element (Found, Index);
                               begin
+                                 if One.Provenance = Held.Provenance then
+                                    Still_Said := True;
+                                 end if;
                                  if One.Provenance = Held.Provenance and then One.Text /= Held.Text then
                                     Said_Now := One.Text;
                                  end if;
@@ -2438,6 +2505,12 @@ package body Model_Runner.CLI.Intents is
                         if Said_Now /= Null_Unbounded_String then
                            Item ("its document says", To_String (Said_Now) & " -- " & Word_Of_Command (Kind)
                                  & " revise " & Named & " from-document takes it", Pres.Pending);
+                        --  Read now, nothing of it there: said, with the way on.
+                        elsif not Still_Said and then Nt."=" (Kind, Nt.Requirement)
+                          and then To_String (Held.State) not in "obsolete" | "superseded" | "rejected"
+                        then
+                           Item ("its document", "no longer says it -- " & Word_Of_Command (Kind) & " obsolete "
+                                 & Named & " retires it", Pres.Pending);
                         end if;
                      end if;
                      --  Not read here, as bootstrap found it otherwise: said.
@@ -2570,7 +2643,18 @@ package body Model_Runner.CLI.Intents is
                                    (Hostkit.Fs.Join (Ada.Directories.Containing_Directory (S.Root (Store)),
                                                      To_String (Held.Source)))
                   then
-                     Item ("source", To_String (Held.Source) & " (missing: the document is gone)", Pres.Bad);
+                     declare
+                        Became : constant String :=
+                          Model_Runner.Framework.Git.Renamed_In_History
+                            (Ada.Directories.Containing_Directory (S.Root (Store)), To_String (Held.Source));
+                     begin
+                        Item ("source", To_String (Held.Source)
+                              & (if Became /= ""
+                                 then " (moved: git shows it renamed to " & Became & " -- /bootstrap follows it)"
+                                 else " (missing: the document is gone -- " & Word_Of_Command (Kind) & " obsolete "
+                                      & Named & " retires it)"),
+                              Pres.Bad);
+                     end;
                   else
                      Item ("source", To_String (Held.Source));
                   end if;

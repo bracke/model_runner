@@ -179,10 +179,11 @@ package body Model_Runner.Framework.Permissions is
                goto Next_Pair;
             end if;
             Last_Key := To_Unbounded_String (Key);
+            --  Given twice, joined: each place kept, none dropping another.
             if Key = "roots" then
-               Result.Roots := Parts (Value, '|');
+               Result.Roots.Append (Parts (Value, '|'));
             elsif Key = "deny" then
-               Result.Deny := Parts (Value, '|');
+               Result.Deny.Append (Parts (Value, '|'));
             elsif Key = "profiles" then
                Result.Profiles := Parts (Value, '|');
             elsif Key = "max_depth" then
@@ -299,6 +300,10 @@ package body Model_Runner.Framework.Permissions is
    begin
       Result := Nothing;
       Status := E.Success;
+      --  none: nothing at all, as a level's none is.
+      if Trim (Text) = "none" then
+         return;
+      end if;
       --  Only what it takes away -- -use_network -- leaves the rest as the
       --  levels above give it: everything, here, before they narrow it.
       if not Entries.Is_Empty
@@ -328,7 +333,10 @@ package body Model_Runner.Framework.Permissions is
                               & "; they are read_source, write_source, read_specs, write_specs,"
                               & " run_build, run_tests, run_static_analysis, create_children,"
                               & " propose_tasks, request_integration, use_network and"
-                              & " execute_external_process");
+                              & " execute_external_process"
+                              & (if Ada.Strings.Fixed.Index (Name, ",") > 0
+                                 then " -- several are a ; apart: permissions=""-use_network; -run_build"""
+                                 else ""));
                   Result := Nothing;
                   return;
                end if;
@@ -367,6 +375,18 @@ package body Model_Runner.Framework.Permissions is
                               then " -- capabilities are a ; apart and a capability's places follow it after a"
                                    & " space, the whole in quotes: permissions=""read_source; write_source roots=src/"""
                               else ""));
+               Result := Nothing;
+               return;
+            end if;
+            --  Another capability where a constraint goes: two written as
+            --  one, a ; missing between them.
+            if (for some One in Capability =>
+                  Ada.Strings.Fixed.Index ("," & Rest & ",", "," & Word (One) & ",") > 0)
+            then
+               Status := E.Make (E.Framework_Schema_Violation);
+               E.Add_Text (Status, "name", "permissions");
+               E.Add_Text (Status, "detail", Trim (Name) & " and what follows it are capabilities a ; apart, as"
+                           & " permissions=""read_source; write_source roots=src/""");
                Result := Nothing;
                return;
             end if;
@@ -893,9 +913,9 @@ package body Model_Runner.Framework.Permissions is
                           (if Equal = 0 then "" else Token (Equal + 1 .. Token'Last));
                      begin
                         if Key = "roots" then
-                           Result (Item).Roots := Parts (Rest, '|');
+                           Result (Item).Roots.Append (Parts (Rest, '|'));
                         elsif Key = "deny" then
-                           Result (Item).Deny := Parts (Rest, '|');
+                           Result (Item).Deny.Append (Parts (Rest, '|'));
                         elsif Key = "profiles" then
                            Result (Item).Profiles := Parts (Rest, '|');
                         elsif Key = "max_depth"
@@ -1046,7 +1066,11 @@ package body Model_Runner.Framework.Permissions is
 
       Outside : constant String :=
         Path & " is outside the project; paths are relative to it"
-        & (if Suggested = "" then "" else ": try " & Suggested & ", or list_directory . to see them");
+        --  For reading, only a file there is: a name it cannot read is no help.
+        & (if Suggested = ""
+             or else (not Writing and then not Ada.Directories.Exists (Hostkit.Fs.Join (Root, Suggested)))
+           then ": list_directory . shows what there is"
+           else ": try " & Suggested & ", or list_directory . to see them");
       Parts   : Name_Lists.Vector;
       Start   : Natural := Path'First;
 

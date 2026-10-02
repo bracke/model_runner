@@ -1357,8 +1357,14 @@ package body Model_Runner.Framework.Work is
                  and then Field (Field'First .. Field'First + Prefix'Length - 1) = Prefix
                then
                   Append (Text, (if Text = Null_Unbounded_String then "" else ", ")
-                          & Field (Field'First + Prefix'Length - Kept .. Field'Last) & Between
-                          & Records.Get (Value, Field));
+                          --  A tool's version that names it already: not named twice.
+                          & (if Kept = 0
+                               and then Ada.Strings.Fixed.Index
+                                          (Records.Get (Value, Field),
+                                           Field (Field'First + Prefix'Length .. Field'Last) & " ") = 1
+                             then Records.Get (Value, Field)
+                             else Field (Field'First + Prefix'Length - Kept .. Field'Last) & Between
+                                  & Records.Get (Value, Field)));
                end if;
             end;
          end loop;
@@ -1502,12 +1508,25 @@ package body Model_Runner.Framework.Work is
       --  Every move it made, when and why, not only the last attempt's.
       declare
          Happened : constant Events.Event_List := Events.Since (Item, 0);
+         --  Stopped by the person last: its next move is from stopped.
+         Was_Stopped : Boolean := False;
+         --  This move is from a stop: said as taken up again.
+         Was_Stopped_Before : Boolean := False;
       begin
          for Index in 1 .. Events.Length (Happened) loop
             declare
                One : constant Events.Event := Events.Element (Happened, Index);
+               Raw : constant String := To_String (One.Detail);
+               --  Its words as a person reads them: stopped, not blocked, where
+               --  the stop is what it came from; reconsidered, not created.
+               Detail : constant String :=
+                 (if Was_Stopped and then Ada.Strings.Fixed.Index (Raw, "blocked -> ") = Raw'First
+                  then "stopped -> " & Raw (Raw'First + 11 .. Raw'Last)
+                  else Raw);
             begin
                if To_String (One.Subject) = Task_Id then
+                  Was_Stopped_Before := Was_Stopped and then Detail /= Raw;
+                  Was_Stopped := Ada.Strings.Fixed.Index (Raw, "-> blocked: you stopped its work") > 0;
                   Result.Append
                     ("history: " & To_String (One.Occurred_At) & " "
                      --  In words: Task_Became_Ready is became ready.
@@ -1515,8 +1534,11 @@ package body Model_Runner.Framework.Work is
                         then "stopped"
                         --  Never worked, and taken to running: on its way to
                         --  being completed by hand.
-                        elsif Invocation = "" and then Words_Of_Kind (To_String (One.Kind_Word)) = "started"
+                        elsif Words_Of_Kind (To_String (One.Kind_Word)) = "started"
+                          and then (Invocation = "" or else Ada.Strings.Fixed.Index (Raw, "completed by hand") > 0)
                         then "taken up to be completed by hand"
+                        elsif Ada.Strings.Fixed.Index (Raw, "rejected -> candidate") = Raw'First then "reconsidered"
+                        elsif Was_Stopped_Before then "taken up again"
                         else Words_Of_Kind (To_String (One.Kind_Word)))
                      & (if Length (One.Detail) = 0 then ""
                         --  Stopped by the person: said so, as /state says it.
@@ -1526,7 +1548,7 @@ package body Model_Runner.Framework.Work is
                                          Ada.Strings.Fixed.Index (To_String (One.Detail), "-> blocked"),
                                          Ada.Strings.Fixed.Index (To_String (One.Detail), "-> blocked") + 9,
                                          "-> stopped")
-                        else " -- " & To_String (One.Detail)));
+                        else " -- " & Detail));
                end if;
             end;
          end loop;
@@ -1917,7 +1939,8 @@ package body Model_Runner.Framework.Work is
             Got    : E.Error_Info;
             Kind_Named : Boolean := False;
             Capability : constant String :=
-              (if Lacks = "write a file" then "write_source"
+              (if Lacks = "write a file" or else Ada.Strings.Fixed.Index (Lacks, "write anywhere") = Lacks'First
+               then "write_source"
                elsif Lacks in "read the source" | "anything" then "read_source" else "");
          begin
             Configurations.Read (Item, Config, Got);
@@ -1938,10 +1961,17 @@ package body Model_Runner.Framework.Work is
                is (Capability /= ""
                    and then (for some One in Permissions.Capability =>
                                Permissions.Word (One) = Capability and then Set (One).Granted));
+               --  Without the role an agent works in: what the kind gives.
+               Of_Kind_Alone : constant Permissions.Permission_Set :=
+                 Permissions.Effective (Item, Kind, "", Within_Sandbox => False);
+               By_Role : constant Boolean :=
+                 Lacks /= "write a file" and then Grants (Of_Kind_Alone) and then not Grants (Of_Kind)
+                 and then Ada.Strings.Fixed.Index (Lacks, "write anywhere") = 0;
                Own_Narrows : constant Boolean :=
-                 Records.Get (View, "definition.permissions") /= "" and then Grants (Of_Kind);
+                 Records.Get (View, "definition.permissions") /= "" and then Grants (Of_Kind) and then not By_Role;
                Level : constant String :=
-                 (if Kind_Named and then Grants (Of_Project) then "kind." & Kind else "project");
+                 (if By_Role then "role.worker"
+                  elsif Kind_Named and then Grants (Of_Project) then "kind." & Kind else "project");
             begin
                return (if Lacks = "anything" then "it may do nothing at all" else "it would not be let " & Lacks)
                  & (if Lacks = "write a file" then ", which its gate implementation_present needs" else "")

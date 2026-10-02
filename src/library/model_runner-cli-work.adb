@@ -802,9 +802,10 @@ package body Model_Runner.CLI.Work is
          end;
       end if;
       if Given.Contains ("steps") and then Setting ("model", "") = "" then
+         --  The option, not its value, is what does not apply.
          Outcome := E.Make (E.Framework_Input_Invalid);
-         E.Add_Text (Outcome, "name", "steps");
-         E.Add_Text (Outcome, "value", Given ("steps"));
+         E.Add_Text (Outcome, "name", "/work's options");
+         E.Add_Text (Outcome, "value", "steps= without model=");
          declare
             --  The task's own kind, where it names one.
             Defined : R.Item;
@@ -1813,7 +1814,7 @@ package body Model_Runner.CLI.Work is
             --  said once, as trying again.
             --  Going round on a call that kept failing: a model too small
             --  for the call, or one that needs telling.
-            elsif Ada.Strings.Fixed.Index (To_String (Done.Reason), "its calls kept failing: ") > 0 then
+            elsif Ada.Strings.Fixed.Index (To_String (Done.Reason), "failed on the way") > 0 then
                Pres.Put_Note (Screen, "cli.next.repeated_error", [Loc.Named ("name", To_String (Done.Task_Id))]);
             elsif Ada.Strings.Fixed.Index (To_String (Done.Reason), "/task complete " & To_String (Done.Task_Id)) > 0
             then
@@ -2035,9 +2036,24 @@ package body Model_Runner.CLI.Work is
             end loop;
          end if;
          exit when Remaining.Is_Empty;
-         --  Stopped by the person: the whole of it, not only this task.
-         exit when To_String (Done.Final_State) = "blocked"
-           and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "you stopped") > 0;
+         --  Stopped by the person: the whole of it, not only this task --
+         --  what was left said, still ready.
+         if To_String (Done.Final_State) = "blocked"
+           and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "you stopped") > 0
+         then
+            declare
+               Left : Unbounded_String;
+            begin
+               for Id of Remaining loop
+                  Append (Left, (if Left = Null_Unbounded_String then "" else " ") & Id);
+               end loop;
+               Pres.Put_Note (Screen, "cli.work.all_stopped",
+                              [Loc.Named ("name", To_String (Chosen)),
+                               Loc.Named ("detail", (if Left = Null_Unbounded_String then "none"
+                                                     else To_String (Left)))]);
+            end;
+            exit;
+         end if;
          Chosen := To_Unbounded_String (Remaining.First_Element);
          Remaining.Delete_First;
       end loop;

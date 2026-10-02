@@ -506,8 +506,17 @@ package body Model_Runner.CLI.Interactive is
                      Pres.Put_Usage (Screen, "cli.interactive.usage.instruct");
                   end if;
                else
-                  Pres.Put_Message (Screen, "cli.interactive.help_unknown",
-                                    [Loc.Named ("value", T.Escape_Controls (Named))]);
+                  --  The command most likely meant, as Tab would take it.
+                  declare
+                     Near : constant Model_Runner.Framework.Name_Lists.Vector :=
+                       Model_Runner.CLI.Completion.Candidates ("/help " & Named);
+                  begin
+                     Pres.Put_Message (Screen, "cli.interactive.help_unknown",
+                                       [Loc.Named ("value", T.Escape_Controls (Named)
+                                                   & (if Natural (Near.Length) = 1
+                                                      then " -- did you mean /help " & Near.First_Element & "?"
+                                                      else ""))]);
+                  end;
                end if;
             end;
 
@@ -824,9 +833,25 @@ package body Model_Runner.CLI.Interactive is
                   Best  : constant String :=
                     (if Begun /= "" then Begun else Model_Runner.Framework.Nearest (Typed, Near));
                begin
-                  E.Add_Text (Unknown, "value", T.Escape_Controls (Line)
-                              & (if Best /= "" then " -- did you mean " & Best & "?" else "")
-                              & " (/help lists the commands)");
+                  declare
+                     --  An action of a register's command typed as a command of
+                     --  its own -- /reconsider DEC-3 -- with an ID: that command.
+                     Rest  : constant String :=
+                       Ada.Strings.Fixed.Trim (Line (Line'First + Typed'Length .. Line'Last), Ada.Strings.Both);
+                     Upper : constant String := Ada.Strings.Fixed.Head (Rest, 5);
+                     Owner : constant String :=
+                       (if Upper = "TASK-" then "/task"
+                        elsif Upper (Upper'First .. Upper'First + 3) = "REQ-" then "/req"
+                        elsif Upper (Upper'First .. Upper'First + 3) = "DEC-" then "/decision"
+                        elsif Upper = "SPEC-" then "/spec" else "");
+                  begin
+                     E.Add_Text (Unknown, "value", T.Escape_Controls (Typed)
+                                 & (if Owner /= "" and then Typed'Length > 1
+                                    then " -- " & Owner & " " & Typed (Typed'First + 1 .. Typed'Last) & " " & Rest
+                                         & " is the command"
+                                    elsif Best /= "" then " -- did you mean " & Best & "?" else "")
+                                 & " (/help lists the commands)");
+                  end;
                end;
                Pres.Report (Screen, Unknown);
             end;
