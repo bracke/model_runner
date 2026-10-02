@@ -1410,6 +1410,16 @@ package body Model_Runner.Presentation is
             (if Outcome.Weights_Mapped
              then "statistics.weights.mapped"
              else "statistics.weights.read")), Diagnostic);
+      --  What rewriting them at load cost, where they were rewritten.
+      if Interfaces."/=" (Outcome.Repacked_Bytes, 0) then
+         Put_Field
+           (Item, "statistics.repacked",
+            Message
+              (Item, "statistics.repacked.value",
+               [Loc.Named ("value", Size_Image (Outcome.Repacked_Bytes)),
+                Loc.Named ("other", Seconds (Outcome.Repack_Ns))]),
+            Diagnostic);
+      end if;
       if Outcome.Shifted > 0 then
          Put_Field
            (Item, "statistics.shifted",

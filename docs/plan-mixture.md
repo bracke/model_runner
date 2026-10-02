@@ -27,7 +27,10 @@ or refused by the reading, and written down either way.
 
 ## 0. Instruments first (a day)
 
-Two measurements this plan needs and the repository cannot take today.
+**Done.** Both instruments exist: `tests speed --device-timeline` prints a
+layer's steps in microseconds from timestamp queries (`Step_Times`), and
+`tests benchmark` measures the expert shapes. What follows is the plan as
+it was written.
 
 **A device timeline.** `Products.Run` records a sequence and the only
 clock is the fence at its end. `VK_QUERY_TYPE_TIMESTAMP` written after each
@@ -105,10 +108,12 @@ Budget a second entry for that.
 
 ## 2. The two-bit row product on the device (one week)
 
-**Re-measured 2026-10-02** (`docs/measured-figures.txt`): inside a token
-Q3_K is level with llama.cpp (TinyLlama 100.7 against 101.6 t/s) and Q2_K
-is 7 per cent behind (101.5 against 109.4); the mixture runs whole on the
-device ahead of llama.cpp. What is left of this section is Q2_K's 7 per cent.
+**Done 2026-10-02** (`docs/measured-figures.txt`, bc1ba815): Q2_K and Q3_K
+generate on `row_product_wave_low.comp`, a lane a sub-block of sixteen,
+four rows a workgroup. TinyLlama Q2_K 101.5 -> 109.3-112.5 t/s against
+llama.cpp's 109.1, Q3_K 100.7 -> 101.5-103.0 against 101.6. The mixture
+already ran whole on the device ahead of llama.cpp. The rest of this
+section is the reasoning as written before.
 
 **The mechanism.** Inside a token Q2_K streams at 39 GB/s where Q4_K
 streams at 59 and Q8_0 at 56; `tests device-bench` says Q3_K is worse, 21.
@@ -136,6 +141,14 @@ the stacks held at load, then Q8_0 as the control. Conformance at zero
 outside tolerance; the association changes, so no digest is held.
 
 ## 3. Attention over a long context on the device (one week)
+
+**Done.** A generated token's attention is cut into slices of the cached
+positions, a workgroup a slice, each leaving its largest score, sum and
+unnormalized blend for `merge.comp` (cba83208, 2026-09-11); a tile the
+cache did not fill is dealt round its subgroups and a group's heads are
+bundled into one workgroup (2026-09-27). What is left at depth is the exact
+binary32 cache against llama.cpp's half-precision one. The rest of this
+section is the plan as written.
 
 **The mechanism.** The same mixture generates at 22 t/s from an empty
 context and 18 at 1302 positions: 10 ms a token for 1302 positions over

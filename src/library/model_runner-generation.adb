@@ -784,6 +784,8 @@ package body Model_Runner.Generation is
         (if L.Workers (Session) = null then 1
          else Positive (Workers_CPU.Worker_Total (L.Workers (Session).all)));
       Outcome.Weights_Mapped := L.Weights_Mapped (Source);
+      Outcome.Repacked_Bytes := L.Repacked_Bytes (Source);
+      Outcome.Repack_Ns := L.Repack_Time (Source);
 
       --  Seed selection. An explicit seed wins; otherwise the entropy source
       --  chooses one and the choice is reported so the run can be repeated.

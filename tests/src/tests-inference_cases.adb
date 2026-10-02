@@ -2335,7 +2335,32 @@ package body Tests.Inference_Cases is
                     "converted" & Interfaces.Unsigned_64'Image (Converted)
                     & " bytes against" & Interfaces.Unsigned_64'Image (Weights)
                     & " of weights: too much to be the norms alone");
+
+            --  And the statistics say no copy was made and none took time.
+            Assert (L.Repacked_Bytes (Under.Ready) = 0
+                    and then L.Repack_Time (Under.Ready) = 0,
+                    "a model read as stored reports a rewrite at load");
          end;
+      end;
+
+      --  The same model decoded at load reports the copy it made: a byte a
+      --  weight became four, so the copy is larger than the file's own.
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source (Held'Access);
+         Parsed : Containers.Container;
+         Ready  : L.Model;
+         Status : E.Error_Info;
+      begin
+         Containers.Reader.Parse (Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+         L.Prepare (Ready, Parsed, Source, Repack => L.To_F32, Status => Status);
+         Assert (E.Is_Ok (Status), "the model did not prepare decoded");
+         Assert (L.Repacked_Bytes (Ready) > Interfaces.Unsigned_64 (Held'Length) / 2,
+                 "a model decoded at load reports"
+                 & Interfaces.Unsigned_64'Image (L.Repacked_Bytes (Ready))
+                 & " bytes of copy");
+         L.Close (Ready, Status);
       end;
 
       B.Free (Image);

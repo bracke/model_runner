@@ -7,6 +7,7 @@ with Model_Runner.Backend.CPU;
 with Model_Runner.Byte_Sources;
 with Model_Runner.Bytes;
 with Model_Runner.Cancellation;
+with Model_Runner.Clocks;
 with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers;
 with Model_Runner.Kernels;
@@ -1841,6 +1842,21 @@ package Model_Runner.Llama is
    --  @return True when the weights are borrowed rather than held.
    function Weights_Mapped (Item : Model) return Boolean;
 
+   --  The bytes of the copy the weights were rewritten into at load --
+   --  panels or binary32 -- or zero where they were read as the file has
+   --  them.
+   --
+   --  @param Item Prepared model.
+   --  @return The copy's size in bytes.
+   function Repacked_Bytes (Item : Model) return Interfaces.Unsigned_64;
+
+   --  How long the rewrite of the weights took at load, zero where there
+   --  was none.
+   --
+   --  @param Item Prepared model.
+   --  @return The time in nanoseconds.
+   function Repack_Time (Item : Model) return Model_Runner.Clocks.Nanoseconds;
+
    --  Drop the oldest positions and slide the rest down.
    --
    --  What it is for is a context that has filled. A run that stops there
@@ -2452,6 +2468,9 @@ private
       --  own bytes, and the file's arena stays mapped for whatever was not
       --  repacked.
       Repacked    : Model_Runner.Bytes.Byte_Array_Access := null;
+
+      --  How long writing it took.
+      Repack_Ns   : Model_Runner.Clocks.Nanoseconds := 0;
 
       --  The output head at four bits, for a model that only drafts.
       Light_Head  : Model_Runner.Bytes.Byte_Array_Access := null;

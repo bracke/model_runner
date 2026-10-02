@@ -239,6 +239,13 @@ package Model_Runner.Generation is
       --  at.
       Weights_Mapped   : Boolean := False;
 
+      --  The copy the weights were rewritten into at load -- panels or
+      --  binary32 -- and how long writing it took; both zero without one.
+      --  A rewrite buys its speed with memory and a slower start, and a
+      --  short run should be able to see what it paid.
+      Repacked_Bytes   : Interfaces.Unsigned_64 := 0;
+      Repack_Ns        : Model_Runner.Clocks.Nanoseconds := 0;
+
       --  How many tokens a draft model proposed and how many of those the
       --  real one agreed with. Both zero without a draft.
       --

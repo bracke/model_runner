@@ -3410,6 +3410,10 @@ package body Model_Runner.Llama is
    is
       Ignored : E.Error_Info;
 
+      --  When the weights' rewrite began, for what it cost.
+      Repack_Clock   : Model_Runner.Clocks.System_Clock;
+      Repack_Started : Model_Runner.Clocks.Nanoseconds := 0;
+
       --  Abandon preparation, releasing every resource acquired so far.
       procedure Fail (Reason : E.Error_Info) is
       begin
@@ -5262,6 +5266,10 @@ package body Model_Runner.Llama is
       --  way and only where the row count divides by the panel; everything
       --  else in the file is left where it lies, so the file's own bytes
       --  stay mapped and are never released here.
+      if Repack /= No_Repack then
+         Repack_Started := Model_Runner.Clocks.Now (Repack_Clock);
+      end if;
+
       if Repack = To_Rows then
          P.Publish (Observer, P.Load_Progress (P.Repacking_Weights));
 
@@ -5328,7 +5336,16 @@ package body Model_Runner.Llama is
                   return;
                end if;
 
-               B.Allocate (Needed, Item.Repacked);
+               --  Not zeroed here: a zeroing pass on one task touched every
+               --  page of the copy before the team began, a third of the
+               --  rewrite's time. Each matrix's panels are cleared by the
+               --  task that writes them, beside where they are written.
+               begin
+                  Item.Repacked := new B.Byte_Array (1 .. Needed);
+               exception
+                  when Storage_Error =>
+                     Item.Repacked := null;
+               end;
                if Item.Repacked = null then
                   Fail (E.Make (E.Memory_Allocation_Failed));
                   return;
@@ -5383,7 +5400,13 @@ package body Model_Runner.Llama is
 
                      Source : B.Byte_Array (1 .. Where.all.Span)
                        with Import, Address => Where.all.Base;
+                     First : constant B.Byte_Index :=
+                       Item.Repacked.all'First + Bases (Which);
+                     Size  : constant B.Byte_Count :=
+                       Model_Runner.Quantization.Interleave.Panel_Bytes
+                         (Where.all.Format, Where.all.Rows, Blocks_Of (Where));
                   begin
+                     Item.Repacked.all (First .. First + Size - 1) := [others => 0];
                      Model_Runner.Quantization.Interleave.Build
                        (Format => Where.all.Format,
                         Source => Source,
@@ -5734,6 +5757,13 @@ package body Model_Runner.Llama is
                end;
             end if;
          end;
+      end if;
+
+      --  What the rewrite cost, for the statistics: the copy's bytes and
+      --  the time it took, file order to panels or to binary32.
+      if Repack /= No_Repack and then Item.Repacked /= null then
+         Item.Repack_Ns := Model_Runner.Clocks.Elapsed
+           (Repack_Started, Model_Runner.Clocks.Now (Repack_Clock));
       end if;
 
       --  And whether the backend has room for what those matrices now are.
@@ -12397,6 +12427,13 @@ package body Model_Runner.Llama is
    function Weights_Mapped (Item : Model) return Boolean
    is (not Item.Weights_Held
        and then Item.Weights_Base /= System.Null_Address);
+
+   function Repacked_Bytes (Item : Model) return Interfaces.Unsigned_64
+   is (if Item.Repacked = null then 0
+       else Interfaces.Unsigned_64 (Item.Repacked.all'Length));
+
+   function Repack_Time (Item : Model) return Model_Runner.Clocks.Nanoseconds
+   is (Item.Repack_Ns);
 
    function Template_Ready (Item : Model) return Boolean
    is (Item.Chat_Present and then Model_Runner.Templates.Is_Compiled (Item.Chat));
