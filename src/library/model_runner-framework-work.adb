@@ -2033,6 +2033,14 @@ package body Model_Runner.Framework.Work is
               (if Lacks = "write a file" or else Ada.Strings.Fixed.Index (Lacks, "write anywhere") = Lacks'First
                then "write_source"
                elsif Lacks in "read the source" | "anything" then "read_source" else "");
+            --  The other of reading and writing the source, lacking too: named
+            --  in the same hint, so granting the one does not leave it refused.
+            Also : constant String :=
+              (if Capability = "read_source" and then Writes
+                 and then not Permissions.Allows (Allowed, Permissions.Write_Source)
+               then "write_source"
+               elsif Capability = "write_source" and then not Permissions.Allows (Allowed, Permissions.Read_Source)
+               then "read_source" else "");
          begin
             Configurations.Read (Item, Config, Got);
             for Index in 1 .. Records.Field_Count (Config) loop
@@ -2090,6 +2098,10 @@ package body Model_Runner.Framework.Work is
                  & (if Capability = "" or else Permissions."/=" (Permissions.Sandbox, Permissions.Unrestricted)
                       or else Own_Narrows
                     then ""
+                    elsif Also /= ""
+                    then "; " & Level & " withholds " & Capability & " and " & Also & " -- /reconfigure"
+                         & " map.permission." & Level & "." & Capability & "=on map.permission." & Level & "."
+                         & Also & "=on grants them"
                     else "; " & Level & " withholds " & Capability & " -- /reconfigure map.permission."
                          & Level & "." & Capability & "=on grants it")
                  & (if Elsewhere then " (" & Comma_Separated (Homes) & ")" else "")

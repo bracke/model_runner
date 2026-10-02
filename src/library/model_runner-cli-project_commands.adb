@@ -6835,14 +6835,6 @@ package body Model_Runner.CLI.Project_Commands is
             end loop;
          end loop;
 
-         --  The agents' bound at 0: no helper anywhere, whatever a level's
-         --  create_children grants -- said before it is asked.
-         for Bound of Names.Vector'(["scalar.agents.max_children", "scalar.agents.max_depth"]) loop
-            if R.Get (Planned.After, Bound) = "0" and then R.Get (Planned.Before, Bound) /= "0" then
-               Pres.Put_Note (Screen, "cli.project.no_helpers", [Loc.Named ("name", Bound)]);
-            end if;
-         end loop;
-
          --  A root or a deny naming a place the project has not: said, as
          --  a typo grants nothing where it was meant to.
          for Line of Planned.Changed loop

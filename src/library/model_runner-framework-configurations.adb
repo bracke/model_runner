@@ -2088,6 +2088,15 @@ package body Model_Runner.Framework.Configurations is
             then
                return Name & " is 1 or more, not " & Value & " -- with none, no task could be worked";
             end if;
+            --  A bound of nothing on the agents: refused as a level's is, the
+            --  grant withheld being how no helper is made.
+            if Name in "scalar.agents.max_children" | "scalar.agents.max_depth"
+              and then Value'Length in 1 .. 9 and then (for all C of Value => C = '0')
+            then
+               return Name & " is 1 or more, not " & Value & " -- a bound of 0 lets no agent make a helper;"
+                 & " map.permission.project.create_children=off withholds it so, and max_depth=1 lets agents"
+                 & " make helpers that make none";
+            end if;
             --  A lease of nothing would end every run as it starts: not
             --  taken for the default it would fall back to.
             if Name = "scalar.work.lease" and then Value'Length in 1 .. 9
@@ -2181,7 +2190,7 @@ package body Model_Runner.Framework.Configurations is
       elsif Name = "scalar.agents.max_active" then
          return "how many agents may run at once: a count, 1 or more";
       elsif Name = "scalar.agents.max_children" then
-         return "how many helpers an agent may make: a count, 0 for none";
+         return "how many helpers an agent may make: a count, 1 or more";
       elsif Name = "scalar.agents.max_depth" then
          return "how deep helpers may make helpers: a count";
       elsif Name = "scalar.agents.max_invocations" then

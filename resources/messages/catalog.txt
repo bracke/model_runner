@@ -663,7 +663,6 @@ en.cli.project.level_gains = {name} gains what it did not have: {detail}
 en.cli.project.level_loses = {name} loses what it had: {detail}
 en.cli.project.level_refuses = {name} would no longer {value}, so its tasks ready now would be refused: {detail}
 en.cli.project.places_missing = {name} names a place the project has not: {detail}
-en.cli.project.no_helpers = {name}=0 lets no agent make a helper, whatever a level's create_children grants -- map.permission.LEVEL.create_children=off says so where that is meant
 en.cli.project.over_ruling = {name} is above what {other} rules for the agents, {detail}: the kind's own limit holds over that ruling for its tasks
 en.cli.project.grant_opens = {name} reaches more than it did: {detail} open to it now -- give the deny or the roots it had to keep it as narrow
 en.cli.project.sources_match_none = {value} finds no file in the project now: /bootstrap would read nothing by it -- a * stands for one directory or a name's part, and dir/** for every directory below dir
@@ -2095,7 +2094,6 @@ da.cli.project.level_gains = {name} får hvad den ikke havde: {detail}
 da.cli.project.level_loses = {name} mister hvad den havde: {detail}
 da.cli.project.level_refuses = {name} ville ikke længere kunne {value}, så dens opgaver der er klar nu ville blive afvist: {detail}
 da.cli.project.places_missing = {name} nævner et sted projektet ikke har: {detail}
-da.cli.project.no_helpers = {name}=0 lader ingen agent lave en hjælper, hvad et niveaus create_children end giver -- map.permission.NIVEAU.create_children=off siger det dér hvor det er ment
 da.cli.project.over_ruling = {name} er over hvad {other} afgør for agenterne, {detail}: artens egen grænse gælder over den afgørelse for dens opgaver
 da.cli.project.grant_opens = {name} rækker videre end før: {detail} åben for den nu -- giv det deny eller de rødder den havde for at holde den så snæver
 da.cli.project.sources_match_none = {value} finder ingen fil i projektet nu: /bootstrap ville intet læse ad den vej -- en * står for én mappe eller en del af et navn, og dir/** for alle mapper under dir
@@ -3300,7 +3298,6 @@ qps.cli.project.level_gains = ⟦{name} gáíñß wháŧ íŧ ðíð ñóŧ háv
 qps.cli.project.level_loses = ⟦{name} ĺóßéß wháŧ íŧ háð: {detail}⟧
 qps.cli.project.level_refuses = ⟦{name} wóúĺð ñó ĺóñgéŕ {value}, ßó íŧß ŧáßkß ŕéáðý ñów wóúĺð bé ŕéfúßéð: {detail}⟧
 qps.cli.project.places_missing = ⟦{name} ñáméß á pĺáçé ŧhé pŕójéçŧ háß ñóŧ: {detail}⟧
-qps.cli.project.no_helpers = ⟦{name}=0 ĺéŧß ñó ágéñŧ máké á héĺpéŕ, wháŧévéŕ á ĺévéĺ'ß çŕéáŧé_çhíĺðŕéñ gŕáñŧß -- máp.péŕmíßßíóñ.LEVEL.çŕéáŧé_çhíĺðŕéñ=óff ßáýß ßó whéŕé ŧháŧ íß méáñŧ⟧
 qps.cli.project.over_ruling = ⟦{name} íß ábóvé wháŧ {other} ŕúĺéß fóŕ ŧhé ágéñŧß, {detail}: ŧhé kíñð'ß ówñ ĺímíŧ hóĺðß óvéŕ ŧháŧ ŕúĺíñg fóŕ íŧß ŧáßkß⟧
 qps.cli.project.grant_opens = ⟦{name} ŕéáçhéß móŕé ŧháñ íŧ ðíð: {detail} ópéñ ŧó íŧ ñów -- gívé ŧhé ðéñý óŕ ŧhé ŕóóŧß íŧ háð ŧó kéép íŧ áß ñáŕŕów⟧
 qps.cli.project.sources_match_none = ⟦{value} fíñðß ñó fíĺé íñ ŧhé pŕójéçŧ ñów: /bóóŧßŧŕáp wóúĺð ŕéáð ñóŧhíñg bý íŧ -- á * ßŧáñðß fóŕ óñé ðíŕéçŧóŕý óŕ á ñámé'ß páŕŧ, áñð ðíŕ/** fóŕ évéŕý ðíŕéçŧóŕý béĺów ðíŕ⟧
