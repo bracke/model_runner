@@ -548,8 +548,9 @@ package body Model_Runner.Framework.Bootstrap is
          if Pending_Label /= Null_Unbounded_String then
             Found (Issue, Path & "#" & To_String (Pending_Label) & "#unstated",
                    To_String (Pending_Label) & " in " & Path & " states no SHALL, MUST or SHOULD, so it is not"
-                   & " proposed: " & To_String (Pending_Title) & " -- reword it so, or /req new TITLE text=..."
-                   & " makes it",
+                   & " proposed: " & To_String (Pending_Title)
+                   & (if Decisions_Here then " -- under a heading of decisions, /decision new TITLE text=... makes it"
+                      else " -- reword it so, or /req new TITLE text=... makes it"),
                    To_String (Pending_Title));
             Pending_Label := Null_Unbounded_String;
          end if;
@@ -765,7 +766,7 @@ package body Model_Runner.Framework.Bootstrap is
                Seen.Append (Fingerprint (Item));
                Found (Requirement_Candidate, Path & "#" & Fingerprint (Item), Headline (Item), Item);
                Found (Issue, Path & "#" & Fingerprint (Item) & "#done",
-                      Headline (Item) & " is marked done in " & Path & ": once it is accepted, /task complete"
+                      """" & Headline (Item) & """ is marked done in " & Path & ": once it is accepted, /task complete"
                       & " takes the task derived for it as done, its checks passing, rather than /work doing it"
                       & " again", Item);
             end if;
@@ -787,7 +788,7 @@ package body Model_Runner.Framework.Bootstrap is
          then
             Found (Issue, Path & "#" & (if Label /= Null_Unbounded_String then To_String (Label)
                                         else Fingerprint (Item)) & "#done",
-                   (if Label /= Null_Unbounded_String then To_String (Label) else Headline (Item))
+                   (if Label /= Null_Unbounded_String then To_String (Label) else """" & Headline (Item) & """")
                    & " is marked done in " & Path & ": once it is accepted, /task complete takes the task"
                    & " derived for it as done, its checks passing, rather than /work doing it again",
                    Item);
@@ -863,6 +864,16 @@ package body Model_Runner.Framework.Bootstrap is
                elsif Length (Label) > 4 and then Slice (Label, 1, 4) = "ADR-" then
                   Found (Decision_Candidate, Path & "#" & To_String (Label),
                          To_String (Label) & ": " & To_String (Rest), "");
+                  Section := Length (Result);
+                  return;
+               --  ## DEC-1: Title -- the project's own decision: made under
+               --  its identifier, its section saying it.
+               elsif Length (Label) > 4 and then Slice (Label, 1, 4) = "DEC-"
+                 and then Identifiers.Is_Valid (To_String (Label))
+               then
+                  Found (Decision_Candidate, Path & "#" & To_String (Label),
+                         (if Length (Rest) = 0 then To_String (Label) else Trim (To_String (Rest))), "",
+                         Given => To_String (Label));
                   Section := Length (Result);
                   return;
                --  ### REQ-004: Title -- the project's own identifier, at any
@@ -1092,6 +1103,7 @@ package body Model_Runner.Framework.Bootstrap is
                begin
                   if Said /= "" and then Own then
                      Found (Decision_Candidate, Path & "#" & Mark, Headline (Said), Said, Given => Mark);
+                     return;
                   elsif Said /= "" then
                      Found (Decision_Candidate, Path & "#" & Mark,
                             (if Label = Null_Unbounded_String then Headline (Said)
@@ -2104,7 +2116,23 @@ package body Model_Runner.Framework.Bootstrap is
                --  Its heading, then its status, as a document says them; with
                --  no title, its label goes on its first line of words, and
                --  done there as a ticked item is.
-               if Title /= Null_Unbounded_String then
+               --  Its status in the words the rest of the reading takes:
+               --  approved is accepted, and done, as RST's :status: is.
+               declare
+                  Lower : constant String :=
+                    Ada.Characters.Handling.To_Lower (Ada.Strings.Fixed.Trim (To_String (Status), Ada.Strings.Both));
+               begin
+                  if Lower in "approved" | "baselined" | "agreed" | "active" then
+                     Status := To_Unbounded_String ("accepted");
+                  elsif Lower in "implemented" | "done" | "complete" | "completed" | "verified" | "closed" then
+                     Status := To_Unbounded_String ("done");
+                  end if;
+               end;
+               --  Done, with an id: a ticked item its words follow, its title
+               --  aside -- as a ticked item is, and said done.
+               if To_String (Status) = "done" and then Id /= Null_Unbounded_String then
+                  Lead := To_Unbounded_String ("- [x] " & To_String (Id) & ": ");
+               elsif Title /= Null_Unbounded_String then
                   Append (Result, "## "
                           & (if Id = Null_Unbounded_String then "" else To_String (Id) & " ")
                           & To_String (Title) & ASCII.LF);
@@ -2131,6 +2159,13 @@ package body Model_Runner.Framework.Bootstrap is
                end if;
             --  Its first words a heading: that is its title, as title:
             --  would have been -- its # not part of it.
+            --  Done, its first words a heading: the heading is its title,
+            --  its statement follows to be ticked.
+            elsif Lead /= Null_Unbounded_String and then Trim (Line) /= ""
+              and then Trim (Line) (Trim (Line)'First) = '#'
+              and then Length (Lead) > 5 and then Slice (Lead, 1, 5) = "- [x]"
+            then
+               null;
             elsif Lead /= Null_Unbounded_String and then Trim (Line) /= ""
               and then Trim (Line) (Trim (Line)'First) = '#'
             then
@@ -3251,6 +3286,50 @@ package body Model_Runner.Framework.Bootstrap is
             end if;
             Said_Now.Append (Field (Next.Provenance));
          end loop;
+         --  A document entries came from that says none now -- its last
+         --  requirement taken out -- is read as saying nothing, so what
+         --  came from it is said gone, not left unseen.
+         declare
+            Root : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
+         begin
+            for Kind in Intent.Requirement .. Intent.Decision loop
+               for Known of Intent.List (Item, Kind) loop
+                  declare
+                     Held : Intent.Entity;
+                     Got  : E.Error_Info;
+                     Text : Unbounded_String;
+                     Read : E.Error_Info;
+                  begin
+                     Intent.Read (Item, Kind, Known, Held, Got);
+                     if E.Is_Ok (Got) and then Length (Held.Source) > 0
+                       and then To_String (Held.Source) /= "user"
+                       and then not Read_From.Contains (To_String (Held.Source))
+                       and then Ada.Directories.Exists (Hostkit.Fs.Join (Root, To_String (Held.Source)))
+                       and then To_String (Held.State) not in "obsolete" | "superseded" | "rejected"
+                     then
+                        Files.Read_Text (Hostkit.Fs.Join (Root, To_String (Held.Source)), Text, Read);
+                        declare
+                           Now : constant Output_List := Scan (To_String (Held.Source), To_String (Text));
+                           --  Of its kind: a requirement's, a decision's, a
+                           --  specification's.
+                           function Of_Kind (One : Output) return Boolean
+                           is (if Intent."=" (Kind, Intent.Requirement)
+                               then One.Kind in Imported_Item | Requirement_Candidate
+                               elsif Intent."=" (Kind, Intent.Decision) then One.Kind = Decision_Candidate
+                               else One.Kind = Specification_Candidate);
+                        begin
+                           if E.Is_Ok (Read) and then not (for some One of Now.Outputs => Of_Kind (One)) then
+                              Read_From.Append (To_String (Held.Source));
+                           end if;
+                        end;
+                     end if;
+                  end;
+               end loop;
+            end loop;
+         exception
+            when others =>
+               null;
+         end;
          --  A document gone altogether, with what was taken up from it: one
          --  issue for it, naming them all, not one an entry.
          declare
@@ -3420,8 +3499,13 @@ package body Model_Runner.Framework.Bootstrap is
                            end Retired_As;
                            Why     : constant String :=
                              Known & ": " & To_String (Held.Source)
-                             & (if Retired_As = "" then " no longer says it"
-                                else " now marks it " & Retired_As);
+                             & (if Retired_As /= "" then " now marks it " & Retired_As
+                                --  The file gone, not its words changed.
+                                elsif not Ada.Directories.Exists
+                                            (Hostkit.Fs.Join (Ada.Directories.Containing_Directory (Stores.Root (Item)),
+                                                              To_String (Held.Source)))
+                                then " is gone from the project, and with it what it said"
+                                else " no longer says it");
 
                            --  The decision made of the record it says replaced it
                            --  -- superseded by ADR-0003 -- now or before; "".

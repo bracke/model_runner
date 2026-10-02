@@ -1173,7 +1173,8 @@ package body Model_Runner.CLI.Interactive is
                      Got    : constant String :=
                        Model_Runner.CLI.Choosers.Edited_Line
                          (Screen, Pres.Message_Value (Screen, Key) & " ", Ending,
-                          Complete => Model_Runner.CLI.Completion.Candidates'Access);
+                          Complete => Model_Runner.CLI.Completion.Candidates'Access,
+                          Describe => Model_Runner.CLI.Completion.Described'Access);
                      --  Escape and Ctrl-C drop the line, as when a cooked
                      --  terminal passes them on: the key after what was typed.
                      Whole  : constant String :=

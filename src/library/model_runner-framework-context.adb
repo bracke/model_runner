@@ -204,7 +204,12 @@ package body Model_Runner.Framework.Context is
                E.Add_Text
                  (Status, "detail",
                   "what it must hold is" & Natural'Image (Result.Cost)
-                  & " tokens and the model has room for" & Natural'Image (Result.Budget));
+                  & " tokens and the model has room for" & Natural'Image (Result.Budget)
+                  --  The profile it was planned with, and how to widen it.
+                  & ", as planned with the profile " & To_String (Result.Model.Id) & " (context"
+                  & Natural'Image (Result.Model.Context_Limit) & ", reserve"
+                  & Natural'Image (Result.Model.Output_Reserve) & ") -- /reconfigure map.model."
+                  & To_String (Result.Model.Id) & "=context=N gives it more, or /work ... profile=NAME another");
                return;
             end if;
          end loop;

@@ -78,8 +78,16 @@ package body Model_Runner.Framework.Permissions is
    --  What of a grant's constraints this does not read: a key it has no
    --  constraint called, a word with nothing it belongs to, a count that
    --  is no number. Read as it stood, it would grant more than meant.
-   function Constraint_Problem (Text : String) return String is
+   function Constraint_Problem (Text : String; Capability_Word : String := "") return String is
       Last_Key : Unbounded_String;
+      --  The constraints the capability takes, where it is known.
+      Takes : constant String :=
+        (if Capability_Word in "read_source" | "write_source" | "read_specs" | "write_specs"
+         then "roots= and deny="
+         elsif Capability_Word = "create_children" then "max_depth= and max_children="
+         elsif Capability_Word in "run_build" | "run_tests" | "run_static_analysis" then "profiles="
+         elsif Capability_Word /= "" then "none -- " & Capability_Word & " is granted whole"
+         else "roots=, deny=, profiles=, max_depth= and max_children=");
    begin
       for Pair of Parts (Ada.Strings.Fixed.Translate
                            (Text, Ada.Strings.Maps.To_Mapping (" ", ",")), ',')
@@ -103,12 +111,13 @@ package body Model_Runner.Framework.Permissions is
             elsif Equal = 0 and then To_String (Last_Key) in "roots" | "deny" | "profiles" then
                null;
             elsif Equal = 0 then
-               return Key & " is no constraint: they are roots=, deny=, profiles=, max_depth= and"
-                 & " max_children=; on grants a capability with none, off takes it away, and inherit"
+               return Key & " is no constraint: " & (if Capability_Word = "" then "they are " else "it takes ")
+                 & Takes & "; on grants a capability with none, off takes it away, and inherit"
                  & " follows the level above";
             elsif Key not in "roots" | "deny" | "profiles" | "max_depth" | "max_children" then
-               return "no constraint is called " & Key & "; they are roots, deny, profiles,"
-                 & " max_depth and max_children -- and on, off or inherit stand alone";
+               return "no constraint is called " & Key & "; "
+                 & (if Capability_Word = "" then "they are " else "it takes ")
+                 & Takes & " -- and on, off or inherit stand alone";
             elsif Key in "max_depth" | "max_children"
               and then (Value'Length not in 1 .. 9
                         or else (for some C of Value => C not in '0' .. '9'))
@@ -355,16 +364,16 @@ package body Model_Runner.Framework.Permissions is
                                 or else Ada.Strings.Fixed.Tail (Trim (Name), 4) = "=off"
                               then " -- on and off are for a level's, by /reconfigure map.permission.LEVEL.NAME=off"
                               elsif Ada.Strings.Fixed.Index (Name, ",") > 0
-                              then " -- a capability's places follow it after a space, as write_source roots=src/,"
-                                   & " and capabilities are a ; apart"
+                              then " -- capabilities are a ; apart and a capability's places follow it after a"
+                                   & " space, the whole in quotes: permissions=""read_source; write_source roots=src/"""
                               else ""));
                Result := Nothing;
                return;
             end if;
-            if Constraint_Problem (Rest) /= "" then
+            if Constraint_Problem (Rest, Trim (Name)) /= "" then
                Status := E.Make (E.Framework_Schema_Violation);
                E.Add_Text (Status, "name", "permissions");
-               E.Add_Text (Status, "detail", Trim (Name) & ": " & Constraint_Problem (Rest));
+               E.Add_Text (Status, "detail", Trim (Name) & ": " & Constraint_Problem (Rest, Trim (Name)));
                Result := Nothing;
                return;
             end if;
@@ -1285,7 +1294,7 @@ package body Model_Runner.Framework.Permissions is
             return Result;
       end Top_Directories;
 
-      procedure Check (Place : String) is
+      procedure Check (Place : String; Denied : Boolean) is
          Bare : constant String :=
            (if Place'Length > 2 and then Place (Place'First .. Place'First + 1) = "./"
             then Place (Place'First + 2 .. Place'Last) else Place);
@@ -1299,7 +1308,8 @@ package body Model_Runner.Framework.Permissions is
             begin
                Ada.Strings.Unbounded.Append
                  (Said, (if Ada.Strings.Unbounded.Length (Said) = 0 then "" else ", ") & Bare
-                  & " (no such place here" & (if Near = "" then "" else "; " & Near & " is") & ")");
+                  & " (no such place here" & (if Near = "" then "" else "; " & Near & " is")
+                  & (if Denied then ": kept from being made" else ": it grants nothing there") & ")");
             end;
          end if;
       end Check;
@@ -1317,7 +1327,7 @@ package body Model_Runner.Framework.Permissions is
                   begin
                      for At_Index in Eq + 1 .. Word'Last + 1 loop
                         if At_Index > Word'Last or else Word (At_Index) in ',' | '|' then
-                           Check (Word (From .. At_Index - 1));
+                           Check (Word (From .. At_Index - 1), Denied => Word (Word'First .. Eq - 1) = "deny");
                            From := At_Index + 1;
                         end if;
                      end loop;

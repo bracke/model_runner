@@ -13,4 +13,12 @@ package Model_Runner.CLI.Completion is
    --    once; empty where nothing fits.
    function Candidates (Before : String) return Model_Runner.Framework.Name_Lists.Vector;
 
+   --  What an identifier Tab lists stands for, as the listing shows it: a
+   --  task's state and title, an entry's title.
+   --
+   --  @param Word The identifier.
+   --  @return As "TASK-003  ready  Add the parser"; empty for a word that is
+   --    no identifier of the project here.
+   function Described (Word : String) return String;
+
 end Model_Runner.CLI.Completion;

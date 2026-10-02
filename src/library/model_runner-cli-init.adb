@@ -544,6 +544,9 @@ package body Model_Runner.CLI.Init is
             Kept_Said   : Unbounded_String;
             Skipped_Said : Unbounded_String;
             Warned      : Unbounded_String;
+            --  Where the project would better be made: the package's or the
+            --  repository's root above, offered as a choice of its own.
+            Root_Instead : Unbounded_String;
 
             --  Whether the plan writes a file beside a manifest kept: only
             --  then are the two to agree on the crate's name.
@@ -793,6 +796,7 @@ package body Model_Runner.CLI.Init is
                                     (Screen, "cli.init.inside_project", [Loc.Named ("path", Top)])
                                   & ASCII.LF);
                elsif Top /= "" and then Ada.Directories.Full_Name (Top) /= Here then
+                  Root_Instead := To_Unbounded_String (Ada.Directories.Full_Name (Top));
                   Say ("cli.init.inside_repository", [Loc.Named ("path", Top)]);
                   Append (Warned, Pres.Next_Step_Value
                                     (Screen, "cli.init.inside_repository", [Loc.Named ("path", Top)])
@@ -808,9 +812,32 @@ package body Model_Runner.CLI.Init is
                               Ada.Directories.Exists (Hostkit.Fs.Join (To_String (Up), Manifest)))
                         then
                            Say ("cli.init.manifest_above", [Loc.Named ("path", To_String (Up))]);
+                           Root_Instead := Up;
                            exit;
                         end if;
                         Up := To_Unbounded_String (Ada.Directories.Containing_Directory (To_String (Up)));
+                     end loop;
+                  end;
+               end if;
+               --  No repository around it: a package's manifest a few
+               --  directories up is the place for the project too.
+               if Top = "" and then not Ada.Directories.Exists (Hostkit.Fs.Join (Here, ".git")) then
+                  declare
+                     Up    : Unbounded_String := To_Unbounded_String (Ada.Directories.Containing_Directory (Here));
+                     Steps : Natural := 0;
+                  begin
+                     while Steps < 3 and then Length (Up) > 1 loop
+                        if (for some Manifest of Model_Runner.Framework.Name_Lists.Vector'
+                              (["package.json", "go.mod", "Cargo.toml", "alire.toml", "pyproject.toml"]) =>
+                              Ada.Directories.Exists (Hostkit.Fs.Join (To_String (Up), Manifest)))
+                          and then not S.Is_Initialized (To_String (Up))
+                        then
+                           Say ("cli.init.manifest_above", [Loc.Named ("path", To_String (Up))]);
+                           Root_Instead := Up;
+                           exit;
+                        end if;
+                        Up := To_Unbounded_String (Ada.Directories.Containing_Directory (To_String (Up)));
+                        Steps := Steps + 1;
                      end loop;
                   end;
                end if;
@@ -1072,6 +1099,17 @@ package body Model_Runner.CLI.Init is
                                   Details    => Null_Unbounded_String,
                                   Selectable => True));
                   end if;
+                  --  Made at the root above instead: a choice, not only a warning.
+                  if Root_Instead /= Null_Unbounded_String then
+                     Choosers.Append
+                       (Answers, (Label      => To_Unbounded_String
+                                                  (Pres.Next_Step_Value
+                                                     (Screen, "cli.init.confirm.root",
+                                                      [Loc.Named ("path", To_String (Root_Instead))])),
+                                  Tag        => Null_Unbounded_String,
+                                  Details    => Null_Unbounded_String,
+                                  Selectable => True));
+                  end if;
                   if not Planned.Inputs.Is_Empty then
                      Choosers.Append
                        (Answers, (Label      => To_Unbounded_String
@@ -1127,6 +1165,17 @@ package body Model_Runner.CLI.Init is
                      if Picked = 0 or else Picked = Choosers.Length (Answers) then
                         Pres.Put_Note (Screen, "cli.init.cancelled");
                         Status := E.Exit_Cancelled;
+                        return;
+                     elsif Root_Instead /= Null_Unbounded_String
+                       and then Picked = 2 + (if Fixes.Is_Empty then 0 else 1)
+                     then
+                        --  Planned again, there.
+                        declare
+                           There : Model_Runner.CLI.Project_Requests.Request := Item;
+                        begin
+                           There.Project_Directory := T.To_Bounded (To_String (Root_Instead));
+                           Run (There, Screen, Status);
+                        end;
                         return;
                      elsif Picked = Change_At then
                         --  Which, and its new value -- the one it has offered
@@ -1266,7 +1315,13 @@ package body Model_Runner.CLI.Init is
       end if;
       --  In a session, the steps after it are the session's commands, which
       --  work where the session was started: not offered for elsewhere.
-      if not (Pres.In_Session (Screen) and then not T.Is_Empty (Item.Project_Directory)) then
+      if not (Pres.In_Session (Screen) and then not T.Is_Empty (Item.Project_Directory))
+        --  Or the session goes on in the project made: it holds where it
+        --  was started.
+        or else (not S.Is_Initialized (Ada.Directories.Current_Directory)
+                 and then Ada.Strings.Fixed.Index (Ada.Directories.Current_Directory & "/",
+                                                   Ada.Directories.Full_Name (Directory) & "/") = 1)
+      then
          --  Documents there to read: named, as /bootstrap will read them.
          declare
             Found  : constant Model_Runner.Framework.Name_Lists.Vector :=
@@ -1289,7 +1344,9 @@ package body Model_Runner.CLI.Init is
             --  A package of its own below -- a manifest beside its README --
             --  whose README is not read: named, with how it would be.
             declare
-               Unread : Unbounded_String;
+               Unread   : Unbounded_String;
+               --  The directories below that build apart: a manifest each.
+               Packages : Unbounded_String;
 
                procedure Look (Dir : String; Depth : Natural) is
                   Search : Ada.Directories.Search_Type;
@@ -1298,6 +1355,13 @@ package body Model_Runner.CLI.Init is
                   Rel    : constant String :=
                     (if Dir'Length > Top'Length + 1 then Dir (Dir'First + Top'Length + 1 .. Dir'Last) else "");
                begin
+                  if Depth > 0 and then Rel /= ""
+                    and then (for some Manifest of Model_Runner.Framework.Name_Lists.Vector'
+                                (["package.json", "Cargo.toml", "go.mod", "alire.toml", "pyproject.toml"]) =>
+                                Ada.Directories.Exists (Hostkit.Fs.Join (Dir, Manifest)))
+                  then
+                     Append (Packages, (if Packages = Null_Unbounded_String then "" else " ") & Rel & "/");
+                  end if;
                   if Depth > 0
                     and then (for some Manifest of Model_Runner.Framework.Name_Lists.Vector'
                                 (["package.json", "Cargo.toml", "go.mod", "alire.toml", "pyproject.toml"]) =>
@@ -1333,6 +1397,10 @@ package body Model_Runner.CLI.Init is
                Look (Ada.Directories.Full_Name (Directory), 0);
                if Unread /= Null_Unbounded_String then
                   Pres.Put_Note (Screen, "cli.next.init_packages_unread", [Loc.Named ("detail", To_String (Unread))]);
+               end if;
+               if Packages /= Null_Unbounded_String then
+                  Pres.Put_Note (Screen, "cli.next.init_packages_components",
+                                 [Loc.Named ("detail", To_String (Packages))]);
                end if;
             end;
          end;

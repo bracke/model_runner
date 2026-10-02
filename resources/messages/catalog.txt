@@ -402,6 +402,7 @@ en.cli.init.choose_input = Change which input?
 en.cli.init.cancelled = nothing was initialized
 en.cli.init.confirm = Initialize the project as planned?
 en.cli.init.confirm.yes = Initialize
+en.cli.init.confirm.root = Initialize at {path} instead
 en.cli.init.confirm.change = Change an input
 en.cli.init.confirm.allow = Initialize, and set the checks to what can run: {detail}
 en.cli.init.confirm.no = Cancel
@@ -479,8 +480,10 @@ en.cli.result.elsewhere = {name} is shown by {value}
 en.cli.result.task_not_run = {name} has no result: no run of it is kept
 en.cli.result.latest_of = {value} is the newest result {name}'s runs left; /task show {name} and /task audit {name} say the rest
 en.cli.result.found_over_run = {name} was completed by hand with what was found: its agent's run, {value}, said otherwise and is set aside
-en.cli.result.since_stopped = {name} was stopped since (Ctrl-C), and that run left no answer: {value}, below, is from before
-en.cli.result.since_completed = {name} was completed since, by hand: {value}, below, is the failure from before
+en.cli.result.since_stopped = {name} was stopped (Ctrl-C) in {other}, which left no answer: {value}, below, is an earlier run's
+en.cli.result.stopped_left = {name} was stopped (Ctrl-C) in {other}: what that run left, {value}, is below -- /task accept {name} takes it up again
+en.cli.result.task_failed = {name} failed: {detail} -- /result {other} shows that run and its calls; its newest result is below
+en.cli.result.since_completed = {name} is complete{detail}: {value}, below, is the newest result its runs left
 en.cli.result.no_finding = {name} was completed by hand with nothing kept of what was found, and no run of it answered -- /task reopen {name}, then /task complete {name} asks what was found and keeps it
 en.cli.result.none = no open issues, and no task failed or was stopped
 en.cli.result.section.tasks = Tasks that failed, were stopped or are blocked
@@ -537,6 +540,7 @@ en.cli.intent.ruling_disagrees = {name} rules {value} = {detail}, and the config
 en.cli.intent.governs_still = {name} still governs {value}
 en.cli.intent.ruling_replaced = {name}'s ruling replaces the one it had: {value}
 en.cli.intent.ruling_now_over = {name} rules {value} as before, and now holds over {other}
+en.cli.intent.rejected_back = {name} is kept, rejected: {value} reconsider {name} takes it back to a candidate
 en.cli.intent.ruling_passed = {name} governed {value}; {other} governs it now: {detail}
 en.cli.intent.already_governs = {name} governs {value} already; nothing changed
 en.cli.intent.moved = {name} moved from {other} to {value}
@@ -588,7 +592,6 @@ en.cli.task.requirement = {name} is {value}
 en.cli.task.requirement_unverified = {name} is {value} and not yet verified: {detail}
 en.cli.task.requirement_no_file = {name} is marked implemented, as {other} is complete, but no file is known to implement it: /req link {name} implementation {path} names it, and /check {name} then judges it
 en.cli.task.diff_none = no work of {name} waits to be taken in -- its state is {value}: {detail}
-en.cli.task.diff_reopened = {name} is {value} now: what its last attempt wrote, above, is in the project -- /work {name} does it again over it
 en.cli.task.kept_none = no copy of given-up or overwritten work is kept
 en.cli.task.kept_line = {name}  {value}: {detail}
 en.cli.task.kept_restore_confirm = restore the files kept in {name} into the project -- {detail} (yes/no; Enter is no)
@@ -598,7 +601,7 @@ en.cli.task.kept_drop_all_confirm = remove every kept copy -- {detail}? (yes/no;
 en.cli.task.kept_restored = {name} is put back in the project: {detail}
 en.cli.task.kept_replaced = what the project held of {detail} is kept as {name}: /task kept restore {name} puts it back
 en.cli.task.diff_empty = {name}'s work changes no file
-en.cli.task.diff_uncommitted = {name} is complete, its work in the project; what of it the last commit does not hold yet:
+en.cli.task.diff_uncommitted = {name} is {value}, its work in the project; what of it the last commit does not hold yet:
 en.cli.task.diff_not_its = what {detail} holds beyond the last commit came after {name}'s work was committed, so it is not {name}'s: /git shows it, and git log -p -- {detail} shows what {name} changed
 en.cli.task.diff_undone = {name}'s work was undone when {value} was put back: nothing of it is in the project now -- /task reopen {name} does it again
 en.cli.task.diff_later = {other} changed {path} after {name} did: what it holds now is {other}'s -- /task diff {other} shows it
@@ -651,7 +654,9 @@ en.cli.project.stale_verified = {name} is recorded verified, but its evidence no
 en.cli.project.clipped = {name} asks for more than the project now allows -- {detail}; it gets no more than the project's
 en.cli.project.grant_widened = {name} widens: it held {value}, and now {detail}
 en.cli.project.level_gains = {name} gains what it did not have: {detail}
-en.cli.project.places_missing = {name} names a place the project has not: {detail} -- a place that is not there grants nothing
+en.cli.project.level_refuses = {name} would no longer read or write the source, so its tasks ready now would be refused: {detail}
+en.cli.project.places_missing = {name} names a place the project has not: {detail}
+en.cli.project.no_helpers = {name}=0 lets no agent make a helper, whatever a level's create_children grants -- map.permission.LEVEL.create_children=off says so where that is meant
 en.cli.project.grant_opens = {name} reaches more than it did: {detail} open to it now -- give the deny or the roots it had to keep it as narrow
 en.cli.project.sources_match_none = {value} finds no file in the project now: /bootstrap would read nothing by it -- a * stands for one directory or a name's part, and dir/** for every directory below dir
 en.cli.project.component_gone = {name} is no longer one of the project's components ({value}), and open tasks in it: {count}; /task rehome {name} NAME places them, or /reconfigure map.component.{name}=roots=DIR keeps it one
@@ -691,6 +696,7 @@ en.cli.project.inconsistent = what does not hold together (/check consistency li
 en.cli.project.last_full = last full test
 en.cli.project.bootstrapped = made: {count}; revised: {value}; already there: {total}; new issues: {extra}
 en.cli.project.bootstrap.made =   made {name}, {value}
+en.cli.project.bootstrap.accepted_why = accepted at once: its document gives it the project's own identifier (REQ-n, DEC-n) or says it is accepted -- /reconfigure bootstrap.import=candidate makes such wait for /accept instead
 en.cli.project.bootstrap.revised =   revised {name} to what its document says now
 en.cli.project.bootstrap.adopted =   {detail}, which names it: read from there from now on
 en.cli.project.bootstrap.moved = moved: {detail}
@@ -699,6 +705,7 @@ en.cli.project.bootstrap.stale =   {detail}
 en.cli.project.bootstrap.numbered = the documents number {count} requirements ({detail}): accept them as the documents have them, so they govern and tasks are derived? (yes/no -- no makes them candidates to decide one by one)
 en.cli.next.bootstrap = next: /accept takes what waits to be decided -- the one at once, or several listed to choose from: requirements, specifications, decisions and tasks derived -- and /accept all accepts every one
 en.cli.next.bootstrap_unread = next: documents that look like requirements or decisions are not among its sources -- {detail}; /reconfigure add set.bootstrap.sources {value} reads one, a pattern such as specs/*/requirements.md several
+en.cli.next.bootstrap_unreadable = {detail} seem to hold requirements in a form /bootstrap does not read -- /req new TITLE text=... says each, or a Markdown list of them is read
 en.cli.next.bootstrap_nested = note: {detail} belong to a project of its own below as well, which makes its own entries of them: each is made twice -- /reconfigure remove set.bootstrap.sources takes the pattern out
 en.cli.next.bootstrap_no_requirement = no requirement was read: a requirement is a line with SHALL, MUST or SHOULD (shall, must or should in lower case count in a list or in a requirements document), or a heading ## REQ-001 Title with its statement under it
 en.cli.next.bootstrap_nothing = nothing in {detail} reads as a requirement, decision or specification: a requirement is a line with SHALL, MUST or SHOULD (shall, must or should in lower case count in a list or in a requirements document), or a heading ## REQ-001 Title with its statement under it
@@ -707,6 +714,7 @@ en.cli.next.no_documents = no documents to read: bootstrap looks at {detail} -- 
 en.cli.next.init = next: /bootstrap FILE reads a document's requirements in, /req new TITLE text=... says one, and /task new TITLE kind=KIND makes a task
 en.cli.next.init_documents = next: /bootstrap reads what the documents here say the project must be -- {detail} -- and /task new TITLE kind=KIND makes a task
 en.cli.next.init_packages_unread = the packages below have documents of their own it does not read -- {detail}: /bootstrap PATH reads one, and /reconfigure add set.bootstrap.sources PATH... reads them from now on
+en.cli.next.init_packages_components = the directories below build apart, a manifest each -- {detail}: /reconfigure map.component.NAME=roots=DIR makes each a component of its own, its tasks and files kept to it
 en.cli.next.requirements = no requirements yet; /req new TITLE text=... says one, /bootstrap FILE reads a document's in
 en.cli.next.specifications = no specifications yet; /spec new TITLE text=... says one, /bootstrap FILE makes one of each document it reads
 en.cli.next.decisions = no decisions yet; /decision new TITLE text=... records one, and /decision govern ID SETTING RULING has it rule a setting
@@ -736,6 +744,7 @@ en.cli.project.complete_all_kept = none is completed
 en.cli.project.pending_many = several wait to be decided; each is decided by the command beside it, or all of them by /accept all (or /reject all):
 en.cli.project.pending_one =   {detail}
 en.cli.project.reject_one_confirm = reject {name}, the one waiting? (yes/no; Enter is no)
+en.cli.project.reject_all_confirm = reject every one waiting -- {detail}? (yes/no; Enter is no)
 en.cli.project.reject_kept = nothing is rejected
 en.cli.project.accept_all_skipped = {name} left as it is: what it serves is retired -- /task reject {name} lets it go
 en.cli.project.nothing_running = nothing is running in the foreground; Ctrl-C stops a reply or /work while it runs, and /cancel TASK cancels a task
@@ -752,7 +761,7 @@ en.cli.project.reconfigure.kept = nothing changed: the configuration was left as
 en.cli.project.reconfigure.nothing = nothing would change: each setting named already says that (/config NAME shows one); NAME=inherit gives a permission back to the level above
 en.cli.project.reconfigure.nothing_inherit = nothing would change: what is named follows the level above already
 en.cli.project.reconfigure.nothing_set = nothing would change: the set holds that already, or does not hold what is taken out (/config NAME shows it)
-en.cli.project.reconfigure.usage = /reconfigure NAME=VALUE ... changes settings: scalar., set., list., map., profile., fact., adapter. and task_kind. names; NAME= removes one -- /reconfigure add set.NAME A B adds to a set or a list, and /reconfigure remove set.NAME A takes out of it -- a permission's capability, map.permission.LEVEL.CAP, takes on, off, inherit (as the level above), or its places as roots=src/|tests/ and deny=src/x/ (deny= or deny=none takes a deny away); a kind's or role's level whole, map.permission.kind.KIND, takes none (withhold all) or inherit; /config lists them, /config NAME shows one
+en.cli.project.reconfigure.usage = /reconfigure NAME=VALUE ... changes settings: scalar., set., list., map., profile., fact., adapter. and task_kind. names; NAME= removes one -- /reconfigure add set.NAME A B adds to a set or a list, and /reconfigure remove set.NAME A takes out of it -- a permission's capability, map.permission.LEVEL.CAP, takes on, off, inherit (as the level above), and what fits it: places for reading and writing as roots=src/|tests/ and deny=src/x/ (deny= or deny=none takes a deny away), max_depth=N max_children=N for create_children, profiles=NAME for run_build, run_tests and run_static_analysis; a level whole, map.permission.project or map.permission.kind.KIND, takes none (withhold all) or inherit (the project's: its defaults); /config lists them, /config NAME shows one
 en.cli.project.recovered = put right: {detail}
 en.cli.project.internal = {name} stopped at a fault in model_runner, and the session goes on: {detail}
 en.cli.project.opening_waiting = work waiting to be taken in: {count} -- {detail}
@@ -857,16 +866,16 @@ en.cli.work.evidence = checked by {name}
 en.cli.work.requirement = {name} is now {value}
 en.cli.work.requirement_also = also, by the same evidence: {name} is now {value}
 en.cli.work.requirement_stays = {name} is {value} and not yet verified: {detail}
-en.cli.work.parent_ready = next: {name}, its parent, has its parts done: /task complete {name} takes it as done where they were the whole of it, or /work {name} does what is left
+en.cli.work.parent_ready = next: {name}, its parent, has its parts settled{detail}: /task complete {name} takes it as done where they were the whole of it, or /work {name} does what is left
 en.cli.work.ended = the task is {name}
 en.cli.work.all_ended = all run, each as it ended: {detail}
 en.cli.work.ended_because = the task is {name}: {detail}
 en.cli.work.failed_because = the task failed: {detail}
 en.cli.work.complete_but = the task is {name}; mind that {detail}
 en.cli.next.retry = next: /task accept {name} tries it again, or /task complete {name} takes it as done once it is done by hand
-en.cli.next.repeated_error = next: its model kept making a call that failed, as said above: /work {name} model=PATH with a larger model, or /task note {name} with what the call needs, then /task accept {name} tries it again
+en.cli.next.repeated_error = next: its model kept making a call that failed, as said above: /task note {name} with what the call needs, then /task accept {name} takes it up again -- and /work {name} model=PATH then runs it with a larger model
 en.cli.next.retry_only = next: /task accept {name} tries it again
-en.cli.next.take_up_blocked = next: {detail} blocked or stopped -- /task show ID says why, /task accept ID takes one up again
+en.cli.next.take_up_blocked = next: {detail} -- /task show ID says why, /task accept ID takes one up again
 en.cli.next.retry_all = next: {detail} failed -- /task accept all tries them again, /task accept ID one
 en.cli.next.waits_on_failed = next: {name} waits for {value}, which failed -- /task accept {value} tries it again, or /task complete {value} takes it as done; or /task depend {name} {value} remove lets {name} start without it
 en.cli.next.retry_kept = next: /task accept {name} tries it again; what it changed is kept in {value} -- /task kept restore {value} puts that in the project, and /task complete {name} then takes it as done
@@ -877,7 +886,7 @@ en.cli.next.sandbox_refused = next: the session's sandbox refused it: /sandbox o
 en.cli.next.refused_first = next: trying again is refused the same way; the project's permissions withhold it: /config permission.project shows them, /reconfigure map.permission.project.CAPABILITY=on grants one, and /task accept {name} then tries again
 en.cli.next.own_permissions_refused = next: trying again is refused the same way; its own permissions limit it: /task edit {name} permissions=... widens them
 en.cli.next.refused_outside = next: it tried to {value} outside the project, which nothing grants, and was refused; /task note {name} paths are relative to the project -- that tells the next attempt -- and /task accept {name} then tries again
-en.cli.next.refused_outside_again = next: its model named a path outside the project again, though its notes say paths are relative to it, and no permission reaches outside: /work {name} model=PATH with a larger model, or /task complete {name} once it is done by hand
+en.cli.next.refused_outside_again = next: its model named a path outside the project again, though its notes say paths are relative to it, and no permission reaches outside: /task accept {name} takes it up again and /work {name} model=PATH runs it with a larger model, or /task complete {name} once it is done by hand
 en.cli.next.kind_refused = next: trying again is refused the same way; its kind's permissions withhold it: /config permission.kind.{value} shows them, /reconfigure map.permission.kind.{value}.CAPABILITY=... widens them, and /task accept {name} then tries again
 en.cli.next.reopen = next: /task reopen {name} makes it ready to be worked again
 en.cli.next.reconsider = next: /task reconsider {name} makes it a candidate again
@@ -915,7 +924,7 @@ en.cli.next.kept = next: /task kept diff NAME shows what a copy would change, /t
 en.cli.next.undo_end = next: /task {value} {name} takes it up again
 en.cli.next.result_answer = next: /result {name} shows what its agent answered
 en.cli.next.trace_link = next: /{value} link {name} implementation PATH ties it to the file that does it, and /{value} link {name} task TASK-ID to the task
-en.cli.next.trace_missing = next: {value} takes the link to the file that is gone off, and /req link ... ties the file it became
+en.cli.next.trace_missing = next: {value} takes the link to the file that is gone off; where it was moved, /req link with the same words and its new path ties that instead
 en.cli.next.kept_diffed = next: /task kept restore {name} puts it in the project, what the project holds otherwise kept aside first
 en.cli.next.proposed = next: /task accept ID accepts each proposal ({detail}), /task reject ID drops one
 en.cli.next.task_component = next: {name} serves {other} and is elsewhere; /task edit {name} component={value} places it with it
@@ -1798,6 +1807,7 @@ da.cli.init.choose_input = Ændr hvilket input?
 da.cli.init.cancelled = intet blev initialiseret
 da.cli.init.confirm = Initialisér projektet som planlagt?
 da.cli.init.confirm.yes = Initialisér
+da.cli.init.confirm.root = Initialisér i {path} i stedet
 da.cli.init.confirm.change = Ændr et input
 da.cli.init.confirm.allow = Initialisér, og sæt tjekkene til det der kan køre: {detail}
 da.cli.init.confirm.no = Annullér
@@ -1875,8 +1885,10 @@ da.cli.result.elsewhere = {name} vises af {value}
 da.cli.result.task_not_run = {name} har intet resultat: ingen kørsel af den er gemt
 da.cli.result.latest_of = {value} er det nyeste resultat {name}s kørsler efterlod; /task show {name} og /task audit {name} siger resten
 da.cli.result.found_over_run = {name} blev færdiggjort i hånden med det der blev fundet: dens agents kørsel, {value}, sagde andet og er lagt til side
-da.cli.result.since_stopped = {name} er standset siden (Ctrl-C), og den kørsel efterlod intet svar: {value}, herunder, er fra før
-da.cli.result.since_completed = {name} er afsluttet siden, i hånden: {value}, herunder, er fejlen fra før
+da.cli.result.since_stopped = {name} blev standset (Ctrl-C) i {other}, som ikke efterlod noget svar: {value}, herunder, er fra en tidligere kørsel
+da.cli.result.stopped_left = {name} blev standset (Ctrl-C) i {other}: hvad den kørsel efterlod, {value}, står herunder -- /task accept {name} tager den op igen
+da.cli.result.task_failed = {name} fejlede: {detail} -- /result {other} viser den kørsel og dens kald; dens nyeste resultat står herunder
+da.cli.result.since_completed = {name} er afsluttet{detail}: {value}, herunder, er det nyeste resultat dens kørsler efterlod
 da.cli.result.no_finding = {name} blev afsluttet i hånden uden at gemme hvad der blev fundet, og ingen kørsel af den svarede -- /task reopen {name}, derefter spørger /task complete {name} hvad der blev fundet og gemmer det
 da.cli.result.none = ingen åbne problemer, og ingen opgave fejlede eller blev standset
 da.cli.result.section.tasks = Opgaver der fejlede, blev standset eller er blokeret
@@ -1933,6 +1945,7 @@ da.cli.intent.ruling_disagrees = {name} afgør {value} = {detail}, og konfigurat
 da.cli.intent.governs_still = {name} styrer stadig {value}
 da.cli.intent.ruling_replaced = {name}s afgørelse erstatter den den havde: {value}
 da.cli.intent.ruling_now_over = {name} afgør {value} som før, og gælder nu over {other}
+da.cli.intent.rejected_back = {name} gemmes, afvist: {value} reconsider {name} tager den tilbage som kandidat
 da.cli.intent.ruling_passed = {name} styrede {value}; {other} styrer den nu: {detail}
 da.cli.intent.already_governs = {name} styrer allerede {value}; intet er ændret
 da.cli.intent.moved = {name} flyttet fra {other} til {value}
@@ -1984,7 +1997,6 @@ da.cli.task.requirement = {name} er {value}
 da.cli.task.requirement_unverified = {name} er {value} og endnu ikke verificeret: {detail}
 da.cli.task.requirement_no_file = {name} er markeret implementeret, da {other} er færdig, men ingen fil vides at implementere den: /req link {name} implementation {path} navngiver den, og /check {name} bedømmer den så
 da.cli.task.diff_none = intet arbejde af {name} venter på at blive taget ind -- dens tilstand er {value}: {detail}
-da.cli.task.diff_reopened = {name} er {value} nu: hvad dens sidste forsøg skrev, ovenfor, er i projektet -- /work {name} gør den igen oven på det
 da.cli.task.kept_none = ingen kopi af opgivet eller overskrevet arbejde er gemt
 da.cli.task.kept_line = {name}  {value}: {detail}
 da.cli.task.kept_restore_confirm = læg filerne gemt i {name} tilbage i projektet -- {detail} (ja/nej; Enter er nej)
@@ -1994,7 +2006,7 @@ da.cli.task.kept_drop_all_confirm = fjern alle gemte kopier -- {detail}? (ja/nej
 da.cli.task.kept_restored = {name} er lagt tilbage i projektet: {detail}
 da.cli.task.kept_replaced = hvad projektet havde af {detail} er gemt som {name}: /task kept restore {name} lægger det tilbage
 da.cli.task.diff_empty = {name}s arbejde ændrer ingen fil
-da.cli.task.diff_uncommitted = {name} er færdig, dens arbejde i projektet; hvad af det den seneste commit ikke rummer endnu:
+da.cli.task.diff_uncommitted = {name} er {value}, dens arbejde i projektet; hvad af det den seneste commit ikke rummer endnu:
 da.cli.task.diff_not_its = hvad {detail} rummer ud over den seneste commit kom efter {name}s arbejde blev committet, så det er ikke {name}s: /git viser det, og git log -p -- {detail} viser hvad {name} ændrede
 da.cli.task.diff_undone = {name}s arbejde blev fortrudt da {value} blev lagt tilbage: intet af det er i projektet nu -- /task reopen {name} gør det igen
 da.cli.task.diff_later = {other} ændrede {path} efter {name} gjorde: det den rummer nu er {other}s -- /task diff {other} viser det
@@ -2047,7 +2059,9 @@ da.cli.project.stale_verified = {name} er registreret verificeret, men dens evid
 da.cli.project.clipped = {name} beder om mere end projektet nu tillader -- {detail}; den får ikke mere end projektets
 da.cli.project.grant_widened = {name} udvides: den havde {value}, og nu {detail}
 da.cli.project.level_gains = {name} får hvad den ikke havde: {detail}
-da.cli.project.places_missing = {name} nævner et sted projektet ikke har: {detail} -- et sted der ikke findes giver intet
+da.cli.project.level_refuses = {name} ville ikke længere læse eller skrive kilden, så dens opgaver der er klar nu ville blive afvist: {detail}
+da.cli.project.places_missing = {name} nævner et sted projektet ikke har: {detail}
+da.cli.project.no_helpers = {name}=0 lader ingen agent lave en hjælper, hvad et niveaus create_children end giver -- map.permission.NIVEAU.create_children=off siger det dér hvor det er ment
 da.cli.project.grant_opens = {name} rækker videre end før: {detail} åben for den nu -- giv det deny eller de rødder den havde for at holde den så snæver
 da.cli.project.sources_match_none = {value} finder ingen fil i projektet nu: /bootstrap ville intet læse ad den vej -- en * står for én mappe eller en del af et navn, og dir/** for alle mapper under dir
 da.cli.project.component_gone = {name} er ikke længere en af projektets komponenter ({value}), og åbne opgaver i den: {count}; /task rehome {name} NAVN placerer dem, eller /reconfigure map.component.{name}=roots=MAPPE beholder den
@@ -2087,6 +2101,7 @@ da.cli.project.inconsistent = hvad der ikke hænger sammen (/check consistency v
 da.cli.project.last_full = seneste fulde test
 da.cli.project.bootstrapped = lavet: {count}; revideret: {value}; allerede der: {total}; nye problemer: {extra}
 da.cli.project.bootstrap.made =   lavede {name}, {value}
+da.cli.project.bootstrap.accepted_why = accepteret med det samme: dets dokument giver det projektets egen identifikator (REQ-n, DEC-n) eller siger det er accepteret -- /reconfigure bootstrap.import=candidate lader sådanne vente på /accept i stedet
 da.cli.project.bootstrap.revised =   reviderede {name} til det dens dokument siger nu
 da.cli.project.bootstrap.adopted =   {detail}, som nævner det: læses derfra fra nu af
 da.cli.project.bootstrap.moved = flyttet: {detail}
@@ -2095,6 +2110,7 @@ da.cli.project.bootstrap.stale =   {detail}
 da.cli.project.bootstrap.numbered = dokumenterne nummererer {count} krav ({detail}): acceptér dem som dokumenterne har dem, så de gælder og opgaver udledes? (ja/nej -- nej gør dem til kandidater at afgøre én for én)
 da.cli.next.bootstrap = næste: /accept tager det der venter på afgørelse -- den ene straks, eller flere listet at vælge imellem: krav, specifikationer, beslutninger og afledte opgaver -- og /accept all accepterer hver eneste
 da.cli.next.bootstrap_unread = næste: dokumenter der ligner krav eller beslutninger er ikke blandt dens kilder -- {detail}; /reconfigure add set.bootstrap.sources {value} læser et, et mønster som specs/*/requirements.md flere
+da.cli.next.bootstrap_unreadable = {detail} ser ud til at rumme krav i en form /bootstrap ikke læser -- /req new TITEL text=... siger hvert, eller en Markdown-liste af dem læses
 da.cli.next.bootstrap_nested = bemærk: {detail} hører også til et projekt for sig nedenfor, som laver sine egne poster af dem: hver laves to gange -- /reconfigure remove set.bootstrap.sources tager mønsteret ud
 da.cli.next.bootstrap_no_requirement = intet krav blev læst: et krav er en linje med SHALL, MUST eller SHOULD (shall, must eller should med små bogstaver tæller i en liste eller i et kravdokument), eller en overskrift ## REQ-001 Titel med dens udsagn under
 da.cli.next.bootstrap_nothing = intet i {detail} læses som et krav, en beslutning eller en specifikation: et krav er en linje med SHALL, MUST eller SHOULD (shall, must eller should med små bogstaver tæller i en liste eller i et kravdokument), eller en overskrift ## REQ-001 Titel med dens udsagn under
@@ -2103,6 +2119,7 @@ da.cli.next.no_documents = ingen dokumenter at læse: bootstrap ser på {detail}
 da.cli.next.init = næste: /bootstrap FIL læser et dokuments krav ind, /req new TITEL text=... siger et, og /task new TITEL kind=ART laver en opgave
 da.cli.next.init_documents = næste: /bootstrap læser hvad dokumenterne her siger projektet skal være -- {detail} -- og /task new TITEL kind=ART laver en opgave
 da.cli.next.init_packages_unread = pakkerne herunder har egne dokumenter den ikke læser -- {detail}: /bootstrap STI læser et, og /reconfigure add set.bootstrap.sources STI... læser dem fremover
+da.cli.next.init_packages_components = mapperne herunder bygges hver for sig, med hvert sit manifest -- {detail}: /reconfigure map.component.NAVN=roots=MAPPE gør hver til sin egen komponent, med dens opgaver og filer holdt for sig
 da.cli.next.requirements = ingen krav endnu; /req new TITEL text=... siger et, /bootstrap FIL læser et dokuments ind
 da.cli.next.specifications = ingen specifikationer endnu; /spec new TITEL text=... angiver en, /bootstrap FIL laver en af hvert dokument den læser
 da.cli.next.decisions = ingen beslutninger endnu; /decision new TITEL text=... registrerer en, og /decision govern ID INDSTILLING AFGØRELSE lader den afgøre en indstilling
@@ -2132,6 +2149,7 @@ da.cli.project.complete_all_kept = ingen afsluttes
 da.cli.project.pending_many = flere venter på at blive afgjort; hver afgøres med kommandoen ved siden af, eller alle med /accept all (eller /reject all):
 da.cli.project.pending_one =   {detail}
 da.cli.project.reject_one_confirm = afvis {name}, den ene der venter? (ja/nej; Enter er nej)
+da.cli.project.reject_all_confirm = afvis hver eneste der venter -- {detail}? (ja/nej; Enter er nej)
 da.cli.project.reject_kept = intet er afvist
 da.cli.project.accept_all_skipped = {name} ladt som den er: det den tjener er trukket tilbage -- /task reject {name} giver slip
 da.cli.project.nothing_running = intet kører i forgrunden; Ctrl-C stopper et svar eller /work mens det kører, og /cancel OPGAVE annullerer en opgave
@@ -2148,7 +2166,7 @@ da.cli.project.reconfigure.kept = intet ændret: konfigurationen blev ladt som d
 da.cli.project.reconfigure.nothing = intet ville ændre sig: hver nævnt indstilling siger allerede det (/config NAVN viser en); NAVN=inherit giver en tilladelse tilbage til niveauet over
 da.cli.project.reconfigure.nothing_inherit = intet ville ændre sig: det nævnte følger allerede niveauet over
 da.cli.project.reconfigure.nothing_set = intet ville ændre sig: sættet rummer det allerede, eller rummer ikke det der tages ud (/config NAVN viser det)
-da.cli.project.reconfigure.usage = /reconfigure NAVN=VÆRDI ... ændrer indstillinger: scalar., set., list., map., profile., fact., adapter. og task_kind. navne; NAVN= fjerner en -- /reconfigure add set.NAVN A B lægger til en mængde eller liste, og /reconfigure remove set.NAVN A tager ud af den -- en tilladelses evne, map.permission.NIVEAU.EVNE, tager on, off, inherit (som niveauet over), eller sine steder som roots=src/|tests/ og deny=src/x/ (deny= eller deny=none fjerner et deny); en arts eller rolles niveau som helhed, map.permission.kind.ART, tager none (tilbagehold alt) eller inherit; /config lister dem, /config NAVN viser en
+da.cli.project.reconfigure.usage = /reconfigure NAVN=VÆRDI ... ændrer indstillinger: scalar., set., list., map., profile., fact., adapter. og task_kind.-navne; NAVN= fjerner en -- /reconfigure add set.NAVN A B lægger til en mængde eller liste, og /reconfigure remove set.NAVN A tager ud af den -- en tilladelses evne, map.permission.NIVEAU.EVNE, tager on, off, inherit (som niveauet over), og hvad der passer til den: steder for læsning og skrivning som roots=src/|tests/ og deny=src/x/ (deny= eller deny=none fjerner et deny), max_depth=N max_children=N for create_children, profiles=NAVN for run_build, run_tests og run_static_analysis; et helt niveau, map.permission.project eller map.permission.kind.ART, tager none (tilbagehold alt) eller inherit (projektets: dets standarder); /config lister dem, /config NAVN viser en
 da.cli.project.recovered = rettet: {detail}
 da.cli.project.internal = {name} stoppede ved en fejl i model_runner, og sessionen fortsætter: {detail}
 da.cli.project.opening_waiting = arbejde der venter på at blive taget ind: {count} -- {detail}
@@ -2253,16 +2271,16 @@ da.cli.work.evidence = tjekket af {name}
 da.cli.work.requirement = {name} er nu {value}
 da.cli.work.requirement_also = også, af samme bevis: {name} er nu {value}
 da.cli.work.requirement_stays = {name} er {value} og endnu ikke verificeret: {detail}
-da.cli.work.parent_ready = next: {name}, dens forælder, har sine dele gjort: /task complete {name} tager den som gjort hvor de var det hele, eller /work {name} gør det der er tilbage
+da.cli.work.parent_ready = næste: {name}, dens forælder, har sine dele afgjort{detail}: /task complete {name} tager den som gjort hvor de var det hele, eller /work {name} gør hvad der er tilbage
 da.cli.work.ended = opgaven er {name}
 da.cli.work.all_ended = alle kørt, hver som den endte: {detail}
 da.cli.work.ended_because = opgaven er {name}: {detail}
 da.cli.work.failed_because = opgaven mislykkedes: {detail}
 da.cli.work.complete_but = opgaven er {name}; bemærk at {detail}
 da.cli.next.retry = næste: /task accept {name} prøver den igen, eller /task complete {name} tager den som gjort, når den er gjort i hånden
-da.cli.next.repeated_error = næste: dens model blev ved med at lave et kald der fejlede, som sagt ovenfor: /work {name} model=STI med en større model, eller /task note {name} med hvad kaldet behøver, så prøver /task accept {name} den igen
+da.cli.next.repeated_error = næste: dens model blev ved med at lave et kald der fejlede, som sagt ovenfor: /task note {name} med hvad kaldet behøver, derefter tager /task accept {name} den op igen -- og /work {name} model=STI kører den så med en større model
 da.cli.next.retry_only = næste: /task accept {name} prøver igen
-da.cli.next.take_up_blocked = næste: {detail} blokeret eller standset -- /task show ID siger hvorfor, /task accept ID tager en op igen
+da.cli.next.take_up_blocked = næste: {detail} -- /task show ID siger hvorfor, /task accept ID tager en op igen
 da.cli.next.retry_all = næste: {detail} fejlede -- /task accept all prøver dem igen, /task accept ID én
 da.cli.next.waits_on_failed = næste: {name} venter på {value}, som fejlede -- /task accept {value} prøver den igen, eller /task complete {value} tager den som gjort; eller /task depend {name} {value} remove lader {name} starte uden den
 da.cli.next.retry_kept = næste: /task accept {name} prøver igen; hvad den ændrede er gemt i {value} -- /task kept restore {value} lægger det ind i projektet, og /task complete {name} tager det så som færdigt
@@ -2273,7 +2291,7 @@ da.cli.next.sandbox_refused = næste: sessionens sandkasse afviste det: /sandbox
 da.cli.next.refused_first = næste: et nyt forsøg afvises på samme måde; projektets tilladelser holder det tilbage: /config permission.project viser dem, /reconfigure map.permission.project.EVNE=on giver én, og /task accept {name} prøver så igen
 da.cli.next.own_permissions_refused = næste: et nyt forsøg afvises på samme måde; dens egne tilladelser begrænser den: /task edit {name} permissions=... udvider dem
 da.cli.next.refused_outside = næste: den forsøgte at {value} uden for projektet, hvilket intet tillader, og blev afvist; /task note {name} stier er relative til projektet -- det får næste forsøg at vide -- og /task accept {name} prøver så igen
-da.cli.next.refused_outside_again = næste: dens model nævnte igen en sti uden for projektet, skønt dens noter siger at stier er relative til det, og ingen tilladelse rækker udenfor: /work {name} model=STI med en større model, eller /task complete {name} når den er gjort i hånden
+da.cli.next.refused_outside_again = næste: dens model nævnte en sti uden for projektet igen, skønt dens noter siger at stier er relative til det, og ingen tilladelse rækker udenfor: /task accept {name} tager den op igen og /work {name} model=STI kører den med en større model, eller /task complete {name} når den er gjort i hånden
 da.cli.next.kind_refused = næste: et nyt forsøg afvises på samme måde; dens arts tilladelser holder det tilbage: /config permission.kind.{value} viser dem, /reconfigure map.permission.kind.{value}.EVNE=... udvider dem, og /task accept {name} prøver så igen
 da.cli.next.reopen = næste: /task reopen {name} gør den klar til at blive arbejdet på igen
 da.cli.next.reconsider = næste: /task reconsider {name} gør den til kandidat igen
@@ -2311,7 +2329,7 @@ da.cli.next.kept = næste: /task kept diff NAVN viser hvad en kopi ville ændre,
 da.cli.next.undo_end = næste: /task {value} {name} tager den op igen
 da.cli.next.result_answer = næste: /result {name} viser hvad dens agent svarede
 da.cli.next.trace_link = næste: /{value} link {name} implementation STI binder den til filen der gør det, og /{value} link {name} task OPGAVE-ID til opgaven
-da.cli.next.trace_missing = næste: {value} tager forbindelsen til den forsvundne fil af, og /req link ... binder den fil den blev til
+da.cli.next.trace_missing = næste: {value} fjerner linket til filen der er væk; hvor den blev flyttet, binder /req link med de samme ord og dens nye sti den i stedet
 da.cli.next.kept_diffed = next: /task kept restore {name} lægger den i projektet, og det projektet rummer ellers gemmes først
 da.cli.next.proposed = næste: /task accept ID accepterer hvert forslag ({detail}), /task reject ID dropper et
 da.cli.next.task_component = næste: {name} tjener {other} og er et andet sted; /task edit {name} component={value} placerer den sammen med den
@@ -2967,6 +2985,7 @@ qps.cli.init.choose_input = ⟦Çháñgé whíçh íñpúŧ?⟧
 qps.cli.init.cancelled = ⟦ñóŧhíñg wáß íñíŧíáĺízéð⟧
 qps.cli.init.confirm = ⟦Íñíŧíáĺízé ŧhé þŕóĵéçŧ áß þĺáññéð?⟧
 qps.cli.init.confirm.yes = ⟦Íñíŧíáĺízé⟧
+qps.cli.init.confirm.root = ⟦Iñíŧíáĺízé áŧ {path} íñßŧéáð⟧
 qps.cli.init.confirm.change = ⟦Çháñgé áñ íñpúŧ⟧
 qps.cli.init.confirm.allow = ⟦Iñíŧíáĺízé, áñð ßéŧ ŧhé çhéçkß ŧó wháŧ çáñ ŕúñ: {detail}⟧
 qps.cli.init.confirm.no = ⟦Çáñçéĺ⟧
@@ -3044,8 +3063,10 @@ qps.cli.result.elsewhere = ⟦{name} íß ßhówñ bý {value}⟧
 qps.cli.result.task_not_run = ⟦{name} háß ñó ŕéßúĺŧ: ñó ŕúñ óf íŧ íß képŧ⟧
 qps.cli.result.latest_of = ⟦{value} íß ŧhé ñéwéßŧ ŕéßúĺŧ {name}'ß ŕúñß ĺéfŧ; /ŧáßk ßhów {name} áñð /ŧáßk áúðíŧ {name} ßáý ŧhé ŕéßŧ⟧
 qps.cli.result.found_over_run = ⟦{name} wáß çómpĺéŧéð bý háñð wíŧh wháŧ wáß fóúñð: íŧß ágéñŧ'ß ŕúñ, {value}, ßáíð óŧhéŕwíßé áñð íß ßéŧ áßíðé⟧
-qps.cli.result.since_stopped = ⟦{name} wáß ßŧóppéð ßíñçé (Çŧŕĺ-Ç), áñð ŧháŧ ŕúñ ĺéfŧ ñó áñßwéŕ: {value}, béĺów, íß fŕóm béfóŕé⟧
-qps.cli.result.since_completed = ⟦{name} wáß çómpĺéŧéð ßíñçé, bý háñð: {value}, béĺów, íß ŧhé fáíĺúŕé fŕóm béfóŕé⟧
+qps.cli.result.since_stopped = ⟦{name} wáß ßŧóppéð (Çŧŕĺ-Ç) íñ {other}, whíçh ĺéfŧ ñó áñßwéŕ: {value}, béĺów, íß áñ éáŕĺíéŕ ŕúñ'ß⟧
+qps.cli.result.stopped_left = ⟦{name} wáß ßŧóppéð (Çŧŕĺ-Ç) íñ {other}: wháŧ ŧháŧ ŕúñ ĺéfŧ, {value}, íß béĺów -- /ŧáßk áççépŧ {name} ŧákéß íŧ úp ágáíñ⟧
+qps.cli.result.task_failed = ⟦{name} fáíĺéð: {detail} -- /ŕéßúĺŧ {other} ßhówß ŧháŧ ŕúñ áñð íŧß çáĺĺß; íŧß ñéwéßŧ ŕéßúĺŧ íß béĺów⟧
+qps.cli.result.since_completed = ⟦{name} íß çómpĺéŧé{detail}: {value}, béĺów, íß ŧhé ñéwéßŧ ŕéßúĺŧ íŧß ŕúñß ĺéfŧ⟧
 qps.cli.result.no_finding = ⟦{name} wáß çómpĺéŧéð bý háñð wíŧh ñóŧhíñg képŧ óf wháŧ wáß fóúñð, áñð ñó ŕúñ óf íŧ áñßwéŕéð -- /ŧáßk ŕéópéñ {name}, ŧhéñ /ŧáßk çómpĺéŧé {name} áßkß wháŧ wáß fóúñð áñð kéépß íŧ⟧
 qps.cli.result.none = ⟦ñó ópéñ íßßúéß, áñð ñó ŧáßk fáíĺéð óŕ wáß ßŧóppéð⟧
 qps.cli.result.section.tasks = ⟦Ŧáßkß ŧháŧ fáíĺéð, wéŕé ßŧóppéð óŕ áŕé bĺóçkéð⟧
@@ -3102,6 +3123,7 @@ qps.cli.intent.ruling_disagrees = ⟦{name} ŕúĺéß {value} = {detail}, áñ�
 qps.cli.intent.governs_still = ⟦{name} ßŧíĺĺ góvéŕñß {value}⟧
 qps.cli.intent.ruling_replaced = ⟦{name}'ß ŕúĺíñg ŕépĺáçéß ŧhé óñé íŧ háð: {value}⟧
 qps.cli.intent.ruling_now_over = ⟦{name} ŕúĺéß {value} áß béfóŕé, áñð ñów hóĺðß óvéŕ {other}⟧
+qps.cli.intent.rejected_back = ⟦{name} íß képŧ, ŕéjéçŧéð: {value} ŕéçóñßíðéŕ {name} ŧákéß íŧ báçk ŧó á çáñðíðáŧé⟧
 qps.cli.intent.ruling_passed = ⟦{name} góvéŕñéð {value}; {other} góvéŕñß íŧ ñów: {detail}⟧
 qps.cli.intent.already_governs = ⟦{name} góvéŕñß {value} áĺŕéáðý; ñóŧhíñg çháñgéð⟧
 qps.cli.intent.moved = ⟦{name} ḿóvéð fŕóḿ {other} ŧó {value}⟧
@@ -3153,7 +3175,6 @@ qps.cli.task.requirement = ⟦{name} íß {value}⟧
 qps.cli.task.requirement_unverified = ⟦{name} íß {value} áñð ñóŧ ýéŧ véŕífíéð: {detail}⟧
 qps.cli.task.requirement_no_file = ⟦{name} íß máŕkéð ímpĺéméñŧéð, áß {other} íß çómpĺéŧé, búŧ ñó fíĺé íß kñówñ ŧó ímpĺéméñŧ íŧ: /ŕéq ĺíñk {name} ímpĺéméñŧáŧíóñ {path} ñáméß íŧ, áñð /çhéçk {name} ŧhéñ júðgéß íŧ⟧
 qps.cli.task.diff_none = ⟦ñó wóŕk óf {name} wáíŧß ŧó bé ŧákéñ íñ -- íŧß ßŧáŧé íß {value}: {detail}⟧
-qps.cli.task.diff_reopened = ⟦{name} íß {value} ñów: wháŧ íŧß ĺáßŧ áŧŧémpŧ wŕóŧé, ábóvé, íß íñ ŧhé pŕójéçŧ -- /wóŕk {name} ðóéß íŧ ágáíñ óvéŕ íŧ⟧
 qps.cli.task.kept_none = ⟦ñó çópý óf gívéñ-úp óŕ óvéŕwŕíŧŧéñ wóŕk íß képŧ⟧
 qps.cli.task.kept_line = ⟦{name}  {value}: {detail}⟧
 qps.cli.task.kept_restore_confirm = ⟦ŕéßŧóŕé ŧhé fíĺéß képŧ íñ {name} íñŧó ŧhé pŕójéçŧ -- {detail} (ýéß/ñó; Eñŧéŕ íß ñó)⟧
@@ -3163,7 +3184,7 @@ qps.cli.task.kept_drop_all_confirm = ⟦ŕémóvé évéŕý képŧ çópý -- {
 qps.cli.task.kept_restored = ⟦{name} íß púŧ báçk íñ ŧhé pŕójéçŧ: {detail}⟧
 qps.cli.task.kept_replaced = ⟦wháŧ ŧhé pŕójéçŧ héĺð óf {detail} íß képŧ áß {name}: /ŧáßk képŧ ŕéßŧóŕé {name} púŧß íŧ báçk⟧
 qps.cli.task.diff_empty = ⟦{name}'ß wóŕk çháñgéß ñó fíĺé⟧
-qps.cli.task.diff_uncommitted = ⟦{name} íß çómpĺéŧé, íŧß wóŕk íñ ŧhé pŕójéçŧ; wháŧ óf íŧ ŧhé ĺáßŧ çómmíŧ ðóéß ñóŧ hóĺð ýéŧ:⟧
+qps.cli.task.diff_uncommitted = ⟦{name} íß {value}, íŧß wóŕk íñ ŧhé pŕójéçŧ; wháŧ óf íŧ ŧhé ĺáßŧ çómmíŧ ðóéß ñóŧ hóĺð ýéŧ:⟧
 qps.cli.task.diff_not_its = ⟦wháŧ {detail} hóĺðß béýóñð ŧhé ĺáßŧ çómmíŧ çámé áfŧéŕ {name}'ß wóŕk wáß çómmíŧŧéð, ßó íŧ íß ñóŧ {name}'ß: /gíŧ ßhówß íŧ, áñð gíŧ ĺóg -p -- {detail} ßhówß wháŧ {name} çháñgéð⟧
 qps.cli.task.diff_undone = ⟦{name}'ß wóŕk wáß úñðóñé whéñ {value} wáß púŧ báçk: ñóŧhíñg óf íŧ íß íñ ŧhé pŕójéçŧ ñów -- /ŧáßk ŕéópéñ {name} ðóéß íŧ ágáíñ⟧
 qps.cli.task.diff_later = ⟦{other} çháñgéð {path} áfŧéŕ {name} ðíð: wháŧ íŧ hóĺðß ñów íß {other}'ß -- /ŧáßk ðíff {other} ßhówß íŧ⟧
@@ -3216,7 +3237,9 @@ qps.cli.project.stale_verified = ⟦{name} íß ŕéçóŕðéð véŕífíéð,
 qps.cli.project.clipped = ⟦{name} áßkß fóŕ móŕé ŧháñ ŧhé pŕójéçŧ ñów áĺĺówß -- {detail}; íŧ géŧß ñó móŕé ŧháñ ŧhé pŕójéçŧ'ß⟧
 qps.cli.project.grant_widened = ⟦{name} wíðéñß: íŧ héĺð {value}, áñð ñów {detail}⟧
 qps.cli.project.level_gains = ⟦{name} gáíñß wháŧ íŧ ðíð ñóŧ hávé: {detail}⟧
-qps.cli.project.places_missing = ⟦{name} ñáméß á pĺáçé ŧhé pŕójéçŧ háß ñóŧ: {detail} -- á pĺáçé ŧháŧ íß ñóŧ ŧhéŕé gŕáñŧß ñóŧhíñg⟧
+qps.cli.project.level_refuses = ⟦{name} wóúĺð ñó ĺóñgéŕ ŕéáð óŕ wŕíŧé ŧhé ßóúŕçé, ßó íŧß ŧáßkß ŕéáðý ñów wóúĺð bé ŕéfúßéð: {detail}⟧
+qps.cli.project.places_missing = ⟦{name} ñáméß á pĺáçé ŧhé pŕójéçŧ háß ñóŧ: {detail}⟧
+qps.cli.project.no_helpers = ⟦{name}=0 ĺéŧß ñó ágéñŧ máké á héĺpéŕ, wháŧévéŕ á ĺévéĺ'ß çŕéáŧé_çhíĺðŕéñ gŕáñŧß -- máp.péŕmíßßíóñ.LEVEL.çŕéáŧé_çhíĺðŕéñ=óff ßáýß ßó whéŕé ŧháŧ íß méáñŧ⟧
 qps.cli.project.grant_opens = ⟦{name} ŕéáçhéß móŕé ŧháñ íŧ ðíð: {detail} ópéñ ŧó íŧ ñów -- gívé ŧhé ðéñý óŕ ŧhé ŕóóŧß íŧ háð ŧó kéép íŧ áß ñáŕŕów⟧
 qps.cli.project.sources_match_none = ⟦{value} fíñðß ñó fíĺé íñ ŧhé pŕójéçŧ ñów: /bóóŧßŧŕáp wóúĺð ŕéáð ñóŧhíñg bý íŧ -- á * ßŧáñðß fóŕ óñé ðíŕéçŧóŕý óŕ á ñámé'ß páŕŧ, áñð ðíŕ/** fóŕ évéŕý ðíŕéçŧóŕý béĺów ðíŕ⟧
 qps.cli.project.component_gone = ⟦{name} íß ñó ĺóñgéŕ óñé óf ŧhé pŕójéçŧ'ß çómpóñéñŧß ({value}), áñð ópéñ ŧáßkß íñ íŧ: {count}; /ŧáßk ŕéhómé {name} NAME pĺáçéß ŧhém, óŕ /ŕéçóñfígúŕé máp.çómpóñéñŧ.{name}=ŕóóŧß=DIR kéépß íŧ óñé⟧
@@ -3256,6 +3279,7 @@ qps.cli.project.inconsistent = ⟦wháŧ ðóéß ñóŧ hóĺð ŧógéŧhéŕ 
 qps.cli.project.last_full = ⟦ĺáßŧ fúĺĺ ŧéßŧ⟧
 qps.cli.project.bootstrapped = ⟦máðé: {count}; ŕévíßéð: {value}; áĺŕéáðý ŧhéŕé: {total}; ñéw íßßúéß: {extra}⟧
 qps.cli.project.bootstrap.made = ⟦  máðé {name}, {value}⟧
+qps.cli.project.bootstrap.accepted_why = ⟦áççépŧéð áŧ óñçé: íŧß ðóçúméñŧ gívéß íŧ ŧhé pŕójéçŧ'ß ówñ íðéñŧífíéŕ (REQ-ñ, DEÇ-ñ) óŕ ßáýß íŧ íß áççépŧéð -- /ŕéçóñfígúŕé bóóŧßŧŕáp.ímpóŕŧ=çáñðíðáŧé mákéß ßúçh wáíŧ fóŕ /áççépŧ íñßŧéáð⟧
 qps.cli.project.bootstrap.revised = ⟦  ŕévíßéð {name} ŧó wháŧ íŧß ðóçúméñŧ ßáýß ñów⟧
 qps.cli.project.bootstrap.adopted = ⟦  {detail}, whíçh ñáméß íŧ: ŕéáð fŕóm ŧhéŕé fŕóm ñów óñ⟧
 qps.cli.project.bootstrap.moved = ⟦móvéð: {detail}⟧
@@ -3264,6 +3288,7 @@ qps.cli.project.bootstrap.stale = ⟦  {detail}⟧
 qps.cli.project.bootstrap.numbered = ⟦ŧhé ðóçúméñŧß ñúmbéŕ {count} ŕéqúíŕéméñŧß ({detail}): áççépŧ ŧhém áß ŧhé ðóçúméñŧß hávé ŧhém, ßó ŧhéý góvéŕñ áñð ŧáßkß áŕé ðéŕívéð? (ýéß/ñó -- ñó mákéß ŧhém çáñðíðáŧéß ŧó ðéçíðé óñé bý óñé)⟧
 qps.cli.next.bootstrap = ⟦ñéxŧ: /áççépŧ ŧákéß wháŧ wáíŧß ŧó bé ðéçíðéð -- ŧhé óñé áŧ óñçé, óŕ ßévéŕáĺ ĺíßŧéð ŧó çhóóßé fŕóm: ŕéqúíŕéméñŧß, ßpéçífíçáŧíóñß, ðéçíßíóñß áñð ŧáßkß ðéŕívéð -- áñð /áççépŧ áĺĺ áççépŧß évéŕý óñé⟧
 qps.cli.next.bootstrap_unread = ⟦ñéxŧ: ðóçúméñŧß ŧháŧ ĺóók ĺíké ŕéqúíŕéméñŧß óŕ ðéçíßíóñß áŕé ñóŧ ámóñg íŧß ßóúŕçéß -- {detail}; /ŕéçóñfígúŕé áðð ßéŧ.bóóŧßŧŕáp.ßóúŕçéß {value} ŕéáðß óñé, á páŧŧéŕñ ßúçh áß ßpéçß/*/ŕéqúíŕéméñŧß.mð ßévéŕáĺ⟧
+qps.cli.next.bootstrap_unreadable = ⟦{detail} ßéém ŧó hóĺð ŕéqúíŕéméñŧß íñ á fóŕm /bóóŧßŧŕáp ðóéß ñóŧ ŕéáð -- /ŕéq ñéw ŦIŦLE ŧéxŧ=... ßáýß éáçh, óŕ á Máŕkðówñ ĺíßŧ óf ŧhém íß ŕéáð⟧
 qps.cli.next.bootstrap_nested = ⟦ñóŧé: {detail} béĺóñg ŧó á pŕójéçŧ óf íŧß ówñ béĺów áß wéĺĺ, whíçh mákéß íŧß ówñ éñŧŕíéß óf ŧhém: éáçh íß máðé ŧwíçé -- /ŕéçóñfígúŕé ŕémóvé ßéŧ.bóóŧßŧŕáp.ßóúŕçéß ŧákéß ŧhé páŧŧéŕñ óúŧ⟧
 qps.cli.next.bootstrap_no_requirement = ⟦ñó ŕéqúíŕéméñŧ wáß ŕéáð: á ŕéqúíŕéméñŧ íß á ĺíñé wíŧh SHALL, MÚSŦ óŕ SHOÚLD (ßháĺĺ, múßŧ óŕ ßhóúĺð íñ ĺówéŕ çáßé çóúñŧ íñ á ĺíßŧ óŕ íñ á ŕéqúíŕéméñŧß ðóçúméñŧ), óŕ á héáðíñg ## REQ-001 Ŧíŧĺé wíŧh íŧß ßŧáŧéméñŧ úñðéŕ íŧ⟧
 qps.cli.next.bootstrap_nothing = ⟦ñóŧhíñg íñ {detail} ŕéáðß áß á ŕéqúíŕéméñŧ, ðéçíßíóñ óŕ ßpéçífíçáŧíóñ: á ŕéqúíŕéméñŧ íß á ĺíñé wíŧh SHALL, MÚSŦ óŕ SHOÚLD (ßháĺĺ, múßŧ óŕ ßhóúĺð íñ ĺówéŕ çáßé çóúñŧ íñ á ĺíßŧ óŕ íñ á ŕéqúíŕéméñŧß ðóçúméñŧ), óŕ á héáðíñg ## REQ-001 Ŧíŧĺé wíŧh íŧß ßŧáŧéméñŧ úñðéŕ íŧ⟧
@@ -3272,6 +3297,7 @@ qps.cli.next.no_documents = ⟦ñó ðóçúméñŧß ŧó ŕéáð: bóóŧßŧ
 qps.cli.next.init = ⟦ñéxŧ: /bóóŧßŧŕáp FILE ŕéáðß á ðóçúméñŧ'ß ŕéqúíŕéméñŧß íñ, /ŕéq ñéw ŦIŦLE ŧéxŧ=... ßáýß óñé, áñð /ŧáßk ñéw ŦIŦLE kíñð=KIND mákéß á ŧáßk⟧
 qps.cli.next.init_documents = ⟦ñéxŧ: /bóóŧßŧŕáp ŕéáðß wháŧ ŧhé ðóçúméñŧß héŕé ßáý ŧhé pŕójéçŧ múßŧ bé -- {detail} -- áñð /ŧáßk ñéw ŦIŦLE kíñð=KIND mákéß á ŧáßk⟧
 qps.cli.next.init_packages_unread = ⟦ŧhé páçkágéß béĺów hávé ðóçúméñŧß óf ŧhéíŕ ówñ íŧ ðóéß ñóŧ ŕéáð -- {detail}: /bóóŧßŧŕáp PAŦH ŕéáðß óñé, áñð /ŕéçóñfígúŕé áðð ßéŧ.bóóŧßŧŕáp.ßóúŕçéß PAŦH... ŕéáðß ŧhém fŕóm ñów óñ⟧
+qps.cli.next.init_packages_components = ⟦ŧhé ðíŕéçŧóŕíéß béĺów búíĺð ápáŕŧ, á máñíféßŧ éáçh -- {detail}: /ŕéçóñfígúŕé máp.çómpóñéñŧ.NAME=ŕóóŧß=DIR mákéß éáçh á çómpóñéñŧ óf íŧß ówñ, íŧß ŧáßkß áñð fíĺéß képŧ ŧó íŧ⟧
 qps.cli.next.requirements = ⟦ñó ŕéqúíŕéméñŧß ýéŧ; /ŕéq ñéw ŦIŦLE ŧéxŧ=... ßáýß óñé, /bóóŧßŧŕáp FILE ŕéáðß á ðóçúméñŧ'ß íñ⟧
 qps.cli.next.specifications = ⟦ñó ßpéçífíçáŧíóñß ýéŧ; /ßpéç ñéw ŦIŦLE ŧéxŧ=... ßáýß óñé, /bóóŧßŧŕáp FILE mákéß óñé óf éáçh ðóçúméñŧ íŧ ŕéáðß⟧
 qps.cli.next.decisions = ⟦ñó ðéçíßíóñß ýéŧ; /ðéçíßíóñ ñéw ŦIŦLE ŧéxŧ=... ŕéçóŕðß óñé, áñð /ðéçíßíóñ góvéŕñ ID SEŦŦING RÚLING háß íŧ ŕúĺé á ßéŧŧíñg⟧
@@ -3301,6 +3327,7 @@ qps.cli.project.complete_all_kept = ⟦ñóñé íß çómpĺéŧéð⟧
 qps.cli.project.pending_many = ⟦ßévéŕáĺ wáíŧ ŧó bé ðéçíðéð; éáçh íß ðéçíðéð bý ŧhé çómmáñð béßíðé íŧ, óŕ áĺĺ óf ŧhém bý /áççépŧ áĺĺ (óŕ /ŕéjéçŧ áĺĺ):⟧
 qps.cli.project.pending_one = ⟦  {detail}⟧
 qps.cli.project.reject_one_confirm = ⟦ŕéjéçŧ {name}, ŧhé óñé wáíŧíñg? (ýéß/ñó; Eñŧéŕ íß ñó)⟧
+qps.cli.project.reject_all_confirm = ⟦ŕéjéçŧ évéŕý óñé wáíŧíñg -- {detail}? (ýéß/ñó; Eñŧéŕ íß ñó)⟧
 qps.cli.project.reject_kept = ⟦ñóŧhíñg íß ŕéjéçŧéð⟧
 qps.cli.project.accept_all_skipped = ⟦{name} ĺéfŧ áß íŧ íß: wháŧ íŧ ßéŕvéß íß ŕéŧíŕéð -- /ŧáßk ŕéjéçŧ {name} ĺéŧß íŧ gó⟧
 qps.cli.project.nothing_running = ⟦ñóŧhíñg íß ŕúññíñg íñ ŧhé fóŕégŕóúñð; Çŧŕĺ-Ç ßŧóþß á ŕéþĺý óŕ /wóŕk wháíĺé íŧ ŕúñß, áñð /çáñçéĺ ŦÁßK çáñçéĺß á ŧáßk⟧
@@ -3317,7 +3344,7 @@ qps.cli.project.reconfigure.kept = ⟦ñóŧhíñg çháñgéð: ŧhé çóñfí
 qps.cli.project.reconfigure.nothing = ⟦ñóŧhíñg wóúĺð çháñgé: éáçh ßéŧŧíñg ñáméð áĺŕéáðý ßáýß ŧháŧ (/çóñfíg NAME ßhówß óñé); NAME=íñhéŕíŧ gívéß á péŕmíßßíóñ báçk ŧó ŧhé ĺévéĺ ábóvé⟧
 qps.cli.project.reconfigure.nothing_inherit = ⟦ñóŧhíñg wóúĺð çháñgé: wháŧ íß ñáméð fóĺĺówß ŧhé ĺévéĺ ábóvé áĺŕéáðý⟧
 qps.cli.project.reconfigure.nothing_set = ⟦ñóŧhíñg wóúĺð çháñgé: ŧhé ßéŧ hóĺðß ŧháŧ áĺŕéáðý, óŕ ðóéß ñóŧ hóĺð wháŧ íß ŧákéñ óúŧ (/çóñfíg NAME ßhówß íŧ)⟧
-qps.cli.project.reconfigure.usage = ⟦/ŕéçóñfígúŕé NAME=VALÚE ... çháñgéß ßéŧŧíñgß: ßçáĺáŕ., ßéŧ., ĺíßŧ., máp., pŕófíĺé., fáçŧ., áðápŧéŕ. áñð ŧáßk_kíñð. ñáméß; NAME= ŕémóvéß óñé -- /ŕéçóñfígúŕé áðð ßéŧ.NAME A B áððß ŧó á ßéŧ óŕ á ĺíßŧ, áñð /ŕéçóñfígúŕé ŕémóvé ßéŧ.NAME A ŧákéß óúŧ óf íŧ -- á péŕmíßßíóñ'ß çápábíĺíŧý, máp.péŕmíßßíóñ.LEVEL.ÇAP, ŧákéß óñ, óff, íñhéŕíŧ (áß ŧhé ĺévéĺ ábóvé), óŕ íŧß pĺáçéß áß ŕóóŧß=ßŕç/|ŧéßŧß/ áñð ðéñý=ßŕç/x/ (ðéñý= óŕ ðéñý=ñóñé ŧákéß á ðéñý áwáý); á kíñð'ß óŕ ŕóĺé'ß ĺévéĺ whóĺé, máp.péŕmíßßíóñ.kíñð.KIND, ŧákéß ñóñé (wíŧhhóĺð áĺĺ) óŕ íñhéŕíŧ; /çóñfíg ĺíßŧß ŧhém, /çóñfíg NAME ßhówß óñé⟧
+qps.cli.project.reconfigure.usage = ⟦/ŕéçóñfígúŕé NAME=VALÚE ... çháñgéß ßéŧŧíñgß: ßçáĺáŕ., ßéŧ., ĺíßŧ., máp., pŕófíĺé., fáçŧ., áðápŧéŕ. áñð ŧáßk_kíñð. ñáméß; NAME= ŕémóvéß óñé -- /ŕéçóñfígúŕé áðð ßéŧ.NAME A B áððß ŧó á ßéŧ óŕ á ĺíßŧ, áñð /ŕéçóñfígúŕé ŕémóvé ßéŧ.NAME A ŧákéß óúŧ óf íŧ -- á péŕmíßßíóñ'ß çápábíĺíŧý, máp.péŕmíßßíóñ.LEVEL.ÇAP, ŧákéß óñ, óff, íñhéŕíŧ (áß ŧhé ĺévéĺ ábóvé), áñð wháŧ fíŧß íŧ: pĺáçéß fóŕ ŕéáðíñg áñð wŕíŧíñg áß ŕóóŧß=ßŕç/|ŧéßŧß/ áñð ðéñý=ßŕç/x/ (ðéñý= óŕ ðéñý=ñóñé ŧákéß á ðéñý áwáý), máx_ðépŧh=N máx_çhíĺðŕéñ=N fóŕ çŕéáŧé_çhíĺðŕéñ, pŕófíĺéß=NAME fóŕ ŕúñ_búíĺð, ŕúñ_ŧéßŧß áñð ŕúñ_ßŧáŧíç_áñáĺýßíß; á ĺévéĺ whóĺé, máp.péŕmíßßíóñ.pŕójéçŧ óŕ máp.péŕmíßßíóñ.kíñð.KIND, ŧákéß ñóñé (wíŧhhóĺð áĺĺ) óŕ íñhéŕíŧ (ŧhé pŕójéçŧ'ß: íŧß ðéfáúĺŧß); /çóñfíg ĺíßŧß ŧhém, /çóñfíg NAME ßhówß óñé⟧
 qps.cli.project.recovered = ⟦púŧ ŕíghŧ: {detail}⟧
 qps.cli.project.internal = ⟦{name} ßŧóppéð áŧ á fáúĺŧ íñ móðéĺ_ŕúññéŕ, áñð ŧhé ßéßßíóñ góéß óñ: {detail}⟧
 qps.cli.project.opening_waiting = ⟦wóŕk wáíŧíñg ŧó bé ŧákéñ íñ: {count} -- {detail}⟧
@@ -3422,16 +3449,16 @@ qps.cli.work.evidence = ⟦çhéçkéð bý {name}⟧
 qps.cli.work.requirement = ⟦{name} íß ñów {value}⟧
 qps.cli.work.requirement_also = ⟦áĺßó, bý ŧhé ßámé évíðéñçé: {name} íß ñów {value}⟧
 qps.cli.work.requirement_stays = ⟦{name} íß {value} áñð ñóŧ ýéŧ véŕífíéð: {detail}⟧
-qps.cli.work.parent_ready = ⟦ñéxŧ: {name}, íŧß páŕéñŧ, háß íŧß páŕŧß ðóñé: /ŧáßk çómpĺéŧé {name} ŧákéß íŧ áß ðóñé whéŕé ŧhéý wéŕé ŧhé whóĺé óf íŧ, óŕ /wóŕk {name} ðóéß wháŧ íß ĺéfŧ⟧
+qps.cli.work.parent_ready = ⟦ñéxŧ: {name}, íŧß páŕéñŧ, háß íŧß páŕŧß ßéŧŧĺéð{detail}: /ŧáßk çómpĺéŧé {name} ŧákéß íŧ áß ðóñé whéŕé ŧhéý wéŕé ŧhé whóĺé óf íŧ, óŕ /wóŕk {name} ðóéß wháŧ íß ĺéfŧ⟧
 qps.cli.work.ended = ⟦ŧhé ŧáßk íß {name}⟧
 qps.cli.work.all_ended = ⟦áĺĺ ŕúñ, éáçh áß íŧ éñðéð: {detail}⟧
 qps.cli.work.ended_because = ⟦ŧhé ŧáßk íß {name}: {detail}⟧
 qps.cli.work.failed_because = ⟦ŧhé ŧáßk fáíĺéð: {detail}⟧
 qps.cli.work.complete_but = ⟦ŧhé ŧáßk íß {name}; míñð ŧháŧ {detail}⟧
 qps.cli.next.retry = ⟦ñéxŧ: /ŧáßk áççépŧ {name} ŧŕíéß íŧ ágáíñ, óŕ /ŧáßk çómpĺéŧé {name} ŧákéß íŧ áß ðóñé óñçé íŧ íß ðóñé bý háñð⟧
-qps.cli.next.repeated_error = ⟦ñéxŧ: íŧß móðéĺ képŧ mákíñg á çáĺĺ ŧháŧ fáíĺéð, áß ßáíð ábóvé: /wóŕk {name} móðéĺ=PAŦH wíŧh á ĺáŕgéŕ móðéĺ, óŕ /ŧáßk ñóŧé {name} wíŧh wháŧ ŧhé çáĺĺ ñééðß, ŧhéñ /ŧáßk áççépŧ {name} ŧŕíéß íŧ ágáíñ⟧
+qps.cli.next.repeated_error = ⟦ñéxŧ: íŧß móðéĺ képŧ mákíñg á çáĺĺ ŧháŧ fáíĺéð, áß ßáíð ábóvé: /ŧáßk ñóŧé {name} wíŧh wháŧ ŧhé çáĺĺ ñééðß, ŧhéñ /ŧáßk áççépŧ {name} ŧákéß íŧ úp ágáíñ -- áñð /wóŕk {name} móðéĺ=PAŦH ŧhéñ ŕúñß íŧ wíŧh á ĺáŕgéŕ móðéĺ⟧
 qps.cli.next.retry_only = ⟦ñéxŧ: /ŧáßk áççépŧ {name} ŧŕíéß íŧ ágáíñ⟧
-qps.cli.next.take_up_blocked = ⟦ñéxŧ: {detail} bĺóçkéð óŕ ßŧóppéð -- /ŧáßk ßhów ID ßáýß whý, /ŧáßk áççépŧ ID ŧákéß óñé úp ágáíñ⟧
+qps.cli.next.take_up_blocked = ⟦ñéxŧ: {detail} -- /ŧáßk ßhów ID ßáýß whý, /ŧáßk áççépŧ ID ŧákéß óñé úp ágáíñ⟧
 qps.cli.next.retry_all = ⟦ñéxŧ: {detail} fáíĺéð -- /ŧáßk áççépŧ áĺĺ ŧŕíéß ŧhém ágáíñ, /ŧáßk áççépŧ ID óñé⟧
 qps.cli.next.waits_on_failed = ⟦ñéxŧ: {name} wáíŧß fóŕ {value}, whíçh fáíĺéð -- /ŧáßk áççépŧ {value} ŧŕíéß íŧ ágáíñ, óŕ /ŧáßk çómpĺéŧé {value} ŧákéß íŧ áß ðóñé; óŕ /ŧáßk ðépéñð {name} {value} ŕémóvé ĺéŧß {name} ßŧáŕŧ wíŧhóúŧ íŧ⟧
 qps.cli.next.retry_kept = ⟦ñéxŧ: /ŧáßk áççépŧ {name} ŧŕíéß íŧ ágáíñ; wháŧ íŧ çháñgéð íß képŧ íñ {value} -- /ŧáßk képŧ ŕéßŧóŕé {value} púŧß ŧháŧ íñ ŧhé pŕójéçŧ, áñð /ŧáßk çómpĺéŧé {name} ŧhéñ ŧákéß íŧ áß ðóñé⟧
@@ -3442,7 +3469,7 @@ qps.cli.next.sandbox_refused = ⟦ñéxŧ: ŧhé ßéßßíóñ'ß ßáñðbóx 
 qps.cli.next.refused_first = ⟦ñéxŧ: ŧŕýíñg ágáíñ íß ŕéfúßéð ŧhé ßámé wáý; ŧhé pŕójéçŧ'ß péŕmíßßíóñß wíŧhhóĺð íŧ: /çóñfíg péŕmíßßíóñ.pŕójéçŧ ßhówß ŧhém, /ŕéçóñfígúŕé máp.péŕmíßßíóñ.pŕójéçŧ.ÇAPABILIŦY=óñ gŕáñŧß óñé, áñð /ŧáßk áççépŧ {name} ŧhéñ ŧŕíéß ágáíñ⟧
 qps.cli.next.own_permissions_refused = ⟦ñéxŧ: ŧŕýíñg ágáíñ íß ŕéfúßéð ŧhé ßámé wáý; íŧß ówñ péŕmíßßíóñß ĺímíŧ íŧ: /ŧáßk éðíŧ {name} péŕmíßßíóñß=... wíðéñß ŧhém⟧
 qps.cli.next.refused_outside = ⟦ñéxŧ: íŧ ŧŕíéð ŧó {value} óúŧßíðé ŧhé pŕójéçŧ, whíçh ñóŧhíñg gŕáñŧß, áñð wáß ŕéfúßéð; /ŧáßk ñóŧé {name} páŧhß áŕé ŕéĺáŧívé ŧó ŧhé pŕójéçŧ -- ŧháŧ ŧéĺĺß ŧhé ñéxŧ áŧŧémpŧ -- áñð /ŧáßk áççépŧ {name} ŧhéñ ŧŕíéß ágáíñ⟧
-qps.cli.next.refused_outside_again = ⟦ñéxŧ: íŧß móðéĺ ñáméð á páŧh óúŧßíðé ŧhé pŕójéçŧ ágáíñ, ŧhóúgh íŧß ñóŧéß ßáý páŧhß áŕé ŕéĺáŧívé ŧó íŧ, áñð ñó péŕmíßßíóñ ŕéáçhéß óúŧßíðé: /wóŕk {name} móðéĺ=PAŦH wíŧh á ĺáŕgéŕ móðéĺ, óŕ /ŧáßk çómpĺéŧé {name} óñçé íŧ íß ðóñé bý háñð⟧
+qps.cli.next.refused_outside_again = ⟦ñéxŧ: íŧß móðéĺ ñáméð á páŧh óúŧßíðé ŧhé pŕójéçŧ ágáíñ, ŧhóúgh íŧß ñóŧéß ßáý páŧhß áŕé ŕéĺáŧívé ŧó íŧ, áñð ñó péŕmíßßíóñ ŕéáçhéß óúŧßíðé: /ŧáßk áççépŧ {name} ŧákéß íŧ úp ágáíñ áñð /wóŕk {name} móðéĺ=PAŦH ŕúñß íŧ wíŧh á ĺáŕgéŕ móðéĺ, óŕ /ŧáßk çómpĺéŧé {name} óñçé íŧ íß ðóñé bý háñð⟧
 qps.cli.next.kind_refused = ⟦ñéxŧ: ŧŕýíñg ágáíñ íß ŕéfúßéð ŧhé ßámé wáý; íŧß kíñð'ß péŕmíßßíóñß wíŧhhóĺð íŧ: /çóñfíg péŕmíßßíóñ.kíñð.{value} ßhówß ŧhém, /ŕéçóñfígúŕé máp.péŕmíßßíóñ.kíñð.{value}.ÇAPABILIŦY=... wíðéñß ŧhém, áñð /ŧáßk áççépŧ {name} ŧhéñ ŧŕíéß ágáíñ⟧
 qps.cli.next.reopen = ⟦ñéxŧ: /ŧáßk ŕéópéñ {name} mákéß íŧ ŕéáðý ŧó bé wóŕkéð ágáíñ⟧
 qps.cli.next.reconsider = ⟦ñéxŧ: /ŧáßk ŕéçóñßíðéŕ {name} mákéß íŧ á çáñðíðáŧé ágáíñ⟧
@@ -3480,7 +3507,7 @@ qps.cli.next.kept = ⟦ñéxŧ: /ŧáßk képŧ ðíff NAME ßhówß wháŧ á �
 qps.cli.next.undo_end = ⟦ñéxŧ: /ŧáßk {value} {name} ŧákéß íŧ úp ágáíñ⟧
 qps.cli.next.result_answer = ⟦ñéxŧ: /ŕéßúĺŧ {name} ßhówß wháŧ íŧß ágéñŧ áñßwéŕéð⟧
 qps.cli.next.trace_link = ⟦ñéxŧ: /{value} ĺíñk {name} ímpĺéméñŧáŧíóñ PAŦH ŧíéß íŧ ŧó ŧhé fíĺé ŧháŧ ðóéß íŧ, áñð /{value} ĺíñk {name} ŧáßk ŦASK-ID ŧó ŧhé ŧáßk⟧
-qps.cli.next.trace_missing = ⟦ñéxŧ: {value} ŧákéß ŧhé ĺíñk ŧó ŧhé fíĺé ŧháŧ íß góñé óff, áñð /ŕéq ĺíñk ... ŧíéß ŧhé fíĺé íŧ béçámé⟧
+qps.cli.next.trace_missing = ⟦ñéxŧ: {value} ŧákéß ŧhé ĺíñk ŧó ŧhé fíĺé ŧháŧ íß góñé óff; whéŕé íŧ wáß móvéð, /ŕéq ĺíñk wíŧh ŧhé ßámé wóŕðß áñð íŧß ñéw páŧh ŧíéß ŧháŧ íñßŧéáð⟧
 qps.cli.next.kept_diffed = ⟦ñéxŧ: /ŧáßk képŧ ŕéßŧóŕé {name} púŧß íŧ íñ ŧhé pŕójéçŧ, wháŧ ŧhé pŕójéçŧ hóĺðß óŧhéŕwíßé képŧ áßíðé fíŕßŧ⟧
 qps.cli.next.proposed = ⟦ñéxŧ: /ŧáßk áççépŧ ID áççépŧß éáçh pŕópóßáĺ ({detail}), /ŧáßk ŕéjéçŧ ID ðŕópß óñé⟧
 qps.cli.next.task_component = ⟦ñéxŧ: {name} ßéŕvéß {other} áñð íß éĺßéwhéŕé; /ŧáßk éðíŧ {name} çómpóñéñŧ={value} pĺáçéß íŧ wíŧh íŧ⟧

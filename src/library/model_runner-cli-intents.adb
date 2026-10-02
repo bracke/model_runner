@@ -1016,6 +1016,11 @@ package body Model_Runner.CLI.Intents is
                  (Screen, "cli.task.moved", [Loc.Named ("name", Word (2)),
                                              Loc.Named ("value", Model_Runner.Framework.State_Said (Next))]);
                Apply_Rulings (Store, Kind, Word (2), Screen);
+               --  Rejected, and kept: how it comes back.
+               if Next = "rejected" then
+                  Pres.Put_Note (Screen, "cli.intent.rejected_back",
+                                 [Loc.Named ("name", Word (2)), Loc.Named ("value", Word_Of_Command (Kind))]);
+               end if;
                --  Accepted, and what that means: a decision that rules on
                --  nothing yet, how it would; a specification, where it holds.
                if Next = "accepted" and then Nt."=" (Kind, Nt.Decision)
@@ -1100,7 +1105,10 @@ package body Model_Runner.CLI.Intents is
 
       elsif Action = "move" then
          --  To any state the project's lifecycle allows: its own among them.
-         Needs (3, "the " & Word_Of (Kind) & " and the state");
+         Needs (3, (if Word (2) = "" then "the " & Word_Of (Kind) & " and the state: " & Word_Of_Command (Kind)
+                                          & " move ID STATE"
+                    else "the state to move " & Word (2) & " to: " & Word_Of_Command (Kind) & " move " & Word (2)
+                         & " STATE"));
          if E.Is_Ok (Status) then
             declare
                Held : Nt.Entity;
@@ -1171,11 +1179,11 @@ package body Model_Runner.CLI.Intents is
                      elsif not Ada.Directories.Exists (Path) then
                         --  Gone: no words to take, and how it is retired.
                         Status := E.Make (E.Framework_Input_Invalid);
-                        E.Add_Text (Status, "name", "from-document");
-                        E.Add_Text (Status, "value", Word (2));
-                        E.Add_Text (Status, "detail", To_String (Held.Source) & ", which " & Word (2)
-                                    & " came from, is gone from the project; " & Word_Of_Command (Kind)
-                                    & " obsolete " & Word (2) & " retires it, and text=... revises it by hand");
+                        E.Add_Text (Status, "name", "the document " & Word (2) & " came from");
+                        E.Add_Text (Status, "value", To_String (Held.Source));
+                        E.Add_Text (Status, "detail", "it is gone from the project, so there are no words of it to"
+                                    & " take; " & Word_Of_Command (Kind) & " obsolete " & Word (2)
+                                    & " retires it, and text=... revises it by hand");
                      else
                         Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
                         while not Ada.Text_IO.End_Of_File (File) loop
@@ -2432,36 +2440,39 @@ package body Model_Runner.CLI.Intents is
                                  & " revise " & Named & " from-document takes it", Pres.Pending);
                         end if;
                      end if;
+                     --  Not read here, as bootstrap found it otherwise: said.
+                     if Said_Now = Null_Unbounded_String then
+                        --  Its document saying otherwise now, as bootstrap found:
+                        --  said here, with the step that takes the document's words.
+                        for Name of S.Names (Store, Model_Runner.Framework.Results_Area) loop
+                           declare
+                              package Rs renames Model_Runner.Framework.Results;
+                              Result_Id : constant String :=
+                                (if Name'Length > 4 and then Name (Name'Last - 3 .. Name'Last) = ".rec"
+                                 then Name (Name'First .. Name'Last - 4) else Name);
+                              One : Rs.Result;
+                              Got : E.Error_Info;
+                           begin
+                              Rs.Read (Store, Result_Id, One, Got);
+                              if E.Is_Ok (Got)
+                                and then Ada.Strings.Unbounded.Index
+                                           (One.Summary, " now says what " & Named & " does not") > 0
+                                and then One.Payload /= Held.Text
+                              then
+                                 Item ("its document now says",
+                                       To_String (One.Payload) & " -- " & Word_Of_Command (Kind) & " revise " & Named
+                                       & " from-document takes it", Pres.Pending);
+                                 exit;
+                              end if;
+                           end;
+                        end loop;
+                     end if;
                   exception
                      when others =>
                         if Ada.Text_IO.Is_Open (File) then
                            Ada.Text_IO.Close (File);
                         end if;
                   end;
-                  --  Its document saying otherwise now, as bootstrap found:
-                  --  said here, with the step that takes the document's words.
-                  for Name of S.Names (Store, Model_Runner.Framework.Results_Area) loop
-                     declare
-                        package Rs renames Model_Runner.Framework.Results;
-                        Result_Id : constant String :=
-                          (if Name'Length > 4 and then Name (Name'Last - 3 .. Name'Last) = ".rec"
-                           then Name (Name'First .. Name'Last - 4) else Name);
-                        One : Rs.Result;
-                        Got : E.Error_Info;
-                     begin
-                        Rs.Read (Store, Result_Id, One, Got);
-                        if E.Is_Ok (Got)
-                          and then Ada.Strings.Unbounded.Index
-                                     (One.Summary, " now says what " & Named & " does not") > 0
-                          and then One.Payload /= Held.Text
-                        then
-                           Item ("its document now says",
-                                 To_String (One.Payload) & " -- " & Word_Of_Command (Kind) & " revise " & Named
-                                 & " from-document takes it", Pres.Pending);
-                           exit;
-                        end if;
-                     end;
-                  end loop;
 
                   --  How it stands, coloured by that: an accepted decision
                   --  or specification governs, an accepted requirement waits.

@@ -6,7 +6,9 @@ with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
 
 with Model_Runner.Errors;
+with Hostkit.Fs;
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Records;
@@ -356,6 +358,23 @@ package body Model_Runner.Framework.Traceability is
             if File.Role = Repository.Test then
                Link (Result, "file:" & To_String (File.Path), "tests", "is_test",
                      Repository.Naming_Convention, Repository.Probable);
+            --  Rust keeps a file's tests in it: #[cfg(test)] mod tests.
+            elsif Path'Length > 3 and then Path (Path'Last - 2 .. Path'Last) = ".rs" then
+               declare
+                  Text : Unbounded_String;
+                  Read : E.Error_Info;
+               begin
+                  Model_Runner.Framework.Files.Read_Text
+                    (Hostkit.Fs.Join (Ada.Directories.Containing_Directory (Stores.Root (Item)),
+                                      To_String (File.Path)), Text, Read);
+                  if E.Is_Ok (Read)
+                    and then (Ada.Strings.Unbounded.Index (Text, "#[cfg(test)]") > 0
+                              or else Ada.Strings.Unbounded.Index (Text, "#[test]") > 0)
+                  then
+                     Link (Result, "file:" & To_String (File.Path), "tests", "is_test",
+                           Repository.Naming_Convention, Repository.Probable);
+                  end if;
+               end;
             end if;
          end;
       end loop;

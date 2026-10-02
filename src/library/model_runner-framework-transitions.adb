@@ -124,6 +124,10 @@ package body Model_Runner.Framework.Transitions is
                      Append (Open, (if Open = Null_Unbounded_String then "" else ", ")
                              & To_String (One.To));
                   end if;
+               --  Taken back by reconsidering it: said so, as the way on.
+               elsif To_String (One.From) = Current and then One.Requires = Reconsideration then
+                  Append (Open, (if Open = Null_Unbounded_String then "" else ", ")
+                          & To_String (One.To) & " (reconsider it)");
                end if;
             end loop;
             Refuse ("no such move is allowed"

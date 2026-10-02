@@ -979,6 +979,16 @@ package body Model_Runner.Framework.Tasks is
               else State_Of (Item, Id));
    end State_In;
 
+   --  Whether a task is blocked because a person stopped its work.
+   function Stopped_By_Person (Item : Stores.Store; Id : String) return Boolean is
+      Runtime_Value : Records.Item;
+      Got           : E.Error_Info;
+   begin
+      Stores.Read (Item, Tasks_Area, Id & State_Suffix, Runtime_Value, Got);
+      return E.Is_Ok (Got)
+        and then Ada.Strings.Fixed.Index (Records.Get (Runtime_Value, "blocking_reasons"), "you stopped its work") > 0;
+   end Stopped_By_Person;
+
    --  Readiness, as the transaction will leave it.
    function Ready_In
      (Item   : Stores.Store;
@@ -1038,6 +1048,9 @@ package body Model_Runner.Framework.Tasks is
                then "it was blocked with no reason given: /task accept " & Id & " takes it up again"
                elsif State = "failed"
                then "it failed" & (if Why = Null_Unbounded_String then "" else ": " & To_String (Why))
+               --  Stopped by the person: stopped, as every list says it.
+               elsif State = "blocked" and then Index (Why, "you stopped its work") > 0
+               then "it is stopped: " & To_String (Why)
                else "it is " & State_Said (State)
                     & (if Why = Null_Unbounded_String then "" else ": " & To_String (Why)));
          end;
@@ -1049,6 +1062,8 @@ package body Model_Runner.Framework.Tasks is
               ("it waits for " & Other & ", which is "
                & (if State_In (Item, Change, Other) = "" then "not there"
                   elsif State_In (Item, Change, Other) = "accepted" then "not done yet"
+                  elsif State_In (Item, Change, Other) = "blocked" and then Stopped_By_Person (Item, Other)
+                  then "stopped"
                   else State_Said (State_In (Item, Change, Other))));
          end if;
       end loop;

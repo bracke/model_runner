@@ -84,6 +84,9 @@ package body Model_Runner.Framework.Git is
       Arguments.Append ("status");
       Arguments.Append ("--porcelain=v1");
       Arguments.Append ("--branch");
+      --  Each new file, not the new directory it is in: a task's file
+      --  there is known as its.
+      Arguments.Append ("--untracked-files=all");
       --  What is in the project only, where it is part of a larger
       --  repository: the rest is no task's work.
       Arguments.Append ("--");

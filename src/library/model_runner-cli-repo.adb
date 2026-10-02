@@ -134,11 +134,24 @@ package body Model_Runner.CLI.Repo is
       Top       : constant String :=
         Ada.Directories.Full_Name
           (if T.Is_Empty (Item.Project_Directory) then "." else T.To_String (Item.Project_Directory));
+      --  ../x from there is from there, whether there is such a file or
+      --  not -- inside the project, it is one of its paths.
+      function Below_Whole return String is
+      begin
+         return Ada.Directories.Full_Name (Hostkit.Fs.Join (Hostkit.Fs.Join (Top, Below), Typed));
+      exception
+         when others =>
+            return "";
+      end Below_Whole;
       From_Here : constant String :=
         (if Below /= "" and then Typed /= "" and then Typed (Typed'First) /= '/'
-           and then not Ada.Directories.Exists (Hostkit.Fs.Join (Top, Typed))
-           and then Ada.Directories.Exists (Hostkit.Fs.Join (Hostkit.Fs.Join (Top, Below), Typed))
-         then Below & "/" & Typed else Typed);
+           and then ((not Ada.Directories.Exists (Hostkit.Fs.Join (Top, Typed))
+                      and then Ada.Directories.Exists (Hostkit.Fs.Join (Hostkit.Fs.Join (Top, Below), Typed)))
+                     or else (Ada.Strings.Fixed.Index (Typed, "..") = Typed'First
+                              and then Below_Whole'Length > Top'Length
+                              and then Ada.Strings.Fixed.Index (Below_Whole, Top & "/") = Below_Whole'First))
+         then (if Ada.Strings.Fixed.Index (Typed, "..") = Typed'First then Below_Whole else Below & "/" & Typed)
+         else Typed);
       Argument  : constant String :=
         (if From_Here = "." or else Ada.Strings.Fixed.Index (From_Here, "/") > 0
          then Rp.Relative_Path (Top, From_Here)
@@ -935,7 +948,15 @@ package body Model_Runner.CLI.Repo is
                                           begin
                                              if Word /= "" then
                                                 Missing_Links.Append
-                                                  ("/req unlink " & To_String (One.From) & " " & Word & " "
+                                                  ("/req unlink "
+                                                   --  The entry, not its revision: REQ-12, not REQ-12@4.
+                                                   & (if Ada.Strings.Fixed.Index (To_String (One.From), "@") > 0
+                                                      then To_String (One.From)
+                                                             (To_String (One.From)'First
+                                                              .. Ada.Strings.Fixed.Index (To_String (One.From), "@")
+                                                                 - 1)
+                                                      else To_String (One.From))
+                                                   & " " & Word & " "
                                                    & Node_Said (To_String (One.To)));
                                              end if;
                                           end;
@@ -1404,8 +1425,64 @@ package body Model_Runner.CLI.Repo is
                         for Kind of Order loop
                            declare
                               Of_Kind : Natural := 0;
+                              --  Requirements and tasks reached only by sharing
+                              --  a component with it: one line, not one each.
+                              Shared  : Unbounded_String;
+                              Shared_Count : Natural := 0;
+
+                              --  Whether the file changed names a requirement:
+                              --  its identifier, or its document's label.
+                              function Named_In_File (Id : String) return Boolean is
+                                 Text : Unbounded_String;
+                                 Held : Model_Runner.Framework.Intent.Entity;
+                                 Read : E.Error_Info;
+                              begin
+                                 if Kind /= "requirement" or else not Ada.Directories.Exists (Argument) then
+                                    return False;
+                                 end if;
+                                 declare
+                                    File : Ada.Text_IO.File_Type;
+                                 begin
+                                    Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Argument);
+                                    while not Ada.Text_IO.End_Of_File (File) loop
+                                       Append (Text, Ada.Text_IO.Get_Line (File) & ASCII.LF);
+                                    end loop;
+                                    Ada.Text_IO.Close (File);
+                                 end;
+                                 if Ada.Strings.Unbounded.Index (Text, Id) > 0 then
+                                    return True;
+                                 end if;
+                                 Model_Runner.Framework.Intent.Read
+                                   (Store, Model_Runner.Framework.Intent.Requirement, Id, Held, Read);
+                                 if E.Is_Ok (Read) and then Ada.Strings.Unbounded.Index (Held.Provenance, "#") > 0
+                                 then
+                                    declare
+                                       Whole : constant String := To_String (Held.Provenance);
+                                       Label : constant String :=
+                                         Whole (Ada.Strings.Fixed.Index (Whole, "#") + 1 .. Whole'Last);
+                                    begin
+                                       return Label'Length >= 3 and then Label'Length < 12
+                                         and then Ada.Strings.Unbounded.Index (Text, Label) > 0;
+                                    end;
+                                 end if;
+                                 return False;
+                              exception
+                                 when others =>
+                                    return False;
+                              end Named_In_File;
                            begin
                               for One of All_Reached loop
+                                 if not Verbose and then To_String (One.Kind) = Kind
+                                   and then Kind in "requirement" | "task"
+                                   and then Rp."=" (One.Sure, Rp.Probable)
+                                   and then not Named_In_File (Bare_Id (To_String (One.Id)))
+                                 then
+                                    Append (Shared, (if Shared = Null_Unbounded_String then "" else " ")
+                                            & Bare_Id (To_String (One.Id)));
+                                    Shared_Count := Shared_Count + 1;
+                                    Of_Kind := Of_Kind + 1;
+                                    goto Next_Reached;
+                                 end if;
                                  begin
                                     if To_String (One.Kind) = Kind then
                                        Of_Kind := Of_Kind + 1;
@@ -1416,14 +1493,25 @@ package body Model_Runner.CLI.Repo is
                                               Loc.Named ("name", (if Verbose then To_String (One.Id)
                                                                   else Node_Said (To_String (One.Id)))),
                                               Loc.Named ("detail",
-                                                         (if Verbose or else Rp."/=" (One.Sure, Rp.Certain)
+                                                         (if Kind = "requirement"
+                                                            and then Named_In_File (Bare_Id (To_String (One.Id)))
+                                                          then "named in it"
+                                                          elsif Verbose or else Rp."/=" (One.Sure, Rp.Certain)
                                                           then Ada.Characters.Handling.To_Lower
                                                                  (Rp.Confidence'Image (One.Sure))
                                                           else ""))]);
                                        end if;
                                     end if;
                                  end;
+                                 <<Next_Reached>>
                               end loop;
+                              if Shared_Count > 0 then
+                                 Pres.Put_Indented
+                                   (Screen, "cli.repo.reached",
+                                    [Loc.Named ("value", Kind),
+                                     Loc.Named ("name", To_String (Shared)),
+                                     Loc.Named ("detail", "probable: by sharing its component")]);
+                              end if;
                               if not Verbose and then Of_Kind > 10 then
                                  Pres.Put_Message
                                    (Screen, "cli.repo.more",

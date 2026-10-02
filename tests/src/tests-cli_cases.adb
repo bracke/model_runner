@@ -2173,7 +2173,7 @@ package body Tests.CLI_Cases is
          Run ("task|verify|" & Part);
          Run ("task|complete|" & Part);
       end loop;
-      Assert (Shows ("TASK-003, its parent, has its parts done"),
+      Assert (Shows ("TASK-003, its parent, has its parts settled"),
               "the last part done did not say its parent goes on: " & To_String (Said));
       Run ("task|list");
       Assert (Shows ("TASK-003  [ready]"),
@@ -2538,6 +2538,14 @@ package body Tests.CLI_Cases is
                     "a list's items were not offered once each");
             Assert (not Model_Runner.CLI.Completion.Candidates ("/task depend TASK-001 ").Contains ("TASK-001"),
                     "an ID given before was offered again");
+            Assert (Model_Runner.CLI.Completion.Candidates ("/task edit TASK-001 title=").Is_Empty = False
+                    and then Ada.Strings.Fixed.Head
+                               (Model_Runner.CLI.Completion.Candidates ("/task edit TASK-001 title=")
+                                  .First_Element, 6) = "title=",
+                    "a field's value now was not offered to change");
+            Assert (Ada.Strings.Fixed.Head (Model_Runner.CLI.Completion.Described ("TASK-001"), 10) = "TASK-001  "
+                    and then Model_Runner.CLI.Completion.Described ("nothing") = "",
+                    "an identifier was not described with what it is");
             Assert (Model_Runner.CLI.Completion.Candidates ("/reconfigure scalar.model.default=")
                       .Contains ("scalar.model.default=default"),
                     "the model profiles were not offered");
@@ -13015,6 +13023,8 @@ package body Tests.CLI_Cases is
               "an action was not completed from a part of it");
       Assert (Model_Runner.CLI.Completion.Candidates ("hello wor").Is_Empty,
               "a word of a message was completed");
+      Assert (Model_Runner.CLI.Completion.Candidates ("/tsak").Contains ("/task"),
+              "a mistyped command was not completed to the one it was most likely meant to be");
    end Tab_Completes_Commands;
 
    overriding procedure Register_Tests (T : in out Case_Type) is

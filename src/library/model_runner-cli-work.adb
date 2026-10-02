@@ -55,6 +55,23 @@ package body Model_Runner.CLI.Work is
       new String'("retrieve")];
 
    --  A whole file, or nothing when it cannot be read.
+
+   --  A parent's parts let go -- cancelled or rejected -- as said beside
+   --  its parts being settled: " (TASK-006 cancelled: its work not done)".
+   function Cancelled_Parts (Store : Model_Runner.Framework.Stores.Store; Parent : String) return String is
+      Said : Ada.Strings.Unbounded.Unbounded_String;
+   begin
+      for Child of Model_Runner.Framework.Tasks.Children (Store, Parent) loop
+         if Model_Runner.Framework.Tasks.State_Of (Store, Child) in "cancelled" | "rejected" then
+            Ada.Strings.Unbounded.Append
+              (Said, (if Ada.Strings.Unbounded.Length (Said) = 0 then "" else ", ") & Child & " "
+                     & Model_Runner.Framework.Tasks.State_Of (Store, Child));
+         end if;
+      end loop;
+      return (if Ada.Strings.Unbounded.Length (Said) = 0 then ""
+              else " (" & Ada.Strings.Unbounded.To_String (Said) & ": its work not done)");
+   end Cancelled_Parts;
+
    function Whole (Path : String) return String is
       File : Ada.Streams.Stream_IO.File_Type;
    begin
@@ -86,6 +103,26 @@ package body Model_Runner.CLI.Work is
       if not Started then
          return "the agent did not start";
       end if;
+      --  An error it reported: that, in its words, not its whole output
+      --  with its own headings -- and the room it ran out of, how to widen.
+      declare
+         At_Error : constant Natural := Ada.Strings.Fixed.Index (Output, "error: ", Ada.Strings.Backward);
+      begin
+         if At_Error > 0 then
+            declare
+               Stop : constant Natural := Ada.Strings.Fixed.Index (Output (At_Error .. Output'Last), [1 => ASCII.LF]);
+               Said : constant String :=
+                 Ada.Strings.Fixed.Trim (Output (At_Error + 7 .. (if Stop = 0 then Output'Last else Stop - 1)),
+                                         Ada.Strings.Both);
+            begin
+               return "the agent stopped on an error: " & Said
+                 & (if Ada.Strings.Fixed.Index (Said, "exceeds the") > 0
+                    then " -- the model's room is what its profile plans with: /config map.model shows it, and"
+                         & " /reconfigure map.model.NAME=context=N widens it"
+                    else "");
+            end;
+         end if;
+      end;
       --  Its last three lines, and no more than 400 characters of them.
       for Index in reverse Output'Range loop
          if Output (Index) = ASCII.LF and then Index < Output'Last then
@@ -475,7 +512,11 @@ package body Model_Runner.CLI.Work is
                if not (for some Reason of Tk.Ready (Store, Id).Reasons =>
                          Ada.Strings.Fixed.Index (Reason, "waiting for its children") > 0)
                then
-                  Result.Append (Id);
+                  Result.Append
+                    (Id & " ("
+                     & (if (for some Reason of Tk.Ready (Store, Id).Reasons =>
+                              Ada.Strings.Fixed.Index (Reason, "you stopped its work") > 0)
+                        then "stopped" else "blocked") & ")");
                end if;
             end loop;
             return Result;
@@ -1221,7 +1262,7 @@ package body Model_Runner.CLI.Work is
                   --  Which model that is, by the profile it is planned with.
                   Say ("cli.work.runner", Pres.Message_Value (Screen, "cli.work.runner.session")
                                           & (if Length (Model.Id) = 0 then ""
-                                             else " (" & To_String (Model.Id) & ")"),
+                                             else ", planned with the profile " & To_String (Model.Id)),
                        To_String (Chosen));
                end if;
             end if;
@@ -1501,7 +1542,10 @@ package body Model_Runner.CLI.Work is
                  and then Tk.Ready (Store, R.Get (Defined, "parent")).Ready
                then
                   Pres.Put_Note
-                    (Screen, "cli.work.parent_ready", [Loc.Named ("name", R.Get (Defined, "parent"))]);
+                    (Screen, "cli.work.parent_ready",
+               [Loc.Named ("name", R.Get (Defined, "parent")),
+                --  A part let go is no part done: named.
+                Loc.Named ("detail", Cancelled_Parts (Store, R.Get (Defined, "parent")))]);
                end if;
             end;
          end if;
@@ -1991,6 +2035,9 @@ package body Model_Runner.CLI.Work is
             end loop;
          end if;
          exit when Remaining.Is_Empty;
+         --  Stopped by the person: the whole of it, not only this task.
+         exit when To_String (Done.Final_State) = "blocked"
+           and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "you stopped") > 0;
          Chosen := To_Unbounded_String (Remaining.First_Element);
          Remaining.Delete_First;
       end loop;

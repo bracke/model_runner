@@ -2799,6 +2799,10 @@ package body Tests.Framework_Cases is
             S.Read (Store, Model_Runner.Framework.Tasks_Area, Only & ".state", Held, Status);
             Assert (R.Get (Held, "undone_by") = "given-up-" & Only & "-WS-000001",
                     "a task whose work was put back out was not noted so: " & R.Get (Held, "undone_by"));
+            --  Given up to be done afresh: its last answer is told no more.
+            Model_Runner.Framework.Work.Forget_Last_Answer (Store, Only);
+            S.Read (Store, Model_Runner.Framework.Tasks_Area, Only & ".state", Held, Status);
+            Assert (R.Get (Held, "last_result") = "", "a task's last answer was kept after it was forgotten");
          end;
       end;
       S.Close (Store);

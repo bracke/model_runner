@@ -425,6 +425,13 @@ package Model_Runner.Framework.Work is
    --  @param Copy The kept copy put back.
    procedure Note_Undone (Item : in out Stores.Store; Task_Id, Copy : String);
 
+   --  Forget what a task's last attempt answered: its work given up to be
+   --  done afresh, the next attempt is not told it.
+   --
+   --  @param Item The store.
+   --  @param Task_Id The task.
+   procedure Forget_Last_Answer (Item : in out Stores.Store; Task_Id : String);
+
    --  A file's content as a fingerprint, as what a task took in is kept.
    --
    --  @param Path The file.

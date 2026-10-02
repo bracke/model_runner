@@ -184,6 +184,9 @@ package Model_Runner.CLI.Choosers is
    --  may become, given what is typed before the cursor.
    type Completer is access function (Before : String) return Model_Runner.Framework.Name_Lists.Vector;
 
+   --  What a word Tab lists stands for, shown beside it: empty for none.
+   type Describer is access function (Word : String) return String;
+
    --  A line typed at the session's prompt, edited as it is typed and its
    --  commands coloured as they are: the cursor moves with the arrows,
    --  Home and End (Ctrl-A, Ctrl-E), Backspace and Delete take a character,
@@ -203,12 +206,15 @@ package Model_Runner.CLI.Choosers is
    --  @param Prompt The prompt, as shown before the line.
    --  @param Outcome How it ended.
    --  @param Complete What Tab completes a word to; null, Tab completes nothing.
+   --  @param Describe What a listed word stands for: identifiers listed a
+   --    line each with it; null, they are listed bare.
    --  @return What was typed.
    function Edited_Line
      (Screen   : Model_Runner.Presentation.Console;
       Prompt   : String;
       Outcome  : out Line_End;
-      Complete : Completer := null) return String;
+      Complete : Completer := null;
+      Describe : Describer := null) return String;
 
    --  A yes or no read from the person: anything else asked again, a
    --  command typed in its place said and not run, and no answer, Escape

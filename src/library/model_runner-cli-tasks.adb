@@ -47,6 +47,22 @@ package body Model_Runner.CLI.Tasks is
    package T renames Model_Runner.Text;
    package Tk renames Model_Runner.Framework.Tasks;
 
+   --  A parent's parts let go -- cancelled or rejected -- as said beside
+   --  its parts being settled: " (TASK-006 cancelled: its work not done)".
+   function Cancelled_Parts (Store : Model_Runner.Framework.Stores.Store; Parent : String) return String is
+      Said : Ada.Strings.Unbounded.Unbounded_String;
+   begin
+      for Child of Model_Runner.Framework.Tasks.Children (Store, Parent) loop
+         if Model_Runner.Framework.Tasks.State_Of (Store, Child) in "cancelled" | "rejected" then
+            Ada.Strings.Unbounded.Append
+              (Said, (if Ada.Strings.Unbounded.Length (Said) = 0 then "" else ", ") & Child & " "
+                     & Model_Runner.Framework.Tasks.State_Of (Store, Child));
+         end if;
+      end loop;
+      return (if Ada.Strings.Unbounded.Length (Said) = 0 then ""
+              else " (" & Ada.Strings.Unbounded.To_String (Said) & ": its work not done)");
+   end Cancelled_Parts;
+
    function Joined
      (Items : Model_Runner.Framework.Name_Lists.Vector) return String
    is
@@ -120,6 +136,23 @@ package body Model_Runner.CLI.Tasks is
       end loop;
       return "the project";
    end Giver;
+
+   --  The level that withholds what a task asks beyond its kind's: the
+   --  project, where the project does not grant it -- the kind may -- or
+   --  the kind.
+   function Withholder
+     (Store : Model_Runner.Framework.Stores.Store;
+      Kind  : String;
+      Asked : Model_Runner.Framework.Permissions.Permission_Set) return String
+   is
+      package Pm renames Model_Runner.Framework.Permissions;
+      Project : constant Pm.Permission_Set := Pm.Effective (Store, "", "", Within_Sandbox => False);
+   begin
+      if (for some One in Pm.Capability => Asked (One).Granted and then not Project (One).Granted) then
+         return "the project";
+      end if;
+      return Giver (Store, Kind);
+   end Withholder;
 
    --  What a task's own permissions take away from its kind's -- a level
    --  that names anything grants only that -- and what it is left with.
@@ -254,8 +287,13 @@ package body Model_Runner.CLI.Tasks is
                         declare
                            Whole : constant String := To_String (Held.Provenance);
                            Mark  : constant Natural := Ada.Strings.Fixed.Index (Whole, "#");
+                           Label : constant String := Whole (Mark + 1 .. Whole'Last);
                         begin
-                           return Whole (Mark + 1 .. Whole'Last) & " in " & Whole (Whole'First .. Mark - 1);
+                           --  Known by a fingerprint, not a label: by its ID.
+                           return (if Label'Length >= 12
+                                     and then (for all C of Label => C in '0' .. '9' | 'a' .. 'f')
+                                   then Req else Label)
+                             & " in " & Whole (Whole'First .. Mark - 1);
                         end;
                      end if;
                   end;
@@ -319,8 +357,9 @@ package body Model_Runner.CLI.Tasks is
           elsif Name = "link" then "/task link TASK-ID REQ-ID"
           elsif Name = "new" then "/task new TITLE kind=KIND"
           elsif Name = "reconsider" then "/task reconsider TASK-ID -- a rejected task back to a candidate"
+          elsif Name = "rehome" then "/task rehome OLD-COMPONENT NEW-COMPONENT -- its tasks moved to the new one"
           elsif Name in "show" | "diff" | "audit" | "context" | "accept" | "reject" | "cancel" | "reopen"
-                      | "complete" | "verify" | "integrate" | "rehome" | "step"
+                      | "complete" | "verify" | "integrate" | "step"
           then "/task " & Name & " TASK-ID, as /task " & Name & " TASK-001 or /task " & Name & " 1"
           else "");
 
@@ -486,6 +525,18 @@ package body Model_Runner.CLI.Tasks is
                             in "obsolete" | "superseded" | "rejected");
          end;
       end Serves_Only_Retired;
+
+      --  The parts of the task shown that failed, a space apart.
+      function Failed_Parts return String is
+         Said : Unbounded_String;
+      begin
+         for Child of Tk.Children (Store, Argument) loop
+            if Tk.State_Of (Store, Child) = "failed" then
+               Append (Said, (if Said = Null_Unbounded_String then "" else " ") & Child);
+            end if;
+         end loop;
+         return To_String (Said);
+      end Failed_Parts;
 
       --  A reason as a person reads it: a task's parts, not its children.
       function Parts_Worded (Text : String) return String is
@@ -826,8 +877,15 @@ package body Model_Runner.CLI.Tasks is
             begin
                for Cut in Pair'Range loop
                   if Pair (Cut) = '=' then
-                     Fields.Include
-                       (Pair (Pair'First .. Cut - 1), Pair (Cut + 1 .. Pair'Last));
+                     --  roots= or deny= after permissions=CAPABILITY, unquoted:
+                     --  the capability's places, as quoted they would be.
+                     if Pair (Pair'First .. Cut - 1) in "roots" | "deny" and then Fields.Contains ("permissions")
+                     then
+                        Fields.Include ("permissions", Fields ("permissions") & " " & Pair);
+                     else
+                        Fields.Include
+                          (Pair (Pair'First .. Cut - 1), Pair (Cut + 1 .. Pair'Last));
+                     end if;
                      exit;
                   end if;
                end loop;
@@ -1172,7 +1230,8 @@ package body Model_Runner.CLI.Tasks is
                      if Clipped /= "" then
                         Pres.Put_Note
                           (Screen, "cli.task.clipped",
-                           [Loc.Named ("name", To_String (Id)), Loc.Named ("other", Giver (Store, Fields ("kind"))),
+                           [Loc.Named ("name", To_String (Id)),
+                            Loc.Named ("other", Withholder (Store, Fields ("kind"), Asked)),
                             Loc.Named ("detail", Clipped)]);
                      end if;
                      Say_Narrowing (Screen, To_String (Id), Giver (Store, Fields ("kind")), Asked, Allowed);
@@ -1335,14 +1394,41 @@ package body Model_Runner.CLI.Tasks is
             begin
                --  Said as /task show says it: why it cannot start.
                Pres.Put_Pair (Screen, "cli.task.field", "why it cannot start",
-                              Parts_Worded (if Ada.Strings.Fixed.Index (Why, "it is blocked: ") = Why'First
+                              Parts_Worded (if Ada.Strings.Fixed.Head (Why, 15) in "it is blocked: " | "it is stopped: "
                                             then Why (Why'First + 15 .. Why'Last) else Why),
                               Pres.Pending);
-               --  Waiting for its parts: the first of them is what to do.
+               --  Waiting for its parts: the first that can be worked is what
+               --  to do -- else a failed one taken up again, a candidate accepted.
                if First /= "" then
-                  Pres.Put_Note (Screen, "cli.next.work",
-                                 [Loc.Named ("name", (if Comma = 0 then First
-                                                      else First (First'First .. Comma - 1)))]);
+                  declare
+                     Ready_Part, Failed_Part, Candidate_Part : Unbounded_String;
+                  begin
+                     for Child of Tk.Children (Store, Argument) loop
+                        if Ready_Part = Null_Unbounded_String and then Tk.State_Of (Store, Child) = "accepted"
+                          and then Tk.Ready (Store, Child).Ready
+                        then
+                           Ready_Part := To_Unbounded_String (Child);
+                        elsif Failed_Part = Null_Unbounded_String and then Tk.State_Of (Store, Child) = "failed" then
+                           Failed_Part := To_Unbounded_String (Child);
+                        elsif Candidate_Part = Null_Unbounded_String
+                          and then Tk.State_Of (Store, Child) = "candidate"
+                        then
+                           Candidate_Part := To_Unbounded_String (Child);
+                        end if;
+                     end loop;
+                     if Ready_Part /= Null_Unbounded_String then
+                        Pres.Put_Note (Screen, "cli.next.work", [Loc.Named ("name", To_String (Ready_Part))]);
+                     elsif Failed_Part /= Null_Unbounded_String then
+                        Pres.Put_Note (Screen, "cli.next.retry_only", [Loc.Named ("name", To_String (Failed_Part))]);
+                     elsif Candidate_Part /= Null_Unbounded_String then
+                        Pres.Put_Note (Screen, "cli.next.accept_one_task",
+                                       [Loc.Named ("name", To_String (Candidate_Part))]);
+                     else
+                        Pres.Put_Note (Screen, "cli.next.work",
+                                       [Loc.Named ("name", (if Comma = 0 then First
+                                                            else First (First'First .. Comma - 1)))]);
+                     end if;
+                  end;
                end if;
             end;
          end if;
@@ -1605,7 +1691,8 @@ package body Model_Runner.CLI.Tasks is
                end if;
                return False;
             end if;
-            Pres.Put_Message (Screen, "cli.task.diff_uncommitted", [Loc.Named ("name", Id)]);
+            Pres.Put_Message (Screen, "cli.task.diff_uncommitted",
+                              [Loc.Named ("name", Id), Loc.Named ("value", Moved_State (Id))]);
             for Line of Model_Runner.Framework.Lines_Of (Diff) loop
                Pres.Put_Diff_Line (Screen, Line);
             end loop;
@@ -1776,6 +1863,17 @@ package body Model_Runner.CLI.Tasks is
                end loop;
                Ada.Directories.End_Search (Search);
             end if;
+            --  Not one older than its work taken in since: that work is the
+            --  project's now, and the copy would go over it.
+            declare
+               Held : R.Item;
+               Read : E.Error_Info;
+            begin
+               S.Read (Store, Model_Runner.Framework.Tasks_Area, Argument & ".state", Held, Read);
+               if E.Is_Ok (Read) and then R.Get (Held, "taken_in") /= "" then
+                  Kept := Null_Unbounded_String;
+               end if;
+            end;
             if Kept /= Null_Unbounded_String then
                Pres.Put_Note (Screen, "cli.task.given_up_kept",
                               [Loc.Named ("path", Ada.Directories.Simple_Name (To_String (Kept)))]);
@@ -2199,7 +2297,8 @@ package body Model_Runner.CLI.Tasks is
                      if Clipped /= "" then
                         Pres.Put_Note
                           (Screen, "cli.task.clipped",
-                           [Loc.Named ("name", Id), Loc.Named ("other", Giver (Store, R.Get (Defined, "kind"))),
+                           [Loc.Named ("name", Id),
+                            Loc.Named ("other", Withholder (Store, R.Get (Defined, "kind"), Asked)),
                             Loc.Named ("detail", Clipped)]);
                      end if;
                      Say_Narrowing (Screen, Id, Giver (Store, R.Get (Defined, "kind")), Asked, Allowed);
@@ -2325,16 +2424,36 @@ package body Model_Runner.CLI.Tasks is
                   return To_String (Said);
                end;
             end One_Word;
+            --  roots= or deny= given twice is one of each, its places joined:
+            --  each checked, none dropping another.
+            Roots, Denied : Unbounded_String;
          begin
             for Index in Text'First .. Text'Last + 1 loop
                if Index > Text'Last or else Text (Index) = ' ' then
                   if Index > Start then
-                     Append (Result, (if Result = Null_Unbounded_String then "" else " ")
-                             & One_Word (Text (Start .. Index - 1)));
+                     declare
+                        Word : constant String := One_Word (Text (Start .. Index - 1));
+                     begin
+                        if Word'Length > 6 and then Word (Word'First .. Word'First + 5) = "roots=" then
+                           Append (Roots, (if Roots = Null_Unbounded_String then "" else "|")
+                                          & Word (Word'First + 6 .. Word'Last));
+                        elsif Word'Length > 5 and then Word (Word'First .. Word'First + 4) = "deny=" then
+                           Append (Denied, (if Denied = Null_Unbounded_String then "" else "|")
+                                           & Word (Word'First + 5 .. Word'Last));
+                        else
+                           Append (Result, (if Result = Null_Unbounded_String then "" else " ") & Word);
+                        end if;
+                     end;
                   end if;
                   Start := Index + 1;
                end if;
             end loop;
+            if Roots /= Null_Unbounded_String then
+               Append (Result, (if Result = Null_Unbounded_String then "" else " ") & "roots=" & Roots);
+            end if;
+            if Denied /= Null_Unbounded_String then
+               Append (Result, (if Result = Null_Unbounded_String then "" else " ") & "deny=" & Denied);
+            end if;
             return To_String (Result);
          end Normal_Places;
          Limits  : constant String := Normal_Places (Constraints);
@@ -3349,10 +3468,15 @@ package body Model_Runner.CLI.Tasks is
                      elsif Shown_Name = "gates" then Gates_Said (Shown_Value)
                      --  Its state is said above: not again before why.
                      elsif Shown_Name = "blocked_by" and then Shown_Value'Length > 15
-                       and then Shown_Value (Shown_Value'First .. Shown_Value'First + 14) = "it is blocked: "
+                       and then Ada.Strings.Fixed.Head (Shown_Value, 15) in "it is blocked: " | "it is stopped: "
                      then Parts_Worded (Shown_Value (Shown_Value'First + 15 .. Shown_Value'Last))
                      elsif Shown_Name = "blocked_by" then Parts_Worded (Shown_Value)
-                     else Shown_Value);
+                     else Shown_Value)
+                    --  Waiting for parts, one of them failed: which, and how on.
+                    & (if Shown_Name = "blocked_by" and then Failed_Parts /= ""
+                       then " -- " & Failed_Parts & " failed: /task accept " & Failed_Parts & " tries "
+                            & (if Ada.Strings.Fixed.Index (Failed_Parts, " ") > 0 then "them" else "it") & " again"
+                       else "");
                begin
                   Grouped ("  " & Label, Value);
                end;
@@ -3939,7 +4063,10 @@ package body Model_Runner.CLI.Tasks is
            and then Tk.Ready (Store, R.Get (Defined, "parent")).Ready
          then
             Pres.Put_Note
-              (Screen, "cli.work.parent_ready", [Loc.Named ("name", R.Get (Defined, "parent"))]);
+              (Screen, "cli.work.parent_ready",
+               [Loc.Named ("name", R.Get (Defined, "parent")),
+                --  A part let go is no part done: named.
+                Loc.Named ("detail", Cancelled_Parts (Store, R.Get (Defined, "parent")))]);
             Said_Ready.Append (R.Get (Defined, "parent"));
          end if;
       end Say_Parent_Ready;
@@ -4328,7 +4455,9 @@ package body Model_Runner.CLI.Tasks is
                else
                   Pres.Put_Marked
                     (Screen, "cli.task.gate",
-                     [Loc.Named ("name", "  " & Named), Loc.Named ("detail", Detail)],
+                     [Loc.Named ("name", "  " & Named),
+                      Loc.Named ("detail", Detail & (if To_String (One.Name) = "children"
+                                                     then Cancelled_Parts (Store, Argument) else ""))],
                      Lead, (if Lead = "passed" then Pres.Good else Pres.Muted));
                end if;
             end;
@@ -4539,6 +4668,10 @@ package body Model_Runner.CLI.Tasks is
                if E.Is_Ok (Outcome) then
                   Commit;
                end if;
+               --  Afresh: what that attempt answered is not told the next.
+               if E.Is_Ok (Outcome) then
+                  Model_Runner.Framework.Work.Forget_Last_Answer (Store, First_Word);
+               end if;
                if E.Is_Error (Outcome) then
                   Fail (Outcome);
                   return;
@@ -4696,6 +4829,26 @@ package body Model_Runner.CLI.Tasks is
                       (Store, Model_Runner.Framework.Workspaces.Active_For (Store, First_Word)).Is_Empty
            and then Model_Runner.Framework.Workspaces.Semantic_Conflicts
                       (Store, Model_Runner.Framework.Workspaces.Active_For (Store, First_Word)).Is_Empty;
+         --  Settled, or taken anyway, with no conflict recorded yet but one
+         --  there: found now, as a plain integrate finds it -- recorded, the
+         --  project untouched -- and gone on with, not refused to be asked again.
+         if After_First in "resolved" | "resolved anyway"
+           and then Model_Runner.Framework.Workspaces.Active_For (Store, First_Word) /= ""
+           and then Model_Runner.Framework.Workspaces.Conflict_Files
+                      (Store, Model_Runner.Framework.Workspaces.Active_For (Store, First_Word)).Is_Empty
+           and then not Model_Runner.Framework.Workspaces.Conflicts
+                          (Store, Model_Runner.Framework.Workspaces.Active_For (Store, First_Word)).Is_Empty
+         then
+            declare
+               Scratch : S.Transaction;
+               Taken   : Model_Runner.Framework.Name_Lists.Vector;
+               Found   : E.Error_Info;
+            begin
+               Model_Runner.Framework.Workspaces.Integrate
+                 (Store, Scratch, Model_Runner.Framework.Workspaces.Active_For (Store, First_Word),
+                  Permitted => True, Taken => Taken, Status => Found);
+            end;
+         end if;
          declare
             Space : constant String := Model_Runner.Framework.Workspaces.Active_For (Store, First_Word);
             --  Settled means a conflict was found first: without one, the
@@ -5486,7 +5639,10 @@ package body Model_Runner.CLI.Tasks is
          --  To any state the project's lifecycle allows: move TASK STATE.
          if First_Word = "" or else After_First = "" then
             Outcome := E.Make (E.Framework_Input_Missing);
-            E.Add_Text (Outcome, "name", "the task and the state");
+            E.Add_Text (Outcome, "name",
+                        (if First_Word = "" then "the task and the state: /task move TASK-ID STATE"
+                         else "the state to move " & First_Word & " to: /task move " & First_Word
+                              & " accepted, blocked or cancelled"));
             Fail (Outcome);
          elsif Tk.State_Of (Store, First_Word)
                  = Ada.Strings.Fixed.Head
@@ -5874,12 +6030,25 @@ package body Model_Runner.CLI.Tasks is
                declare
                   Changed : constant Model_Runner.Framework.Name_Lists.Vector := Ws.Changed_Since_Kept (Store, Name);
                   Aside   : constant String := Ws.Replaced_Copy (Store, Name);
+                  --  A complete task's work among what it goes over: named,
+                  --  as that task's work goes from the project.
+                  function Whose_Work return String is
+                     Said : Unbounded_String;
+                  begin
+                     for File of Changed loop
+                        if Taken_In_By (File, "") /= "" then
+                           Append (Said, " " & File & " holds " & Taken_In_By (File, "") & "'s work, complete:"
+                                   & " /task reopen " & Taken_In_By (File, "") & " has it done again after.");
+                        end if;
+                     end loop;
+                     return To_String (Said);
+                  end Whose_Work;
                   Over    : constant String :=
                     (if Natural (Changed.Length) = 0 then ""
                      else " The project's " & Joined (Changed)
                           & (if Natural (Changed.Length) = 1 then " differs" else " differ")
                           & " from these now, and " & (if Natural (Changed.Length) = 1 then "is" else "are")
-                          & " kept first as " & Aside & ".");
+                          & " kept first as " & Aside & "." & Whose_Work);
 
                   --  Each file, said as going over the project's or added.
                   function Files_Said return String is
@@ -6006,10 +6175,8 @@ package body Model_Runner.CLI.Tasks is
               and then Changed_By (First_Word) /= ""
               and then Shown_Uncommitted (First_Word)
             then
-               if Tk.State_Of (Store, First_Word) /= "complete" then
-                  Pres.Put_Note (Screen, "cli.task.diff_reopened",
-                                 [Loc.Named ("name", First_Word), Loc.Named ("value", Moved_State (First_Word))]);
-               end if;
+               --  Its state is in what heads it: no more to say.
+               null;
             elsif Space = "" then
                --  Nothing waits: said as a state, with where its work is.
                Pres.Put_Note
@@ -6052,6 +6219,9 @@ package body Model_Runner.CLI.Tasks is
                                then "its workspace was given up, what it changed kept in " & Kept_For (First_Word)
                                     & "; /task kept diff " & Kept_For (First_Word) & " shows it, and /task kept"
                                     & " restore " & Kept_For (First_Word) & " puts it in the project"
+                               --  Ended, never worked: nothing of it anywhere.
+                               elsif Never_Worked (First_Word)
+                               then "it was never worked on, so nothing of it is anywhere"
                                --  The files said where it names them; /git only
                                --  where there is a repository to ask.
                                else (if Changed_By (First_Word) /= ""

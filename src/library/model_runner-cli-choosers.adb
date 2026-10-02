@@ -1025,7 +1025,8 @@ package body Model_Runner.CLI.Choosers is
      (Screen   : Model_Runner.Presentation.Console;
       Prompt   : String;
       Outcome  : out Line_End;
-      Complete : Completer := null) return String
+      Complete : Completer := null;
+      Describe : Describer := null) return String
    is
       Guard   : Raw_Guard;
       Text    : Unbounded_String;
@@ -1086,6 +1087,29 @@ package body Model_Runner.CLI.Choosers is
       --  it: Right or End takes it.
       Ghost : Unbounded_String;
 
+      --  Whether the word a line typed before goes on with is one Tab
+      --  would offer now: a link taken off since, a task done, is not
+      --  suggested again. Where Tab offers nothing, any word is.
+      function Still_Offered (Line, Rest : String) return Boolean is
+         Space   : constant Natural := Ada.Strings.Fixed.Index (Rest, " ");
+         Partial : constant Natural := Ada.Strings.Fixed.Index (Line, " ", Ada.Strings.Backward);
+         Typed   : constant String :=
+           (if Partial = 0 then Line else Line (Partial + 1 .. Line'Last));
+         Word    : constant String :=
+           Typed & (if Space = 0 then Rest else Rest (Rest'First .. Space - 1));
+         Choices : constant Model_Runner.Framework.Name_Lists.Vector := Complete (Line);
+      begin
+         return Choices.Is_Empty or else Word = "" or else Choices.Contains (Word)
+           --  A number for an ID, a NAME= with its value: as typed then.
+           or else (for all C of Word => C in '0' .. '9')
+           or else (for some One of Choices =>
+                      One'Length > 0 and then One (One'Last) = '=' and then Word'Length > One'Length
+                      and then Word (Word'First .. Word'First + One'Length - 1) = One);
+      exception
+         when others =>
+            return True;
+      end Still_Offered;
+
       procedure Find_Ghost is
          Line  : constant String := To_String (Text);
       begin
@@ -1099,6 +1123,7 @@ package body Model_Runner.CLI.Choosers is
                begin
                   if Earlier'Length > Line'Length
                     and then Earlier (Earlier'First .. Earlier'First + Line'Length - 1) = Line
+                    and then Still_Offered (Line, Earlier (Earlier'First + Line'Length .. Earlier'Last))
                   then
                      Ghost := To_Unbounded_String (Earlier (Earlier'First + Line'Length .. Earlier'Last));
                      return;
@@ -1326,6 +1351,18 @@ package body Model_Runner.CLI.Choosers is
                      exit when Shown = 200;
                      Put (Pres.Coloured_Commands (Screen, Described (One)) & ASCII.CR & ASCII.LF);
                      Shown := Shown + 1;
+                  end loop;
+               --  Identifiers each with what it is, a line each.
+               elsif Describe /= null and then Natural (Choices.Length) <= 40
+                 and then (for all One of Choices => Describe (One) /= "")
+               then
+                  for One of Choices loop
+                     declare
+                        Said : constant String := Describe (One);
+                     begin
+                        Put ((if Said'Length > Columns - 1 then Said (Said'First .. Said'First + Columns - 5) & "..."
+                              else Said) & ASCII.CR & ASCII.LF);
+                     end;
                   end loop;
                else
                   for Whole of Choices loop

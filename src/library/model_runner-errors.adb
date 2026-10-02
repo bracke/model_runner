@@ -229,9 +229,12 @@ package body Model_Runner.Errors is
             | Conversation_System_Unsupported
             | Tools_Not_In_Template
             | Framework_Format_Unsupported
-            | Framework_Context_Overflow
             | Internal_Not_Implemented =>
             return Recovery_Unsupported;
+
+         --  A profile too small for the task: the person widens it.
+         when Framework_Context_Overflow =>
+            return Recovery_User_Correctable;
 
          when Template_Refused =>
             --  The template's author said no to this conversation, and

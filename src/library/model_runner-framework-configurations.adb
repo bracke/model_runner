@@ -374,9 +374,16 @@ package body Model_Runner.Framework.Configurations is
 
             --  Its name is its main program's and its project's: not one
             --  the language keeps for itself.
-            elsif Value in "ada" | "system" | "interfaces" | "gnat" | "standard" then
-               Refuse ("it is the name of a unit the language defines, which a program of its own"
+            elsif Value in "ada" | "system" | "interfaces" | "standard" then
+               Refuse ("it is the name of a unit the language defines, which a project of its own"
                        & " cannot take");
+            elsif Value = "gnat" then
+               Refuse ("it is the name of the compiler's own units, which a project of its own cannot take");
+            --  The template's own crates beside it: the test crate and its
+            --  harness would be named the same, and neither builds.
+            elsif Value in "tests" | "aunit" then
+               Refuse ("the test crate beside it is " & (if Value = "tests" then "called tests" else "built on aunit")
+                       & ", and a project of that name clashes with it");
             elsif Value in "abort" | "abs" | "abstract" | "accept" | "access" | "aliased" | "all"
                          | "and" | "array" | "at" | "begin" | "body" | "case" | "constant"
                          | "declare" | "delay" | "delta" | "digits" | "do" | "else" | "elsif"
@@ -1567,7 +1574,7 @@ package body Model_Runner.Framework.Configurations is
               and then Word not in "read_source" | "write_source" | "read_specs" | "write_specs"
             then
                return Word & " takes no roots= or deny=: places are for read_source, write_source, read_specs and"
-                 & " write_specs; " & Name & "=on grants it";
+                 & " write_specs; on grants it whole";
             elsif (Ada.Strings.Fixed.Index (Value, "max_depth=") > 0
                    or else Ada.Strings.Fixed.Index (Value, "max_children=") > 0)
               and then (for some One in Permissions.Capability => Permissions.Word (One) = Word)
@@ -2001,6 +2008,14 @@ package body Model_Runner.Framework.Configurations is
                         return Name & ": reserve must be less than context, as the answer's room is kept of the"
                           & " whole --" & Natural'Image (Number ("reserve")) & " is not less than"
                           & Natural'Image (Number ("context"));
+                     --  No reserve named: the built-in 1024 is kept all the same.
+                     elsif Number ("context") > 0 and then Ada.Strings.Fixed.Index (Value, "reserve=") = 0
+                       and then 1024 + Number ("overhead") >= Number ("context")
+                     then
+                        return Name & ": context=" & Ada.Strings.Fixed.Trim (Natural'Image (Number ("context")),
+                                                                           Ada.Strings.Both)
+                          & " leaves no room: the answer's reserve, built in, is 1024 -- give more context, or"
+                          & " a smaller reserve= with it";
                      end if;
                   end;
                end;
@@ -2255,14 +2270,30 @@ package body Model_Runner.Framework.Configurations is
               and then Ada.Strings.Fixed.Count (Name (Name'First + 20 .. Name'Last), ".") = 0
             then
                Normal.Include (Name, "inherit");
-            --  The project's level whole -- none, or inherit: the harness's
-            --  defaults -- is each of its capabilities so.
+            --  The project's level whole: none, written so, as a kind's is --
+            --  nothing granted -- or inherit, its own taken away, the
+            --  harness's defaults holding. What it says of each capability
+            --  goes either way.
             elsif Name = "map.permission.project" and then Value_Maps.Element (Position) in "none" | "inherit" then
-               Normal.Delete (Name);
-               for One in Permissions.Capability loop
-                  Normal.Include ("map.permission.project." & Permissions.Word (One),
-                                  (if Value_Maps.Element (Position) = "none" then "off" else "inherit"));
-               end loop;
+               declare
+                  Config : Records.Item;
+                  Got    : E.Error_Info;
+               begin
+                  Read (Item, Config, Got);
+                  if Value_Maps.Element (Position) = "inherit" then
+                     Normal.Delete (Name);
+                  end if;
+                  if E.Is_Ok (Got) then
+                     for Index in 1 .. Records.Field_Count (Config) loop
+                        if Starts (Records.Field_Name (Config, Index), "map.permission.project.")
+                          or else (Value_Maps.Element (Position) = "inherit"
+                                   and then Records.Field_Name (Config, Index) = "map.permission.project")
+                        then
+                           Normal.Include (Records.Field_Name (Config, Index), "");
+                        end if;
+                     end loop;
+                  end if;
+               end;
             end if;
          end;
       end loop;
@@ -2364,7 +2395,13 @@ package body Model_Runner.Framework.Configurations is
          elsif Starts (Level, "role.")
            and then Ada.Strings.Fixed.Index (Level (Level'First + 5 .. Level'Last), ".") = 0
          then
-            return "";
+            --  The role an agent works in is worker: another is read by nothing.
+            return (if Level (Level'First + 5 .. Level'Last) = "worker"
+                      or else (for some Index in 1 .. Records.Field_Count (Result.Before) =>
+                                 Starts (Records.Field_Name (Result.Before, Index), "map.permission." & Level))
+                    then ""
+                    else Level (Level'First + 5 .. Level'Last) & " is no role an agent works in, so nothing would"
+                         & " read it; the role there is is worker: map.permission.role.worker.CAPABILITY=...");
          elsif Starts (Level, "task.") then
             return "a task's permissions are its own field: /task edit "
               & Level (Level'First + 5 .. Level'Last) & " permissions=... sets them";
@@ -3219,7 +3256,9 @@ package body Model_Runner.Framework.Configurations is
                         Records.Remove (Result.After, Name);
                      end if;
                      Result.Changed.Append
-                       (Name & ": " & (if not Was and then Level_Said (Name)
+                       (Name & ": " & (if not Was and then Name = "map.permission.project"
+                                       then "the defaults (not written)"
+                                       elsif not Was and then Level_Said (Name)
                                          and then Records.Get (Result.Before,
                                                                Name (Name'First .. Ada.Strings.Fixed.Index
                                                                        (Name, ".", Ada.Strings.Backward) - 1))

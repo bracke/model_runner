@@ -77,15 +77,23 @@ package body Model_Runner.CLI.Completion is
       --  Where the session was started, below the project's top: what is
       --  typed is from there, as the commands take it.
       Below  : constant String := Model_Runner.CLI.Project_Commands.Started_Below;
+      --  ../ is from where the session was started, always.
+      Up     : constant Boolean := Dir'Length >= 2 and then Dir (Dir'First .. Dir'First + 1) = "..";
       Where  : constant String :=
         (if Below /= "" and then Ada.Directories.Exists (Below & "/" & (if Dir = "" then "." else Dir))
-           and then not (Dir /= "" and then Ada.Directories.Exists (Dir))
+           and then (Up or else not (Dir /= "" and then Ada.Directories.Exists (Dir)))
          then Below & "/" & (if Dir = "" then "." else Dir)
          elsif Dir = "" then "." else Dir);
+      --  Nothing outside the project is one of its files.
+      Inside : constant Boolean :=
+        not Up
+        or else (Ada.Directories.Exists (Where)
+                 and then Ada.Strings.Fixed.Index (Ada.Directories.Full_Name (Where) & "/",
+                                                   Ada.Directories.Current_Directory & "/") = 1);
       Search : Ada.Directories.Search_Type;
       Found  : Ada.Directories.Directory_Entry_Type;
    begin
-      if not Ada.Directories.Exists (Where) then
+      if not Ada.Directories.Exists (Where) or else not Inside then
          return Result;
       end if;
       Ada.Directories.Start_Search (Search, Where, "");
@@ -329,6 +337,27 @@ package body Model_Runner.CLI.Completion is
                for Value of Values_Of (Name) loop
                   Offer (Name & "=" & Value);
                end loop;
+               --  What it holds now, to change rather than type again.
+               declare
+                  Config : R.Item;
+                  Got    : E.Error_Info;
+               begin
+                  Model_Runner.Framework.Configurations.Read (Store, Config, Got);
+                  if E.Is_Ok (Got) then
+                     for Full of Names.Vector'([Name, "scalar." & Name, "map." & Name]) loop
+                        declare
+                           Held : constant String := R.Get (Config, Full);
+                        begin
+                           if Held /= "" and then Ada.Strings.Fixed.Index (Held, [1 => ASCII.LF]) = 0
+                             and then Ada.Strings.Fixed.Index (Held, """") = 0
+                           then
+                              Offer (Name & "=" & (if Ada.Strings.Fixed.Index (Held, " ") > 0
+                                                   then """" & Held & """" else Held));
+                           end if;
+                        end;
+                     end loop;
+                  end if;
+               end;
                --  A kind's profile, or the default: the profiles there are.
                if Ada.Strings.Fixed.Index (Name, "task.profile.") > 0
                  or else Name in "model.default" | "scalar.model.default"
@@ -349,6 +378,55 @@ package body Model_Runner.CLI.Completion is
             for Kind of Tk.Kinds (Store) loop
                Offer ("kind=" & Kind);
             end loop;
+         elsif ((Command = "/task" and then Action = "edit")
+                or else (Command in "/req" | "/spec" | "/decision" and then Action = "revise"))
+           and then Position >= 4
+           and then (for some Key of Names.Vector'(["title=", "notes=", "text=", "criteria="]) =>
+                       Current = Key)
+         then
+            --  What the field says now, to change rather than type again.
+            declare
+               Key   : constant String := Current (Current'First .. Current'Last - 1);
+               Typed : constant String := Words (3);
+               Id    : constant String :=
+                 (if Typed /= "" and then (for all C of Typed => C in '0' .. '9')
+                  then "TASK-" & (if Typed'Length >= 3 then Typed else [1 .. 3 - Typed'Length => '0'] & Typed)
+                  else Ada.Characters.Handling.To_Upper (Typed));
+               Now   : Ada.Strings.Unbounded.Unbounded_String;
+            begin
+               if Command = "/task" then
+                  declare
+                     Defined : R.Item;
+                     Got     : E.Error_Info;
+                  begin
+                     Tk.Definition (Store, Id, Defined, Got);
+                     if E.Is_Ok (Got) then
+                        Now := Ada.Strings.Unbounded.To_Unbounded_String (R.Get (Defined, Key));
+                     end if;
+                  end;
+               else
+                  declare
+                     Held : Nt.Entity;
+                     Got  : E.Error_Info;
+                  begin
+                     Nt.Read (Store, Register (Command), Id, Held, Got);
+                     if E.Is_Ok (Got) then
+                        Now := (if Key = "title" then Held.Title elsif Key = "text" then Held.Text
+                                elsif Key = "criteria" then Held.Criteria else Now);
+                     end if;
+                  end;
+               end if;
+               declare
+                  Said : constant String := Ada.Strings.Unbounded.To_String (Now);
+               begin
+                  --  On one line, its quotes kept out of it.
+                  if Said /= "" and then Ada.Strings.Fixed.Index (Said, [1 => ASCII.LF]) = 0
+                    and then Ada.Strings.Fixed.Index (Said, """") = 0
+                  then
+                     Offer (Current & (if Ada.Strings.Fixed.Index (Said, " ") > 0 then """" & Said & """" else Said));
+                  end if;
+               end;
+            end;
          elsif (for some Key of Names.Vector'(["component=", "requirement=", "requirements=", "depends_on=",
                                                "parent=", "profile=", "model="]) =>
                   Ada.Strings.Fixed.Index (Current, Key) = Current'First)
@@ -532,6 +610,10 @@ package body Model_Runner.CLI.Completion is
                Settings;
             elsif Action = "supersede" then
                Offer_All (Nt.List (Store, Register (Command)));
+            elsif Action = "move" then
+               --  The states its register has.
+               Offer_Words (if Command = "/req" then "candidate accepted blocked implemented obsolete rejected"
+                            else "candidate accepted rejected obsolete superseded");
             elsif Action = "revise" then
                Offer_Words ("from-document title= text= criteria=");
             end if;
@@ -739,7 +821,30 @@ package body Model_Runner.CLI.Completion is
       elsif Position = 2 and then Actions_Of (Command) /= "" then
          Offer_Words (Actions_Of (Command));
          From_Project;
-      elsif Command in "/refs" | "/sym" | "/deps" | "/users" | "/impact" | "/tree" | "/bootstrap" | "/save"
+      elsif Command = "/bootstrap" then
+         --  What it reads: documents, and directories to go on into.
+         for Path of Paths (Current) loop
+            declare
+               Lower : constant String := Ada.Characters.Handling.To_Lower (Path);
+            begin
+               if Path (Path'Last) = '/'
+                 or else (for some Ending of Names.Vector'([".md", ".rst", ".adoc", ".txt"]) =>
+                            Lower'Length > Ending'Length
+                            and then Lower (Lower'Last - Ending'Length + 1 .. Lower'Last) = Ending)
+               then
+                  Offer (Path);
+               end if;
+            end;
+         end loop;
+      elsif Command = "/init" and then Position >= 3 and then Words (Position - 1) = "--directory" then
+         for Path of Paths (Current) loop
+            if Path (Path'Last) = '/' then
+               Offer (Path);
+            end if;
+         end loop;
+      elsif Command = "/init" and then Position >= 3 then
+         Offer_Words ("--directory --set");
+      elsif Command in "/refs" | "/sym" | "/deps" | "/users" | "/impact" | "/tree" | "/save"
                      | "/load" | "/image" | "/video"
       then
          Offer_All (Paths (Current));
@@ -856,6 +961,32 @@ package body Model_Runner.CLI.Completion is
             end;
          end if;
       end;
+      --  Nothing at all: the one it was most likely meant to be, a letter
+      --  or two off -- /tsak is /task.
+      if Result.Is_Empty and then Current'Length >= 3 then
+         declare
+            Near : constant String := Model_Runner.Framework.Nearest (Current, Offered);
+         begin
+            if Near /= "" then
+               Result.Append (Near);
+            else
+               --  Two letters typed the other way round: /tsak.
+               for One of Offered loop
+                  if One'Length = Current'Length
+                    and then (for some At_Index in 0 .. Current'Length - 2 =>
+                                One (One'First + At_Index) = Current (Current'First + At_Index + 1)
+                                and then One (One'First + At_Index + 1) = Current (Current'First + At_Index)
+                                and then One (One'First .. One'First + At_Index - 1)
+                                         = Current (Current'First .. Current'First + At_Index - 1)
+                                and then One (One'First + At_Index + 2 .. One'Last)
+                                         = Current (Current'First + At_Index + 2 .. Current'Last))
+                  then
+                     Result.Append (One);
+                  end if;
+               end loop;
+            end if;
+         end;
+      end if;
       Sorting.Sort (Result);
       return Result;
    exception
@@ -863,5 +994,60 @@ package body Model_Runner.CLI.Completion is
       when others =>
          return Names.Empty_Vector;
    end Candidates;
+
+   ---------------
+   -- Described --
+   ---------------
+
+   function Described (Word : String) return String is
+      Store : S.Store;
+      Read  : E.Error_Info;
+      Said  : Ada.Strings.Unbounded.Unbounded_String;
+   begin
+      if Word'Length < 5 or else not S.Is_Initialized (Ada.Directories.Current_Directory)
+        or else not (for some Prefix of Names.Vector'(["TASK-", "REQ-", "SPEC-", "DEC-"]) =>
+                       Word'Length > Prefix'Length
+                       and then Word (Word'First .. Word'First + Prefix'Length - 1) = Prefix)
+      then
+         return "";
+      end if;
+      S.Open_To_Read (Store, Ada.Directories.Current_Directory, Read);
+      if E.Is_Error (Read) then
+         return "";
+      end if;
+      if Word (Word'First .. Word'First + 4) = "TASK-" then
+         declare
+            Defined : R.Item;
+            Got     : E.Error_Info;
+         begin
+            Tk.Definition (Store, Word, Defined, Got);
+            if E.Is_Ok (Got) then
+               Said := Ada.Strings.Unbounded.To_Unbounded_String
+                 (Word & "  " & Tk.State_Of (Store, Word) & "  " & R.Get (Defined, "title"));
+            end if;
+         end;
+      else
+         declare
+            Kind : constant Nt.Intent_Kind :=
+              (if Word (Word'First .. Word'First + 3) = "REQ-" then Nt.Requirement
+               elsif Word (Word'First .. Word'First + 4) = "SPEC-" then Nt.Specification else Nt.Decision);
+            Held : Nt.Entity;
+            Got  : E.Error_Info;
+         begin
+            Nt.Read (Store, Kind, Word, Held, Got);
+            if E.Is_Ok (Got) then
+               Said := Ada.Strings.Unbounded.To_Unbounded_String
+                 (Word & "  " & Ada.Strings.Unbounded.To_String (Held.State) & "  "
+                  & Ada.Strings.Unbounded.To_String (Held.Title));
+            end if;
+         end;
+      end if;
+      S.Close (Store);
+      return Ada.Strings.Unbounded.To_String (Said);
+   exception
+      when others =>
+         S.Close (Store);
+         return "";
+   end Described;
 
 end Model_Runner.CLI.Completion;

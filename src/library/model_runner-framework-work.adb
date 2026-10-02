@@ -302,6 +302,18 @@ package body Model_Runner.Framework.Work is
       Stores.Commit (Item, Change, Status);
    end Note_Undone;
 
+   ------------------------
+   -- Forget_Last_Answer --
+   ------------------------
+
+   procedure Forget_Last_Answer (Item : in out Stores.Store; Task_Id : String) is
+      Change : Stores.Transaction;
+      Status : E.Error_Info;
+   begin
+      Annotate (Item, Change, Task_Id, "last_result", "");
+      Stores.Commit (Item, Change, Status);
+   end Forget_Last_Answer;
+
    --  What was taken in, kept as a result -- the files, and the project's
    --  revision they made, which integration made the state it is in --
    --  named on the task, and said as a change to the source.
@@ -3043,9 +3055,18 @@ package body Model_Runner.Framework.Work is
          then
             Status := E.Make (E.Framework_Task_Not_Ready);
             E.Add_Text (Status, "name", Task_Id);
-            E.Add_Text
-              (Status, "detail",
-               (if Now.Reasons.Is_Empty then "" else Now.Reasons.First_Element));
+            declare
+               Why : constant String := (if Now.Reasons.Is_Empty then "" else Now.Reasons.First_Element);
+               At_Children : constant Natural :=
+                 Ada.Strings.Fixed.Index (Why, "it is blocked: waiting for its children");
+            begin
+               --  Its parts, as every list says them, not its children.
+               E.Add_Text
+                 (Status, "detail",
+                  (if At_Children = Why'First
+                   then "it is waiting for its parts" & Why (Why'First + 39 .. Why'Last)
+                   else Why));
+            end;
             return;
          end if;
       end;
