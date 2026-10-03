@@ -49,6 +49,11 @@ package body Model_Runner.Platform.Device is
       return Index <= Item.Used and then Item.Discrete (Index);
    end Is_Discrete;
 
+   function Is_Software (Item : Inventory; Index : Positive) return Boolean is
+   begin
+      return Index <= Item.Used and then Item.Software (Index);
+   end Is_Software;
+
    procedure Open
      (Item  : in out Context;
       From  : Inventory;

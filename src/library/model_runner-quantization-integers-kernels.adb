@@ -1426,6 +1426,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
 
       Places : Vector_Places;
 
+      --  Whether the one-vector table holds this call's vector already.
+      One_Table : Boolean := False;
+
       Base   : B.Byte_Index;
       At_Row : Element_Count;
 
@@ -1975,31 +1978,33 @@ package body Model_Runner.Quantization.Integers.Kernels is
          --  the eight minima likewise, and the four packed pairs of
          --  activation totals. Ninety-six bytes so that both halves of the
          --  scale land on a thirty-two byte boundary.
-         for Block in Element_Count range 0 .. Blocks - 1 loop
-            declare
-               At_Tot : constant Element_Count :=
-                 Places (0) + Block * Subs;
-               Scale  : constant N.Real :=
-                 Scales (Scales'First + At_Tot);
-               At_Band : constant Natural := Natural (Block) * 24;
-            begin
-               for Row in Element_Count range 0 .. Panel - 1 loop
-                  Bands (At_Band + Natural (Row)) :=
-                    Wholes (Natural (Block * Panel + Row)) * Scale;
-                  Bands (At_Band + 8 + Natural (Row)) :=
-                    Leasts (Natural (Block * Panel + Row)) * Scale;
-               end loop;
+         --  The vector's own part of the table, made for the first panel
+         --  of the call and read by the rest; the rows' scales times the
+         --  vector's the insertion works out from the panel's own halves,
+         --  the same products in the same order, where a scalar pass a
+         --  block a panel was a sixth of a token on one core.
+         if not One_Table then
+            for Block in Element_Count range 0 .. Blocks - 1 loop
+               declare
+                  At_Tot : constant Element_Count :=
+                    Places (0) + Block * Subs;
+                  At_Band : constant Natural := Natural (Block) * 24;
+               begin
+                  Bands (At_Band + 20) := Scales (Scales'First + At_Tot);
 
-               for Pair in 0 .. 3 loop
-                  Marks (At_Band + 16 + Pair) :=
-                    Paired
-                      (Totals (Totals'First + At_Tot
-                               + Element_Count (Pair) * 2),
-                       Totals (Totals'First + At_Tot
-                               + Element_Count (Pair) * 2 + 1));
-               end loop;
-            end;
-         end loop;
+                  for Pair in 0 .. 3 loop
+                     Marks (At_Band + 16 + Pair) :=
+                       Paired
+                         (Totals (Totals'First + At_Tot
+                                  + Element_Count (Pair) * 2),
+                          Totals (Totals'First + At_Tot
+                                  + Element_Count (Pair) * 2 + 1));
+                  end loop;
+               end;
+            end loop;
+
+            One_Table := True;
+         end if;
 
          System.Machine_Code.Asm
            (
@@ -2017,32 +2022,33 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "xorq %%rsi, %%rsi" & LF &
                "movq %4, %%rax" & LF &
                "2:" & LF &
-               --  The panel a block or two on, a kilobyte and a half or more ahead:
+               --  The panel some eight kilobytes on, into the second-level cache:
                --  the copy lies in pages of four kilobytes and the hardware's
-               --  stream stops at each, so a generated token waited on it.
-               "prefetcht0 2880(%1,%%rcx,1)" & LF &
-               "prefetcht0 2944(%1,%%rcx,1)" & LF &
-               "prefetcht0 3008(%1,%%rcx,1)" & LF &
-               "prefetcht0 3072(%1,%%rcx,1)" & LF &
-               "prefetcht0 3136(%1,%%rcx,1)" & LF &
-               "prefetcht0 3200(%1,%%rcx,1)" & LF &
-               "prefetcht0 3264(%1,%%rcx,1)" & LF &
-               "prefetcht0 3328(%1,%%rcx,1)" & LF &
-               "prefetcht0 3392(%1,%%rcx,1)" & LF &
-               "prefetcht0 3456(%1,%%rcx,1)" & LF &
-               "prefetcht0 3520(%1,%%rcx,1)" & LF &
-               "prefetcht0 3584(%1,%%rcx,1)" & LF &
-               "prefetcht0 3648(%1,%%rcx,1)" & LF &
-               "prefetcht0 3712(%1,%%rcx,1)" & LF &
-               "prefetcht0 3776(%1,%%rcx,1)" & LF &
-               "prefetcht0 3840(%1,%%rcx,1)" & LF &
-               "prefetcht0 3904(%1,%%rcx,1)" & LF &
-               "prefetcht0 3968(%1,%%rcx,1)" & LF &
-               "prefetcht0 4032(%1,%%rcx,1)" & LF &
-               "prefetcht0 4096(%1,%%rcx,1)" & LF &
-               "prefetcht0 4160(%1,%%rcx,1)" & LF &
-               "prefetcht0 4224(%1,%%rcx,1)" & LF &
-               "prefetcht0 4288(%1,%%rcx,1)" & LF &
+               --  stream stops at each, and the first-level cache's few misses in
+               --  flight were too few to cover the memory's latency on one core.
+               "prefetcht1 8640(%1,%%rcx,1)" & LF &
+               "prefetcht1 8704(%1,%%rcx,1)" & LF &
+               "prefetcht1 8768(%1,%%rcx,1)" & LF &
+               "prefetcht1 8832(%1,%%rcx,1)" & LF &
+               "prefetcht1 8896(%1,%%rcx,1)" & LF &
+               "prefetcht1 8960(%1,%%rcx,1)" & LF &
+               "prefetcht1 9024(%1,%%rcx,1)" & LF &
+               "prefetcht1 9088(%1,%%rcx,1)" & LF &
+               "prefetcht1 9152(%1,%%rcx,1)" & LF &
+               "prefetcht1 9216(%1,%%rcx,1)" & LF &
+               "prefetcht1 9280(%1,%%rcx,1)" & LF &
+               "prefetcht1 9344(%1,%%rcx,1)" & LF &
+               "prefetcht1 9408(%1,%%rcx,1)" & LF &
+               "prefetcht1 9472(%1,%%rcx,1)" & LF &
+               "prefetcht1 9536(%1,%%rcx,1)" & LF &
+               "prefetcht1 9600(%1,%%rcx,1)" & LF &
+               "prefetcht1 9664(%1,%%rcx,1)" & LF &
+               "prefetcht1 9728(%1,%%rcx,1)" & LF &
+               "prefetcht1 9792(%1,%%rcx,1)" & LF &
+               "prefetcht1 9856(%1,%%rcx,1)" & LF &
+               "prefetcht1 9920(%1,%%rcx,1)" & LF &
+               "prefetcht1 9984(%1,%%rcx,1)" & LF &
+               "prefetcht1 10048(%1,%%rcx,1)" & LF &
                "vpxord %%ymm24, %%ymm24, %%ymm24" & LF &
                "vpxord %%ymm8, %%ymm8, %%ymm8" & LF &
                "vpxord %%ymm9, %%ymm9, %%ymm9" & LF &
@@ -2571,8 +2577,12 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "vpdpwssd 76(%3,%%rsi,1)%{1to8%}, %%ymm6, %%ymm16" & LF &
                "vcvtdq2ps %%ymm24, %%ymm26" & LF &
                "vcvtdq2ps %%ymm16, %%ymm27" & LF &
-               "vmulps 0(%3,%%rsi,1), %%ymm26, %%ymm26" & LF &
-               "vmulps 32(%3,%%rsi,1), %%ymm27, %%ymm27" & LF &
+               "vcvtph2ps 0(%1,%%rcx,1), %%ymm28" & LF &
+               "vcvtph2ps 16(%1,%%rcx,1), %%ymm29" & LF &
+               "vmulps 80(%3,%%rsi,1)%{1to8%}, %%ymm28, %%ymm28" & LF &
+               "vmulps 80(%3,%%rsi,1)%{1to8%}, %%ymm29, %%ymm29" & LF &
+               "vmulps %%ymm28, %%ymm26, %%ymm26" & LF &
+               "vmulps %%ymm29, %%ymm27, %%ymm27" & LF &
                "vsubps %%ymm27, %%ymm26, %%ymm26" & LF &
                "vaddps %%ymm26, %%ymm25, %%ymm25" & LF &
                "addq $1440, %%rcx" & LF &
@@ -2591,7 +2601,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
             Clobber  =>
               "rax,rcx,rdx,rsi,ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,"
               & "ymm8,ymm9,ymm10,ymm11,ymm12,ymm13,ymm14,ymm15,"
-              & "ymm16,ymm24,ymm25,ymm26,ymm27,memory",
+              & "ymm16,ymm24,ymm25,ymm26,ymm27,ymm28,ymm29,memory",
             Volatile => True);
 
          declare
@@ -2630,7 +2640,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
          --  because that is how the panel holds them. This is the whole of
          --  what a panel costs before its first product; the sub-block
          --  scales the kernel wants are bytes it reads itself.
+         --  Not for one vector, whose insertion reads the halves itself.
          for Block in Element_Count range 0 .. Blocks - 1 loop
+            exit when Count = 1;
             System.Machine_Code.Asm
               (
                "vcvtph2ps 0(%2), %%ymm0" & LF &
@@ -2774,6 +2786,11 @@ package body Model_Runner.Quantization.Integers.Kernels is
       is (Element_Count'Min (At_Vector + Vector, Count - 1));
 
       Places : Vector_Places;
+
+      --  Whether the one-vector table holds this call's vector already,
+      --  and the vector's scale a block for the insertion.
+      One_Table  : Boolean := False;
+      Own_Scales : Scale_Table;
 
       Base   : B.Byte_Index;
       At_Row : Element_Count;
@@ -3692,30 +3709,35 @@ package body Model_Runner.Quantization.Integers.Kernels is
       begin
          Places (0) := (First + At_Vector * Stride) / Activation_Block;
 
-         for Block in Element_Count range 0 .. Blocks - 1 loop
-            declare
-               Scale : constant N.Real :=
-                 Scales (Scales'First + Places (0) + Block * 8);
-               At_Sum : constant Element_Count := Summing (0, Block);
-               At_Band : constant Natural := Natural (Block) * 24;
-            begin
-               for Row in Element_Count range 0 .. Panel - 1 loop
-                  Bands (At_Band + Natural (Row)) :=
-                    Wholes (Natural (Block * Panel + Row)) * Scale;
-                  Bands (At_Band + 8 + Natural (Row)) :=
-                    Wholes (Natural (Block * Panel + Row)) * Scale * 32.0;
-               end loop;
+         --  The vector's own part of the table, made for the first panel
+         --  of the call and read by the rest; the rows' scales times the
+         --  vector's the insertion works out from the panel's own halves,
+         --  the same products in the same order, where a scalar pass a
+         --  block a panel was a sixth of a token on one core.
+         --  Its eight pairs fill the block's table, so the vector's scale a
+         --  block is a list of its own, read through a pointer.
+         if not One_Table then
+            for Block in Element_Count range 0 .. Blocks - 1 loop
+               declare
+                  At_Sum : constant Element_Count := Summing (0, Block);
+                  At_Band : constant Natural := Natural (Block) * 24;
+               begin
+                  Own_Scales (Natural (Block)) :=
+                    Scales (Scales'First + Places (0) + Block * 8);
 
-               for Pair in 0 .. 7 loop
-                  Marks (At_Band + 16 + Pair) :=
-                    Paired
-                      (Halves (Halves'First + At_Sum
-                               + Element_Count (Pair) * 2),
-                       Halves (Halves'First + At_Sum
-                               + Element_Count (Pair) * 2 + 1));
-               end loop;
-            end;
-         end loop;
+                  for Pair in 0 .. 7 loop
+                     Marks (At_Band + 16 + Pair) :=
+                       Paired
+                         (Halves (Halves'First + At_Sum
+                                  + Element_Count (Pair) * 2),
+                          Halves (Halves'First + At_Sum
+                                  + Element_Count (Pair) * 2 + 1));
+                  end loop;
+               end;
+            end loop;
+
+            One_Table := True;
+         end if;
 
          System.Machine_Code.Asm
            (
@@ -3734,37 +3756,39 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "xorq %%rdx, %%rdx" & LF &
                "xorq %%rsi, %%rsi" & LF &
                "movq %4, %%rax" & LF &
+               "movq %5, %%r8" & LF &
                "2:" & LF &
-               --  The panel a block or two on, a kilobyte and a half or more ahead:
+               --  The panel some eight kilobytes on, into the second-level cache:
                --  the copy lies in pages of four kilobytes and the hardware's
-               --  stream stops at each, so a generated token waited on it.
-               "prefetcht0 1680(%1,%%rcx,1)" & LF &
-               "prefetcht0 1744(%1,%%rcx,1)" & LF &
-               "prefetcht0 1808(%1,%%rcx,1)" & LF &
-               "prefetcht0 1872(%1,%%rcx,1)" & LF &
-               "prefetcht0 1936(%1,%%rcx,1)" & LF &
-               "prefetcht0 2000(%1,%%rcx,1)" & LF &
-               "prefetcht0 2064(%1,%%rcx,1)" & LF &
-               "prefetcht0 2128(%1,%%rcx,1)" & LF &
-               "prefetcht0 2192(%1,%%rcx,1)" & LF &
-               "prefetcht0 2256(%1,%%rcx,1)" & LF &
-               "prefetcht0 2320(%1,%%rcx,1)" & LF &
-               "prefetcht0 2384(%1,%%rcx,1)" & LF &
-               "prefetcht0 2448(%1,%%rcx,1)" & LF &
-               "prefetcht0 2512(%1,%%rcx,1)" & LF &
-               "prefetcht0 2576(%1,%%rcx,1)" & LF &
-               "prefetcht0 2640(%1,%%rcx,1)" & LF &
-               "prefetcht0 2704(%1,%%rcx,1)" & LF &
-               "prefetcht0 2768(%1,%%rcx,1)" & LF &
-               "prefetcht0 2832(%1,%%rcx,1)" & LF &
-               "prefetcht0 2896(%1,%%rcx,1)" & LF &
-               "prefetcht0 2960(%1,%%rcx,1)" & LF &
-               "prefetcht0 3024(%1,%%rcx,1)" & LF &
-               "prefetcht0 3088(%1,%%rcx,1)" & LF &
-               "prefetcht0 3152(%1,%%rcx,1)" & LF &
-               "prefetcht0 3216(%1,%%rcx,1)" & LF &
-               "prefetcht0 3280(%1,%%rcx,1)" & LF &
-               "prefetcht0 3344(%1,%%rcx,1)" & LF &
+               --  stream stops at each, and the first-level cache's few misses in
+               --  flight were too few to cover the memory's latency on one core.
+               "prefetcht1 8400(%1,%%rcx,1)" & LF &
+               "prefetcht1 8464(%1,%%rcx,1)" & LF &
+               "prefetcht1 8528(%1,%%rcx,1)" & LF &
+               "prefetcht1 8592(%1,%%rcx,1)" & LF &
+               "prefetcht1 8656(%1,%%rcx,1)" & LF &
+               "prefetcht1 8720(%1,%%rcx,1)" & LF &
+               "prefetcht1 8784(%1,%%rcx,1)" & LF &
+               "prefetcht1 8848(%1,%%rcx,1)" & LF &
+               "prefetcht1 8912(%1,%%rcx,1)" & LF &
+               "prefetcht1 8976(%1,%%rcx,1)" & LF &
+               "prefetcht1 9040(%1,%%rcx,1)" & LF &
+               "prefetcht1 9104(%1,%%rcx,1)" & LF &
+               "prefetcht1 9168(%1,%%rcx,1)" & LF &
+               "prefetcht1 9232(%1,%%rcx,1)" & LF &
+               "prefetcht1 9296(%1,%%rcx,1)" & LF &
+               "prefetcht1 9360(%1,%%rcx,1)" & LF &
+               "prefetcht1 9424(%1,%%rcx,1)" & LF &
+               "prefetcht1 9488(%1,%%rcx,1)" & LF &
+               "prefetcht1 9552(%1,%%rcx,1)" & LF &
+               "prefetcht1 9616(%1,%%rcx,1)" & LF &
+               "prefetcht1 9680(%1,%%rcx,1)" & LF &
+               "prefetcht1 9744(%1,%%rcx,1)" & LF &
+               "prefetcht1 9808(%1,%%rcx,1)" & LF &
+               "prefetcht1 9872(%1,%%rcx,1)" & LF &
+               "prefetcht1 9936(%1,%%rcx,1)" & LF &
+               "prefetcht1 10000(%1,%%rcx,1)" & LF &
+               "prefetcht1 10064(%1,%%rcx,1)" & LF &
                "vpxord %%ymm24, %%ymm24, %%ymm24" & LF &
                "vpxord %%ymm8, %%ymm8, %%ymm8" & LF &
                "vpxord %%ymm9, %%ymm9, %%ymm9" & LF &
@@ -4345,8 +4369,14 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "vpdpwssd 92(%3,%%rsi,1)%{1to8%}, %%ymm6, %%ymm16" & LF &
                "vcvtdq2ps %%ymm24, %%ymm26" & LF &
                "vcvtdq2ps %%ymm16, %%ymm27" & LF &
-               "vmulps 0(%3,%%rsi,1), %%ymm26, %%ymm26" & LF &
-               "vmulps 32(%3,%%rsi,1), %%ymm27, %%ymm27" & LF &
+               "vcvtph2ps 0(%1,%%rcx,1), %%ymm28" & LF &
+               "vmulps (%%r8)%{1to8%}, %%ymm28, %%ymm28" & LF &
+               "movl $0x42000000, %%r10d" & LF &
+               "vpbroadcastd %%r10d, %%ymm29" & LF &
+               "vmulps %%ymm29, %%ymm28, %%ymm29" & LF &
+               "vmulps %%ymm28, %%ymm26, %%ymm26" & LF &
+               "vmulps %%ymm29, %%ymm27, %%ymm27" & LF &
+               "addq $4, %%r8" & LF &
                "vsubps %%ymm27, %%ymm26, %%ymm26" & LF &
                "vaddps %%ymm26, %%ymm25, %%ymm25" & LF &
                "addq $1680, %%rcx" & LF &
@@ -4361,10 +4391,12 @@ package body Model_Runner.Quantization.Integers.Kernels is
                System.Address'Asm_Input
                  ("r", Values (Reading (0, 0))'Address),
                System.Address'Asm_Input ("r", Bands'Address),
-               Element_Count'Asm_Input ("r", Blocks)],
+               Element_Count'Asm_Input ("r", Blocks),
+               System.Address'Asm_Input ("r", Own_Scales'Address)],
             Clobber  =>
-              "rax,rcx,rdx,rsi,ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,"
-              & "ymm8,ymm9,ymm16,ymm17,ymm24,ymm25,ymm26,ymm27,memory",
+              "rax,rcx,rdx,rsi,r8,r10,ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,"
+              & "ymm8,ymm9,ymm16,ymm17,ymm24,ymm25,ymm26,ymm27,ymm28,ymm29,"
+              & "memory",
             Volatile => True);
 
          declare
@@ -4402,7 +4434,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
          --  The panel's block scale, widened eight rows at a time. The
          --  sub-block scales the kernel wants are signed bytes it reads
          --  itself, which is what the layout is for.
+         --  Not for one vector, whose insertion reads the halves itself.
          for Block in Element_Count range 0 .. Blocks - 1 loop
+            exit when Count = 1;
             System.Machine_Code.Asm
               (
                "vcvtph2ps 0(%1), %%ymm0" & LF &
@@ -4569,6 +4603,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
       is (Element_Count'Min (At_Vector + Vector, Count - 1));
 
       Places : Vector_Places;
+
+      --  Whether the one-vector table holds this call's vector already.
+      One_Table : Boolean := False;
 
       Base   : B.Byte_Index;
       At_Row : Element_Count;
@@ -5080,31 +5117,35 @@ package body Model_Runner.Quantization.Integers.Kernels is
          --  the eight minima likewise, and the four packed pairs of
          --  activation totals. Ninety-six bytes so that both halves of the
          --  scale land on a thirty-two byte boundary.
-         for Block in Element_Count range 0 .. Blocks - 1 loop
-            declare
-               At_Tot : constant Element_Count :=
-                 Places (0) + Block * Subs;
-               Scale  : constant N.Real :=
-                 Scales (Scales'First + At_Tot);
-               At_Band : constant Natural := Natural (Block) * 24;
-            begin
-               for Row in Element_Count range 0 .. Panel - 1 loop
-                  Bands (At_Band + Natural (Row)) :=
-                    Wholes (Natural (Block * Panel + Row)) * Scale;
-                  Bands (At_Band + 8 + Natural (Row)) :=
-                    Leasts (Natural (Block * Panel + Row)) * Scale;
-               end loop;
+         --  The vector's own part of the table -- its scale a block and
+         --  its packed pairs of totals -- made for the first panel of the
+         --  call and read by the rest. The rows' scale and minimum times
+         --  the vector's scale, which this table held for every panel, the
+         --  insertion now works out from the panel's own halves: the same
+         --  two products in the same order, so the same sums, where a
+         --  scalar pass a block a panel was a sixth of a token on one core.
+         if not One_Table then
+            for Block in Element_Count range 0 .. Blocks - 1 loop
+               declare
+                  At_Tot : constant Element_Count :=
+                    Places (0) + Block * Subs;
+                  At_Band : constant Natural := Natural (Block) * 24;
+               begin
+                  Bands (At_Band + 20) := Scales (Scales'First + At_Tot);
 
-               for Pair in 0 .. 3 loop
-                  Marks (At_Band + 16 + Pair) :=
-                    Paired
-                      (Totals (Totals'First + At_Tot
-                               + Element_Count (Pair) * 2),
-                       Totals (Totals'First + At_Tot
-                               + Element_Count (Pair) * 2 + 1));
-               end loop;
-            end;
-         end loop;
+                  for Pair in 0 .. 3 loop
+                     Marks (At_Band + 16 + Pair) :=
+                       Paired
+                         (Totals (Totals'First + At_Tot
+                                  + Element_Count (Pair) * 2),
+                          Totals (Totals'First + At_Tot
+                                  + Element_Count (Pair) * 2 + 1));
+                  end loop;
+               end;
+            end loop;
+
+            One_Table := True;
+         end if;
 
          System.Machine_Code.Asm
            (
@@ -5118,28 +5159,29 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "xorq %%rsi, %%rsi" & LF &
                "movq %4, %%rax" & LF &
                "2:" & LF &
-               --  The panel a block or two on, a kilobyte and a half or more ahead:
+               --  The panel some eight kilobytes on, into the second-level cache:
                --  the copy lies in pages of four kilobytes and the hardware's
-               --  stream stops at each, so a generated token waited on it.
-               "prefetcht0 2368(%1,%%rcx,1)" & LF &
-               "prefetcht0 2432(%1,%%rcx,1)" & LF &
-               "prefetcht0 2496(%1,%%rcx,1)" & LF &
-               "prefetcht0 2560(%1,%%rcx,1)" & LF &
-               "prefetcht0 2624(%1,%%rcx,1)" & LF &
-               "prefetcht0 2688(%1,%%rcx,1)" & LF &
-               "prefetcht0 2752(%1,%%rcx,1)" & LF &
-               "prefetcht0 2816(%1,%%rcx,1)" & LF &
-               "prefetcht0 2880(%1,%%rcx,1)" & LF &
-               "prefetcht0 2944(%1,%%rcx,1)" & LF &
-               "prefetcht0 3008(%1,%%rcx,1)" & LF &
-               "prefetcht0 3072(%1,%%rcx,1)" & LF &
-               "prefetcht0 3136(%1,%%rcx,1)" & LF &
-               "prefetcht0 3200(%1,%%rcx,1)" & LF &
-               "prefetcht0 3264(%1,%%rcx,1)" & LF &
-               "prefetcht0 3328(%1,%%rcx,1)" & LF &
-               "prefetcht0 3392(%1,%%rcx,1)" & LF &
-               "prefetcht0 3456(%1,%%rcx,1)" & LF &
-               "prefetcht0 3520(%1,%%rcx,1)" & LF &
+               --  stream stops at each, and the first-level cache's few misses in
+               --  flight were too few to cover the memory's latency on one core.
+               "prefetcht1 8288(%1,%%rcx,1)" & LF &
+               "prefetcht1 8352(%1,%%rcx,1)" & LF &
+               "prefetcht1 8416(%1,%%rcx,1)" & LF &
+               "prefetcht1 8480(%1,%%rcx,1)" & LF &
+               "prefetcht1 8544(%1,%%rcx,1)" & LF &
+               "prefetcht1 8608(%1,%%rcx,1)" & LF &
+               "prefetcht1 8672(%1,%%rcx,1)" & LF &
+               "prefetcht1 8736(%1,%%rcx,1)" & LF &
+               "prefetcht1 8800(%1,%%rcx,1)" & LF &
+               "prefetcht1 8864(%1,%%rcx,1)" & LF &
+               "prefetcht1 8928(%1,%%rcx,1)" & LF &
+               "prefetcht1 8992(%1,%%rcx,1)" & LF &
+               "prefetcht1 9056(%1,%%rcx,1)" & LF &
+               "prefetcht1 9120(%1,%%rcx,1)" & LF &
+               "prefetcht1 9184(%1,%%rcx,1)" & LF &
+               "prefetcht1 9248(%1,%%rcx,1)" & LF &
+               "prefetcht1 9312(%1,%%rcx,1)" & LF &
+               "prefetcht1 9376(%1,%%rcx,1)" & LF &
+               "prefetcht1 9440(%1,%%rcx,1)" & LF &
                "vpxord %%ymm24, %%ymm24, %%ymm24" & LF &
                "vpxord %%ymm8, %%ymm8, %%ymm8" & LF &
                "vpxord %%ymm9, %%ymm9, %%ymm9" & LF &
@@ -5436,8 +5478,12 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "vpdpwssd 76(%3,%%rsi,1)%{1to8%}, %%ymm7, %%ymm16" & LF &
                "vcvtdq2ps %%ymm24, %%ymm26" & LF &
                "vcvtdq2ps %%ymm16, %%ymm27" & LF &
-               "vmulps 0(%3,%%rsi,1), %%ymm26, %%ymm26" & LF &
-               "vmulps 32(%3,%%rsi,1), %%ymm27, %%ymm27" & LF &
+               "vcvtph2ps 0(%1,%%rcx,1), %%ymm28" & LF &
+               "vcvtph2ps 16(%1,%%rcx,1), %%ymm29" & LF &
+               "vmulps 80(%3,%%rsi,1)%{1to8%}, %%ymm28, %%ymm28" & LF &
+               "vmulps 80(%3,%%rsi,1)%{1to8%}, %%ymm29, %%ymm29" & LF &
+               "vmulps %%ymm28, %%ymm26, %%ymm26" & LF &
+               "vmulps %%ymm29, %%ymm27, %%ymm27" & LF &
                "vsubps %%ymm27, %%ymm26, %%ymm26" & LF &
                "vaddps %%ymm26, %%ymm25, %%ymm25" & LF &
                "addq $1184, %%rcx" & LF &
@@ -5456,7 +5502,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
             Clobber  =>
               "rax,rcx,rdx,rsi,ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,"
               & "ymm8,ymm9,ymm10,ymm11,ymm12,ymm13,ymm14,ymm15,"
-              & "ymm16,ymm24,ymm25,ymm26,ymm27,memory",
+              & "ymm16,ymm24,ymm25,ymm26,ymm27,ymm28,ymm29,memory",
             Volatile => True);
 
          declare
@@ -5495,7 +5541,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
          --  because that is how the panel holds them. This is the whole of
          --  what a panel costs before its first product; the sub-block
          --  scales the kernel wants are bytes it reads itself.
+         --  Not for one vector, whose insertion reads the halves itself.
          for Block in Element_Count range 0 .. Blocks - 1 loop
+            exit when Count = 1;
             System.Machine_Code.Asm
               (
                "vcvtph2ps 0(%2), %%ymm0" & LF &
@@ -5950,12 +5998,13 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "xorq %%rdx, %%rdx" & LF &
                   "movq %4, %%rcx" & LF &
                   "1:" & LF &
-                  --  The panel a block or two on, a kilobyte and a half or more ahead:
+                  --  The panel some eight kilobytes on, into the second-level cache:
                   --  the copy lies in pages of four kilobytes and the hardware's
-                  --  stream stops at each, so a generated token waited on it.
-                  "prefetcht0 1728(%%r11)" & LF &
-                  "prefetcht0 1792(%%r11)" & LF &
-                  "prefetcht0 1856(%%r11)" & LF &
+                  --  stream stops at each, and the first-level cache's few misses in
+                  --  flight were too few to cover the memory's latency on one core.
+                  "prefetcht1 8208(%%r11)" & LF &
+                  "prefetcht1 8272(%%r11)" & LF &
+                  "prefetcht1 8336(%%r11)" & LF &
                   "vcvtph2ps 0(%%r11), %%ymm4" & LF &
                   "vmovdqu 16(%%r11), %%ymm0" & LF &
                   "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
@@ -6441,12 +6490,13 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "xorq %%rdx, %%rdx" & LF &
                   "movq %4, %%rcx" & LF &
                   "1:" & LF &
-                  --  The panel a block or two on, a kilobyte and a half or more ahead:
+                  --  The panel some eight kilobytes on, into the second-level cache:
                   --  the copy lies in pages of four kilobytes and the hardware's
-                  --  stream stops at each, so a generated token waited on it.
-                  "prefetcht0 1600(%%r11)" & LF &
-                  "prefetcht0 1664(%%r11)" & LF &
-                  "prefetcht0 1728(%%r11)" & LF &
+                  --  stream stops at each, and the first-level cache's few misses in
+                  --  flight were too few to cover the memory's latency on one core.
+                  "prefetcht1 8320(%%r11)" & LF &
+                  "prefetcht1 8384(%%r11)" & LF &
+                  "prefetcht1 8448(%%r11)" & LF &
                   "vcvtph2ps 0(%%r11), %%ymm4" & LF &
                   "vcvtph2ps 16(%%r11), %%ymm7" & LF &
                   "vmovdqu 32(%%r11), %%ymm0" & LF &
@@ -6958,12 +7008,13 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "xorq %%rdx, %%rdx" & LF &
                   "movq %4, %%rcx" & LF &
                   "1:" & LF &
-                  --  The panel a block or two on, a kilobyte and a half or more ahead:
+                  --  The panel some eight kilobytes on, into the second-level cache:
                   --  the copy lies in pages of four kilobytes and the hardware's
-                  --  stream stops at each, so a generated token waited on it.
-                  "prefetcht0 1760(%%r11)" & LF &
-                  "prefetcht0 1824(%%r11)" & LF &
-                  "prefetcht0 1888(%%r11)" & LF &
+                  --  stream stops at each, and the first-level cache's few misses in
+                  --  flight were too few to cover the memory's latency on one core.
+                  "prefetcht1 8272(%%r11)" & LF &
+                  "prefetcht1 8336(%%r11)" & LF &
+                  "prefetcht1 8400(%%r11)" & LF &
                   "vcvtph2ps 0(%%r11), %%ymm4" & LF &
                   "vmovdqu 144(%%r11), %%ymm5" & LF &
                   "vmovdqu 16(%%r11), %%ymm0" & LF &
@@ -7472,12 +7523,13 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "xorq %%rdx, %%rdx" & LF &
                   "movq %4, %%rcx" & LF &
                   "1:" & LF &
-                  --  The panel a block or two on, a kilobyte and a half or more ahead:
+                  --  The panel some eight kilobytes on, into the second-level cache:
                   --  the copy lies in pages of four kilobytes and the hardware's
-                  --  stream stops at each, so a generated token waited on it.
-                  "prefetcht0 1728(%%r11)" & LF &
-                  "prefetcht0 1792(%%r11)" & LF &
-                  "prefetcht0 1856(%%r11)" & LF &
+                  --  stream stops at each, and the first-level cache's few misses in
+                  --  flight were too few to cover the memory's latency on one core.
+                  "prefetcht1 8256(%%r11)" & LF &
+                  "prefetcht1 8320(%%r11)" & LF &
+                  "prefetcht1 8384(%%r11)" & LF &
                   "vcvtph2ps 0(%%r11), %%ymm4" & LF &
                   "vcvtph2ps 16(%%r11), %%ymm7" & LF &
                   "vmovdqu 160(%%r11), %%ymm5" & LF &
@@ -9220,22 +9272,23 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "xorq %%rdx, %%rdx" & LF &
                   "movq %4, %%rcx" & LF &
                   "1:" & LF &
-                  --  The panel a block or two on, a kilobyte and a half or more ahead:
+                  --  The panel some eight kilobytes on, into the second-level cache:
                   --  the copy lies in pages of four kilobytes and the hardware's
-                  --  stream stops at each, so a generated token waited on it.
-                  "prefetcht0 1600(%%r11)" & LF &
-                  "prefetcht0 1664(%%r11)" & LF &
-                  "prefetcht0 1728(%%r11)" & LF &
-                  "prefetcht0 1792(%%r11)" & LF &
-                  "prefetcht0 1856(%%r11)" & LF &
-                  "prefetcht0 1920(%%r11)" & LF &
-                  "prefetcht0 1984(%%r11)" & LF &
-                  "prefetcht0 2048(%%r11)" & LF &
-                  "prefetcht0 2112(%%r11)" & LF &
-                  "prefetcht0 2176(%%r11)" & LF &
-                  "prefetcht0 2240(%%r11)" & LF &
-                  "prefetcht0 2304(%%r11)" & LF &
-                  "prefetcht0 2368(%%r11)" & LF &
+                  --  stream stops at each, and the first-level cache's few misses in
+                  --  flight were too few to cover the memory's latency on one core.
+                  "prefetcht1 8800(%%r11)" & LF &
+                  "prefetcht1 8864(%%r11)" & LF &
+                  "prefetcht1 8928(%%r11)" & LF &
+                  "prefetcht1 8992(%%r11)" & LF &
+                  "prefetcht1 9056(%%r11)" & LF &
+                  "prefetcht1 9120(%%r11)" & LF &
+                  "prefetcht1 9184(%%r11)" & LF &
+                  "prefetcht1 9248(%%r11)" & LF &
+                  "prefetcht1 9312(%%r11)" & LF &
+                  "prefetcht1 9376(%%r11)" & LF &
+                  "prefetcht1 9440(%%r11)" & LF &
+                  "prefetcht1 9504(%%r11)" & LF &
+                  "prefetcht1 9568(%%r11)" & LF &
                   "vpxord %%ymm8, %%ymm8, %%ymm8" & LF &
                   "vmovdqu 288(%%r11), %%ymm0" & LF &
                   "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
@@ -11392,24 +11445,25 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "xorq %%rdx, %%rdx" & LF &
                   "movq %4, %%rcx" & LF &
                   "1:" & LF &
-                  --  The panel a block or two on, a kilobyte and a half or more ahead:
+                  --  The panel some eight kilobytes on, into the second-level cache:
                   --  the copy lies in pages of four kilobytes and the hardware's
-                  --  stream stops at each, so a generated token waited on it.
-                  "prefetcht0 1824(%%r11)" & LF &
-                  "prefetcht0 1888(%%r11)" & LF &
-                  "prefetcht0 1952(%%r11)" & LF &
-                  "prefetcht0 2016(%%r11)" & LF &
-                  "prefetcht0 2080(%%r11)" & LF &
-                  "prefetcht0 2144(%%r11)" & LF &
-                  "prefetcht0 2208(%%r11)" & LF &
-                  "prefetcht0 2272(%%r11)" & LF &
-                  "prefetcht0 2336(%%r11)" & LF &
-                  "prefetcht0 2400(%%r11)" & LF &
-                  "prefetcht0 2464(%%r11)" & LF &
-                  "prefetcht0 2528(%%r11)" & LF &
-                  "prefetcht0 2592(%%r11)" & LF &
-                  "prefetcht0 2656(%%r11)" & LF &
-                  "prefetcht0 2720(%%r11)" & LF &
+                  --  stream stops at each, and the first-level cache's few misses in
+                  --  flight were too few to cover the memory's latency on one core.
+                  "prefetcht1 8208(%%r11)" & LF &
+                  "prefetcht1 8272(%%r11)" & LF &
+                  "prefetcht1 8336(%%r11)" & LF &
+                  "prefetcht1 8400(%%r11)" & LF &
+                  "prefetcht1 8464(%%r11)" & LF &
+                  "prefetcht1 8528(%%r11)" & LF &
+                  "prefetcht1 8592(%%r11)" & LF &
+                  "prefetcht1 8656(%%r11)" & LF &
+                  "prefetcht1 8720(%%r11)" & LF &
+                  "prefetcht1 8784(%%r11)" & LF &
+                  "prefetcht1 8848(%%r11)" & LF &
+                  "prefetcht1 8912(%%r11)" & LF &
+                  "prefetcht1 8976(%%r11)" & LF &
+                  "prefetcht1 9040(%%r11)" & LF &
+                  "prefetcht1 9104(%%r11)" & LF &
                   "vpxord %%ymm8, %%ymm8, %%ymm8" & LF &
                   "vmovdqu 144(%%r11), %%ymm0" & LF &
                   "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
@@ -12369,12 +12423,13 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "xorq %%rdx, %%rdx" & LF &
                   "movq %4, %%rcx" & LF &
                   "1:" & LF &
-                  --  The panel a block or two on, a kilobyte and a half or more ahead:
+                  --  The panel some eight kilobytes on, into the second-level cache:
                   --  the copy lies in pages of four kilobytes and the hardware's
-                  --  stream stops at each, so a generated token waited on it.
-                  "prefetcht0 1728(%%r11)" & LF &
-                  "prefetcht0 1792(%%r11)" & LF &
-                  "prefetcht0 1856(%%r11)" & LF &
+                  --  stream stops at each, and the first-level cache's few misses in
+                  --  flight were too few to cover the memory's latency on one core.
+                  "prefetcht1 8208(%%r11)" & LF &
+                  "prefetcht1 8272(%%r11)" & LF &
+                  "prefetcht1 8336(%%r11)" & LF &
                   "vcvtph2ps 0(%%r11), %%ymm4" & LF &
                   "vmovdqu 16(%%r11), %%ymm0" & LF &
                   "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
@@ -13851,27 +13906,28 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "xorq %%rdx, %%rdx" & LF &
                   "movq %4, %%rcx" & LF &
                   "1:" & LF &
-                  --  The panel a block or two on, a kilobyte and a half or more ahead:
+                  --  The panel some eight kilobytes on, into the second-level cache:
                   --  the copy lies in pages of four kilobytes and the hardware's
-                  --  stream stops at each, so a generated token waited on it.
-                  "prefetcht0 2208(%%r11)" & LF &
-                  "prefetcht0 2272(%%r11)" & LF &
-                  "prefetcht0 2336(%%r11)" & LF &
-                  "prefetcht0 2400(%%r11)" & LF &
-                  "prefetcht0 2464(%%r11)" & LF &
-                  "prefetcht0 2528(%%r11)" & LF &
-                  "prefetcht0 2592(%%r11)" & LF &
-                  "prefetcht0 2656(%%r11)" & LF &
-                  "prefetcht0 2720(%%r11)" & LF &
-                  "prefetcht0 2784(%%r11)" & LF &
-                  "prefetcht0 2848(%%r11)" & LF &
-                  "prefetcht0 2912(%%r11)" & LF &
-                  "prefetcht0 2976(%%r11)" & LF &
-                  "prefetcht0 3040(%%r11)" & LF &
-                  "prefetcht0 3104(%%r11)" & LF &
-                  "prefetcht0 3168(%%r11)" & LF &
-                  "prefetcht0 3232(%%r11)" & LF &
-                  "prefetcht0 3296(%%r11)" & LF &
+                  --  stream stops at each, and the first-level cache's few misses in
+                  --  flight were too few to cover the memory's latency on one core.
+                  "prefetcht1 8832(%%r11)" & LF &
+                  "prefetcht1 8896(%%r11)" & LF &
+                  "prefetcht1 8960(%%r11)" & LF &
+                  "prefetcht1 9024(%%r11)" & LF &
+                  "prefetcht1 9088(%%r11)" & LF &
+                  "prefetcht1 9152(%%r11)" & LF &
+                  "prefetcht1 9216(%%r11)" & LF &
+                  "prefetcht1 9280(%%r11)" & LF &
+                  "prefetcht1 9344(%%r11)" & LF &
+                  "prefetcht1 9408(%%r11)" & LF &
+                  "prefetcht1 9472(%%r11)" & LF &
+                  "prefetcht1 9536(%%r11)" & LF &
+                  "prefetcht1 9600(%%r11)" & LF &
+                  "prefetcht1 9664(%%r11)" & LF &
+                  "prefetcht1 9728(%%r11)" & LF &
+                  "prefetcht1 9792(%%r11)" & LF &
+                  "prefetcht1 9856(%%r11)" & LF &
+                  "prefetcht1 9920(%%r11)" & LF &
                   "vpxord %%ymm8, %%ymm8, %%ymm8" & LF &
                   "vmovdqu 80(%%r11), %%ymm0" & LF &
                   "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
@@ -14730,12 +14786,13 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "xorq %%rdx, %%rdx" & LF &
                   "movq %4, %%rcx" & LF &
                   "1:" & LF &
-                  --  The panel a block or two on, a kilobyte and a half or more ahead:
+                  --  The panel some eight kilobytes on, into the second-level cache:
                   --  the copy lies in pages of four kilobytes and the hardware's
-                  --  stream stops at each, so a generated token waited on it.
-                  "prefetcht0 1632(%%r11)" & LF &
-                  "prefetcht0 1696(%%r11)" & LF &
-                  "prefetcht0 1760(%%r11)" & LF &
+                  --  stream stops at each, and the first-level cache's few misses in
+                  --  flight were too few to cover the memory's latency on one core.
+                  "prefetcht1 8296(%%r11)" & LF &
+                  "prefetcht1 8360(%%r11)" & LF &
+                  "prefetcht1 8424(%%r11)" & LF &
                   "vpmovzxbd 0(%%r11), %%ymm4" & LF &
                   "vpsllvd %%ymm4, %%ymm10, %%ymm11" & LF &
                   "vpsubd %%ymm8, %%ymm4, %%ymm5" & LF &

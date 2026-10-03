@@ -83,6 +83,16 @@ package Model_Runner.Platform.Device is
    --  @return True for a discrete device.
    function Is_Discrete (Item : Inventory; Index : Positive) return Boolean;
 
+   --  Whether a device is the processor itself behind the interface -- a
+   --  software rasterizer such as llvmpipe, which a host lists beside its
+   --  real device and on which everything is computed, slowly, on the
+   --  processor's cores.
+   --
+   --  @param Item Inventory to inspect.
+   --  @param Index Device number, from one.
+   --  @return True for a device of the CPU kind.
+   function Is_Software (Item : Inventory; Index : Positive) return Boolean;
+
    --  An open device: something that can be given work.
    --
    --  Opening one asks the host for a queue that accepts compute, and finds
@@ -356,6 +366,7 @@ private
       Used     : Natural := 0;
       Names    : Name_List;
       Discrete : Discrete_List := [others => False];
+      Software : Discrete_List := [others => False];
 
       --  The host's own handle for each device, kept so that one of them
       --  can be opened afterwards.

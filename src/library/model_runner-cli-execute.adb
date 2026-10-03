@@ -1856,8 +1856,12 @@ package body Model_Runner.CLI.Execute is
             Add (Devices.Name (Held, Index));
 
             --  Whether it has its own memory, because that is what decides
-            --  whether moving a model to it costs anything.
-            Add ((if Devices.Is_Discrete (Held, Index)
+            --  whether moving a model to it costs anything -- or is the
+            --  processor itself behind the interface, a software rasterizer
+            --  a host lists beside its real device, which is neither.
+            Add ((if Devices.Is_Software (Held, Index)
+                  then " (software)"
+                  elsif Devices.Is_Discrete (Held, Index)
                   then " (discrete)"
                   else " (integrated)"));
          end loop;

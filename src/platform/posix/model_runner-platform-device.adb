@@ -153,6 +153,7 @@ package body Model_Runner.Platform.Device is
    Offset_Timestamp_Period   : constant := Offset_Limits + 424;
 
    Device_Kind_Discrete : constant := 2;
+   Device_Kind_Processor : constant := 4;
 
    --  Queue families and devices, which is the rest of what opening one
    --  needs. A queue family is a group of queues that accept the same kinds
@@ -709,6 +710,7 @@ package body Model_Runner.Platform.Device is
                   Last : Natural := 0;
                begin
                   Item.Discrete (Index) := Kind = Device_Kind_Discrete;
+                  Item.Software (Index) := Kind = Device_Kind_Processor;
 
                   --  The name is a run of bytes ending at the first zero.
                   while Last < Max_Name_Bytes
@@ -787,6 +789,11 @@ package body Model_Runner.Platform.Device is
    begin
       return Index <= Item.Used and then Item.Discrete (Index);
    end Is_Discrete;
+
+   function Is_Software (Item : Inventory; Index : Positive) return Boolean is
+   begin
+      return Index <= Item.Used and then Item.Software (Index);
+   end Is_Software;
 
    ---------------------------------------------------------------------------
    --  An open device

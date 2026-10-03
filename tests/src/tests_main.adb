@@ -937,6 +937,14 @@ begin
          --  long ones twice, and a bound set from a single reading is a
          --  bound set from the best of them.
          --
+         --  Read again on 2026-10-03, the two short ones having outgrown
+         --  theirs unnoticed -- they failed only on a quiet machine, and the
+         --  machine running them was seldom quiet: the suite 45.95 and
+         --  44.77 (531 tests, from the hundred-odd of August; it read 150
+         --  until Device_Product_Matches_The_Processor stopped compiling
+         --  every kernel on the software rasterizer listed beside the real
+         --  device), the repository checks 61.56, 61.57, 61.93 and 64.46.
+         --
          --  Where a host reports no processor time none of this is held at
          --  all. Host_Load reads /proc/self/stat, so that is every host but
          --  one family of them. Asking the system instead -- getrusage is
@@ -1101,12 +1109,12 @@ begin
          --  because AUnit prints nothing until it is finished and a timeout
          --  shorter than the stage looks exactly like one.
          --
-         --  Eight seconds, and sixty as the bound. It was twenty-eight
-         --  minutes until the conformance sweep stopped being run from
-         --  inside it as well as beside it; a bound of sixty says loudly if
-         --  anything of that size is put back.
+         --  It was twenty-eight minutes until the conformance sweep stopped
+         --  being run from inside it as well as beside it; the bound, set
+         --  from its readings above, says loudly if anything of that size
+         --  is put back.
          if not Repository_Only then
-            Report_Stage ("suite", 20.0);
+            Report_Stage ("suite", 140.0);
          end if;
 
          --  What each half of the gate costs, said as it goes. The gate
@@ -1117,7 +1125,7 @@ begin
          Started := Ada.Calendar.Clock;
 
          Checks.Run (Root, Result, Record_Warnings => Recording);
-         Report_Stage ("repository checks", 60.0);
+         Report_Stage ("repository checks", 195.0);
          Failed := Failed or else not Checks.Is_Clean (Result);
 
          --  The gate runs the two things that were commands somebody had to

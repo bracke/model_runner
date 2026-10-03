@@ -661,6 +661,14 @@ package body Tests.CLI_Cases is
             Engine : Products.Engine;
             Ready  : Boolean;
          begin
+            --  Not a software rasterizer listed beside the real device:
+            --  compiling every kernel on llvmpipe was half of the suite's
+            --  time, a hundred seconds, and it is the processor checked
+            --  against itself.
+            if Devices.Is_Software (Held, Which) then
+               goto Next_Device;
+            end if;
+
             Devices.Open (Opened, Held, Which, Ready);
 
             if Ready then
@@ -1588,6 +1596,9 @@ package body Tests.CLI_Cases is
             Products.Close (Engine);
             Devices.Close (Opened);
          end;
+
+         <<Next_Device>>
+         null;
       end loop;
 
       Devices.Close (Held);
