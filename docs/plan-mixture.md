@@ -1,5 +1,32 @@
 # Closing the mixture's gap to llama.cpp
 
+**Closed. Kept as a record of the investigation, not as a plan.** Where
+things stand on 2026-10-03, against llama.cpp on the same host, every
+comparison processor-only with the device hidden (`GGML_VK_VISIBLE_DEVICES=""
+llama-bench -ngl 0`) -- the 3.6 below was llama.cpp sending its large
+batches to the device despite `-ngl 0`:
+
+| | this program | llama.cpp | |
+| --- | ---: | ---: | --- |
+| Qwen3-Coder-30B-A3B Q2_K, processor, 1234 prompt | 78-80 t/s | 70.4 | ahead |
+| Qwen3-Coder-30B-A3B Q2_K, processor, generating | 30.0-30.5 | 30.65 | 1.3 per cent behind |
+| Qwen3-30B-A3B, device, generating | 35.6 | 32.5 | ahead |
+| TinyLlama Q4_K_M, processor, generating | 68.9 | 68.7 | level |
+| qwen3-8b Q4_K_M, processor, generating | 9.75 | 9.79 | level |
+
+Each section below says what became of it: §0 built, §1 not needed (the
+gap it priced was the measurement's), §2 done (the two- and three-bit row
+products at llama.cpp's rate), §3 done (split-K attention since cba83208,
+the half-precision cache at llama.cpp's rate after a thousand positions,
+paged on the device, and the default since afe8b48a). What closed the
+processor's generation was bytes rather than scheduling: panels at the
+file's size for Q2_K, Q4_K and Q5_K (`docs/measured-figures.txt`,
+2026-10-03, with every scheduling lever that was tried and refused).
+
+What follows is the plan as it was written on 2026-09-11.
+
+---
+
 Where this program stands against llama.cpp `95b8e33e1` on this host
 (Ryzen 7 7840U, Radeon 780M, 30 GB), measured 2026-09-11:
 
