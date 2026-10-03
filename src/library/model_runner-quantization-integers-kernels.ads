@@ -162,4 +162,38 @@ package Model_Runner.Quantization.Integers.Kernels is
       Earlier : out Interfaces.Integer_32;
       Total   : out Interfaces.Integer_32);
 
+   --  Sums of a super-block's eight blocks: block B's first sixteen at 2B,
+   --  all thirty-two at 2B + 1.
+   type Block_Sums is array (0 .. 15) of Interfaces.Integer_32;
+
+   --  The largest magnitude in a super-block of 256, and whether all of it
+   --  is finite: the eight blocks' Block_Extent in one pass.
+   --
+   --  @param Vectors Activations to read.
+   --  @param At_It First element of the super-block, from Vectors'First.
+   --  @param Largest Receives the largest magnitude.
+   --  @param Finite Receives whether every element is finite.
+   procedure Super_Extent
+     (Vectors : Model_Runner.Numerics.Real_Array;
+      At_It   : Element_Count;
+      Largest : out Model_Runner.Numerics.Real;
+      Finite  : out Boolean);
+
+   --  A super-block's eight blocks rounded against one scale: Block_Round
+   --  eight times over, its constants made once.
+   --
+   --  @param Vectors Activations to read.
+   --  @param At_It First element of the super-block, from Vectors'First.
+   --  @param Inverse One over the scale, or zero for a block of zeros.
+   --  @param Values Receives 256 bytes from At_Out.
+   --  @param At_Out First byte of the super-block, from Values'First.
+   --  @param Sums Receives each block's two sums.
+   procedure Super_Round
+     (Vectors : Model_Runner.Numerics.Real_Array;
+      At_It   : Element_Count;
+      Inverse : Model_Runner.Numerics.Real;
+      Values  : in out Signed_Array;
+      At_Out  : Element_Count;
+      Sums    : out Block_Sums);
+
 end Model_Runner.Quantization.Integers.Kernels;

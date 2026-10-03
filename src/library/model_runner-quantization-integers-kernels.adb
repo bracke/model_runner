@@ -19783,4 +19783,528 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Total := Whole;
    end Block_Round;
 
+   ------------------
+   -- Super_Extent --
+   ------------------
+
+   --  The magnitudes' bits compared as unsigned integers: a non-negative
+   --  binary32 orders as its bit pattern does, so the largest pattern is
+   --  the largest magnitude, and one at or above an infinity's says the
+   --  super-block holds an infinity or a NaN -- the extent and the
+   --  finiteness test in one reduction.
+   procedure Super_Extent
+     (Vectors : Model_Runner.Numerics.Real_Array;
+      At_It   : Element_Count;
+      Largest : out Model_Runner.Numerics.Real;
+      Finite  : out Boolean)
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      function To_Real is new Ada.Unchecked_Conversion
+        (Interfaces.Unsigned_32, Model_Runner.Numerics.Real);
+
+      At_Value : constant System.Address :=
+        Vectors (Vectors'First + At_It)'Address;
+      Top      : Interfaces.Unsigned_32 := 0;
+      Ignored  : Interfaces.Unsigned_32 := 0;
+   begin
+      --  Only the deep compilation has these registers; the others never
+      --  call this, and the static test leaves them no instruction to
+      --  reject.
+      if not Deep then
+         Largest := 0.0;
+         Finite := False;
+         return;
+      end if;
+
+      System.Machine_Code.Asm
+        ("movl $0x7fffffff, %%eax" & LF
+         & "vpbroadcastd %%eax, %%zmm16" & LF
+         & "vpandd 0(%2), %%zmm16, %%zmm0" & LF
+         & "vpandd 64(%2), %%zmm16, %%zmm1" & LF
+         & "vpandd 128(%2), %%zmm16, %%zmm2" & LF
+         & "vpandd 192(%2), %%zmm16, %%zmm3" & LF
+         & "vpandd 256(%2), %%zmm16, %%zmm4" & LF
+         & "vpandd 320(%2), %%zmm16, %%zmm5" & LF
+         & "vpandd 384(%2), %%zmm16, %%zmm6" & LF
+         & "vpandd 448(%2), %%zmm16, %%zmm7" & LF
+         & "vpandd 512(%2), %%zmm16, %%zmm8" & LF
+         & "vpandd 576(%2), %%zmm16, %%zmm9" & LF
+         & "vpandd 640(%2), %%zmm16, %%zmm10" & LF
+         & "vpandd 704(%2), %%zmm16, %%zmm11" & LF
+         & "vpandd 768(%2), %%zmm16, %%zmm12" & LF
+         & "vpandd 832(%2), %%zmm16, %%zmm13" & LF
+         & "vpandd 896(%2), %%zmm16, %%zmm14" & LF
+         & "vpandd 960(%2), %%zmm16, %%zmm15" & LF
+         & "vpmaxud %%zmm8, %%zmm0, %%zmm0" & LF
+         & "vpmaxud %%zmm9, %%zmm1, %%zmm1" & LF
+         & "vpmaxud %%zmm10, %%zmm2, %%zmm2" & LF
+         & "vpmaxud %%zmm11, %%zmm3, %%zmm3" & LF
+         & "vpmaxud %%zmm12, %%zmm4, %%zmm4" & LF
+         & "vpmaxud %%zmm13, %%zmm5, %%zmm5" & LF
+         & "vpmaxud %%zmm14, %%zmm6, %%zmm6" & LF
+         & "vpmaxud %%zmm15, %%zmm7, %%zmm7" & LF
+         & "vpmaxud %%zmm4, %%zmm0, %%zmm0" & LF
+         & "vpmaxud %%zmm5, %%zmm1, %%zmm1" & LF
+         & "vpmaxud %%zmm6, %%zmm2, %%zmm2" & LF
+         & "vpmaxud %%zmm7, %%zmm3, %%zmm3" & LF
+         & "vpmaxud %%zmm2, %%zmm0, %%zmm0" & LF
+         & "vpmaxud %%zmm3, %%zmm1, %%zmm1" & LF
+         & "vpmaxud %%zmm1, %%zmm0, %%zmm0" & LF
+         & "vextracti64x4 $1, %%zmm0, %%ymm1" & LF
+         & "vpmaxud %%ymm1, %%ymm0, %%ymm0" & LF
+         & "vextracti128 $1, %%ymm0, %%xmm1" & LF
+         & "vpmaxud %%xmm1, %%xmm0, %%xmm0" & LF
+         & "vpshufd $0x4E, %%xmm0, %%xmm1" & LF
+         & "vpmaxud %%xmm1, %%xmm0, %%xmm0" & LF
+         & "vpshufd $0xB1, %%xmm0, %%xmm1" & LF
+         & "vpmaxud %%xmm1, %%xmm0, %%xmm0" & LF
+         & "vmovd %%xmm0, %0" & LF
+         & "vzeroupper",
+         Outputs =>
+           [Interfaces.Unsigned_32'Asm_Output ("=m", Top),
+            Interfaces.Unsigned_32'Asm_Output ("=m", Ignored)],
+         Inputs   => [System.Address'Asm_Input ("r", At_Value)],
+         Clobber  =>
+           "rax,zmm0,zmm1,zmm2,zmm3,zmm4,zmm5,zmm6,zmm7,zmm8,zmm9,zmm10,"
+           & "zmm11,zmm12,zmm13,zmm14,zmm15,zmm16,cc,memory",
+         Volatile => True);
+
+      Finite := Interfaces."<" (Top, 16#7F80_0000#);
+      Largest := (if Finite then To_Real (Top) else 0.0);
+   end Super_Extent;
+
+   -----------------
+   -- Super_Round --
+   -----------------
+
+   procedure Super_Round
+     (Vectors : Model_Runner.Numerics.Real_Array;
+      At_It   : Element_Count;
+      Inverse : Model_Runner.Numerics.Real;
+      Values  : in out Signed_Array;
+      At_Out  : Element_Count;
+      Sums    : out Block_Sums)
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      At_Value : constant System.Address :=
+        Vectors (Vectors'First + At_It)'Address;
+      At_Byte  : constant System.Address :=
+        Values (Values'First + At_Out)'Address;
+
+      Held : aliased constant Model_Runner.Numerics.Real := Inverse;
+   begin
+      Sums := [others => 0];
+
+      if not Deep then
+         return;
+      end if;
+
+      System.Machine_Code.Asm
+        ("vbroadcastss %3, %%zmm6" & LF
+         & "movl $0x3f000000, %%eax" & LF
+         & "vpbroadcastd %%eax, %%zmm5" & LF
+         & "movl $0x3f800000, %%eax" & LF
+         & "vpbroadcastd %%eax, %%zmm4" & LF
+         & "movl $0x80000000, %%eax" & LF
+         & "vpbroadcastd %%eax, %%zmm10" & LF
+         & "movl $0x7fffffff, %%eax" & LF
+         & "vpbroadcastd %%eax, %%zmm7" & LF
+         & "movl $0x42fe0000, %%eax" & LF
+         & "vpbroadcastd %%eax, %%zmm13" & LF
+         & "movl $0xc2fe0000, %%eax" & LF
+         & "vpbroadcastd %%eax, %%zmm14" & LF
+         & "vmovups 0(%0), %%zmm0" & LF
+         & "vmovups 64(%0), %%zmm1" & LF
+         & "vmulps %%zmm6, %%zmm0, %%zmm0" & LF
+         & "vmulps %%zmm6, %%zmm1, %%zmm1" & LF
+         & "vrndscaleps $0x0B, %%zmm0, %%zmm2" & LF
+         & "vrndscaleps $0x0B, %%zmm1, %%zmm3" & LF
+         & "vsubps %%zmm2, %%zmm0, %%zmm8" & LF
+         & "vsubps %%zmm3, %%zmm1, %%zmm9" & LF
+         & "vandps %%zmm7, %%zmm8, %%zmm8" & LF
+         & "vandps %%zmm7, %%zmm9, %%zmm9" & LF
+         & "vandps %%zmm10, %%zmm0, %%zmm11" & LF
+         & "vandps %%zmm10, %%zmm1, %%zmm12" & LF
+         & "vorps %%zmm4, %%zmm11, %%zmm11" & LF
+         & "vorps %%zmm4, %%zmm12, %%zmm12" & LF
+         & "vcmpps $0x1D, %%zmm5, %%zmm8, %%k1" & LF
+         & "vaddps %%zmm11, %%zmm2, %%zmm2%{%%k1%}" & LF
+         & "vcmpps $0x1D, %%zmm5, %%zmm9, %%k1" & LF
+         & "vaddps %%zmm12, %%zmm3, %%zmm3%{%%k1%}" & LF
+         & "vminps %%zmm13, %%zmm2, %%zmm2" & LF
+         & "vminps %%zmm13, %%zmm3, %%zmm3" & LF
+         & "vmaxps %%zmm14, %%zmm2, %%zmm2" & LF
+         & "vmaxps %%zmm14, %%zmm3, %%zmm3" & LF
+         & "vcvttps2dq %%zmm2, %%zmm2" & LF
+         & "vcvttps2dq %%zmm3, %%zmm3" & LF
+         & "vpmovsdb %%zmm2, 0(%1)" & LF
+         & "vpmovsdb %%zmm3, 16(%1)" & LF
+         & "vextracti64x4 $1, %%zmm2, %%ymm15" & LF
+         & "vpaddd %%ymm15, %%ymm2, %%ymm15" & LF
+         & "vextracti128 $1, %%ymm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0x4E, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0xB1, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vmovd %%xmm15, %%eax" & LF
+         & "movl %%eax, 0(%2)" & LF
+         & "vextracti64x4 $1, %%zmm3, %%ymm15" & LF
+         & "vpaddd %%ymm15, %%ymm3, %%ymm15" & LF
+         & "vextracti128 $1, %%ymm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0x4E, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0xB1, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vmovd %%xmm15, %%edx" & LF
+         & "addl %%edx, %%eax" & LF
+         & "movl %%eax, 4(%2)" & LF
+         & "vmovups 128(%0), %%zmm0" & LF
+         & "vmovups 192(%0), %%zmm1" & LF
+         & "vmulps %%zmm6, %%zmm0, %%zmm0" & LF
+         & "vmulps %%zmm6, %%zmm1, %%zmm1" & LF
+         & "vrndscaleps $0x0B, %%zmm0, %%zmm2" & LF
+         & "vrndscaleps $0x0B, %%zmm1, %%zmm3" & LF
+         & "vsubps %%zmm2, %%zmm0, %%zmm8" & LF
+         & "vsubps %%zmm3, %%zmm1, %%zmm9" & LF
+         & "vandps %%zmm7, %%zmm8, %%zmm8" & LF
+         & "vandps %%zmm7, %%zmm9, %%zmm9" & LF
+         & "vandps %%zmm10, %%zmm0, %%zmm11" & LF
+         & "vandps %%zmm10, %%zmm1, %%zmm12" & LF
+         & "vorps %%zmm4, %%zmm11, %%zmm11" & LF
+         & "vorps %%zmm4, %%zmm12, %%zmm12" & LF
+         & "vcmpps $0x1D, %%zmm5, %%zmm8, %%k1" & LF
+         & "vaddps %%zmm11, %%zmm2, %%zmm2%{%%k1%}" & LF
+         & "vcmpps $0x1D, %%zmm5, %%zmm9, %%k1" & LF
+         & "vaddps %%zmm12, %%zmm3, %%zmm3%{%%k1%}" & LF
+         & "vminps %%zmm13, %%zmm2, %%zmm2" & LF
+         & "vminps %%zmm13, %%zmm3, %%zmm3" & LF
+         & "vmaxps %%zmm14, %%zmm2, %%zmm2" & LF
+         & "vmaxps %%zmm14, %%zmm3, %%zmm3" & LF
+         & "vcvttps2dq %%zmm2, %%zmm2" & LF
+         & "vcvttps2dq %%zmm3, %%zmm3" & LF
+         & "vpmovsdb %%zmm2, 32(%1)" & LF
+         & "vpmovsdb %%zmm3, 48(%1)" & LF
+         & "vextracti64x4 $1, %%zmm2, %%ymm15" & LF
+         & "vpaddd %%ymm15, %%ymm2, %%ymm15" & LF
+         & "vextracti128 $1, %%ymm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0x4E, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0xB1, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vmovd %%xmm15, %%eax" & LF
+         & "movl %%eax, 8(%2)" & LF
+         & "vextracti64x4 $1, %%zmm3, %%ymm15" & LF
+         & "vpaddd %%ymm15, %%ymm3, %%ymm15" & LF
+         & "vextracti128 $1, %%ymm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0x4E, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0xB1, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vmovd %%xmm15, %%edx" & LF
+         & "addl %%edx, %%eax" & LF
+         & "movl %%eax, 12(%2)" & LF
+         & "vmovups 256(%0), %%zmm0" & LF
+         & "vmovups 320(%0), %%zmm1" & LF
+         & "vmulps %%zmm6, %%zmm0, %%zmm0" & LF
+         & "vmulps %%zmm6, %%zmm1, %%zmm1" & LF
+         & "vrndscaleps $0x0B, %%zmm0, %%zmm2" & LF
+         & "vrndscaleps $0x0B, %%zmm1, %%zmm3" & LF
+         & "vsubps %%zmm2, %%zmm0, %%zmm8" & LF
+         & "vsubps %%zmm3, %%zmm1, %%zmm9" & LF
+         & "vandps %%zmm7, %%zmm8, %%zmm8" & LF
+         & "vandps %%zmm7, %%zmm9, %%zmm9" & LF
+         & "vandps %%zmm10, %%zmm0, %%zmm11" & LF
+         & "vandps %%zmm10, %%zmm1, %%zmm12" & LF
+         & "vorps %%zmm4, %%zmm11, %%zmm11" & LF
+         & "vorps %%zmm4, %%zmm12, %%zmm12" & LF
+         & "vcmpps $0x1D, %%zmm5, %%zmm8, %%k1" & LF
+         & "vaddps %%zmm11, %%zmm2, %%zmm2%{%%k1%}" & LF
+         & "vcmpps $0x1D, %%zmm5, %%zmm9, %%k1" & LF
+         & "vaddps %%zmm12, %%zmm3, %%zmm3%{%%k1%}" & LF
+         & "vminps %%zmm13, %%zmm2, %%zmm2" & LF
+         & "vminps %%zmm13, %%zmm3, %%zmm3" & LF
+         & "vmaxps %%zmm14, %%zmm2, %%zmm2" & LF
+         & "vmaxps %%zmm14, %%zmm3, %%zmm3" & LF
+         & "vcvttps2dq %%zmm2, %%zmm2" & LF
+         & "vcvttps2dq %%zmm3, %%zmm3" & LF
+         & "vpmovsdb %%zmm2, 64(%1)" & LF
+         & "vpmovsdb %%zmm3, 80(%1)" & LF
+         & "vextracti64x4 $1, %%zmm2, %%ymm15" & LF
+         & "vpaddd %%ymm15, %%ymm2, %%ymm15" & LF
+         & "vextracti128 $1, %%ymm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0x4E, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0xB1, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vmovd %%xmm15, %%eax" & LF
+         & "movl %%eax, 16(%2)" & LF
+         & "vextracti64x4 $1, %%zmm3, %%ymm15" & LF
+         & "vpaddd %%ymm15, %%ymm3, %%ymm15" & LF
+         & "vextracti128 $1, %%ymm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0x4E, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0xB1, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vmovd %%xmm15, %%edx" & LF
+         & "addl %%edx, %%eax" & LF
+         & "movl %%eax, 20(%2)" & LF
+         & "vmovups 384(%0), %%zmm0" & LF
+         & "vmovups 448(%0), %%zmm1" & LF
+         & "vmulps %%zmm6, %%zmm0, %%zmm0" & LF
+         & "vmulps %%zmm6, %%zmm1, %%zmm1" & LF
+         & "vrndscaleps $0x0B, %%zmm0, %%zmm2" & LF
+         & "vrndscaleps $0x0B, %%zmm1, %%zmm3" & LF
+         & "vsubps %%zmm2, %%zmm0, %%zmm8" & LF
+         & "vsubps %%zmm3, %%zmm1, %%zmm9" & LF
+         & "vandps %%zmm7, %%zmm8, %%zmm8" & LF
+         & "vandps %%zmm7, %%zmm9, %%zmm9" & LF
+         & "vandps %%zmm10, %%zmm0, %%zmm11" & LF
+         & "vandps %%zmm10, %%zmm1, %%zmm12" & LF
+         & "vorps %%zmm4, %%zmm11, %%zmm11" & LF
+         & "vorps %%zmm4, %%zmm12, %%zmm12" & LF
+         & "vcmpps $0x1D, %%zmm5, %%zmm8, %%k1" & LF
+         & "vaddps %%zmm11, %%zmm2, %%zmm2%{%%k1%}" & LF
+         & "vcmpps $0x1D, %%zmm5, %%zmm9, %%k1" & LF
+         & "vaddps %%zmm12, %%zmm3, %%zmm3%{%%k1%}" & LF
+         & "vminps %%zmm13, %%zmm2, %%zmm2" & LF
+         & "vminps %%zmm13, %%zmm3, %%zmm3" & LF
+         & "vmaxps %%zmm14, %%zmm2, %%zmm2" & LF
+         & "vmaxps %%zmm14, %%zmm3, %%zmm3" & LF
+         & "vcvttps2dq %%zmm2, %%zmm2" & LF
+         & "vcvttps2dq %%zmm3, %%zmm3" & LF
+         & "vpmovsdb %%zmm2, 96(%1)" & LF
+         & "vpmovsdb %%zmm3, 112(%1)" & LF
+         & "vextracti64x4 $1, %%zmm2, %%ymm15" & LF
+         & "vpaddd %%ymm15, %%ymm2, %%ymm15" & LF
+         & "vextracti128 $1, %%ymm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0x4E, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0xB1, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vmovd %%xmm15, %%eax" & LF
+         & "movl %%eax, 24(%2)" & LF
+         & "vextracti64x4 $1, %%zmm3, %%ymm15" & LF
+         & "vpaddd %%ymm15, %%ymm3, %%ymm15" & LF
+         & "vextracti128 $1, %%ymm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0x4E, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0xB1, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vmovd %%xmm15, %%edx" & LF
+         & "addl %%edx, %%eax" & LF
+         & "movl %%eax, 28(%2)" & LF
+         & "vmovups 512(%0), %%zmm0" & LF
+         & "vmovups 576(%0), %%zmm1" & LF
+         & "vmulps %%zmm6, %%zmm0, %%zmm0" & LF
+         & "vmulps %%zmm6, %%zmm1, %%zmm1" & LF
+         & "vrndscaleps $0x0B, %%zmm0, %%zmm2" & LF
+         & "vrndscaleps $0x0B, %%zmm1, %%zmm3" & LF
+         & "vsubps %%zmm2, %%zmm0, %%zmm8" & LF
+         & "vsubps %%zmm3, %%zmm1, %%zmm9" & LF
+         & "vandps %%zmm7, %%zmm8, %%zmm8" & LF
+         & "vandps %%zmm7, %%zmm9, %%zmm9" & LF
+         & "vandps %%zmm10, %%zmm0, %%zmm11" & LF
+         & "vandps %%zmm10, %%zmm1, %%zmm12" & LF
+         & "vorps %%zmm4, %%zmm11, %%zmm11" & LF
+         & "vorps %%zmm4, %%zmm12, %%zmm12" & LF
+         & "vcmpps $0x1D, %%zmm5, %%zmm8, %%k1" & LF
+         & "vaddps %%zmm11, %%zmm2, %%zmm2%{%%k1%}" & LF
+         & "vcmpps $0x1D, %%zmm5, %%zmm9, %%k1" & LF
+         & "vaddps %%zmm12, %%zmm3, %%zmm3%{%%k1%}" & LF
+         & "vminps %%zmm13, %%zmm2, %%zmm2" & LF
+         & "vminps %%zmm13, %%zmm3, %%zmm3" & LF
+         & "vmaxps %%zmm14, %%zmm2, %%zmm2" & LF
+         & "vmaxps %%zmm14, %%zmm3, %%zmm3" & LF
+         & "vcvttps2dq %%zmm2, %%zmm2" & LF
+         & "vcvttps2dq %%zmm3, %%zmm3" & LF
+         & "vpmovsdb %%zmm2, 128(%1)" & LF
+         & "vpmovsdb %%zmm3, 144(%1)" & LF
+         & "vextracti64x4 $1, %%zmm2, %%ymm15" & LF
+         & "vpaddd %%ymm15, %%ymm2, %%ymm15" & LF
+         & "vextracti128 $1, %%ymm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0x4E, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0xB1, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vmovd %%xmm15, %%eax" & LF
+         & "movl %%eax, 32(%2)" & LF
+         & "vextracti64x4 $1, %%zmm3, %%ymm15" & LF
+         & "vpaddd %%ymm15, %%ymm3, %%ymm15" & LF
+         & "vextracti128 $1, %%ymm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0x4E, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0xB1, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vmovd %%xmm15, %%edx" & LF
+         & "addl %%edx, %%eax" & LF
+         & "movl %%eax, 36(%2)" & LF
+         & "vmovups 640(%0), %%zmm0" & LF
+         & "vmovups 704(%0), %%zmm1" & LF
+         & "vmulps %%zmm6, %%zmm0, %%zmm0" & LF
+         & "vmulps %%zmm6, %%zmm1, %%zmm1" & LF
+         & "vrndscaleps $0x0B, %%zmm0, %%zmm2" & LF
+         & "vrndscaleps $0x0B, %%zmm1, %%zmm3" & LF
+         & "vsubps %%zmm2, %%zmm0, %%zmm8" & LF
+         & "vsubps %%zmm3, %%zmm1, %%zmm9" & LF
+         & "vandps %%zmm7, %%zmm8, %%zmm8" & LF
+         & "vandps %%zmm7, %%zmm9, %%zmm9" & LF
+         & "vandps %%zmm10, %%zmm0, %%zmm11" & LF
+         & "vandps %%zmm10, %%zmm1, %%zmm12" & LF
+         & "vorps %%zmm4, %%zmm11, %%zmm11" & LF
+         & "vorps %%zmm4, %%zmm12, %%zmm12" & LF
+         & "vcmpps $0x1D, %%zmm5, %%zmm8, %%k1" & LF
+         & "vaddps %%zmm11, %%zmm2, %%zmm2%{%%k1%}" & LF
+         & "vcmpps $0x1D, %%zmm5, %%zmm9, %%k1" & LF
+         & "vaddps %%zmm12, %%zmm3, %%zmm3%{%%k1%}" & LF
+         & "vminps %%zmm13, %%zmm2, %%zmm2" & LF
+         & "vminps %%zmm13, %%zmm3, %%zmm3" & LF
+         & "vmaxps %%zmm14, %%zmm2, %%zmm2" & LF
+         & "vmaxps %%zmm14, %%zmm3, %%zmm3" & LF
+         & "vcvttps2dq %%zmm2, %%zmm2" & LF
+         & "vcvttps2dq %%zmm3, %%zmm3" & LF
+         & "vpmovsdb %%zmm2, 160(%1)" & LF
+         & "vpmovsdb %%zmm3, 176(%1)" & LF
+         & "vextracti64x4 $1, %%zmm2, %%ymm15" & LF
+         & "vpaddd %%ymm15, %%ymm2, %%ymm15" & LF
+         & "vextracti128 $1, %%ymm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0x4E, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0xB1, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vmovd %%xmm15, %%eax" & LF
+         & "movl %%eax, 40(%2)" & LF
+         & "vextracti64x4 $1, %%zmm3, %%ymm15" & LF
+         & "vpaddd %%ymm15, %%ymm3, %%ymm15" & LF
+         & "vextracti128 $1, %%ymm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0x4E, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0xB1, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vmovd %%xmm15, %%edx" & LF
+         & "addl %%edx, %%eax" & LF
+         & "movl %%eax, 44(%2)" & LF
+         & "vmovups 768(%0), %%zmm0" & LF
+         & "vmovups 832(%0), %%zmm1" & LF
+         & "vmulps %%zmm6, %%zmm0, %%zmm0" & LF
+         & "vmulps %%zmm6, %%zmm1, %%zmm1" & LF
+         & "vrndscaleps $0x0B, %%zmm0, %%zmm2" & LF
+         & "vrndscaleps $0x0B, %%zmm1, %%zmm3" & LF
+         & "vsubps %%zmm2, %%zmm0, %%zmm8" & LF
+         & "vsubps %%zmm3, %%zmm1, %%zmm9" & LF
+         & "vandps %%zmm7, %%zmm8, %%zmm8" & LF
+         & "vandps %%zmm7, %%zmm9, %%zmm9" & LF
+         & "vandps %%zmm10, %%zmm0, %%zmm11" & LF
+         & "vandps %%zmm10, %%zmm1, %%zmm12" & LF
+         & "vorps %%zmm4, %%zmm11, %%zmm11" & LF
+         & "vorps %%zmm4, %%zmm12, %%zmm12" & LF
+         & "vcmpps $0x1D, %%zmm5, %%zmm8, %%k1" & LF
+         & "vaddps %%zmm11, %%zmm2, %%zmm2%{%%k1%}" & LF
+         & "vcmpps $0x1D, %%zmm5, %%zmm9, %%k1" & LF
+         & "vaddps %%zmm12, %%zmm3, %%zmm3%{%%k1%}" & LF
+         & "vminps %%zmm13, %%zmm2, %%zmm2" & LF
+         & "vminps %%zmm13, %%zmm3, %%zmm3" & LF
+         & "vmaxps %%zmm14, %%zmm2, %%zmm2" & LF
+         & "vmaxps %%zmm14, %%zmm3, %%zmm3" & LF
+         & "vcvttps2dq %%zmm2, %%zmm2" & LF
+         & "vcvttps2dq %%zmm3, %%zmm3" & LF
+         & "vpmovsdb %%zmm2, 192(%1)" & LF
+         & "vpmovsdb %%zmm3, 208(%1)" & LF
+         & "vextracti64x4 $1, %%zmm2, %%ymm15" & LF
+         & "vpaddd %%ymm15, %%ymm2, %%ymm15" & LF
+         & "vextracti128 $1, %%ymm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0x4E, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0xB1, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vmovd %%xmm15, %%eax" & LF
+         & "movl %%eax, 48(%2)" & LF
+         & "vextracti64x4 $1, %%zmm3, %%ymm15" & LF
+         & "vpaddd %%ymm15, %%ymm3, %%ymm15" & LF
+         & "vextracti128 $1, %%ymm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0x4E, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0xB1, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vmovd %%xmm15, %%edx" & LF
+         & "addl %%edx, %%eax" & LF
+         & "movl %%eax, 52(%2)" & LF
+         & "vmovups 896(%0), %%zmm0" & LF
+         & "vmovups 960(%0), %%zmm1" & LF
+         & "vmulps %%zmm6, %%zmm0, %%zmm0" & LF
+         & "vmulps %%zmm6, %%zmm1, %%zmm1" & LF
+         & "vrndscaleps $0x0B, %%zmm0, %%zmm2" & LF
+         & "vrndscaleps $0x0B, %%zmm1, %%zmm3" & LF
+         & "vsubps %%zmm2, %%zmm0, %%zmm8" & LF
+         & "vsubps %%zmm3, %%zmm1, %%zmm9" & LF
+         & "vandps %%zmm7, %%zmm8, %%zmm8" & LF
+         & "vandps %%zmm7, %%zmm9, %%zmm9" & LF
+         & "vandps %%zmm10, %%zmm0, %%zmm11" & LF
+         & "vandps %%zmm10, %%zmm1, %%zmm12" & LF
+         & "vorps %%zmm4, %%zmm11, %%zmm11" & LF
+         & "vorps %%zmm4, %%zmm12, %%zmm12" & LF
+         & "vcmpps $0x1D, %%zmm5, %%zmm8, %%k1" & LF
+         & "vaddps %%zmm11, %%zmm2, %%zmm2%{%%k1%}" & LF
+         & "vcmpps $0x1D, %%zmm5, %%zmm9, %%k1" & LF
+         & "vaddps %%zmm12, %%zmm3, %%zmm3%{%%k1%}" & LF
+         & "vminps %%zmm13, %%zmm2, %%zmm2" & LF
+         & "vminps %%zmm13, %%zmm3, %%zmm3" & LF
+         & "vmaxps %%zmm14, %%zmm2, %%zmm2" & LF
+         & "vmaxps %%zmm14, %%zmm3, %%zmm3" & LF
+         & "vcvttps2dq %%zmm2, %%zmm2" & LF
+         & "vcvttps2dq %%zmm3, %%zmm3" & LF
+         & "vpmovsdb %%zmm2, 224(%1)" & LF
+         & "vpmovsdb %%zmm3, 240(%1)" & LF
+         & "vextracti64x4 $1, %%zmm2, %%ymm15" & LF
+         & "vpaddd %%ymm15, %%ymm2, %%ymm15" & LF
+         & "vextracti128 $1, %%ymm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0x4E, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0xB1, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vmovd %%xmm15, %%eax" & LF
+         & "movl %%eax, 56(%2)" & LF
+         & "vextracti64x4 $1, %%zmm3, %%ymm15" & LF
+         & "vpaddd %%ymm15, %%ymm3, %%ymm15" & LF
+         & "vextracti128 $1, %%ymm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0x4E, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vpshufd $0xB1, %%xmm15, %%xmm11" & LF
+         & "vpaddd %%xmm11, %%xmm15, %%xmm15" & LF
+         & "vmovd %%xmm15, %%edx" & LF
+         & "addl %%edx, %%eax" & LF
+         & "movl %%eax, 60(%2)" & LF
+         & "vzeroupper",
+         Inputs   =>
+           [System.Address'Asm_Input ("r", At_Value),
+            System.Address'Asm_Input ("r", At_Byte),
+            System.Address'Asm_Input ("r", Sums'Address),
+            Model_Runner.Numerics.Real'Asm_Input ("m", Held)],
+         Clobber  =>
+           "rax,rdx,zmm0,zmm1,zmm2,zmm3,zmm4,zmm5,zmm6,zmm7,zmm8,zmm9,zmm10,"
+           & "zmm11,zmm12,zmm13,zmm14,zmm15,k1,cc,memory",
+         Volatile => True);
+   end Super_Round;
+
 end Model_Runner.Quantization.Integers.Kernels;

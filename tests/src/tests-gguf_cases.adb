@@ -1352,8 +1352,12 @@ package body Tests.GGUF_Cases is
    --  from a half to nine and a half, both signs, and the two floats either
    --  side of a half besides.
    --
-   --  The super-block arm is Block_Round's, which is what a k-quant's
-   --  activation takes: one scale over eight blocks rather than one each.
+   --  The super-block arm is what a k-quant's activation takes: one scale
+   --  over eight blocks rather than one each. Its deep compilation is two
+   --  calls a super-block, Super_Extent for the largest magnitude and the
+   --  finite test and Super_Round for the eight blocks' bytes and sums, so
+   --  comparing that arm bit for bit, and handing it an infinity, is what
+   --  tests those two.
    --
    --  On a host without the instructions the deep instance is never
    --  entered, so this asks the host the same question the backend asks and
@@ -1485,6 +1489,14 @@ package body Tests.GGUF_Cases is
         (Vectors, Count, Columns,
          Deep_Values, Deep_Scales, Deep_Totals, Deep_Halves, Ok);
       Assert (not Ok, "the chosen packer accepted an infinity");
+
+      --  And with one scale over eight blocks, where the infinity is
+      --  found by Super_Extent's one reduction rather than a block's.
+      QI.Quantize_Vectors
+        (Vectors, Count, Columns,
+         Deep_Values, Deep_Scales, Deep_Totals, Deep_Halves, Ok,
+         Super => True);
+      Assert (not Ok, "the chosen packer accepted an infinity in a super-block");
 
       QI.Use_Deep_Rows (Deep);
    end Both_Packers_Answer_The_Same_Bits;

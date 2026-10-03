@@ -1553,6 +1553,29 @@ package body Model_Runner.Backend.CPU is
       end if;
    end Mat_Vec_Group;
 
+   -----------------
+   -- Packs_Alike --
+   -----------------
+
+   --  Whether two weights read one packing of the same vector: the same
+   --  format, or two whose kernels take the vector packed alike. A layer's
+   --  query and key in Q4_K and its value in Q6_K -- a "_M" file -- were
+   --  three jobs, the vector packed for each and the pool woken and
+   --  settled three times, where they are one product of one vector.
+   function Packs_Alike (Left, Right : T.View) return Boolean is
+      package QI renames Model_Runner.Quantization.Integers;
+      use type Model_Runner.GGUF.Tensor_Type;
+   begin
+      if Left.Format = Right.Format then
+         return True;
+      end if;
+
+      return QI.Packs_Vectors (Left.Format, 1, Left.Interleaved)
+        and then QI.Packs_Vectors (Right.Format, 1, Right.Interleaved)
+        and then QI.Supers_Vectors (Left.Format)
+                 = QI.Supers_Vectors (Right.Format);
+   end Packs_Alike;
+
    --------------------
    -- Dispatch_Group --
    --------------------
@@ -1565,13 +1588,11 @@ package body Model_Runner.Backend.CPU is
       Status  : out E.Error_Info;
       Roles   : Role_Set := Integer_Activation_Roles)
    is
-      use type Model_Runner.GGUF.Tensor_Type;
-
       --  What may be run as one job: at most three matrices, as many
-      --  answers as matrices, and every one of them agreeing on the format
-      --  and the width -- because the activation is quantized once for the
-      --  whole job and what that quantizing does is decided by those two.
-      --  Anything else is what it was, one product at a time.
+      --  answers as matrices, and every one of them agreeing on the width
+      --  and on how the activation is packed for them -- because it is
+      --  quantized once for the whole job. Anything else is what it was,
+      --  one product at a time.
       Together : Boolean :=
         Item /= null
         and then Weights'Length in 2 .. 3
@@ -1584,7 +1605,7 @@ package body Model_Runner.Backend.CPU is
             declare
                Which : T.View renames Weights (Index);
             begin
-               if Which.Format /= Weights (Weights'First).Format
+               if not Packs_Alike (Which, Weights (Weights'First))
                  or else Which.Columns /= Weights (Weights'First).Columns
                  or else Which.Rows = 0
                  or else Into (Into'First + (Index - Weights'First)) = null

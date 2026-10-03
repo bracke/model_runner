@@ -310,6 +310,52 @@ package body Model_Runner.Quantization.Integers is
                Scale   : N.Real;
                Inverse : N.Real;
             begin
+               --  Where the deep kernels are, the super-block is measured
+               --  and rounded in two calls rather than sixteen: a block's
+               --  calls each made their constants again, and a generated
+               --  token packs a vector before every product it starts.
+               if Deeper then
+                  declare
+                     Finite : Boolean;
+                     Sums   : Deep.Block_Sums;
+                  begin
+                     Deep.Super_Extent (Vectors, At_Element, Largest, Finite);
+
+                     if not Finite then
+                        return;
+                     end if;
+
+                     Scale := Largest / 127.0;
+                     Inverse := (if Scale > 0.0 then 1.0 / Scale else 0.0);
+
+                     Deep.Super_Round
+                       (Vectors, At_Element, Inverse, Values, At_Element,
+                        Sums);
+
+                     for Part in 0 .. Per_Super - 1 loop
+                        declare
+                           At_Half : constant Element_Count :=
+                             (Super_Block * Per_Super + Part)
+                             * (Activation_Block / Activation_Half);
+                           Earlier : constant Interfaces.Integer_32 :=
+                             Sums (Natural (2 * Part));
+                           Total   : constant Interfaces.Integer_32 :=
+                             Sums (Natural (2 * Part + 1));
+                        begin
+                           Scales (Scales'First + Super_Block * Per_Super
+                                   + Part) := Scale;
+                           Halves (Halves'First + At_Half) := Earlier;
+                           Halves (Halves'First + At_Half + 1) :=
+                             Total - Earlier;
+                           Totals (Totals'First + Super_Block * Per_Super
+                                   + Part) := Total;
+                        end;
+                     end loop;
+                  end;
+
+                  goto Super_Done;
+               end if;
+
                for Part in 0 .. Per_Super - 1 loop
                   declare
                      Here   : N.Real;
@@ -413,6 +459,9 @@ package body Model_Runner.Quantization.Integers is
                      null;
                   end;
                end loop;
+
+               <<Super_Done>>
+               null;
             end;
          end loop;
 
