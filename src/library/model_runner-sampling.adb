@@ -934,7 +934,9 @@ package body Model_Runner.Sampling is
       Penalty : Real;
       Seen    : in out Boolean;
       Best    : in out Element_Count;
-      Top     : in out Real)
+      Top     : in out Real;
+      Floor   : Real := Below_All;
+      Floored : Boolean := False)
    is
       pragma Suppress (Validity_Check);
       pragma Suppress (Index_Check);
@@ -948,7 +950,11 @@ package body Model_Runner.Sampling is
       --  has kept nothing yet.
       Nobody : constant Element_Count := Element_Count'Last;
 
-      Top_0, Top_1, Top_2, Top_3, Top_4, Top_5, Top_6, Top_7 : Real := Below;
+      --  Started at the best of the blocks before, where there was one, as
+      --  Walk_Greedy_Wide's lanes are.
+      Start : constant Real := (if Floored then Floor else Below);
+
+      Top_0, Top_1, Top_2, Top_3, Top_4, Top_5, Top_6, Top_7 : Real := Start;
       Place_0, Place_1, Place_2, Place_3,
       Place_4, Place_5, Place_6, Place_7 : Element_Count := Nobody;
 
@@ -981,7 +987,7 @@ package body Model_Runner.Sampling is
                      else Here * Penalty);
          end if;
 
-         if Place = Nobody or else Here > Top then
+         if (Place = Nobody and then not Floored) or else Here > Top then
             Top := Here;
             Place := Index;
          end if;
@@ -1099,6 +1105,8 @@ package body Model_Runner.Sampling is
       Seen    : in out Boolean;
       Best    : in out Element_Count;
       Top     : in out Real;
+      Floor   : Real;
+      Floored : Boolean;
       Broken  : out Boolean)
    is
       pragma Suppress (Validity_Check);
@@ -1115,7 +1123,13 @@ package body Model_Runner.Sampling is
         with Alignment => 64;
       type Lane_Places is array (0 .. 15) of Element_Count;
 
-      Tops     : Lane_Tops := [others => Below_All];
+      --  Every lane starts at the best of the blocks walked before this
+      --  one, where there was one: only a token above it can be the walk's
+      --  -- an equal one comes later and the earlier wins -- and started
+      --  below everything, each of the fifty-six blocks Gemma 3's
+      --  vocabulary is cut into spent its first few hundred tokens leaving
+      --  the vector loop for one that beat a best only just set.
+      Tops     : Lane_Tops := [others => (if Floored then Floor else Below_All)];
       Places   : Lane_Places := [others => Nobody];
       Gathered : Lane_Bits := [others => 0];
 
@@ -1135,7 +1149,9 @@ package body Model_Runner.Sampling is
             Here := (if Here > 0.0 then Here / Penalty else Here * Penalty);
          end if;
 
-         if Places (Lane) = Nobody or else Here > Tops (Lane) then
+         if (Places (Lane) = Nobody and then not Floored)
+           or else Here > Tops (Lane)
+         then
             Tops (Lane) := Here;
             Places (Lane) := Index;
          end if;
@@ -1433,6 +1449,11 @@ package body Model_Runner.Sampling is
          --  token be passed over on its logit as it stands.
          Screens : constant Boolean :=
            not General and then (not Recent or else Penalty >= 1.0);
+
+         --  The best of the blocks walked so far, which a later block's
+         --  token has to beat.
+         Floor   : Real := Below_All;
+         Floored : Boolean := False;
       begin
          if First > Last then
             return;
@@ -1457,7 +1478,7 @@ package body Model_Runner.Sampling is
                        (Logits, Block_First (Block, Over),
                         Block_Last (Block, Over), Masked, Stepped,
                         Window.all, Recent, Penalty, Seen, Best, Top,
-                        Broken);
+                        Floor, Floored, Broken);
 
                      if not Broken then
                         goto Block_Done;
@@ -1475,7 +1496,7 @@ package body Model_Runner.Sampling is
                   Walk_Greedy
                     (Logits, Block_First (Block, Over),
                      Block_Last (Block, Over), Masked, Stepped, Window.all,
-                     Recent, Penalty, Seen, Best, Top);
+                     Recent, Penalty, Seen, Best, Top, Floor, Floored);
 
                   goto Block_Done;
                end if;
@@ -1519,6 +1540,11 @@ package body Model_Runner.Sampling is
                Work.Found (Block) := Seen;
                Work.Where (Block) := Best;
                Work.Value (Block) := Top;
+
+               if Seen and then (not Floored or else Top > Floor) then
+                  Floor := Top;
+                  Floored := True;
+               end if;
             end;
          end loop;
       end Run;

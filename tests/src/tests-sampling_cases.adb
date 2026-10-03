@@ -206,8 +206,11 @@ package body Tests.Sampling_Cases is
 
       use type Interfaces.Unsigned_32;
 
-      Lengths : constant array (1 .. 7) of Natural :=
-        [1, 15, 16, 17, 63, 1000, 4099];
+      --  The last two are cut into several blocks, each walked from the
+      --  best of those before: a tie across blocks, and a maximum in a
+      --  later block than an early high one.
+      Lengths : constant array (1 .. 9) of Natural :=
+        [1, 15, 16, 17, 63, 1000, 4099, 70_000, 262_144];
       Seed    : Interfaces.Unsigned_32 := 16#1234_5678#;
 
       function Next return Float is
