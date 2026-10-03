@@ -351,6 +351,24 @@ package body Model_Runner.Backend.CPU is
    Chunk_Grain : constant Element_Count :=
      Model_Runner.Quantization.Integers.Row_Tile;
 
+   --  The grain a job is cut at: the tile for the integer kernels, whose
+   --  rows are summed a tile together, and finer for the floating-point
+   --  path, which sums every row alone -- so a small product there is cut
+   --  into enough runs for its whole team rather than into a tile apiece.
+   --  A mixture's router is a hundred and twenty-eight binary32 rows a
+   --  layer: four tiles, so four of eight cores, and 2.5 ms of a 37 ms
+   --  token where its fifty megabytes are one at the memory's rate.
+   function Grain_Of (Work : Job) return Element_Count
+   is (if Work.Values /= null or else Work.Work /= null
+         or else Work.Rows_Two > 0
+       then Chunk_Grain
+       else Element_Count'Max
+              (1,
+               Element_Count'Min
+                 (Chunk_Grain,
+                  Work.Rows
+                  / Element_Count'Max (1, 4 * Element_Count (Work.Team)))));
+
    --  Below this much arithmetic a job is done by the task that submits it
    --  rather than shared out.
    --
@@ -1163,7 +1181,7 @@ package body Model_Runner.Backend.CPU is
                if Current.Work = null then
                   Take_Chunks
                     (Waking, Current,
-                     Chunk_Grain);
+                     Grain_Of (Current));
                else
                   Partition
                     (Current.Rows, Current.Team, Position, First, Last,
@@ -1392,7 +1410,7 @@ package body Model_Runner.Backend.CPU is
       begin
          Take_Chunks
            (Item.Waking'Unchecked_Access, Work,
-            Chunk_Grain);
+            Grain_Of (Work));
       exception
          --  Reported the way a worker's failure is, after the workers are
          --  collected: leaving before they finish would free the vector and
@@ -1512,7 +1530,7 @@ package body Model_Runner.Backend.CPU is
       begin
          Take_Chunks
            (Item.Waking'Unchecked_Access, Work,
-            Chunk_Grain);
+            Grain_Of (Work));
       exception
          when others =>
             Mine_Failed := True;
@@ -1682,7 +1700,7 @@ package body Model_Runner.Backend.CPU is
       begin
          Take_Chunks
            (Item.Waking'Unchecked_Access, Work,
-            Chunk_Grain);
+            Grain_Of (Work));
       exception
          --  Reported the way a worker's failure is, after the workers are
          --  collected: leaving before they finish would free the vector and
