@@ -492,6 +492,23 @@ package body Tests.Catalog_Cases is
       Assert (Loc.Describe (Catalog, Condition) = "unknown option: --nope",
               "rendered """ & Loc.Describe (Catalog, Condition) & """");
 
+      --  A condition raised without the value its message names renders
+      --  the key's bare form, not the key in angle brackets: most of the
+      --  places that run out of memory do not say what for.
+      declare
+         Short : constant E.Error_Info :=
+           E.Make (E.Memory_Allocation_Failed);
+         Named : E.Error_Info := E.Make (E.Memory_Allocation_Failed);
+      begin
+         Assert (Loc.Describe (Catalog, Short)
+                   = "cannot allocate the memory this needs",
+                 "rendered """ & Loc.Describe (Catalog, Short) & """");
+         E.Add_Text (Named, "category", "pictures", E.Param_Identifier);
+         Assert (Loc.Describe (Catalog, Named)
+                   = "cannot allocate memory for pictures",
+                 "rendered """ & Loc.Describe (Catalog, Named) & """");
+      end;
+
       --  A value carrying a terminal escape must not reach the terminal as
       --  one.
       declare

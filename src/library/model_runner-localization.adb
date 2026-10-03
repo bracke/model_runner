@@ -262,7 +262,27 @@ package body Model_Runner.Localization is
                  Keep_Line_Breaks => True, Indent => False));
       end loop;
 
-      return Text (Item, E.Message_Key (Condition.Code), Values (1 .. Used));
+      --  A message whose value the raiser did not give -- most of the places
+      --  that run out of memory say nothing of what for -- falls back to the
+      --  key's bare form where the catalog has one, rather than to the
+      --  emergency form that names the key in angle brackets.
+      declare
+         Key  : constant String := E.Message_Key (Condition.Code);
+         Full : constant String := Text (Item, Key, Values (1 .. Used));
+      begin
+         if Full = "<" & Key & ">" then
+            declare
+               Bare : constant String :=
+                 Text (Item, Key & ".bare", Values (1 .. Used));
+            begin
+               if Bare /= "<" & Key & ".bare>" then
+                  return Bare;
+               end if;
+            end;
+         end if;
+
+         return Full;
+      end;
    end Describe;
 
    ----------------------

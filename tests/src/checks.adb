@@ -1161,6 +1161,10 @@ package body Checks is
          for Code in E.Error_Code loop
             if Code /= E.No_Error then
                Reached (E.Message_Key (Code));
+
+               --  And its bare form, which Localization.Describe falls
+               --  back to where the raiser gave no value for the message.
+               Reached (E.Message_Key (Code) & ".bare");
             end if;
          end loop;
 
