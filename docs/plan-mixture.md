@@ -54,6 +54,13 @@ expert and at eighty, against 4.8e11 dense.
 
 ## 1. A cheaper multiply-add in the strip kernel (the 3.6, one to two weeks)
 
+**Re-measured 2026-10-03** (`docs/measured-figures.txt`): the 3.6 was
+against llama.cpp with its device visible, which takes a large batch's
+products even at `-ngl 0`. On the processor alone llama.cpp reads 70.4 t/s
+on a 1,234-token prompt and this program 78-80: the prompt is ahead. What
+is left on the processor is generation, 27.6 against 30.6 t/s. The rest of
+this section is the plan as written.
+
 **Revised 2026-09-11 by the instrument in step 0.** The cost an element on
 the pool is the same at 768 rows as at 5632 and flat from eight vectors to
 eighty, at 5.3e11 multiply-adds a second -- the dense prompt's rate. So

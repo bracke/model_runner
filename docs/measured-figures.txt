@@ -24307,3 +24307,22 @@ panels FB9ADD29BEB7FD4D src/library/model_runner-quantization-interleave.ads src
 #   panels 0C15E9EE7E41EFEE -> FB9ADD29BEB7FD4D.
 # load:  one-minute average 0.4 to 1.2
 # model: TinyLlama 1.1B chat, seven formats
+
+# 2026-10-03: the mixture on the processor, measured again after the panel
+# prefetch. Qwen3-Coder-30B-A3B Q2_K, `run --backend cpu` (panels, unasked),
+# warm, 27 GB free, against llama-bench 95b8e33e1 -ngl 0 with the device
+# hidden (GGML_VK_VISIBLE_DEVICES=""), same sitting:
+#
+#                                   model_runner      llama.cpp
+#   prompt, 1,234 tokens            78.4, 80.5        70.4 (pp1234)
+#   generation, empty context       27.65, 27.58      30.6 (tg32)
+#   generation after the prompt     20.1, 20.1         --
+#
+# The prompt is ahead. The 3.6 times behind of plan-mixture.md (69 against
+# 250 at 1,419 tokens) was llama.cpp with the device visible: its build
+# hands a large batch's products to the device even at -ngl 0. With the
+# device hidden it reads 70. Generation is ten per cent behind (25.9 before
+# the prefetch, 27.6 now). The panel copy took 7.3-7.6 s with the file in
+# the page cache.
+# load:  one-minute average 0.5 to 1.4
+# model: Qwen3-Coder-30B-A3B Q2_K
