@@ -24326,3 +24326,29 @@ panels FB9ADD29BEB7FD4D src/library/model_runner-quantization-interleave.ads src
 # the page cache.
 # load:  one-minute average 0.5 to 1.4
 # model: Qwen3-Coder-30B-A3B Q2_K
+
+# 2026-10-03: the mixture's generation on the processor, taken apart and
+# not closed. Qwen3-Coder-30B-A3B Q2_K, `run --backend cpu --temperature 0
+# --draft-tokens 0`, 64 tokens, alternated twice each (t/s; llama-bench
+# -ngl 0, device hidden, tg32: 30.6):
+#
+#   as it stands                                        27.3-27.7
+#   one job for all sixteen arms and one for all eight
+#     down projections (a job of any number of
+#     matrices, each its own stretch of one input)     27.4  (same text)
+#   the whole team for Q2_K and Q3_K products           27.5, 27.6
+#   the workers' spin ten times longer                  27.5, 27.7
+#   the whole pool for the expert job                   27.3, 27.5
+#   one position by the grouped path, not the batch
+#     path's expert a worker                             2.8  (2,752,512
+#     rows off their panels: a single expert's view into a panelled
+#     stack has no panel kernel)
+#
+# All reverted. A token reads about 1.31 GB -- the chosen experts 656 MB,
+# attention 350, the Q6_K head 255, the binary32 router 50 -- so this reads
+# about 36 GB/s and llama.cpp 40; Q8_0 TinyLlama streams 47 on all cores.
+# Sampled (gdb, every thread), the pool's workers spin in watch, awake,
+# while the submitting task runs a share; no layout of the work tried here
+# moves the token. What is left is not in scheduling.
+# load:  one-minute average 0.5 to 1.3
+# model: Qwen3-Coder-30B-A3B Q2_K
