@@ -3741,7 +3741,11 @@ kernels D5677F10B60E99CF src/library/model_runner-quantization.adb src/library/m
 #   in one job, and the activation packed a super-block at a time -- with
 #   the same bits out of the packer (its test compares them exactly), so
 #   no figure in this group can have moved but by time.
-quality A9D09C0D2119A117 tests/fixtures/perplexity-corpus.txt tests/src/perplexity_run.adb tests/src/perplexity_run.ads src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-quantization.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-integers.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb model_runner.gpr
+# Restamped 2026-10-03, not re-measured: the change was a token's rotary
+#   table made once and kept across its layers -- the same angles and the
+#   same rotation to the bit (a test compares the two), so no figure in
+#   this group can have moved but by time.
+quality 04DF23D7845762F7 tests/fixtures/perplexity-corpus.txt tests/src/perplexity_run.adb tests/src/perplexity_run.ads src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-quantization.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-integers.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb model_runner.gpr
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
 # and every figure in the speed section was taken again at it in one sitting
@@ -5315,7 +5319,11 @@ quality A9D09C0D2119A117 tests/fixtures/perplexity-corpus.txt tests/src/perplexi
 #   in one job, and the activation packed a super-block at a time -- with
 #   the same bits out of the packer (its test compares them exactly), so
 #   no figure in this group can have moved but by time.
-engine 82F828EA5B4B9C20 src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Restamped 2026-10-03, not re-measured: the change was a token's rotary
+#   table made once and kept across its layers -- the same angles and the
+#   same rotation to the bit (a test compares the two), so no figure in
+#   this group can have moved but by time.
+engine 8167BBFEA770D015 src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -5646,7 +5654,11 @@ engine 82F828EA5B4B9C20 src/library/model_runner-llama.adb src/library/model_run
 #   in one job, and the activation packed a super-block at a time -- with
 #   the same bits out of the packer (its test compares them exactly), so
 #   no figure in this group can have moved but by time.
-reference B31D5BDA0EB08916 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Restamped 2026-10-03, not re-measured: the change was a token's rotary
+#   table made once and kept across its layers -- the same angles and the
+#   same rotation to the bit (a test compares the two), so no figure in
+#   this group can have moved but by time.
+reference 2DFB9722FBCFBBBF src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-18, gpt2's feed-forward normalization. These groups carry
 # llama.adb and moved with it. Re-measured rather than argued about, on this
@@ -7502,7 +7514,11 @@ reference B31D5BDA0EB08916 src/library/model_runner-backend-reference.adb src/li
 #   in one job, and the activation packed a super-block at a time -- with
 #   the same bits out of the packer (its test compares them exactly), so
 #   no figure in this group can have moved but by time.
-device A754712B16EB4215 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Restamped 2026-10-03, not re-measured: the change was a token's rotary
+#   table made once and kept across its layers -- the same angles and the
+#   same rotation to the bit (a test compares the two), so no figure in
+#   this group can have moved but by time.
+device 0B5A2F8007537ECC src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 
 # covers: the three-row table under "Drafting", the per-token costs derived
@@ -7866,7 +7882,11 @@ device A754712B16EB4215 src/shaders/row_product.comp src/shaders/matrix_product.
 #   in one job, and the activation packed a super-block at a time -- with
 #   the same bits out of the packer (its test compares them exactly), so
 #   no figure in this group can have moved but by time.
-drafting 819BAC8DF1E8D7C6 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Restamped 2026-10-03, not re-measured: the change was a token's rotary
+#   table made once and kept across its layers -- the same angles and the
+#   same rotation to the bit (a test compares the two), so no figure in
+#   this group can have moved but by time.
+drafting F40F2ACE6055B5D7 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14
@@ -10472,7 +10492,11 @@ tokenizer CE3B696CD412A3B6 src/library/model_runner-tokenizer.adb
 #   in one job, and the activation packed a super-block at a time -- with
 #   the same bits out of the packer (its test compares them exactly), so
 #   no figure in this group can have moved but by time.
-outside A754712B16EB4215 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Restamped 2026-10-03, not re-measured: the change was a token's rotary
+#   table made once and kept across its layers -- the same angles and the
+#   same rotation to the bit (a test compares the two), so no figure in
+#   this group can have moved but by time.
+outside 0B5A2F8007537ECC src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-27  The row tile at sixty-four, and the instrument's first row
 #
@@ -14735,7 +14759,11 @@ outside A754712B16EB4215 src/shaders/row_product.comp src/shaders/matrix_product
 #   in one job, and the activation packed a super-block at a time -- with
 #   the same bits out of the packer (its test compares them exactly), so
 #   no figure in this group can have moved but by time.
-panels B036D8150670FC9D src/library/model_runner-quantization-interleave.ads src/library/model_runner-quantization-interleave.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-tensors.ads src/library/model_runner-tensors.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb tests/src/speed_run.adb model_runner.gpr src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Restamped 2026-10-03, not re-measured: the change was a token's rotary
+#   table made once and kept across its layers -- the same angles and the
+#   same rotation to the bit (a test compares the two), so no figure in
+#   this group can have moved but by time.
+panels 42D085F23713B3BE src/library/model_runner-quantization-interleave.ads src/library/model_runner-quantization-interleave.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-tensors.ads src/library/model_runner-tensors.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb tests/src/speed_run.adb model_runner.gpr src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # ---------------------------------------------------------------------------
 #
@@ -24635,4 +24663,26 @@ panels B036D8150670FC9D src/library/model_runner-quantization-interleave.ads src
 # 6. 9, 12 or 16 threads for 8: level. --kv-cache f16: level.
 # 7. Sampling a 152k vocabulary: about 60 us, 0.06 per cent.
 # load: one-minute average 0.9 to 1.6
+# model: TinyLlama-1.1B-Chat Q4_K_M, Q5_K_M, Q3_K; qwen3-8b Q4_K_M
+
+# 2026-10-03: the processor's dense generation, the time outside the
+# products. `tests speed --repack rows --budget`, TinyLlama Q5_K_M, a token
+# of 17 ms: normalizing 0.30 ms, rotating 0.24, attending 0.14, joining
+# 0.08. Rotating was the rotary table -- a double pow, sin and cos a pair
+# -- made for the query and again for the key of every layer.
+#
+# Kept: the table made once a position and kept across layers. Alternated
+# three times (t/s, same text):
+#                          before           after
+#   TinyLlama Q4_K_M      68.2 68.4 68.5   68.8 68.8 68.8
+#   TinyLlama Q5_K_M      59.0 58.9 58.8   59.4 59.2 59.0
+#   qwen3-8b Q4_K_M       9.71 9.73 9.72   9.75 9.74 9.75
+# Against llama-bench -ngl 0 -p 0 -n 64 at its defaults, the same sitting:
+# Q4_K_M 68.9 against 68.7, Q3_K 81.1 against 80.9, qwen3-8b 9.75 against
+# 9.79, Q5_K_M 59.2 against 59.8. Q5_K_M and Q4_K_M stop rising at four
+# threads for both programs: the memory's rate.
+#
+# Measured and dropped: an RMS sum in eight lanes (Q4_K_M +0.2, Q5_K_M -0.4,
+# qwen3-8b level, and it reorders the sum).
+# load: one-minute average 0.9 to 1.5
 # model: TinyLlama-1.1B-Chat Q4_K_M, Q5_K_M, Q3_K; qwen3-8b Q4_K_M

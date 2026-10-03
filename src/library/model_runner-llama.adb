@@ -18328,30 +18328,74 @@ package body Model_Runner.Llama is
                      Current.Key_Whole_Norm_Bias);
                end if;
 
-               K.Apply_Rotary
-                 (Item.Query.all, Heads, Head_Size,
-                  Element_Count (Settings.Rotary), Item.Committed,
-                  Turn_Base (Settings, Natural (Index)),
-                  Turn_Scaling (Settings, Natural (Index)), Turns (Source),
-                  Settings.Pairing,
-                  Sections => Settings.Sections,
-                  Place => Place_At (Item, Item.Committed),
-                  Offset =>
+               declare
+                  use type K.Rotary_Scaling;
+
+                  Base    : constant N.Wide_Real :=
+                    Turn_Base (Settings, Natural (Index));
+                  Stretch : constant K.Rotary_Scaling :=
+                    Turn_Scaling (Settings, Natural (Index));
+                  Pairs   : constant Element_Count :=
+                    Element_Count (Settings.Rotary) / 2;
+                  Shift   : constant Element_Count :=
                     (if Is_MLA (Settings.Kind)
                      then Head_Size - Element_Count (Settings.Rotary)
-                     else 0));
-               K.Apply_Rotary
-                 (Item.Key_Row.all, KV_Heads, Head_Size,
-                  Element_Count (Settings.Rotary), Item.Committed,
-                  Turn_Base (Settings, Natural (Index)),
-                  Turn_Scaling (Settings, Natural (Index)), Turns (Source),
-                  Settings.Pairing,
-                  Sections => Settings.Sections,
-                  Place => Place_At (Item, Item.Committed),
-                  Offset =>
-                    (if Is_MLA (Settings.Kind)
-                     then Head_Size - Element_Count (Settings.Rotary)
-                     else 0));
+                     else 0);
+               begin
+                  --  A rotation by the position alone turns every layer of
+                  --  this token by the same angles where the base and the
+                  --  stretch agree, so the table is made once and kept.
+                  --  One dealt among the parts of a place is made each time.
+                  if Settings.Sections = K.No_Sections
+                    and then Pairs in 1 .. Item.Turned_Cos'Length
+                  then
+                     if not Item.Turned
+                       or else Item.Turned_At /= Item.Committed
+                       or else Item.Turned_Base /= Base
+                       or else Item.Turned_Scale /= Stretch
+                       or else Item.Turned_Pairs /= Pairs
+                     then
+                        K.Rotary_Table
+                          (Element_Count (Settings.Rotary), Item.Committed,
+                           Base, Stretch, Turns (Source),
+                           Cosines => Item.Turned_Cos (0 .. Pairs - 1),
+                           Sines => Item.Turned_Sin (0 .. Pairs - 1));
+                        Item.Turned := True;
+                        Item.Turned_At := Item.Committed;
+                        Item.Turned_Base := Base;
+                        Item.Turned_Scale := Stretch;
+                        Item.Turned_Pairs := Pairs;
+                     end if;
+
+                     K.Apply_Rotary_Table
+                       (Item.Query.all, Heads, Head_Size,
+                        Element_Count (Settings.Rotary),
+                        Item.Turned_Cos (0 .. Pairs - 1),
+                        Item.Turned_Sin (0 .. Pairs - 1),
+                        Settings.Pairing, Shift);
+                     K.Apply_Rotary_Table
+                       (Item.Key_Row.all, KV_Heads, Head_Size,
+                        Element_Count (Settings.Rotary),
+                        Item.Turned_Cos (0 .. Pairs - 1),
+                        Item.Turned_Sin (0 .. Pairs - 1),
+                        Settings.Pairing, Shift);
+                  else
+                     K.Apply_Rotary
+                       (Item.Query.all, Heads, Head_Size,
+                        Element_Count (Settings.Rotary), Item.Committed,
+                        Base, Stretch, Turns (Source), Settings.Pairing,
+                        Sections => Settings.Sections,
+                        Place => Place_At (Item, Item.Committed),
+                        Offset => Shift);
+                     K.Apply_Rotary
+                       (Item.Key_Row.all, KV_Heads, Head_Size,
+                        Element_Count (Settings.Rotary), Item.Committed,
+                        Base, Stretch, Turns (Source), Settings.Pairing,
+                        Sections => Settings.Sections,
+                        Place => Place_At (Item, Item.Committed),
+                        Offset => Shift);
+                  end if;
+               end;
 
                --  Write into the reserved slot. The slot is only readable as
                --  context once Committed is advanced, at the end of this call.

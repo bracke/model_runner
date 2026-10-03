@@ -2254,6 +2254,56 @@ package body Model_Runner.Kernels is
    -- All_Finite --
    -----------------
 
+   procedure Apply_Rotary_Table
+     (Vector    : in out Real_Array;
+      Heads     : Element_Count;
+      Head_Size : Element_Count;
+      Rotary    : Element_Count;
+      Cosines   : Wide_Real_Array;
+      Sines     : Wide_Real_Array;
+      Pairing   : Rotary_Pairing := Interleaved;
+      Offset    : Element_Count := 0)
+   is
+      Pairs : constant Element_Count := Rotary / 2;
+   begin
+      if Heads = 0 or else Head_Size = 0 or else Rotary = 0
+        or else Rotary > Head_Size
+        or else Rotary mod 2 /= 0
+        or else Vector'Length /= Heads * Head_Size
+        or else Element_Count (Cosines'Length) /= Pairs
+        or else Element_Count (Sines'Length) /= Pairs
+      then
+         return;
+      end if;
+
+      for Head in 0 .. Heads - 1 loop
+         declare
+            Origin : constant Element_Count :=
+              Vector'First + Head * Head_Size + Offset;
+         begin
+            for Pair in 0 .. Pairs - 1 loop
+               declare
+                  Even   : constant Element_Count :=
+                    (if Pairing = Interleaved
+                     then Origin + 2 * Pair
+                     else Origin + Pair);
+                  Odd    : constant Element_Count :=
+                    (if Pairing = Interleaved
+                     then Even + 1
+                     else Even + Pairs);
+                  First  : constant Wide_Real := Wide_Real (Vector (Even));
+                  Second : constant Wide_Real := Wide_Real (Vector (Odd));
+                  Cosine : constant Wide_Real := Cosines (Cosines'First + Pair);
+                  Sine   : constant Wide_Real := Sines (Sines'First + Pair);
+               begin
+                  Vector (Even) := Real (First * Cosine - Second * Sine);
+                  Vector (Odd) := Real (First * Sine + Second * Cosine);
+               end;
+            end loop;
+         end;
+      end loop;
+   end Apply_Rotary_Table;
+
    function All_Finite (Item : Real_Array) return Boolean is
    begin
       for Value of Item loop

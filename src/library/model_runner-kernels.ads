@@ -779,6 +779,32 @@ package Model_Runner.Kernels is
       Place           : Rotary_Place := (others => 0);
       Offset          : Element_Count := 0);
 
+   --  Rotary positional encoding by a table Rotary_Table made, in place.
+   --
+   --  Apply_Rotary's rotation with its angles worked out beforehand: every
+   --  layer of a token turns by the same angles where it has the same base
+   --  and stretch, and the table is a power, a sine and a cosine a pair in
+   --  double precision -- made once, it is not made forty-four times.
+   --
+   --  @param Vector Head-major vector holding Heads heads of Head_Size
+   --    elements each, updated in place.
+   --  @param Heads Number of heads in Vector.
+   --  @param Head_Size Elements per head.
+   --  @param Rotary Number of leading elements per head to rotate.
+   --  @param Cosines A cosine a pair, Rotary / 2 of them.
+   --  @param Sines A sine a pair, as many.
+   --  @param Pairing Which elements of a head are rotated against which.
+   --  @param Offset Where in a head the rotated slice begins.
+   procedure Apply_Rotary_Table
+     (Vector    : in out Real_Array;
+      Heads     : Element_Count;
+      Head_Size : Element_Count;
+      Rotary    : Element_Count;
+      Cosines   : Wide_Real_Array;
+      Sines     : Wide_Real_Array;
+      Pairing   : Rotary_Pairing := Interleaved;
+      Offset    : Element_Count := 0);
+
    --  Report whether every element is finite.
    --
    --  @param Item Values to test.

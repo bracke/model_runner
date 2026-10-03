@@ -2804,6 +2804,19 @@ private
       Spent      : Phase_Times := [others => 0.0];
       Budgeting  : Boolean := False;
 
+      --  The rotation's angles for the position being written, kept from
+      --  one layer to the next: a token's layers turn by the same angles
+      --  wherever their base and stretch agree.
+      Turned       : Boolean := False;
+      Turned_At    : Natural := 0;
+      Turned_Base  : Model_Runner.Numerics.Wide_Real := 0.0;
+      Turned_Scale : Model_Runner.Kernels.Rotary_Scaling;
+      Turned_Pairs : Model_Runner.Numerics.Element_Count := 0;
+      Turned_Cos   : Model_Runner.Numerics.Wide_Real_Array (0 .. 255) :=
+        [others => 1.0];
+      Turned_Sin   : Model_Runner.Numerics.Wide_Real_Array (0 .. 255) :=
+        [others => 0.0];
+
       Gate       : Model_Runner.Tensors.Real_Array_Access := null;
       Up         : Model_Runner.Tensors.Real_Array_Access := null;
 

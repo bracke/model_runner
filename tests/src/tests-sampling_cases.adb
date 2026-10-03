@@ -1255,6 +1255,42 @@ package body Tests.Sampling_Cases is
                       - (1.0 * 1.0 + 3.0 * 3.0)) < 1.0e-3,
                  "split rotation did not preserve its pair");
       end;
+
+      --  And a rotation by a table made beforehand is the same rotation to
+      --  the bit, under both pairings, with a slice that starts inside the
+      --  head and leaves its tail alone: Apply_Rotary_Table is what every
+      --  layer of a generated token now turns by, its table made once.
+      for Pairing in Model_Runner.Kernels.Rotary_Pairing loop
+         declare
+            Heads  : constant N.Element_Count := 3;
+            Size   : constant N.Element_Count := 16;
+            Rotary : constant N.Element_Count := 8;
+            Shift  : constant N.Element_Count := 4;
+            Want   : N.Real_Array (0 .. Heads * Size - 1);
+            Got    : N.Real_Array (0 .. Heads * Size - 1);
+            Cosines, Sines : N.Wide_Real_Array (0 .. Rotary / 2 - 1);
+         begin
+            for Index in Want'Range loop
+               Want (Index) := N.Real (Index mod 7) - 2.75;
+            end loop;
+            Got := Want;
+
+            Model_Runner.Kernels.Apply_Rotary
+              (Want, Heads, Size, Rotary, 37, 10_000.0,
+               Pairing => Pairing, Offset => Shift);
+
+            Model_Runner.Kernels.Rotary_Table
+              (Rotary, 37, 10_000.0, Cosines => Cosines, Sines => Sines);
+            Model_Runner.Kernels.Apply_Rotary_Table
+              (Got, Heads, Size, Rotary, Cosines, Sines, Pairing, Shift);
+
+            for Index in Want'Range loop
+               Assert (Got (Index) = Want (Index),
+                       "a rotation by a table made beforehand differs at"
+                       & N.Element_Count'Image (Index));
+            end loop;
+         end;
+      end loop;
    end Rotary_Pairings_Differ;
 
    --  Constructs outside the supported subset are rejected at compile time,
