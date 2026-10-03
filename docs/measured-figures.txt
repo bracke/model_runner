@@ -24385,3 +24385,24 @@ panels 479A23EC0D45D807 src/library/model_runner-quantization-interleave.ads src
 #   panels FB9ADD29BEB7FD4D -> 479A23EC0D45D807.
 # load:  one-minute average 0.6 to 1.4
 # model: Qwen3-Coder-30B-A3B Q2_K
+
+# 2026-10-03: IQ1_M on the device with every row's reads asked for before
+# any row's arithmetic (lane_load / lane_use, PRELOAD in
+# row_product_wave_low.comp). TinyLlama, `tests speed --backend device`,
+# alternated, same text each (bccdd60e44aff06c):
+#
+#   IQ1_M   143.6 144.7 143.9 144.3  ->  148.4 148.8 148.1 147.3
+#           llama-bench tg128 in the same sitting 155.8 (0.87 -> 0.95)
+#
+# Tried and refused: a third step (the grid lookups for every row before
+# the arithmetic) -- level; the same two-step split for IQ1_S (157 -> 145)
+# and IQ2_XXS (141 -> 139) -- slower, the rows' words holding registers
+# their grid work wanted. On the processor, for the dense gap: one rotary
+# table for the queries and keys (level), the whole team for Q2_K and Q3_K
+# (Q2_K +1, Q3_K within noise), prefetch none / L2 4 KB / L2 8 KB / L3
+# 8 KB on all cores (Q6_K 49.0-49.8 all four); panels or the file's own
+# pages (Q6_K 49.4 / 49.2, Q4_K_M 65.7 / 65.6). Timed in a token on all
+# cores, products are 93 per cent of the time, the pool's task jobs 2, the
+# rest 5 (1.07 ms of Q6_K's 20.2); no change above moved it.
+# load:  one-minute average 0.5 to 1.6
+# model: TinyLlama 1.1B chat IQ1_M, IQ1_S, IQ2_XXS, Q6_K, Q4_K_M, Q3_K, Q2_K

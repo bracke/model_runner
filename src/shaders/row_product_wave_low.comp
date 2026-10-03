@@ -1366,6 +1366,54 @@ float lifted_dot(uint entry, vec4 a, vec4 b) {
     return dot(a, lo) + dot(b, hi);
 }
 
+//  A lane's reads for a row taken apart from the arithmetic on them, so
+//  that the main loop can ask for every row's before it waits on any: a
+//  row was a chain of dependent reads, and eight of them one after another
+//  were what a lane waited on. Here and not in IQ1_S or IQ2_XXS, which the
+//  same split made slower, the rows' words holding registers their grid
+//  work wanted.
+#define PRELOAD
+struct Pre { uint sa; uint sb; uint nib; uint q; };
+
+Pre lane_load(uint at, uint within) {
+    uint sub = within / 32u;
+    uint l = (within % 32u) / 8u;
+    Pre p;
+    p.sa = w[(at + 48u) >> 2u];
+    p.sb = w[(at + 52u) >> 2u];
+    p.nib = w[(at + 32u + 2u * sub + l / 2u) >> 2u];
+    p.q = w[(at + 4u * sub + l) >> 2u];
+    return p;
+}
+
+float lane_use(Pre p, uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
+    uint sub = within / 32u;
+    uint l = (within % 32u) / 8u;
+    uint s0 = p.sa & 0xFFFFu;
+    uint s1 = p.sa >> 16u;
+    uint s2 = p.sb & 0xFFFFu;
+    uint s3 = p.sb >> 16u;
+    float d = unpackHalf2x16((s0 >> 12u) | ((s1 >> 8u) & 0x00F0u)
+                             | ((s2 >> 4u) & 0x0F00u) | (s3 & 0xF000u)).x;
+    uint pair = sub / 2u;
+    uint word = pair == 0u ? s0 : pair == 1u ? s1 : pair == 2u ? s2 : s3;
+    uint scale = (word >> (6u * (sub % 2u) + 3u * (l / 2u))) & 7u;
+    float dl = d * float(2u * scale + 1u);
+    uint nb_at = at + 32u + 2u * sub + l / 2u;
+    uint nibbles = (p.nib >> ((nb_at & 3u) * 8u)) & 255u;
+    uint n0 = nibbles & 15u;
+    uint n1 = nibbles >> 4u;
+    uint q_at = at + 4u * sub + l;
+    uint qs = p.q >> ((q_at & 3u) * 8u);
+    uint e0 = iq1_entry((qs & 255u)        | ((n0 & 7u) << 8u));
+    uint e1 = iq1_entry(((qs >> 8u) & 255u) | ((n1 & 7u) << 8u));
+    float shift0 = (n0 & 8u) != 0u ? -0.125 : 0.125;
+    float shift1 = (n1 & 8u) != 0u ? -0.125 : 0.125;
+    return dl * (lifted_dot(e0, a0, a1) + lifted_dot(e1, a2, a3)
+                 + (shift0 - 1.0) * dot(a0 + a1, vec4(1.0))
+                 + (shift1 - 1.0) * dot(a2 + a3, vec4(1.0)));
+}
+
 float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
     uint sub = within / 32u;
     uint l = (within % 32u) / 8u;
@@ -1889,11 +1937,27 @@ void main() {
             uint block = col / BLOCK_ELEMS;
             uint within = col % BLOCK_ELEMS;
 
+#ifdef PRELOAD
+            //  Every row's reads asked for, then every row's arithmetic.
+            Pre pre[NUM_ROWS];
+            for (uint r = 0u; r < NUM_ROWS; ++r) {
+                uint row = min(first_row + r, shape.rows - 1u);
+                pre[r] = lane_load(shape.base + slice + row * span
+                                   + block * BLOCK_BYTES, within);
+            }
+            for (uint r = 0u; r < NUM_ROWS; ++r) {
+                uint row = min(first_row + r, shape.rows - 1u);
+                temp[r] += lane_use(pre[r], shape.base + slice + row * span
+                                            + block * BLOCK_BYTES,
+                                    within, a0, a1, a2, a3);
+            }
+#else
             for (uint r = 0u; r < NUM_ROWS; ++r) {
                 uint row = min(first_row + r, shape.rows - 1u);
                 uint at = shape.base + slice + row * span + block * BLOCK_BYTES;
                 temp[r] += lane_dot(at, within, a0, a1, a2, a3);
             }
+#endif
         }
 #endif
     }
