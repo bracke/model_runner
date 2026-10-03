@@ -1,6 +1,7 @@
 with Ada.Containers.Generic_Array_Sort;
 with Ada.Unchecked_Conversion;
 with Ada.Unchecked_Deallocation;
+with System.Machine_Code;
 
 package body Model_Runner.Sampling is
 
@@ -1061,6 +1062,197 @@ package body Model_Runner.Sampling is
       Fold (Top_7, Place_7);
    end Walk_Greedy;
 
+   --  Whether this processor has the sixteen-lane vector instructions the
+   --  wide greedy walk is written in, as the processor backend was told.
+   Wide_Held : Boolean := False;
+
+   procedure Use_Wide_Walks (Allowed : Boolean) is
+   begin
+      Wide_Held := Allowed;
+   end Use_Wide_Walks;
+
+   function Wide_Walks return Boolean is (Wide_Held);
+
+   --  The greedy walk of Walk_Greedy sixteen tokens a step, and the finite
+   --  check of Has_Non_Finite in the same pass.
+   --
+   --  Sixteen bests, a token to each by its place, held in one register:
+   --  sixteen logits are compared with them in one instruction and the
+   --  loop leaves only where one beats its lane's best, which after the
+   --  first few hundred tokens is almost never. Each lane then goes through
+   --  Consider as Walk_Greedy's eight do, so a lane keeps its earliest
+   --  highest and the fold gives the walk's -- the same token. The exponent
+   --  test is Has_Non_Finite's, gathered into a second register; Broken
+   --  says the block holds a logit that is not finite, and the caller then
+   --  walks it the slow way and what this found is not used. Two passes over
+   --  Gemma 3's quarter of a million logits were 186 us of a 5.7 ms token,
+   --  read while the device waited.
+   procedure Walk_Greedy_Wide
+     (Logits  : Real_Array;
+      Low     : Element_Count;
+      High    : Element_Count;
+      Masked  : Mask_Array;
+      Stepped : Mask_Array;
+      Window  : Mask_Array;
+      Recent  : Boolean;
+      Penalty : Real;
+      Seen    : in out Boolean;
+      Best    : in out Element_Count;
+      Top     : in out Real;
+      Broken  : out Boolean)
+   is
+      pragma Suppress (Validity_Check);
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      LF : constant Character := ASCII.LF;
+
+      Nobody : constant Element_Count := Element_Count'Last;
+
+      type Lane_Tops is array (0 .. 15) of Real with Alignment => 64;
+      type Lane_Bits is array (0 .. 15) of Interfaces.Unsigned_32
+        with Alignment => 64;
+      type Lane_Places is array (0 .. 15) of Element_Count;
+
+      Tops     : Lane_Tops := [others => Below_All];
+      Places   : Lane_Places := [others => Nobody];
+      Gathered : Lane_Bits := [others => 0];
+
+      At_Index : Element_Count := Low;
+
+      procedure Consider (Index : Element_Count; Lane : Natural)
+        with No_Inline;
+
+      procedure Consider (Index : Element_Count; Lane : Natural) is
+         Here : Real := Logits (Logits'First + Index);
+      begin
+         if Masked (Natural (Index)) or else Stepped (Natural (Index)) then
+            return;
+         end if;
+
+         if Recent and then Window (Natural (Index)) then
+            Here := (if Here > 0.0 then Here / Penalty else Here * Penalty);
+         end if;
+
+         if Places (Lane) = Nobody or else Here > Tops (Lane) then
+            Tops (Lane) := Here;
+            Places (Lane) := Index;
+         end if;
+      end Consider;
+
+      --  Steps of sixteen from From, as many as Steps, until one holds a
+      --  logit above its lane's best: how many passed without one, and
+      --  which lanes of the next did. Every step read is gathered into the
+      --  exponent test, the one that stopped the loop too.
+      procedure Scan
+        (From   : System.Address;
+         Steps  : Element_Count;
+         Passed : out Element_Count;
+         Lanes  : out Interfaces.Unsigned_32)
+      is
+      begin
+         System.Machine_Code.Asm
+           ("vmovups (%2), %%zmm1" & LF &
+            "vmovdqu32 (%3), %%zmm3" & LF &
+            "movl $0x7F800000, %%r10d" & LF &
+            "vpbroadcastd %%r10d, %%zmm4" & LF &
+            "movl $0x00800000, %%r10d" & LF &
+            "vpbroadcastd %%r10d, %%zmm5" & LF &
+            "movq %4, %%r9" & LF &
+            "xorq %0, %0" & LF &
+            "xorl %1, %1" & LF &
+            "1:" & LF &
+            "cmpq %5, %0" & LF &
+            "jae 3f" & LF &
+            "vmovups (%%r9), %%zmm0" & LF &
+            "vpandd %%zmm4, %%zmm0, %%zmm2" & LF &
+            "vpaddd %%zmm5, %%zmm2, %%zmm2" & LF &
+            "vpord %%zmm2, %%zmm3, %%zmm3" & LF &
+            "vcmpps $0x1E, %%zmm1, %%zmm0, %%k1" & LF &
+            "kortestw %%k1, %%k1" & LF &
+            "jnz 2f" & LF &
+            "addq $64, %%r9" & LF &
+            "incq %0" & LF &
+            "jmp 1b" & LF &
+            "2:" & LF &
+            "kmovw %%k1, %1" & LF &
+            "3:" & LF &
+            "vmovdqu32 %%zmm3, (%3)",
+            Outputs  =>
+              [Element_Count'Asm_Output ("=&r", Passed),
+               Interfaces.Unsigned_32'Asm_Output ("=&r", Lanes)],
+            Inputs   =>
+              [System.Address'Asm_Input ("r", Tops'Address),
+               System.Address'Asm_Input ("r", Gathered'Address),
+               System.Address'Asm_Input ("r", From),
+               Element_Count'Asm_Input ("r", Steps)],
+            Clobber  =>
+              "r9,r10,xmm0,xmm1,xmm2,xmm3,xmm4,xmm5,memory,cc",
+            Volatile => True);
+      end Scan;
+
+      procedure Fold (Lane_Top : Real; Lane_Place : Element_Count) is
+      begin
+         if Lane_Place /= Nobody
+           and then (not Seen
+                     or else Lane_Top > Top
+                     or else (Lane_Top = Top and then Lane_Place < Best))
+         then
+            Seen := True;
+            Best := Lane_Place;
+            Top := Lane_Top;
+         end if;
+      end Fold;
+
+      Any : Interfaces.Unsigned_32 := 0;
+   begin
+      while At_Index + 15 <= High loop
+         declare
+            Passed : Element_Count;
+            Lanes  : Interfaces.Unsigned_32;
+         begin
+            Scan (Logits (Logits'First + At_Index)'Address,
+                  (High - At_Index + 1) / 16, Passed, Lanes);
+            At_Index := At_Index + Passed * 16;
+            exit when Lanes = 0;
+
+            for Lane in 0 .. 15 loop
+               if (Interfaces.Shift_Right (Lanes, Lane) and 1) /= 0 then
+                  Consider (At_Index + Element_Count (Lane), Lane);
+               end if;
+            end loop;
+
+            At_Index := At_Index + 16;
+         end;
+      end loop;
+
+      --  The last few, a lane each in turn and each through the finite
+      --  test on its own.
+      while At_Index <= High loop
+         declare
+            Lane : constant Natural := Natural ((At_Index - Low) mod 16);
+            Bits : constant Interfaces.Unsigned_32 :=
+              To_Bits (Logits (Logits'First + At_Index));
+         begin
+            Any := Any or ((Bits and 16#7F80_0000#) + 16#0080_0000#);
+            if Logits (Logits'First + At_Index) > Tops (Lane) then
+               Consider (At_Index, Lane);
+            end if;
+         end;
+         At_Index := At_Index + 1;
+      end loop;
+
+      for Lane in Gathered'Range loop
+         Any := Any or Gathered (Lane);
+      end loop;
+      Broken := (Any and 16#8000_0000#) /= 0;
+
+      for Lane in 0 .. 15 loop
+         Fold (Tops (Lane), Places (Lane));
+      end loop;
+   end Walk_Greedy_Wide;
+
    --  The top-k walk over one block, where nothing can raise a logit.
    --
    --  A token no higher as it stands than what the block's last kept one
@@ -1254,7 +1446,28 @@ package body Model_Runner.Sampling is
             begin
                --  Screened where nothing can raise a logit and every one
                --  of the block is finite; see Walk_Greedy.
-               if Screens
+               --  Sixteen at a time, the finite test in the same pass,
+               --  where the processor has the instructions; a block that
+               --  is not all finite is walked below as it always was.
+               if Screens and then Wide_Walks then
+                  declare
+                     Broken : Boolean;
+                  begin
+                     Walk_Greedy_Wide
+                       (Logits, Block_First (Block, Over),
+                        Block_Last (Block, Over), Masked, Stepped,
+                        Window.all, Recent, Penalty, Seen, Best, Top,
+                        Broken);
+
+                     if not Broken then
+                        goto Block_Done;
+                     end if;
+
+                     Seen := False;
+                     Best := 0;
+                     Top := 0.0;
+                  end;
+               elsif Screens
                  and then not Has_Non_Finite
                                 (Logits, Block_First (Block, Over),
                                  Block_Last (Block, Over))

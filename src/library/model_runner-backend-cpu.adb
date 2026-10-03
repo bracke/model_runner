@@ -4,6 +4,7 @@ with Ada.Unchecked_Deallocation;
 with System.Atomic_Operations.Integer_Arithmetic;
 with System.Machine_Code;
 
+with Model_Runner.Sampling;
 with Model_Runner.Kernels;
 with Model_Runner.Delta_Rule;
 with Model_Runner.Platform;
@@ -1928,4 +1929,6 @@ begin
      (Model_Runner.Platform.Wide_Vectors);
    Model_Runner.Delta_Rule.Use_Wide
      (Model_Runner.Platform.Wide_Vectors);
+   Model_Runner.Sampling.Use_Wide_Walks
+     (Model_Runner.Platform.Byte_Products);
 end Model_Runner.Backend.CPU;

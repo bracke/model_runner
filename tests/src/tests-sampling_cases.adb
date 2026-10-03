@@ -9,6 +9,7 @@ with Model_Runner.Entropy;
 with Interfaces;
 with Model_Runner.Errors;
 with Model_Runner.Limits;
+with Model_Runner.Platform;
 with Model_Runner.Kernels;
 with Model_Runner.Numerics;
 with Model_Runner.Sampling;
@@ -190,6 +191,87 @@ package body Tests.Sampling_Cases is
 
       S.Close (Sampler);
    end Greedy_Selects_Maximum;
+
+   --  Greedy over vocabularies of every shape the walk cuts into steps:
+   --  shorter than a step, a step and one over, many steps and a remainder,
+   --  with the maximum planted early, late, twice (the earlier wins) and
+   --  in the remainder -- against the plain earliest-highest answer. The
+   --  wide walk takes sixteen at a time where the processor has it, and a
+   --  lane's best compared with the wrong token, or a tail given the wrong
+   --  lane, is a different token here.
+   procedure Greedy_Agrees_At_Every_Length
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      use type Interfaces.Unsigned_32;
+
+      Lengths : constant array (1 .. 7) of Natural :=
+        [1, 15, 16, 17, 63, 1000, 4099];
+      Seed    : Interfaces.Unsigned_32 := 16#1234_5678#;
+
+      function Next return Float is
+      begin
+         Seed := Seed * 1_664_525 + 1_013_904_223;
+         return Float (Interfaces.Shift_Right (Seed, 8)) / 2.0 ** 24 * 20.0
+           - 10.0;
+      end Next;
+   begin
+      --  Both walks: the eight-lane one everywhere, the wide one where
+      --  this processor has it; told back as the backend told it after.
+      for Wide in Boolean loop
+         S.Use_Wide_Walks (Wide and then Model_Runner.Platform.Byte_Products);
+         for Length of Lengths loop
+            for Plant in 0 .. 3 loop
+               declare
+                  Sampler : S.Sampler;
+                  Status  : E.Error_Info;
+                  Token   : Vocab.Token_Id;
+                  Logits  : N.Real_Array (0 .. N.Element_Count (Length) - 1);
+                  Want    : Natural := 0;
+               begin
+                  for Index in Logits'Range loop
+                     Logits (Index) := N.Real (Next);
+                  end loop;
+
+                  --  The planted maximum: first, last, twice, or one past
+                  --  the last whole step of sixteen.
+                  declare
+                     Spot : constant Natural :=
+                       (case Plant is
+                          when 0 => 0,
+                          when 1 => Length - 1,
+                          when 2 => Length / 3,
+                          when others => Natural'Min (Length - 1, (Length / 16) * 16));
+                  begin
+                     Logits (N.Element_Count (Spot)) := 50.0;
+                     if Plant = 2 and then Length > 1 then
+                        Logits (N.Element_Count (Length - 1)) := 50.0;
+                     end if;
+                  end;
+
+                  for Index in Logits'Range loop
+                     if Logits (Index) > Logits (N.Element_Count (Want)) then
+                        Want := Natural (Index);
+                     end if;
+                  end loop;
+
+                  S.Open (Sampler, S.Greedy_Configuration, Length, 1, Status);
+                  Assert (E.Is_Ok (Status), "greedy sampler did not open");
+                  S.Sample (Sampler, Logits, Token, Status);
+                  Assert (E.Is_Ok (Status) and then Natural (Token) = Want,
+                          "greedy over" & Natural'Image (Length)
+                          & " logits chose" & Vocab.Token_Id'Image (Token)
+                          & " where the earliest highest is"
+                          & Natural'Image (Want));
+                  S.Close (Sampler);
+               end;
+            end loop;
+         end loop;
+      end loop;
+
+      S.Use_Wide_Walks (Model_Runner.Platform.Byte_Products);
+   end Greedy_Agrees_At_Every_Length;
 
    --  Greedy mode must not consume random state, so two samplers with
    --  different seeds agree exactly.
@@ -3364,6 +3446,9 @@ package body Tests.Sampling_Cases is
       Register_Routine
         (T, Greedy_Selects_Maximum'Access,
          "greedy selects the maximum and breaks ties towards the lowest token");
+      Register_Routine
+        (T, Greedy_Agrees_At_Every_Length'Access,
+         "greedy chooses the earliest highest at every length the walk cuts");
       Register_Routine
         (T, Greedy_Ignores_Entropy'Access,
          "greedy selection does not depend on the seed");

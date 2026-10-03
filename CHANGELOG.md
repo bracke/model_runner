@@ -1794,6 +1794,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Greedy choice sixteen logits at a time:** where the processor has the sixteen-lane vector instructions, the greedy walk compares sixteen logits with sixteen lane bests in one instruction and checks that every logit is finite in the same pass, where it took two passes over the vocabulary. Gemma 3's 262,144 logits: 188 -> 140 us a token; same tokens.
 - **IQ4_NL and IQ4_XS generate four rows a workgroup on the device:** TinyLlama IQ4_NL 96 -> 99 tokens a second (llama.cpp 98.4), IQ4_XS 104 -> 108 (95.7); same text.
 - **A generated token on the processor reads its panels ahead:** the one-vector panel kernels prefetch the panel a kilobyte and a half or more ahead, a line at a time; the copy lies in pages of four kilobytes and the hardware's stream stops at each. TinyLlama Q2_K 76.4 -> 82 tokens a second, Q3_K 71.7 -> 74.1, IQ4_NL +1, Q4_0 +1 per cent, the five- and four-bit k-quants level; same text.
 - **`--kv-cache f16` paged on the device:** a session asking for half precision on the device is dealt its cache in pages as an exact one is. Before, it reserved its whole context as one block: past one storage buffer that left the device (qwen3-8b at `--context-size 32768` 3.55 -> 13.3 tokens a second), a drafted check round went to the processor (qwen3-8b drafted 11.9 -> 16.2), and `tests speed --kv-cache f16`, which opens the model's whole context, read 7.7 where `run` read 13.5 (now 13.3). The context it holds on the device is 684 MiB where it was 3.5 GiB.

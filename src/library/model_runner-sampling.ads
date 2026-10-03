@@ -459,6 +459,14 @@ package Model_Runner.Sampling is
    --  @param Token Token to record.
    procedure Record_Token (Item : in out Sampler; Token : Token_Id);
 
+   --  Whether the greedy walk may take sixteen logits at a time, in the
+   --  sixteen-lane vector instructions. Told once, by the processor
+   --  backend, which asks the host; this package reads no files.
+   --
+   --  @param Allowed True only where the host has the byte dot product,
+   --    and with it the sixteen-lane set.
+   procedure Use_Wide_Walks (Allowed : Boolean);
+
 private
 
    --  A candidate token and its running score. Probability is meaningful only
