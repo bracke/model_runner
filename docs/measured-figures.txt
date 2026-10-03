@@ -24406,3 +24406,24 @@ panels 479A23EC0D45D807 src/library/model_runner-quantization-interleave.ads src
 # rest 5 (1.07 ms of Q6_K's 20.2); no change above moved it.
 # load:  one-minute average 0.5 to 1.6
 # model: TinyLlama 1.1B chat IQ1_M, IQ1_S, IQ2_XXS, Q6_K, Q4_K_M, Q3_K, Q2_K
+
+# 2026-10-03: the same generation timed by rdtsc, the submitting task's
+# own clock, per layer (48 a token), 256 tokens at 27.0-27.3 t/s:
+#
+#   in the pool (every top-level product and share job)   92 per cent
+#   on the submitting task alone                            62 us a layer,
+#                                                           3.0 ms a token
+#     of that in the mixture (route, pack, sum)             18 us
+#       the weighted sum of the eight experts                4 us
+#     the two norms (16,320 cycles a call, cache lines
+#       another core wrote)                                 10 us
+#   jobs a layer                                             7.0
+#
+# Every serial stretch gone would make 28.9 t/s, short of 30.6: the gap
+# is in how fast the pool reads, not around it. Also tried and level or
+# slower: llama.cpp's layout, each expert's rows cut across the team at
+# 32 and 128 rows (26.4-27.3); taskset to the physical cores; the
+# arms' rooms on the stack; an eight-way norm sum; rope by pairs;
+# prefetch distances; panels against file pages.
+# load:  one-minute average 0.5 to 1.3
+# model: Qwen3-Coder-30B-A3B Q2_K
