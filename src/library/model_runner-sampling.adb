@@ -1296,7 +1296,9 @@ package body Model_Runner.Sampling is
       List        : in out Blocked_List;
       Held        : in out Element_Count;
       Found       : in out Boolean;
-      Where       : in out Element_Count)
+      Where       : in out Element_Count;
+      Wide        : Boolean := False;
+      Broken      : out Boolean)
    is
       pragma Suppress (Validity_Check);
       pragma Suppress (Index_Check);
@@ -1304,49 +1306,164 @@ package body Model_Runner.Sampling is
       pragma Suppress (Access_Check);
       pragma Suppress (Overflow_Check);
 
+      LF : constant Character := ASCII.LF;
+
       Low_Safe : constant Real :=
         -(Real'Last / 4.0) * Real'Min (Temperature, 1.0)
         / Real'Max (Penalty, 1.0);
 
       Floor     : Real := Real'First;
       Floor_Raw : Real := Below_All;
-   begin
-      for Index in Low .. High loop
-         declare
-            Raw : constant Real := Logits (Logits'First + Index);
-         begin
-            if (Raw > Floor_Raw or else Raw < Low_Safe)
-              and then not Masked (Natural (Index))
-              and then not Stepped (Natural (Index))
-            then
-               declare
-                  Adjusted : constant Real :=
-                    (if Penalized and then Window (Natural (Index))
-                     then (if Raw > 0.0 then Raw / Penalty
-                           else Raw * Penalty)
-                     else Raw);
-                  Value    : constant Real := Adjusted / Temperature;
-               begin
-                  if not N.Is_Finite (Value) then
-                     Found := True;
-                     Where := Index;
-                     return;
-                  end if;
 
-                  if Value >= Floor then
-                     Keep_Best
-                       (List, Held, Wanted,
-                        (Token => Token_Id (Index), Logit => Value,
-                         Probability => Adjusted));
-                     if Held = Wanted then
-                        Floor := List (Wanted - 1).Logit;
-                        Floor_Raw := List (Wanted - 1).Probability;
-                     end if;
+      --  One token through the screen and, past it, the list: the whole of
+      --  the walk for the plain loop, and for the wide one each token of a
+      --  step of sixteen that held one the screen lets through. Found ends
+      --  the walk.
+      procedure Take (Index : Element_Count) is
+         Raw : constant Real := Logits (Logits'First + Index);
+      begin
+         if (Raw > Floor_Raw or else Raw < Low_Safe)
+           and then not Masked (Natural (Index))
+           and then not Stepped (Natural (Index))
+         then
+            declare
+               Adjusted : constant Real :=
+                 (if Penalized and then Window (Natural (Index))
+                  then (if Raw > 0.0 then Raw / Penalty
+                        else Raw * Penalty)
+                  else Raw);
+               Value    : constant Real := Adjusted / Temperature;
+            begin
+               if not N.Is_Finite (Value) then
+                  Found := True;
+                  Where := Index;
+                  return;
+               end if;
+
+               if Value >= Floor then
+                  Keep_Best
+                    (List, Held, Wanted,
+                     (Token => Token_Id (Index), Logit => Value,
+                      Probability => Adjusted));
+                  if Held = Wanted then
+                     Floor := List (Wanted - 1).Logit;
+                     Floor_Raw := List (Wanted - 1).Probability;
                   end if;
-               end;
-            end if;
+               end if;
+            end;
+         end if;
+      end Take;
+
+      --  Steps of sixteen from From until one holds a logit above Above or
+      --  below Under: how many passed, and whether one stopped the loop.
+      --  Has_Non_Finite's exponent test is gathered into Gathered on the
+      --  way, as Walk_Greedy_Wide's is.
+      type Lane_Bits is array (0 .. 15) of Interfaces.Unsigned_32
+        with Alignment => 64;
+      Gathered : Lane_Bits := [others => 0];
+
+      procedure Scan
+        (From   : System.Address;
+         Steps  : Element_Count;
+         Above  : Real;
+         Under  : Real;
+         Passed : out Element_Count;
+         Lanes  : out Interfaces.Unsigned_32)
+      is
+      begin
+         System.Machine_Code.Asm
+           ("vbroadcastss %4, %%zmm1" & LF &
+            "vbroadcastss %5, %%zmm6" & LF &
+            "vmovdqu32 (%2), %%zmm3" & LF &
+            "movl $0x7F800000, %%r10d" & LF &
+            "vpbroadcastd %%r10d, %%zmm4" & LF &
+            "movl $0x00800000, %%r10d" & LF &
+            "vpbroadcastd %%r10d, %%zmm5" & LF &
+            "movq %3, %%r9" & LF &
+            "xorq %0, %0" & LF &
+            "xorl %1, %1" & LF &
+            "1:" & LF &
+            "cmpq %6, %0" & LF &
+            "jae 3f" & LF &
+            "vmovups (%%r9), %%zmm0" & LF &
+            "vpandd %%zmm4, %%zmm0, %%zmm2" & LF &
+            "vpaddd %%zmm5, %%zmm2, %%zmm2" & LF &
+            "vpord %%zmm2, %%zmm3, %%zmm3" & LF &
+            "vcmpps $0x1E, %%zmm1, %%zmm0, %%k1" & LF &
+            "vcmpps $0x11, %%zmm6, %%zmm0, %%k2" & LF &
+            "korw %%k2, %%k1, %%k1" & LF &
+            "kortestw %%k1, %%k1" & LF &
+            "jnz 2f" & LF &
+            "addq $64, %%r9" & LF &
+            "incq %0" & LF &
+            "jmp 1b" & LF &
+            "2:" & LF &
+            "kmovw %%k1, %1" & LF &
+            "3:" & LF &
+            "vmovdqu32 %%zmm3, (%2)",
+            Outputs  =>
+              [Element_Count'Asm_Output ("=&r", Passed),
+               Interfaces.Unsigned_32'Asm_Output ("=&r", Lanes)],
+            Inputs   =>
+              [System.Address'Asm_Input ("r", Gathered'Address),
+               System.Address'Asm_Input ("r", From),
+               Real'Asm_Input ("m", Above),
+               Real'Asm_Input ("m", Under),
+               Element_Count'Asm_Input ("r", Steps)],
+            Clobber  =>
+              "r9,r10,xmm0,xmm1,xmm2,xmm3,xmm4,xmm5,xmm6,memory,cc",
+            Volatile => True);
+      end Scan;
+
+      At_Index : Element_Count := Low;
+      Any      : Interfaces.Unsigned_32 := 0;
+   begin
+      Broken := False;
+
+      if not Wide then
+         for Index in Low .. High loop
+            Take (Index);
+            exit when Found;
+         end loop;
+         return;
+      end if;
+
+      --  Sixteen at a time against the list's last raw value, as it stands
+      --  at each stop; a step that held one is taken a token at a time, in
+      --  order, so the list is the plain loop's.
+      while At_Index + 15 <= High loop
+         declare
+            Passed : Element_Count;
+            Lanes  : Interfaces.Unsigned_32;
+         begin
+            Scan (Logits (Logits'First + At_Index)'Address,
+                  (High - At_Index + 1) / 16, Floor_Raw, Low_Safe,
+                  Passed, Lanes);
+            At_Index := At_Index + Passed * 16;
+            exit when Lanes = 0;
+
+            for Index in At_Index .. At_Index + 15 loop
+               Take (Index);
+               exit when Found;
+            end loop;
+            exit when Found;
+
+            At_Index := At_Index + 16;
          end;
       end loop;
+
+      while not Found and then At_Index <= High loop
+         Any := Any
+           or ((To_Bits (Logits (Logits'First + At_Index)) and 16#7F80_0000#)
+               + 16#0080_0000#);
+         Take (At_Index);
+         At_Index := At_Index + 1;
+      end loop;
+
+      for Lane in Gathered'Range loop
+         Any := Any or Gathered (Lane);
+      end loop;
+      Broken := (Any and 16#8000_0000#) /= 0;
    end Walk_Top_K;
 
    --  What an element of the greedy walk costs when the penalties are on,
@@ -2132,14 +2249,43 @@ package body Model_Runner.Sampling is
                --  the blocks to the team costs, and one list keeps its few
                --  in a few hundred insertions where fifty-six lists took
                --  ten thousand between them.
-               if Screens
+               --  Sixteen at a time with the finite test in the same pass,
+               --  where the processor has the instructions; a vocabulary
+               --  that is not all finite is walked as it was below, its
+               --  list started again.
+               if Screens and then Wide_Walks then
+                  declare
+                     Broken : Boolean;
+                  begin
+                     Walk_Top_K
+                       (Logits, 0, Over - 1, Masked, Stepped, Recent.all,
+                        Penalized, Penalty, Effective_Temp, Wanted,
+                        Pick.Lists (0), Pick.Held (0), Pick.Found (0),
+                        Pick.Where (0), Wide => True, Broken => Broken);
+                     Dealt := not Broken;
+
+                     if Broken then
+                        Pick.Held (0) := 0;
+                        Pick.Found (0) := False;
+                        Pick.Where (0) := 0;
+                     end if;
+                  end;
+               end if;
+
+               if Dealt then
+                  null;
+               elsif Screens
                  and then not Has_Non_Finite (Logits, 0, Over - 1)
                then
-                  Walk_Top_K
-                    (Logits, 0, Over - 1, Masked, Stepped, Recent.all,
-                     Penalized, Penalty, Effective_Temp, Wanted,
-                     Pick.Lists (0), Pick.Held (0), Pick.Found (0),
-                     Pick.Where (0));
+                  declare
+                     Broken : Boolean;
+                  begin
+                     Walk_Top_K
+                       (Logits, 0, Over - 1, Masked, Stepped, Recent.all,
+                        Penalized, Penalty, Effective_Temp, Wanted,
+                        Pick.Lists (0), Pick.Held (0), Pick.Found (0),
+                        Pick.Where (0), Broken => Broken);
+                  end;
                   Dealt := True;
                elsif Across /= null then
                   Across.all.Divide

@@ -276,6 +276,76 @@ package body Tests.Sampling_Cases is
       S.Use_Wide_Walks (Model_Runner.Platform.Byte_Products);
    end Greedy_Agrees_At_Every_Length;
 
+   --  The top-k walk sixteen at a time and one at a time draw the same
+   --  tokens with the same probabilities from the same seed, at lengths
+   --  that end inside a step and over a whole vocabulary of Gemma 3's
+   --  size: the wide screen lets through every token the plain one does,
+   --  in the same order, so the kept few and the draw are the same.
+   procedure Top_K_Walks_Agree (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Interfaces.Unsigned_32;
+      use type N.Real_Array;
+
+      Lengths : constant array (1 .. 5) of Natural :=
+        [17, 1000, 4099, 70_000, 262_144];
+      Draws   : constant := 5;
+
+      type Token_List is array (1 .. Draws) of Vocab.Token_Id;
+      type Real_Access is access N.Real_Array;
+      procedure Free is new Ada.Unchecked_Deallocation
+        (N.Real_Array, Real_Access);
+   begin
+      for Length of Lengths loop
+         declare
+            Seed    : Interfaces.Unsigned_32 := 16#BEEF_0001#;
+            Logits  : Real_Access :=
+              new N.Real_Array (0 .. N.Element_Count (Length) - 1);
+            Taken   : array (Boolean) of Token_List;
+            Chances : array (Boolean) of Real_Access;
+         begin
+            for Index in Logits'Range loop
+               Seed := Seed * 1_664_525 + 1_013_904_223;
+               Logits (Index) :=
+                 N.Real (Interfaces.Shift_Right (Seed, 8)) / 2.0 ** 24
+                 * 12.0 - 6.0;
+            end loop;
+
+            for Wide in Boolean loop
+               S.Use_Wide_Walks (Wide and then Model_Runner.Platform.Byte_Products);
+               Chances (Wide) := new N.Real_Array (Logits'Range);
+               declare
+                  Sampler : S.Sampler;
+                  Config  : S.Configuration;
+                  Status  : E.Error_Info;
+               begin
+                  S.Open (Sampler, Config, Length, 99, Status);
+                  Assert (E.Is_Ok (Status), "the sampler did not open");
+                  for Draw in 1 .. Draws loop
+                     S.Sample (Sampler, Logits.all, Taken (Wide) (Draw), Status,
+                               Probs => Chances (Wide));
+                     Assert (E.Is_Ok (Status), "a draw failed");
+                  end loop;
+                  S.Close (Sampler);
+               end;
+            end loop;
+
+            S.Use_Wide_Walks (Model_Runner.Platform.Byte_Products);
+
+            Assert (Taken (False) = Taken (True),
+                    "the wide and plain top-k walks drew different tokens over"
+                    & Natural'Image (Length) & " logits");
+            Assert (Chances (False).all = Chances (True).all,
+                    "the wide and plain top-k walks gave different chances over"
+                    & Natural'Image (Length) & " logits");
+
+            Free (Logits);
+            Free (Chances (False));
+            Free (Chances (True));
+         end;
+      end loop;
+   end Top_K_Walks_Agree;
+
    --  Greedy mode must not consume random state, so two samplers with
    --  different seeds agree exactly.
    procedure Greedy_Ignores_Entropy (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -3452,6 +3522,9 @@ package body Tests.Sampling_Cases is
       Register_Routine
         (T, Greedy_Agrees_At_Every_Length'Access,
          "greedy chooses the earliest highest at every length the walk cuts");
+      Register_Routine
+        (T, Top_K_Walks_Agree'Access,
+         "the top-k walk draws the same sixteen at a time as one at a time");
       Register_Routine
         (T, Greedy_Ignores_Entropy'Access,
          "greedy selection does not depend on the seed");
