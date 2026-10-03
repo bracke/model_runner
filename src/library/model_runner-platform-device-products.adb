@@ -171,8 +171,10 @@ package body Model_Runner.Platform.Device.Products is
    --  itself went the other way, 7.3 -> 7.9 ms, and stays where it was.
    Long_Row_Columns : constant := 8192;
 
-   --  And the IQ4 formats', their shader's NUM_ROWS.
-   IQ4_Wave_Rows  : constant := 2;
+   --  And the IQ4 formats', their shader's NUM_ROWS: four, as Q2_K's,
+   --  where two read TinyLlama IQ4_NL at 96 and IQ4_XS at 104 tokens a
+   --  second against 99 and 108 at four.
+   IQ4_Wave_Rows  : constant := 4;
    Q2K_Wave_Rows  : constant := 4;
    Low_Wave_Lanes : constant := 64;
 
