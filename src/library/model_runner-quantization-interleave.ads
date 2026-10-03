@@ -37,14 +37,18 @@ with Model_Runner.Numerics;
 --  two that carry a fifth bit, with one thing added that no k-quant has.
 --
 --  The four-bit layout. A panel is eight consecutive rows. For each
---  super-block of the panel, 1184 bytes -- the eight rows' 144 each,
---  rearranged, and thirty-two more:
+--  super-block of the panel, 1152 bytes -- the eight rows' 144 each,
+--  rearranged and not one more:
 --
 --     0 ..  15   the eight rows' block scales, half precision, in order
 --    16 ..  31   the eight rows' block minima, likewise
---    32 ..  95   the sub-block scales, a byte each, sub-block major
---    96 .. 159   the sub-block minima, the same way
---   160 .. 1183  the eight rows' quants, interleaved
+--    32 ..  95   each sub-block's scale and minimum, their low four bits a
+--                byte -- the scale's low nibble, the minimum's high --
+--                sub-block major
+--    96 .. 127   their top two bits, two sub-blocks a byte: byte 8P + L
+--                holds row L's for sub-blocks 2P and 2P + 1, the scale's
+--                then the minimum's, two bits each from the bottom
+--   128 .. 1151  the eight rows' quants, interleaved
 --
 --  The quants are interleaved so that a thirty-two byte load holds four
 --  consecutive elements of each of the eight rows: byte 4*L + M of the group
@@ -54,15 +58,16 @@ with Model_Runner.Numerics;
 --  puts row L's contribution in lane L. That is the whole of why the order
 --  is this order.
 --
---  And the sub-block scales are unpacked here rather than in the kernel,
---  which is the thirty-two bytes. A file keeps eight six-bit scales and
---  eight six-bit minima in twelve bytes; taking them out is about
+--  And the sub-block scales are transposed here rather than in the
+--  kernel. A file keeps eight six-bit scales and eight six-bit minima in
+--  twelve bytes by a scheme of its own; taking them out is about
 --  twenty-five instructions a row, and a panel wants them a lane a row,
 --  which is a transpose on top. Done in the kernel that cost two and a half
---  times what the kernel itself cost for a generated token, where there is
---  one vector to amortize it over. Done here it is paid once at load. A
---  byte apiece is sixty-four for each of the two against the ninety-six they
---  were packed into, and the panel block grows by the difference.
+--  times what the kernel itself cost for a generated token. Done here, and
+--  kept in the same ninety-six bytes in a shape the kernel reassembles with
+--  two loads and four shifts, eight rows at once. They were a byte apiece
+--  once, 1184 bytes a block, and a generated token -- bound by the memory
+--  -- paid the thirty-two more on every read.
 --
 --  The six-bit layout, which a "_M" file needs because it is a mixture: its
 --  output projection and about half its feed-forward are Q6_K, and with the
@@ -98,8 +103,8 @@ package Model_Runner.Quantization.Interleave is
    Panel_Rows : constant := 8;
 
    --  Bytes one panel's block occupies, in each of the four layouts.
-   Panel_Block_Bytes : constant := 1184;
-   Five_Block_Bytes  : constant := 1440;
+   Panel_Block_Bytes : constant := 1152;
+   Five_Block_Bytes  : constant := 1408;
    Six_Block_Bytes   : constant := 1680;
    Legacy_Block_Bytes : constant := 144;
    Least_Block_Bytes  : constant := 160;
@@ -114,20 +119,20 @@ package Model_Runner.Quantization.Interleave is
    Panel_Scale_At   : constant := 0;
    Panel_Least_At   : constant := 16;
    Panel_Factor_At  : constant := 32;
-   Panel_Minimum_At : constant := 96;
-   Panel_Quants_At  : constant := 160;
+   Panel_Top_At     : constant := 96;
+   Panel_Quants_At  : constant := 128;
 
    --  The five-bit layout is the four-bit one with a run of fifth bits
    --  after the quants, and its first five parts are at the same places:
    --
-   --  1184 .. 1439  the fifth bit of every quant, interleaved
+   --  1152 .. 1407  the fifth bit of every quant, interleaved
    --
    --  The fifth bits are a bit an element where the low four are a nibble,
    --  so one thirty-two byte load of them serves all four pairs at four
    --  shifts -- bit 2*J for a pair's low sub-block and 2*J + 1 for its
    --  high one -- which is why the kernel reads the same group of them four
    --  times over.
-   Five_High_At : constant := 1184;
+   Five_High_At : constant := 1152;
 
    --  And the four parts of a six-bit one.
    Six_Scale_At  : constant := 0;

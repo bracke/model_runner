@@ -295,18 +295,31 @@ package body Model_Runner.Quantization.Interleave is
       Target (Out_At + Panel_Least_At + Lane * 2 + 1) := Source (In_At + 3);
 
       --  The eight sub-block scales and minima, taken out of their six-bit
-      --  fields and written a byte each, sub-block major -- so that the
-      --  kernel widens eight rows' scale for one sub-block out of eight
-      --  consecutive bytes.
+      --  fields and put back sub-block major -- the low four bits of a
+      --  scale and its minimum a byte, the top two of two sub-blocks' a
+      --  byte -- so that the kernel widens eight rows' scale for one
+      --  sub-block out of eight consecutive bytes.
       Unpack (Source, In_At + Scales_At, Scale, Least);
 
       for Sub in 0 .. 7 loop
          Target
            (Out_At + Panel_Factor_At
-            + B.Byte_Count (Sub) * Panel_Rows + Lane) := Scale (Sub);
+            + B.Byte_Count (Sub) * Panel_Rows + Lane) :=
+           (Scale (Sub) and 16#0F#)
+           or Interfaces.Shift_Left (Least (Sub) and 16#0F#, 4);
+      end loop;
+
+      for Pair in 0 .. 3 loop
          Target
-           (Out_At + Panel_Minimum_At
-            + B.Byte_Count (Sub) * Panel_Rows + Lane) := Least (Sub);
+           (Out_At + Panel_Top_At
+            + B.Byte_Count (Pair) * Panel_Rows + Lane) :=
+           Interfaces.Shift_Right (Scale (2 * Pair), 4)
+           or Interfaces.Shift_Left
+                (Interfaces.Shift_Right (Least (2 * Pair), 4), 2)
+           or Interfaces.Shift_Left
+                (Interfaces.Shift_Right (Scale (2 * Pair + 1), 4), 4)
+           or Interfaces.Shift_Left
+                (Interfaces.Shift_Right (Least (2 * Pair + 1), 4), 6);
       end loop;
 
       --  And the quants, which is the permutation this layout exists for.
@@ -1031,12 +1044,22 @@ package body Model_Runner.Quantization.Interleave is
       Target (Out_At + 3) := Source (In_At + Panel_Least_At + Lane * 2 + 1);
 
       for Sub in 0 .. 7 loop
-         Scale (Sub) :=
-           Source (In_At + Panel_Factor_At
-                   + B.Byte_Count (Sub) * Panel_Rows + Lane);
-         Least (Sub) :=
-           Source (In_At + Panel_Minimum_At
-                   + B.Byte_Count (Sub) * Panel_Rows + Lane);
+         declare
+            Low : constant Interfaces.Unsigned_8 :=
+              Source (In_At + Panel_Factor_At
+                      + B.Byte_Count (Sub) * Panel_Rows + Lane);
+            Top : constant Interfaces.Unsigned_8 :=
+              Interfaces.Shift_Right
+                (Source (In_At + Panel_Top_At
+                         + B.Byte_Count (Sub / 2) * Panel_Rows + Lane),
+                 4 * (Sub mod 2));
+         begin
+            Scale (Sub) :=
+              (Low and 16#0F#) or Interfaces.Shift_Left (Top and 3, 4);
+            Least (Sub) :=
+              Interfaces.Shift_Right (Low, 4)
+              or Interfaces.Shift_Left (Interfaces.Shift_Right (Top, 2) and 3, 4);
+         end;
       end loop;
 
       Pack (Scale, Least, Target, Out_At + Scales_At);

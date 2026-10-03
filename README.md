@@ -10337,10 +10337,17 @@ and a panel wants them a lane a row, which is a transpose on top. Built that
 way the prompt was already 1.37 times ahead and **a generated token was forty
 per cent behind** -- with one vector there is nothing to amortize a prologue
 over, and it measured two and a half times what the kernel itself cost. So the
-panel layout stores them unpacked, a byte each, sub-block major: one
-`vpmovzxbd` a sub-block, and the four-bit panel block grows from 1152 bytes to
-1184 for it. That is what a repack is for, and the first version of this had
-put the work back in the kernel it was repacking to avoid. The six-bit
+panel layout stores them transposed, sub-block major, which is the expensive
+half done once at load. It first stored them unpacked too, a byte each, which
+grew the block from 1152 bytes to 1184; since 2026-10-03 the low four bits of a
+scale and its minimum share a byte and the top two bits of two sub-blocks'
+share another, so the block is the file's 1152 again and a sub-block's eight
+factors are two `vpmovzxbd` and four shifts. A generated token is bound by the
+memory, and the thirty-two bytes were read on every one of them: TinyLlama
+Q4_K_M 61.0 -> 62.3 tokens a second on all cores, 52.7 -> 53.6 on one,
+qwen3-8b Q4_K_M 9.43 -> 9.65. That is what a repack is for, and the first
+version of this had put the work back in the kernel it was repacking to
+avoid. The six-bit
 format's scales are already whole bytes, so its panel block is 1680 -- the
 eight rows' 210 each and not one more.
 
