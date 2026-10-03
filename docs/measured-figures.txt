@@ -23960,3 +23960,16 @@ panels FB3271B0953307EE src/library/model_runner-quantization-interleave.ads src
 #   outside 4458A4F8B2418461 -> 190E3ADD8BD2DC09,
 #   panels 32309E5A1BE7C019 -> FB3271B0953307EE.
 # model: TinyLlama 1.1B chat Q2_K, Qwen3-Coder-30B-A3B Q2_K
+
+# 2026-10-03: the Q6_K output head on the device, tried on the low-bit
+# subgroup kernel (a lane a sub-block of sixteen, as Q2_K and Q3_K) and
+# refused: TinyLlama Q5_K_M's head (32000 x 2048) 826 us a token with it
+# against about 812 on row_product_super6 (--device-timeline, about 65 GB/s
+# -- the fastest product in the token), and generation level, 1.628 against
+# 1.626 s for 128 tokens, same text (35ab560dd24fdd2a). There is no head gap
+# to close: in the same sitting TinyLlama Q5_K_M generates at 78.7 t/s
+# against llama.cpp's 77.3, and qwen3-8b Q4_K_M (a 151936 x 4096 Q6_K head)
+# at 14.10 against llama-bench tg64's 13.90. Nothing changed; no group is
+# restamped.
+# load:  one-minute average 1.5 to 2.1
+# model: TinyLlama 1.1B chat Q5_K_M, Qwen3-8B Q4_K_M
