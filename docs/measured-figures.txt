@@ -24035,3 +24035,20 @@ panels 6F89212F64FC4A8C src/library/model_runner-quantization-interleave.ads src
 # pays for its pages too.
 # load:  one-minute average 1.6 to 2.2
 # model: Qwen3-8B Q4_K_M
+
+# 2026-10-03: qwen3.6-35B-A3B (MTP, Q4_K_S, 21.4 GB) against llama.cpp, and
+# there is no reference to close a gap to. llama-bench 95b8e33e1 does not
+# load it on this host's 780M: with -ngl 99 and -ncmoe 99, -ot exps=CPU,
+# -mmp 0, -ngl 10 or -ngl 0 it fails "radv/amdgpu: Not enough memory for
+# command submission ... ErrorDeviceLost" (TinyLlama runs in the same
+# sitting, 92.9 t/s). With the device hidden (GGML_VK_VISIBLE_DEVICES="")
+# it generates at 7.50 +- 1.77 t/s (tg32). model_runner's split (front on
+# the device, experts on the processor), `run --draft-tokens 0`, 64 tokens,
+# warm with 24 GB free: 13.4, 14.4, 16.3, 15.2 t/s -- about twice the only
+# configuration llama.cpp runs here. Against the hardware, the 2026-09-26
+# entries stand: the device half reads near DRAM and the processor's
+# experts at ~35 of ~45 GB/s, bandwidth-bound (threads 6/8/10 equal), and
+# the two halves share one memory bus (pipelining them lost).
+# Nothing changed; no group is restamped.
+# load:  one-minute average 1.4 to 2.6
+# model: qwen3.6-35b-a3b-mtp Q4_K_S
