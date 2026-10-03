@@ -24686,3 +24686,22 @@ panels 42D085F23713B3BE src/library/model_runner-quantization-interleave.ads src
 # qwen3-8b level, and it reorders the sum).
 # load: one-minute average 0.9 to 1.5
 # model: TinyLlama-1.1B-Chat Q4_K_M, Q5_K_M, Q3_K; qwen3-8b Q4_K_M
+# 2026-10-03: what is left of Q5_K_M's processor generation against
+# llama.cpp (59.2 against 59.8, TinyLlama, 8 threads), bounded by mutants
+# that give wrong text and show what a lever could at most buy (t/s,
+# alternated, run --raw --prompt "The" --max-tokens 128):
+#
+#   the activation never packed again (stale bytes)   +0.3   (Q4_K_M +1-3)
+#   Q5_K's scale nibbles taken without the shifts      all cores 58.7 ->
+#     that rebuild them                                58.6; one core
+#                                                      41.0 -> 43.8
+#   the last tile of a stretch in four panels          level
+#   Q5_K's prefetch 4 KB or 8 KB further               level (58.97 against
+#                                                      59.0 over four)
+#
+# Per job (rdtsc): busy 575k cycles of 595k; packing the vector 5.0k, the
+# rest of the setup 3k, the wake 2.5k, the tail about 9k. None of it moves
+# the token. Both programs stop rising at four threads; what separates them
+# is not in anything found here.
+# load: one-minute average 0.9 to 1.5
+# model: TinyLlama-1.1B-Chat Q5_K_M, Q4_K_M
