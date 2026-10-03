@@ -1185,6 +1185,11 @@ package body Model_Runner.Vision is
    procedure Close (Item : in out Encoder) is
    begin
       Item.Ready := False;
+      for Index in 1 .. Item.Padded_Count loop
+         Model_Runner.Bytes.Free (Item.Padded (Index).Bytes);
+         Item.Padded (Index) := (others => <>);
+      end loop;
+      Item.Padded_Count := 0;
       if Item.Layers /= null then
          for Current of Item.Layers.all loop
             T.Free (Current.Norm_1_Weight);
@@ -1461,12 +1466,19 @@ package body Model_Runner.Vision is
    --  Rows one product on the device takes at once: where the device's
    --  own batch is fastest, and the working set its shader was measured
    --  with.
-   Device_Chunk : constant Element_Count := 512;
+   Device_Chunk : constant Element_Count := 128;
 
    --  What every product and row task of an encode shares: the pool, the
    --  stop request, the two work records, the scratch a matrix is decoded
    --  into and a device product's chunk of rows in and out, and the
    --  status every step reads before it starts and writes when it fails.
+   Exactly : Boolean := False;
+
+   procedure Prefer_Exact (On : Boolean) is
+   begin
+      Exactly := On;
+   end Prefer_Exact;
+
    type Workspace is limited record
       Team      : CPU.Pool_Reference := null;
       Cancel    : Model_Runner.Cancellation.Token_Reference := null;
@@ -1481,7 +1493,99 @@ package body Model_Runner.Vision is
       --  after, so the cache grows once a picture. Not yet chosen is
       --  Element_Count'Last.
       Cache_Base : Element_Count := Element_Count'Last;
+
+      --  The encoder this picture belongs to, for the padded weights it
+      --  keeps; null where the caller did not say, which multiplies by the
+      --  file's own shapes.
+      Owner : access Encoder := null;
    end record;
+
+   --  The tile's grain in rows and its step in columns at the batch the
+   --  device is handed here.
+   Pad_Rows    : constant Element_Count := 32;
+   Pad_Columns : constant Element_Count := 128;
+
+   function Rounded (Value, Grain : Element_Count) return Element_Count
+   is ((Value + Grain - 1) / Grain * Grain);
+
+   --  Weight, or the padded copy of it the encoder keeps, made now if it has
+   --  none. The file's own view where nothing needs padding, where the
+   --  format is not one the tile reads, or where the copy cannot be made.
+   function Padded
+     (Work : in out Workspace; Weight : T.View) return T.View
+   is
+      use type Model_Runner.GGUF.Tensor_Type;
+      use System.Storage_Elements;
+
+      Rows_P : constant Element_Count := Rounded (Weight.Rows, Pad_Rows);
+      Cols_P : constant Element_Count :=
+        Rounded (Weight.Columns, Pad_Columns);
+      Key    : constant System.Address :=
+        Weight.Base + Storage_Offset (Weight.Offset);
+   begin
+      if Work.Owner = null
+        or else Exactly
+        or else (Rows_P = Weight.Rows and then Cols_P = Weight.Columns)
+        or else not (Weight.Format = Model_Runner.GGUF.Type_F16
+                     or else Weight.Format = Model_Runner.GGUF.Type_BF16)
+        or else Weight.Interleaved
+      then
+         return Weight;
+      end if;
+
+      for Index in 1 .. Work.Owner.Padded_Count loop
+         if Work.Owner.Padded (Index).Key = Key then
+            return Work.Owner.Padded (Index).View;
+         end if;
+      end loop;
+
+      if Work.Owner.Padded_Count = Work.Owner.Padded'Last then
+         return Weight;
+      end if;
+
+      declare
+         Row_In  : constant Model_Runner.Bytes.Byte_Count :=
+           Model_Runner.Bytes.Byte_Count (Weight.Columns) * 2;
+         Row_Out : constant Model_Runner.Bytes.Byte_Count :=
+           Model_Runner.Bytes.Byte_Count (Cols_P) * 2;
+         Total   : constant Model_Runner.Bytes.Byte_Count :=
+           Row_Out * Model_Runner.Bytes.Byte_Count (Rows_P);
+         Bytes   : Model_Runner.Bytes.Byte_Array_Access;
+         Made    : T.View;
+         Local   : E.Error_Info;
+      begin
+         begin
+            Bytes := new Model_Runner.Bytes.Byte_Array'(1 .. Total => 0);
+         exception
+            when Storage_Error =>
+               return Weight;
+         end;
+
+         declare
+            Source : Model_Runner.Bytes.Byte_Array
+              (1 .. Row_In * Model_Runner.Bytes.Byte_Count (Weight.Rows))
+              with Import, Address => Key;
+         begin
+            for Row in 0 .. Model_Runner.Bytes.Byte_Count (Weight.Rows) - 1
+            loop
+               Bytes (1 + Row * Row_Out .. Row * Row_Out + Row_In) :=
+                 Source (1 + Row * Row_In .. (Row + 1) * Row_In);
+            end loop;
+         end;
+
+         T.Make (Weight.Format, Rows_P, Cols_P, Bytes, 0, Made, Local);
+         if E.Is_Error (Local) then
+            Model_Runner.Bytes.Free (Bytes);
+            return Weight;
+         end if;
+         Made.Role := Weight.Role;
+
+         Work.Owner.Padded_Count := Work.Owner.Padded_Count + 1;
+         Work.Owner.Padded (Work.Owner.Padded_Count) :=
+           (Key => Key, View => Made, Bytes => Bytes);
+         return Made;
+      end;
+   end Padded;
 
    --  Every row of Target through one of the row tasks.
    procedure Rows_Through
@@ -1563,23 +1667,65 @@ package body Model_Runner.Vision is
 
       if Model_Runner.Backend.Device.Is_Ready then
          declare
-            Columns : constant Element_Count := Weight.Columns;
+            Shaped   : constant T.View := Padded (Work, Weight);
+            Columns  : constant Element_Count := Weight.Columns;
             Rows_Out : constant Element_Count := Weight.Rows;
-            From : Element_Count := 0;
+            Cols_P   : constant Element_Count := Shaped.Columns;
+            Rows_P   : constant Element_Count := Shaped.Rows;
+            From     : Element_Count := 0;
          begin
+            if Work.In_Chunk.all'Length < Device_Chunk * Cols_P then
+               T.Free (Work.In_Chunk);
+               T.Allocate (Device_Chunk * Cols_P, Work.In_Chunk);
+            end if;
+            if Work.Out_Chunk.all'Length < Device_Chunk * Rows_P then
+               T.Free (Work.Out_Chunk);
+               T.Allocate (Device_Chunk * Rows_P, Work.Out_Chunk);
+            end if;
+            if Work.In_Chunk = null or else Work.Out_Chunk = null then
+               Work.Status := E.Make (E.Memory_Allocation_Failed);
+               E.Add_Text (Work.Status, "category", "vision",
+                           E.Param_Identifier);
+               return;
+            end if;
+
             while E.Is_Ok (Work.Status) and then From < Total loop
                declare
                   Take : constant Element_Count :=
                     Element_Count'Min (Device_Chunk, Total - From);
                begin
-                  Work.In_Chunk (0 .. Take * Columns - 1) :=
-                    Source (From * Columns .. (From + Take) * Columns - 1);
+                  if Cols_P = Columns then
+                     Work.In_Chunk (0 .. Take * Columns - 1) :=
+                       Source (From * Columns .. (From + Take) * Columns - 1);
+                  else
+                     for P in 0 .. Take - 1 loop
+                        Work.In_Chunk (P * Cols_P .. P * Cols_P + Columns - 1)
+                          := Source ((From + P) * Columns
+                                     .. (From + P + 1) * Columns - 1);
+                        Work.In_Chunk
+                          (P * Cols_P + Columns .. (P + 1) * Cols_P - 1) :=
+                            [others => 0.0];
+                     end loop;
+                  end if;
+
+                  --  The tile's operand is half precision, as llama.cpp's
+                  --  is; the row kernel's binary32 read every weight once
+                  --  a group of eight patches, and a picture is 4,096.
                   Model_Runner.Backend.Device.Dispatch_Batch
-                    (Weight, Work.In_Chunk, Take, Work.Out_Chunk, Work.Status,
-                     Work.Cancel, Exact => True);
+                    (Shaped, Work.In_Chunk, Take, Work.Out_Chunk, Work.Status,
+                     Work.Cancel, Exact => Exactly);
                   exit when E.Is_Error (Work.Status);
-                  Target (From * Rows_Out .. (From + Take) * Rows_Out - 1) :=
-                    Work.Out_Chunk (0 .. Take * Rows_Out - 1);
+
+                  if Rows_P = Rows_Out then
+                     Target (From * Rows_Out .. (From + Take) * Rows_Out - 1) :=
+                       Work.Out_Chunk (0 .. Take * Rows_Out - 1);
+                  else
+                     for P in 0 .. Take - 1 loop
+                        Target ((From + P) * Rows_Out
+                                .. (From + P + 1) * Rows_Out - 1) :=
+                          Work.Out_Chunk (P * Rows_P .. P * Rows_P + Rows_Out - 1);
+                     end loop;
+                  end if;
                   From := From + Take;
                end;
             end loop;
@@ -1672,10 +1818,50 @@ package body Model_Runner.Vision is
    is
       Scale : constant Real :=
         Real (N.Wide_Real'(1.0) / Elementary.Sqrt (N.Wide_Real (Head)));
+
+      --  A head as the device's matrix attention reads it: a whole number
+      --  of sixteen components. SigLIP's are 72, and a head the matrix
+      --  kernel cannot read goes to the exact one, a component at a time,
+      --  at a tenth of the rate. The padding is zeros in the queries and
+      --  the keys, which add nothing to a score, and in the values, whose
+      --  padded components are blended and dropped; the scale stays the
+      --  head's own.
+      Head_P  : constant Element_Count :=
+        (if Exactly then Head else (Head + 15) / 16 * 16);
+      Width_P : constant Element_Count := Heads * Head_P;
+      Spread  : constant Boolean := Head_P /= Head or else Stride /= Width;
+
       K_Base : Element_Count;
       V_Base : Element_Count;
       Whole  : T.Real_Array_Access := null;
+      Asked  : T.Real_Array_Access := null;
+      Answer : T.Real_Array_Access := null;
       Ok     : Boolean;
+
+      --  Patch P's row of Source, from At with Stride between patches, into
+      --  Into at Place, a head of Head_P at a time.
+      procedure Spread_Row
+        (Source : T.Real_Array_Access;
+         At_Row : Element_Count;
+         Into   : T.Real_Array_Access;
+         Place  : Element_Count) is
+      begin
+         for H in 0 .. Heads - 1 loop
+            Into (Place + H * Head_P .. Place + H * Head_P + Head - 1) :=
+              Source (At_Row + H * Head .. At_Row + H * Head + Head - 1);
+            if Head_P > Head then
+               Into (Place + H * Head_P + Head .. Place + (H + 1) * Head_P - 1)
+                 := [others => 0.0];
+            end if;
+         end loop;
+      end Spread_Row;
+
+      procedure Release is
+      begin
+         T.Free (Whole);
+         T.Free (Asked);
+         T.Free (Answer);
+      end Release;
    begin
       Took := False;
       if not Model_Runner.Backend.Device.Is_Ready
@@ -1688,20 +1874,15 @@ package body Model_Runner.Vision is
          Work.Cache_Base := Model_Runner.Backend.Device.Cached_Elements;
       end if;
       K_Base := Work.Cache_Base;
-      V_Base := K_Base + Patches * Width;
+      V_Base := K_Base + Patches * Width_P;
 
-      --  Patches are read as an exact session's keys and values are, so
-      --  the copy must reach as far as they do.
       Model_Runner.Backend.Device.Reserve_Cache
-        (V_Base + Patches * Width, V_Base + Patches * Width, Ok);
+        (V_Base + Patches * Width_P, V_Base + Patches * Width_P, Ok);
       if not Ok then
          return;
       end if;
 
-      --  The keys and the values, each as one run of Patches positions of
-      --  Width: as they are where they lie that way, gathered where they
-      --  lie Stride apart.
-      if Stride = Width then
+      if not Spread then
          Model_Runner.Backend.Device.Put_Cache
            (K_Base, Kv (K_At .. K_At + Patches * Width - 1), Ok);
          if Ok then
@@ -1709,46 +1890,44 @@ package body Model_Runner.Vision is
               (V_Base, V (V_At .. V_At + Patches * Width - 1), Ok);
          end if;
       else
-         T.Allocate (Patches * Width, Whole);
-         if Whole = null then
+         T.Allocate (Patches * Width_P, Whole);
+         T.Allocate (Device_Queries * Width_P, Asked);
+         T.Allocate (Device_Queries * Width_P, Answer);
+         if Whole = null or else Asked = null or else Answer = null then
+            Release;
             return;
          end if;
          for P in 0 .. Patches - 1 loop
-            Whole (P * Width .. (P + 1) * Width - 1) :=
-              Kv (K_At + P * Stride .. K_At + P * Stride + Width - 1);
+            Spread_Row (Kv, K_At + P * Stride, Whole, P * Width_P);
          end loop;
          Model_Runner.Backend.Device.Put_Cache (K_Base, Whole.all, Ok);
          if Ok then
             for P in 0 .. Patches - 1 loop
-               Whole (P * Width .. (P + 1) * Width - 1) :=
-                 V (V_At + P * Stride .. V_At + P * Stride + Width - 1);
+               Spread_Row (V, V_At + P * Stride, Whole, P * Width_P);
             end loop;
             Model_Runner.Backend.Device.Put_Cache (V_Base, Whole.all, Ok);
          end if;
       end if;
       if not Ok then
-         T.Free (Whole);
+         Release;
          return;
       end if;
 
-      --  The queries, a batch at a time, gathered contiguous where they
-      --  lie Stride apart; the blends land in Attended as they are. In
-      --  binary32, off the matrix instruction: its halves moved a row of
-      --  the picture by a thousandth of its norm over the blocks, and the
-      --  kernel that reads the cache proper by a millionth; the products
-      --  are held to binary32 the same way.
       declare
          From : Element_Count := 0;
          Was_Exact : constant Boolean :=
            Model_Runner.Backend.Device.Attends_Exactly;
       begin
-         Model_Runner.Backend.Device.Attend_Exactly (True);
+         --  The matrix kernel, its operands half precision as llama.cpp's
+         --  flash attention reads them; the heads are padded above to the
+         --  sixteen it reads at a time. Or binary32 throughout, asked for.
+         Model_Runner.Backend.Device.Attend_Exactly (Exactly);
          while From < Patches loop
             declare
                Take : constant Element_Count :=
                  Element_Count'Min (Device_Queries, Patches - From);
             begin
-               if Stride = Width then
+               if not Spread then
                   Model_Runner.Backend.Device.Attend
                     (Q (Q_At + From * Width .. Q_At + (From + Take) * Width - 1),
                      Natural (Heads), Natural (Head), Natural (Head), 1,
@@ -1760,19 +1939,29 @@ package body Model_Runner.Vision is
                      Positions => Natural (Take), Causal => False);
                else
                   for P in 0 .. Take - 1 loop
-                     Whole (P * Width .. (P + 1) * Width - 1) :=
-                       Q (Q_At + (From + P) * Stride
-                          .. Q_At + (From + P) * Stride + Width - 1);
+                     Spread_Row
+                       (Q, Q_At + (From + P) * Stride, Asked, P * Width_P);
                   end loop;
                   Model_Runner.Backend.Device.Attend
-                    (Whole (0 .. Take * Width - 1),
-                     Natural (Heads), Natural (Head), Natural (Head), 1,
+                    (Asked (0 .. Take * Width_P - 1),
+                     Natural (Heads), Natural (Head_P), Natural (Head_P), 1,
                      0, Natural (Patches - 1),
                      K_Base, V_Base,
-                     Natural (Width), Natural (Width),
+                     Natural (Width_P), Natural (Width_P),
                      Scale, 0.0,
-                     Attended (From * Width .. (From + Take) * Width - 1), Ok,
+                     Answer (0 .. Take * Width_P - 1), Ok,
                      Positions => Natural (Take), Causal => False);
+                  if Ok then
+                     for P in 0 .. Take - 1 loop
+                        for H in 0 .. Heads - 1 loop
+                           Attended
+                             ((From + P) * Width + H * Head
+                              .. (From + P) * Width + H * Head + Head - 1) :=
+                             Answer (P * Width_P + H * Head_P
+                                     .. P * Width_P + H * Head_P + Head - 1);
+                        end loop;
+                     end loop;
+                  end if;
                end if;
                exit when not Ok;
                From := From + Take;
@@ -1781,7 +1970,7 @@ package body Model_Runner.Vision is
          Took := Ok and then From = Patches;
          Model_Runner.Backend.Device.Attend_Exactly (Was_Exact);
       end;
-      T.Free (Whole);
+      Release;
    end Attend_On_Device;
 
    procedure Attend
@@ -2109,6 +2298,7 @@ package body Model_Runner.Vision is
       end Attend;
 
    begin
+      Work.Owner := Item'Unchecked_Access;
       Rows := null;
       Status := E.Success;
 
@@ -2425,6 +2615,7 @@ package body Model_Runner.Vision is
          Status := Work.Status;
       end Attend;
    begin
+      Work.Owner := Item'Unchecked_Access;
       Rows := null;
       Status := E.Success;
 
@@ -2838,6 +3029,7 @@ package body Model_Runner.Vision is
              when others => (2 * I + 1) * Grid + (2 * J + 1));
 
    begin
+      Work.Owner := Item'Unchecked_Access;
       Rows := null;
       Status := E.Success;
 
@@ -3374,6 +3566,7 @@ package body Model_Runner.Vision is
          Blend (Y1 * Grid + X1, FY * FX);
       end Position_Row;
    begin
+      Work.Owner := Item'Unchecked_Access;
       Rows := null;
       Grid_Rows := 0;
       Grid_Columns := 0;

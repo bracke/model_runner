@@ -5,6 +5,7 @@ with Ada.Unchecked_Conversion;
 with Interfaces.C;
 with Interfaces.C.Strings;
 
+with System.Machine_Code;
 with System.Storage_Elements;
 
 with Model_Runner.Shaders;
@@ -7604,6 +7605,85 @@ package body Model_Runner.Platform.Device.Products is
    -- Put_Cache --
    ---------------
 
+   --  Whether the half conversion instruction may be used: the x86-64-v3
+   --  set, asked once.
+   Converts_Halves : constant Boolean := Model_Runner.Platform.Wide_Vectors;
+
+   --  Values into binary16, eight a step through VCVTPS2PH where every one
+   --  of the eight is finite and either zero or at least the smallest
+   --  binary16 subnormal -- where the instruction's rounding, to nearest
+   --  and ties to even, is To_Half's to the bit -- and through To_Half
+   --  where any is not: a NaN keeps To_Half's payload, and a value below
+   --  two to the minus twenty-four goes to zero as To_Half sends it. A
+   --  picture's keys and values are ten million a block, converted one at
+   --  a time they were a third of its attention.
+   procedure Halve
+     (Values : Model_Runner.Numerics.Real_Array;
+      Halves : out Model_Runner.Numerics.Half_Array)
+   is
+
+      Count  : constant Model_Runner.Numerics.Element_Count := Values'Length;
+      Blocks : constant Model_Runner.Numerics.Element_Count := Count / 8;
+      Odd    : Interfaces.Unsigned_32 := 0;
+   begin
+      if Converts_Halves and then Blocks > 0 then
+         System.Machine_Code.Asm
+           ("movl $0x7fffffff, %%eax"          & ASCII.LF
+            & "vmovd %%eax, %%xmm3"            & ASCII.LF
+            & "vbroadcastss %%xmm3, %%ymm3"    & ASCII.LF
+            & "movl $0x33800000, %%eax"        & ASCII.LF
+            & "vmovd %%eax, %%xmm4"            & ASCII.LF
+            & "vbroadcastss %%xmm4, %%ymm4"    & ASCII.LF
+            & "movl $0x7f800000, %%eax"        & ASCII.LF
+            & "vmovd %%eax, %%xmm5"            & ASCII.LF
+            & "vbroadcastss %%xmm5, %%ymm5"    & ASCII.LF
+            & "xorl %0, %0"                    & ASCII.LF
+            & "movq %1, %%rsi"                 & ASCII.LF
+            & "movq %2, %%rdi"                 & ASCII.LF
+            & "movq %3, %%rcx"                 & ASCII.LF
+            & "1:"                             & ASCII.LF
+            & "vmovups (%%rsi), %%ymm0"        & ASCII.LF
+            & "vandps %%ymm3, %%ymm0, %%ymm1"  & ASCII.LF
+            & "vcmpps $0x1d, %%ymm4, %%ymm1, %%ymm2" & ASCII.LF
+            & "vxorps %%xmm6, %%xmm6, %%xmm6"  & ASCII.LF
+            & "vcmpps $0x00, %%ymm6, %%ymm1, %%ymm6" & ASCII.LF
+            & "vorps %%ymm6, %%ymm2, %%ymm2"   & ASCII.LF
+            & "vcmpps $0x11, %%ymm5, %%ymm1, %%ymm6" & ASCII.LF
+            & "vandps %%ymm6, %%ymm2, %%ymm2"  & ASCII.LF
+            & "vmovmskps %%ymm2, %%eax"        & ASCII.LF
+            & "xorl $0xff, %%eax"              & ASCII.LF
+            & "orl %%eax, %0"                  & ASCII.LF
+            & "vcvtps2ph $0, %%ymm0, (%%rdi)"  & ASCII.LF
+            & "addq $32, %%rsi"                & ASCII.LF
+            & "addq $16, %%rdi"                & ASCII.LF
+            & "decq %%rcx"                     & ASCII.LF
+            & "jnz 1b"                         & ASCII.LF
+            & "vzeroupper",
+            Outputs  => Interfaces.Unsigned_32'Asm_Output ("=&r", Odd),
+            Inputs   =>
+              [System.Address'Asm_Input ("r", Values (Values'First)'Address),
+               System.Address'Asm_Input ("r", Halves (Halves'First)'Address),
+               Interfaces.Unsigned_64'Asm_Input
+                 ("r", Interfaces.Unsigned_64 (Blocks))],
+            Clobber  =>
+              "rax,rcx,rsi,rdi,xmm0,xmm1,xmm2,xmm3,xmm4,xmm5,xmm6,cc,memory",
+            Volatile => True);
+      end if;
+
+      if not Converts_Halves or else Interfaces."/=" (Odd, 0) then
+         for Index in Halves'Range loop
+            Halves (Index) := Model_Runner.Numerics.To_Half
+              (Values (Values'First + (Index - Halves'First)));
+         end loop;
+         return;
+      end if;
+
+      for Index in Blocks * 8 .. Count - 1 loop
+         Halves (Halves'First + Index) :=
+           Model_Runner.Numerics.To_Half (Values (Values'First + Index));
+      end loop;
+   end Halve;
+
    procedure Put_Cache
      (Item     : in out Engine;
       At_Value : Model_Runner.Numerics.Element_Count;
@@ -7684,10 +7764,7 @@ package body Model_Runner.Platform.Device.Products is
                           (System.Storage_Elements.To_Integer (Base_At)
                            + System.Storage_Elements.Integer_Address (At_Half));
             begin
-               for Index in Halves'Range loop
-                  Halves (Index) :=
-                    Model_Runner.Numerics.To_Half (Values (Index));
-               end loop;
+               Halve (Values, Halves);
             end;
          end if;
       end;

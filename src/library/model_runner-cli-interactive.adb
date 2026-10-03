@@ -27,6 +27,7 @@ with Model_Runner.Text;
 with Model_Runner.Tokenizer;
 with Model_Runner.UTF8;
 with Model_Runner.CLI.Pictures;
+with Model_Runner.Vision;
 
 package body Model_Runner.CLI.Interactive is
 
@@ -316,6 +317,10 @@ package body Model_Runner.CLI.Interactive is
             E.Add_Text (Outcome, "other", "--mmproj", E.Param_Identifier);
             return;
          end if;
+         Model_Runner.Vision.Prefer_Exact
+           (Item.Arithmetic_Set
+            and then Model_Runner.Llama."="
+                       (Item.Arithmetic, Model_Runner.Llama.Float_Activations));
          if not Model_Runner.CLI.Pictures.Is_Open (Seer) then
             Model_Runner.CLI.Pictures.Open
               (Seer, T.To_String (Item.Projector_Path), Prepared, Outcome);

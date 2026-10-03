@@ -61,6 +61,16 @@ package Model_Runner.Vision is
    --  @param Item Encoder to close.
    procedure Close (Item : in out Encoder);
 
+   --  Whether the device encodes in binary32 throughout: the row kernel
+   --  for the products and the exact attention kernel, at a third of the
+   --  rate. Off, the products and the attention among the patches read
+   --  half-precision operands through the matrix instruction, as llama.cpp
+   --  encodes, and a row lands a thousandth to a hundredth of its norm from
+   --  the reference. The command asks for it with --arith f32.
+   --
+   --  @param On True for binary32 throughout.
+   procedure Prefer_Exact (On : Boolean);
+
    --  Whether Open succeeded and Close has not been called.
    --
    --  @param Item Encoder to inspect.
@@ -289,6 +299,18 @@ private
    type Block_Array is array (Natural range <>) of Block;
    type Block_Array_Access is access Block_Array;
 
+   --  A weight copied out to a shape the device's tile takes, rows a
+   --  multiple of 32 and columns of 128, the rest zero: SigLIP's
+   --  feed-forward is 4304 wide, which neither divides, and a product that
+   --  fits no tile reads its weights again for every eight patches.
+   type Padded_Weight is record
+      Key   : System.Address := System.Null_Address;
+      View  : T.View := T.Empty_View;
+      Bytes : Model_Runner.Bytes.Byte_Array_Access := null;
+   end record;
+
+   type Padded_Set is array (1 .. 8 * Max_Blocks) of Padded_Weight;
+
    type Encoder is tagged limited record
       Ready     : Boolean := False;
       File      : Model_Runner.Byte_Sources.Files.File_Source;
@@ -326,6 +348,11 @@ private
       --  rows for a device to read.
       Projection_Rows : T.Real_Array_Access := null;
       Projection      : T.View := T.Empty_View;
+
+      --  The weights padded for the device, made the first time a picture
+      --  multiplies by them there and kept until the encoder closes.
+      Padded       : Padded_Set;
+      Padded_Count : Natural := 0;
 
       --  What the Qwen encoder has that Gemma's has not: the patches
       --  walked in windows of Merge a side, whose rows are joined and

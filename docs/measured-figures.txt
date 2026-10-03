@@ -7533,7 +7533,11 @@ reference 0680DE6E6931EC13 src/library/model_runner-backend-reference.adb src/li
 #   The figures in this group were taken with the exact cache and stand
 #   as figures for --kv-cache f32; taken again without naming it, a long
 #   context reads the half-precision cache.
-device DEAA1C1E76D02BAC src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Restamped 2026-10-03, not re-measured: the change was the half-precision
+#   copy of the cache written eight elements a step through the conversion
+#   instruction where they are in its exact range, To_Half's bits either
+#   way, and the picture encoder's products and attention on the device.
+device 186758F724C7ED5A src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 
 # covers: the three-row table under "Drafting", the per-token costs derived
@@ -10521,7 +10525,11 @@ tokenizer CE3B696CD412A3B6 src/library/model_runner-tokenizer.adb
 #   The figures in this group were taken with the exact cache and stand
 #   as figures for --kv-cache f32; taken again without naming it, a long
 #   context reads the half-precision cache.
-outside DEAA1C1E76D02BAC src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Restamped 2026-10-03, not re-measured: the change was the half-precision
+#   copy of the cache written eight elements a step through the conversion
+#   instruction where they are in its exact range, To_Half's bits either
+#   way, and the picture encoder's products and attention on the device.
+outside 186758F724C7ED5A src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-27  The row tile at sixty-four, and the instrument's first row
 #
@@ -24730,3 +24738,37 @@ panels 42D085F23713B3BE src/library/model_runner-quantization-interleave.ads src
 # is not in anything found here.
 # load: one-minute average 0.9 to 1.5
 # model: TinyLlama-1.1B-Chat Q5_K_M, Q4_K_M
+
+# 2026-10-03: Gemma 3's picture encoder on the device, against llama.cpp's
+# (llama-mtmd-cli -ngl 99, the same picture and prompt: 2.4 s to encode, 7.05 s
+# the whole run; -ngl 0 with the device hidden, 63 s to encode).
+#
+# Before, timed inside the encoder: 21.7 s, of it the products 11.0 (164 of
+# them, 67 ms each, about 0.2 TFLOP/s) and the attention 9.6 (27 blocks, 356
+# ms each). The products all took the row kernel: Exact was asked, and had it
+# not been, a batch of 512 takes the wide tile, which steps 256 columns, and
+# 1152 is not a multiple; the feed-forward's 4304 divides neither 32 rows nor
+# 128 columns. The attention took the exact kernel, and a head of 72 is not
+# the multiple of sixteen the matrix attention reads.
+#
+#   128 patches a product, the matrix tile          products 11.0 -> 8.6 s
+#   the feed-forward padded to 4320 x 1152 and
+#     1152 x 4352 (zeros, made once)                 encode 19.4 -> 13.7 s
+#   heads padded 72 -> 80, the matrix attention      attention 9.9 -> 5.0 s
+#   the half copy written through VCVTPS2PH          its writing 1.67 -> 0.72 s
+#   now                                              encode 8.0 s, the second
+#                                                    picture of a run 7.4 s
+#
+# A device step, from the timeline: 1152x1152 over 128 patches 105 us (was
+# 3,145 us over 512), 4320x1152 246 us, 1152x4352 394 us -- 0.9 s of products
+# a picture on the device, the rest of their 2.6 s the vectors each product
+# sends and fetches, about 4.7 GB a picture. Tried and dropped: the whole
+# picture a product with columns padded to the wide tile's 256 -- 162 products
+# in place of 5,184 but 10 ms each of sending, 2.7 s.
+#
+# Rows against the reference (tests see --device --expect, plaza.png): 0.0078,
+# 0.0012 and 0.0015 of their norms, held to 0.01; --arith f32 gives the
+# binary32 encoder as it was. Same answer on the red circle; MiniCPM-V 2.6
+# and Qwen3.5-0.8B read it as before.
+# load: one-minute average 0.8 to 1.6
+# model: gemma-3-4b-it Q4_K_M with gemma-3-4b-it-mmproj-f16

@@ -44,6 +44,7 @@ with Model_Runner.Stops;
 with Model_Runner.Templates;
 with Model_Runner.Tensors;
 with Model_Runner.Text;
+with Model_Runner.Vision;
 with Model_Runner.Tools;
 with Model_Runner.Tokenizer;
 with Model_Runner.UTF8;
@@ -2944,6 +2945,9 @@ package body Model_Runner.CLI.Execute is
             E.Add_Text (Condition, "other", "--mmproj", E.Param_Identifier);
             return;
          end if;
+
+         Model_Runner.Vision.Prefer_Exact
+           (L."=" (Chosen_Arithmetic (Item, Prepared), L.Float_Activations));
 
          if not Model_Runner.CLI.Pictures.Is_Open (Seer) then
             Model_Runner.CLI.Pictures.Open
