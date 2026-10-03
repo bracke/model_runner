@@ -1187,6 +1187,7 @@ package body Model_Runner.Vision is
       Item.Ready := False;
       for Index in 1 .. Item.Padded_Count loop
          Model_Runner.Bytes.Free (Item.Padded (Index).Bytes);
+         T.Free (Item.Padded (Index).Values);
          Item.Padded (Index) := (others => <>);
       end loop;
       Item.Padded_Count := 0;
@@ -1511,15 +1512,15 @@ package body Model_Runner.Vision is
    --  Weight, or the padded copy of it the encoder keeps, made now if it has
    --  none. The file's own view where nothing needs padding, where the
    --  format is not one the tile reads, or where the copy cannot be made.
-   function Padded
-     (Work : in out Workspace; Weight : T.View) return T.View
+   function Padded_To
+     (Work   : in out Workspace;
+      Weight : T.View;
+      Rows_P : Element_Count;
+      Cols_P : Element_Count) return T.View
    is
       use type Model_Runner.GGUF.Tensor_Type;
       use System.Storage_Elements;
 
-      Rows_P : constant Element_Count := Rounded (Weight.Rows, Pad_Rows);
-      Cols_P : constant Element_Count :=
-        Rounded (Weight.Columns, Pad_Columns);
       Key    : constant System.Address :=
         Weight.Base + Storage_Offset (Weight.Offset);
    begin
@@ -1534,7 +1535,11 @@ package body Model_Runner.Vision is
       end if;
 
       for Index in 1 .. Work.Owner.Padded_Count loop
-         if Work.Owner.Padded (Index).Key = Key then
+         if Work.Owner.Padded (Index).Key = Key
+           and then Work.Owner.Padded (Index).Bytes /= null
+           and then Work.Owner.Padded (Index).View.Rows = Rows_P
+           and then Work.Owner.Padded (Index).View.Columns = Cols_P
+         then
             return Work.Owner.Padded (Index).View;
          end if;
       end loop;
@@ -1582,10 +1587,60 @@ package body Model_Runner.Vision is
 
          Work.Owner.Padded_Count := Work.Owner.Padded_Count + 1;
          Work.Owner.Padded (Work.Owner.Padded_Count) :=
-           (Key => Key, View => Made, Bytes => Bytes);
+           (Key => Key, View => Made, Bytes => Bytes, Values => null);
          return Made;
       end;
-   end Padded;
+   end Padded_To;
+
+   function Padded
+     (Work : in out Workspace; Weight : T.View) return T.View
+   is (Padded_To (Work, Weight, Rounded (Weight.Rows, Pad_Rows),
+                  Rounded (Weight.Columns, Pad_Columns)));
+
+   --  Bias, or a copy of it zero past its own length to Length, kept as the
+   --  padded weights are. Null for no bias, and the bias itself where the
+   --  copy cannot be made or is not needed.
+   function Padded_Bias
+     (Work   : in out Workspace;
+      Bias   : T.Real_Array_Access;
+      Length : Element_Count) return T.Real_Array_Access
+   is
+      Key : System.Address;
+      Made : T.Real_Array_Access;
+   begin
+      if Bias = null or else Bias.all'Length >= Length
+        or else Work.Owner = null
+      then
+         return Bias;
+      end if;
+
+      Key := Bias.all (Bias.all'First)'Address;
+      for Index in 1 .. Work.Owner.Padded_Count loop
+         if Work.Owner.Padded (Index).Key = Key
+           and then Work.Owner.Padded (Index).Values /= null
+           and then Work.Owner.Padded (Index).Values.all'Length = Length
+         then
+            return Work.Owner.Padded (Index).Values;
+         end if;
+      end loop;
+
+      if Work.Owner.Padded_Count = Work.Owner.Padded'Last then
+         return Bias;
+      end if;
+
+      T.Allocate (Length, Made);
+      if Made = null then
+         return Bias;
+      end if;
+      Made.all := [others => 0.0];
+      Made.all (Made.all'First .. Made.all'First + Bias.all'Length - 1) :=
+        Bias.all;
+
+      Work.Owner.Padded_Count := Work.Owner.Padded_Count + 1;
+      Work.Owner.Padded (Work.Owner.Padded_Count) :=
+        (Key => Key, View => T.Empty_View, Bytes => null, Values => Made);
+      return Made;
+   end Padded_Bias;
 
    --  Every row of Target through one of the row tasks.
    procedure Rows_Through
@@ -1750,6 +1805,114 @@ package body Model_Runner.Vision is
 
    --  The scratch a workspace holds, for products of Total rows at most
    --  through weights of Columns_Max columns and Rows_Max rows.
+   --  A block's feed-forward on the device in one submission a chunk of
+   --  patches: up and its bias, the Gaussian unit, down and its bias, the
+   --  hidden activation never leaving the device. Both matrices padded so
+   --  that the hidden width is one the tile steps through on both sides.
+   --  Took is False where it did not run whole, and Target is then the
+   --  caller's to fill.
+   procedure Feed_On_Device
+     (Work      : in out Workspace;
+      Source    : T.Real_Array_Access;
+      Total     : Element_Count;
+      Up        : T.View;
+      Up_Bias   : T.Real_Array_Access;
+      Down      : T.View;
+      Down_Bias : T.Real_Array_Access;
+      Target    : T.Real_Array_Access;
+      Took      : out Boolean)
+   is
+      use type Model_Runner.GGUF.Tensor_Type;
+
+      Hidden_P : constant Element_Count := Rounded (Up.Rows, Pad_Columns);
+   begin
+      Took := False;
+      if not Model_Runner.Backend.Device.Is_Ready
+        or else Exactly
+        or else Work.Owner = null
+        or else E.Is_Error (Work.Status)
+        or else Up.Rows /= Down.Columns
+        or else not (Up.Format in Model_Runner.GGUF.Type_F16
+                                 | Model_Runner.GGUF.Type_BF16)
+        or else not (Down.Format in Model_Runner.GGUF.Type_F16
+                                   | Model_Runner.GGUF.Type_BF16)
+      then
+         return;
+      end if;
+
+      declare
+         Up_P     : constant T.View :=
+           Padded_To (Work, Up, Hidden_P, Rounded (Up.Columns, Pad_Columns));
+         Down_P   : constant T.View :=
+           Padded_To (Work, Down, Rounded (Down.Rows, Pad_Rows), Hidden_P);
+         Up_B     : constant T.Real_Array_Access :=
+           Padded_Bias (Work, Up_Bias, Hidden_P);
+         Down_B   : constant T.Real_Array_Access :=
+           Padded_Bias (Work, Down_Bias, Down_P.Rows);
+         Columns  : constant Element_Count := Up.Columns;
+         Cols_P   : constant Element_Count := Up_P.Columns;
+         Rows_Out : constant Element_Count := Down.Rows;
+         Rows_P   : constant Element_Count := Down_P.Rows;
+         From     : Element_Count := 0;
+         Local    : E.Error_Info;
+      begin
+         if Up_P.Rows /= Hidden_P or else Down_P.Columns /= Hidden_P
+           or else (Up_Bias /= null and then Up_B.all'Length /= Hidden_P)
+           or else (Down_Bias /= null and then Down_B.all'Length /= Rows_P)
+         then
+            return;
+         end if;
+
+         if Work.In_Chunk.all'Length < Device_Chunk * Cols_P then
+            T.Free (Work.In_Chunk);
+            T.Allocate (Device_Chunk * Cols_P, Work.In_Chunk);
+         end if;
+         if Work.Out_Chunk.all'Length < Device_Chunk * Rows_P then
+            T.Free (Work.Out_Chunk);
+            T.Allocate (Device_Chunk * Rows_P, Work.Out_Chunk);
+         end if;
+         if Work.In_Chunk = null or else Work.Out_Chunk = null then
+            Work.Status := E.Make (E.Memory_Allocation_Failed);
+            E.Add_Text (Work.Status, "category", "vision", E.Param_Identifier);
+            return;
+         end if;
+
+         while From < Total loop
+            declare
+               Take : constant Element_Count :=
+                 Element_Count'Min (Device_Chunk, Total - From);
+            begin
+               for P in 0 .. Take - 1 loop
+                  Work.In_Chunk (P * Cols_P .. P * Cols_P + Columns - 1) :=
+                    Source ((From + P) * Columns .. (From + P + 1) * Columns - 1);
+                  if Cols_P > Columns then
+                     Work.In_Chunk
+                       (P * Cols_P + Columns .. (P + 1) * Cols_P - 1) :=
+                         [others => 0.0];
+                  end if;
+               end loop;
+
+               Model_Runner.Backend.Device.Dispatch_Feed
+                 (Up_P, Up_B, Down_P, Down_B, Work.In_Chunk, Take, 1,
+                  Work.Out_Chunk, Local, Work.Cancel);
+               if E.Is_Error (Local) then
+                  if Model_Runner.Cancellation.Is_Cancelled (Work.Cancel) then
+                     Work.Status := Local;
+                  end if;
+                  return;
+               end if;
+
+               for P in 0 .. Take - 1 loop
+                  Target ((From + P) * Rows_Out .. (From + P + 1) * Rows_Out - 1)
+                    := Work.Out_Chunk (P * Rows_P .. P * Rows_P + Rows_Out - 1);
+               end loop;
+               From := From + Take;
+            end;
+         end loop;
+         Took := True;
+      end;
+   end Feed_On_Device;
+
    procedure Furnish
      (Work    : in out Workspace;
       Decoded : Element_Count;
@@ -2437,11 +2600,22 @@ package body Model_Runner.Vision is
             Rows_Through (Normalize, Normed, Patches, Width, Source => X,
                           Bias => Current.Norm_2_Bias,
                           Weight => Current.Norm_2_Weight);
-            Multiply (Normed, Patches, Current.Feed_In, Hidden,
-                      Current.Feed_In_Bias);
-            Rows_Through (Gaussian, Hidden, Patches, Feed);
-            Multiply (Hidden, Patches, Current.Feed_Out, Normed,
-                      Current.Feed_Out_Bias);
+            declare
+               Took : Boolean;
+            begin
+               Work.Status := Status;
+               Feed_On_Device
+                 (Work, Normed, Patches, Current.Feed_In, Current.Feed_In_Bias,
+                  Current.Feed_Out, Current.Feed_Out_Bias, Normed, Took);
+               Status := Work.Status;
+               if not Took and then E.Is_Ok (Status) then
+                  Multiply (Normed, Patches, Current.Feed_In, Hidden,
+                            Current.Feed_In_Bias);
+                  Rows_Through (Gaussian, Hidden, Patches, Feed);
+                  Multiply (Hidden, Patches, Current.Feed_Out, Normed,
+                            Current.Feed_Out_Bias);
+               end if;
+            end;
             exit when E.Is_Error (Status);
             K.Add (X.all, Normed.all);
          end;

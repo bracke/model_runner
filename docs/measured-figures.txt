@@ -7537,7 +7537,13 @@ reference 0680DE6E6931EC13 src/library/model_runner-backend-reference.adb src/li
 #   copy of the cache written eight elements a step through the conversion
 #   instruction where they are in its exact range, To_Half's bits either
 #   way, and the picture encoder's products and attention on the device.
-device 186758F724C7ED5A src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Restamped 2026-10-03, not re-measured: the change was a long batch of
+#   a width the wider tile does not step through taking the tile that
+#   steps 128 rather than the row kernel, the matrix attention's grid
+#   with its blocks first, and a feed-forward without a gate sent whole --
+#   same text on every model tried; the published rows are of widths the
+#   wider tile takes, which are unchanged.
+device B6F9C696A266C646 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 
 # covers: the three-row table under "Drafting", the per-token costs derived
@@ -10529,7 +10535,13 @@ tokenizer CE3B696CD412A3B6 src/library/model_runner-tokenizer.adb
 #   copy of the cache written eight elements a step through the conversion
 #   instruction where they are in its exact range, To_Half's bits either
 #   way, and the picture encoder's products and attention on the device.
-outside 186758F724C7ED5A src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Restamped 2026-10-03, not re-measured: the change was a long batch of
+#   a width the wider tile does not step through taking the tile that
+#   steps 128 rather than the row kernel, the matrix attention's grid
+#   with its blocks first, and a feed-forward without a gate sent whole --
+#   same text on every model tried; the published rows are of widths the
+#   wider tile takes, which are unchanged.
+outside B6F9C696A266C646 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-27  The row tile at sixty-four, and the instrument's first row
 #
@@ -24772,3 +24784,29 @@ panels 42D085F23713B3BE src/library/model_runner-quantization-interleave.ads src
 # and Qwen3.5-0.8B read it as before.
 # load: one-minute average 0.8 to 1.6
 # model: gemma-3-4b-it Q4_K_M with gemma-3-4b-it-mmproj-f16
+
+
+# 2026-10-03, continued: the picture encoder's feed-forward and attention.
+#
+#   the matrix attention's grid, blocks along the first axis and heads
+#     along the second, so the workgroups running at once read one head's
+#     keys and values: the second picture's attention 3.86 -> 3.69 s;
+#     text prefill level (gemma-3-4b 1300 tokens 547/546 -> 550/547 t/s)
+#   a block's feed-forward sent whole (Dispatch_Feed: up and its bias, the
+#     Gaussian unit, down chained and its bias), the 4352-wide hidden row
+#     never crossing the interface: encode 8.0 -> 6.1 s, the second picture
+#     of a run 7.3 -> 4.9 s; rows 0.0080, 0.0012, 0.0013 of their norms
+#     from the reference (held to 0.01)
+#   a long batch of a width the wider tile does not step (256 columns) takes
+#     the tile that steps 128 rather than the row kernel, the run deciding
+#     from its products' widths (Narrow_Run):
+#                           before (row kernel)   after      same text
+#     gemma3.gguf (1152)    340, 664 t/s          1883, 1875
+#     gemma-3-270m (640)    1046, 2764            4799, 4745
+#     gemma-3-4b (2560)     550, 549              553, 552
+#     a 1,300-token prompt, --backend device
+#   Tried and dropped: the whole picture a submission with that tile (4096
+#   patches): encode 6.7 / 6.1 s against 6.1 / 4.9 at 128 a submission.
+# load: one-minute average 0.8 to 1.6
+# model: gemma-3-4b-it Q4_K_M with its mmproj-f16; gemma3.gguf; gemma-3-270m-it
+#        Q8_0

@@ -219,8 +219,14 @@ shared uint rowmap[256];
 shared float16_t ps[BR * BC];
 
 void main() {
-    uint head  = gl_WorkGroupID.x;
-    uint block = gl_WorkGroupID.y;
+    //  Blocks of queries along the first axis and heads along the second,
+    //  so that the workgroups a part runs at once are one head's blocks
+    //  and read one head's keys and values: across the heads they were a
+    //  picture's twenty-one megabytes of keys and values at once, read
+    //  again from memory for every sixteen queries, where one head's are a
+    //  megabyte and a half and stay in the second-level cache.
+    uint block = gl_WorkGroupID.x;
+    uint head  = gl_WorkGroupID.y;
     uint lane  = gl_LocalInvocationID.x;
 
     //  Whether a position sees only what precedes it, and how many

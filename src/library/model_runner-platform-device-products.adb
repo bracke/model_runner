@@ -224,12 +224,20 @@ package body Model_Runner.Platform.Device.Products is
    --  batch is rounded to is asked in places that know only its length.
    Wider_Ready : Boolean := False;
 
+   --  Set by Run for the sequence it is running: true where a product in
+   --  it is a width the wider tile does not step through -- it steps 256
+   --  columns at a time, and a SigLIP or Gemma 3 1B is 1152 wide -- so the
+   --  sequence takes the tile that steps 128 rather than none: a long
+   --  batch of such a width went to the row kernel, which reads its
+   --  weights again for every eight vectors.
+   Narrow_Run : Boolean := False;
+
    --  Past this many vectors a batch takes the wider tile.
    Wider_Least : constant := 128;
    Wider_Vectors : constant := 256;
 
    function Widened (Count : Natural) return Boolean
-   is (Wider_Ready and then Count > Wider_Least);
+   is (Wider_Ready and then not Narrow_Run and then Count > Wider_Least);
 
    function Tile_Width (Count : Natural) return Positive
    is (if Narrowed (Count) then Narrow_Vectors
@@ -6590,6 +6598,13 @@ package body Model_Runner.Platform.Device.Products is
       Good := True;
    end Tile_Product;
 
+   --  Narrow_Run for one product of this width; see its declaration.
+   function Set_Narrow_For (Columns : Natural) return Boolean is
+   begin
+      Narrow_Run := Columns mod (2 * Wide_Step) /= 0;
+      return Narrow_Run;
+   end Set_Narrow_For;
+
    -----------------
    -- One_Product --
    -----------------
@@ -6620,6 +6635,8 @@ package body Model_Runner.Platform.Device.Products is
       --  Whichever engine is being asked, because an entry point belongs to
       --  the instance behind it.
       Ignored : constant Boolean := Set_Asking (Item);
+      Narrowed_Run : constant Boolean := Set_Narrow_For (Columns);
+      pragma Unreferenced (Narrowed_Run);
 
       Wide : constant Interfaces.Unsigned_64 := Row_Bytes (Packing, Columns);
 
@@ -9154,8 +9171,16 @@ package body Model_Runner.Platform.Device.Products is
          --  positions between them, and the positions of a batch do not
          --  need each other, so they go in one submission rather than one
          --  each.
-         Dispatch (Item.Buffer, C.unsigned (Heads),
-                   Attend_Groups (Item, Slots, Head_Size, Value_Size), 1);
+         --  The matrix kernel takes its blocks along the first axis and
+         --  its heads along the second; see attention_matrix.comp.
+         if Attends_By_Matrix (Item, Slots, Head_Size, Value_Size) then
+            Dispatch (Item.Buffer,
+                      Attend_Groups (Item, Slots, Head_Size, Value_Size),
+                      C.unsigned (Heads), 1);
+         else
+            Dispatch (Item.Buffer, C.unsigned (Heads),
+                      Attend_Groups (Item, Slots, Head_Size, Value_Size), 1);
+         end if;
 
          if Stop (Item.Buffer) /= 0 then
             return;
@@ -10513,6 +10538,30 @@ package body Model_Runner.Platform.Device.Products is
    -- Run --
    ---------
 
+   --  Narrow_Run for this sequence; see its declaration.
+   function Set_Narrow (Steps : Sequence) return Boolean is
+   begin
+      Narrow_Run := False;
+      for Index in 1 .. Steps.Held loop
+         declare
+            This : Step renames Steps.Items (Index);
+         begin
+            if not (This.Blends or else This.Attends or else This.Places
+                    or else This.Rotates or else This.Mixes
+                    or else This.Inverts or else This.Picks
+                    or else This.Norms or else This.Biases
+                    or else This.Convolves or else This.Rules
+                    or else This.Routes or else This.Readies)
+              and then This.Base /= System.Null_Address
+              and then This.Columns mod (2 * Wide_Step) /= 0
+            then
+               Narrow_Run := True;
+            end if;
+         end;
+      end loop;
+      return Narrow_Run;
+   end Set_Narrow;
+
    procedure Run
      (Item      : in out Engine;
       Steps     : Sequence;
@@ -10529,6 +10578,8 @@ package body Model_Runner.Platform.Device.Products is
       use type System.Storage_Elements.Integer_Address;
 
       Ignored : constant Boolean := Set_Asking (Item);
+      Narrowed_Run : constant Boolean := Set_Narrow (Steps);
+      pragma Unreferenced (Narrowed_Run);
 
       --  A storage buffer binding may not begin anywhere: a device states
       --  the boundary it wants, and no device asks for more than this.
@@ -12717,23 +12768,37 @@ package body Model_Runner.Platform.Device.Products is
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Attention_Bytes, Shape'Address);
-                     Dispatch
-                       (Item.Buffer,
-                        Attend_Heads
-                          (Item, This.Heads, This.Group_Size, Count,
-                           This.Head_Size, This.Value_Size,
-                           Rounding => False,
-                           K_Base => This.K_Base, V_Base => This.V_Base,
-                           KV_Width => This.KV_Width,
-                           V_Width => This.V_Width,
-                           Span => (if This.Last >= This.First then This.Last - This.First + 1 else 0)),
-                        Attend_Groups
-                          (Item,
-                           (if Halved (Index) then Whole_Tiles (Count)
-                            else Count),
-                           This.Head_Size, This.Value_Size,
-                           Rounding => False),
-                        C.unsigned (Slices));
+                     declare
+                        Across : constant C.unsigned :=
+                          Attend_Heads
+                            (Item, This.Heads, This.Group_Size, Count,
+                             This.Head_Size, This.Value_Size,
+                             Rounding => False,
+                             K_Base => This.K_Base, V_Base => This.V_Base,
+                             KV_Width => This.KV_Width,
+                             V_Width => This.V_Width,
+                             Span => (if This.Last >= This.First then This.Last - This.First + 1 else 0));
+                        Seated : constant Natural :=
+                          (if Halved (Index) then Whole_Tiles (Count)
+                           else Count);
+                        Down   : constant C.unsigned :=
+                          Attend_Groups
+                            (Item, Seated, This.Head_Size, This.Value_Size,
+                             Rounding => False);
+                     begin
+                        --  The matrix kernel takes its blocks along the
+                        --  first axis and its heads along the second; see
+                        --  attention_matrix.comp.
+                        if Attends_By_Matrix
+                             (Item, Seated, This.Head_Size, This.Value_Size)
+                        then
+                           Dispatch (Item.Buffer, Down, Across,
+                                     C.unsigned (Slices));
+                        else
+                           Dispatch (Item.Buffer, Across, Down,
+                                     C.unsigned (Slices));
+                        end if;
+                     end;
 
                      --  The slices put together, once every one of them
                      --  has left its record: a workgroup a head of a

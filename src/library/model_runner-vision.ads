@@ -307,6 +307,9 @@ private
       Key   : System.Address := System.Null_Address;
       View  : T.View := T.Empty_View;
       Bytes : Model_Runner.Bytes.Byte_Array_Access := null;
+
+      --  Or a bias, zeros past its own length, where Bytes is null.
+      Values : T.Real_Array_Access := null;
    end record;
 
    type Padded_Set is array (1 .. 8 * Max_Blocks) of Padded_Weight;

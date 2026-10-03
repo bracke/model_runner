@@ -4409,6 +4409,171 @@ package body Model_Runner.Backend.Device is
    -- Dispatch_Batch --
    --------------------
 
+   procedure Dispatch_Feed
+     (Up        : T.View;
+      Up_Bias   : T.Real_Array_Access;
+      Down      : T.View;
+      Down_Bias : T.Real_Array_Access;
+      Vector    : T.Real_Array_Access;
+      Spread    : Model_Runner.Numerics.Element_Count;
+      Unit      : Natural;
+      Into      : T.Real_Array_Access;
+      Status    : out E.Error_Info;
+      Cancel    : Model_Runner.Cancellation.Token_Reference := null)
+   is
+      Steps  : Products.Sequence;
+      Wanted : Model_Runner.Numerics.Element_Count := 0;
+      Added  : Boolean;
+      Ok     : Boolean;
+      Cancelled : Boolean := False;
+      Up_P, Down_P : Products.Weight_Packing;
+      Known_Up, Known_Down : Boolean;
+      Asked  : Interfaces.Unsigned_64 := 0;
+      Step_Up, Step_Down : Natural;
+
+      procedure Add_Bias_To
+        (Bias : T.Real_Array_Access; Rows : Model_Runner.Numerics.Element_Count;
+         Which : in out Natural; Kept : Boolean) is
+      begin
+         Added := True;
+         if Bias = null then
+            return;
+         end if;
+         Products.Add_Bias
+           (Steps, Bias.all (Bias.all'First)'Address,
+            Model_Runner.Bytes.Byte_Count (Bias.all'Length) * 4, 0,
+            1, Natural (Rows), Which, 0, Added,
+            Key => Bias.all (Bias.all'First)'Address, Kept => Kept);
+         if Added then
+            Which := Products.Length (Steps);
+            Wanted := Wanted + Rows * Spread;
+         end if;
+      end Add_Bias_To;
+   begin
+      Status := E.Success;
+
+      if not Ready_Now then
+         Status := E.Make (E.Backend_Closed);
+         return;
+      end if;
+
+      Packing_Of (Up.Format, Up_P, Known_Up);
+      Packing_Of (Down.Format, Down_P, Known_Down);
+      if not Known_Up or else not Known_Down then
+         Status := E.Make (E.Backend_Capability_Missing);
+         E.Add_Text
+           (Status, "capability",
+            Model_Runner.GGUF.Type_Name
+              (if Known_Up then Down.Format else Up.Format),
+            E.Param_Identifier);
+         E.Add_Text (Status, "backend", Backend_Name (Backend_Device),
+                     E.Param_Identifier);
+         return;
+      end if;
+
+      if Vector = null or else Into = null
+        or else Spread = 0
+        or else Up.Base = System.Null_Address
+        or else Down.Base = System.Null_Address
+        or else Up.Rows /= Down.Columns
+        or else Vector.all'Length < Up.Columns * Spread
+        or else Into.all'Length < Down.Rows * Spread
+        or else (Up_Bias /= null and then Up_Bias.all'Length /= Up.Rows)
+        or else (Down_Bias /= null
+                 and then Down_Bias.all'Length /= Down.Rows)
+      then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         return;
+      end if;
+
+      Products.Open_Sequence (Steps);
+
+      Products.Add_Product
+        (Steps, Up.Base, Up.Span, Up.Offset, Up_P,
+         Natural (Up.Rows), Natural (Up.Columns), Added,
+         Key => At_Offset (Up.Base, Up.Offset), Kept => False);
+      if not Added then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         return;
+      end if;
+      Wanted := Wanted + Up.Rows * Spread;
+      Step_Up := Products.Length (Steps);
+
+      Add_Bias_To (Up_Bias, Up.Rows, Step_Up, Kept => False);
+      if not Added then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         return;
+      end if;
+
+      Products.Add_Combination (Steps, Unit + 4, Added, Kept => False);
+      if not Added then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         return;
+      end if;
+      Wanted := Wanted + Up.Rows * Spread;
+
+      Products.Add_Chained_Product
+        (Steps, Down.Base, Down.Span, Down.Offset, Down_P,
+         Natural (Down.Rows), Natural (Down.Columns), Added,
+         Key => At_Offset (Down.Base, Down.Offset),
+         Kept => Down_Bias = null);
+      if not Added then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         return;
+      end if;
+      Wanted := Wanted + Down.Rows * Spread;
+      Step_Down := Products.Length (Steps);
+
+      Add_Bias_To (Down_Bias, Down.Rows, Step_Down, Kept => True);
+      if not Added then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         return;
+      end if;
+
+      Asked := Interfaces.Unsigned_64'Max
+        (Interfaces.Unsigned_64 (Up.Rows)
+         * Products.Row_Bytes (Up_P, Natural (Up.Columns)),
+         Interfaces.Unsigned_64 (Down.Rows)
+         * Products.Row_Bytes (Down_P, Natural (Down.Columns)));
+
+      if Landing = null or else Landing.all'Length < Wanted then
+         T.Free (Landing);
+         T.Allocate (Wanted, Landing);
+         if Landing = null then
+            Status := E.Make (E.Memory_Allocation_Failed);
+            return;
+         end if;
+      end if;
+
+      Products.Run
+        (Engine, Steps, Vector.all, Positive (Spread),
+         Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
+         Ok, Cancelled, Cancel);
+
+      if Ok then
+         Note_Timeline (Steps, Positive (Spread));
+      end if;
+
+      if Cancelled then
+         Status := E.Make (E.Generation_Cancelled);
+         return;
+      elsif Products.Is_Stalled (Engine) then
+         Status := E.Make (E.Backend_Device_Stalled);
+         E.Add_Text (Status, "backend", Backend_Name (Backend_Device),
+                     E.Param_Identifier);
+         E.Add_Integer (Status, "limit", Long_Long_Integer (Opened_Patience));
+         return;
+      elsif not Ok then
+         Declined (Status, Asked);
+         return;
+      end if;
+
+      Into.all (Into.all'First .. Into.all'First + Down.Rows * Spread - 1) :=
+        Landing.all
+          (Landing.all'First + Wanted - Down.Rows * Spread
+           .. Landing.all'First + Wanted - 1);
+   end Dispatch_Feed;
+
    procedure Dispatch_Batch
      (Weight  : T.View;
       Vectors : T.Real_Array_Access;

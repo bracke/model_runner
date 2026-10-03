@@ -1486,6 +1486,36 @@ package Model_Runner.Backend.Device is
       Alpha : Model_Runner.Numerics.Real := 0.0;
       Limit : Model_Runner.Numerics.Real := 0.0);
 
+   --  A feed-forward block without a gate, whole, in one submission: the
+   --  projection up and its bias, a unit on what that made, the projection
+   --  down chained to it and its bias. Only what the projection down made
+   --  comes back. A picture encoder's block is this, over 4,096 patches,
+   --  and sent as two products with the unit on the host its hidden
+   --  activation crossed the interface twice.
+   --
+   --  @param Up Matrix up; its rows are Down's columns.
+   --  @param Up_Bias One element a row of Up, or null for none.
+   --  @param Down Matrix down.
+   --  @param Down_Bias One element a row of Down, or null for none.
+   --  @param Vector The input, Spread positions of Up's columns.
+   --  @param Spread How many positions.
+   --  @param Unit Zero for the sigmoid-weighted unit, one for the Gaussian
+   --    one in its tanh form.
+   --  @param Into Receives what the projection down made, Spread rows.
+   --  @param Status Success, or why not.
+   --  @param Cancel Token a caller may set to ask for a stop.
+   procedure Dispatch_Feed
+     (Up        : Model_Runner.Tensors.View;
+      Up_Bias   : Model_Runner.Tensors.Real_Array_Access;
+      Down      : Model_Runner.Tensors.View;
+      Down_Bias : Model_Runner.Tensors.Real_Array_Access;
+      Vector    : Model_Runner.Tensors.Real_Array_Access;
+      Spread    : Model_Runner.Numerics.Element_Count;
+      Unit      : Natural;
+      Into      : Model_Runner.Tensors.Real_Array_Access;
+      Status    : out Model_Runner.Errors.Error_Info;
+      Cancel    : Model_Runner.Cancellation.Token_Reference := null);
+
    --  The same product for each vector of a batch.
    --
    --  A batch of one is what the evaluator hands a backend that says it does

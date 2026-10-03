@@ -1463,6 +1463,72 @@ package body Tests.CLI_Cases is
                                 & " same block sent a step at a time by"
                                 & N.Real'Image (Worst));
 
+                        --  And the block without a gate that a picture
+                        --  encoder's is: the projection up and its bias,
+                        --  the Gaussian unit in its tanh form, the
+                        --  projection down and its bias, through
+                        --  Dispatch_Feed in one submission, against the
+                        --  same a step at a time.
+                        declare
+                           Up_Bias : constant
+                             Model_Runner.Tensors.Real_Array_Access :=
+                               new N.Real_Array
+                                     (0 .. N.Element_Count (Rows) - 1);
+                           Down_Bias : constant
+                             Model_Runner.Tensors.Real_Array_Access :=
+                               new N.Real_Array
+                                     (0 .. N.Element_Count (Rows) - 1);
+                        begin
+                           for Row in Up_Bias.all'Range loop
+                              Up_Bias.all (Row) :=
+                                0.05 * N.Real (Row mod 7) - 0.15;
+                              Down_Bias.all (Row) :=
+                                0.03 * N.Real (Row mod 5) - 0.06;
+                           end loop;
+
+                           for Row in Middle.all'Range loop
+                              declare
+                                 X : constant N.Wide_Real :=
+                                   N.Wide_Real (Apart (2).all (Row))
+                                   + N.Wide_Real (Up_Bias.all (Row));
+                              begin
+                                 Middle.all (Row) := N.Real
+                                   (0.5 * X
+                                    * (1.0 + N.Tanh
+                                         (0.7978845608028654
+                                          * (X + 0.044715 * X * X * X))));
+                              end;
+                           end loop;
+
+                           Model_Runner.Backend.Device.Dispatch
+                             (Down_View, Middle, By_Hand, Why);
+                           Assert (not Model_Runner.Errors.Is_Error (Why),
+                                   "a device refused a projection down");
+                           for Row in By_Hand.all'Range loop
+                              By_Hand.all (Row) :=
+                                By_Hand.all (Row) + Down_Bias.all (Row);
+                           end loop;
+
+                           Model_Runner.Backend.Device.Dispatch_Feed
+                             (Views (2), Up_Bias, Down_View, Down_Bias,
+                              Vector, 1, 1, Whole, Why);
+                           Assert (not Model_Runner.Errors.Is_Error (Why),
+                                   "a device refused a block without a gate");
+
+                           Worst := 0.0;
+                           for Row in Whole.all'Range loop
+                              Worst := N.Real'Max
+                                (Worst,
+                                 abs (Whole.all (Row) - By_Hand.all (Row)));
+                           end loop;
+
+                           Assert (Worst < 1.0E-4,
+                                   "a block without a gate sent whole"
+                                   & " disagrees with the same block sent a"
+                                   & " step at a time by"
+                                   & N.Real'Image (Worst));
+                        end;
+
                         Model_Runner.Bytes.Free (Down_Free);
                      end;
 
