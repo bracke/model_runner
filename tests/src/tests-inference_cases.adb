@@ -454,6 +454,37 @@ package body Tests.Inference_Cases is
 
          L.Close (Live);
 
+         --  And the same in pages: halves are the device's copy of an
+         --  exact cache, so a session asking for them is dealt pages as an
+         --  exact one is -- it was not, and a context past one storage
+         --  buffer went to the processor -- and answers what the block did.
+         declare
+            Paged_Halved : Logit_Vector;
+            Apart        : N.Real := 0.0;
+         begin
+            L.Open (Live, Under.Ready, Cache => L.Halved, Paged => True,
+                    Status => Status);
+            Assert (E.Is_Ok (Status), "the paged halved session did not open");
+
+            for Token of Prompt loop
+               L.Evaluate (Live, Under.Ready, Token, Paged_Halved,
+                           Status => Status);
+               Assert (E.Is_Ok (Status), "the paged halved evaluation failed");
+            end loop;
+
+            Assert (L.Pages_Held > 0,
+                    "a halved session asked for pages holds none");
+
+            for Index in Halved'Range loop
+               Apart := N.Real'Max (Apart, abs (Halved (Index) - Paged_Halved (Index)));
+            end loop;
+
+            Assert (Apart < 1.0e-3,
+                    "a paged halved session answers" & N.Real'Image (Apart)
+                    & " away from the block it was");
+            L.Close (Live);
+         end;
+
          --  Closing the session leaves the device as it was told: the
          --  device is told for the process, by whichever session opened
          --  last, and by a caller with no session at all.

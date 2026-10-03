@@ -14165,12 +14165,17 @@ package body Model_Runner.Llama is
          --  Pages array. The bases themselves are set when the pages are
          --  taken, one slot at a time; here is only the shape. Pages are
          --  the device's, so a session on any other backend is dealt none
-         --  and Paged stays false.
+         --  and Paged stays false. Halves are paged as exact is: on the
+         --  device they are its copy of an exact cache, read through the
+         --  same tables. Left out, a session asking for them reserved its
+         --  whole context as one block, which past one storage buffer
+         --  left the device -- qwen3-8b at 32,768 positions read 3.55
+         --  tokens a second where paged it reads 13.3.
          if Paged
            and then Model_Runner.Backend."="
                       (Source.Able.Kind,
                        Model_Runner.Backend.Backend_Device)
-           and then Cache in Exact | Eighth | Fourth
+           and then Cache in Exact | Halved | Eighth | Fourth
          then
             Item.Paged := True;
             Item.Page_First :=
