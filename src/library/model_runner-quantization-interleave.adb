@@ -573,11 +573,11 @@ package body Model_Runner.Quantization.Interleave is
 
    --  One row's two-bit super-block, written into its panel.
    --
-   --  The sixteen scales and sixteen minima come out of their nibbles here
-   --  and go a byte apiece, sub-block major, for the reason the four-bit
-   --  k-quant's do: a kernel wants eight rows' scale for one sub-block as
-   --  eight consecutive bytes, and unpacking that in the kernel is work
-   --  paid once a product instead of once a load.
+   --  The sixteen scale-and-minimum bytes go sub-block major as they are,
+   --  for the reason the four-bit k-quant's scales do: a kernel wants eight
+   --  rows' scale for one sub-block as eight consecutive bytes. They stay
+   --  packed, because a shift in the kernel is cheaper than the bytes a
+   --  layout of its own would add to every read.
    --
    --  And a quant is two bits, so a group of thirty-two bytes carries
    --  sixteen elements a row rather than eight: byte 4L + M of group G
@@ -602,15 +602,8 @@ package body Model_Runner.Quantization.Interleave is
         Source (In_At + Two_Dmin + 1);
 
       for Sub in B.Byte_Count range 0 .. 15 loop
-         declare
-            Packed : constant Interfaces.Unsigned_8 :=
-              Source (In_At + Two_Scales + Sub);
-         begin
-            Target (Out_At + Two_Factor_At + Sub * Panel_Rows + Lane) :=
-              Packed and 16#0F#;
-            Target (Out_At + Two_Minimum_At + Sub * Panel_Rows + Lane) :=
-              Interfaces.Shift_Right (Packed, 4);
-         end;
+         Target (Out_At + Two_Factor_At + Sub * Panel_Rows + Lane) :=
+           Source (In_At + Two_Scales + Sub);
       end loop;
 
       for Group in Element_Count range 0 .. 15 loop
@@ -1219,10 +1212,7 @@ package body Model_Runner.Quantization.Interleave is
 
       for Sub in B.Byte_Count range 0 .. 15 loop
          Target (Out_At + Two_Scales + Sub) :=
-           Source (In_At + Two_Factor_At + Sub * Panel_Rows + Lane)
-           or Interfaces.Shift_Left
-                (Source (In_At + Two_Minimum_At + Sub * Panel_Rows + Lane),
-                 4);
+           Source (In_At + Two_Factor_At + Sub * Panel_Rows + Lane);
       end loop;
 
       for Index in B.Byte_Count range 0 .. 63 loop

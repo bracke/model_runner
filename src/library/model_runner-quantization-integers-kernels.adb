@@ -7856,7 +7856,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpxord %%ymm13, %%ymm13, %%ymm13" & LF &
                   "vpxord %%ymm14, %%ymm14, %%ymm14" & LF &
                   "vpxord %%ymm15, %%ymm15, %%ymm15" & LF &
-                  "vmovdqu 288(%%r11), %%ymm0" & LF &
+                  "vmovdqu 160(%%r11), %%ymm0" & LF &
                   "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
                   "vpsrlw $2, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm25" & LF &
@@ -7865,6 +7865,8 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
                   "vpmovzxbd 32(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
                   "vpdpbusd 0(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
@@ -7927,6 +7929,306 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpdpbusd 4(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
                   "vpdpbusd 8(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
                   "vpdpbusd 12(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm15, %%ymm15" & LF &
+                  "vmovdqu 192(%%r11), %%ymm0" & LF &
+                  "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
+                  "vpsrlw $2, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm25" & LF &
+                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
+                  "vpsrlw $6, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
+                  "vpmovzxbd 40(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
+                  "movq 0(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
+                  "movq 8(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm9, %%ymm9" & LF &
+                  "movq 16(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm10, %%ymm10" & LF &
+                  "movq 24(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm11, %%ymm11" & LF &
+                  "movq 32(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm12, %%ymm12" & LF &
+                  "movq 40(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm13, %%ymm13" & LF &
+                  "movq 48(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm14, %%ymm14" & LF &
+                  "movq 56(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm15, %%ymm15" & LF &
+                  "vmovdqu 224(%%r11), %%ymm0" & LF &
+                  "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
+                  "vpsrlw $2, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm25" & LF &
+                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
+                  "vpsrlw $6, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
+                  "vpmovzxbd 48(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
+                  "movq 0(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 32(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 36(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 40(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 44(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
+                  "movq 8(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 32(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 36(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 40(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 44(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm9, %%ymm9" & LF &
+                  "movq 16(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 32(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 36(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 40(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 44(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm10, %%ymm10" & LF &
+                  "movq 24(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 32(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 36(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 40(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 44(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm11, %%ymm11" & LF &
+                  "movq 32(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 32(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 36(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 40(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 44(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm12, %%ymm12" & LF &
+                  "movq 40(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 32(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 36(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 40(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 44(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm13, %%ymm13" & LF &
+                  "movq 48(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 32(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 36(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 40(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 44(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm14, %%ymm14" & LF &
+                  "movq 56(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 32(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 36(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 40(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 44(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm15, %%ymm15" & LF &
+                  "vmovdqu 256(%%r11), %%ymm0" & LF &
+                  "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
+                  "vpsrlw $2, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm25" & LF &
+                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
+                  "vpsrlw $6, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
+                  "vpmovzxbd 56(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
+                  "movq 0(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 48(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 52(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 56(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 60(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
+                  "movq 8(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 48(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 52(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 56(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 60(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm9, %%ymm9" & LF &
+                  "movq 16(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 48(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 52(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 56(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 60(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm10, %%ymm10" & LF &
+                  "movq 24(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 48(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 52(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 56(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 60(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm11, %%ymm11" & LF &
+                  "movq 32(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 48(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 52(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 56(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 60(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm12, %%ymm12" & LF &
+                  "movq 40(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 48(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 52(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 56(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 60(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm13, %%ymm13" & LF &
+                  "movq 48(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 48(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 52(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 56(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 60(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm14, %%ymm14" & LF &
+                  "movq 56(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 48(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 52(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 56(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 60(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm15, %%ymm15" & LF &
+                  "vmovdqu 288(%%r11), %%ymm0" & LF &
+                  "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
+                  "vpsrlw $2, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm25" & LF &
+                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
+                  "vpsrlw $6, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
+                  "vpmovzxbd 64(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
+                  "movq 0(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 64(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 68(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 72(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 76(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
+                  "movq 8(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 64(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 68(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 72(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 76(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm9, %%ymm9" & LF &
+                  "movq 16(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 64(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 68(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 72(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 76(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm10, %%ymm10" & LF &
+                  "movq 24(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 64(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 68(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 72(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 76(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm11, %%ymm11" & LF &
+                  "movq 32(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 64(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 68(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 72(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 76(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm12, %%ymm12" & LF &
+                  "movq 40(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 64(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 68(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 72(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 76(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm13, %%ymm13" & LF &
+                  "movq 48(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 64(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 68(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 72(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 76(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm14, %%ymm14" & LF &
+                  "movq 56(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 64(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 68(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 72(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 76(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm15, %%ymm15" & LF &
                   "vmovdqu 320(%%r11), %%ymm0" & LF &
@@ -7937,69 +8239,71 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 40(%%r11), %%ymm4" & LF &
+                  "vpmovzxbd 72(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 80(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 84(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 88(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 92(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
                   "movq 8(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 80(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 84(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 88(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 92(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm9, %%ymm9" & LF &
                   "movq 16(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 80(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 84(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 88(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 92(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm10, %%ymm10" & LF &
                   "movq 24(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 80(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 84(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 88(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 92(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm11, %%ymm11" & LF &
                   "movq 32(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 80(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 84(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 88(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 92(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm12, %%ymm12" & LF &
                   "movq 40(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 80(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 84(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 88(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 92(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm13, %%ymm13" & LF &
                   "movq 48(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 80(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 84(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 88(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 92(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm14, %%ymm14" & LF &
                   "movq 56(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 80(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 84(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 88(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 92(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm15, %%ymm15" & LF &
                   "vmovdqu 352(%%r11), %%ymm0" & LF &
@@ -8010,69 +8314,71 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 48(%%r11), %%ymm4" & LF &
+                  "vpmovzxbd 80(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 32(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 36(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 40(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 44(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 96(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 100(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 104(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 108(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
                   "movq 8(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 32(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 36(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 40(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 44(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 96(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 100(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 104(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 108(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm9, %%ymm9" & LF &
                   "movq 16(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 32(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 36(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 40(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 44(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 96(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 100(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 104(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 108(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm10, %%ymm10" & LF &
                   "movq 24(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 32(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 36(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 40(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 44(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 96(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 100(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 104(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 108(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm11, %%ymm11" & LF &
                   "movq 32(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 32(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 36(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 40(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 44(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 96(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 100(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 104(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 108(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm12, %%ymm12" & LF &
                   "movq 40(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 32(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 36(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 40(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 44(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 96(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 100(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 104(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 108(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm13, %%ymm13" & LF &
                   "movq 48(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 32(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 36(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 40(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 44(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 96(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 100(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 104(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 108(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm14, %%ymm14" & LF &
                   "movq 56(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 32(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 36(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 40(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 44(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 96(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 100(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 104(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 108(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm15, %%ymm15" & LF &
                   "vmovdqu 384(%%r11), %%ymm0" & LF &
@@ -8083,69 +8389,71 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 56(%%r11), %%ymm4" & LF &
+                  "vpmovzxbd 88(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 48(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 52(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 56(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 60(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 112(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 116(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 120(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 124(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
                   "movq 8(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 48(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 52(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 56(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 60(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 112(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 116(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 120(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 124(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm9, %%ymm9" & LF &
                   "movq 16(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 48(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 52(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 56(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 60(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 112(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 116(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 120(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 124(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm10, %%ymm10" & LF &
                   "movq 24(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 48(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 52(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 56(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 60(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 112(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 116(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 120(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 124(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm11, %%ymm11" & LF &
                   "movq 32(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 48(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 52(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 56(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 60(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 112(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 116(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 120(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 124(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm12, %%ymm12" & LF &
                   "movq 40(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 48(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 52(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 56(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 60(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 112(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 116(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 120(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 124(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm13, %%ymm13" & LF &
                   "movq 48(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 48(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 52(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 56(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 60(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 112(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 116(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 120(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 124(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm14, %%ymm14" & LF &
                   "movq 56(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 48(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 52(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 56(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 60(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 112(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 116(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 120(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 124(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm15, %%ymm15" & LF &
                   "vmovdqu 416(%%r11), %%ymm0" & LF &
@@ -8156,69 +8464,71 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 64(%%r11), %%ymm4" & LF &
+                  "vpmovzxbd 96(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 64(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 68(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 72(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 76(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 128(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 132(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 136(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 140(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
                   "movq 8(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 64(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 68(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 72(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 76(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 128(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 132(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 136(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 140(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm9, %%ymm9" & LF &
                   "movq 16(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 64(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 68(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 72(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 76(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 128(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 132(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 136(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 140(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm10, %%ymm10" & LF &
                   "movq 24(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 64(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 68(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 72(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 76(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 128(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 132(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 136(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 140(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm11, %%ymm11" & LF &
                   "movq 32(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 64(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 68(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 72(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 76(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 128(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 132(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 136(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 140(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm12, %%ymm12" & LF &
                   "movq 40(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 64(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 68(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 72(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 76(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 128(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 132(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 136(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 140(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm13, %%ymm13" & LF &
                   "movq 48(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 64(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 68(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 72(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 76(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 128(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 132(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 136(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 140(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm14, %%ymm14" & LF &
                   "movq 56(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 64(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 68(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 72(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 76(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 128(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 132(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 136(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 140(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm15, %%ymm15" & LF &
                   "vmovdqu 448(%%r11), %%ymm0" & LF &
@@ -8229,69 +8539,71 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 72(%%r11), %%ymm4" & LF &
+                  "vpmovzxbd 104(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 80(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 84(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 88(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 92(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 144(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 148(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 152(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 156(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
                   "movq 8(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 80(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 84(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 88(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 92(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 144(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 148(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 152(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 156(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm9, %%ymm9" & LF &
                   "movq 16(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 80(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 84(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 88(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 92(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 144(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 148(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 152(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 156(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm10, %%ymm10" & LF &
                   "movq 24(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 80(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 84(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 88(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 92(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 144(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 148(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 152(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 156(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm11, %%ymm11" & LF &
                   "movq 32(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 80(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 84(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 88(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 92(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 144(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 148(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 152(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 156(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm12, %%ymm12" & LF &
                   "movq 40(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 80(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 84(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 88(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 92(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 144(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 148(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 152(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 156(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm13, %%ymm13" & LF &
                   "movq 48(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 80(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 84(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 88(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 92(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 144(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 148(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 152(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 156(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm14, %%ymm14" & LF &
                   "movq 56(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 80(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 84(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 88(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 92(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 144(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 148(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 152(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 156(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm15, %%ymm15" & LF &
                   "vmovdqu 480(%%r11), %%ymm0" & LF &
@@ -8302,69 +8614,71 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 80(%%r11), %%ymm4" & LF &
+                  "vpmovzxbd 112(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 96(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 100(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 104(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 108(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 160(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 164(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 168(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 172(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
                   "movq 8(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 96(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 100(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 104(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 108(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 160(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 164(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 168(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 172(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm9, %%ymm9" & LF &
                   "movq 16(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 96(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 100(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 104(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 108(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 160(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 164(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 168(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 172(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm10, %%ymm10" & LF &
                   "movq 24(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 96(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 100(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 104(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 108(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 160(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 164(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 168(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 172(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm11, %%ymm11" & LF &
                   "movq 32(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 96(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 100(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 104(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 108(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 160(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 164(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 168(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 172(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm12, %%ymm12" & LF &
                   "movq 40(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 96(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 100(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 104(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 108(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 160(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 164(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 168(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 172(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm13, %%ymm13" & LF &
                   "movq 48(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 96(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 100(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 104(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 108(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 160(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 164(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 168(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 172(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm14, %%ymm14" & LF &
                   "movq 56(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 96(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 100(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 104(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 108(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 160(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 164(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 168(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 172(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm15, %%ymm15" & LF &
                   "vmovdqu 512(%%r11), %%ymm0" & LF &
@@ -8375,69 +8689,71 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 88(%%r11), %%ymm4" & LF &
+                  "vpmovzxbd 120(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 112(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 116(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 120(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 124(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 176(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 180(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 184(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 188(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
                   "movq 8(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 112(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 116(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 120(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 124(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 176(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 180(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 184(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 188(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm9, %%ymm9" & LF &
                   "movq 16(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 112(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 116(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 120(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 124(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 176(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 180(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 184(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 188(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm10, %%ymm10" & LF &
                   "movq 24(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 112(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 116(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 120(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 124(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 176(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 180(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 184(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 188(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm11, %%ymm11" & LF &
                   "movq 32(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 112(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 116(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 120(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 124(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 176(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 180(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 184(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 188(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm12, %%ymm12" & LF &
                   "movq 40(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 112(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 116(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 120(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 124(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 176(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 180(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 184(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 188(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm13, %%ymm13" & LF &
                   "movq 48(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 112(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 116(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 120(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 124(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 176(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 180(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 184(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 188(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm14, %%ymm14" & LF &
                   "movq 56(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 112(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 116(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 120(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 124(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 176(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 180(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 184(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 188(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm15, %%ymm15" & LF &
                   "vmovdqu 544(%%r11), %%ymm0" & LF &
@@ -8448,69 +8764,71 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 96(%%r11), %%ymm4" & LF &
+                  "vpmovzxbd 128(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 128(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 132(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 136(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 140(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 192(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 196(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 200(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 204(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
                   "movq 8(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 128(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 132(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 136(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 140(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 192(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 196(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 200(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 204(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm9, %%ymm9" & LF &
                   "movq 16(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 128(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 132(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 136(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 140(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 192(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 196(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 200(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 204(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm10, %%ymm10" & LF &
                   "movq 24(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 128(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 132(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 136(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 140(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 192(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 196(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 200(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 204(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm11, %%ymm11" & LF &
                   "movq 32(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 128(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 132(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 136(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 140(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 192(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 196(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 200(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 204(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm12, %%ymm12" & LF &
                   "movq 40(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 128(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 132(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 136(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 140(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 192(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 196(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 200(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 204(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm13, %%ymm13" & LF &
                   "movq 48(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 128(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 132(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 136(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 140(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 192(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 196(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 200(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 204(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm14, %%ymm14" & LF &
                   "movq 56(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 128(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 132(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 136(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 140(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 192(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 196(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 200(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 204(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm15, %%ymm15" & LF &
                   "vmovdqu 576(%%r11), %%ymm0" & LF &
@@ -8521,69 +8839,71 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 104(%%r11), %%ymm4" & LF &
+                  "vpmovzxbd 136(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 144(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 148(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 152(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 156(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 208(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 212(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 216(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 220(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
                   "movq 8(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 144(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 148(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 152(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 156(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 208(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 212(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 216(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 220(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm9, %%ymm9" & LF &
                   "movq 16(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 144(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 148(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 152(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 156(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 208(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 212(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 216(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 220(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm10, %%ymm10" & LF &
                   "movq 24(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 144(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 148(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 152(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 156(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 208(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 212(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 216(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 220(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm11, %%ymm11" & LF &
                   "movq 32(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 144(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 148(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 152(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 156(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 208(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 212(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 216(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 220(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm12, %%ymm12" & LF &
                   "movq 40(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 144(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 148(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 152(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 156(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 208(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 212(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 216(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 220(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm13, %%ymm13" & LF &
                   "movq 48(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 144(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 148(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 152(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 156(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 208(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 212(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 216(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 220(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm14, %%ymm14" & LF &
                   "movq 56(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 144(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 148(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 152(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 156(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 208(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 212(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 216(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 220(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm15, %%ymm15" & LF &
                   "vmovdqu 608(%%r11), %%ymm0" & LF &
@@ -8594,69 +8914,71 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 112(%%r11), %%ymm4" & LF &
+                  "vpmovzxbd 144(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 160(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 164(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 168(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 172(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 224(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 228(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 232(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 236(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
                   "movq 8(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 160(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 164(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 168(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 172(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 224(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 228(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 232(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 236(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm9, %%ymm9" & LF &
                   "movq 16(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 160(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 164(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 168(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 172(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 224(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 228(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 232(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 236(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm10, %%ymm10" & LF &
                   "movq 24(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 160(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 164(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 168(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 172(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 224(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 228(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 232(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 236(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm11, %%ymm11" & LF &
                   "movq 32(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 160(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 164(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 168(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 172(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 224(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 228(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 232(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 236(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm12, %%ymm12" & LF &
                   "movq 40(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 160(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 164(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 168(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 172(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 224(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 228(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 232(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 236(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm13, %%ymm13" & LF &
                   "movq 48(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 160(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 164(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 168(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 172(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 224(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 228(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 232(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 236(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm14, %%ymm14" & LF &
                   "movq 56(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 160(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 164(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 168(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 172(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 224(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 228(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 232(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 236(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm15, %%ymm15" & LF &
                   "vmovdqu 640(%%r11), %%ymm0" & LF &
@@ -8667,299 +8989,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 120(%%r11), %%ymm4" & LF &
-                  "movq 0(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 176(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 180(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 184(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 188(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
-                  "movq 8(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 176(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 180(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 184(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 188(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm9, %%ymm9" & LF &
-                  "movq 16(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 176(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 180(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 184(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 188(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm10, %%ymm10" & LF &
-                  "movq 24(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 176(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 180(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 184(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 188(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm11, %%ymm11" & LF &
-                  "movq 32(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 176(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 180(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 184(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 188(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm12, %%ymm12" & LF &
-                  "movq 40(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 176(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 180(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 184(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 188(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm13, %%ymm13" & LF &
-                  "movq 48(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 176(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 180(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 184(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 188(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm14, %%ymm14" & LF &
-                  "movq 56(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 176(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 180(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 184(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 188(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm15, %%ymm15" & LF &
-                  "vmovdqu 672(%%r11), %%ymm0" & LF &
-                  "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
-                  "vpsrlw $2, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm25" & LF &
-                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
-                  "vpsrlw $6, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 128(%%r11), %%ymm4" & LF &
-                  "movq 0(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 192(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 196(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 200(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 204(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
-                  "movq 8(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 192(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 196(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 200(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 204(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm9, %%ymm9" & LF &
-                  "movq 16(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 192(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 196(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 200(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 204(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm10, %%ymm10" & LF &
-                  "movq 24(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 192(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 196(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 200(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 204(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm11, %%ymm11" & LF &
-                  "movq 32(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 192(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 196(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 200(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 204(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm12, %%ymm12" & LF &
-                  "movq 40(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 192(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 196(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 200(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 204(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm13, %%ymm13" & LF &
-                  "movq 48(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 192(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 196(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 200(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 204(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm14, %%ymm14" & LF &
-                  "movq 56(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 192(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 196(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 200(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 204(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm15, %%ymm15" & LF &
-                  "vmovdqu 704(%%r11), %%ymm0" & LF &
-                  "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
-                  "vpsrlw $2, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm25" & LF &
-                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
-                  "vpsrlw $6, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 136(%%r11), %%ymm4" & LF &
-                  "movq 0(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 208(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 212(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 216(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 220(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
-                  "movq 8(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 208(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 212(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 216(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 220(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm9, %%ymm9" & LF &
-                  "movq 16(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 208(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 212(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 216(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 220(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm10, %%ymm10" & LF &
-                  "movq 24(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 208(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 212(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 216(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 220(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm11, %%ymm11" & LF &
-                  "movq 32(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 208(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 212(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 216(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 220(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm12, %%ymm12" & LF &
-                  "movq 40(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 208(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 212(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 216(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 220(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm13, %%ymm13" & LF &
-                  "movq 48(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 208(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 212(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 216(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 220(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm14, %%ymm14" & LF &
-                  "movq 56(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 208(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 212(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 216(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 220(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm15, %%ymm15" & LF &
-                  "vmovdqu 736(%%r11), %%ymm0" & LF &
-                  "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
-                  "vpsrlw $2, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm25" & LF &
-                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
-                  "vpsrlw $6, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 144(%%r11), %%ymm4" & LF &
-                  "movq 0(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 224(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 228(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 232(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 236(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
-                  "movq 8(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 224(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 228(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 232(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 236(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm9, %%ymm9" & LF &
-                  "movq 16(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 224(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 228(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 232(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 236(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm10, %%ymm10" & LF &
-                  "movq 24(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 224(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 228(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 232(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 236(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm11, %%ymm11" & LF &
-                  "movq 32(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 224(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 228(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 232(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 236(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm12, %%ymm12" & LF &
-                  "movq 40(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 224(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 228(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 232(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 236(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm13, %%ymm13" & LF &
-                  "movq 48(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 224(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 228(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 232(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 236(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm14, %%ymm14" & LF &
-                  "movq 56(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 224(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 228(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 232(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 236(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm15, %%ymm15" & LF &
-                  "vmovdqu 768(%%r11), %%ymm0" & LF &
-                  "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
-                  "vpsrlw $2, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm25" & LF &
-                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
-                  "vpsrlw $6, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
                   "vpmovzxbd 152(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
                   "vpdpbusd 240(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
@@ -9024,36 +9056,52 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpdpbusd 252(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm15, %%ymm15" & LF &
-                  "vpmovzxbd 160(%%r11), %%ymm24" & LF &
-                  "vpmovzxbd 168(%%r11), %%ymm5" & LF &
+                  "vpmovzxbd 32(%%r11), %%ymm24" & LF &
+                  "vpsrld $4, %%ymm24, %%ymm24" & LF &
+                  "vpmovzxbd 40(%%r11), %%ymm5" & LF &
+                  "vpsrld $4, %%ymm5, %%ymm5" & LF &
                   "vpslld $16, %%ymm5, %%ymm5" & LF &
                   "vpord %%ymm5, %%ymm24, %%ymm24" & LF &
-                  "vpmovzxbd 176(%%r11), %%ymm25" & LF &
-                  "vpmovzxbd 184(%%r11), %%ymm5" & LF &
+                  "vpmovzxbd 48(%%r11), %%ymm25" & LF &
+                  "vpsrld $4, %%ymm25, %%ymm25" & LF &
+                  "vpmovzxbd 56(%%r11), %%ymm5" & LF &
+                  "vpsrld $4, %%ymm5, %%ymm5" & LF &
                   "vpslld $16, %%ymm5, %%ymm5" & LF &
                   "vpord %%ymm5, %%ymm25, %%ymm25" & LF &
-                  "vpmovzxbd 192(%%r11), %%ymm26" & LF &
-                  "vpmovzxbd 200(%%r11), %%ymm5" & LF &
+                  "vpmovzxbd 64(%%r11), %%ymm26" & LF &
+                  "vpsrld $4, %%ymm26, %%ymm26" & LF &
+                  "vpmovzxbd 72(%%r11), %%ymm5" & LF &
+                  "vpsrld $4, %%ymm5, %%ymm5" & LF &
                   "vpslld $16, %%ymm5, %%ymm5" & LF &
                   "vpord %%ymm5, %%ymm26, %%ymm26" & LF &
-                  "vpmovzxbd 208(%%r11), %%ymm27" & LF &
-                  "vpmovzxbd 216(%%r11), %%ymm5" & LF &
+                  "vpmovzxbd 80(%%r11), %%ymm27" & LF &
+                  "vpsrld $4, %%ymm27, %%ymm27" & LF &
+                  "vpmovzxbd 88(%%r11), %%ymm5" & LF &
+                  "vpsrld $4, %%ymm5, %%ymm5" & LF &
                   "vpslld $16, %%ymm5, %%ymm5" & LF &
                   "vpord %%ymm5, %%ymm27, %%ymm27" & LF &
-                  "vpmovzxbd 224(%%r11), %%ymm28" & LF &
-                  "vpmovzxbd 232(%%r11), %%ymm5" & LF &
+                  "vpmovzxbd 96(%%r11), %%ymm28" & LF &
+                  "vpsrld $4, %%ymm28, %%ymm28" & LF &
+                  "vpmovzxbd 104(%%r11), %%ymm5" & LF &
+                  "vpsrld $4, %%ymm5, %%ymm5" & LF &
                   "vpslld $16, %%ymm5, %%ymm5" & LF &
                   "vpord %%ymm5, %%ymm28, %%ymm28" & LF &
-                  "vpmovzxbd 240(%%r11), %%ymm29" & LF &
-                  "vpmovzxbd 248(%%r11), %%ymm5" & LF &
+                  "vpmovzxbd 112(%%r11), %%ymm29" & LF &
+                  "vpsrld $4, %%ymm29, %%ymm29" & LF &
+                  "vpmovzxbd 120(%%r11), %%ymm5" & LF &
+                  "vpsrld $4, %%ymm5, %%ymm5" & LF &
                   "vpslld $16, %%ymm5, %%ymm5" & LF &
                   "vpord %%ymm5, %%ymm29, %%ymm29" & LF &
-                  "vpmovzxbd 256(%%r11), %%ymm30" & LF &
-                  "vpmovzxbd 264(%%r11), %%ymm5" & LF &
+                  "vpmovzxbd 128(%%r11), %%ymm30" & LF &
+                  "vpsrld $4, %%ymm30, %%ymm30" & LF &
+                  "vpmovzxbd 136(%%r11), %%ymm5" & LF &
+                  "vpsrld $4, %%ymm5, %%ymm5" & LF &
                   "vpslld $16, %%ymm5, %%ymm5" & LF &
                   "vpord %%ymm5, %%ymm30, %%ymm30" & LF &
-                  "vpmovzxbd 272(%%r11), %%ymm31" & LF &
-                  "vpmovzxbd 280(%%r11), %%ymm5" & LF &
+                  "vpmovzxbd 144(%%r11), %%ymm31" & LF &
+                  "vpsrld $4, %%ymm31, %%ymm31" & LF &
+                  "vpmovzxbd 152(%%r11), %%ymm5" & LF &
+                  "vpsrld $4, %%ymm5, %%ymm5" & LF &
                   "vpslld $16, %%ymm5, %%ymm5" & LF &
                   "vpord %%ymm5, %%ymm31, %%ymm31" & LF &
                   "vcvtph2ps 0(%%r11), %%ymm4" & LF &
@@ -9178,7 +9226,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmulps 28(%%r9)%{1to8%}, %%ymm7, %%ymm5" & LF &
                   "vcvtdq2ps %%ymm6, %%ymm2" & LF &
                   "vfnmadd231ps %%ymm5, %%ymm2, %%ymm23" & LF &
-                  "addq $800, %%r11" & LF &
+                  "addq $672, %%r11" & LF &
                   "addq $320, %%r9" & LF &
                   "addq $256, %%rdx" & LF &
                   "decq %%rcx" & LF &
@@ -9276,6 +9324,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   --  the copy lies in pages of four kilobytes and the hardware's
                   --  stream stops at each, and the first-level cache's few misses in
                   --  flight were too few to cover the memory's latency on one core.
+                  "prefetcht1 8736(%%r11)" & LF &
                   "prefetcht1 8800(%%r11)" & LF &
                   "prefetcht1 8864(%%r11)" & LF &
                   "prefetcht1 8928(%%r11)" & LF &
@@ -9286,11 +9335,8 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "prefetcht1 9248(%%r11)" & LF &
                   "prefetcht1 9312(%%r11)" & LF &
                   "prefetcht1 9376(%%r11)" & LF &
-                  "prefetcht1 9440(%%r11)" & LF &
-                  "prefetcht1 9504(%%r11)" & LF &
-                  "prefetcht1 9568(%%r11)" & LF &
                   "vpxord %%ymm8, %%ymm8, %%ymm8" & LF &
-                  "vmovdqu 288(%%r11), %%ymm0" & LF &
+                  "vmovdqu 160(%%r11), %%ymm0" & LF &
                   "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
                   "vpsrlw $2, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm25" & LF &
@@ -9299,12 +9345,90 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
                   "vpmovzxbd 32(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
                   "vpdpbusd 0(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
                   "vpdpbusd 4(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
                   "vpdpbusd 8(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
                   "vpdpbusd 12(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
+                  "vmovdqu 192(%%r11), %%ymm0" & LF &
+                  "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
+                  "vpsrlw $2, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm25" & LF &
+                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
+                  "vpsrlw $6, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
+                  "vpmovzxbd 40(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
+                  "movq 0(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
+                  "vmovdqu 224(%%r11), %%ymm0" & LF &
+                  "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
+                  "vpsrlw $2, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm25" & LF &
+                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
+                  "vpsrlw $6, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
+                  "vpmovzxbd 48(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
+                  "movq 0(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 32(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 36(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 40(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 44(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
+                  "vmovdqu 256(%%r11), %%ymm0" & LF &
+                  "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
+                  "vpsrlw $2, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm25" & LF &
+                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
+                  "vpsrlw $6, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
+                  "vpmovzxbd 56(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
+                  "movq 0(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 48(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 52(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 56(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 60(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
+                  "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
+                  "vmovdqu 288(%%r11), %%ymm0" & LF &
+                  "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
+                  "vpsrlw $2, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm25" & LF &
+                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
+                  "vpsrlw $6, %%ymm0, %%ymm1" & LF &
+                  "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
+                  "vpmovzxbd 64(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
+                  "movq 0(%3), %%r10" & LF &
+                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
+                  "vpdpbusd 64(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 68(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 72(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 76(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
                   "vmovdqu 320(%%r11), %%ymm0" & LF &
@@ -9315,13 +9439,15 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 40(%%r11), %%ymm4" & LF &
+                  "vpmovzxbd 72(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 16(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 20(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 24(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 28(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 80(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 84(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 88(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 92(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
                   "vmovdqu 352(%%r11), %%ymm0" & LF &
@@ -9332,13 +9458,15 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 48(%%r11), %%ymm4" & LF &
+                  "vpmovzxbd 80(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 32(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 36(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 40(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 44(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 96(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 100(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 104(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 108(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
                   "vmovdqu 384(%%r11), %%ymm0" & LF &
@@ -9349,13 +9477,15 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 56(%%r11), %%ymm4" & LF &
+                  "vpmovzxbd 88(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 48(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 52(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 56(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 60(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 112(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 116(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 120(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 124(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
                   "vmovdqu 416(%%r11), %%ymm0" & LF &
@@ -9366,13 +9496,15 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 64(%%r11), %%ymm4" & LF &
+                  "vpmovzxbd 96(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 64(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 68(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 72(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 76(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 128(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 132(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 136(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 140(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
                   "vmovdqu 448(%%r11), %%ymm0" & LF &
@@ -9383,13 +9515,15 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 72(%%r11), %%ymm4" & LF &
+                  "vpmovzxbd 104(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 80(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 84(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 88(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 92(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 144(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 148(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 152(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 156(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
                   "vmovdqu 480(%%r11), %%ymm0" & LF &
@@ -9400,13 +9534,15 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 80(%%r11), %%ymm4" & LF &
+                  "vpmovzxbd 112(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 96(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 100(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 104(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 108(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 160(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 164(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 168(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 172(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
                   "vmovdqu 512(%%r11), %%ymm0" & LF &
@@ -9417,13 +9553,15 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 88(%%r11), %%ymm4" & LF &
+                  "vpmovzxbd 120(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 112(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 116(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 120(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 124(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 176(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 180(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 184(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 188(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
                   "vmovdqu 544(%%r11), %%ymm0" & LF &
@@ -9434,13 +9572,15 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 96(%%r11), %%ymm4" & LF &
+                  "vpmovzxbd 128(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 128(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 132(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 136(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 140(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 192(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 196(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 200(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 204(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
                   "vmovdqu 576(%%r11), %%ymm0" & LF &
@@ -9451,13 +9591,15 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 104(%%r11), %%ymm4" & LF &
+                  "vpmovzxbd 136(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 144(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 148(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 152(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 156(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 208(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 212(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 216(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 220(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
                   "vmovdqu 608(%%r11), %%ymm0" & LF &
@@ -9468,13 +9610,15 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 112(%%r11), %%ymm4" & LF &
+                  "vpmovzxbd 144(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 160(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 164(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 168(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 172(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
+                  "vpdpbusd 224(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
+                  "vpdpbusd 228(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
+                  "vpdpbusd 232(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
+                  "vpdpbusd 236(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
                   "vmovdqu 640(%%r11), %%ymm0" & LF &
@@ -9485,75 +9629,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
                   "vpsrlw $6, %%ymm0, %%ymm1" & LF &
                   "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 120(%%r11), %%ymm4" & LF &
-                  "movq 0(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 176(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 180(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 184(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 188(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
-                  "vmovdqu 672(%%r11), %%ymm0" & LF &
-                  "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
-                  "vpsrlw $2, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm25" & LF &
-                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
-                  "vpsrlw $6, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 128(%%r11), %%ymm4" & LF &
-                  "movq 0(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 192(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 196(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 200(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 204(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
-                  "vmovdqu 704(%%r11), %%ymm0" & LF &
-                  "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
-                  "vpsrlw $2, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm25" & LF &
-                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
-                  "vpsrlw $6, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 136(%%r11), %%ymm4" & LF &
-                  "movq 0(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 208(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 212(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 216(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 220(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
-                  "vmovdqu 736(%%r11), %%ymm0" & LF &
-                  "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
-                  "vpsrlw $2, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm25" & LF &
-                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
-                  "vpsrlw $6, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
-                  "vpmovzxbd 144(%%r11), %%ymm4" & LF &
-                  "movq 0(%3), %%r10" & LF &
-                  "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
-                  "vpdpbusd 224(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
-                  "vpdpbusd 228(%%r10,%%rdx,1)%{1to8%}, %%ymm25, %%ymm6" & LF &
-                  "vpdpbusd 232(%%r10,%%rdx,1)%{1to8%}, %%ymm26, %%ymm6" & LF &
-                  "vpdpbusd 236(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
-                  "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
-                  "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
-                  "vmovdqu 768(%%r11), %%ymm0" & LF &
-                  "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
-                  "vpsrlw $2, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm25" & LF &
-                  "vpsrlw $4, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm26" & LF &
-                  "vpsrlw $6, %%ymm0, %%ymm1" & LF &
-                  "vpandd %%ymm3, %%ymm1, %%ymm27" & LF &
                   "vpmovzxbd 152(%%r11), %%ymm4" & LF &
+                  "vpslld $28, %%ymm4, %%ymm4" & LF &
+                  "vpsrld $28, %%ymm4, %%ymm4" & LF &
                   "movq 0(%3), %%r10" & LF &
                   "vpxord %%ymm6, %%ymm6, %%ymm6" & LF &
                   "vpdpbusd 240(%%r10,%%rdx,1)%{1to8%}, %%ymm24, %%ymm6" & LF &
@@ -9562,36 +9640,52 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vpdpbusd 252(%%r10,%%rdx,1)%{1to8%}, %%ymm27, %%ymm6" & LF &
                   "vpmulld %%ymm4, %%ymm6, %%ymm6" & LF &
                   "vpaddd %%ymm6, %%ymm8, %%ymm8" & LF &
-                  "vpmovzxbd 160(%%r11), %%ymm24" & LF &
-                  "vpmovzxbd 168(%%r11), %%ymm5" & LF &
+                  "vpmovzxbd 32(%%r11), %%ymm24" & LF &
+                  "vpsrld $4, %%ymm24, %%ymm24" & LF &
+                  "vpmovzxbd 40(%%r11), %%ymm5" & LF &
+                  "vpsrld $4, %%ymm5, %%ymm5" & LF &
                   "vpslld $16, %%ymm5, %%ymm5" & LF &
                   "vpord %%ymm5, %%ymm24, %%ymm24" & LF &
-                  "vpmovzxbd 176(%%r11), %%ymm25" & LF &
-                  "vpmovzxbd 184(%%r11), %%ymm5" & LF &
+                  "vpmovzxbd 48(%%r11), %%ymm25" & LF &
+                  "vpsrld $4, %%ymm25, %%ymm25" & LF &
+                  "vpmovzxbd 56(%%r11), %%ymm5" & LF &
+                  "vpsrld $4, %%ymm5, %%ymm5" & LF &
                   "vpslld $16, %%ymm5, %%ymm5" & LF &
                   "vpord %%ymm5, %%ymm25, %%ymm25" & LF &
-                  "vpmovzxbd 192(%%r11), %%ymm26" & LF &
-                  "vpmovzxbd 200(%%r11), %%ymm5" & LF &
+                  "vpmovzxbd 64(%%r11), %%ymm26" & LF &
+                  "vpsrld $4, %%ymm26, %%ymm26" & LF &
+                  "vpmovzxbd 72(%%r11), %%ymm5" & LF &
+                  "vpsrld $4, %%ymm5, %%ymm5" & LF &
                   "vpslld $16, %%ymm5, %%ymm5" & LF &
                   "vpord %%ymm5, %%ymm26, %%ymm26" & LF &
-                  "vpmovzxbd 208(%%r11), %%ymm27" & LF &
-                  "vpmovzxbd 216(%%r11), %%ymm5" & LF &
+                  "vpmovzxbd 80(%%r11), %%ymm27" & LF &
+                  "vpsrld $4, %%ymm27, %%ymm27" & LF &
+                  "vpmovzxbd 88(%%r11), %%ymm5" & LF &
+                  "vpsrld $4, %%ymm5, %%ymm5" & LF &
                   "vpslld $16, %%ymm5, %%ymm5" & LF &
                   "vpord %%ymm5, %%ymm27, %%ymm27" & LF &
-                  "vpmovzxbd 224(%%r11), %%ymm28" & LF &
-                  "vpmovzxbd 232(%%r11), %%ymm5" & LF &
+                  "vpmovzxbd 96(%%r11), %%ymm28" & LF &
+                  "vpsrld $4, %%ymm28, %%ymm28" & LF &
+                  "vpmovzxbd 104(%%r11), %%ymm5" & LF &
+                  "vpsrld $4, %%ymm5, %%ymm5" & LF &
                   "vpslld $16, %%ymm5, %%ymm5" & LF &
                   "vpord %%ymm5, %%ymm28, %%ymm28" & LF &
-                  "vpmovzxbd 240(%%r11), %%ymm29" & LF &
-                  "vpmovzxbd 248(%%r11), %%ymm5" & LF &
+                  "vpmovzxbd 112(%%r11), %%ymm29" & LF &
+                  "vpsrld $4, %%ymm29, %%ymm29" & LF &
+                  "vpmovzxbd 120(%%r11), %%ymm5" & LF &
+                  "vpsrld $4, %%ymm5, %%ymm5" & LF &
                   "vpslld $16, %%ymm5, %%ymm5" & LF &
                   "vpord %%ymm5, %%ymm29, %%ymm29" & LF &
-                  "vpmovzxbd 256(%%r11), %%ymm30" & LF &
-                  "vpmovzxbd 264(%%r11), %%ymm5" & LF &
+                  "vpmovzxbd 128(%%r11), %%ymm30" & LF &
+                  "vpsrld $4, %%ymm30, %%ymm30" & LF &
+                  "vpmovzxbd 136(%%r11), %%ymm5" & LF &
+                  "vpsrld $4, %%ymm5, %%ymm5" & LF &
                   "vpslld $16, %%ymm5, %%ymm5" & LF &
                   "vpord %%ymm5, %%ymm30, %%ymm30" & LF &
-                  "vpmovzxbd 272(%%r11), %%ymm31" & LF &
-                  "vpmovzxbd 280(%%r11), %%ymm5" & LF &
+                  "vpmovzxbd 144(%%r11), %%ymm31" & LF &
+                  "vpsrld $4, %%ymm31, %%ymm31" & LF &
+                  "vpmovzxbd 152(%%r11), %%ymm5" & LF &
+                  "vpsrld $4, %%ymm5, %%ymm5" & LF &
                   "vpslld $16, %%ymm5, %%ymm5" & LF &
                   "vpord %%ymm5, %%ymm31, %%ymm31" & LF &
                   "vcvtph2ps 0(%%r11), %%ymm4" & LF &
@@ -9611,7 +9705,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmulps 0(%%r9)%{1to8%}, %%ymm7, %%ymm5" & LF &
                   "vcvtdq2ps %%ymm6, %%ymm2" & LF &
                   "vfnmadd231ps %%ymm5, %%ymm2, %%ymm16" & LF &
-                  "addq $800, %%r11" & LF &
+                  "addq $672, %%r11" & LF &
                   "addq $320, %%r9" & LF &
                   "addq $256, %%rdx" & LF &
                   "decq %%rcx" & LF &

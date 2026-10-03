@@ -105,7 +105,7 @@ package Model_Runner.Quantization.Interleave is
    Least_Block_Bytes  : constant := 160;
    Fifth_Block_Bytes  : constant := 176;
    Fifth_Least_Block_Bytes : constant := 192;
-   Two_Block_Bytes   : constant := 800;
+   Two_Block_Bytes   : constant := 672;
    Three_Block_Bytes : constant := 912;
    Level_Block_Bytes : constant := 1104;
    Micro_Block_Bytes : constant := 136;
@@ -216,16 +216,19 @@ package Model_Runner.Quantization.Interleave is
    --  bits in a quant, and the panel is arranged for the first of those
    --  rather than the second.
    --
-   --  800 bytes, which is the first layout here that grows: the eight rows'
-   --  84 each is 672, and the difference is the sixteen scales and sixteen
-   --  minima taken out of their nibbles and written a byte apiece.
+   --  672 bytes, the eight rows' 84 each and not one more. The sixteen
+   --  scale-and-minimum bytes stay as the file packs them, a scale in the
+   --  low nibble and a minimum in the high, and only move to sub-block
+   --  major; the kernel splits the nibbles with a shift or two. Taken out
+   --  a byte apiece they made 800, and a generated token's expert arms,
+   --  bound by the memory, read that nineteen per cent more at the
+   --  memory's rate.
    --
    --     0 ..  15   the eight rows' block scales, half precision
    --    16 ..  31   the eight rows' block minima, likewise
-   --    32 .. 159   the sixteen sub-block scales, a byte each, sub-block
-   --                major
-   --   160 .. 287   the sixteen sub-block minima, the same way
-   --   288 .. 799   the quants, interleaved
+   --    32 .. 159   the sixteen sub-blocks' scale and minimum, a byte each
+   --                as the file has them, sub-block major
+   --   160 .. 671   the quants, interleaved
    --
    --  A quant is two bits, so a byte holds four of them and one thirty-two
    --  byte group covers SIXTEEN elements a row rather than eight. Byte
@@ -234,13 +237,12 @@ package Model_Runner.Quantization.Interleave is
    --  so one load and four shifts give the group's four runs of four
    --  consecutive elements, which is what the byte dot product wants. And a
    --  group is exactly a sub-block, which is why the scales above are
-   --  sub-block major: the kernel widens eight rows' scale for one group
-   --  out of eight consecutive bytes.
+   --  sub-block major: the kernel widens eight rows' scale and minimum
+   --  for one group out of eight consecutive bytes.
    Two_Scale_At   : constant := 0;
    Two_Least_At   : constant := 16;
    Two_Factor_At  : constant := 32;
-   Two_Minimum_At : constant := 160;
-   Two_Quants_At  : constant := 288;
+   Two_Quants_At  : constant := 160;
 
    --  And the three-bit k-quant. Sixteen sub-blocks again, a six-bit signed
    --  scale each and no minimum, with the quant's third bit in a run of its
