@@ -567,6 +567,9 @@ package body Model_Runner.Platform.Device.Products is
        elsif Item.Bundle_Line /= Null_Handle
          and then Group_Size mod Head_Bundle = 0
        then Head_Bundle
+       elsif Group_Size in Whole_Lines'Range
+         and then Item.Whole_Halved_Line (Group_Size) /= Null_Handle
+       then Group_Size
        else 0);
 
    --  Whether a batch too short for the tiled kernels takes the bundled
@@ -674,6 +677,8 @@ package body Model_Runner.Platform.Device.Products is
        then (case Halved_Bundle (Item, Group_Size, Span) is
                when Wide_Bundle => Item.Eight_Halved_Line,
                when Head_Bundle => Item.Bundle_Line,
+               when Whole_Lines'Range =>
+                 Item.Whole_Halved_Line (Group_Size),
                when others      => Item.Halved_Line)
        elsif not Rounding
          and then Exact_Bundle
@@ -3829,6 +3834,18 @@ package body Model_Runner.Platform.Device.Products is
                   Item.Eight_Halved_Line := Made;
                end if;
 
+               --  And at the width of each whole group neither four nor
+               --  eight divides.
+               for Width in Whole_Lines'Range loop
+                  Value := C.unsigned (Width);
+
+                  if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                             Null_Handle, Made'Access) = 0
+                  then
+                     Item.Whole_Halved_Line (Width) := Made;
+                  end if;
+               end loop;
+
                Request.Stage.Specialized := Null_Handle;
             end;
          end if;
@@ -4610,6 +4627,9 @@ package body Model_Runner.Platform.Device.Products is
          Give_Back (Line, "vkDestroyPipeline");
       end loop;
       Give_Back (Item.Eight_Halved_Line, "vkDestroyPipeline");
+      for Line of Item.Whole_Halved_Line loop
+         Give_Back (Line, "vkDestroyPipeline");
+      end loop;
       Give_Back (Item.Merge_Line, "vkDestroyPipeline");
       Give_Back (Item.Thin_Line, "vkDestroyPipeline");
       Give_Back (Item.F32_Tile_Line, "vkDestroyPipeline");

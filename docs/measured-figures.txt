@@ -7445,7 +7445,7 @@ reference B9BC7DF02F2CD2E1 src/library/model_runner-backend-reference.adb src/li
 # Restamped 2026-09-30, not re-measured: the change was the command line
 #   losing the project commands to the session -- options and dispatch
 #   only, no code these figures time.
-device 190E3ADD8BD2DC09 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+device 0B45B6D1C2CABE2A src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 
 # covers: the three-row table under "Drafting", the per-token costs derived
@@ -10376,7 +10376,7 @@ tokenizer CE3B696CD412A3B6 src/library/model_runner-tokenizer.adb
 # Restamped 2026-09-30, not re-measured: the change was the command line
 #   losing the project commands to the session -- options and dispatch
 #   only, no code these figures time.
-outside 190E3ADD8BD2DC09 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+outside 0B45B6D1C2CABE2A src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-27  The row tile at sixty-four, and the instrument's first row
 #
@@ -23973,3 +23973,38 @@ panels FB3271B0953307EE src/library/model_runner-quantization-interleave.ads src
 # restamped.
 # load:  one-minute average 1.5 to 2.1
 # model: TinyLlama 1.1B chat Q5_K_M, Qwen3-8B Q4_K_M
+
+# 2026-10-03: a generated token's attention at depth, the half-precision
+# cache. `run --backend device --draft-tokens 0 --prompt-file` (a 5.6 KB
+# prompt, 1,226-1,294 tokens) --max-tokens 64 --show-stats, warm, two runs
+# each, against llama-bench -p 0 -n 64 -d <same depth> -ngl 99 -r 3:
+#
+#                       f32 (default)   f16 before   f16 after   llama.cpp
+#   Steelman-14B Q4_K_M     7.17          7.23         7.41        7.47
+#   qwen3-8b Q4_K_M        12.93         13.57        13.55       13.57
+#   gemma-3-4b Q4_K_M      22.6          22.5         23.5        22.87
+#
+# Attend step a generated layer, --device-timeline --context-size 4096:
+# Steelman f16 160.8 -> 102.9 us, qwen3-8b 98.7 -> 97.9. What did it, one
+# at a time on Steelman: the values read four halves a load (f16vec4, the
+# binary32 path's run) 160.8 -> 134.8; a whole-group bundle of five out of
+# the copy (Whole_Halved_Line, as the exact path's Whole_Bundle_Line)
+# 134.8 -> 103. The keys read across the lanes out of the copy were 10 per
+# cent slower on heads of 128 (qwen 98 -> 109) and 3 per cent faster on
+# Gemma's 256, so they are taken for heads of 256 only. Finer slices
+# (Slice_Least 128, 64) were slower on both caches. Same text on all three.
+#
+# The binary32 cache's gap at depth (qwen 4.7, Steelman 4 per cent) is its
+# bytes: it reads twice the f16 cache's, and its attend reads at 58 GB/s.
+# Found and not fixed: --kv-cache f16 is not dealt in pages, so a context
+# past one storage buffer leaves the device (qwen3-8b at --context-size
+# 32768: 3.55 t/s), and `tests speed --kv-cache f16` opens the model's whole
+# context and reads 7.7 t/s for that reason; with the default lookup draft
+# an f16 session's check rounds go to the host ("the context is not on the
+# device"), 11.9 t/s where undrafted is 13.5.
+# load:  one-minute average 1.5 to 2.4
+# Restamped, not re-measured: the device and outside tables run the
+# binary32 cache, which reads none of what changed.
+#   device 190E3ADD8BD2DC09 -> 0B45B6D1C2CABE2A,
+#   outside 190E3ADD8BD2DC09 -> 0B45B6D1C2CABE2A.
+# model: Steelman-14B r6 Q4_K_M, Qwen3-8B Q4_K_M, gemma-3-4b-it Q4_K_M

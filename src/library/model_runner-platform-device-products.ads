@@ -2817,6 +2817,11 @@ private
       --  The half-precision bundle at eight heads, for a token attending
       --  out of the copy, and whether a token does.
       Eight_Halved_Line : System.Address := System.Null_Address;
+
+      --  And at a whole group of five, six or seven, as the exact bundle
+      --  has: a group neither four nor eight divides read its keys and
+      --  values once a head out of the copy.
+      Whole_Halved_Line : Whole_Lines := [others => System.Null_Address];
       Halves : Boolean := False;
 
       --  And whether a batch is kept off the matrix instruction, as
