@@ -24052,3 +24052,32 @@ panels 6F89212F64FC4A8C src/library/model_runner-quantization-interleave.ads src
 # Nothing changed; no group is restamped.
 # load:  one-minute average 1.4 to 2.6
 # model: qwen3.6-35b-a3b-mtp Q4_K_S
+
+# 2026-10-03: the processor's generation against llama.cpp's, panels on
+# (`tests speed --backend cpu --repack rows --max-tokens 128 --repeats 3`,
+# as `run` now does unasked), TinyLlama 1.1B, against llama-bench
+# 95b8e33e1 with the device hidden (GGML_VK_VISIBLE_DEVICES="" -ngl 0)
+# tg128, same sitting, tokens a second:
+#
+#             ours   llama.cpp           1 thread       4 threads
+#   Q4_0      70.7    72.9    -3%      36.7 / 42.1    68.3 / 71.6
+#   Q4_K_M    64.5    68.1    -5%   (10 tokens before the end of text)
+#   Q5_K_M    55.6    59.3    -6%
+#   Q8_0      40.1    40.5    -1%
+#   Q2_K      76.6    88.0   -13%      29.3 / 34.6    75.2 / 84.2
+#   Q3_K      72.2    80.0   -10%      27.6 / 36.1    69.0 / 76.8
+#   IQ4_NL    67.9    71.9    -6%
+#
+# The gap is the core's, widest on one thread: a single-threaded Q3_K
+# token, sampled with gdb, is 95 per cent in the panel kernels (q3k 35,
+# q4k 35, q6k 18 per cent of samples). The "Q2_K" file is Q2_K attention,
+# Q3_K feed-forward and a Q6_K head, so both rows are mostly the Q3_K
+# kernel. One vector on the pool, Q3_K reads 4.3e-3 ns an element at
+# 5632 x 2048 where Q4_K reads 3.5e-3 -- slower with fewer bytes.
+# Tried and refused: building the one-vector activation table (Bands,
+# Marks) once a call rather than once a panel in the Q2_K and Q3_K kernels
+# -- level (Q2_K 29.3 / 75.2 -> 29.2 / 76.3, Q3_K 27.6 / 69.0 -> 24.2 /
+# 69.5, same text); the scalar table is not what the core waits on.
+# Nothing changed; no group is restamped.
+# load:  one-minute average 1.2 to 2.6
+# model: TinyLlama 1.1B chat, seven formats
