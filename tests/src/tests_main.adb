@@ -2806,10 +2806,11 @@ begin
             Repack      => Mode_Of (Option ("--repack", "none")),
 
             --  The storage the session keeps its context in, named the way
-            --  the command names it: f32, f16, q8 or q4.
+            --  the command names it: f32, f16, q8 or q4, and by default
+            --  what the command keeps by default.
             Cache       =>
               (declare
-                 Named : constant String := Option ("--kv-cache", "f32");
+                 Named : constant String := Option ("--kv-cache", "f16");
                begin
                  (if Named = Model_Runner.Llama.Cache_Name
                               (Model_Runner.Llama.Halved)
@@ -2820,7 +2821,10 @@ begin
                   elsif Named = Model_Runner.Llama.Cache_Name
                                   (Model_Runner.Llama.Fourth)
                   then Model_Runner.Llama.Fourth
-                  else Model_Runner.Llama.Exact)),
+                  elsif Named = Model_Runner.Llama.Cache_Name
+                                  (Model_Runner.Llama.Exact)
+                  then Model_Runner.Llama.Exact
+                  else Model_Runner.Llama.Halved)),
             Backend     => Backend_Of (Option ("--backend", "cpu")),
             Penalty     => Real_Of (Option ("--repeat-penalty", "1.1")),
             Draft       => Option ("--draft-model", ""),

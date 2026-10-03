@@ -559,11 +559,14 @@ package Model_Runner.CLI.Options is
       Repack     : Model_Runner.Llama.Repack_Mode :=
         Model_Runner.Llama.No_Repack;
 
-      --  How the session stores what it has committed. The default is the
-      --  precision the engine computes in, which is what every published
-      --  figure was measured against.
+      --  How the session stores what it has committed. The default is
+      --  binary16, half the bytes a token reads at depth and what llama.cpp
+      --  keeps: binary32 cost a generated token four to five per cent at a
+      --  thousand positions and more past that. --kv-cache f32 keeps the
+      --  precision the engine computes in, which is what the published
+      --  figures before 2026-10-03 were measured against.
       Cache      : Model_Runner.Llama.Cache_Precision :=
-        Model_Runner.Llama.Exact;
+        Model_Runner.Llama.Halved;
 
       --  How the values are stored where that differs from the keys: one
       --  of the packed storages beside a packed --kv-cache, since attention

@@ -47,7 +47,7 @@ Tokenizer
 
 Memory
   model weights                   4.9 KiB (5024 bytes)
-  session at this context         5.7 KiB (5880 bytes)
+  session at this context         5.2 KiB (5338 bytes)
   ...
 
 Execution
@@ -1436,7 +1436,9 @@ tool counts what the figure describes. Every prompt length quoted here is the
 tool's count.
 
 The cached figures are `--kv-cache f16`, which stores what a session has
-committed as binary16 rather than binary32: half the memory for the context,
+committed as binary16 rather than binary32 -- the default since 2026-10-03,
+as it is llama.cpp's, with `--kv-cache f32` for the exact storage: half the
+memory for the context,
 and **0.0327** worst absolute on these fixtures against 2.2e-05 for the exact
 cache. That is measured with and without a sliding window; without one it is
 0.0218, and a window raises it for the reason a window raises everything
