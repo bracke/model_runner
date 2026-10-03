@@ -477,6 +477,10 @@ package body Model_Runner.Platform.Device.Products is
        then Null_Handle
        elsif Head_Size <= Matrix_Head and then Value_Size <= Matrix_Head
        then Item.Matrix_Attend
+       elsif Head_Size <= Matrix_Mid_Head
+         and then Value_Size <= Matrix_Mid_Head
+         and then Item.Matrix_Mid_Attend /= Null_Handle
+       then Item.Matrix_Mid_Attend
        elsif Head_Size <= Matrix_Wide_Head
          and then Value_Size <= Matrix_Wide_Head
        then Item.Matrix_Wide_Attend
@@ -512,6 +516,7 @@ package body Model_Runner.Platform.Device.Products is
    is (Item.Attend_Matrix /= Null_Handle
        or else Item.Attend_Matrix_Wide /= Null_Handle
        or else Item.Attend_Matrix_Wider /= Null_Handle
+       or else Item.Attend_Matrix_Mid /= Null_Handle
        or else Item.Halved_Line /= Null_Handle);
 
    function Keeps_Copy (Item : Engine) return Boolean
@@ -3082,6 +3087,21 @@ package body Model_Runner.Platform.Device.Products is
                   end if;
                end;
 
+               --  And one between, eighty wide.
+               declare
+                  Mid : aliased constant Model_Runner.Shaders.Word_Array :=
+                    Model_Runner.Shaders.Attend.Attention_Matrix_Mid;
+               begin
+                  Request.Size := Interfaces.C.size_t (Mid'Length * 4);
+                  Request.Code := Mid'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Attend_Matrix_Mid := Made;
+                  end if;
+               end;
+
                --  And twice as wide again.
                declare
                   Wider : aliased constant Model_Runner.Shaders.Word_Array :=
@@ -3955,6 +3975,16 @@ package body Model_Runner.Platform.Device.Products is
             end if;
          end if;
 
+         if Item.Attend_Matrix_Mid /= Null_Handle then
+            Request.Stage.Module := Item.Attend_Matrix_Mid;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Matrix_Mid_Attend := Made;
+            end if;
+         end if;
+
          if Item.Attend_Matrix_Wider /= Null_Handle then
             Request.Stage.Module := Item.Attend_Matrix_Wider;
 
@@ -4693,9 +4723,11 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Matrix_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Wide_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Wider_Attend, "vkDestroyPipeline");
+      Give_Back (Item.Matrix_Mid_Attend, "vkDestroyPipeline");
       Give_Back (Item.Attend_Matrix, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Matrix_Wide, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Matrix_Wider, "vkDestroyShaderModule");
+      Give_Back (Item.Attend_Matrix_Mid, "vkDestroyShaderModule");
       Give_Back (Item.Query_Tile, "vkDestroyShaderModule");
       Give_Back (Item.Grouped, "vkDestroyShaderModule");
       Give_Back (Item.Attender, "vkDestroyShaderModule");

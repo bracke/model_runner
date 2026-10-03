@@ -176,6 +176,14 @@ const uint DM = 256u;
 #elif defined(WIDE_HEAD)
 #define IN_PLACE
 const uint DM = 128u;
+#elif defined(MID_HEAD)
+//  And one between, for heads of eighty -- a picture encoder's seventy-two
+//  spread to the sixteen this reads at a time. Compiled for a hundred and
+//  twenty-eight they kept the registers and the shared memory of eight
+//  accumulators where five are used, and fewer workgroups ran at once:
+//  a picture's attention read 2.62 s where this reads 2.37.
+#define IN_PLACE
+const uint DM = 80u;
 #else
 const uint DM = 64u;
 #endif

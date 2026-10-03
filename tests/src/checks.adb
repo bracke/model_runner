@@ -6706,6 +6706,19 @@ package body Checks is
                   & "with every shader named");
          end if;
 
+         --  And the one between, eighty wide.
+         Result.Performed := Result.Performed + 1;
+
+         if Found
+           and then Digest /= Model_Runner.Shaders.Attend.Attention_Matrix_Mid_Digest
+         then
+            Fail ("the middle compilation of src/shaders/attention_matrix.comp"
+                  & " is older than the source; compile it with "
+                  & "--target-env vulkan1.3 -DMID_HEAD to "
+                  & "attention_matrix_mid.spv, and run 'tests shader' again "
+                  & "with every shader named");
+         end if;
+
          --  And its third, twice as wide again.
          Result.Performed := Result.Performed + 1;
 

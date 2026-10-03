@@ -165,6 +165,10 @@ package Model_Runner.Platform.Device.Products is
    Matrix_Head : constant := 64;
    Matrix_Wide_Head : constant := 128;
 
+   --  And a fourth compilation's, between the first two: a picture
+   --  encoder's heads, spread to eighty.
+   Matrix_Mid_Head : constant := 80;
+
    --  And the third compilation's, Gemma's width.
    Matrix_Wider_Head : constant := 256;
 
@@ -2682,6 +2686,7 @@ private
       --  offers it. Null on a device that does not.
       Attend_Matrix : System.Address := System.Null_Address;
       Attend_Matrix_Wide : System.Address := System.Null_Address;
+      Attend_Matrix_Mid : System.Address := System.Null_Address;
       Attend_Matrix_Wider : System.Address := System.Null_Address;
 
       --  The fourth and fifth kernels, which go together and are made only
@@ -2919,6 +2924,7 @@ private
       Tile_Line   : System.Address := System.Null_Address;
       Matrix_Attend : System.Address := System.Null_Address;
       Matrix_Wide_Attend : System.Address := System.Null_Address;
+      Matrix_Mid_Attend : System.Address := System.Null_Address;
       Matrix_Wider_Attend : System.Address := System.Null_Address;
       Norm_Line   : System.Address := System.Null_Address;
       Turn_Line   : System.Address := System.Null_Address;

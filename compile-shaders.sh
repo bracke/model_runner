@@ -97,6 +97,7 @@ compile matrix_wider_extra           matrix_product.comp   vulkan1.3 MORE_FORMAT
 compile matrix_wider_low             matrix_product.comp   vulkan1.3 LOW_BITS WIDER
 compile attention_matrix             attention_matrix.comp vulkan1.3
 compile attention_matrix_wide        attention_matrix.comp vulkan1.3 WIDE_HEAD
+compile attention_matrix_mid         attention_matrix.comp vulkan1.3 MID_HEAD
 compile attention_matrix_wider       attention_matrix.comp vulkan1.3 WIDER_HEAD
 compile norm                         norm.comp             vulkan1.1
 compile rotate                       rotate.comp           vulkan1.0
