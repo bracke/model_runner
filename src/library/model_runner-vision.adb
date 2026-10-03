@@ -1805,6 +1805,162 @@ package body Model_Runner.Vision is
 
    --  The scratch a workspace holds, for products of Total rows at most
    --  through weights of Columns_Max columns and Rows_Max rows.
+   --  Weight with its heads spread to Head_P apart, zeros between: a
+   --  query, key or value projection's rows (By_Rows), or an output
+   --  projection's columns. Kept as the padded weights are; the weight
+   --  itself where it cannot be made.
+   function Head_Padded
+     (Work    : in out Workspace;
+      Weight  : T.View;
+      Heads   : Element_Count;
+      Head    : Element_Count;
+      Head_P  : Element_Count;
+      By_Rows : Boolean) return T.View
+   is
+      use type Model_Runner.GGUF.Tensor_Type;
+      use System.Storage_Elements;
+
+      Rows_P : constant Element_Count :=
+        (if By_Rows then Heads * Head_P else Weight.Rows);
+      Cols_P : constant Element_Count :=
+        (if By_Rows then Weight.Columns else Heads * Head_P);
+      Key    : constant System.Address :=
+        Weight.Base + Storage_Offset (Weight.Offset);
+   begin
+      if Work.Owner = null
+        or else Head_P = Head
+        or else not (Weight.Format = Model_Runner.GGUF.Type_F16
+                     or else Weight.Format = Model_Runner.GGUF.Type_BF16)
+        or else Weight.Interleaved
+        or else (By_Rows and then Weight.Rows /= Heads * Head)
+        or else (not By_Rows and then Weight.Columns /= Heads * Head)
+      then
+         return Weight;
+      end if;
+
+      for Index in 1 .. Work.Owner.Padded_Count loop
+         if Work.Owner.Padded (Index).Key = Key
+           and then Work.Owner.Padded (Index).Bytes /= null
+           and then Work.Owner.Padded (Index).View.Rows = Rows_P
+           and then Work.Owner.Padded (Index).View.Columns = Cols_P
+         then
+            return Work.Owner.Padded (Index).View;
+         end if;
+      end loop;
+
+      if Work.Owner.Padded_Count = Work.Owner.Padded'Last then
+         return Weight;
+      end if;
+
+      declare
+         Row_In  : constant Model_Runner.Bytes.Byte_Count :=
+           Model_Runner.Bytes.Byte_Count (Weight.Columns) * 2;
+         Row_Out : constant Model_Runner.Bytes.Byte_Count :=
+           Model_Runner.Bytes.Byte_Count (Cols_P) * 2;
+         Total   : constant Model_Runner.Bytes.Byte_Count :=
+           Row_Out * Model_Runner.Bytes.Byte_Count (Rows_P);
+         Bytes   : Model_Runner.Bytes.Byte_Array_Access;
+         Made    : T.View;
+         Local   : E.Error_Info;
+         Run     : constant Model_Runner.Bytes.Byte_Count :=
+           Model_Runner.Bytes.Byte_Count (Head) * 2;
+      begin
+         begin
+            Bytes := new Model_Runner.Bytes.Byte_Array'(1 .. Total => 0);
+         exception
+            when Storage_Error =>
+               return Weight;
+         end;
+
+         declare
+            Source : Model_Runner.Bytes.Byte_Array
+              (1 .. Row_In * Model_Runner.Bytes.Byte_Count (Weight.Rows))
+              with Import, Address => Key;
+         begin
+            for Row in 0 .. Model_Runner.Bytes.Byte_Count (Weight.Rows) - 1
+            loop
+               if By_Rows then
+                  declare
+                     H : constant Model_Runner.Bytes.Byte_Count :=
+                       Row / Model_Runner.Bytes.Byte_Count (Head);
+                     I : constant Model_Runner.Bytes.Byte_Count :=
+                       Row mod Model_Runner.Bytes.Byte_Count (Head);
+                     To : constant Model_Runner.Bytes.Byte_Count :=
+                       (H * Model_Runner.Bytes.Byte_Count (Head_P) + I)
+                       * Row_Out;
+                  begin
+                     Bytes (1 + To .. To + Row_In) :=
+                       Source (1 + Row * Row_In .. (Row + 1) * Row_In);
+                  end;
+               else
+                  for H in 0 .. Model_Runner.Bytes.Byte_Count (Heads) - 1 loop
+                     declare
+                        From : constant Model_Runner.Bytes.Byte_Count :=
+                          Row * Row_In + H * Run;
+                        To   : constant Model_Runner.Bytes.Byte_Count :=
+                          Row * Row_Out
+                          + H * Model_Runner.Bytes.Byte_Count (Head_P) * 2;
+                     begin
+                        Bytes (1 + To .. To + Run) :=
+                          Source (1 + From .. From + Run);
+                     end;
+                  end loop;
+               end if;
+            end loop;
+         end;
+
+         T.Make (Weight.Format, Rows_P, Cols_P, Bytes, 0, Made, Local);
+         if E.Is_Error (Local) then
+            Model_Runner.Bytes.Free (Bytes);
+            return Weight;
+         end if;
+         Made.Role := Weight.Role;
+
+         Work.Owner.Padded_Count := Work.Owner.Padded_Count + 1;
+         Work.Owner.Padded (Work.Owner.Padded_Count) :=
+           (Key => Key, View => Made, Bytes => Bytes, Values => null);
+         return Made;
+      end;
+   end Head_Padded;
+
+   --  A kept copy of Length elements made by Fill, keyed by Key: a bias
+   --  spread to the padded heads, or a normalization's gain and shift side
+   --  by side. Null where it cannot be made.
+   function Kept_Values
+     (Work   : in out Workspace;
+      Key    : System.Address;
+      Length : Element_Count;
+      Fill   : not null access procedure (Into : in out T.Real_Array))
+      return T.Real_Array_Access
+   is
+      Made : T.Real_Array_Access;
+   begin
+      if Work.Owner = null then
+         return null;
+      end if;
+      for Index in 1 .. Work.Owner.Padded_Count loop
+         if Work.Owner.Padded (Index).Key = Key
+           and then Work.Owner.Padded (Index).Values /= null
+           and then Work.Owner.Padded (Index).Values.all'Length = Length
+         then
+            return Work.Owner.Padded (Index).Values;
+         end if;
+      end loop;
+      if Work.Owner.Padded_Count = Work.Owner.Padded'Last then
+         return null;
+      end if;
+      T.Allocate (Length, Made);
+      if Made = null then
+         return null;
+      end if;
+      Made.all := [others => 0.0];
+      Fill (Made.all);
+      Work.Owner.Padded_Count := Work.Owner.Padded_Count + 1;
+      Work.Owner.Padded (Work.Owner.Padded_Count) :=
+        (Key => Key, View => T.Empty_View, Bytes => null, Values => Made);
+      return Made;
+   end Kept_Values;
+
    --  A block's feed-forward on the device in one submission a chunk of
    --  patches: up and its bias, the Gaussian unit, down and its bias, the
    --  hidden activation never leaving the device. Both matrices padded so
@@ -2392,6 +2548,9 @@ package body Model_Runner.Vision is
 
       Work : Workspace;
 
+      --  The first block the host computes: past those the device took.
+      First_Host : Natural := 0;
+
       procedure Release is
       begin
          T.Free (X);
@@ -2573,9 +2732,202 @@ package body Model_Runner.Vision is
          end loop;
       end if;
 
+      --  The blocks whole on the device, where it is open and the encoder
+      --  is not held to binary32: a block a submission over every patch --
+      --  both normalizations, the projections and their biases, the
+      --  patches attending to each other both ways, the feed-forward --
+      --  the stream left on the device from one block to the next, so a
+      --  picture crosses the interface once each way. The heads are
+      --  spread from 72 to 80 apart for the matrix attention; where any
+      --  block is refused the stream is fetched back and the rest go the
+      --  way below.
+      declare
+         Head_P  : constant Element_Count := (Head + 15) / 16 * 16;
+         Width_P : constant Element_Count := Heads * Head_P;
+         Scale_D : constant Real :=
+           Real (N.Wide_Real'(1.0) / Elementary.Sqrt (N.Wide_Real (Head)));
+         Keys_M, Values_M : T.Real_Array_Access := null;
+         Carried : Boolean := False;
+         Ok      : Boolean := True;
+         K_Base, V_Base : Element_Count;
+      begin
+         if Model_Runner.Backend.Device.Is_Ready
+           and then not Exactly
+           and then E.Is_Ok (Status)
+         then
+            Work.Status := Status;
+            T.Allocate (Patches * Width_P, Keys_M);
+            T.Allocate (Patches * Width_P, Values_M);
+            if Work.Cache_Base = Element_Count'Last then
+               Work.Cache_Base :=
+                 Model_Runner.Backend.Device.Cached_Elements;
+            end if;
+            K_Base := Work.Cache_Base;
+            V_Base := K_Base + Patches * Width_P;
+            Model_Runner.Backend.Device.Reserve_Cache
+              (V_Base + Patches * Width_P, V_Base + Patches * Width_P, Ok);
+            Ok := Ok and then Keys_M /= null and then Values_M /= null;
+
+            while Ok and then First_Host < Item.Blocks loop
+               declare
+                  Current : Block renames Item.Layers (First_Host);
+
+                  procedure Spread_Bias
+                    (Bias : T.Real_Array_Access; Into : in out T.Real_Array) is
+                  begin
+                     for H in 0 .. Heads - 1 loop
+                        Into (Into'First + H * Head_P
+                              .. Into'First + H * Head_P + Head - 1) :=
+                          Bias (Bias'First + H * Head
+                                .. Bias'First + H * Head + Head - 1);
+                     end loop;
+                  end Spread_Bias;
+
+                  procedure Q_Fill (Into : in out T.Real_Array) is
+                  begin
+                     Spread_Bias (Current.Query_Bias, Into);
+                  end Q_Fill;
+                  procedure K_Fill (Into : in out T.Real_Array) is
+                  begin
+                     Spread_Bias (Current.Key_Bias, Into);
+                  end K_Fill;
+                  procedure V_Fill (Into : in out T.Real_Array) is
+                  begin
+                     Spread_Bias (Current.Value_Bias, Into);
+                  end V_Fill;
+                  procedure Pair_1 (Into : in out T.Real_Array) is
+                  begin
+                     Into (Into'First .. Into'First + Width - 1) :=
+                       Current.Norm_1_Weight.all;
+                     Into (Into'First + Width .. Into'Last) :=
+                       Current.Norm_1_Bias.all;
+                  end Pair_1;
+                  procedure Pair_2 (Into : in out T.Real_Array) is
+                  begin
+                     Into (Into'First .. Into'First + Width - 1) :=
+                       Current.Norm_2_Weight.all;
+                     Into (Into'First + Width .. Into'Last) :=
+                       Current.Norm_2_Bias.all;
+                  end Pair_2;
+                  procedure Up_Fill (Into : in out T.Real_Array) is
+                  begin
+                     Into (Into'First .. Into'First + Feed - 1) :=
+                       Current.Feed_In_Bias.all;
+                  end Up_Fill;
+
+                  Hidden_P : constant Element_Count :=
+                    Rounded (Feed, Pad_Columns);
+                  Usable : constant Boolean :=
+                    Current.Query_Bias /= null and then Current.Key_Bias /= null
+                    and then Current.Value_Bias /= null
+                    and then Current.Output_Bias /= null
+                    and then Current.Feed_In_Bias /= null
+                    and then Current.Feed_Out_Bias /= null
+                    and then Current.Norm_1_Weight /= null
+                    and then Current.Norm_1_Bias /= null
+                    and then Current.Norm_2_Weight /= null
+                    and then Current.Norm_2_Bias /= null;
+               begin
+                  exit when not Usable;
+                  declare
+                     Qp : constant T.View := Head_Padded
+                       (Work, Current.Query, Heads, Head, Head_P, True);
+                     Kp : constant T.View := Head_Padded
+                       (Work, Current.Key, Heads, Head, Head_P, True);
+                     Vp : constant T.View := Head_Padded
+                       (Work, Current.Value, Heads, Head, Head_P, True);
+                     Op : constant T.View := Head_Padded
+                       (Work, Current.Output, Heads, Head, Head_P, False);
+                     Up : constant T.View := Padded_To
+                       (Work, Current.Feed_In, Hidden_P,
+                        Rounded (Current.Feed_In.Columns, Pad_Columns));
+                     Dn : constant T.View := Padded_To
+                       (Work, Current.Feed_Out,
+                        Rounded (Current.Feed_Out.Rows, Pad_Rows), Hidden_P);
+                     Qb : constant T.Real_Array_Access := Kept_Values
+                       (Work, Current.Query_Bias.all
+                                (Current.Query_Bias.all'First)'Address,
+                        Width_P, Q_Fill'Access);
+                     Kb : constant T.Real_Array_Access := Kept_Values
+                       (Work, Current.Key_Bias.all
+                                (Current.Key_Bias.all'First)'Address,
+                        Width_P, K_Fill'Access);
+                     Vb : constant T.Real_Array_Access := Kept_Values
+                       (Work, Current.Value_Bias.all
+                                (Current.Value_Bias.all'First)'Address,
+                        Width_P, V_Fill'Access);
+                     Ub : constant T.Real_Array_Access := Kept_Values
+                       (Work, Current.Feed_In_Bias.all
+                                (Current.Feed_In_Bias.all'First)'Address,
+                        Hidden_P, Up_Fill'Access);
+                     N1 : constant T.Real_Array_Access := Kept_Values
+                       (Work, Current.Norm_1_Weight.all
+                                (Current.Norm_1_Weight.all'First)'Address,
+                        2 * Width, Pair_1'Access);
+                     N2 : constant T.Real_Array_Access := Kept_Values
+                       (Work, Current.Norm_2_Weight.all
+                                (Current.Norm_2_Weight.all'First)'Address,
+                        2 * Width, Pair_2'Access);
+                     Last : constant Boolean := First_Host = Item.Blocks - 1;
+                  begin
+                     exit when Qp.Rows /= Width_P or else Kp.Rows /= Width_P
+                       or else Vp.Rows /= Width_P or else Op.Columns /= Width_P
+                       or else Up.Rows /= Hidden_P or else Dn.Columns /= Hidden_P
+                       or else Dn.Rows /= Width
+                       or else Qb = null or else Kb = null or else Vb = null
+                       or else Ub = null or else N1 = null or else N2 = null;
+
+                     Model_Runner.Backend.Device.Attend_Exactly (False);
+                     Model_Runner.Backend.Device.Whole_Layer
+                       (X.all (0 .. Patches * Width - 1), N1, N2,
+                        Item.Epsilon, Qp, Kp, Vp,
+                        Model_Runner.Backend.Device.No_Turns,
+                        Natural (Head_P), 0, False,
+                        K_Base, V_Base,
+                        Natural (Heads), Natural (Head_P), 1,
+                        0, Natural (Patches - 1),
+                        K_Base, V_Base,
+                        Natural (Width_P), Natural (Width_P),
+                        Scale_D, 0.0,
+                        Op, T.Empty_View, Up, Dn, 1,
+                        Keys_M, Values_M, X, Ok,
+                        Positions => Natural (Patches),
+                        Causal    => False,
+                        Cancel    => Cancel,
+                        Carry_In  => Carried,
+                        Carry_Out => not Last,
+                        Mirror    => False,
+                        Up_Bias   => Ub,
+                        Down_Bias => Current.Feed_Out_Bias,
+                        Query_Bias => Qb, Key_Bias => Kb, Value_Bias => Vb,
+                        Out_Bias  => Current.Output_Bias,
+                        Shifted   => True);
+                     exit when not Ok;
+                     Carried := not Last;
+                     First_Host := First_Host + 1;
+                  end;
+               end;
+            end loop;
+
+            if Carried then
+               declare
+                  Back : Boolean;
+               begin
+                  Model_Runner.Backend.Device.Fetch_Carried
+                    (X.all (0 .. Patches * Width - 1), Back);
+                  if not Back then
+                     Status := E.Make (E.Backend_Device_Refused);
+                  end if;
+               end;
+            end if;
+            T.Free (Keys_M);
+            T.Free (Values_M);
+         end if;
+      end;
+
       --  The blocks, each pre-normalized: attention over its first norm
       --  and the feed-forward over its second, both added to the stream.
-      for Index in 0 .. Item.Blocks - 1 loop
+      for Index in First_Host .. Item.Blocks - 1 loop
          exit when E.Is_Error (Status);
          if Model_Runner.Cancellation.Is_Cancelled (Cancel) then
             Status := E.Make (E.Generation_Cancelled);
