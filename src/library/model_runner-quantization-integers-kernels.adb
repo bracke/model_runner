@@ -2017,6 +2017,32 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "xorq %%rsi, %%rsi" & LF &
                "movq %4, %%rax" & LF &
                "2:" & LF &
+               --  The panel a block or two on, a kilobyte and a half or more ahead:
+               --  the copy lies in pages of four kilobytes and the hardware's
+               --  stream stops at each, so a generated token waited on it.
+               "prefetcht0 2880(%1,%%rcx,1)" & LF &
+               "prefetcht0 2944(%1,%%rcx,1)" & LF &
+               "prefetcht0 3008(%1,%%rcx,1)" & LF &
+               "prefetcht0 3072(%1,%%rcx,1)" & LF &
+               "prefetcht0 3136(%1,%%rcx,1)" & LF &
+               "prefetcht0 3200(%1,%%rcx,1)" & LF &
+               "prefetcht0 3264(%1,%%rcx,1)" & LF &
+               "prefetcht0 3328(%1,%%rcx,1)" & LF &
+               "prefetcht0 3392(%1,%%rcx,1)" & LF &
+               "prefetcht0 3456(%1,%%rcx,1)" & LF &
+               "prefetcht0 3520(%1,%%rcx,1)" & LF &
+               "prefetcht0 3584(%1,%%rcx,1)" & LF &
+               "prefetcht0 3648(%1,%%rcx,1)" & LF &
+               "prefetcht0 3712(%1,%%rcx,1)" & LF &
+               "prefetcht0 3776(%1,%%rcx,1)" & LF &
+               "prefetcht0 3840(%1,%%rcx,1)" & LF &
+               "prefetcht0 3904(%1,%%rcx,1)" & LF &
+               "prefetcht0 3968(%1,%%rcx,1)" & LF &
+               "prefetcht0 4032(%1,%%rcx,1)" & LF &
+               "prefetcht0 4096(%1,%%rcx,1)" & LF &
+               "prefetcht0 4160(%1,%%rcx,1)" & LF &
+               "prefetcht0 4224(%1,%%rcx,1)" & LF &
+               "prefetcht0 4288(%1,%%rcx,1)" & LF &
                "vpxord %%ymm24, %%ymm24, %%ymm24" & LF &
                "vpxord %%ymm8, %%ymm8, %%ymm8" & LF &
                "vpxord %%ymm9, %%ymm9, %%ymm9" & LF &
@@ -3709,6 +3735,36 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "xorq %%rsi, %%rsi" & LF &
                "movq %4, %%rax" & LF &
                "2:" & LF &
+               --  The panel a block or two on, a kilobyte and a half or more ahead:
+               --  the copy lies in pages of four kilobytes and the hardware's
+               --  stream stops at each, so a generated token waited on it.
+               "prefetcht0 1680(%1,%%rcx,1)" & LF &
+               "prefetcht0 1744(%1,%%rcx,1)" & LF &
+               "prefetcht0 1808(%1,%%rcx,1)" & LF &
+               "prefetcht0 1872(%1,%%rcx,1)" & LF &
+               "prefetcht0 1936(%1,%%rcx,1)" & LF &
+               "prefetcht0 2000(%1,%%rcx,1)" & LF &
+               "prefetcht0 2064(%1,%%rcx,1)" & LF &
+               "prefetcht0 2128(%1,%%rcx,1)" & LF &
+               "prefetcht0 2192(%1,%%rcx,1)" & LF &
+               "prefetcht0 2256(%1,%%rcx,1)" & LF &
+               "prefetcht0 2320(%1,%%rcx,1)" & LF &
+               "prefetcht0 2384(%1,%%rcx,1)" & LF &
+               "prefetcht0 2448(%1,%%rcx,1)" & LF &
+               "prefetcht0 2512(%1,%%rcx,1)" & LF &
+               "prefetcht0 2576(%1,%%rcx,1)" & LF &
+               "prefetcht0 2640(%1,%%rcx,1)" & LF &
+               "prefetcht0 2704(%1,%%rcx,1)" & LF &
+               "prefetcht0 2768(%1,%%rcx,1)" & LF &
+               "prefetcht0 2832(%1,%%rcx,1)" & LF &
+               "prefetcht0 2896(%1,%%rcx,1)" & LF &
+               "prefetcht0 2960(%1,%%rcx,1)" & LF &
+               "prefetcht0 3024(%1,%%rcx,1)" & LF &
+               "prefetcht0 3088(%1,%%rcx,1)" & LF &
+               "prefetcht0 3152(%1,%%rcx,1)" & LF &
+               "prefetcht0 3216(%1,%%rcx,1)" & LF &
+               "prefetcht0 3280(%1,%%rcx,1)" & LF &
+               "prefetcht0 3344(%1,%%rcx,1)" & LF &
                "vpxord %%ymm24, %%ymm24, %%ymm24" & LF &
                "vpxord %%ymm8, %%ymm8, %%ymm8" & LF &
                "vpxord %%ymm9, %%ymm9, %%ymm9" & LF &
@@ -5062,6 +5118,28 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "xorq %%rsi, %%rsi" & LF &
                "movq %4, %%rax" & LF &
                "2:" & LF &
+               --  The panel a block or two on, a kilobyte and a half or more ahead:
+               --  the copy lies in pages of four kilobytes and the hardware's
+               --  stream stops at each, so a generated token waited on it.
+               "prefetcht0 2368(%1,%%rcx,1)" & LF &
+               "prefetcht0 2432(%1,%%rcx,1)" & LF &
+               "prefetcht0 2496(%1,%%rcx,1)" & LF &
+               "prefetcht0 2560(%1,%%rcx,1)" & LF &
+               "prefetcht0 2624(%1,%%rcx,1)" & LF &
+               "prefetcht0 2688(%1,%%rcx,1)" & LF &
+               "prefetcht0 2752(%1,%%rcx,1)" & LF &
+               "prefetcht0 2816(%1,%%rcx,1)" & LF &
+               "prefetcht0 2880(%1,%%rcx,1)" & LF &
+               "prefetcht0 2944(%1,%%rcx,1)" & LF &
+               "prefetcht0 3008(%1,%%rcx,1)" & LF &
+               "prefetcht0 3072(%1,%%rcx,1)" & LF &
+               "prefetcht0 3136(%1,%%rcx,1)" & LF &
+               "prefetcht0 3200(%1,%%rcx,1)" & LF &
+               "prefetcht0 3264(%1,%%rcx,1)" & LF &
+               "prefetcht0 3328(%1,%%rcx,1)" & LF &
+               "prefetcht0 3392(%1,%%rcx,1)" & LF &
+               "prefetcht0 3456(%1,%%rcx,1)" & LF &
+               "prefetcht0 3520(%1,%%rcx,1)" & LF &
                "vpxord %%ymm24, %%ymm24, %%ymm24" & LF &
                "vpxord %%ymm8, %%ymm8, %%ymm8" & LF &
                "vpxord %%ymm9, %%ymm9, %%ymm9" & LF &
@@ -5872,6 +5950,12 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "xorq %%rdx, %%rdx" & LF &
                   "movq %4, %%rcx" & LF &
                   "1:" & LF &
+                  --  The panel a block or two on, a kilobyte and a half or more ahead:
+                  --  the copy lies in pages of four kilobytes and the hardware's
+                  --  stream stops at each, so a generated token waited on it.
+                  "prefetcht0 1728(%%r11)" & LF &
+                  "prefetcht0 1792(%%r11)" & LF &
+                  "prefetcht0 1856(%%r11)" & LF &
                   "vcvtph2ps 0(%%r11), %%ymm4" & LF &
                   "vmovdqu 16(%%r11), %%ymm0" & LF &
                   "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
@@ -6357,6 +6441,12 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "xorq %%rdx, %%rdx" & LF &
                   "movq %4, %%rcx" & LF &
                   "1:" & LF &
+                  --  The panel a block or two on, a kilobyte and a half or more ahead:
+                  --  the copy lies in pages of four kilobytes and the hardware's
+                  --  stream stops at each, so a generated token waited on it.
+                  "prefetcht0 1600(%%r11)" & LF &
+                  "prefetcht0 1664(%%r11)" & LF &
+                  "prefetcht0 1728(%%r11)" & LF &
                   "vcvtph2ps 0(%%r11), %%ymm4" & LF &
                   "vcvtph2ps 16(%%r11), %%ymm7" & LF &
                   "vmovdqu 32(%%r11), %%ymm0" & LF &
@@ -6868,6 +6958,12 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "xorq %%rdx, %%rdx" & LF &
                   "movq %4, %%rcx" & LF &
                   "1:" & LF &
+                  --  The panel a block or two on, a kilobyte and a half or more ahead:
+                  --  the copy lies in pages of four kilobytes and the hardware's
+                  --  stream stops at each, so a generated token waited on it.
+                  "prefetcht0 1760(%%r11)" & LF &
+                  "prefetcht0 1824(%%r11)" & LF &
+                  "prefetcht0 1888(%%r11)" & LF &
                   "vcvtph2ps 0(%%r11), %%ymm4" & LF &
                   "vmovdqu 144(%%r11), %%ymm5" & LF &
                   "vmovdqu 16(%%r11), %%ymm0" & LF &
@@ -7376,6 +7472,12 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "xorq %%rdx, %%rdx" & LF &
                   "movq %4, %%rcx" & LF &
                   "1:" & LF &
+                  --  The panel a block or two on, a kilobyte and a half or more ahead:
+                  --  the copy lies in pages of four kilobytes and the hardware's
+                  --  stream stops at each, so a generated token waited on it.
+                  "prefetcht0 1728(%%r11)" & LF &
+                  "prefetcht0 1792(%%r11)" & LF &
+                  "prefetcht0 1856(%%r11)" & LF &
                   "vcvtph2ps 0(%%r11), %%ymm4" & LF &
                   "vcvtph2ps 16(%%r11), %%ymm7" & LF &
                   "vmovdqu 160(%%r11), %%ymm5" & LF &
@@ -9118,6 +9220,22 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "xorq %%rdx, %%rdx" & LF &
                   "movq %4, %%rcx" & LF &
                   "1:" & LF &
+                  --  The panel a block or two on, a kilobyte and a half or more ahead:
+                  --  the copy lies in pages of four kilobytes and the hardware's
+                  --  stream stops at each, so a generated token waited on it.
+                  "prefetcht0 1600(%%r11)" & LF &
+                  "prefetcht0 1664(%%r11)" & LF &
+                  "prefetcht0 1728(%%r11)" & LF &
+                  "prefetcht0 1792(%%r11)" & LF &
+                  "prefetcht0 1856(%%r11)" & LF &
+                  "prefetcht0 1920(%%r11)" & LF &
+                  "prefetcht0 1984(%%r11)" & LF &
+                  "prefetcht0 2048(%%r11)" & LF &
+                  "prefetcht0 2112(%%r11)" & LF &
+                  "prefetcht0 2176(%%r11)" & LF &
+                  "prefetcht0 2240(%%r11)" & LF &
+                  "prefetcht0 2304(%%r11)" & LF &
+                  "prefetcht0 2368(%%r11)" & LF &
                   "vpxord %%ymm8, %%ymm8, %%ymm8" & LF &
                   "vmovdqu 288(%%r11), %%ymm0" & LF &
                   "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
@@ -11274,6 +11392,24 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "xorq %%rdx, %%rdx" & LF &
                   "movq %4, %%rcx" & LF &
                   "1:" & LF &
+                  --  The panel a block or two on, a kilobyte and a half or more ahead:
+                  --  the copy lies in pages of four kilobytes and the hardware's
+                  --  stream stops at each, so a generated token waited on it.
+                  "prefetcht0 1824(%%r11)" & LF &
+                  "prefetcht0 1888(%%r11)" & LF &
+                  "prefetcht0 1952(%%r11)" & LF &
+                  "prefetcht0 2016(%%r11)" & LF &
+                  "prefetcht0 2080(%%r11)" & LF &
+                  "prefetcht0 2144(%%r11)" & LF &
+                  "prefetcht0 2208(%%r11)" & LF &
+                  "prefetcht0 2272(%%r11)" & LF &
+                  "prefetcht0 2336(%%r11)" & LF &
+                  "prefetcht0 2400(%%r11)" & LF &
+                  "prefetcht0 2464(%%r11)" & LF &
+                  "prefetcht0 2528(%%r11)" & LF &
+                  "prefetcht0 2592(%%r11)" & LF &
+                  "prefetcht0 2656(%%r11)" & LF &
+                  "prefetcht0 2720(%%r11)" & LF &
                   "vpxord %%ymm8, %%ymm8, %%ymm8" & LF &
                   "vmovdqu 144(%%r11), %%ymm0" & LF &
                   "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
@@ -12233,6 +12369,12 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "xorq %%rdx, %%rdx" & LF &
                   "movq %4, %%rcx" & LF &
                   "1:" & LF &
+                  --  The panel a block or two on, a kilobyte and a half or more ahead:
+                  --  the copy lies in pages of four kilobytes and the hardware's
+                  --  stream stops at each, so a generated token waited on it.
+                  "prefetcht0 1728(%%r11)" & LF &
+                  "prefetcht0 1792(%%r11)" & LF &
+                  "prefetcht0 1856(%%r11)" & LF &
                   "vcvtph2ps 0(%%r11), %%ymm4" & LF &
                   "vmovdqu 16(%%r11), %%ymm0" & LF &
                   "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
@@ -13709,6 +13851,27 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "xorq %%rdx, %%rdx" & LF &
                   "movq %4, %%rcx" & LF &
                   "1:" & LF &
+                  --  The panel a block or two on, a kilobyte and a half or more ahead:
+                  --  the copy lies in pages of four kilobytes and the hardware's
+                  --  stream stops at each, so a generated token waited on it.
+                  "prefetcht0 2208(%%r11)" & LF &
+                  "prefetcht0 2272(%%r11)" & LF &
+                  "prefetcht0 2336(%%r11)" & LF &
+                  "prefetcht0 2400(%%r11)" & LF &
+                  "prefetcht0 2464(%%r11)" & LF &
+                  "prefetcht0 2528(%%r11)" & LF &
+                  "prefetcht0 2592(%%r11)" & LF &
+                  "prefetcht0 2656(%%r11)" & LF &
+                  "prefetcht0 2720(%%r11)" & LF &
+                  "prefetcht0 2784(%%r11)" & LF &
+                  "prefetcht0 2848(%%r11)" & LF &
+                  "prefetcht0 2912(%%r11)" & LF &
+                  "prefetcht0 2976(%%r11)" & LF &
+                  "prefetcht0 3040(%%r11)" & LF &
+                  "prefetcht0 3104(%%r11)" & LF &
+                  "prefetcht0 3168(%%r11)" & LF &
+                  "prefetcht0 3232(%%r11)" & LF &
+                  "prefetcht0 3296(%%r11)" & LF &
                   "vpxord %%ymm8, %%ymm8, %%ymm8" & LF &
                   "vmovdqu 80(%%r11), %%ymm0" & LF &
                   "vpandd %%ymm3, %%ymm0, %%ymm24" & LF &
@@ -14567,6 +14730,12 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "xorq %%rdx, %%rdx" & LF &
                   "movq %4, %%rcx" & LF &
                   "1:" & LF &
+                  --  The panel a block or two on, a kilobyte and a half or more ahead:
+                  --  the copy lies in pages of four kilobytes and the hardware's
+                  --  stream stops at each, so a generated token waited on it.
+                  "prefetcht0 1632(%%r11)" & LF &
+                  "prefetcht0 1696(%%r11)" & LF &
+                  "prefetcht0 1760(%%r11)" & LF &
                   "vpmovzxbd 0(%%r11), %%ymm4" & LF &
                   "vpsllvd %%ymm4, %%ymm10, %%ymm11" & LF &
                   "vpsubd %%ymm8, %%ymm4, %%ymm5" & LF &
