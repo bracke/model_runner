@@ -1562,6 +1562,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A run told to end ends:** SIGTERM or SIGHUP still cancels cleanly, at the next checkpoint; a run that has not ended ten seconds later, or is told a second time, ends at once with status 7 and says so. A processor run of a 30B mixture once stuck where no checkpoint is reached and outlived `timeout`'s SIGTERM and a plain `kill` for twelve hours, holding seven gigabytes; the stall itself did not come back in 39 runs (release and dev builds, under load and with 12 GB held elsewhere), so this is the bound on it rather than its cause.
 - A process's standard output and standard error captured to one file
   (checks, builds) no longer write over each other, losing output.
 - Choosers leave no stray blank line behind.

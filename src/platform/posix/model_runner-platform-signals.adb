@@ -1,6 +1,7 @@
 with Ada.Exceptions;
 with Ada.Interrupts;
 with Ada.Interrupts.Names;
+with Ada.Real_Time.Timing_Events;
 
 with Hostkit.Descriptors;
 with Hostkit.Terminal_Control;
@@ -35,6 +36,21 @@ package body Model_Runner.Platform.Signals is
    Stopped_Line : constant String :=
      ASCII.LF & "stopped: told to end (SIGTERM or SIGHUP)" & ASCII.LF;
 
+   --  How long a run told to end has to end cleanly before it is ended at
+   --  once. A clean end is a layer of a token away, or a tensor of a load;
+   --  a run that has not ended in this is stuck where nothing asks, and a
+   --  stuck run once outlived `timeout`'s SIGTERM and a plain kill by
+   --  twelve hours, holding seven gigabytes.
+   Ending_Grace : constant Ada.Real_Time.Time_Span := Ada.Real_Time.Seconds (10);
+
+   Forced_Line : constant String :=
+     ASCII.LF & "stopped: told to end and did not, so ended at once" & ASCII.LF;
+
+   --  The clock that ends a run which was told to end and did not: a
+   --  timing event, so it holds nothing up -- a run that ends cleanly
+   --  first leaves it set, and the process is gone before it fires.
+   Deadline : Ada.Real_Time.Timing_Events.Timing_Event;
+
    protected Handler is
 
       --  Interrupt entry point. It does the least possible work: set the
@@ -46,6 +62,8 @@ package body Model_Runner.Platform.Signals is
       --  the program ends here.
       procedure Ending;
       pragma Interrupt_Handler (Ending);
+
+      procedure Overdue (Event : in out Ada.Real_Time.Timing_Events.Timing_Event);
 
       procedure Set_Waiting (Value : Boolean; Note : String);
       function Ended return Boolean;
@@ -109,10 +127,26 @@ package body Model_Runner.Platform.Signals is
 
       function Count return Natural is (Seen);
 
-      procedure Ending is
+      procedure Overdue (Event : in out Ada.Real_Time.Timing_Events.Timing_Event) is
+         pragma Unreferenced (Event);
+         Ignored : constant Integer := Write_Error (2, Forced_Line, Forced_Line'Length);
+         pragma Unreferenced (Ignored);
       begin
+         Quick_Exit (7);
+      end Overdue;
+
+      procedure Ending is
+         use type Ada.Real_Time.Time;
+      begin
+         --  Told twice: the first was not enough, so this one is.
+         if Told then
+            Overdue (Deadline);
+         end if;
+
          Told := True;
          Interrupt;
+         Ada.Real_Time.Timing_Events.Set_Handler
+           (Deadline, Ada.Real_Time.Clock + Ending_Grace, Overdue'Access);
          if Waiting then
             declare
                Ignored : constant Integer := Write_Error (2, Stopped_Line, Stopped_Line'Length);

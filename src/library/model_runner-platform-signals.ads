@@ -18,8 +18,11 @@ with Model_Runner.Cancellation;
 --  changed.
 --
 --  A second interrupt is not treated specially: the first one already ends the
---  run at the next checkpoint. A process that must be stopped sooner can still
---  be sent SIGTERM or SIGKILL, which this crate does not intercept.
+--  run at the next checkpoint. Being told to end -- SIGTERM, SIGHUP -- cancels
+--  the same way, and where the program has not ended ten seconds later it ends
+--  at once, status 7, as it does on being told a second time: a run stuck
+--  where no checkpoint is reached would otherwise outlive every request but
+--  SIGKILL.
 --
 --  Task safety: Install and Remove are called by the task that owns the
 --  command; the handler runs in its own context and touches only the token.
