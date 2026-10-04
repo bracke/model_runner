@@ -25045,3 +25045,26 @@ panels 784CB2D61F49BC3D src/library/model_runner-quantization-interleave.ads src
 # multiplies every format was seen to fail on each new kernel mutated.
 # load: one-minute average 0.9 to 1.1
 # model: TinyLlama 1.1B chat IQ1_S, IQ2_XXS
+
+
+# 2026-10-04, continued: IQ1_M, IQ2_XS and IQ3_S the same way -- the grid in
+# the workgroup's memory, a lane a whole sub-block of thirty-two (eight lanes
+# a block, eight blocks in flight), the sub-block's bytes in whole words:
+# IQ2_XS's four eleven-bit lanes and IQ3_S's eight indices as three words and
+# a funnel, IQ3_S's four sign bytes as one word (each byte was a load of its
+# own), IQ1_M's four index bytes one word and its high nibbles half of
+# another. IQ1_M's split of its reads from its arithmetic (PRELOAD) went with
+# its sixteen-element lane. Same text throughout. TinyLlama, tests speed
+# --backend device --max-tokens 128 --repeats 3, alternated two rounds;
+# llama-bench -ngl 99 -n 128 -r 3 twice in the same sitting (the part warming
+# between: the higher of the two):
+#
+#             before   after    llama.cpp
+#   IQ1_M     153.2    171.1    167.2 (154.3)   57 tokens, the model's end
+#   IQ2_XS    141.3    152.9    152.6 (143.5)
+#   IQ3_S     110.0    116.6    114.8 (112.1)
+#
+# The device test multiplying every format failed on each of the three new
+# kernels mutated. IQ2_S and IQ3_XXS (0.98) keep the sixteen-element lane.
+# load: one-minute average 0.9 to 1.2
+# model: TinyLlama 1.1B chat IQ1_M, IQ2_XS, IQ3_S
