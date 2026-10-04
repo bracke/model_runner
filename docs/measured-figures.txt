@@ -25012,3 +25012,36 @@ panels 784CB2D61F49BC3D src/library/model_runner-quantization-interleave.ads src
 # load: one-minute average 0.8 to 1.5
 # model: minicpmv-2.6-mmproj-f16, minicpmv-4.5-mmproj-f16,
 #   qwen3.5-0.8b-mmproj-f16
+
+
+# 2026-10-04: IQ1_S and IQ2_XXS generation on the device, closed. TinyLlama,
+# `tests speed --backend device --max-tokens 128 --repeats 3` against
+# llama-bench -ngl 99 -n 128 -r 3, same sitting, tokens a second:
+#
+#             before   after    llama.cpp
+#   IQ1_S     158.6    177.8    172.1 (173.7 earlier the same day)
+#   IQ2_XXS   143.0    163.5    160.5 (162.1, 149.9 +- 4.5)
+#
+# What separated the kernels (RADV_DEBUG=shaders,shaderstats against
+# llama.cpp's, and GGML_VK_PERF_LOGGER for its per-product times): ours read
+# the grid from the shader's constant table, a load from memory that cannot
+# issue until the index it needs arrives -- two waits a row -- and held 96
+# vector registers (10 waves a SIMD) against llama.cpp's 56 (18). Taken one at
+# a time, alternated A/B, output unchanged throughout:
+#
+#   the grid copied into the workgroup's memory    IQ1_S 0.810 -> 0.792 s,
+#     once a workgroup (56 registers, 18 waves)      IQ2_XXS 0.900 -> 0.875
+#   a sub-block's words in fewer loads: IQ2_XXS's  IQ1_S 0.792 -> 0.766,
+#     eight bytes as three words and a funnel        IQ2_XXS 0.874 -> 0.839
+#     (was four half-word reads), IQ1_S's two
+#     index bytes as one half-word read
+#   a lane a whole sub-block of 32 (eight lanes a  IQ1_S 0.773 -> 0.725,
+#     block, eight blocks in flight): a block's      IQ2_XXS 0.835 -> 0.783
+#     scale and high bits read once for 32
+#
+# Tried and dropped: four rows a workgroup (0.807 / 0.876 with the shared
+# grid, against 0.788 / 0.866 at eight), sixteen (0.827 / 0.917), two waves a
+# workgroup splitting a row's groups (0.854 / 0.929). The device test that
+# multiplies every format was seen to fail on each new kernel mutated.
+# load: one-minute average 0.9 to 1.1
+# model: TinyLlama 1.1B chat IQ1_S, IQ2_XXS

@@ -17,6 +17,10 @@
 //  the constant multiplies the run's activation sum once. The subgroup adds
 //  the partials, and a workgroup answers NUM_ROWS rows.
 //
+//  IQ2_XXS and IQ1_S go further (LANE32): eight lanes a group, each a whole
+//  sub-block of thirty-two, eight groups in flight, with the codebook in
+//  the workgroup's memory (SHARED_GRID).
+//
 //  A lane finds its block from its column, so the formats of sixty-four and
 //  a hundred and twenty-eight elements need no width a multiple of 256: a
 //  group past the end of a row is skipped lane by lane.
@@ -213,17 +217,35 @@ const uint IQ2XXS_GRID[512] = uint[512](
     0x08081908u, 0x2B2B2B19u
 );
 
-float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
-    uint sub = within / 32u;
-    uint l = (within % 32u) / 8u;
+//  The grid in the workgroup's memory, copied there once a workgroup: a
+//  lookup from the constant table is a load from memory that cannot begin
+//  until the index it needs has arrived, and a row waited on two of them.
+#define SHARED_GRID
+shared uvec2 grid_shared[256];
+
+//  A lane takes a whole sub-block of thirty-two -- its scale, four indices
+//  and four signs in three words, against eight vec4s of activation --
+//  eight lanes a block; a lane of sixteen elements read the same words for
+//  half the work. TinyLlama IQ2_XXS 143 -> 164 tokens a second with the
+//  shared grid, llama.cpp's 162.
+#define LANE32
+float lane_dot32(uint at, uint sub, vec4 a[8]) {
     uint q = at + 2u + 8u * sub;
-    uint aux0 = u32_at(q);
-    uint aux1 = u32_at(q + 4u);
+    uint i = q >> 2u;
+    uint shift = (q & 2u) * 8u;
+    uint w0 = w[i];
+    uint w1 = w[i + 1u];
+    uint w2 = w[i + 2u];
+    uint aux0 = shift == 0u ? w0 : (w0 >> 16u) | (w1 << 16u);
+    uint aux1 = shift == 0u ? w1 : (w1 >> 16u) | (w2 << 16u);
     float db = half_at(at) * (0.5 + float(aux1 >> 28u)) * 0.25;
-    uvec2 g0 = uvec2(IQ2XXS_GRID[2u * ((aux0 >> (8u * l)) & 255u)], IQ2XXS_GRID[2u * ((aux0 >> (8u * l)) & 255u) + 1u]);
-    uvec2 g1 = uvec2(IQ2XXS_GRID[2u * ((aux0 >> (8u * l + 8u)) & 255u)], IQ2XXS_GRID[2u * ((aux0 >> (8u * l + 8u)) & 255u) + 1u]);
-    return db * (signed_dot(g0.x, g0.y, ksign((aux1 >> (7u * l)) & 127u), a0, a1)
-               + signed_dot(g1.x, g1.y, ksign((aux1 >> (7u * l + 7u)) & 127u), a2, a3));
+    float sum = 0.0;
+    for (uint l = 0u; l < 4u; ++l) {
+        uvec2 g = grid_shared[(aux0 >> (8u * l)) & 255u];
+        sum += signed_dot(g.x, g.y, ksign((aux1 >> (7u * l)) & 127u),
+                          a[2u * l], a[2u * l + 1u]);
+    }
+    return db * sum;
 }
 #endif
 
@@ -1135,9 +1157,12 @@ const uint IQ1S_PACKED[1024] = uint[1024](
 //  An IQ1 grid entry packed as ggml's own GPU table packs it: eight values of
 //  minus one to one, each lifted by one into two bits, sixteen bits an entry
 //  and two entries a word -- a quarter of the room eight signed bytes take,
-//  and one load where they took two.
+//  and one load where they took two. Kept in the workgroup's memory, as
+//  IQ2_XXS's grid is.
+#define SHARED_GRID
+shared uint grid_shared[1024];
 uint iq1_entry(uint index) {
-    return (IQ1S_PACKED[index >> 1u] >> ((index & 1u) * 16u)) & 0xFFFFu;
+    return (grid_shared[index >> 1u] >> ((index & 1u) * 16u)) & 0xFFFFu;
 }
 
 //  The eight lifted values of an entry against eight activations.
@@ -1153,18 +1178,25 @@ float lifted_dot(uint entry, vec4 a, vec4 b) {
     return dot(a, lo) + dot(b, hi);
 }
 
-float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
-    uint sub = within / 32u;
-    uint l = (within % 32u) / 8u;
+//  A lane's whole sub-block of thirty-two, as IQ2_XXS's: its scale and
+//  high bits once, its four index bytes in one read, against eight vec4s of
+//  activation. TinyLlama IQ1_S 158 -> 177 tokens a second with the shared
+//  grid, llama.cpp's 174.
+#define LANE32
+float lane_dot32(uint at, uint sub, vec4 a[8]) {
     uint high = u16_at(at + 34u + 2u * sub);
     float dl = half_at(at) * float(2u * ((high >> 12u) & 7u) + 1u);
     float shift = (high & 0x8000u) != 0u ? -0.125 : 0.125;
-    uint q = at + 2u + 4u * sub + l;
-    uint e0 = iq1_entry(byte_at(q)      | (((high >> (3u * l)) & 7u) << 8u));
-    uint e1 = iq1_entry(byte_at(q + 1u) | (((high >> (3u * l + 3u)) & 7u) << 8u));
-    float total = dot(a0 + a1 + a2 + a3, vec4(1.0));
-    return dl * (lifted_dot(e0, a0, a1) + lifted_dot(e1, a2, a3)
-                 + (shift - 1.0) * total);
+    uint quad = quad_at(at + 2u + 4u * sub);
+    float sum = 0.0;
+    vec4 all = vec4(0.0);
+    for (uint l = 0u; l < 4u; ++l) {
+        uint e = iq1_entry(((quad >> (8u * l)) & 255u)
+                           | (((high >> (3u * l)) & 7u) << 8u));
+        sum += lifted_dot(e, a[2u * l], a[2u * l + 1u]);
+        all += a[2u * l] + a[2u * l + 1u];
+    }
+    return dl * (sum + (shift - 1.0) * dot(all, vec4(1.0)));
 }
 #endif
 
@@ -1872,8 +1904,28 @@ void main() {
     }
     barrier();
 #endif
+#ifdef SHARED_GRID
+    //  The grid into the workgroup's memory, every lane's loads at once.
+#ifdef IQ2_XXS
+    for (uint g = tid; g < 256u; g += 64u) {
+        grid_shared[g] = uvec2(IQ2XXS_GRID[2u * g], IQ2XXS_GRID[2u * g + 1u]);
+    }
+#else
+    for (uint g = tid; g < 1024u; g += 64u) {
+        grid_shared[g] = IQ1S_PACKED[g];
+    }
+#endif
+    barrier();
+#endif
+#ifdef LANE32
+    uint itid = tid & 7u;
+    uint ix = tid >> 3u;            // which of the eight groups in flight
+    const uint IN_FLIGHT = 8u;
+#else
     uint itid = tid & 15u;
     uint ix = tid >> 4u;            // which of the four groups in flight
+    const uint IN_FLIGHT = 4u;
+#endif
 
     uint member = gl_WorkGroupID.z;
     bool listed = shape.routed >= LISTED_BY_POSITION;
@@ -1910,7 +1962,23 @@ void main() {
         temp[r] = 0.0;
     }
 
-    for (uint i = ix; i < groups; i += 4u) {
+    for (uint i = ix; i < groups; i += IN_FLIGHT) {
+#ifdef LANE32
+        uint col = i * 256u + itid * 32u;
+        if (col < shape.columns) {
+            uint xb = (from_base + col) >> 2u;
+            vec4 a[8];
+            for (uint k = 0u; k < 8u; ++k) {
+                a[k] = x4[xb + k];
+            }
+            uint block = col / BLOCK_ELEMS;
+            for (uint r = 0u; r < NUM_ROWS; ++r) {
+                uint row = min(first_row + r, shape.rows - 1u);
+                uint at = shape.base + slice + row * span + block * BLOCK_BYTES;
+                temp[r] += lane_dot32(at, itid, a);
+            }
+        }
+#else
         uint col = i * 256u + itid * 16u;
 
 #ifdef OWN_ACTIVATIONS
@@ -1959,6 +2027,7 @@ void main() {
             }
 #endif
         }
+#endif
 #endif
     }
 
