@@ -1260,6 +1260,14 @@ package body Model_Runner.Kernels is
       Epsilon : Real;
       Target  : out Real_Array)
    is
+      --  The three lengths are proved equal below before either loop reads
+      --  them, and every index is the first plus a count under that length.
+      --  Checked, each element paid three index checks and an overflow
+      --  check in the second loop, and a norm of 2048 took 4 us warm.
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
       Sum   : Wide_Real := 0.0;
       Gain  : Wide_Real;
    begin
@@ -1276,14 +1284,36 @@ package body Model_Runner.Kernels is
          return;
       end if;
 
-      for Index in 0 .. Element_Count (Source'Length) - 1 loop
-         declare
-            Value : constant Wide_Real :=
-              Wide_Real (Source (Source'First + Index));
-         begin
-            Sum := Sum + Value * Value;
-         end;
-      end loop;
+      declare
+         type Lanes is array (0 .. 7) of Wide_Real;
+         Part  : Lanes := [others => 0.0];
+         Whole : constant Element_Count :=
+           Element_Count (Source'Length) / 8 * 8;
+      begin
+         for Base in 0 .. Whole / 8 - 1 loop
+            for Lane in 0 .. 7 loop
+               declare
+                  Value : constant Wide_Real :=
+                    Wide_Real (Source (Source'First + Base * 8
+                                       + Element_Count (Lane)));
+               begin
+                  Part (Lane) := Part (Lane) + Value * Value;
+               end;
+            end loop;
+         end loop;
+
+         Sum := ((Part (0) + Part (1)) + (Part (2) + Part (3)))
+           + ((Part (4) + Part (5)) + (Part (6) + Part (7)));
+
+         for Index in Whole .. Element_Count (Source'Length) - 1 loop
+            declare
+               Value : constant Wide_Real :=
+                 Wide_Real (Source (Source'First + Index));
+            begin
+               Sum := Sum + Value * Value;
+            end;
+         end loop;
+      end;
 
       Gain := N.Sqrt (Sum / Wide_Real (Source'Length) + Wide_Real (Epsilon));
 
@@ -1320,6 +1350,12 @@ package body Model_Runner.Kernels is
       Epsilon : Real;
       Target  : out Real_Array)
    is
+      --  The four lengths are proved equal below before either loop
+      --  reads them, as RMS_Norm's are.
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
       Count : constant Element_Count := Element_Count (Source'Length);
       Mean  : Wide_Real := 0.0;
       Spread : Wide_Real := 0.0;
@@ -2264,6 +2300,11 @@ package body Model_Runner.Kernels is
       Pairing   : Rotary_Pairing := Interleaved;
       Offset    : Element_Count := 0)
    is
+      --  Every shape is proved below before the loops read anything.
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
       Pairs : constant Element_Count := Rotary / 2;
    begin
       if Heads = 0 or else Head_Size = 0 or else Rotary = 0
