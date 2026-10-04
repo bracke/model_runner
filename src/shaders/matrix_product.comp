@@ -1423,16 +1423,39 @@ void decode16(uint format, uint row, uint col, out float v[16]) {
                   dl, (n & 8u) != 0u ? -0.125 : 0.125, v, 8u * t);
         }
     } else if (format == FMT_TQ1_0) {
+        //  A run of sixteen starts on a multiple of sixteen, so below the
+        //  block's last run its sixteen trits are one digit of sixteen
+        //  bytes side by side -- the first 32 bytes hold five digits of 32
+        //  elements, the next 16 five of 16 -- read as words, at an even
+        //  position, four words and a funnel; the last run is four digits
+        //  of the last four bytes. Each element was a byte load and a digit
+        //  worked out on its own.
         float d = unpackHalf2x16(u16_at(at + 52u)).x;
-        for (uint e = 0u; e < 16u; ++e) {
-            uint c = within + e;
-            uint byte_index = c < 160u ? c % 32u
-                            : c < 240u ? 32u + (c - 160u) % 16u : 48u + (c - 240u) % 4u;
-            uint digit = c < 160u ? c / 32u : c < 240u ? (c - 160u) / 16u : (c - 240u) / 4u;
-            uint pow3 = digit == 0u ? 1u : digit == 1u ? 3u : digit == 2u ? 9u
-                      : digit == 3u ? 27u : 81u;
-            uint trit = (((byte_at(at + byte_index) * pow3) & 255u) * 3u) >> 8u;
-            v[e] = (float(trit) - 1.0) * d;
+        const uint POW3[5] = uint[5](1u, 3u, 9u, 27u, 81u);
+        if (within < 240u) {
+            uint digit = within < 160u ? within / 32u : (within - 160u) / 16u;
+            uint first = within < 160u ? at + within % 32u : at + 32u;
+            uint pow3 = POW3[digit];
+            uint i = first >> 2u;
+            uint shift = (first & 2u) * 8u;
+            uint words[5] = uint[5](w[i], w[i + 1u], w[i + 2u], w[i + 3u],
+                                    w[i + 4u]);
+            for (uint k = 0u; k < 4u; ++k) {
+                uint word = shift == 0u ? words[k]
+                          : (words[k] >> 16u) | (words[k + 1u] << 16u);
+                for (uint b = 0u; b < 4u; ++b) {
+                    uint trit = ((((word >> (8u * b)) & 255u) * pow3 & 255u)
+                                 * 3u) >> 8u;
+                    v[4u * k + b] = (float(trit) - 1.0) * d;
+                }
+            }
+        } else {
+            uint quad = u32_at(at + 48u);
+            for (uint e = 0u; e < 16u; ++e) {
+                uint trit = ((((quad >> (8u * (e % 4u))) & 255u)
+                              * POW3[e / 4u] & 255u) * 3u) >> 8u;
+                v[e] = (float(trit) - 1.0) * d;
+            }
         }
     } else if (format == FMT_TQ2_0) {
         float d = unpackHalf2x16(u16_at(at + 64u)).x;
