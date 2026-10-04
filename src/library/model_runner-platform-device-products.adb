@@ -798,6 +798,21 @@ package body Model_Runner.Platform.Device.Products is
    --  and would not suffer much for this one.
    Want_Workgroups : constant := 256;
 
+   --  Most partial answers a generated token's attention leaves for
+   --  merge.comp, the heads times the cache's slices. A slice is a whole
+   --  tile of 256 positions at least, each carries an unnormalized blend a
+   --  head, and the merge reads them all back: many heads cut fine spend
+   --  more there than the extra workgroups bring. Tokens a second, the
+   --  half-precision cache, alternated:
+   --
+   --                        heads  positions  slices   before -> after
+   --    Steelman-14B (qwen2)  40     1,318    6 -> 3   7.82 -> 7.85 (llama 7.84)
+   --    Steelman-14B          40     3,892   16 -> 3   7.25 -> 7.36 (llama 7.37)
+   --    qwen3-8b              32     1,297    6 -> 4   14.09 -> 14.23
+   --    gemma-3-4b             8     1,335    6, kept  24.4 (3 slices: 23.8)
+   --    gemma-3-270m           4     1,335    6, kept  156 (3 slices: 134)
+   Merged_Rows : constant := 128;
+
    --  Whether a round's cache is cut into slices, which the two kernels
    --  answer differently because their workgroups cost differently.
    --
@@ -12717,25 +12732,32 @@ package body Model_Runner.Platform.Device.Products is
                         Pages_At   => C.unsigned (This.Pages_At),
                         Page_Shift => C.unsigned (This.Page_Shift));
 
+                     Across : constant C.unsigned :=
+                       Attend_Heads
+                         (Item, This.Heads, This.Group_Size, Count,
+                          This.Head_Size, This.Value_Size,
+                          Rounding => False,
+                          K_Base => This.K_Base, V_Base => This.V_Base,
+                          KV_Width => This.KV_Width,
+                          V_Width => This.V_Width,
+                          Span => (if This.Last >= This.First then This.Last - This.First + 1 else 0));
+
+                     --  As many slices as the cache gives, but no more than
+                     --  Merged_Rows partial answers between the heads.
                      Slices : constant Natural :=
                        (if Barrier = null then 1
-                        else Attend_Slices
-                               (Item, Count, This.Head_Size, This.Value_Size,
-                                This.First, This.Last,
-                                Rounding => False));
+                        else Natural'Min
+                               (Attend_Slices
+                                  (Item, Count, This.Head_Size,
+                                   This.Value_Size, This.First, This.Last,
+                                   Rounding => False),
+                                Natural'Max
+                                  (1, Merged_Rows
+                                        / Natural'Max (1, This.Heads))));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Attention_Bytes, Shape'Address);
                      declare
-                        Across : constant C.unsigned :=
-                          Attend_Heads
-                            (Item, This.Heads, This.Group_Size, Count,
-                             This.Head_Size, This.Value_Size,
-                             Rounding => False,
-                             K_Base => This.K_Base, V_Base => This.V_Base,
-                             KV_Width => This.KV_Width,
-                             V_Width => This.V_Width,
-                             Span => (if This.Last >= This.First then This.Last - This.First + 1 else 0));
                         Seated : constant Natural :=
                           (if Halved (Index) then Whole_Tiles (Count)
                            else Count);

@@ -7580,7 +7580,11 @@ reference 2966A663E53379B4 src/library/model_runner-backend-reference.adb src/li
 # Restamped 2026-10-04, not re-measured: the change was two doubled blank
 #   lines taken out of Kernels' sources, which the development build's
 #   style check reports and the release build does not.
-device 5DC1BEC9F2E58703 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Restamped 2026-10-04, not re-measured: the change caps a generated
+#   token's attention slices at 128 partial answers between the heads;
+#   these runs are TinyLlama (32 heads) at a few hundred positions, one
+#   or two slices, under the cap of four.
+device 7003E9255E3C83F2 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 
 # covers: the three-row table under "Drafting", the per-token costs derived
@@ -10602,7 +10606,11 @@ tokenizer CE3B696CD412A3B6 src/library/model_runner-tokenizer.adb
 # Restamped 2026-10-04, not re-measured: the change was two doubled blank
 #   lines taken out of Kernels' sources, which the development build's
 #   style check reports and the release build does not.
-outside 5DC1BEC9F2E58703 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Restamped 2026-10-04, not re-measured: the change caps a generated
+#   token's attention slices at 128 partial answers between the heads;
+#   these runs are TinyLlama (32 heads) at a few hundred positions, one
+#   or two slices, under the cap of four.
+outside 7003E9255E3C83F2 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-27  The row tile at sixty-four, and the instrument's first row
 #
@@ -25093,3 +25101,33 @@ panels 784CB2D61F49BC3D src/library/model_runner-quantization-interleave.ads src
 # failed on the new IQ3_XXS kernel mutated. Same text throughout.
 # load: one-minute average 0.9 to 1.2
 # model: TinyLlama 1.1B chat, IQ2_S and IQ3_XXS whole (Q8_0 requantized)
+
+
+# 2026-10-04: Steelman-14B's generation at depth, closed. A generated token's
+# attention cut a cache of 1,318 positions into six slices -- each a single
+# 256-position tile -- for each of eight head bundles; Steelman's forty heads
+# left 240 partial answers for merge.comp to read back. The slices are now
+# capped at 128 partial answers between the heads (Merged_Rows). run --backend
+# device --draft-tokens 0 --max-tokens 64 --show-stats, the half-precision
+# cache, alternated; llama-bench -ngl 99 -p 0 -n 64 -d <depth> -r 3:
+#
+#                        positions  slices    before  after   llama.cpp
+#   Steelman-14B Q4_K_M    1,318    6 -> 3    7.82    7.85    7.82-7.86
+#   Steelman-14B Q4_K_M    3,892   16 -> 3    7.25    7.36    7.37
+#   qwen3-8b Q4_K_M        1,297    6 -> 4   14.09   14.23
+#   gemma-3-4b Q4_K_M      1,335    6, kept  24.4    24.5
+#   gemma-3-270m Q8_0      1,335    6, kept  156     156
+#
+# The rule was found by Slice_Least at 512, which took Steelman to 7.85 and
+# qwen3-8b to 14.24 but cost gemma-3-4b 2.5 per cent (23.8) and gemma-3-270m
+# 14 (134): few heads want the slices, many do not. A cap on workgroups (head
+# bundles times slices, 24) cut gemma-3-4b the same way. Slice_Least below
+# 256 does nothing at these depths: a slice is rounded up to a whole tile.
+# Per op against llama.cpp's own (GGML_VK_PERF_LOGGER), the rest of a token
+# was level: attend 116 us against 99.7 plus its rope and cache writes; the
+# output head 8.90 ms against 8.64 (Q6_K at four rows a workgroup was
+# slower: 7.58-7.67). Prompts: tests/fixtures/speed-prompt-long.txt, and it
+# three times over for 3,892.
+# load: one-minute average 0.7 to 1.2
+# model: Steelman-14B r6 Q4_K_M, Qwen3-8B Q4_K_M, gemma-3-4b-it Q4_K_M,
+#   gemma-3-270m-it Q8_0
