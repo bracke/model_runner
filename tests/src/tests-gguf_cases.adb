@@ -1,3 +1,4 @@
+with Ada.Unchecked_Conversion;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with AUnit.Assertions;
@@ -16,6 +17,7 @@ with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.GGUF.Shards;
 with Model_Runner.Limits;
 with Model_Runner.Numerics;
+with Model_Runner.Kernels;
 with Model_Runner.Platform;
 with Model_Runner.Quantization;
 with Model_Runner.Quantization.Integers;
@@ -6622,6 +6624,64 @@ package body Tests.GGUF_Cases is
               "negative zero did not widen to negative zero");
    end Every_Half_Widens_To_Its_Value;
 
+   --  Kernels.To_Halves, eight a step through the conversion instruction,
+   --  writes what To_Half writes one at a time, to the bit: across the
+   --  normal range, the subnormals, the values below the smallest
+   --  subnormal that To_Half sends to zero and the instruction would not,
+   --  the overflow past the largest half, the infinities and a NaN -- each
+   --  of those last placed among seven ordinary values, so that a block
+   --  holding one goes the slow way and the blocks beside it do not.
+   procedure Halves_Eight_At_A_Time_Are_To_Half
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      pragma Suppress (Validity_Check);
+
+      use type N.Half;
+
+      Count  : constant N.Element_Count := 4099;
+      Values : N.Real_Array (0 .. Count - 1);
+      Fast   : N.Half_Array (0 .. Count - 1);
+      Slow   : N.Half_Array (0 .. Count - 1);
+      function From_Bits is new Ada.Unchecked_Conversion
+        (Interfaces.Unsigned_32, N.Real);
+   begin
+      for Index in Values'Range loop
+         Values (Index) :=
+           N.Real (Index mod 97 - 48) * 0.0137
+           * N.Real (2.0 ** Natural (Index mod 23));
+      end loop;
+      --  Subnormal halves, and just under the smallest of them.
+      Values (100) := 3.0E-6;
+      Values (101) := -6.0E-8;
+      Values (102) := 4.0E-8;
+      Values (103) := 2.98E-8;
+      Values (104) := 0.0;
+      Values (105) := -0.0;
+      --  Past the largest half, and the ties around it.
+      Values (200) := 65504.0;
+      Values (201) := 65519.0;
+      Values (202) := 65520.0;
+      Values (203) := -1.0E9;
+      --  The infinities and a NaN.
+      Values (300) := From_Bits (16#7F80_0000#);
+      Values (301) := From_Bits (16#FF80_0000#);
+      Values (16)  := From_Bits (16#7FC0_0001#);
+
+      Model_Runner.Kernels.Use_Wide_Lanes (Model_Runner.Platform.Wide_Vectors);
+      Model_Runner.Kernels.To_Halves (Values, Fast);
+      for Index in Values'Range loop
+         Slow (Index) := N.To_Half (Values (Index));
+      end loop;
+
+      for Index in Values'Range loop
+         Assert (Fast (Index) = Slow (Index),
+                 "the conversion eight at a time differs from To_Half at"
+                 & N.Element_Count'Image (Index) & ", from"
+                 & N.Real'Image (Values (Index)));
+      end loop;
+   end Halves_Eight_At_A_Time_Are_To_Half;
+
    ------------------------------------------
    -- Q6_K_Matches_An_Element_Wise_Reading --
    ------------------------------------------
@@ -7550,6 +7610,10 @@ package body Tests.GGUF_Cases is
         (T, Every_Half_Widens_To_Its_Value'Access,
          "every one of the 65536 half precision patterns widens to the "
          & "value the format defines");
+      Register_Routine
+        (T, Halves_Eight_At_A_Time_Are_To_Half'Access,
+         "values converted to half precision eight at a time are what "
+         & "To_Half makes of them one at a time, to the bit");
       Register_Routine
         (T, Q6_K_Matches_An_Element_Wise_Reading'Access,
          "six-bit decoding places every element where reading the layout "

@@ -15133,10 +15133,9 @@ package body Model_Runner.Llama is
                         Item.Values.all (V_Into .. V_Into + V_Width - 1) :=
                           Item.Values.all (V_From .. V_From + V_Width - 1);
                      else
-                        for Offset in 0 .. KV_Width - 1 loop
-                           Item.Half_Keys.all (Into + Offset) :=
-                             N.To_Half (Item.Key_Row.all (Offset));
-                        end loop;
+                        Model_Runner.Kernels.To_Halves
+                          (Item.Key_Row.all (0 .. KV_Width - 1),
+                           Item.Half_Keys.all (Into .. Into + KV_Width - 1));
                         for Offset in 0 .. V_Width - 1 loop
                            Item.Half_Values.all (V_Into + Offset) :=
                              Item.Half_Values.all (V_From + Offset);
@@ -18429,14 +18428,12 @@ package body Model_Runner.Llama is
                      Slot, Item.Key_Row.all (0 .. KV_Width - 1),
                      V_Slot, Item.Value_Row.all (0 .. V_Width - 1), Resident);
                else
-                  for Offset in 0 .. KV_Width - 1 loop
-                     Item.Half_Keys.all (Slot + Offset) :=
-                       N.To_Half (Item.Key_Row.all (Offset));
-                  end loop;
-                  for Offset in 0 .. V_Width - 1 loop
-                     Item.Half_Values.all (V_Slot + Offset) :=
-                       N.To_Half (Item.Value_Row.all (Offset));
-                  end loop;
+                  Model_Runner.Kernels.To_Halves
+                    (Item.Key_Row.all (0 .. KV_Width - 1),
+                     Item.Half_Keys.all (Slot .. Slot + KV_Width - 1));
+                  Model_Runner.Kernels.To_Halves
+                    (Item.Value_Row.all (0 .. V_Width - 1),
+                     Item.Half_Values.all (V_Slot .. V_Slot + V_Width - 1));
                end if;
 
                --  Rotating covers the cache write, as it does in the batched
@@ -21068,14 +21065,14 @@ package body Model_Runner.Llama is
                            end;
                         end if;
                      else
-                        for Offset in 0 .. KV_Width - 1 loop
-                           Item'Unchecked_Access.Half_Keys.all (Place + Offset) :=
-                             N.To_Half (Keys.all (KV_At + Offset));
-                        end loop;
-                        for Offset in 0 .. V_Width - 1 loop
-                           Item'Unchecked_Access.Half_Values.all (V_Place + Offset) :=
-                             N.To_Half (Values.all (V_At + Offset));
-                        end loop;
+                        Model_Runner.Kernels.To_Halves
+                          (Keys.all (KV_At .. KV_At + KV_Width - 1),
+                           Item'Unchecked_Access.Half_Keys.all
+                             (Place .. Place + KV_Width - 1));
+                        Model_Runner.Kernels.To_Halves
+                          (Values.all (V_At .. V_At + V_Width - 1),
+                           Item'Unchecked_Access.Half_Values.all
+                             (V_Place .. V_Place + V_Width - 1));
                      end if;
                   end;
                end loop;

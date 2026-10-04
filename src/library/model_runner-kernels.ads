@@ -414,6 +414,20 @@ package Model_Runner.Kernels is
    --  @param Allowed True where the host has the wider instructions.
    procedure Use_Wide_Lanes (Allowed : Boolean);
 
+   --  Values into binary16, as To_Half writes each of them: eight a step
+   --  through the conversion instruction where Use_Wide_Lanes allowed it
+   --  and every one of the eight is finite and either zero or at least the
+   --  smallest binary16 subnormal -- where the instruction's rounding, to
+   --  nearest and ties to even, is To_Half's to the bit -- and through
+   --  To_Half where any is not. A cache's keys and values are written
+   --  through this a position at a time.
+   --
+   --  @param Values What to convert.
+   --  @param Halves Receives them, as many as Values holds.
+   procedure To_Halves (Values : Real_Array; Halves : out Half_Array)
+   with Pre => Halves'Length = Values'Length;
+
+
    --  Root-mean-square normalization with a per-element gain.
    --
    --  Computes Target (i) = Source (i) / sqrt (mean of squares + Epsilon)
