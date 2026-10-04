@@ -10291,15 +10291,78 @@ package body Model_Runner.Llama is
    --  weights outside its own are nought. A prompt on the processor did
    --  one query at a time, every key it saw read and converted again:
    --  qwen3-8b's 3,863 tokens spent 46 s of 106 there.
+   --  Over a cache kept in binary32 the same, with kernels that read it
+   --  as it is (Blend_Exact_Four): one generic, the two caches' kernels
+   --  given to it.
    type Cell_Quad is array (0 .. 7) of Element_Count;
 
-   procedure Blend_Halved_Four
+   generic
+      type Held is private;
+      type Held_Array is
+        array (Model_Runner.Numerics.Element_Index range <>) of Held;
+      with procedure Dots_Four
+        (Left        : Real_Array;
+         At_Left     : Element_Count;
+         Left_Stride : Element_Count;
+         Right       : Held_Array;
+         At_Right    : Element_Count;
+         Span        : Element_Count;
+         Dots        : out Real_Array);
+      with procedure Dots_Eight
+        (Left        : Real_Array;
+         At_Left     : Element_Count;
+         Left_Stride : Element_Count;
+         Right       : Held_Array;
+         At_Right    : Element_Count;
+         Span        : Element_Count;
+         Dots        : out Real_Array);
+      with procedure Blend_Sixteen
+        (Sums          : in out Real_Array;
+         Weights       : Real_Array;
+         At_Weight     : Element_Count;
+         Weight_Stride : Element_Count;
+         Values        : Held_Array;
+         At_Value      : Element_Count;
+         Stride        : Element_Count;
+         Steps         : Element_Count);
+   procedure Blend_Block_Four
      (Size       : Positive;
       Query      : Real_Array;
       Q_At       : Element_Count;
       Q_Stride   : Element_Count;
-      Keys       : T.Half_Array;
-      Values     : T.Half_Array;
+      Keys       : Held_Array;
+      Values     : Held_Array;
+      K_Base     : Element_Count;
+      V_Base     : Element_Count;
+      KV_Width   : Element_Count;
+      V_Width    : Element_Count;
+      Head_Size  : Element_Count;
+      Value_Size : Element_Count;
+      Group_Size : Element_Count;
+      Heads      : Element_Count;
+      Firsts     : Cell_Quad;
+      Lasts      : Cell_Quad;
+      Query_Ats  : Cell_Quad;
+      Scale      : Real;
+      Cap        : Real;
+      Max_Bias   : Real;
+      Sinks      : Model_Runner.Tensors.Real_Array_Access;
+      From_Head  : Element_Count;
+      To_Head    : Element_Count;
+      Room       : Element_Count;
+      Rows       : in out Real_Array;
+      Target     : in out Real_Array;
+      T_At       : Element_Count;
+      T_Stride   : Element_Count;
+      Ok         : out Boolean);
+
+   procedure Blend_Block_Four
+     (Size       : Positive;
+      Query      : Real_Array;
+      Q_At       : Element_Count;
+      Q_Stride   : Element_Count;
+      Keys       : Held_Array;
+      Values     : Held_Array;
       K_Base     : Element_Count;
       V_Base     : Element_Count;
       KV_Width   : Element_Count;
@@ -10359,13 +10422,13 @@ package body Model_Runner.Llama is
          begin
             for Step in Lo .. Hi loop
                if Size = 8 then
-                  K.Head_Dots_Halved_Eight
+                  Dots_Eight
                     (Query, Q_At + Head * Head_Size, Q_Stride,
                      Keys, Keys'First + K_Base + Step * KV_Width
                            + Group * Head_Size,
                      Head_Size, Dots);
                else
-                  K.Head_Dots_Halved_Four
+                  Dots_Four
                     (Query, Q_At + Head * Head_Size, Q_Stride,
                      Keys, Keys'First + K_Base + Step * KV_Width
                            + Group * Head_Size,
@@ -10431,7 +10494,7 @@ package body Model_Runner.Llama is
                   --  registers hold.
                   for Quarter in 0 .. Last_Row / 4 loop
                      Sums := [others => 0.0];
-                     K.Blend_Sixteen_Halved_Four
+                     Blend_Sixteen
                        (Sums          => Sums,
                         Weights       => Rows,
                         At_Weight     =>
@@ -10464,7 +10527,21 @@ package body Model_Runner.Llama is
             end;
          end;
       end loop;
-   end Blend_Halved_Four;
+   end Blend_Block_Four;
+
+   procedure Blend_Halved_Four is new Blend_Block_Four
+     (Held          => Model_Runner.Numerics.Half,
+      Held_Array    => Model_Runner.Numerics.Half_Array,
+      Dots_Four     => K.Head_Dots_Halved_Four,
+      Dots_Eight    => K.Head_Dots_Halved_Eight,
+      Blend_Sixteen => K.Blend_Sixteen_Halved_Four);
+
+   procedure Blend_Exact_Four is new Blend_Block_Four
+     (Held          => Real,
+      Held_Array    => Real_Array,
+      Dots_Four     => K.Head_Dots_Four,
+      Dots_Eight    => K.Head_Dots_Eight,
+      Blend_Sixteen => K.Blend_Sixteen_Four);
 
    --  Normalize each head of a projection in place.
    --
@@ -21492,11 +21569,16 @@ package body Model_Runner.Llama is
                         declare
                            --  Four positions at a time where the cache is
                            --  kept in halves: a key read and converted once
-                           --  for the four (Blend_Halved_Four). The rest of a
-                           --  batch, and every other cache, a position at a
-                           --  time as before.
+                           --  for the four (Blend_Halved_Four). In binary32
+                           --  too (Blend_Exact_Four), but not sixty-four
+                           --  wide: Blend_Exact scores that width eight keys
+                           --  to a fold, which the block's kernels do not
+                           --  sum to the bit. The rest of a batch, and the
+                           --  byte caches, a position at a time as before.
                            Four : constant Boolean :=
-                             Item.Held = Halved
+                             (Item.Held = Halved
+                              or else (Item.Held = Exact
+                                       and then Head_Size /= 64))
                              and then Value_Size mod 16 = 0
                              and then Count >= 4;
                            Size : Positive := 4;
@@ -21639,20 +21721,37 @@ package body Model_Runner.Llama is
                                          Query_Of (Next + Element_Count (R));
                                     end loop;
 
-                                    Blend_Halved_Four
-                                      (Size,
-                                       Query.all, Slot (Next, Wide), Wide,
-                                       Item'Unchecked_Access.Half_Keys.all,
-                                       Item'Unchecked_Access.Half_Values.all,
-                                       Base, V_Base, KV_Width, V_Width,
-                                       Head_Size, Value_Size,
-                                       Element_Count (Settings.Group_Size),
-                                       Heads, Firsts, Lasts, Queries, Scale,
-                                       Settings.Attention_Cap,
-                                       Settings.Max_Bias, Current.Sinks,
-                                       From, To, Item.Score_Room, Rows.all,
-                                       Attend.all, Slot (Next, Blend), Blend,
-                                       Usable);
+                                    if Item.Held = Exact then
+                                       Blend_Exact_Four
+                                         (Size,
+                                          Query.all, Slot (Next, Wide), Wide,
+                                          Item'Unchecked_Access.Keys.all,
+                                          Item'Unchecked_Access.Values.all,
+                                          Base, V_Base, KV_Width, V_Width,
+                                          Head_Size, Value_Size,
+                                          Element_Count (Settings.Group_Size),
+                                          Heads, Firsts, Lasts, Queries, Scale,
+                                          Settings.Attention_Cap,
+                                          Settings.Max_Bias, Current.Sinks,
+                                          From, To, Item.Score_Room, Rows.all,
+                                          Attend.all, Slot (Next, Blend), Blend,
+                                          Usable);
+                                    else
+                                       Blend_Halved_Four
+                                         (Size,
+                                          Query.all, Slot (Next, Wide), Wide,
+                                          Item'Unchecked_Access.Half_Keys.all,
+                                          Item'Unchecked_Access.Half_Values.all,
+                                          Base, V_Base, KV_Width, V_Width,
+                                          Head_Size, Value_Size,
+                                          Element_Count (Settings.Group_Size),
+                                          Heads, Firsts, Lasts, Queries, Scale,
+                                          Settings.Attention_Cap,
+                                          Settings.Max_Bias, Current.Sinks,
+                                          From, To, Item.Score_Room, Rows.all,
+                                          Attend.all, Slot (Next, Blend), Blend,
+                                          Usable);
+                                    end if;
 
                                     if not Usable then
                                        Share.Ok := False;

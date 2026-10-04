@@ -6715,8 +6715,143 @@ package body Tests.GGUF_Cases is
          end loop;
       end loop;
 
+      --  And over a binary32 cache, against Head_Dot and Blend_Run.
+      declare
+         Exact_Keys : N.Real_Array (Keys'Range);
+      begin
+         for Index in Keys'Range loop
+            Exact_Keys (Index) := N.To_Real (Keys (Index));
+         end loop;
+
+         for Wide in Boolean loop
+            KK.Use_Wide_Lanes (Wide and then Model_Runner.Platform.Wide_Vectors);
+
+            for Run of N.Real_Array'(128.0, 64.0, 20.0) loop
+               declare
+                  Width : constant N.Element_Count := N.Element_Count (Run);
+               begin
+                  KK.Head_Dots_Four
+                    (Queries, 3, Stride, Exact_Keys, 5 * Stride, Width, Four);
+                  KK.Head_Dots_Eight
+                    (Queries, 3, Stride, Exact_Keys, 5 * Stride, Width, Eight);
+                  for Which in N.Element_Count range 0 .. 7 loop
+                     declare
+                        Alone : constant N.Real :=
+                          KK.Head_Dot
+                            (Queries, 3 + Which * Stride, Exact_Keys,
+                             5 * Stride, Width);
+                     begin
+                        Assert (Eight (Which) = Alone,
+                                "eight queries' binary32 dot product"
+                                & Which'Image & " at" & Width'Image
+                                & " is not the one query's");
+                        if Which < 4 then
+                           Assert (Four (Which) = Alone,
+                                   "four queries' binary32 dot product"
+                                   & Which'Image & " at" & Width'Image
+                                   & " is not the one query's");
+                        end if;
+                     end;
+                  end loop;
+               end;
+            end loop;
+
+            Sums := [others => 0.0];
+            KK.Blend_Sixteen_Four
+              (Sums, Weights, 2, 64, Exact_Keys, 7, Stride, Steps - 1);
+            for Which in N.Element_Count range 0 .. 3 loop
+               One := [others => 0.0];
+               KK.Blend_Run
+                 (One, Weights, 2 + Which * 64, Exact_Keys, 7, Stride,
+                  Steps - 1);
+               for Index in N.Element_Count range 0 .. 15 loop
+                  Assert (Sums (Which * 16 + Index) = One (Index),
+                          "four queries' binary32 blend" & Which'Image
+                          & " differs from the one query's at" & Index'Image);
+               end loop;
+            end loop;
+         end loop;
+      end;
+
       KK.Use_Wide_Lanes (Model_Runner.Platform.Wide_Vectors);
    end Block_Kernels_Are_The_One_Query_Kernels;
+
+   --  The nibble cache's kernels in their wide lanes, against their own
+   --  nibble-at-a-time loop: a value run's weighted sum the same to the
+   --  bit, and a key's dot product within a few units in the last place
+   --  of the largest term, being summed in another order. The rows have
+   --  room past the run, so a lane reading a byte or a scale too far, or
+   --  a nibble laid in the wrong place, shows.
+   procedure Nibble_Lanes_Are_The_Nibble_Loop
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      package KK renames Model_Runner.Kernels;
+
+      Width     : constant N.Element_Count := 256;
+      Blocks    : constant N.Element_Count := Width / KK.Nibble_Block;
+      Row_Bytes : constant B.Byte_Count := B.Byte_Count (Width / 2);
+      Steps     : constant N.Element_Count := 23;
+
+      Query   : N.Real_Array (0 .. Width - 1);
+      Rows    : B.Byte_Array (0 .. B.Byte_Count (Steps) * Row_Bytes - 1);
+      Scales  : N.Real_Array (0 .. Steps * Blocks - 1);
+      Weights : N.Real_Array (0 .. Steps - 1);
+      Wide    : N.Real_Array (0 .. 63);
+      Narrow  : N.Real_Array (0 .. 63);
+   begin
+      for Index in Query'Range loop
+         Query (Index) := N.Real (Index mod 53 - 26) * 0.0311;
+      end loop;
+      for Index in Rows'Range loop
+         Rows (Index) := B.Byte ((Index * 37 + Index / 7) mod 256);
+      end loop;
+      for Index in Scales'Range loop
+         Scales (Index) := N.Real (Index mod 11 + 1) * 0.013;
+      end loop;
+      for Index in Weights'Range loop
+         Weights (Index) := N.Real (Index mod 13) * 0.0071;
+      end loop;
+
+      for Offset in N.Element_Count range 0 .. 2 loop
+         declare
+            At_Offset : constant N.Element_Count := Offset * 64;
+            Dot_Wide, Dot_Narrow : N.Real;
+            Bound : N.Real := 0.0;
+         begin
+            KK.Use_Wide_Lanes (Model_Runner.Platform.Wide_Vectors);
+            Dot_Wide := KK.Head_Dot_Fourth
+              (Query, 7, Rows, Row_Bytes * 5, At_Offset, Scales, 5 * Blocks, 128);
+            Wide := [others => 0.25];
+            KK.Blend_Run_Fourth
+              (Wide, Weights, 1, Scales, 2 * Blocks, Blocks, Rows,
+               Row_Bytes * 2, Row_Bytes, At_Offset, Steps - 3);
+
+            KK.Use_Wide_Lanes (False);
+            Dot_Narrow := KK.Head_Dot_Fourth
+              (Query, 7, Rows, Row_Bytes * 5, At_Offset, Scales, 5 * Blocks, 128);
+            Narrow := [others => 0.25];
+            KK.Blend_Run_Fourth
+              (Narrow, Weights, 1, Scales, 2 * Blocks, Blocks, Rows,
+               Row_Bytes * 2, Row_Bytes, At_Offset, Steps - 3);
+            KK.Use_Wide_Lanes (Model_Runner.Platform.Wide_Vectors);
+
+            for Index in N.Element_Count range 0 .. 127 loop
+               Bound := Bound + abs Query (7 + Index) * 8.0 * 0.143;
+            end loop;
+            Assert (abs (Dot_Wide - Dot_Narrow) <= Bound * 1.0E-6,
+                    "the nibble dot product at" & At_Offset'Image
+                    & " is" & Dot_Wide'Image & " in lanes and"
+                    & Dot_Narrow'Image & " a nibble at a time");
+            for Index in Wide'Range loop
+               Assert (Wide (Index) = Narrow (Index),
+                       "the nibble blend at" & At_Offset'Image
+                       & " differs at" & Index'Image);
+            end loop;
+         end;
+      end loop;
+   end Nibble_Lanes_Are_The_Nibble_Loop;
 
    procedure Halves_Eight_At_A_Time_Are_To_Half
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
@@ -7701,6 +7836,10 @@ package body Tests.GGUF_Cases is
         (T, Block_Kernels_Are_The_One_Query_Kernels'Access,
          "the block attention's kernels, four and eight queries at a time, "
          & "are the one-query kernels to the bit");
+      Register_Routine
+        (T, Nibble_Lanes_Are_The_Nibble_Loop'Access,
+         "the nibble cache's kernels in wide lanes are their nibble loop: "
+         & "the blend to the bit, the dot product to rounding");
       Register_Routine
         (T, Halves_Eight_At_A_Time_Are_To_Half'Access,
          "values converted to half precision eight at a time are what "

@@ -410,6 +410,70 @@ package Model_Runner.Kernels is
       Steps         : Element_Count)
    with Pre => Sums'Length = 64;
 
+   --  Head_Dots_Halved_Four over a binary32 cache: the same block, the
+   --  key read as it is rather than converted, and each dot product
+   --  Head_Dot's to the bit. A prompt on the processor with --kv-cache
+   --  f32 takes its attention a block of positions at a time with these:
+   --  qwen3-8b's 3,871 tokens 30.5 -> 38.0 t/s.
+   --
+   --  @param Left Vector the queries are taken from.
+   --  @param At_Left Index of the first query's first component.
+   --  @param Left_Stride Elements from one query to the next.
+   --  @param Right Vector the key is taken from.
+   --  @param At_Right Index of the key's first component.
+   --  @param Span How many components a query and the key have.
+   --  @param Dots Receives the four dot products, from its first index.
+   procedure Head_Dots_Four
+     (Left        : Real_Array;
+      At_Left     : Element_Count;
+      Left_Stride : Element_Count;
+      Right       : Real_Array;
+      At_Right    : Element_Count;
+      Span        : Element_Count;
+      Dots        : out Real_Array)
+   with Pre => Dots'Length = 4;
+
+   --  Head_Dots_Four for eight queries.
+   --
+   --  @param Left Vector the queries are taken from.
+   --  @param At_Left Index of the first query's first component.
+   --  @param Left_Stride Elements from one query to the next.
+   --  @param Right Vector the key is taken from.
+   --  @param At_Right Index of the key's first component.
+   --  @param Span How many components a query and the key have.
+   --  @param Dots Receives the eight dot products, from its first index.
+   procedure Head_Dots_Eight
+     (Left        : Real_Array;
+      At_Left     : Element_Count;
+      Left_Stride : Element_Count;
+      Right       : Real_Array;
+      At_Right    : Element_Count;
+      Span        : Element_Count;
+      Dots        : out Real_Array)
+   with Pre => Dots'Length = 8;
+
+   --  Blend_Sixteen_Halved_Four over a binary32 cache, each sum
+   --  Blend_Run's to the bit.
+   --
+   --  @param Sums Four runs of sixteen sums, added to in place.
+   --  @param Weights Vector the weights are taken from.
+   --  @param At_Weight Index of the first query's first position's weight.
+   --  @param Weight_Stride Elements from one query's weights to the next's.
+   --  @param Values Vector the values are taken from.
+   --  @param At_Value Index of the first position's first component.
+   --  @param Stride Elements between one position's values and the next's.
+   --  @param Steps How many positions.
+   procedure Blend_Sixteen_Four
+     (Sums          : in out Real_Array;
+      Weights       : Real_Array;
+      At_Weight     : Element_Count;
+      Weight_Stride : Element_Count;
+      Values        : Real_Array;
+      At_Value      : Element_Count;
+      Stride        : Element_Count;
+      Steps         : Element_Count)
+   with Pre => Sums'Length = 64;
+
    --  What Blend_Run does, reading a value cache kept at half precision.
    --
    --  The narrow cache existed before this and nothing wide read it: a

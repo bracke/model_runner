@@ -866,6 +866,96 @@ package body Model_Runner.Kernels is
          return 0.0;
       end if;
 
+      --  Whole blocks of thirty-two at a block's start, eight lanes at a
+      --  time: a block's sixteen bytes split into their low and high
+      --  nibbles, laid back in element order, widened, less eight, and
+      --  multiplied into the query; the block's sum scaled into the whole.
+      --  One nibble at a time, unchecked by nothing, this was most of a
+      --  prompt on the processor with --kv-cache q4: 52 s of 72 attending
+      --  over 1,289 tokens, where q8, which had lanes, took 4. Summed in
+      --  another order than the loop below, so not to the bit its answer.
+      if Wide_Lanes
+        and then Offset mod Nibble_Block = 0
+        and then Span mod Nibble_Block = 0
+      then
+         declare
+            LF : constant Character := ASCII.LF;
+
+            Left_At  : constant System.Address := Left (At_Left)'Address;
+            Bytes_At : constant System.Address :=
+              Right (At_Row + Model_Runner.Bytes.Byte_Count (Offset / 2))'Address;
+            Scale_At : constant System.Address :=
+              Scales (At_Scale + Offset / Nibble_Block)'Address;
+            Count    : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Span / Nibble_Block);
+            Result   : N.Real;
+         begin
+            System.Machine_Code.Asm
+              ("movl $0x0F0F0F0F, %%eax"                 & LF
+               & "vmovd %%eax, %%xmm15"                  & LF
+               & "vpbroadcastd %%xmm15, %%xmm15"         & LF
+               & "movl $0x41000000, %%eax"               & LF
+               & "vmovd %%eax, %%xmm14"                  & LF
+               & "vbroadcastss %%xmm14, %%ymm14"         & LF
+               & "vxorps %%ymm13, %%ymm13, %%ymm13"      & LF
+               & "movq %1, %%r8"                         & LF
+               & "movq %2, %%r9"                         & LF
+               & "movq %3, %%r10"                        & LF
+               & "movq %4, %%r11"                        & LF
+               & "1:"                                    & LF
+               & "vmovdqu (%%r9), %%xmm0"                & LF
+               & "vpand %%xmm15, %%xmm0, %%xmm1"         & LF
+               & "vpsrlw $4, %%xmm0, %%xmm2"             & LF
+               & "vpand %%xmm15, %%xmm2, %%xmm2"         & LF
+               & "vpunpcklbw %%xmm2, %%xmm1, %%xmm3"     & LF
+               & "vpunpckhbw %%xmm2, %%xmm1, %%xmm4"     & LF
+               & "vpmovzxbd %%xmm3, %%ymm5"              & LF
+               & "vpsrldq $8, %%xmm3, %%xmm3"            & LF
+               & "vpmovzxbd %%xmm3, %%ymm6"              & LF
+               & "vpmovzxbd %%xmm4, %%ymm7"              & LF
+               & "vpsrldq $8, %%xmm4, %%xmm4"            & LF
+               & "vpmovzxbd %%xmm4, %%ymm8"              & LF
+               & "vcvtdq2ps %%ymm5, %%ymm5"              & LF
+               & "vcvtdq2ps %%ymm6, %%ymm6"              & LF
+               & "vcvtdq2ps %%ymm7, %%ymm7"              & LF
+               & "vcvtdq2ps %%ymm8, %%ymm8"              & LF
+               & "vsubps %%ymm14, %%ymm5, %%ymm5"        & LF
+               & "vsubps %%ymm14, %%ymm6, %%ymm6"        & LF
+               & "vsubps %%ymm14, %%ymm7, %%ymm7"        & LF
+               & "vsubps %%ymm14, %%ymm8, %%ymm8"        & LF
+               & "vmulps (%%r8), %%ymm5, %%ymm12"        & LF
+               & "vfmadd231ps 32(%%r8), %%ymm6, %%ymm12" & LF
+               & "vfmadd231ps 64(%%r8), %%ymm7, %%ymm12" & LF
+               & "vfmadd231ps 96(%%r8), %%ymm8, %%ymm12" & LF
+               & "vbroadcastss (%%r10), %%ymm9"          & LF
+               & "vfmadd231ps %%ymm9, %%ymm12, %%ymm13"  & LF
+               & "addq $128, %%r8"                       & LF
+               & "addq $16, %%r9"                        & LF
+               & "addq $4, %%r10"                        & LF
+               & "decq %%r11"                            & LF
+               & "jnz 1b"                                & LF
+               & "vextractf128 $1, %%ymm13, %%xmm0"      & LF
+               & "vaddps %%xmm0, %%xmm13, %%xmm0"        & LF
+               & "vhaddps %%xmm0, %%xmm0, %%xmm0"        & LF
+               & "vhaddps %%xmm0, %%xmm0, %%xmm0"        & LF
+               & "vmovss %%xmm0, %0"                     & LF
+               & "vzeroupper",
+               Outputs  => N.Real'Asm_Output ("=m", Result),
+               Inputs   =>
+                 [System.Address'Asm_Input ("r", Left_At),
+                  System.Address'Asm_Input ("r", Bytes_At),
+                  System.Address'Asm_Input ("r", Scale_At),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Count)],
+               Clobber  =>
+                 "rax, r8, r9, r10, r11, ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, "
+                 & "ymm6, ymm7, ymm8, ymm9, ymm12, ymm13, ymm14, ymm15, "
+                 & "cc, memory",
+               Volatile => True);
+
+            return Result;
+         end;
+      end if;
+
       --  A block at a time, its scale taken out of the sum: the nibbles
       --  are small whole numbers and the query's components are added up
       --  against them in binary32, eight at a time where the compiler
@@ -940,6 +1030,148 @@ package body Model_Runner.Kernels is
                   > Values'Last
       then
          return;
+      end if;
+
+      --  A run of sixty-four at a block's start, a position a turn: its two
+      --  blocks' factors -- the weight times each block's scale -- and its
+      --  thirty-two bytes split, laid in element order, widened, less
+      --  eight, and multiplied and added into eight registers of sums, as
+      --  the loop below multiplies and adds each one: the same answer to
+      --  the bit, eight lanes at a time.
+      if Wide_Lanes
+        and then Span = Held_Run
+        and then Offset mod Nibble_Block = 0
+      then
+         declare
+            LF : constant Character := ASCII.LF;
+
+            Sums_At   : constant System.Address := Sums (Sums'First)'Address;
+            Weight_At : constant System.Address := Weights (At_Weight)'Address;
+            Scale_At  : constant System.Address :=
+              Scales (At_Scale + Offset / Nibble_Block)'Address;
+            Bytes_At  : constant System.Address :=
+              Values (At_Row + Model_Runner.Bytes.Byte_Count (Offset / 2))'Address;
+            Left      : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Steps);
+            Row_Step  : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Row_Bytes);
+            Scale_Step : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Blocks * 4);
+         begin
+            System.Machine_Code.Asm
+              ("movl $0x0F0F0F0F, %%eax"                 & LF
+               & "vmovd %%eax, %%xmm15"                  & LF
+               & "vpbroadcastd %%xmm15, %%xmm15"         & LF
+               & "movl $0x41000000, %%eax"               & LF
+               & "vmovd %%eax, %%xmm14"                  & LF
+               & "vbroadcastss %%xmm14, %%ymm14"         & LF
+               & "vmovups 0(%0), %%ymm0"                 & LF
+               & "vmovups 32(%0), %%ymm1"                & LF
+               & "vmovups 64(%0), %%ymm2"                & LF
+               & "vmovups 96(%0), %%ymm3"                & LF
+               & "vmovups 128(%0), %%ymm4"               & LF
+               & "vmovups 160(%0), %%ymm5"               & LF
+               & "vmovups 192(%0), %%ymm6"               & LF
+               & "vmovups 224(%0), %%ymm7"               & LF
+               & "movq %1, %%r8"                         & LF
+               & "movq %2, %%r10"                        & LF
+               & "movq %3, %%r9"                         & LF
+               & "movq %4, %%r11"                        & LF
+               & "1:"                                    & LF
+               --  The first block, sums 0 to 3.
+               & "vmovss (%%r8), %%xmm10"                & LF
+               & "vmulss (%%r10), %%xmm10, %%xmm10"      & LF
+               & "vbroadcastss %%xmm10, %%ymm10"         & LF
+               & "vmovdqu (%%r9), %%xmm8"                & LF
+               & "vpand %%xmm15, %%xmm8, %%xmm9"         & LF
+               & "vpsrlw $4, %%xmm8, %%xmm8"             & LF
+               & "vpand %%xmm15, %%xmm8, %%xmm8"         & LF
+               & "vpunpcklbw %%xmm8, %%xmm9, %%xmm12"    & LF
+               & "vpunpckhbw %%xmm8, %%xmm9, %%xmm13"    & LF
+               & "vpmovzxbd %%xmm12, %%ymm11"            & LF
+               & "vcvtdq2ps %%ymm11, %%ymm11"            & LF
+               & "vsubps %%ymm14, %%ymm11, %%ymm11"      & LF
+               & "vmulps %%ymm10, %%ymm11, %%ymm11"      & LF
+               & "vaddps %%ymm11, %%ymm0, %%ymm0"        & LF
+               & "vpsrldq $8, %%xmm12, %%xmm12"          & LF
+               & "vpmovzxbd %%xmm12, %%ymm11"            & LF
+               & "vcvtdq2ps %%ymm11, %%ymm11"            & LF
+               & "vsubps %%ymm14, %%ymm11, %%ymm11"      & LF
+               & "vmulps %%ymm10, %%ymm11, %%ymm11"      & LF
+               & "vaddps %%ymm11, %%ymm1, %%ymm1"        & LF
+               & "vpmovzxbd %%xmm13, %%ymm11"            & LF
+               & "vcvtdq2ps %%ymm11, %%ymm11"            & LF
+               & "vsubps %%ymm14, %%ymm11, %%ymm11"      & LF
+               & "vmulps %%ymm10, %%ymm11, %%ymm11"      & LF
+               & "vaddps %%ymm11, %%ymm2, %%ymm2"        & LF
+               & "vpsrldq $8, %%xmm13, %%xmm13"          & LF
+               & "vpmovzxbd %%xmm13, %%ymm11"            & LF
+               & "vcvtdq2ps %%ymm11, %%ymm11"            & LF
+               & "vsubps %%ymm14, %%ymm11, %%ymm11"      & LF
+               & "vmulps %%ymm10, %%ymm11, %%ymm11"      & LF
+               & "vaddps %%ymm11, %%ymm3, %%ymm3"        & LF
+               --  The second block, sums 4 to 7.
+               & "vmovss (%%r8), %%xmm10"                & LF
+               & "vmulss 4(%%r10), %%xmm10, %%xmm10"     & LF
+               & "vbroadcastss %%xmm10, %%ymm10"         & LF
+               & "vmovdqu 16(%%r9), %%xmm8"              & LF
+               & "vpand %%xmm15, %%xmm8, %%xmm9"         & LF
+               & "vpsrlw $4, %%xmm8, %%xmm8"             & LF
+               & "vpand %%xmm15, %%xmm8, %%xmm8"         & LF
+               & "vpunpcklbw %%xmm8, %%xmm9, %%xmm12"    & LF
+               & "vpunpckhbw %%xmm8, %%xmm9, %%xmm13"    & LF
+               & "vpmovzxbd %%xmm12, %%ymm11"            & LF
+               & "vcvtdq2ps %%ymm11, %%ymm11"            & LF
+               & "vsubps %%ymm14, %%ymm11, %%ymm11"      & LF
+               & "vmulps %%ymm10, %%ymm11, %%ymm11"      & LF
+               & "vaddps %%ymm11, %%ymm4, %%ymm4"        & LF
+               & "vpsrldq $8, %%xmm12, %%xmm12"          & LF
+               & "vpmovzxbd %%xmm12, %%ymm11"            & LF
+               & "vcvtdq2ps %%ymm11, %%ymm11"            & LF
+               & "vsubps %%ymm14, %%ymm11, %%ymm11"      & LF
+               & "vmulps %%ymm10, %%ymm11, %%ymm11"      & LF
+               & "vaddps %%ymm11, %%ymm5, %%ymm5"        & LF
+               & "vpmovzxbd %%xmm13, %%ymm11"            & LF
+               & "vcvtdq2ps %%ymm11, %%ymm11"            & LF
+               & "vsubps %%ymm14, %%ymm11, %%ymm11"      & LF
+               & "vmulps %%ymm10, %%ymm11, %%ymm11"      & LF
+               & "vaddps %%ymm11, %%ymm6, %%ymm6"        & LF
+               & "vpsrldq $8, %%xmm13, %%xmm13"          & LF
+               & "vpmovzxbd %%xmm13, %%ymm11"            & LF
+               & "vcvtdq2ps %%ymm11, %%ymm11"            & LF
+               & "vsubps %%ymm14, %%ymm11, %%ymm11"      & LF
+               & "vmulps %%ymm10, %%ymm11, %%ymm11"      & LF
+               & "vaddps %%ymm11, %%ymm7, %%ymm7"        & LF
+               & "addq $4, %%r8"                         & LF
+               & "addq %6, %%r10"                        & LF
+               & "addq %5, %%r9"                         & LF
+               & "decq %%r11"                            & LF
+               & "jnz 1b"                                & LF
+               & "vmovups %%ymm0, 0(%0)"                 & LF
+               & "vmovups %%ymm1, 32(%0)"                & LF
+               & "vmovups %%ymm2, 64(%0)"                & LF
+               & "vmovups %%ymm3, 96(%0)"                & LF
+               & "vmovups %%ymm4, 128(%0)"               & LF
+               & "vmovups %%ymm5, 160(%0)"               & LF
+               & "vmovups %%ymm6, 192(%0)"               & LF
+               & "vmovups %%ymm7, 224(%0)"               & LF
+               & "vzeroupper",
+               Inputs   =>
+                 [System.Address'Asm_Input ("r", Sums_At),
+                  System.Address'Asm_Input ("r", Weight_At),
+                  System.Address'Asm_Input ("r", Scale_At),
+                  System.Address'Asm_Input ("r", Bytes_At),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Left),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Row_Step),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Scale_Step)],
+               Clobber  =>
+                 "rax, r8, r9, r10, r11, ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, "
+                 & "ymm6, ymm7, ymm8, ymm9, ymm10, ymm11, ymm12, ymm13, "
+                 & "ymm14, ymm15, cc, memory",
+               Volatile => True);
+
+            return;
+         end;
       end if;
 
       --  A position at a time: its weight times each block's scale is one
@@ -1208,6 +1440,349 @@ package body Model_Runner.Kernels is
          return N.Real (Sum);
       end;
    end Head_Dot_Halved;
+
+   --------------------
+   -- Head_Dots_Four --
+   --------------------
+
+   procedure Head_Dots_Four
+     (Left        : Real_Array;
+      At_Left     : Element_Count;
+      Left_Stride : Element_Count;
+      Right       : Real_Array;
+      At_Right    : Element_Count;
+      Span        : Element_Count;
+      Dots        : out Real_Array) is
+   begin
+      Dots := [others => 0.0];
+
+      if Span = 0
+        or else Left_Stride < Span
+        or else At_Left < Left'First
+        or else At_Right < Right'First
+        or else At_Left - Left'First + 3 * Left_Stride + Span
+                  > Element_Count (Left'Length)
+        or else At_Right - Right'First + Span > Element_Count (Right'Length)
+      then
+         return;
+      end if;
+
+      if Wide_Lanes and then Span mod 8 = 0 then
+         declare
+            LF : constant Character := ASCII.LF;
+
+            Left_At  : constant System.Address := Left (At_Left)'Address;
+            Right_At : constant System.Address := Right (At_Right)'Address;
+            Blocks   : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Span / 8);
+            Apart    : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Left_Stride * 4);
+            Into     : constant System.Address := Dots (Dots'First)'Address;
+         begin
+            --  The key's eight values read once a turn and multiplied
+            --  into four running sums, a query each; the four then folded
+            --  into one register of four, a lane a query.
+            System.Machine_Code.Asm
+              ("vxorps %%ymm0, %%ymm0, %%ymm0"           & LF
+               & "vxorps %%ymm1, %%ymm1, %%ymm1"         & LF
+               & "vxorps %%ymm2, %%ymm2, %%ymm2"         & LF
+               & "vxorps %%ymm3, %%ymm3, %%ymm3"         & LF
+               & "movq %0, %%r8"                         & LF
+               & "movq %1, %%r9"                         & LF
+               & "movq %2, %%r10"                        & LF
+               & "leaq (%%r8,%3), %%r11"                 & LF
+               & "1:"                                    & LF
+               & "vmovups (%%r9), %%ymm4"              & LF
+               & "vfmadd231ps (%%r8), %%ymm4, %%ymm0"    & LF
+               & "vfmadd231ps (%%r11), %%ymm4, %%ymm1"   & LF
+               & "vfmadd231ps (%%r11,%3), %%ymm4, %%ymm2" & LF
+               & "vfmadd231ps (%%r11,%3,2), %%ymm4, %%ymm3" & LF
+               & "addq $32, %%r8"                        & LF
+               & "addq $32, %%r11"                       & LF
+               & "addq $32, %%r9"                        & LF
+               & "decq %%r10"                            & LF
+               & "jnz 1b"                                & LF
+               --  Each sum folded as Head_Dot folds its one --
+               --  the upper half onto the lower, then two pairwise adds --
+               --  so a query's score is the same to the bit whichever
+               --  kernel took it; the pairwise adds of four at once.
+               & "vextractf128 $1, %%ymm0, %%xmm4"       & LF
+               & "vaddps %%xmm4, %%xmm0, %%xmm0"         & LF
+               & "vextractf128 $1, %%ymm1, %%xmm4"       & LF
+               & "vaddps %%xmm4, %%xmm1, %%xmm1"         & LF
+               & "vextractf128 $1, %%ymm2, %%xmm4"       & LF
+               & "vaddps %%xmm4, %%xmm2, %%xmm2"         & LF
+               & "vextractf128 $1, %%ymm3, %%xmm4"       & LF
+               & "vaddps %%xmm4, %%xmm3, %%xmm3"         & LF
+               & "vhaddps %%xmm1, %%xmm0, %%xmm0"        & LF
+               & "vhaddps %%xmm3, %%xmm2, %%xmm2"        & LF
+               & "vhaddps %%xmm2, %%xmm0, %%xmm0"        & LF
+               & "vmovups %%xmm0, (%4)"                  & LF
+               & "vzeroupper",
+               Inputs   =>
+                 [System.Address'Asm_Input ("r", Left_At),
+                  System.Address'Asm_Input ("r", Right_At),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Blocks),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Apart),
+                  System.Address'Asm_Input ("r", Into)],
+               Clobber  =>
+                 "ymm0, ymm1, ymm2, ymm3, ymm4, r8, r9, r10, r11, cc, memory",
+               Volatile => True);
+
+            return;
+         end;
+      end if;
+
+      for Which in 0 .. 3 loop
+         Dots (Dots'First + Element_Count (Which)) :=
+           Head_Dot
+             (Left, At_Left + Element_Count (Which) * Left_Stride,
+              Right, At_Right, Span);
+      end loop;
+   end Head_Dots_Four;
+
+   ---------------------
+   -- Head_Dots_Eight --
+   ---------------------
+
+   procedure Head_Dots_Eight
+     (Left        : Real_Array;
+      At_Left     : Element_Count;
+      Left_Stride : Element_Count;
+      Right       : Real_Array;
+      At_Right    : Element_Count;
+      Span        : Element_Count;
+      Dots        : out Real_Array) is
+   begin
+      Dots := [others => 0.0];
+
+      if Span = 0
+        or else Left_Stride < Span
+        or else At_Left < Left'First
+        or else At_Right < Right'First
+        or else At_Left - Left'First + 7 * Left_Stride + Span
+                  > Element_Count (Left'Length)
+        or else At_Right - Right'First + Span > Element_Count (Right'Length)
+      then
+         return;
+      end if;
+
+      if Wide_Lanes and then Span mod 8 = 0 then
+         declare
+            LF : constant Character := ASCII.LF;
+
+            Left_At  : constant System.Address := Left (At_Left)'Address;
+            Right_At : constant System.Address := Right (At_Right)'Address;
+            Blocks   : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Span / 8);
+            Apart    : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Left_Stride * 4);
+            Into     : constant System.Address := Dots (Dots'First)'Address;
+         begin
+            --  Rows 0 to 5 through r8 and r11 = r8 + one stride, scaled by
+            --  one, two and four; rows 6 and 7 through r12 = r8 + six.
+            System.Machine_Code.Asm
+              ("vxorps %%ymm0, %%ymm0, %%ymm0"           & LF
+               & "vxorps %%ymm1, %%ymm1, %%ymm1"         & LF
+               & "vxorps %%ymm2, %%ymm2, %%ymm2"         & LF
+               & "vxorps %%ymm3, %%ymm3, %%ymm3"         & LF
+               & "vxorps %%ymm4, %%ymm4, %%ymm4"         & LF
+               & "vxorps %%ymm5, %%ymm5, %%ymm5"         & LF
+               & "vxorps %%ymm6, %%ymm6, %%ymm6"         & LF
+               & "vxorps %%ymm7, %%ymm7, %%ymm7"         & LF
+               & "movq %0, %%r8"                         & LF
+               & "movq %1, %%r9"                         & LF
+               & "movq %2, %%r10"                        & LF
+               & "leaq (%%r8,%3), %%r11"                 & LF
+               & "leaq (%%r11,%3,4), %%r12"              & LF
+               & "addq %3, %%r12"                        & LF
+               & "1:"                                    & LF
+               & "vmovups (%%r9), %%ymm8"              & LF
+               & "vfmadd231ps (%%r8), %%ymm8, %%ymm0"    & LF
+               & "vfmadd231ps (%%r11), %%ymm8, %%ymm1"   & LF
+               & "vfmadd231ps (%%r8,%3,2), %%ymm8, %%ymm2" & LF
+               & "vfmadd231ps (%%r11,%3,2), %%ymm8, %%ymm3" & LF
+               & "vfmadd231ps (%%r8,%3,4), %%ymm8, %%ymm4" & LF
+               & "vfmadd231ps (%%r11,%3,4), %%ymm8, %%ymm5" & LF
+               & "vfmadd231ps (%%r12), %%ymm8, %%ymm6"   & LF
+               & "vfmadd231ps (%%r12,%3), %%ymm8, %%ymm7" & LF
+               & "addq $32, %%r8"                        & LF
+               & "addq $32, %%r11"                       & LF
+               & "addq $32, %%r12"                       & LF
+               & "addq $32, %%r9"                        & LF
+               & "decq %%r10"                            & LF
+               & "jnz 1b"                                & LF
+               --  Folded as Head_Dots_Four folds, for the same bits.
+               & "vextractf128 $1, %%ymm0, %%xmm8"       & LF
+               & "vaddps %%xmm8, %%xmm0, %%xmm0"         & LF
+               & "vextractf128 $1, %%ymm1, %%xmm8"       & LF
+               & "vaddps %%xmm8, %%xmm1, %%xmm1"         & LF
+               & "vextractf128 $1, %%ymm2, %%xmm8"       & LF
+               & "vaddps %%xmm8, %%xmm2, %%xmm2"         & LF
+               & "vextractf128 $1, %%ymm3, %%xmm8"       & LF
+               & "vaddps %%xmm8, %%xmm3, %%xmm3"         & LF
+               & "vextractf128 $1, %%ymm4, %%xmm8"       & LF
+               & "vaddps %%xmm8, %%xmm4, %%xmm4"         & LF
+               & "vextractf128 $1, %%ymm5, %%xmm8"       & LF
+               & "vaddps %%xmm8, %%xmm5, %%xmm5"         & LF
+               & "vextractf128 $1, %%ymm6, %%xmm8"       & LF
+               & "vaddps %%xmm8, %%xmm6, %%xmm6"         & LF
+               & "vextractf128 $1, %%ymm7, %%xmm8"       & LF
+               & "vaddps %%xmm8, %%xmm7, %%xmm7"         & LF
+               & "vhaddps %%xmm1, %%xmm0, %%xmm0"        & LF
+               & "vhaddps %%xmm3, %%xmm2, %%xmm2"        & LF
+               & "vhaddps %%xmm2, %%xmm0, %%xmm0"        & LF
+               & "vmovups %%xmm0, (%4)"                  & LF
+               & "vhaddps %%xmm5, %%xmm4, %%xmm4"        & LF
+               & "vhaddps %%xmm7, %%xmm6, %%xmm6"        & LF
+               & "vhaddps %%xmm6, %%xmm4, %%xmm4"        & LF
+               & "vmovups %%xmm4, 16(%4)"                & LF
+               & "vzeroupper",
+               Inputs   =>
+                 [System.Address'Asm_Input ("r", Left_At),
+                  System.Address'Asm_Input ("r", Right_At),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Blocks),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Apart),
+                  System.Address'Asm_Input ("r", Into)],
+               Clobber  =>
+                 "ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, ymm7, ymm8, "
+                 & "r8, r9, r10, r11, r12, cc, memory",
+               Volatile => True);
+
+            return;
+         end;
+      end if;
+
+      for Which in 0 .. 7 loop
+         Dots (Dots'First + Element_Count (Which)) :=
+           Head_Dot
+             (Left, At_Left + Element_Count (Which) * Left_Stride,
+              Right, At_Right, Span);
+      end loop;
+   end Head_Dots_Eight;
+
+   ------------------------
+   -- Blend_Sixteen_Four --
+   ------------------------
+
+   procedure Blend_Sixteen_Four
+     (Sums          : in out Real_Array;
+      Weights       : Real_Array;
+      At_Weight     : Element_Count;
+      Weight_Stride : Element_Count;
+      Values        : Real_Array;
+      At_Value      : Element_Count;
+      Stride        : Element_Count;
+      Steps         : Element_Count) is
+   begin
+      if Steps = 0
+        or else Stride < 16
+        or else Weight_Stride < Steps
+        or else At_Weight < Weights'First
+        or else At_Value < Values'First
+        or else At_Weight - Weights'First + 3 * Weight_Stride + Steps
+                  > Element_Count (Weights'Length)
+        or else At_Value - Values'First + (Steps - 1) * Stride + 16
+                  > Element_Count (Values'Length)
+      then
+         return;
+      end if;
+
+      if Wide_Lanes then
+         declare
+            LF : constant Character := ASCII.LF;
+
+            Sums_At   : constant System.Address := Sums (Sums'First)'Address;
+            Weight_At : constant System.Address := Weights (At_Weight)'Address;
+            Value_At  : constant System.Address := Values (At_Value)'Address;
+            Left      : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Steps);
+            Apart     : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Stride * 4);
+            Rows      : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Weight_Stride * 4);
+         begin
+            --  A position a turn: its sixteen values read once, and
+            --  each of the four queries' weights broadcast and multiplied
+            --  into that query's two registers of sums.
+            System.Machine_Code.Asm
+              ("vmovups 0(%0), %%ymm0"                   & LF
+               & "vmovups 32(%0), %%ymm1"                & LF
+               & "vmovups 64(%0), %%ymm2"                & LF
+               & "vmovups 96(%0), %%ymm3"                & LF
+               & "vmovups 128(%0), %%ymm4"               & LF
+               & "vmovups 160(%0), %%ymm5"               & LF
+               & "vmovups 192(%0), %%ymm6"               & LF
+               & "vmovups 224(%0), %%ymm7"               & LF
+               & "movq %1, %%r8"                         & LF
+               & "movq %2, %%r9"                         & LF
+               & "movq %3, %%r10"                        & LF
+               & "leaq (%%r8,%5), %%r11"                 & LF
+               & "1:"                                    & LF
+               & "vmovups 0(%%r9), %%ymm8"             & LF
+               & "vmovups 32(%%r9), %%ymm9"            & LF
+               & "vbroadcastss (%%r8), %%ymm10"          & LF
+               & "vfmadd231ps %%ymm8, %%ymm10, %%ymm0"   & LF
+               & "vfmadd231ps %%ymm9, %%ymm10, %%ymm1"   & LF
+               & "vbroadcastss (%%r11), %%ymm11"         & LF
+               & "vfmadd231ps %%ymm8, %%ymm11, %%ymm2"   & LF
+               & "vfmadd231ps %%ymm9, %%ymm11, %%ymm3"   & LF
+               & "vbroadcastss (%%r11,%5), %%ymm12"      & LF
+               & "vfmadd231ps %%ymm8, %%ymm12, %%ymm4"   & LF
+               & "vfmadd231ps %%ymm9, %%ymm12, %%ymm5"   & LF
+               & "vbroadcastss (%%r11,%5,2), %%ymm13"    & LF
+               & "vfmadd231ps %%ymm8, %%ymm13, %%ymm6"   & LF
+               & "vfmadd231ps %%ymm9, %%ymm13, %%ymm7"   & LF
+               & "addq $4, %%r8"                         & LF
+               & "addq $4, %%r11"                        & LF
+               & "addq %4, %%r9"                         & LF
+               & "decq %%r10"                            & LF
+               & "jnz 1b"                                & LF
+               & "vmovups %%ymm0, 0(%0)"                 & LF
+               & "vmovups %%ymm1, 32(%0)"                & LF
+               & "vmovups %%ymm2, 64(%0)"                & LF
+               & "vmovups %%ymm3, 96(%0)"                & LF
+               & "vmovups %%ymm4, 128(%0)"               & LF
+               & "vmovups %%ymm5, 160(%0)"               & LF
+               & "vmovups %%ymm6, 192(%0)"               & LF
+               & "vmovups %%ymm7, 224(%0)"               & LF
+               & "vzeroupper",
+               Inputs   =>
+                 [System.Address'Asm_Input ("r", Sums_At),
+                  System.Address'Asm_Input ("r", Weight_At),
+                  System.Address'Asm_Input ("r", Value_At),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Left),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Apart),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Rows)],
+               Clobber  =>
+                 "ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, ymm7, ymm8, "
+                 & "ymm9, ymm10, ymm11, ymm12, ymm13, r8, r9, r10, r11, "
+                 & "cc, memory",
+               Volatile => True);
+
+            return;
+         end;
+      end if;
+
+      for Which in 0 .. 3 loop
+         for Step in 0 .. Steps - 1 loop
+            declare
+               Weight : constant N.Real :=
+                 Weights (At_Weight + Element_Count (Which) * Weight_Stride
+                          + Step);
+               Here   : constant Element_Count := At_Value + Step * Stride;
+               Run    : constant Element_Count :=
+                 Sums'First + Element_Count (Which) * 16;
+            begin
+               for Index in Element_Count range 0 .. 15 loop
+                  Sums (Run + Index) :=
+                    Sums (Run + Index)
+                    + Weight * Values (Here + Index);
+               end loop;
+            end;
+         end loop;
+      end loop;
+   end Blend_Sixteen_Four;
 
    ---------------------------
    -- Head_Dots_Halved_Four --
