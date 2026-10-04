@@ -2875,6 +2875,8 @@ private
       Wave_Line6   : System.Address := System.Null_Address;
       Long_Shader6 : System.Address := System.Null_Address;
       Long_Line6   : System.Address := System.Null_Address;
+      Mid_Shader6  : System.Address := System.Null_Address;
+      Mid_Line6    : System.Address := System.Null_Address;
       Long_Shader  : System.Address := System.Null_Address;
       Long_Line    : System.Address := System.Null_Address;
       Long_Shader5 : System.Address := System.Null_Address;

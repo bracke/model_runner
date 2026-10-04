@@ -16,6 +16,9 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #extension GL_KHR_shader_subgroup_basic : require
+#ifdef SHARED_SCALES
+#extension GL_KHR_shader_subgroup_shuffle : require
+#endif
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 
@@ -148,10 +151,27 @@ void main() {
             vec4 q2 = vec4 (unpack8 (q2u)) - 32.0;
             vec4 q3 = vec4 (unpack8 (q3u)) - 32.0;
 
+#ifdef SHARED_SCALES
+            //  The block's sixteen scales a lane each, and the four this
+            //  lane wants from the lanes that read them: one load where
+            //  four were, as llama.cpp's shared scale cache but without its
+            //  barrier -- the sixteen lanes of a block are one wave's. For
+            //  rows past 2048 columns only: on a short row the shuffles
+            //  wait on that load with little else to cover them, and a
+            //  32000 x 2048 head went 745 -> 783 us; a 152064 x 5120 one
+            //  went 8,900 -> 8,632, llama.cpp's 8,638.
+            float mine = scale_at (sb + itid);
+            uint lead = gl_SubgroupInvocationID & ~15u;
+            float sc0 = subgroupShuffle (mine, lead + s_offset);
+            float sc1 = subgroupShuffle (mine, lead + s_offset + 2u);
+            float sc2 = subgroupShuffle (mine, lead + s_offset + 4u);
+            float sc3 = subgroupShuffle (mine, lead + s_offset + 6u);
+#else
             float sc0 = scale_at (sb + s_offset);
             float sc1 = scale_at (sb + s_offset + 2u);
             float sc2 = scale_at (sb + s_offset + 4u);
             float sc3 = scale_at (sb + s_offset + 6u);
+#endif
 
             float s0 = dot (by0,  q0);
             float s1 = dot (by32, q1);

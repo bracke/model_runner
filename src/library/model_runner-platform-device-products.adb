@@ -172,6 +172,13 @@ package body Model_Runner.Platform.Device.Products is
    --  itself went the other way, 7.3 -> 7.9 ms, and stays where it was.
    Long_Row_Columns : constant := 8192;
 
+   --  The row length past which a Q6_K row goes to the compilation that
+   --  reads a block's scales a lane each and shares them round the wave
+   --  (SHARED_SCALES in row_product_super6.comp): Steelman-14B's 152064 x
+   --  5120 head 8,900 -> 8,632 us, where TinyLlama's 32000 x 2048 one went
+   --  745 -> 783 and stays with the four loads.
+   Mid_Row_Columns : constant := 2048;
+
    --  And the IQ4 formats', their shader's NUM_ROWS: four, as Q2_K's,
    --  where two read TinyLlama IQ4_NL at 96 and IQ4_XS at 104 tokens a
    --  second against 99 and 108 at four.
@@ -1033,6 +1040,10 @@ package body Model_Runner.Platform.Device.Products is
                and then Columns >= Long_Row_Columns
                and then Item.Long_Line6 /= Null_Handle
              then Item.Long_Line6
+             elsif Packing = Packed_Q6_K
+               and then Columns > Mid_Row_Columns
+               and then Item.Mid_Line6 /= Null_Handle
+             then Item.Mid_Line6
              elsif Packing = Packed_Q6_K then Item.Wave_Line6
              elsif Columns >= Long_Row_Columns
                and then Item.Long_Line /= Null_Handle
@@ -2440,6 +2451,25 @@ package body Model_Runner.Platform.Device.Products is
             Create : constant Create_Call :=
               To_Create (Point ("vkCreateShaderModule"));
             Words  : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Row_Product_Super6_Mid;
+            Request : aliased Shader_Create_Info;
+         begin
+            if Create /= null then
+               Request.Size := Interfaces.C.size_t (Words'Length * 4);
+               Request.Code := Words'Address;
+
+               if Create (Item.Logical, Request'Address, Null_Handle,
+                          Made'Access) = 0
+               then
+                  Item.Mid_Shader6 := Made;
+               end if;
+            end if;
+         end;
+
+         declare
+            Create : constant Create_Call :=
+              To_Create (Point ("vkCreateShaderModule"));
+            Words  : aliased constant Model_Runner.Shaders.Word_Array :=
               Model_Runner.Shaders.Row_Product_Super_Long;
             Request : aliased Shader_Create_Info;
          begin
@@ -3487,6 +3517,11 @@ package body Model_Runner.Platform.Device.Products is
                if Item.Long_Shader6 /= Null_Handle then
                   Request.Stage.Module := Item.Long_Shader6;
                   Line (Wave_Lanes, 1, Item.Long_Line6);
+               end if;
+
+               if Item.Mid_Shader6 /= Null_Handle then
+                  Request.Stage.Module := Item.Mid_Shader6;
+                  Line (Wave_Lanes, 1, Item.Mid_Line6);
                end if;
 
                if Item.Long_Shader /= Null_Handle then
@@ -4649,6 +4684,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Wave_Line5, "vkDestroyPipeline");
       Give_Back (Item.Wave_Line6, "vkDestroyPipeline");
       Give_Back (Item.Long_Line6, "vkDestroyPipeline");
+      Give_Back (Item.Mid_Line6, "vkDestroyPipeline");
       Give_Back (Item.Long_Line, "vkDestroyPipeline");
       Give_Back (Item.Long_Line5, "vkDestroyPipeline");
       for Packing in Low_Packing loop
@@ -4788,6 +4824,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Low_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Wave_Shader6, "vkDestroyShaderModule");
       Give_Back (Item.Long_Shader6, "vkDestroyShaderModule");
+      Give_Back (Item.Mid_Shader6, "vkDestroyShaderModule");
       Give_Back (Item.Long_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Long_Shader5, "vkDestroyShaderModule");
       Item.Matrices := False;

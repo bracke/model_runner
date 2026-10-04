@@ -1360,13 +1360,18 @@ package body Tests.Backend_Cases is
       --  And a sixth, one vector over rows of 8192: the k-quants' subgroup
       --  kernels give a row that long two waves' lanes and add the two
       --  waves' sums at the end, which no shorter row reaches.
-      Shapes : constant array (1 .. 6) of Shape :=
+      --
+      --  And a seventh, one vector over rows of 4096: Q6_K's rows past 2048
+      --  columns go to a compilation of their own, which reads a block's
+      --  scales a lane each and passes them round the wave.
+      Shapes : constant array (1 .. 7) of Shape :=
         [(Tall => 12, Batch => 10, Tiled => False, others => <>),
          (Tall => 64, Batch => 40, Tiled => True, others => <>),
          (Tall => 13, Batch => 1, Tiled => False, others => <>),
          (Tall => 96, Batch => 40, Tiled => True, others => <>),
          (Tall => 64, Batch => 140, Tiled => True, others => <>),
-         (Tall => 5, Batch => 1, Tiled => False, Across => 8192)];
+         (Tall => 5, Batch => 1, Tiled => False, Across => 8192),
+         (Tall => 7, Batch => 1, Tiled => False, Across => 4096)];
 
       --  How far the device and the processor may differ.
       --
