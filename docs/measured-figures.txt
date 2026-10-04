@@ -25342,3 +25342,22 @@ panels B0311224B7BBDE99 src/library/model_runner-quantization-interleave.ads src
 # and leaves a run that said --repack at all as it said (Repack_Asked).
 # load: one-minute average 0.7 to 2.8
 # model: Qwen3-Coder-30B-A3B Q2_K, qwen3.6-35b-a3b-mtp Q4_K_S
+
+
+# 2026-10-04: dense generation on the processor at depth, against llama.cpp.
+# run --backend cpu --draft-tokens 0 --prompt-file
+# tests/fixtures/speed-prompt-long.txt --max-tokens 64 (panels, f16 cache, as
+# run does unasked); llama-bench -ngl 0 -p 0 -n 64 -d <same depth>, the device
+# hidden; alternated two rounds, 45 s of rest before each run, tokens a
+# second:
+#
+#                         depth   ours           llama.cpp
+#   TinyLlama Q4_K_M      1,433   57.48  57.62   55.62  55.15
+#   TinyLlama Q5_K_M      1,433   49.61  50.72   48.74  48.67
+#   qwen3-8b Q4_K_M       1,297    8.91   8.89    8.52   8.51
+#   Steelman-14B Q4_K_M   1,318    4.92   4.94    4.77   
+#
+# Ahead on all four, by 2 to 5 per cent. Nothing changed; no group restamped.
+# load: one-minute average 0.8 to 1.6
+# model: TinyLlama 1.1B chat Q4_K_M and Q5_K_M, Qwen3-8B Q4_K_M,
+#   Steelman-14B r6 Q4_K_M
