@@ -18,6 +18,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A run says when a product missed its fast kernel:** `--show-stats` adds a note where a quantized product's shares went to the floating-point path because no integer kernel took them ("62656 of 67656" for a Q4_1 model left in its rows), and one where a prompt's batched products went to the device's row kernel because its matrix tile refused them -- the shape of the two slow paths Falcon-7B and Q8_0 were found on. Nothing is said when every product took its kernel.
 - **The session's project commands run from the shell:** `model_runner req`,
   `state`, `bootstrap`, `config`, `reconfigure`, `check`, `decision`,
   `spec`, `result`, `sandbox`, `instruct`, `accept` and `reject`, with

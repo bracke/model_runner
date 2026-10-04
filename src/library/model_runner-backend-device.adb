@@ -641,6 +641,10 @@ package body Model_Runner.Backend.Device is
 
    function Layers_Whole return Natural is (Whole_Count);
 
+   function Tiled_Products return Natural is (Products.Tiled_Products);
+
+   function Untiled_Products return Natural is (Products.Untiled_Products);
+
    function Layers_Handed return Natural is (Handed_Count);
 
    function Layers_Split return Natural is (Split_Count);

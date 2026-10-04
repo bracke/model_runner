@@ -244,6 +244,18 @@ package Model_Runner.Backend.Device is
       Held  : Boolean := False;
       Split : Boolean := False);
 
+   --  Batched products the device took on its matrix tile; see
+   --  Platform.Device.Products.Tiled_Products.
+   --
+   --  @return Products recorded on the tile since the process began.
+   function Tiled_Products return Natural;
+
+   --  Batched products the device took on its row kernel, the tile
+   --  refusing them.
+   --
+   --  @return Products recorded on the row kernel since the process began.
+   function Untiled_Products return Natural;
+
    --  @return Layers noted whole since the device was opened.
    function Layers_Whole return Natural;
 

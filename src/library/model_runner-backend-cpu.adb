@@ -4,6 +4,7 @@ with Ada.Unchecked_Deallocation;
 with System.Atomic_Operations.Integer_Arithmetic;
 with System.Machine_Code;
 
+with Model_Runner.GGUF;
 with Model_Runner.Sampling;
 with Model_Runner.Kernels;
 with Model_Runner.Delta_Rule;
@@ -50,6 +51,37 @@ package body Model_Runner.Backend.CPU is
 
    package Chunks is new System.Atomic_Operations.Integer_Arithmetic
      (Chunk_Counter);
+
+   --  The two tallies Integer_Shares and Float_Shares read.
+   type Tally is new Integer with Atomic;
+
+   package Tallies is new System.Atomic_Operations.Integer_Arithmetic (Tally);
+
+   Integer_Tally : aliased Tally := 0;
+   Float_Tally   : aliased Tally := 0;
+
+   function Integer_Shares return Natural is (Natural (Integer_Tally));
+   function Float_Shares return Natural is (Natural (Float_Tally));
+
+   --  A share of a product counted by how it was answered, where its
+   --  weight is quantized; a binary32 or half-precision weight has no
+   --  integer kernel to miss.
+   procedure Count_Share
+     (Format : Model_Runner.GGUF.Tensor_Type; Handled : Boolean)
+   is
+      use type Model_Runner.GGUF.Tensor_Type;
+   begin
+      if Format not in Model_Runner.GGUF.Type_F32
+                     | Model_Runner.GGUF.Type_F16
+                     | Model_Runner.GGUF.Type_BF16
+      then
+         if Handled then
+            Tallies.Atomic_Add (Integer_Tally, 1);
+         else
+            Tallies.Atomic_Add (Float_Tally, 1);
+         end if;
+      end if;
+   end Count_Share;
 
    --  Every tile of a product this task can get, one at a time.
    --
@@ -807,6 +839,8 @@ package body Model_Runner.Backend.CPU is
          T.Free (Scales);
       end if;
 
+      Count_Share (Weight.Format, Handled);
+
       if not Handled then
          T.Mat_Mul_Range
            (Weight, Vector.all, Count, Target.all, 0, Weight.Rows - 1);
@@ -1007,6 +1041,8 @@ package body Model_Runner.Backend.CPU is
             Work.Halves.all, Work.Count, Work.Target.all, First, Last,
             Handled);
       end if;
+
+      Count_Share (Work.Weight.Format, Handled);
 
       if not Handled then
          T.Mat_Mul_Range

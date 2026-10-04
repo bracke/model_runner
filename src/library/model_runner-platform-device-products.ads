@@ -268,6 +268,20 @@ package Model_Runner.Platform.Device.Products is
    --  @return Turns taken by the last product, or zero before any.
    function Waited (Item : Engine) return Natural;
 
+   --  How many products of a batch -- a batch big enough to want the
+   --  matrix tile -- a sequence has recorded on the tile, and how many on
+   --  the row kernel, which reads the weights again for every few vectors
+   --  and runs at an eighth of the tile's rate. A model whose prompts put
+   --  products on the row kernel has a format or a width the tile does not
+   --  take; Falcon-7B's 4544 columns were one. Counted since the process
+   --  began, for the statistics a run reports.
+   --
+   --  @return Batched products recorded on the tile.
+   function Tiled_Products return Natural;
+
+   --  @return Batched products recorded on the row kernel.
+   function Untiled_Products return Natural;
+
    --  Whether a dispatch was left unfinished on this engine.
    --
    --  A device that stopped answering keeps the buffers it was given, and

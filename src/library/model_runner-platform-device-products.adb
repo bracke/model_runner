@@ -10697,6 +10697,14 @@ package body Model_Runner.Platform.Device.Products is
    -- Run --
    ---------
 
+   --  What Tiled_Products and Untiled_Products read. Only the task that
+   --  records a sequence writes them.
+   Tiled_Count   : Natural := 0;
+   Untiled_Count : Natural := 0;
+
+   function Tiled_Products return Natural is (Tiled_Count);
+   function Untiled_Products return Natural is (Untiled_Count);
+
    --  Narrow_Run for this sequence; see its declaration.
    function Set_Narrow (Steps : Sequence) return Boolean is
    begin
@@ -13711,6 +13719,19 @@ package body Model_Runner.Platform.Device.Products is
                     (Item.Buffer, Bind_Point_Compute,
                      Row_Line (Item, Count));
                   goto Next_Dispatch;
+               end if;
+
+               --  A batch the tile would take, counted by whether it did.
+               if Count >= Tile_Least
+                 and then Is_Product (Index)
+                 and then not Steps.Items (Index).Listed
+                 and then Steps.Items (Index).Gathers <= 1
+               then
+                  if Tiled (Index) then
+                     Tiled_Count := Tiled_Count + 1;
+                  else
+                     Untiled_Count := Untiled_Count + 1;
+                  end if;
                end if;
 
                if Tiled (Index) then

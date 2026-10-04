@@ -4648,6 +4648,42 @@ package body Model_Runner.CLI.Execute is
                                  [Loc.Named ("count", T.Image (Long_Long_Integer
                                                                  (Model_Runner.Tensors.Fallback_Rows)))]);
                end if;
+
+               --  And products that missed the fast kernel for their
+               --  shape: a quantized share the integer kernels refused,
+               --  or a batch the device's tile did not take. Each is a
+               --  model running several times slower than it could in that
+               --  product, which no rate above says by itself.
+               declare
+                  Floated : constant Natural :=
+                    Model_Runner.Backend.CPU.Float_Shares;
+                  Integer_Taken : constant Natural :=
+                    Model_Runner.Backend.CPU.Integer_Shares;
+                  Rowed : constant Natural :=
+                    Model_Runner.Backend.Device.Untiled_Products;
+                  Tiled_Taken : constant Natural :=
+                    Model_Runner.Backend.Device.Tiled_Products;
+               begin
+                  if Floated > 0 then
+                     Pres.Put_Note
+                       (Screen, "cli.run.float_shares",
+                        [Loc.Named ("count",
+                                    T.Image (Long_Long_Integer (Floated))),
+                         Loc.Named ("total",
+                                    T.Image (Long_Long_Integer
+                                               (Floated + Integer_Taken)))]);
+                  end if;
+
+                  if Rowed > 0 then
+                     Pres.Put_Note
+                       (Screen, "cli.run.untiled_products",
+                        [Loc.Named ("count",
+                                    T.Image (Long_Long_Integer (Rowed))),
+                         Loc.Named ("total",
+                                    T.Image (Long_Long_Integer
+                                               (Rowed + Tiled_Taken)))]);
+                  end if;
+               end;
             end if;
 
             Free_Text (Prompt);

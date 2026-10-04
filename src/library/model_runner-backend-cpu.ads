@@ -296,6 +296,20 @@ package Model_Runner.Backend.CPU is
    --  @return Workers to open, never above Max_Workers.
    function Default_Workers (Cores : Positive) return Worker_Count;
 
+   --  How many shares of a quantized product this process has answered on
+   --  the integer kernels, the panel ones among them, and how many went to
+   --  the floating-point path -- which decodes every weight to binary32
+   --  and is several times slower. A model whose run sends shares there is
+   --  one a kernel misses: a format or a shape the integer path refuses.
+   --  Counted since the process began, for the statistics a run reports.
+   --
+   --  @return Shares answered by an integer kernel.
+   function Integer_Shares return Natural;
+
+   --  @return Shares of a quantized product taken by the floating-point
+   --    path.
+   function Float_Shares return Natural;
+
    --  Row range one share of a job covers.
    --
    --  Exposed so that the tests can assert the partition is a disjoint cover
