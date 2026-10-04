@@ -6466,6 +6466,72 @@ package body Tests.Inference_Cases is
    -- A_Paged_Window_Slides_As_A_Block_Slides --
    --------------------------------------------------
 
+   --  A windowed layer slides before a batch, keeping the window and a
+   --  rewind's slack, and then holds the whole batch: a second batch of
+   --  488 after one of 512 ran past the cells -- the sizing counted a
+   --  batch and not the slack -- and gemma-3-4b stopped with a range check
+   --  on any prompt whose last batch was that long.
+   procedure A_Window_Holds_A_Long_Batch_After_A_Slide
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image, Room => 1200, Window => 8);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Item   : Containers.Container;
+         Model  : aliased L.Model;
+         Live   : L.Session;
+         Status : E.Error_Info;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse
+           (Item, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+         L.Prepare
+           (Model, Item, Source,
+            Backend => Model_Runner.Backend.Backend_CPU,
+            Status  => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not prepare");
+
+         declare
+            Words  : constant access constant Vocab.Vocabulary :=
+              L.Vocabulary (Model);
+            A      : constant Vocab.Token_Id := Vocab.Find (Words.all, "a");
+            Bee    : constant Vocab.Token_Id := Vocab.Find (Words.all, "b");
+            First  : Vocab.Token_Array (1 .. 512);
+            Second : Vocab.Token_Array (1 .. 488);
+            Logits : N.Real_Array
+              (0 .. N.Element_Count (L.Config (Model).Vocabulary) - 1);
+         begin
+            for Index in First'Range loop
+               First (Index) := (if Index mod 3 = 0 then A else Bee);
+            end loop;
+            First (1) := Vocab.Beginning_Token (Words.all);
+            for Index in Second'Range loop
+               Second (Index) := (if Index mod 2 = 0 then A else Bee);
+            end loop;
+
+            L.Open (Live, Model, 1200, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+            L.Evaluate_Batch (Live, Model, First, Logits, Status => Status);
+            Assert (E.Is_Ok (Status), "the first batch failed");
+            L.Evaluate_Batch (Live, Model, Second, Logits, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "a batch of 488 after a slide failed: "
+                    & E.Error_Code'Image (Status.Code));
+            Assert ((for all V of Logits => V = V),
+                    "the second batch's logits are not numbers");
+            L.Close (Live);
+         end;
+      end;
+      B.Free (Image);
+   end A_Window_Holds_A_Long_Batch_After_A_Slide;
+
    --  A paged session on a sliding-window model says, past the ring its
    --  window keeps, what a session in a block says.
    --
@@ -14451,6 +14517,10 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Adapters_Stack_And_Come_Off_Again'Access,
          "adapters stack, and a scale of minus one takes one off again");
+      Register_Routine
+        (T, A_Window_Holds_A_Long_Batch_After_A_Slide'Access,
+         "a sliding window holds a batch of 488 after it slides, its "
+         & "rewind's slack and all");
       Register_Routine
         (T, A_Paged_Window_Slides_As_A_Block_Slides'Access,
          "a paged session on a sliding-window model says, past the ring its "

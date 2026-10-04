@@ -12952,6 +12952,14 @@ package body Model_Runner.Llama is
    --  positions and moves at most a window of rows when it does. That is
    --  about one row moved for every row written, against the six hundred
    --  megabytes of weights a token reads.
+   --  Positions a slide keeps past the window, for a rewind to land in:
+   --  a drafted round's worth and more. A windowed layer's cells hold the
+   --  window, these and a batch: kept to the window and a batch alone, a
+   --  slide before a batch of more than 512 - 64 positions left the batch's
+   --  last cells past the end -- gemma-3-4b stopped with a range check on
+   --  any prompt whose last batch ran from 1,536 past 1,985.
+   Rewind_Slack : constant := 64;
+
    procedure Make_Room
      (Item     : in out Session;
       Settings : Configuration;
@@ -12973,10 +12981,6 @@ package body Model_Runner.Llama is
       --  pages do not follow.
       Slid : Boolean := False;
 
-      --  Positions a slide keeps past the window, for a rewind to land in:
-      --  a drafted round's worth and more. A ring keeps a batch's worth of
-      --  cells past the window, so this is room it has.
-      Rewind_Slack : constant := 64;
    begin
       if Item.Cells = null or else Settings.Window = 0 then
          return;
@@ -14113,14 +14117,17 @@ package body Model_Runner.Llama is
          --  How far past the window a layer runs before it slides.
          --
          --  A batch, because a batch is written before anything reads it
-         --  and the room has to hold one whole. Not more: what a slide
+         --  and the room has to hold one whole, and the slack a slide keeps
+         --  past the window for a rewind (Rewind_Slack), which the room
+         --  holds beside the batch. Not more: what a slide
          --  costs is a window of rows moved every margin positions, which
          --  is a window over a batch of rows for every position written --
          --  eight of them on gemma2, against the six hundred megabytes of
          --  weights that position reads. What a larger margin would buy is
          --  fewer slides and a bigger cache, which is the trade this
          --  section exists to refuse.
-         Margin : constant Element_Count := Element_Count (Max_Batch);
+         Margin : constant Element_Count :=
+           Element_Count (Max_Batch) + Rewind_Slack;
 
          Windowed : constant Boolean := Settings.Window > 0;
       begin
