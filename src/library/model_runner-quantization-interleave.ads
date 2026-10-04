@@ -27,11 +27,12 @@ with Model_Runner.Numerics;
 --  engine's kernel uses is not the instruction its kernel uses. What the two
 --  share is the idea and the eight.
 --
---  Twelve formats are written here: the three k-quants a "_M" file is made
---  of, the four legacy ones, the two- and three-bit k-quants, the two
---  non-linear formats, and the block-exponent one. That is every quantized
---  format the engine multiplies except Q8_0, which is left out on purpose
---  -- it is already level with llama.cpp and has no correction to carry. The
+--  Thirteen formats are written here: the three k-quants a "_M" file is
+--  made of, the four legacy ones, the two- and three-bit k-quants, the two
+--  non-linear formats, the block-exponent one, and Q8_0 -- every quantized
+--  format the engine multiplies. Q8_0 was left out once, as level with
+--  llama.cpp a token at a time; a prompt was not, a strip of four vectors
+--  to its eight, 578 tokens a second on qwen3-0.6B against 760. The
 --  legacy layouts are described before the last two because they are the
 --  four-bit k-quant's with everything it packs taken away -- and, for the
 --  two that carry a fifth bit, with one thing added that no k-quant has.
@@ -114,6 +115,7 @@ package Model_Runner.Quantization.Interleave is
    Three_Block_Bytes : constant := 912;
    Level_Block_Bytes : constant := 1104;
    Micro_Block_Bytes : constant := 136;
+   Byte_Block_Bytes  : constant := 272;
 
    --  Where the five parts of a four-bit panel block begin.
    Panel_Scale_At   : constant := 0;
@@ -318,6 +320,23 @@ package Model_Runner.Quantization.Interleave is
    Micro_Scale_At  : constant := 0;
    Micro_Quants_At : constant := 8;
 
+   --  And the eight-bit format, thirty-two signed bytes behind one
+   --  half-precision scale, 272 bytes -- the eight rows' thirty-four each,
+   --  and not one more:
+   --
+   --     0 ..  15   the eight rows' block scales, half precision
+   --    16 .. 271   the eight rows' quants, interleaved, each plus 128
+   --
+   --  Eight groups of thirty-two bytes, byte 4L + M of group C row L's
+   --  element 4C + M: one load is four elements of every row and nothing to
+   --  unpack. The byte dot product reads its weight operand unsigned, so a
+   --  quant is kept with a hundred and twenty-eight added -- its top bit
+   --  flipped -- and the kernel takes a hundred and twenty-eight times the
+   --  activation's block total off the block's integer sum before it is
+   --  converted: the same integer the file's quants give, to the bit.
+   Byte_Scale_At  : constant := 0;
+   Byte_Quants_At : constant := 16;
+
    --  Bytes a panel block occupies in the layout this format takes.
    --
    --  @param Format Weight format; one Interleaves accepts.
@@ -351,7 +370,8 @@ package Model_Runner.Quantization.Interleave is
    --
    --  Every format the panel kernels read: the three k-quants a "_M" file
    --  is made of, the four legacy ones, the two- and three-bit k-quants,
-   --  the two non-linear formats and the block-exponent one. A row count that is not a whole
+   --  the two non-linear formats, the block-exponent one and Q8_0. A row
+   --  count that is not a whole
    --  number of panels is refused rather than padded, because a padded panel
    --  is rows that do not exist and a kernel that has to know which they
    --  are.

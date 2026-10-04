@@ -69,6 +69,10 @@ package body Model_Runner.Quantization.Interleave is
    Micro_Row_Bytes : constant := 17;
    Micro_Quants    : constant := 1;
 
+   --  And the eight-bit format: a scale and thirty-two signed bytes.
+   Byte_Row_Bytes : constant := 34;
+   Byte_Quants    : constant := 2;
+
    Level_Row_Bytes : constant := 136;
    Level_High      : constant := 2;
    Level_Low       : constant := 4;
@@ -191,6 +195,7 @@ package body Model_Runner.Quantization.Interleave is
        elsif Format = G.Type_IQ4_NL then Legacy_Block_Bytes
        elsif Format = G.Type_IQ4_XS then Level_Block_Bytes
        elsif Format = G.Type_MXFP4 then Micro_Block_Bytes
+       elsif Format = G.Type_Q8_0 then Byte_Block_Bytes
        else 0);
 
    -----------------------
@@ -230,6 +235,7 @@ package body Model_Runner.Quantization.Interleave is
        elsif Format = G.Type_IQ4_NL then Legacy_Row_Bytes
        elsif Format = G.Type_IQ4_XS then Level_Row_Bytes
        elsif Format = G.Type_MXFP4 then Micro_Row_Bytes
+       elsif Format = G.Type_Q8_0 then Byte_Row_Bytes
        else 0);
 
    ------------------
@@ -251,7 +257,8 @@ package body Model_Runner.Quantization.Interleave is
          or else Format = G.Type_Q3_K
          or else Format = G.Type_IQ4_NL
          or else Format = G.Type_IQ4_XS
-         or else Format = G.Type_MXFP4)
+         or else Format = G.Type_MXFP4
+         or else Format = G.Type_Q8_0)
         and then Rows > 0
         and then Rows mod Panel_Rows = 0
         and then Columns > 0)
@@ -263,6 +270,7 @@ package body Model_Runner.Quantization.Interleave is
           or else Format = G.Type_Q5_0 or else Format = G.Type_Q5_1
           or else Format = G.Type_IQ4_NL
           or else Format = G.Type_MXFP4
+          or else Format = G.Type_Q8_0
         then Columns mod 32 = 0
         else Columns mod 256 = 0));
 
@@ -547,6 +555,30 @@ package body Model_Runner.Quantization.Interleave is
          end;
       end loop;
    end Build_Legacy;
+
+   --  And one row's eight-bit block: its scale where the legacy block's
+   --  goes and its thirty-two bytes four at a time into eight groups, each
+   --  byte's top bit flipped -- a signed quant read back unsigned is that
+   --  quant plus a hundred and twenty-eight, which is the operand the byte
+   --  dot product wants.
+   procedure Build_Byte
+     (Source : B.Byte_Array;
+      In_At  : B.Byte_Index;
+      Target : in out B.Byte_Array;
+      Out_At : B.Byte_Index;
+      Lane   : B.Byte_Count)
+   is
+   begin
+      Target (Out_At + Byte_Scale_At + Lane * 2)     := Source (In_At);
+      Target (Out_At + Byte_Scale_At + Lane * 2 + 1) := Source (In_At + 1);
+
+      for Group in B.Byte_Count range 0 .. 7 loop
+         for M in B.Byte_Count range 0 .. 3 loop
+            Target (Out_At + Byte_Quants_At + Group * 32 + Lane * 4 + M) :=
+              Source (In_At + Byte_Quants + Group * 4 + M) xor 16#80#;
+         end loop;
+      end loop;
+   end Build_Byte;
 
    --  And one row's legacy four-bit block that keeps a minimum.
    --
@@ -1042,6 +1074,10 @@ package body Model_Runner.Quantization.Interleave is
                            Build_Micro
                              (Source, In_At, Target, Out_At,
                               B.Byte_Count (Row));
+                        elsif Format = G.Type_Q8_0 then
+                           Build_Byte
+                             (Source, In_At, Target, Out_At,
+                              B.Byte_Count (Row));
                         else
                            Build_Four
                              (Source, In_At, Target, Out_At,
@@ -1150,6 +1186,27 @@ package body Model_Runner.Quantization.Interleave is
          end;
       end loop;
    end Take_Legacy;
+
+   --  And one row of an eight-bit panel, each byte's top bit flipped back.
+   procedure Take_Byte
+     (Source : B.Byte_Array;
+      In_At  : B.Byte_Index;
+      Target : in out B.Byte_Array;
+      Out_At : B.Byte_Index;
+      Lane   : B.Byte_Count)
+   is
+   begin
+      Target (Out_At)     := Source (In_At + Byte_Scale_At + Lane * 2);
+      Target (Out_At + 1) := Source (In_At + Byte_Scale_At + Lane * 2 + 1);
+
+      for Group in B.Byte_Count range 0 .. 7 loop
+         for M in B.Byte_Count range 0 .. 3 loop
+            Target (Out_At + Byte_Quants + Group * 4 + M) :=
+              Source (In_At + Byte_Quants_At + Group * 32 + Lane * 4 + M)
+              xor 16#80#;
+         end loop;
+      end loop;
+   end Take_Byte;
 
    --  And one row of a panel in that layout.
    procedure Take_Least
@@ -1594,6 +1651,8 @@ package body Model_Runner.Quantization.Interleave is
                Take_Level (Source, In_At, Target, Out_At, Lane);
             elsif Format = G.Type_MXFP4 then
                Take_Micro (Source, In_At, Target, Out_At, Lane);
+            elsif Format = G.Type_Q8_0 then
+               Take_Byte (Source, In_At, Target, Out_At, Lane);
             else
                Take_Four (Source, In_At, Target, Out_At, Lane,
                           Fifth => Format = G.Type_Q5_K);

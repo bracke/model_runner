@@ -408,10 +408,12 @@ package body Tests.Backend_Cases is
       --  And the two non-linear formats, whose nibble is an index into a
       --  table rather than a number -- which the layout is entirely
       --  indifferent to, IQ4_NL taking Q4_0's panel unchanged.
-      Formats : constant array (1 .. 12) of G.Tensor_Type :=
+      --  And the eight-bit format, whose quants the panel keeps a hundred
+      --  and twenty-eight up and the round trip brings back down.
+      Formats : constant array (1 .. 13) of G.Tensor_Type :=
         [G.Type_Q4_K, G.Type_Q5_K, G.Type_Q6_K, G.Type_Q4_0, G.Type_Q4_1,
          G.Type_Q5_0, G.Type_Q5_1, G.Type_Q2_K, G.Type_Q3_K,
-         G.Type_IQ4_NL, G.Type_IQ4_XS, G.Type_MXFP4];
+         G.Type_IQ4_NL, G.Type_IQ4_XS, G.Type_MXFP4, G.Type_Q8_0];
 
       Plain   : B.Byte_Array_Access;
       Panels  : B.Byte_Array_Access;
@@ -477,6 +479,7 @@ package body Tests.Backend_Cases is
             elsif G."=" (Shape, G.Type_IQ4_NL) then 18
             elsif G."=" (Shape, G.Type_IQ4_XS) then 136
             elsif G."=" (Shape, G.Type_MXFP4) then 17
+            elsif G."=" (Shape, G.Type_Q8_0) then 34
             else 210);
 
          --  Blocks in one row, which is not 256 elements for every format
@@ -508,6 +511,8 @@ package body Tests.Backend_Cases is
                then Fixtures.Encode_IQ4_XS (Values)
                elsif G."=" (Shape, G.Type_MXFP4)
                then Fixtures.Encode_MXFP4 (Values)
+               elsif G."=" (Shape, G.Type_Q8_0)
+               then Fixtures.Encode_Q8_0 (Values)
                else Fixtures.Encode_Q6_K (Values));
          begin
             B.Allocate (Bytes'Length, Plain);
@@ -696,10 +701,10 @@ package body Tests.Backend_Cases is
 
       Batch : constant N.Element_Count := 8;
 
-      Shapes : constant array (1 .. 9) of G.Tensor_Type :=
+      Shapes : constant array (1 .. 10) of G.Tensor_Type :=
         [G.Type_Q4_0, G.Type_Q4_1, G.Type_Q5_0, G.Type_Q5_1,
          G.Type_Q2_K, G.Type_Q3_K, G.Type_IQ4_NL, G.Type_IQ4_XS,
-         G.Type_MXFP4];
+         G.Type_MXFP4, G.Type_Q8_0];
 
       Worst : N.Real := 0.0;
 
@@ -755,6 +760,8 @@ package body Tests.Backend_Cases is
                then Fixtures.Encode_IQ4_NL (Values)
                elsif G."=" (Shape, G.Type_IQ4_XS)
                then Fixtures.Encode_IQ4_XS (Values)
+               elsif G."=" (Shape, G.Type_Q8_0)
+               then Fixtures.Encode_Q8_0 (Values)
                else Fixtures.Encode_MXFP4 (Values));
          begin
             B.Allocate (Bytes'Length, Plain);
