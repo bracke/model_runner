@@ -123,7 +123,6 @@ package body Model_Runner.Kernels is
       Wide_Lanes := Allowed;
    end Use_Wide_Lanes;
 
-
    --  Values into binary16, eight a step through VCVTPS2PH where every one
    --  of the eight is finite and either zero or at least the smallest
    --  binary16 subnormal -- where the instruction's rounding, to nearest
@@ -198,7 +197,6 @@ package body Model_Runner.Kernels is
            N.To_Half (Values (Values'First + Index));
       end loop;
    end To_Halves;
-
 
    function Head_Dot
      (Left     : Real_Array;

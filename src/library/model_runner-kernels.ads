@@ -427,7 +427,6 @@ package Model_Runner.Kernels is
    procedure To_Halves (Values : Real_Array; Halves : out Half_Array)
    with Pre => Halves'Length = Values'Length;
 
-
    --  Root-mean-square normalization with a per-element gain.
    --
    --  Computes Target (i) = Source (i) / sqrt (mean of squares + Epsilon)

@@ -2133,8 +2133,14 @@ package body Model_Runner.Vision is
       Stride   : Element_Count;
       Attended : T.Real_Array_Access;
       Width, Patches, Heads, Head : Element_Count;
-      Took     : out Boolean)
+      Took     : out Boolean;
+      Queries  : Element_Count := 0)
    is
+      --  How many rows ask: every patch of a picture attending to the
+      --  others, or a resampler's own queries attending to the patches.
+      Asking : constant Element_Count :=
+        (if Queries = 0 then Patches else Queries);
+
       Scale : constant Real :=
         Real (N.Wide_Real'(1.0) / Elementary.Sqrt (N.Wide_Real (Head)));
 
@@ -2241,10 +2247,10 @@ package body Model_Runner.Vision is
          --  flash attention reads them; the heads are padded above to the
          --  sixteen it reads at a time. Or binary32 throughout, asked for.
          Model_Runner.Backend.Device.Attend_Exactly (Exactly);
-         while From < Patches loop
+         while From < Asking loop
             declare
                Take : constant Element_Count :=
-                 Element_Count'Min (Device_Queries, Patches - From);
+                 Element_Count'Min (Device_Queries, Asking - From);
             begin
                if not Spread then
                   Model_Runner.Backend.Device.Attend
@@ -2286,7 +2292,7 @@ package body Model_Runner.Vision is
                From := From + Take;
             end;
          end loop;
-         Took := Ok and then From = Patches;
+         Took := Ok and then From = Asking;
          Model_Runner.Backend.Device.Attend_Exactly (Was_Exact);
       end;
       Release;
@@ -2515,6 +2521,220 @@ package body Model_Runner.Vision is
       end;
    end Plan_Slices;
 
+   --  The encoder's blocks whole on the device, each one submission over
+   --  every patch, the stream left there from one block to the next; see
+   --  Encode_Gemma. First_Host is the first block the device did not take,
+   --  which the caller computes from, X then holding its input.
+   procedure Blocks_On_Device
+     (Item       : in out Encoder;
+      Work       : in out Workspace;
+      X          : T.Real_Array_Access;
+      Patches    : Element_Count;
+      Cancel     : Model_Runner.Cancellation.Token_Reference;
+      Status     : in out E.Error_Info;
+      First_Host : out Natural)
+   is
+      Width : constant Element_Count := Element_Count (Item.Width);
+      Feed  : constant Element_Count := Element_Count (Item.Feed);
+      Heads : constant Element_Count := Element_Count (Item.Heads);
+      Head  : constant Element_Count := Width / Heads;
+   begin
+      First_Host := 0;
+      --  The blocks whole on the device, where it is open and the encoder
+      --  is not held to binary32: a block a submission over every patch --
+      --  both normalizations, the projections and their biases, the
+      --  patches attending to each other both ways, the feed-forward --
+      --  the stream left on the device from one block to the next, so a
+      --  picture crosses the interface once each way. The heads are
+      --  spread from 72 to 80 apart for the matrix attention; where any
+      --  block is refused the stream is fetched back and the rest go the
+      --  way below.
+      declare
+         Head_P  : constant Element_Count := (Head + 15) / 16 * 16;
+         Width_P : constant Element_Count := Heads * Head_P;
+         Scale_D : constant Real :=
+           Real (N.Wide_Real'(1.0) / Elementary.Sqrt (N.Wide_Real (Head)));
+         Keys_M, Values_M : T.Real_Array_Access := null;
+         Carried : Boolean := False;
+         Ok      : Boolean := True;
+         K_Base, V_Base : Element_Count;
+      begin
+         if Model_Runner.Backend.Device.Is_Ready
+           and then not Exactly
+           and then E.Is_Ok (Status)
+         then
+            Work.Status := Status;
+            T.Allocate (Patches * Width_P, Keys_M);
+            T.Allocate (Patches * Width_P, Values_M);
+            if Work.Cache_Base = Element_Count'Last then
+               Work.Cache_Base :=
+                 Model_Runner.Backend.Device.Cached_Elements;
+            end if;
+            K_Base := Work.Cache_Base;
+            V_Base := K_Base + Patches * Width_P;
+            Model_Runner.Backend.Device.Reserve_Cache
+              (V_Base + Patches * Width_P, V_Base + Patches * Width_P, Ok);
+            Ok := Ok and then Keys_M /= null and then Values_M /= null;
+
+            while Ok and then First_Host < Item.Blocks loop
+               declare
+                  Current : Block renames Item.Layers (First_Host);
+
+                  procedure Spread_Bias
+                    (Bias : T.Real_Array_Access; Into : in out T.Real_Array) is
+                  begin
+                     for H in 0 .. Heads - 1 loop
+                        Into (Into'First + H * Head_P
+                              .. Into'First + H * Head_P + Head - 1) :=
+                          Bias (Bias'First + H * Head
+                                .. Bias'First + H * Head + Head - 1);
+                     end loop;
+                  end Spread_Bias;
+
+                  procedure Q_Fill (Into : in out T.Real_Array) is
+                  begin
+                     Spread_Bias (Current.Query_Bias, Into);
+                  end Q_Fill;
+                  procedure K_Fill (Into : in out T.Real_Array) is
+                  begin
+                     Spread_Bias (Current.Key_Bias, Into);
+                  end K_Fill;
+                  procedure V_Fill (Into : in out T.Real_Array) is
+                  begin
+                     Spread_Bias (Current.Value_Bias, Into);
+                  end V_Fill;
+                  procedure Pair_1 (Into : in out T.Real_Array) is
+                  begin
+                     Into (Into'First .. Into'First + Width - 1) :=
+                       Current.Norm_1_Weight.all;
+                     Into (Into'First + Width .. Into'Last) :=
+                       Current.Norm_1_Bias.all;
+                  end Pair_1;
+                  procedure Pair_2 (Into : in out T.Real_Array) is
+                  begin
+                     Into (Into'First .. Into'First + Width - 1) :=
+                       Current.Norm_2_Weight.all;
+                     Into (Into'First + Width .. Into'Last) :=
+                       Current.Norm_2_Bias.all;
+                  end Pair_2;
+                  procedure Up_Fill (Into : in out T.Real_Array) is
+                  begin
+                     Into (Into'First .. Into'First + Feed - 1) :=
+                       Current.Feed_In_Bias.all;
+                  end Up_Fill;
+
+                  Hidden_P : constant Element_Count :=
+                    Rounded (Feed, Pad_Columns);
+                  Usable : constant Boolean :=
+                    Current.Query_Bias /= null and then Current.Key_Bias /= null
+                    and then Current.Value_Bias /= null
+                    and then Current.Output_Bias /= null
+                    and then Current.Feed_In_Bias /= null
+                    and then Current.Feed_Out_Bias /= null
+                    and then Current.Norm_1_Weight /= null
+                    and then Current.Norm_1_Bias /= null
+                    and then Current.Norm_2_Weight /= null
+                    and then Current.Norm_2_Bias /= null;
+               begin
+                  exit when not Usable;
+                  declare
+                     Qp : constant T.View := Head_Padded
+                       (Work, Current.Query, Heads, Head, Head_P, True);
+                     Kp : constant T.View := Head_Padded
+                       (Work, Current.Key, Heads, Head, Head_P, True);
+                     Vp : constant T.View := Head_Padded
+                       (Work, Current.Value, Heads, Head, Head_P, True);
+                     Op : constant T.View := Head_Padded
+                       (Work, Current.Output, Heads, Head, Head_P, False);
+                     Up : constant T.View := Padded_To
+                       (Work, Current.Feed_In, Hidden_P,
+                        Rounded (Current.Feed_In.Columns, Pad_Columns));
+                     Dn : constant T.View := Padded_To
+                       (Work, Current.Feed_Out,
+                        Rounded (Current.Feed_Out.Rows, Pad_Rows), Hidden_P);
+                     Qb : constant T.Real_Array_Access := Kept_Values
+                       (Work, Current.Query_Bias.all
+                                (Current.Query_Bias.all'First)'Address,
+                        Width_P, Q_Fill'Access);
+                     Kb : constant T.Real_Array_Access := Kept_Values
+                       (Work, Current.Key_Bias.all
+                                (Current.Key_Bias.all'First)'Address,
+                        Width_P, K_Fill'Access);
+                     Vb : constant T.Real_Array_Access := Kept_Values
+                       (Work, Current.Value_Bias.all
+                                (Current.Value_Bias.all'First)'Address,
+                        Width_P, V_Fill'Access);
+                     Ub : constant T.Real_Array_Access := Kept_Values
+                       (Work, Current.Feed_In_Bias.all
+                                (Current.Feed_In_Bias.all'First)'Address,
+                        Hidden_P, Up_Fill'Access);
+                     N1 : constant T.Real_Array_Access := Kept_Values
+                       (Work, Current.Norm_1_Weight.all
+                                (Current.Norm_1_Weight.all'First)'Address,
+                        2 * Width, Pair_1'Access);
+                     N2 : constant T.Real_Array_Access := Kept_Values
+                       (Work, Current.Norm_2_Weight.all
+                                (Current.Norm_2_Weight.all'First)'Address,
+                        2 * Width, Pair_2'Access);
+                     Last : constant Boolean := First_Host = Item.Blocks - 1;
+                  begin
+                     exit when Qp.Rows /= Width_P or else Kp.Rows /= Width_P
+                       or else Vp.Rows /= Width_P or else Op.Columns /= Width_P
+                       or else Up.Rows /= Hidden_P or else Dn.Columns /= Hidden_P
+                       or else Dn.Rows /= Width
+                       or else Qb = null or else Kb = null or else Vb = null
+                       or else Ub = null or else N1 = null or else N2 = null;
+
+                     Model_Runner.Backend.Device.Attend_Exactly (False);
+                     Model_Runner.Backend.Device.Whole_Layer
+                       (X.all (0 .. Patches * Width - 1), N1, N2,
+                        Item.Epsilon, Qp, Kp, Vp,
+                        Model_Runner.Backend.Device.No_Turns,
+                        Natural (Head_P), 0, False,
+                        K_Base, V_Base,
+                        Natural (Heads), Natural (Head_P), 1,
+                        0, Natural (Patches - 1),
+                        K_Base, V_Base,
+                        Natural (Width_P), Natural (Width_P),
+                        Scale_D, 0.0,
+                        Op, T.Empty_View, Up, Dn, 1,
+                        Keys_M, Values_M, X, Ok,
+                        Positions => Natural (Patches),
+                        Causal    => False,
+                        Cancel    => Cancel,
+                        Carry_In  => Carried,
+                        Carry_Out => not Last,
+                        Mirror    => False,
+                        Up_Bias   => Ub,
+                        Down_Bias => Current.Feed_Out_Bias,
+                        Query_Bias => Qb, Key_Bias => Kb, Value_Bias => Vb,
+                        Out_Bias  => Current.Output_Bias,
+                        Shifted   => True);
+                     exit when not Ok;
+                     Carried := not Last;
+                     First_Host := First_Host + 1;
+                  end;
+               end;
+            end loop;
+
+            if Carried then
+               declare
+                  Back : Boolean;
+               begin
+                  Model_Runner.Backend.Device.Fetch_Carried
+                    (X.all (0 .. Patches * Width - 1), Back);
+                  if not Back then
+                     Status := E.Make (E.Backend_Device_Refused);
+                  end if;
+               end;
+            end if;
+            T.Free (Keys_M);
+            T.Free (Values_M);
+         end if;
+      end;
+
+   end Blocks_On_Device;
+
    procedure Encode_Gemma
      (Item    : in out Encoder;
       Picture : Model_Runner.Images.Raster;
@@ -2732,198 +2952,8 @@ package body Model_Runner.Vision is
          end loop;
       end if;
 
-      --  The blocks whole on the device, where it is open and the encoder
-      --  is not held to binary32: a block a submission over every patch --
-      --  both normalizations, the projections and their biases, the
-      --  patches attending to each other both ways, the feed-forward --
-      --  the stream left on the device from one block to the next, so a
-      --  picture crosses the interface once each way. The heads are
-      --  spread from 72 to 80 apart for the matrix attention; where any
-      --  block is refused the stream is fetched back and the rest go the
-      --  way below.
-      declare
-         Head_P  : constant Element_Count := (Head + 15) / 16 * 16;
-         Width_P : constant Element_Count := Heads * Head_P;
-         Scale_D : constant Real :=
-           Real (N.Wide_Real'(1.0) / Elementary.Sqrt (N.Wide_Real (Head)));
-         Keys_M, Values_M : T.Real_Array_Access := null;
-         Carried : Boolean := False;
-         Ok      : Boolean := True;
-         K_Base, V_Base : Element_Count;
-      begin
-         if Model_Runner.Backend.Device.Is_Ready
-           and then not Exactly
-           and then E.Is_Ok (Status)
-         then
-            Work.Status := Status;
-            T.Allocate (Patches * Width_P, Keys_M);
-            T.Allocate (Patches * Width_P, Values_M);
-            if Work.Cache_Base = Element_Count'Last then
-               Work.Cache_Base :=
-                 Model_Runner.Backend.Device.Cached_Elements;
-            end if;
-            K_Base := Work.Cache_Base;
-            V_Base := K_Base + Patches * Width_P;
-            Model_Runner.Backend.Device.Reserve_Cache
-              (V_Base + Patches * Width_P, V_Base + Patches * Width_P, Ok);
-            Ok := Ok and then Keys_M /= null and then Values_M /= null;
-
-            while Ok and then First_Host < Item.Blocks loop
-               declare
-                  Current : Block renames Item.Layers (First_Host);
-
-                  procedure Spread_Bias
-                    (Bias : T.Real_Array_Access; Into : in out T.Real_Array) is
-                  begin
-                     for H in 0 .. Heads - 1 loop
-                        Into (Into'First + H * Head_P
-                              .. Into'First + H * Head_P + Head - 1) :=
-                          Bias (Bias'First + H * Head
-                                .. Bias'First + H * Head + Head - 1);
-                     end loop;
-                  end Spread_Bias;
-
-                  procedure Q_Fill (Into : in out T.Real_Array) is
-                  begin
-                     Spread_Bias (Current.Query_Bias, Into);
-                  end Q_Fill;
-                  procedure K_Fill (Into : in out T.Real_Array) is
-                  begin
-                     Spread_Bias (Current.Key_Bias, Into);
-                  end K_Fill;
-                  procedure V_Fill (Into : in out T.Real_Array) is
-                  begin
-                     Spread_Bias (Current.Value_Bias, Into);
-                  end V_Fill;
-                  procedure Pair_1 (Into : in out T.Real_Array) is
-                  begin
-                     Into (Into'First .. Into'First + Width - 1) :=
-                       Current.Norm_1_Weight.all;
-                     Into (Into'First + Width .. Into'Last) :=
-                       Current.Norm_1_Bias.all;
-                  end Pair_1;
-                  procedure Pair_2 (Into : in out T.Real_Array) is
-                  begin
-                     Into (Into'First .. Into'First + Width - 1) :=
-                       Current.Norm_2_Weight.all;
-                     Into (Into'First + Width .. Into'Last) :=
-                       Current.Norm_2_Bias.all;
-                  end Pair_2;
-                  procedure Up_Fill (Into : in out T.Real_Array) is
-                  begin
-                     Into (Into'First .. Into'First + Feed - 1) :=
-                       Current.Feed_In_Bias.all;
-                  end Up_Fill;
-
-                  Hidden_P : constant Element_Count :=
-                    Rounded (Feed, Pad_Columns);
-                  Usable : constant Boolean :=
-                    Current.Query_Bias /= null and then Current.Key_Bias /= null
-                    and then Current.Value_Bias /= null
-                    and then Current.Output_Bias /= null
-                    and then Current.Feed_In_Bias /= null
-                    and then Current.Feed_Out_Bias /= null
-                    and then Current.Norm_1_Weight /= null
-                    and then Current.Norm_1_Bias /= null
-                    and then Current.Norm_2_Weight /= null
-                    and then Current.Norm_2_Bias /= null;
-               begin
-                  exit when not Usable;
-                  declare
-                     Qp : constant T.View := Head_Padded
-                       (Work, Current.Query, Heads, Head, Head_P, True);
-                     Kp : constant T.View := Head_Padded
-                       (Work, Current.Key, Heads, Head, Head_P, True);
-                     Vp : constant T.View := Head_Padded
-                       (Work, Current.Value, Heads, Head, Head_P, True);
-                     Op : constant T.View := Head_Padded
-                       (Work, Current.Output, Heads, Head, Head_P, False);
-                     Up : constant T.View := Padded_To
-                       (Work, Current.Feed_In, Hidden_P,
-                        Rounded (Current.Feed_In.Columns, Pad_Columns));
-                     Dn : constant T.View := Padded_To
-                       (Work, Current.Feed_Out,
-                        Rounded (Current.Feed_Out.Rows, Pad_Rows), Hidden_P);
-                     Qb : constant T.Real_Array_Access := Kept_Values
-                       (Work, Current.Query_Bias.all
-                                (Current.Query_Bias.all'First)'Address,
-                        Width_P, Q_Fill'Access);
-                     Kb : constant T.Real_Array_Access := Kept_Values
-                       (Work, Current.Key_Bias.all
-                                (Current.Key_Bias.all'First)'Address,
-                        Width_P, K_Fill'Access);
-                     Vb : constant T.Real_Array_Access := Kept_Values
-                       (Work, Current.Value_Bias.all
-                                (Current.Value_Bias.all'First)'Address,
-                        Width_P, V_Fill'Access);
-                     Ub : constant T.Real_Array_Access := Kept_Values
-                       (Work, Current.Feed_In_Bias.all
-                                (Current.Feed_In_Bias.all'First)'Address,
-                        Hidden_P, Up_Fill'Access);
-                     N1 : constant T.Real_Array_Access := Kept_Values
-                       (Work, Current.Norm_1_Weight.all
-                                (Current.Norm_1_Weight.all'First)'Address,
-                        2 * Width, Pair_1'Access);
-                     N2 : constant T.Real_Array_Access := Kept_Values
-                       (Work, Current.Norm_2_Weight.all
-                                (Current.Norm_2_Weight.all'First)'Address,
-                        2 * Width, Pair_2'Access);
-                     Last : constant Boolean := First_Host = Item.Blocks - 1;
-                  begin
-                     exit when Qp.Rows /= Width_P or else Kp.Rows /= Width_P
-                       or else Vp.Rows /= Width_P or else Op.Columns /= Width_P
-                       or else Up.Rows /= Hidden_P or else Dn.Columns /= Hidden_P
-                       or else Dn.Rows /= Width
-                       or else Qb = null or else Kb = null or else Vb = null
-                       or else Ub = null or else N1 = null or else N2 = null;
-
-                     Model_Runner.Backend.Device.Attend_Exactly (False);
-                     Model_Runner.Backend.Device.Whole_Layer
-                       (X.all (0 .. Patches * Width - 1), N1, N2,
-                        Item.Epsilon, Qp, Kp, Vp,
-                        Model_Runner.Backend.Device.No_Turns,
-                        Natural (Head_P), 0, False,
-                        K_Base, V_Base,
-                        Natural (Heads), Natural (Head_P), 1,
-                        0, Natural (Patches - 1),
-                        K_Base, V_Base,
-                        Natural (Width_P), Natural (Width_P),
-                        Scale_D, 0.0,
-                        Op, T.Empty_View, Up, Dn, 1,
-                        Keys_M, Values_M, X, Ok,
-                        Positions => Natural (Patches),
-                        Causal    => False,
-                        Cancel    => Cancel,
-                        Carry_In  => Carried,
-                        Carry_Out => not Last,
-                        Mirror    => False,
-                        Up_Bias   => Ub,
-                        Down_Bias => Current.Feed_Out_Bias,
-                        Query_Bias => Qb, Key_Bias => Kb, Value_Bias => Vb,
-                        Out_Bias  => Current.Output_Bias,
-                        Shifted   => True);
-                     exit when not Ok;
-                     Carried := not Last;
-                     First_Host := First_Host + 1;
-                  end;
-               end;
-            end loop;
-
-            if Carried then
-               declare
-                  Back : Boolean;
-               begin
-                  Model_Runner.Backend.Device.Fetch_Carried
-                    (X.all (0 .. Patches * Width - 1), Back);
-                  if not Back then
-                     Status := E.Make (E.Backend_Device_Refused);
-                  end if;
-               end;
-            end if;
-            T.Free (Keys_M);
-            T.Free (Values_M);
-         end if;
-      end;
+      Blocks_On_Device
+        (Item, Work, X, Patches, Cancel, Status, First_Host);
 
       --  The blocks, each pre-normalized: attention over its first norm
       --  and the feed-forward over its second, both added to the stream.
@@ -3098,6 +3128,9 @@ package body Model_Runner.Vision is
 
       Resampled : Model_Runner.Images.Raster;
       Work : Workspace;
+
+      --  The first block the host computes: past those the device took.
+      First_Host : Natural := 0;
       Omega : array (0 .. Quarter - 1) of Real;
 
       procedure Release is
@@ -3279,8 +3312,12 @@ package body Model_Runner.Vision is
          end loop;
       end if;
 
-      --  The blocks, each pre-normalized.
-      for Index in 0 .. Item.Blocks - 1 loop
+      Blocks_On_Device
+        (Item, Work, X, Patches, Cancel, Status, First_Host);
+
+      --  The blocks, each pre-normalized, from the first the device did not
+      --  take.
+      for Index in First_Host .. Item.Blocks - 1 loop
          exit when E.Is_Error (Status);
          if Model_Runner.Cancellation.Is_Cancelled (Cancel) then
             Status := E.Make (E.Generation_Cancelled);
@@ -3342,28 +3379,48 @@ package body Model_Runner.Vision is
                 / Elementary."**" (Base_Freq,
                     N.Wide_Real (I) / N.Wide_Real (Quarter)));
          end loop;
-         for Pt in 0 .. Patches - 1 loop
-            declare
-               Rowv : constant Element_Count := Pt / Side_X;
-               Colv : constant Element_Count := Pt mod Side_X;
+         --  A patch's place is its column's sines and cosines and its
+         --  row's: worked out once for each column and each row there is,
+         --  where they were worked out again for every patch -- a picture
+         --  of a thousand patches was three and a half million binary64
+         --  sines and cosines, a quarter of a second, for some sixty
+         --  distinct columns and rows.
+         declare
+            Cols : T.Real_Array (0 .. Side_X * Half - 1);
+            Rws  : T.Real_Array (0 .. Side_Y * Half - 1);
+
+            procedure Fill (Into : out T.Real_Array; At_Value : Element_Count;
+                            Many : Element_Count) is
             begin
-               for I in 0 .. Quarter - 1 loop
-                  declare
-                     W_Omega : constant Real := Omega (I);
-                     TX : constant N.Wide_Real :=
-                       N.Wide_Real (W_Omega) * N.Wide_Real (Colv);
-                     TY : constant N.Wide_Real :=
-                       N.Wide_Real (W_Omega) * N.Wide_Real (Rowv);
-                  begin
-                     Pos (Pt * P + I) := Real (Elementary.Sin (TX));
-                     Pos (Pt * P + Quarter + I) := Real (Elementary.Cos (TX));
-                     Pos (Pt * P + Half + I) := Real (Elementary.Sin (TY));
-                     Pos (Pt * P + Half + Quarter + I) :=
-                       Real (Elementary.Cos (TY));
-                  end;
+               for V_At in 0 .. Many - 1 loop
+                  for I in 0 .. Quarter - 1 loop
+                     declare
+                        Theta : constant N.Wide_Real :=
+                          N.Wide_Real (Omega (I)) * N.Wide_Real (V_At);
+                     begin
+                        Into (At_Value + V_At * Half + I) :=
+                          Real (Elementary.Sin (Theta));
+                        Into (At_Value + V_At * Half + Quarter + I) :=
+                          Real (Elementary.Cos (Theta));
+                     end;
+                  end loop;
                end loop;
-            end;
-         end loop;
+            end Fill;
+         begin
+            Fill (Cols, 0, Side_X);
+            Fill (Rws, 0, Side_Y);
+            for Pt in 0 .. Patches - 1 loop
+               declare
+                  Rowv : constant Element_Count := Pt / Side_X;
+                  Colv : constant Element_Count := Pt mod Side_X;
+               begin
+                  Pos (Pt * P .. Pt * P + Half - 1) :=
+                    Cols (Colv * Half .. Colv * Half + Half - 1);
+                  Pos (Pt * P + Half .. Pt * P + 2 * Half - 1) :=
+                    Rws (Rowv * Half .. Rowv * Half + Half - 1);
+               end;
+            end loop;
+         end;
          Kk.all := Kvn.all;
          K.Add (Kk.all, Pos.all);
       end if;
@@ -3377,7 +3434,8 @@ package body Model_Runner.Vision is
       end if;
       if E.Is_Ok (Status) then
          declare
-            Cross : aliased Cross_Work;
+            Cross     : aliased Cross_Work;
+            On_Device : Boolean := False;
          begin
             Cross.Queries := Qh;
             Cross.Keys := Kh;
@@ -3390,11 +3448,23 @@ package body Model_Runner.Vision is
             Cross.Head := D_Head;
             Cross.Scale := Scale;
             Cross.Failed := False;
-            CPU.Dispatch_Shares
-              (Team, Nq, Cross'Unchecked_Access, Status,
-               Cost => Nq * N_Head * Patches * D_Head);
-            if E.Is_Ok (Status) and then Cross.Failed then
-               Status := E.Make (E.Sampling_Non_Finite_Logit);
+
+            --  The queries against the patches on the device where it is
+            --  open: the matrix attention, a resampler's heads of 128 being
+            --  a width it reads; the pool's loop otherwise.
+            Work.Status := Status;
+            Attend_On_Device
+              (Work, Qh, Kh, Vh, 0, 0, 0, P, Att, P, Patches, N_Head,
+               D_Head, On_Device, Queries => Nq);
+            Status := Work.Status;
+
+            if not On_Device and then E.Is_Ok (Status) then
+               CPU.Dispatch_Shares
+                 (Team, Nq, Cross'Unchecked_Access, Status,
+                  Cost => Nq * N_Head * Patches * D_Head);
+               if E.Is_Ok (Status) and then Cross.Failed then
+                  Status := E.Make (E.Sampling_Non_Finite_Logit);
+               end if;
             end if;
          end;
       end if;
