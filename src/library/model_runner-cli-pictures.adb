@@ -241,7 +241,7 @@ package body Model_Runner.CLI.Pictures is
          --  <image> and </image>, one unknown token a row between them; a
          --  picture larger than the encoder's side becomes an overview so
          --  wrapped and a grid of slices each wrapped in <slice> and
-         --  </slice>. This build shows the overview alone, fit to the side.
+         --  </slice>.
          Item.Resampler := True;
          Item.Marker := Model_Runner.Tokenizer.Find (Words.all, "<image>");
          Item.Soft := Model_Runner.Tokenizer.Unknown_Token (Words.all);
@@ -637,6 +637,25 @@ package body Model_Runner.CLI.Pictures is
                  (Item.Eyes, Shown, Team, Rows, Grid_Rows, Grid_Columns,
                   Cancel, Status);
                if E.Is_Ok (Status) then
+                  --  MiniCPM-V's tiles each a marker of their own: the
+                  --  rows this one made, counted for its marker.
+                  if Item.Resampler then
+                     declare
+                        Held_Tiles : constant Natural :=
+                          (if Into.Tile_Rows = null then 0
+                           else Into.Tile_Rows.all'Length);
+                        Grown : constant Gen.Crop_Counts_Access :=
+                          new Gen.Crop_Counts (1 .. Held_Tiles + 1);
+                     begin
+                        if Into.Tile_Rows /= null then
+                           Grown.all (1 .. Held_Tiles) := Into.Tile_Rows.all;
+                        end if;
+                        Grown.all (Held_Tiles + 1) :=
+                          Natural (Rows.all'Length / Width);
+                        Free (Into.Tile_Rows);
+                        Into.Tile_Rows := Grown;
+                     end;
+                  end if;
                   Keep_Rows (Rows);
                end if;
             end Encode_One;
@@ -902,6 +921,7 @@ package body Model_Runner.CLI.Pictures is
       T.Free (Item.Rows);
       Free (Item.Crops);
       Free (Item.Counts);
+      Free (Item.Tile_Rows);
       Free (Item.Places);
       Free (Item.Kinds);
       Free (Item.Slice_Cols);

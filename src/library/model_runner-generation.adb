@@ -1031,12 +1031,16 @@ package body Model_Runner.Generation is
 
             if Marked > 0 then
                declare
-                  --  The rows the k-th marker's picture has: its own
+                  --  The rows the k-th marker's picture has: the tile's
+                  --  own where the set counts them a tile, else its own
                   --  count where the set gives one a picture, else the
                   --  set's for all. A crop's markers count with their
                   --  picture's, every tile Per_Picture.
                   function Rows_Of (Which : Positive) return Natural
-                  is (if Pictures.Counts /= null
+                  is (if Pictures.Tile_Rows /= null
+                        and then Which in Pictures.Tile_Rows.all'Range
+                      then Pictures.Tile_Rows.all (Which)
+                      elsif Pictures.Counts /= null
                         and then Which in Pictures.Counts.all'Range
                       then Pictures.Counts.all (Which)
                       else Pictures.Per_Picture);

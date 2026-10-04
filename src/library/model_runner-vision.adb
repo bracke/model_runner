@@ -2402,8 +2402,11 @@ package body Model_Runner.Vision is
 
       Slice_Side : constant Integer := Item.Size;
       --  MiniCPM-V's resampler does not merge patches, so the slice sizes
-      --  align to the patch alone.
-      Patch      : constant Integer := Item.Patch;
+      --  align to the patch alone; 4.6 merges twice two by two, so its
+      --  align to whole merged rows, as llama.cpp's patch_size * n_merge.
+      Patch      : constant Integer :=
+        (if Is_Minicpm46 (Item) then Item.Patch * Item.Merge_Scale ** 2
+         else Item.Patch);
 
       function Truncate (X : WR) return Integer
       is (Integer (WR'Truncation (X)));
@@ -2475,8 +2478,14 @@ package body Model_Runner.Vision is
          Rows := Best_Rows;
       end Best_Grid;
 
+      --  Slices where a side passes the encoder's; for 4.6, as its own
+      --  processor (transformers' MiniCPMV4_6ImageProcessor) has it, where
+      --  the area does -- a picture of the square's area or less is one
+      --  overview, its shape kept, never a grid of one.
       Has_Slices : constant Boolean :=
-        Width > Slice_Side or else Height > Slice_Side;
+        (if Is_Minicpm46 (Item)
+         then Width * Height > Slice_Side * Slice_Side
+         else Width > Slice_Side or else Height > Slice_Side);
       OW, OH : Integer;
    begin
       Overview_W := 1;
@@ -3513,18 +3522,21 @@ package body Model_Runner.Vision is
    ---------------------
 
    --  MiniCPM-V 4.6 over one picture: the same SigLIP encoder the resampler
-   --  runs, at the encoder's own square, and then the downsample-MLP head --
+   --  runs, over a grid Target_W by Target_H pixels, and then the
+   --  downsample-MLP head --
    --  each two-by-two block of the patch grid joined into one row (top-left,
    --  top-right, bottom-left, bottom-right, as llama.cpp's make_ds_idx lays
    --  them), normalized, widened through an error-function unit and narrowed
    --  to the text width. No post norm: this file carries none.
    procedure Encode_Minicpm46
-     (Item    : in out Encoder;
-      Picture : Model_Runner.Images.Raster;
-      Team    : CPU.Pool_Reference;
-      Rows    : out T.Real_Array_Access;
-      Cancel  : Model_Runner.Cancellation.Token_Reference := null;
-      Status  : out E.Error_Info)
+     (Item     : in out Encoder;
+      Picture  : Model_Runner.Images.Raster;
+      Target_W : Positive;
+      Target_H : Positive;
+      Team     : CPU.Pool_Reference;
+      Rows     : out T.Real_Array_Access;
+      Cancel   : Model_Runner.Cancellation.Token_Reference := null;
+      Status   : out E.Error_Info)
    is
       Width    : constant Element_Count := Element_Count (Item.Width);
       Feed     : constant Element_Count := Element_Count (Item.Feed);
@@ -3537,19 +3549,24 @@ package body Model_Runner.Vision is
       Scale    : constant Real :=
         Real (N.Wide_Real'(1.0) / Elementary.Sqrt (N.Wide_Real (Head)));
 
-      Side     : constant Element_Count :=
-        Element_Count (Item.Size) / Patch_Px;
-      Target_W : constant Positive := Positive (Side * Patch_Px);
-      Target_H : constant Positive := Positive (Side * Patch_Px);
-      Patches  : constant Element_Count := Side * Side;
+      --  The patch grid, Cols across and Lines down: the encoder's
+      --  square for a picture that fits it, a slice's or an overview's
+      --  own shape otherwise, as llama.cpp's preprocessing sizes them.
+      Cols     : constant Element_Count :=
+        Element_Count (Target_W) / Patch_Px;
+      Lines    : constant Element_Count :=
+        Element_Count (Target_H) / Patch_Px;
+      Patches  : constant Element_Count := Cols * Lines;
       Patch_Elements : constant Element_Count := 3 * Patch_Px ** 2;
 
       --  The two two-by-two merges: the first over the patch grid, the
       --  second over what it left.
-      Side1    : constant Element_Count := Side / 2;
-      Tokens1  : constant Element_Count := Side1 * Side1;
-      Side2    : constant Element_Count := Side1 / 2;
-      Tokens2  : constant Element_Count := Side2 * Side2;
+      Cols1    : constant Element_Count := Cols / 2;
+      Lines1   : constant Element_Count := Lines / 2;
+      Tokens1  : constant Element_Count := Cols1 * Lines1;
+      Cols2    : constant Element_Count := Cols1 / 2;
+      Lines2   : constant Element_Count := Lines1 / 2;
+      Tokens2  : constant Element_Count := Cols2 * Lines2;
       Merged   : constant Element_Count := 4 * Width;
 
       X, Normed, Q, Kv, V, Attended, Hidden : T.Real_Array_Access := null;
@@ -3640,7 +3657,7 @@ package body Model_Runner.Vision is
 
       --  The four patches of a two-by-two block, top-left, top-right,
       --  bottom-left, bottom-right, as make_ds_idx lays them: block (I, J)
-      --  of a Grid-by-Grid layout takes rows (2I, 2J) and its neighbours.
+      --  of a layout Grid across takes rows (2I, 2J) and its neighbours.
       function Corner
         (Grid, I, J, Which : Element_Count) return Element_Count
       is (case Which is
@@ -3712,7 +3729,7 @@ package body Model_Runner.Vision is
          return;
       end if;
 
-      --  The picture at the encoder's square, as patch vectors.
+      --  The picture at its grid's size, as patch vectors.
       Model_Runner.Images.Resample (Picture, Target_W, Target_H, Resampled);
       if Resampled.Pixels = null then
          Release; T.Free (Rows);
@@ -3723,11 +3740,11 @@ package body Model_Runner.Vision is
       declare
          Size : constant B.Byte_Count := B.Byte_Count (Target_W);
       begin
-         for PY in 0 .. Side - 1 loop
-            for PX in 0 .. Side - 1 loop
+         for PY in 0 .. Lines - 1 loop
+            for PX in 0 .. Cols - 1 loop
                declare
                   At_Patch : constant Element_Count :=
-                    (PY * Side + PX) * Patch_Elements;
+                    (PY * Cols + PX) * Patch_Elements;
                begin
                   for C in Element_Count range 0 .. 2 loop
                      for KY in 0 .. Patch_Px - 1 loop
@@ -3758,12 +3775,12 @@ package body Model_Runner.Vision is
 
       Multiply (Hidden, Patches, Item.Patch_Weights, X, Item.Patch_Bias);
       if E.Is_Ok (Status) then
-         for PY in 0 .. Side - 1 loop
-            for PX in 0 .. Side - 1 loop
+         for PY in 0 .. Lines - 1 loop
+            for PX in 0 .. Cols - 1 loop
                declare
-                  P_Index : constant Element_Count := PY * Side + PX;
+                  P_Index : constant Element_Count := PY * Cols + PX;
                   Bucket  : constant Element_Count :=
-                    (70 * PY / Side) * 70 + (70 * PX / Side);
+                    (70 * PY / Lines) * 70 + (70 * PX / Cols);
                begin
                   T.Dequantize_Row
                     (Item.Positions, Bucket, Normed (0 .. Width - 1), Status);
@@ -3795,12 +3812,12 @@ package body Model_Runner.Vision is
          Multiply (Normed, Patches, Item.VM_V, V, Item.VM_V_B);
       end if;
       if E.Is_Ok (Status) then
-         for I in 0 .. Side1 - 1 loop
-            for J in 0 .. Side1 - 1 loop
+         for I in 0 .. Lines1 - 1 loop
+            for J in 0 .. Cols1 - 1 loop
                declare
                   T4 : constant array (0 .. 3) of Element_Count :=
-                    [Corner (Side, I, J, 0), Corner (Side, I, J, 1),
-                     Corner (Side, I, J, 2), Corner (Side, I, J, 3)];
+                    [Corner (Cols, I, J, 0), Corner (Cols, I, J, 1),
+                     Corner (Cols, I, J, 2), Corner (Cols, I, J, 3)];
                begin
                   for H in 0 .. Heads - 1 loop
                      for A in 0 .. 3 loop
@@ -3854,10 +3871,10 @@ package body Model_Runner.Vision is
       --  the residual and joined for the MLP -- normalized, widened through
       --  the Gaussian unit, narrowed, and added to the average.
       if E.Is_Ok (Status) then
-         for I in 0 .. Side1 - 1 loop
-            for J in 0 .. Side1 - 1 loop
+         for I in 0 .. Lines1 - 1 loop
+            for J in 0 .. Cols1 - 1 loop
                declare
-                  O : constant Element_Count := I * Side1 + J;
+                  O : constant Element_Count := I * Cols1 + J;
                begin
                   for D in 0 .. Width - 1 loop
                      Mean1 (O * Width + D) := 0.0;
@@ -3865,7 +3882,7 @@ package body Model_Runner.Vision is
                   for N4 in 0 .. 3 loop
                      declare
                         Src : constant Element_Count :=
-                          Corner (Side, I, J, Element_Count (N4)) * Width;
+                          Corner (Cols, I, J, Element_Count (N4)) * Width;
                         Into : constant Element_Count :=
                           O * Merged + Element_Count (N4) * Width;
                      begin
@@ -3910,15 +3927,15 @@ package body Model_Runner.Vision is
 
       --  The final two-by-two merge and the downsample-MLP head.
       if E.Is_Ok (Status) then
-         for I in 0 .. Side2 - 1 loop
-            for J in 0 .. Side2 - 1 loop
+         for I in 0 .. Lines2 - 1 loop
+            for J in 0 .. Cols2 - 1 loop
                declare
-                  O : constant Element_Count := I * Side2 + J;
+                  O : constant Element_Count := I * Cols2 + J;
                begin
                   for N4 in 0 .. 3 loop
                      declare
                         Src : constant Element_Count :=
-                          Corner (Side1, I, J, Element_Count (N4)) * Width;
+                          Corner (Cols1, I, J, Element_Count (N4)) * Width;
                         Into : constant Element_Count :=
                           O * Merged + Element_Count (N4) * Width;
                      begin
@@ -3944,6 +3961,32 @@ package body Model_Runner.Vision is
       end if;
       Release;
    end Encode_Minicpm46;
+
+   --  The size 4.6 encodes a picture at, as its processor gives it: a
+   --  slice or an overview already sized -- whole merged rows a side, and
+   --  between half and twice the encoder's square in area -- as it is, and
+   --  any other picture at the overview Plan_Slices makes of it. A wide
+   --  overview read at the encoder's square was the picture squeezed, and
+   --  its rows fewer than the reference's (64 for 70).
+   procedure Minicpm46_Size
+     (Item : Encoder; Width, Height : Positive;
+      Target_W, Target_H : out Positive)
+   is
+      Align : constant Positive := Item.Patch * Item.Merge_Scale ** 2;
+      RW, RH, GC, GR, Count : Natural;
+      Slices : Slice_List;
+   begin
+      if Width mod Align = 0 and then Height mod Align = 0
+        and then Width * Height <= 2 * Item.Size * Item.Size
+        and then 2 * Width * Height >= Item.Size * Item.Size
+      then
+         Target_W := Width;
+         Target_H := Height;
+      else
+         Plan_Slices (Item, Width, Height, Target_W, Target_H,
+                      RW, RH, GC, GR, Slices, Count);
+      end if;
+   end Minicpm46_Size;
 
    -----------------
    -- Encode_Qwen --
@@ -4621,16 +4664,23 @@ package body Model_Runner.Vision is
          Grid_Rows := (if Rows = null then 0 else Item.Num_Query);
          Grid_Columns := (if Rows = null then 0 else 1);
       elsif Is_Minicpm46 (Item) then
-         Encode_Minicpm46 (Item, Picture, Team, Rows, Cancel, Status);
          declare
-            Side : constant Natural :=
-              (if Item.Ready
-               then (Item.Size / Item.Patch) / Item.Merge_Scale
-                      / Item.Merge_Scale
-               else 0);
+            Target_W, Target_H : Positive := 1;
+            Merged : constant Natural :=
+              Item.Patch * Item.Merge_Scale ** 2;
          begin
-            Grid_Rows := (if Rows = null then 0 else Side);
-            Grid_Columns := (if Rows = null then 0 else Side);
+            if Item.Ready and then Picture.Pixels /= null then
+               Minicpm46_Size
+                 (Item, Picture.Width, Picture.Height, Target_W, Target_H);
+            end if;
+            Encode_Minicpm46
+              (Item, Picture, Target_W, Target_H, Team, Rows, Cancel, Status);
+            Grid_Rows :=
+              (if Rows = null or else Merged = 0 then 0
+               else Target_H / Merged);
+            Grid_Columns :=
+              (if Rows = null or else Merged = 0 then 0
+               else Target_W / Merged);
          end;
       else
          Encode_Gemma (Item, Picture, Team, Rows, Cancel, Status);

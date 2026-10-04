@@ -388,6 +388,13 @@ package Model_Runner.Generation is
       --  shape's; null where every picture has Per_Picture.
       Counts      : Crop_Counts_Access := null;
 
+      --  How many rows each marker's picture has, in the order the
+      --  markers stand -- an overview and each of its slices apart --
+      --  where a picture's tiles differ: a MiniCPM-V 4.6 overview keeps
+      --  its picture's shape, so its rows are not its slices'. Null where
+      --  every tile of a picture has the picture's count.
+      Tile_Rows   : Crop_Counts_Access := null;
+
       --  Where each row stands in its picture, indexed as Rows are, for
       --  a model whose positions have three parts; null for one whose
       --  positions have one.

@@ -1347,6 +1347,64 @@ package body Tests.Vision_Cases is
                        & ", not " & Vocab.Token_Id'Image (Expected (Index)));
             end loop;
 
+            --  The same picture with tiles of their own counts, as a 4.6
+            --  overview keeps its shape and its slices theirs: each marker
+            --  opens into its own tile's rows, the three still the rows
+            --  held.
+            declare
+               Tiles : constant array (1 .. 3) of Natural :=
+                 [Per + 1, Per, Per - 1];
+               Raw   : Vocab.Token_Array (1 .. 128);
+               Tile  : Natural := 0;
+            begin
+               Vocab.Encode (Words.all, "ac" & "b" & ASCII.LF & "b", True,
+                             False, Raw, Read, Status);
+               Assert (E.Is_Ok (Status), "the slice text did not tokenize");
+               Count := 0;
+               for Index in 1 .. Read loop
+                  Count := Count + 1;
+                  Expected (Count) := Raw (Index);
+                  if Raw (Index) = Pictures.Marker
+                    or else Raw (Index) = Pictures.Slice_Marker
+                  then
+                     Tile := Tile + 1;
+                     for Row in 1 .. Tiles (Tile) loop
+                        Count := Count + 1;
+                        Expected (Count) := Pictures.Soft;
+                     end loop;
+                     Count := Count + 1;
+                     Expected (Count) :=
+                       (if Raw (Index) = Pictures.Marker then Pictures.Closer
+                        else Pictures.Slice_Closer);
+                  end if;
+               end loop;
+               Assert (Tile = 3, "the tile text did not hold three markers");
+
+               Pictures.Tile_Rows :=
+                 new Gen.Crop_Counts'(Tiles (1), Tiles (2), Tiles (3));
+               L.Reset (Live);
+               Gen.Release (Outcome);
+               Gen.Generate
+                 (Ready, Live, "c", Request, Stop, null, null, null, null,
+                  null, null, Pictures => Pictures, Outcome => Outcome);
+               Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                       "the picture of tiles run failed: "
+                       & E.Error_Code'Image (Outcome.Error.Code));
+               Assert (Outcome.Prompt_Tokens = Count,
+                       "the prompt of tiles is"
+                       & Natural'Image (Outcome.Prompt_Tokens)
+                       & " tokens, not" & Natural'Image (Count));
+               for Index in 1 .. Count loop
+                  Assert (L.Committed_Token (Live, Index - 1) = Expected (Index),
+                          "token" & Natural'Image (Index)
+                          & " of the prompt of tiles is "
+                          & Vocab.Token_Id'Image
+                              (L.Committed_Token (Live, Index - 1))
+                          & ", not " & Vocab.Token_Id'Image (Expected (Index)));
+               end loop;
+               Free (Pictures.Tile_Rows);
+            end;
+
             Free (Pictures.Crops);
             Free (Pictures.Slice_Cols);
             Pictures.Slice_Marker := Vocab.No_Token;
@@ -4122,19 +4180,23 @@ package body Tests.Vision_Cases is
       B.Free (File);
    end Write_Minicpm46_Projector;
 
-   --  The one row the small 4.6 merger should make of a picture, in
-   --  binary64, computed straight from the spec on the fixed square grid.
+   --  The rows the small 4.6 merger should make of a picture, in binary64,
+   --  computed straight from the spec on a grid Cols patches across and
+   --  Lines down -- the encoder's square unless said.
    procedure Minicpm46_Reference_Rows
      (W : Minicpm46_Weights; Picture : Images.Raster;
-      Rows : out N.Wide_Real_Array)
+      Rows : out N.Wide_Real_Array;
+      Cols : Natural := Size_M / Patch_M;
+      Lines : Natural := Size_M / Patch_M)
    is
       subtype WR is N.Wide_Real;
-      Grid : constant Natural := Size_M / Patch_M;
-      NP0  : constant Natural := Grid * Grid;
-      S1   : constant Natural := Grid / 2;
-      NP1  : constant Natural := S1 * S1;
+      Grid : constant Natural := Cols;
+      NP0  : constant Natural := Cols * Lines;
+      S1   : constant Natural := Cols / 2;
+      L1   : constant Natural := Lines / 2;
+      NP1  : constant Natural := S1 * L1;
       S2   : constant Natural := S1 / 2;
-      Target : constant Natural := Grid * Patch_M;
+      L2   : constant Natural := L1 / 2;
       Eps  : constant WR := 1.0e-6;
       Pixels : Images.Raster;
 
@@ -4316,13 +4378,13 @@ package body Tests.Vision_Cases is
              when 2 => (2 * I + 1) * G + (2 * J),
              when others => (2 * I + 1) * G + (2 * J + 1));
    begin
-      Images.Resample (Picture, Target, Target, Pixels);
-      for PY in 0 .. Grid - 1 loop
-         for PX in 0 .. Grid - 1 loop
+      Images.Resample (Picture, Cols * Patch_M, Lines * Patch_M, Pixels);
+      for PY in 0 .. Lines - 1 loop
+         for PX in 0 .. Cols - 1 loop
             declare
                P : constant Natural := PY * Grid + PX;
                Bucket : constant Natural :=
-                 (70 * PY / Grid) * 70 + (70 * PX / Grid);
+                 (70 * PY / Lines) * 70 + (70 * PX / Cols);
             begin
                for R in 0 .. Width_M - 1 loop
                   declare
@@ -4390,7 +4452,7 @@ package body Tests.Vision_Cases is
                end;
             end loop;
          end loop;
-         for I in 0 .. S1 - 1 loop
+         for I in 0 .. L1 - 1 loop
             for J in 0 .. S1 - 1 loop
                declare
                   T4 : constant array (0 .. 3) of Natural :=
@@ -4454,7 +4516,7 @@ package body Tests.Vision_Cases is
       end;
 
       --  The windowed merger's two-by-two downsample.
-      for I in 0 .. S1 - 1 loop
+      for I in 0 .. L1 - 1 loop
          for J in 0 .. S1 - 1 loop
             declare
                O : constant Natural := I * S1 + J;
@@ -4514,7 +4576,7 @@ package body Tests.Vision_Cases is
       end loop;
 
       --  The final two-by-two merge and the downsample-MLP head.
-      for I in 0 .. S2 - 1 loop
+      for I in 0 .. L2 - 1 loop
          for J in 0 .. S2 - 1 loop
             declare
                O : constant Natural := I * S2 + J;
@@ -4625,6 +4687,92 @@ package body Tests.Vision_Cases is
       Free (W);
    end The_Minicpmv46_Projector_Encodes_As_The_Reference;
 
+   --  A 4.6 picture of its own shape: a slice or an overview already sized
+   --  is read on its own grid rather than squeezed into the encoder's
+   --  square -- here two by one merged rows, as the reference makes them --
+   --  and the slices are planned as the model's own processor plans them:
+   --  by the area past the square, aligned to whole merged rows.
+   procedure A_Minicpmv46_Picture_Keeps_Its_Shape
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      W : Minicpm46_Weights_Access := Fresh_Minicpm46_Weights;
+      Picture : Images.Raster;
+      Status  : E.Error_Info;
+      Wanted  : N.Wide_Real_Array (0 .. 2 * Text46 - 1);
+      Rows    : T.Real_Array_Access;
+      Grid_Rows, Grid_Columns : Natural;
+      Eyes    : Vision.Encoder;
+      OW, OH : Positive;
+      RW, RH, GC, GR, Count : Natural;
+      Sl : Vision.Slice_List;
+   begin
+      declare
+         Data : B.Byte_Array (1 .. 3 * 32 * 16);
+      begin
+         for Y in 0 .. 15 loop
+            for X in 0 .. 31 loop
+               declare
+                  At_Pixel : constant B.Byte_Count :=
+                    B.Byte_Count (3 * (Y * 32 + X)) + 1;
+               begin
+                  Data (At_Pixel) := B.Byte (X * 7);
+                  Data (At_Pixel + 1) := B.Byte (Y * 13);
+                  Data (At_Pixel + 2) :=
+                    (if X in 20 .. 27 and then Y in 3 .. 9 then 230 else 40);
+               end;
+            end loop;
+         end loop;
+         Images.Decode (Bytes_Of ("P6 32 16 255 ") & Data, "test", Picture,
+                        Status);
+         Assert (E.Is_Ok (Status), "the wide 4.6 test picture was refused");
+      end;
+
+      Minicpm46_Reference_Rows (W.all, Picture, Wanted, Cols => 8, Lines => 4);
+
+      Write_Minicpm46_Projector ("obj/vision-minicpm46-wide.gguf", W.all);
+      Vision.Open (Eyes, "obj/vision-minicpm46-wide.gguf", Status);
+      Assert (E.Is_Ok (Status), "the small 4.6 merger did not open: "
+              & E.Error_Code'Image (Status.Code));
+
+      Vision.Encode (Eyes, Picture, null, Rows, Grid_Rows, Grid_Columns,
+                     Status => Status);
+      Assert (E.Is_Ok (Status), "the wide 4.6 picture did not encode: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Rows /= null and then Rows.all'Length = 2 * Text46
+              and then Grid_Rows = 1 and then Grid_Columns = 2,
+              "the wide 4.6 picture was not read as two rows side by side");
+      for J in Wanted'Range loop
+         Assert (abs (N.Wide_Real (Rows (J)) - Wanted (J))
+                 <= 1.0e-4 * (1.0 + abs Wanted (J)),
+                 "wide 4.6 row element" & N.Element_Count'Image (J) & " is "
+                 & N.Real'Image (Rows (J)) & " where the reference has "
+                 & N.Wide_Real'Image (Wanted (J)));
+      end loop;
+      T.Free (Rows);
+
+      --  The plans, from the processor's own rules at this fixture's side
+      --  of sixteen and patch of four: a picture of no more than the
+      --  square's area is one overview, though a side is past the square;
+      --  one past it is an overview of its shape and a grid of slices.
+      Vision.Plan_Slices (Eyes, 17, 15, OW, OH, RW, RH, GC, GR, Sl, Count);
+      Assert (OW = 16 and then OH = 16 and then Count = 0,
+              "a 4.6 picture within the square's area was sliced");
+      Vision.Plan_Slices (Eyes, 64, 16, OW, OH, RW, RH, GC, GR, Sl, Count);
+      Assert (OW = 32 and then OH = 16 and then Count = 4
+              and then GC = 4 and then GR = 1
+              and then RW = 64 and then RH = 16
+              and then Sl (4).Left = 48 and then Sl (4).Width = 16
+              and then Sl (4).Height = 16,
+              "a wide 4.6 picture's plan is not its processor's: overview"
+              & OW'Image & " x" & OH'Image & ", grid" & GC'Image & " x"
+              & GR'Image & ", slices" & Count'Image);
+
+      Vision.Close (Eyes);
+      Images.Free (Picture);
+      Free (W);
+   end A_Minicpmv46_Picture_Keeps_Its_Shape;
+
    ----------
    -- Name --
    ----------
@@ -4679,6 +4827,10 @@ package body Tests.Vision_Cases is
          & "to the rows a plain computation of the same network gives -- the "
          & "SigLIP encoder, the windowed self-attention, the two-by-two "
          & "downsample, and the final merge through the error-function head");
+      Register_Routine
+        (T, A_Minicpmv46_Picture_Keeps_Its_Shape'Access,
+         "a MiniCPM-V 4.6 picture keeps its shape: a sized tile read on its "
+         & "own grid, slices planned by area as its processor plans them");
       Register_Routine
         (T, Pictures_Stand_Behind_Their_Markers'Access,
          "a picture's rows take the positions its marker opens in the "
