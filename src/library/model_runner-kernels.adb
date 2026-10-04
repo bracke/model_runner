@@ -3023,6 +3023,29 @@ package body Model_Runner.Kernels is
       end loop;
    end GELU;
 
+   --------------
+   -- Soft_Cap --
+   --------------
+
+   procedure Soft_Cap (Target : in out Real_Array; Cap : Real) is
+      --  As in SiLU, and for the same reason.
+      pragma Suppress (Overflow_Check);
+      pragma Suppress (Range_Check);
+
+      Over : constant Real := 1.0 / Cap;
+   begin
+      --  tanh u is 2 / (1 + e^(-2u)) - 1: one exponential, clamped
+      --  where Raised clamps it, so a value far past the bound comes
+      --  back at the bound and not as an overflow.
+      for Index in Target'Range loop
+         declare
+            U : constant Real := Target (Index) * Over;
+         begin
+            Target (Index) := Cap * (2.0 / (1.0 + Raised (-2.0 * U)) - 1.0);
+         end;
+      end loop;
+   end Soft_Cap;
+
    ----------------
    -- Exact_GELU --
    ----------------

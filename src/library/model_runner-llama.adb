@@ -2646,9 +2646,7 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      for Value of Values loop
-         Value := Capped (Value, Settings.Logit_Cap);
-      end loop;
+      K.Soft_Cap (Values, Settings.Logit_Cap);
    end Cap_Logits;
 
    --  The last two things done to a row of logits: the bias the output

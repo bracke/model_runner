@@ -704,6 +704,16 @@ package Model_Runner.Kernels is
    --  @param Target Values to transform, updated in place.
    procedure GELU (Target : in out Real_Array);
 
+   --  Each value held under a bound: Cap times the hyperbolic tangent of
+   --  the value over Cap, in binary32 through the exponential SiLU and
+   --  GELU use. What Gemma2 does to its 256,000 logits a token, which one
+   --  at a time through the library's binary64 tangent took longer than
+   --  the device took for the token's last layers.
+   --
+   --  @param Target Values to bound, updated in place.
+   --  @param Cap The bound; positive.
+   procedure Soft_Cap (Target : in out Real_Array; Cap : Real);
+
    --  The Gaussian error linear unit itself, x times the normal
    --  distribution's value at x, for the one place a model was trained
    --  against the function rather than its approximation: the merger of

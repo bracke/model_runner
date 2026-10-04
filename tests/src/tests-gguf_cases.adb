@@ -6789,6 +6789,43 @@ package body Tests.GGUF_Cases is
       KK.Use_Wide_Lanes (Model_Runner.Platform.Wide_Vectors);
    end Block_Kernels_Are_The_One_Query_Kernels;
 
+   --  Kernels.Soft_Cap, binary32 through the kernels' exponential, against
+   --  the cap written out in binary64 -- cap times tanh (x / cap) -- over
+   --  values from well inside the bound to far past it on both sides: within
+   --  a few units in the last place of the cap, the bound never crossed, the
+   --  sign kept, and nought left at nought.
+   procedure Soft_Cap_Is_The_Bounded_Tangent
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Cap    : constant N.Real := 30.0;
+      Values : N.Real_Array (0 .. 4000);
+   begin
+      for Index in Values'Range loop
+         Values (Index) := N.Real (Index - 2000) * 0.125;
+      end loop;
+      Model_Runner.Kernels.Soft_Cap (Values, Cap);
+
+      for Index in Values'Range loop
+         declare
+            X : constant N.Wide_Real := N.Wide_Real (Index - 2000) * 0.125;
+            Want : constant N.Wide_Real :=
+              N.Wide_Real (Cap) * N.Tanh (X / N.Wide_Real (Cap));
+            Got  : constant N.Wide_Real := N.Wide_Real (Values (Index));
+         begin
+            Assert (abs (Got - Want) <= 1.0E-5 * N.Wide_Real (Cap),
+                    "the cap of" & X'Image & " is" & Got'Image
+                    & ", where the tangent gives" & Want'Image);
+            Assert (abs Got <= N.Wide_Real (Cap),
+                    "the cap of" & X'Image & " is past the bound");
+            Assert ((X > 0.0) = (Got > 0.0) or else Got = 0.0,
+                    "the cap of" & X'Image & " lost its sign");
+         end;
+      end loop;
+      Assert (Values (2000) = 0.0, "nought did not stay nought");
+   end Soft_Cap_Is_The_Bounded_Tangent;
+
    --  The nibble cache's kernels in their wide lanes, against their own
    --  nibble-at-a-time loop: a value run's weighted sum the same to the
    --  bit, and a key's dot product within a few units in the last place
@@ -7849,6 +7886,9 @@ package body Tests.GGUF_Cases is
         (T, Block_Kernels_Are_The_One_Query_Kernels'Access,
          "the block attention's kernels, four and eight queries at a time, "
          & "are the one-query kernels to the bit");
+      Register_Routine
+        (T, Soft_Cap_Is_The_Bounded_Tangent'Access,
+         "the logits' soft cap is the bounded tangent, within binary32");
       Register_Routine
         (T, Nibble_Lanes_Are_The_Nibble_Loop'Access,
          "the nibble cache's kernels in wide lanes are their nibble loop: "
