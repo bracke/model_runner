@@ -9,10 +9,17 @@ batches to the device despite `-ngl 0`:
 | | this program | llama.cpp | |
 | --- | ---: | ---: | --- |
 | Qwen3-Coder-30B-A3B Q2_K, processor, 1234 prompt | 78-80 t/s | 70.4 | ahead |
-| Qwen3-Coder-30B-A3B Q2_K, processor, generating | 30.0-30.5 | 30.65 | 1.3 per cent behind |
+| Qwen3-Coder-30B-A3B Q2_K, processor, generating | 30.7-31.0 | 28.9-29.2 | ahead (2026-10-05) |
 | Qwen3-30B-A3B, device, generating | 35.6 | 32.5 | ahead |
 | TinyLlama Q4_K_M, processor, generating | 68.9 | 68.7 | level |
-| qwen3-8b Q4_K_M, processor, generating | 9.75 | 9.79 | level |
+| qwen3-8b Q4_K_M, processor, generating | 9.75-9.81 | 9.67 | ahead (2026-10-05) |
+
+The two generating rows dated 2026-10-05 were taken again at the head of
+that day, five rounds alternating the two runtimes, both generating 64
+tokens after the same 100-token prompt (`tests speed --backend cpu --repack
+rows`, `llama-bench -ngl 0 -nkvo 1 -nopo 1 -p 0 -n 64 -d 100`). Both flags
+matter: without `-nkvo 1` llama.cpp keeps its cache on the device even at
+`-ngl 0`, and qwen3-8b read 8.5 t/s rather than 9.67.
 
 Each section below says what became of it: §0 built, §1 not needed (the
 gap it priced was the measurement's), §2 done (the two- and three-bit row
