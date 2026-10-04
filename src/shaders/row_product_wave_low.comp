@@ -17,11 +17,10 @@
 //  the constant multiplies the run's activation sum once. The subgroup adds
 //  the partials, and a workgroup answers NUM_ROWS rows.
 //
-//  The codebook formats but IQ2_S -- IQ2_XXS, IQ2_XS, IQ3_XXS, IQ3_S, IQ1_S
+//  The codebook formats -- IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S, IQ1_S
 //  and IQ1_M -- go further (LANE32): eight lanes a group, each a whole
 //  sub-block of thirty-two, eight groups in flight, with the codebook in the
-//  workgroup's memory (SHARED_GRID). IQ2_S's grid is 8 KB, which halves the
-//  workgroups a compute unit holds, and that kernel measured level all ways.
+//  workgroup's memory (SHARED_GRID).
 //
 //  A lane finds its block from its column, so the formats of sixty-four and
 //  a hundred and twenty-eight elements need no width a multiple of 256: a
@@ -818,18 +817,36 @@ const uint IQ2S_GRID[2048] = uint[2048](
     0x2B2B2B2Bu, 0x2B2B2B2Bu
 );
 
-float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
-    uint sub = within / 32u;
-    uint l = (within % 32u) / 8u;
+//  As IQ2_XXS's: the grid in the workgroup's memory, and a lane a whole
+//  sub-block of thirty-two -- its four index bytes and its four sign bytes
+//  a word each, its high bits and its two scales a byte each. TinyLlama
+//  quantized wholly to IQ2_S 128 -> 147 tokens a second (llama.cpp 133).
+//  The grid is 8 KB; packed to 2 KB, three magnitudes in two bits decoded
+//  as read, it ran at half the rate.
+#define SHARED_GRID
+shared uvec2 grid_shared[1024];
+void load_grid(uint tid) {
+    for (uint g = tid; g < 1024u; g += 64u) {
+        grid_shared[g] = uvec2(IQ2S_GRID[2u * g], IQ2S_GRID[2u * g + 1u]);
+    }
+}
+
+#define LANE32
+float lane_dot32(uint at, uint sub, vec4 a[8]) {
+    uint qs = quad_at(at + 2u + 4u * sub);
+    uint signs = quad_at(at + 34u + 4u * sub);
     uint tops = byte_at(at + 66u + sub);
     uint scales = byte_at(at + 74u + sub);
-    uint scale = l < 2u ? (scales & 15u) : (scales >> 4u);
-    float db = half_at(at) * (0.5 + float(scale)) * 0.25;
-    uint lane = 4u * sub + l;
-    uvec2 g0 = uvec2(IQ2S_GRID[2u * (byte_at(at + 2u + lane) | (((tops >> (2u * l)) & 3u) << 8u))], IQ2S_GRID[2u * (byte_at(at + 2u + lane) | (((tops >> (2u * l)) & 3u) << 8u)) + 1u]);
-    uvec2 g1 = uvec2(IQ2S_GRID[2u * (byte_at(at + 3u + lane) | (((tops >> (2u * l + 2u)) & 3u) << 8u))], IQ2S_GRID[2u * (byte_at(at + 3u + lane) | (((tops >> (2u * l + 2u)) & 3u) << 8u)) + 1u]);
-    return db * (signed_dot(g0.x, g0.y, byte_at(at + 34u + lane), a0, a1)
-               + signed_dot(g1.x, g1.y, byte_at(at + 35u + lane), a2, a3));
+    float sums[2] = float[2](0.0, 0.0);
+    for (uint l = 0u; l < 4u; ++l) {
+        uvec2 g = grid_shared[((qs >> (8u * l)) & 255u)
+                              | (((tops >> (2u * l)) & 3u) << 8u)];
+        sums[l / 2u] += signed_dot(g.x, g.y, (signs >> (8u * l)) & 255u,
+                                   a[2u * l], a[2u * l + 1u]);
+    }
+    return half_at(at) * 0.25
+           * ((0.5 + float(scales & 15u)) * sums[0]
+              + (0.5 + float(scales >> 4u)) * sums[1]);
 }
 #endif
 

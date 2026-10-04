@@ -25538,3 +25538,49 @@ panels FD57EF5FBA70A5D5 src/library/model_runner-quantization-interleave.ads src
 # model: Steelman-14B r6 Q4_K_M with Qwen2.5-Coder-0.5B-Instruct Q8_0,
 #   Qwen3-8B Q4_K_M, gemma-3-4b-it Q4_K_M, qwen3.5-4b-mtp Q8_0,
 #   TinyLlama 1.1B chat Q4_0
+
+
+# 2026-10-04: every low-bit format on a TinyLlama quantized wholly to it.
+# The tl-*.gguf files the earlier figures used are llama-quantize's mixes,
+# not the formats they are named for (by tensor type, blk.* matrices):
+#   tl-IQ1_S   IQ1_S 108, IQ2_XXS 22, Q4_K 22, Q2_K 2
+#   tl-IQ1_M   IQ1_M 108, IQ2_XXS 22, Q4_K 22, Q2_K 2
+#   tl-IQ2_S   IQ2_XS 108, IQ3_S 24, Q4_K 22         (no IQ2_S at all)
+#   tl-IQ2_XS  IQ2_XS 130, Q4_K 22, Q2_K 2
+#   tl-IQ2_XXS IQ2_XXS 130, Q4_K 22, Q2_K 2
+#   tl-IQ3_S   IQ3_S 132, Q4_K 22
+#   tl-IQ3_XXS IQ3_XXS 66, IQ2_S 44, IQ3_S 22, Q4_K 22
+#   tl-Q1_0, tl-Q2_0, tl-TQ1_0, tl-TQ2_0   the format throughout
+# And llama-quantize's IQ2_S type writes IQ2_XS tensors; IQ2_M writes
+# IQ2_S. The figure given earlier today for IQ2_S, 154 against 143, was
+# IQ2_XS. These are llama-quantize --pure --imatrix (from
+# tests/fixtures/perplexity-corpus.txt), output Q5_K, embedding Q4_K,
+# checked by tensor type. tests speed --backend device --draft-tokens 0
+# --max-tokens 128 --repeats 3 against llama-bench -ngl 99 -n 128 -r 3,
+# same sitting, tokens a second:
+#
+#             ours    llama.cpp
+#   IQ1_S     186     186     \  the model ends its reply after 32-38
+#   IQ1_M     165     178     /  tokens; by product a layer, from
+#                                --device-timeline and GGML_VK_PERF_LOGGER:
+#                                IQ1_M 213 us against 256, IQ1_S 203
+#                                against 248 -- ahead on every product
+#   IQ2_XXS   168     159
+#   IQ2_XS    155     151
+#   IQ2_S     147     133     was 128: the down projection, 2048 x 5632,
+#                             88 us against llama.cpp's 73, on the
+#                             sixteen-element lane; now the grid in the
+#                             workgroup's memory (8 KB) and a lane a whole
+#                             sub-block, 75 us. Packed to 2 KB the grid
+#                             ran at half the rate (1.80 s against 0.87).
+#   IQ3_XXS   135     125
+#   IQ3_S     122     113
+#   TQ1_0      81      43
+#   TQ2_0     172     163
+#   Q1_0      212     174
+#   Q2_0      163     155
+#
+# Same text before and after on IQ2_S (32bd408bef44cd7a); the device test
+# multiplying every format failed with the new IQ2_S kernel mutated.
+# load: one-minute average 1.0 to 2.3
+# model: TinyLlama 1.1B chat, each format whole (Q8_0 requantized)
