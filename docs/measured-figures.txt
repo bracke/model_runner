@@ -24956,3 +24956,16 @@ panels 784CB2D61F49BC3D src/library/model_runner-quantization-interleave.ads src
 # set; left.
 # load: one-minute average 0.9 to 1.5
 # model: TinyLlama-1.1B-Chat Q5_K_M
+# 2026-10-04: TinyLlama Q5_K_M generation on the processor, level with
+# llama.cpp. Alternated round by round, run --raw --prompt "The"
+# --max-tokens 64 against llama-bench -ngl 0 -p 0 -n 64 -r 1 (t/s):
+#   ours    59.98 59.83 59.61 59.54 59.53   mean 59.70
+#   llama   59.76 60.04 59.75 59.66 59.48   mean 59.74
+# 0.07 per cent apart with a spread of 0.3 either side and the lead
+# changing hands: level, not behind. What closed it: the normalization
+# without per-element checks and in eight lanes (559dc25b), and the cache's
+# halves written eight at a time (35f9bfe4).
+# Measured and dropped on the way: short-context attention on the calling
+# task rather than the pool (Cost 1 under 256 positions): 59.3 -> 57.5.
+# load: one-minute average 0.9 to 1.5
+# model: TinyLlama-1.1B-Chat Q5_K_M
