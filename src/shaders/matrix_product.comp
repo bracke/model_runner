@@ -1797,9 +1797,12 @@ void main() {
         //  Sixty-four invocations decode thirty-two rows of the step,
         //  half a row each: sixteen values apiece, taken four bytes to a
         //  word -- and the next thirty-two rows after, where the tile is
-        //  taller.
+        //  taller. A chunk past the row's end is not decoded: a width that
+        //  is not a whole number of steps -- Falcon-7B's 4544 is thirty-five
+        //  and a half -- ends in a step only some chunks of which hold
+        //  anything, and the products below stop where the row does.
         for (uint rr = ((gl_LocalInvocationID.x >> 6u) / CHUNKS) * 32u;
-             rr < TILE_R; rr += 32u * ROW_GROUPS)
+             rr < TILE_R && k0 < shape.columns; rr += 32u * ROW_GROUPS)
         {
             uint chunk   = (gl_LocalInvocationID.x >> 6u) % CHUNKS;
             uint half_of = gl_LocalInvocationID.x & 1u;
@@ -2372,7 +2375,9 @@ void main() {
         }
 #endif
 
-        for (uint step = 0u; step < KCH * CHUNKS; step += 16u) {
+        uint span = min(KCH * CHUNKS, shape.columns - kb);
+
+        for (uint step = 0u; step < span; step += 16u) {
             uint chunk = step / KCH;
             uint kk    = step - chunk * KCH;
 
