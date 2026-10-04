@@ -18,6 +18,7 @@ with Model_Runner.Text;
 with Model_Runner.Bytes;
 with Model_Runner.Platform;
 with Model_Runner.Platform.Mapping;
+with Model_Runner.Platform.Pages;
 
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
@@ -184,6 +185,40 @@ package body Tests.Accounting_Cases is
    --  rather than a guess. The walk itself cannot be tested here, because it
    --  reads files only one host has -- which is why the rule it applies to
    --  each line was moved somewhere a test can hand it a string.
+   procedure Large_Pages_Leave_A_Buffer_As_It_Was
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package B renames Model_Runner.Bytes;
+      use type B.Byte_Count;
+      use type B.Byte;
+
+      Size  : constant B.Byte_Count := 8 * 1024 * 1024 + 123;
+      Big   : B.Byte_Array_Access := new B.Byte_Array (1 .. Size);
+      Small : B.Byte_Array_Access := new B.Byte_Array'(1 .. 10 => 7);
+      Kept  : Boolean := True;
+   begin
+      --  Asked before it is written, as the padded copies ask, and after:
+      --  the advice moves no byte either way.
+      Model_Runner.Platform.Pages.Prefer_Large (Big);
+      for I in Big.all'Range loop
+         Big (I) := B.Byte (I mod 251);
+      end loop;
+      Model_Runner.Platform.Pages.Prefer_Large (Big);
+      for I in Big.all'Range loop
+         Kept := Kept and then Big (I) = B.Byte (I mod 251);
+      end loop;
+      Assert (Kept, "a buffer asked for large pages read back otherwise");
+
+      Model_Runner.Platform.Pages.Prefer_Large (Small);
+      Assert ((for all V of Small.all => V = 7),
+              "a buffer smaller than a page was changed by the advice");
+      Model_Runner.Platform.Pages.Prefer_Large (null);
+
+      B.Free (Big);
+      B.Free (Small);
+   end Large_Pages_Leave_A_Buffer_As_It_Was;
+
    procedure Core_Count_Keeps_Its_Contract
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -943,6 +978,10 @@ package body Tests.Accounting_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Large_Pages_Leave_A_Buffer_As_It_Was'Access,
+         "a buffer asked for large pages holds what it held, and a small or "
+         & "absent one is let be");
       Register_Routine
         (T, Core_Count_Keeps_Its_Contract'Access,
          "the core count that sets the worker default keeps its contract");

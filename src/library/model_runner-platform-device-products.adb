@@ -2197,11 +2197,50 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
+      --  A matrix of a megabyte or more is copied four ways at once. The
+      --  copy into fresh device memory is not the memory's speed but the
+      --  host's faults: the first touch of each page of the mapping, and of
+      --  the file's where it is mapped and not yet read, and a second copy
+      --  into the same buffer took a twelfth of the first. Four of them
+      --  overlap: Steelman-14B's first prompt, which uploads its 8 GiB,
+      --  18.5-25.2 -> 9.2-11.5 s.
       declare
          Room : Model_Runner.Bytes.Byte_Array (Values'Range)
            with Import, Address => Where;
+         Ways : constant := 4;
       begin
-         Room := Values;
+         if Values'Length < 1_048_576 then
+            Room := Values;
+         else
+            declare
+               task type Part is
+                  entry Go (Lo, Hi : Model_Runner.Bytes.Byte_Count);
+               end Part;
+               task body Part is
+                  L, H : Model_Runner.Bytes.Byte_Count;
+               begin
+                  accept Go (Lo, Hi : Model_Runner.Bytes.Byte_Count) do
+                     L := Lo;
+                     H := Hi;
+                  end Go;
+                  Room (L .. H) := Values (L .. H);
+               end Part;
+               Parts : array (1 .. Ways) of Part;
+               Step  : constant Model_Runner.Bytes.Byte_Count :=
+                 (Values'Length + Ways - 1) / Ways;
+            begin
+               for K in Parts'Range loop
+                  declare
+                     Lo : constant Model_Runner.Bytes.Byte_Count :=
+                       Values'First + Model_Runner.Bytes.Byte_Count (K - 1) * Step;
+                  begin
+                     Parts (K).Go
+                       (Lo, Model_Runner.Bytes.Byte_Count'Min
+                              (Values'Last, Lo + Step - 1));
+                  end;
+               end loop;
+            end;
+         end if;
       end;
 
       Ok := True;

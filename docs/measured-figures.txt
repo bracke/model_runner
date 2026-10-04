@@ -7591,7 +7591,10 @@ reference 2966A663E53379B4 src/library/model_runner-backend-reference.adb src/li
 # Restamped 2026-10-04, not re-measured: the change is TQ1_0's decode in
 #   the matrix tile; these tables are TinyLlama Q4_0 and Q8_0, which run
 #   a different branch of the same shader, compiled from it unchanged.
-device 56728C87E4424E51 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Restamped 2026-10-04, not re-measured: the change is how a matrix is
+#   first copied into device memory (four ways for a megabyte or more),
+#   which these tables' timed runs, warm, do not include.
+device 40E04B8B045776D7 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 
 # covers: the three-row table under "Drafting", the per-token costs derived
@@ -10624,7 +10627,10 @@ tokenizer CE3B696CD412A3B6 src/library/model_runner-tokenizer.adb
 # Restamped 2026-10-04, not re-measured: the change is TQ1_0's decode in
 #   the matrix tile; these tables are TinyLlama Q4_0 and Q8_0, which run
 #   a different branch of the same shader, compiled from it unchanged.
-outside 56728C87E4424E51 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Restamped 2026-10-04, not re-measured: the change is how a matrix is
+#   first copied into device memory (four ways for a megabyte or more),
+#   which these tables' timed runs, warm, do not include.
+outside 40E04B8B045776D7 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-27  The row tile at sixty-four, and the instrument's first row
 #
@@ -25192,3 +25198,38 @@ panels 784CB2D61F49BC3D src/library/model_runner-quantization-interleave.ads src
 # mutated.
 # load: one-minute average 0.8 to 1.2
 # model: TinyLlama 1.1B chat TQ1_0, TQ2_0, IQ2_XXS, Q1_0
+
+
+# 2026-10-04: a run's first picture, and a model's first upload. The first
+# picture of a run pads the projector's weights to the tile's shapes and
+# copies them to the device, which llama.cpp does while it loads and leaves
+# out of its "batch encoding" figure. Timed inside, MiniCPM-V 2.6: padding
+# 0.41 s, the first blocks 0.17 against 0.09 after. Both were the host's page
+# faults rather than the bytes: a second copy into the same device buffer
+# took 6 ms where the first took 74 (Qwen3.5's projector).
+#
+#   the padded copies allocated uncleared (each byte written once) and in
+#     large pages (Platform.Pages: madvise MADV_HUGEPAGE on Linux, nothing
+#     elsewhere)                         padding 0.41 -> 0.23 s
+#   a matrix of a megabyte or more copied to the device four ways at once
+#                                        Qwen3.5's copy 74 -> 53 ms
+#   tried: MADV_POPULATE_READ on the file's pages first -- level, they were
+#     not what the faults were
+#
+# First picture, tests see --device, plaza.png, the projector in the page
+# cache; llama-mtmd-cli -ngl 99 "batch encoding" (upload excluded):
+#
+#                       before    after     llama.cpp
+#   MiniCPM-V 2.6       0.652     0.456     0.529
+#   MiniCPM-V 4.5       0.667     0.469     0.517
+#   Gemma 3             2.36      2.35      2.4
+#   Qwen3.5-0.8B        0.231     0.209     0.192
+#
+# Qwen3.5's 17 ms is its upload, which llama.cpp's figure leaves out; its
+# second picture is 0.13. Rows the same throughout (sums of squares). And the
+# four-way copy is every model's first upload: Steelman-14B's first prompt,
+# which copies its 8 GiB to the device, 18.5 and 25.2 s -> 11.5 and 9.2 s
+# (two alternated runs; 6 GB of its 9 GB file in the page cache).
+# load: one-minute average 0.8 to 1.5
+# model: minicpmv-2.6/4.5-mmproj-f16, gemma-3-4b-it-mmproj-f16,
+#   qwen3.5-0.8b-mmproj-f16, Steelman-14B r6 Q4_K_M

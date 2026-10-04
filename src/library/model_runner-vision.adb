@@ -7,6 +7,7 @@ with Model_Runner.Backend.Device;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Kernels;
 with Model_Runner.Platform;
+with Model_Runner.Platform.Pages;
 with Model_Runner.Shares;
 with Model_Runner.Text;
 with Model_Runner.Vision.Plain;
@@ -1560,7 +1561,13 @@ package body Model_Runner.Vision is
          Local   : E.Error_Info;
       begin
          begin
-            Bytes := new Model_Runner.Bytes.Byte_Array'(1 .. Total => 0);
+            --  Not cleared whole: every byte is written below, the
+            --  weight's or a zero of the padding. And in large pages where
+            --  the host has them: a first picture's padded copies are
+            --  hundreds of megabytes, and a fault a page was most of their
+            --  time -- MiniCPM-V 2.6's 0.41 s -> 0.23.
+            Bytes := new Model_Runner.Bytes.Byte_Array (1 .. Total);
+            Model_Runner.Platform.Pages.Prefer_Large (Bytes);
          exception
             when Storage_Error =>
                return Weight;
@@ -1575,7 +1582,11 @@ package body Model_Runner.Vision is
             loop
                Bytes (1 + Row * Row_Out .. Row * Row_Out + Row_In) :=
                  Source (1 + Row * Row_In .. (Row + 1) * Row_In);
+               Bytes (1 + Row * Row_Out + Row_In .. (Row + 1) * Row_Out) :=
+                 [others => 0];
             end loop;
+            Bytes (1 + Model_Runner.Bytes.Byte_Count (Weight.Rows) * Row_Out
+                   .. Total) := [others => 0];
          end;
 
          T.Make (Weight.Format, Rows_P, Cols_P, Bytes, 0, Made, Local);
@@ -1866,7 +1877,10 @@ package body Model_Runner.Vision is
            Model_Runner.Bytes.Byte_Count (Head) * 2;
       begin
          begin
-            Bytes := new Model_Runner.Bytes.Byte_Array'(1 .. Total => 0);
+            --  Not cleared whole, as Padded_To's: the weight's bytes and
+            --  the padding's zeros are each written once below.
+            Bytes := new Model_Runner.Bytes.Byte_Array (1 .. Total);
+            Model_Runner.Platform.Pages.Prefer_Large (Bytes);
          exception
             when Storage_Error =>
                return Weight;
@@ -1891,6 +1905,14 @@ package body Model_Runner.Vision is
                   begin
                      Bytes (1 + To .. To + Row_In) :=
                        Source (1 + Row * Row_In .. (Row + 1) * Row_In);
+
+                     --  After a head's last row, its padding rows.
+                     if I = Model_Runner.Bytes.Byte_Count (Head) - 1 then
+                        Bytes (1 + To + Row_Out
+                               .. (H + 1)
+                                  * Model_Runner.Bytes.Byte_Count (Head_P)
+                                  * Row_Out) := [others => 0];
+                     end if;
                   end;
                else
                   for H in 0 .. Model_Runner.Bytes.Byte_Count (Heads) - 1 loop
@@ -1903,6 +1925,9 @@ package body Model_Runner.Vision is
                      begin
                         Bytes (1 + To .. To + Run) :=
                           Source (1 + From .. From + Run);
+                        Bytes (1 + To + Run
+                               .. To + Model_Runner.Bytes.Byte_Count (Head_P)
+                                       * 2) := [others => 0];
                      end;
                   end loop;
                end if;
