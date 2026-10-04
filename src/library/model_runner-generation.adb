@@ -1246,6 +1246,33 @@ package body Model_Runner.Generation is
                     Causal => Pictures.Causal_Rows);
          end Given_Before;
       begin
+         --  The pages the prompt and the reply will reach, dealt at once,
+         --  on the target and on a draft model: grown a batch at a time, a
+         --  long prompt's device cache peaked at twice its size, and
+         --  Steelman-14B drafted by a 0.5B ran out of a 15.6 GB part on a
+         --  prompt of 3,892. The reply's share no more than Reply_Ahead:
+         --  a long --max-tokens is a bound, not a promise, and its pages
+         --  are dealt as they are reached past that.
+         declare
+            Reply_Ahead : constant := 1024;
+            Ahead : constant Natural :=
+              (Prompt_Count - Index + 1)
+              + Natural'Min (Item.Max_Tokens, Reply_Ahead);
+         begin
+            L.Reserve_Ahead
+              (Session,
+               Natural'Min
+                 (L.Capacity (Session) - 1,
+                  L.Position (Session) + Ahead - 1));
+            if Drafting and then By_Model then
+               L.Reserve_Ahead
+                 (Draft_Session.all,
+                  Natural'Min
+                    (L.Capacity (Draft_Session.all) - 1,
+                     L.Position (Draft_Session.all) + Ahead - 1));
+            end if;
+         end;
+
          Prefill_Loop :
          while Index <= Prompt_Count loop
             if C.Is_Cancelled (Cancel) then

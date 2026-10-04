@@ -8822,6 +8822,20 @@ package body Model_Runner.Llama is
       Ok := True;
    end Take_Pages;
 
+   -------------------
+   -- Reserve_Ahead --
+   -------------------
+
+   procedure Reserve_Ahead (Item : in out Session; Upto : Natural) is
+      Dealt : Boolean;
+   begin
+      if Upto = 0 or else Upto >= Capacity (Item) then
+         return;
+      end if;
+      Take_Pages (Item'Unchecked_Access, Element_Count (Upto), Dealt);
+      pragma Unreferenced (Dealt);
+   end Reserve_Ahead;
+
    --  Where a page's values begin inside it: after its positions' keys.
    function Page_Value_Base (Item : Session) return Element_Count
    is (Element_Count (Page_Positions)

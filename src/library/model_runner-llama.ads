@@ -1480,6 +1480,21 @@ package Model_Runner.Llama is
    --  @return Capacity in tokens.
    function Capacity (Item : Session) return Natural;
 
+   --  Deal a paged session on the device the pages it will need up to
+   --  position Upto, now and in one reservation, rather than a batch at a
+   --  time as the positions reach them. Each reservation that grows the
+   --  device's cache holds the old buffer beside the new one until the
+   --  rows are carried over, so a long prompt grown a batch at a time
+   --  peaked at its cache and the one before it: Steelman-14B's 3,892
+   --  tokens at 13.6 GB of a 15.6 GB part, which a draft model beside it
+   --  ran out of. A session that is not paged on a device, or a position
+   --  past its capacity, is left as it is; and dealing fails quietly, the
+   --  pages then dealt as they are reached, as before.
+   --
+   --  @param Item Session to deal pages to.
+   --  @param Upto Highest position the run will write.
+   procedure Reserve_Ahead (Item : in out Session; Upto : Natural);
+
    --  The lowest position this session may be rewound to and still answer.
    --
    --  Zero for a session whose layers hold everything, which is every model

@@ -6466,6 +6466,100 @@ package body Tests.Inference_Cases is
    -- A_Paged_Window_Slides_As_A_Block_Slides --
    --------------------------------------------------
 
+   --  Pages dealt ahead are the pages a batch would have been dealt: a
+   --  paged session on the device that reserves its run up front answers
+   --  as one that grows a batch at a time. Skipped where there is no
+   --  device.
+   procedure Pages_Dealt_Ahead_Answer_As_Pages_Dealt_Late
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Image : B.Byte_Array_Access;
+      Ready : Boolean;
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready);
+
+      if not Ready then
+         return;
+      end if;
+
+      Tiny_Model.Build (Image, Format => Tiny_Model.Q4_K, Room => 640);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Item   : Containers.Container;
+         Model  : aliased L.Model;
+         Status : E.Error_Info;
+
+         function After (Ahead : Boolean) return N.Real_Array is
+            Live   : L.Session;
+            Words  : constant access constant Vocab.Vocabulary :=
+              L.Vocabulary (Model);
+            A      : constant Vocab.Token_Id := Vocab.Find (Words.all, "a");
+            Bee    : constant Vocab.Token_Id := Vocab.Find (Words.all, "b");
+            Tokens : Vocab.Token_Array (1 .. 300);
+            Logits : N.Real_Array
+              (0 .. N.Element_Count (L.Config (Model).Vocabulary) - 1);
+            Local  : E.Error_Info;
+         begin
+            for Index in Tokens'Range loop
+               Tokens (Index) := (if Index mod 3 = 0 then A else Bee);
+            end loop;
+            Tokens (1) := Vocab.Beginning_Token (Words.all);
+
+            L.Open (Live, Model, 640, Status => Local, Paged => True);
+            Assert (E.Is_Ok (Local), "the session did not open");
+            if Ahead then
+               L.Reserve_Ahead (Live, 600);
+            end if;
+
+            L.Evaluate_Batch (Live, Model, Tokens (1 .. 150), Logits,
+                              Status => Local);
+            Assert (E.Is_Ok (Local), "the first batch failed");
+            L.Evaluate_Batch (Live, Model, Tokens (151 .. 300), Logits,
+                              Status => Local);
+            Assert (E.Is_Ok (Local), "the second batch failed");
+            for Step in 1 .. 10 loop
+               L.Evaluate
+                 (Live, Model, (if Step mod 2 = 0 then A else Bee), Logits,
+                  Status => Local);
+               Assert (E.Is_Ok (Local), "a token after the batches failed");
+            end loop;
+
+            L.Close (Live);
+            return Logits;
+         end After;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse
+           (Item, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+         L.Prepare
+           (Model, Item, Source,
+            Backend => Model_Runner.Backend.Backend_Device,
+            Status  => Status);
+         Assert (E.Is_Ok (Status), "the device would not take the fixture");
+
+         declare
+            Late  : constant N.Real_Array := After (False);
+            Early : constant N.Real_Array := After (True);
+            Worst : N.Real := 0.0;
+         begin
+            for Index in Late'Range loop
+               Worst := N.Real'Max (Worst, abs (Late (Index) - Early (Index)));
+            end loop;
+            Assert (Worst <= 1.0E-3,
+                    "pages dealt ahead answered otherwise, by"
+                    & N.Real'Image (Worst));
+         end;
+      end;
+      B.Free (Image);
+      Model_Runner.Backend.Device.Close;
+   end Pages_Dealt_Ahead_Answer_As_Pages_Dealt_Late;
+
    --  A windowed layer slides before a batch, keeping the window and a
    --  rewind's slack, and then holds the whole batch: a second batch of
    --  488 after one of 512 ran past the cells -- the sizing counted a
@@ -14517,6 +14611,10 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Adapters_Stack_And_Come_Off_Again'Access,
          "adapters stack, and a scale of minus one takes one off again");
+      Register_Routine
+        (T, Pages_Dealt_Ahead_Answer_As_Pages_Dealt_Late'Access,
+         "a paged session that deals its run's pages ahead answers as one "
+         & "dealt them a batch at a time");
       Register_Routine
         (T, A_Window_Holds_A_Long_Batch_After_A_Slide'Access,
          "a sliding window holds a batch of 488 after it slides, its "
