@@ -57,6 +57,11 @@ package body Model_Runner.Framework.Stores is
      (Root : String; Where : Area; Name : String) return String
    is (Join (Area_Directory (Root, Where), Name & Record_Suffix));
 
+   --  A record's name under the state root as the snapshot and the
+   --  written log both spell it, "/" between its parts on every host.
+   function Record_Name (Where : Area; Name : String) return String
+   is (Directory_Name (Where) & "/" & Name & Record_Suffix);
+
    function Journal_Directory (Root : String) return String
    is (Join (Area_Directory (Root, Runtime_Area), Journal_Name));
 
@@ -945,18 +950,11 @@ package body Model_Runner.Framework.Stores is
             begin
                Area_Of (Word (Line, 2), Where, Known);
                if Known and then Is_Name (Word (Line, 3)) then
-                  declare
-                     Target : constant String := Record_Path (Root (Item), Where, Word (Line, 3));
-                  begin
-                     Append (Said, Target (Target'First + Root (Item)'Length + 1 .. Target'Last)
-                                   & ASCII.LF);
-                  end;
+                  Append (Said, Record_Name (Where, Word (Line, 3)) & ASCII.LF);
                end if;
             end;
          end loop;
-         Append (Said, Index_Path (Root (Item)) (Index_Path (Root (Item))'First
-                                                 + Root (Item)'Length + 1
-                                                 .. Index_Path (Root (Item))'Last) & ASCII.LF);
+         Append (Said, Record_Name (Indexes_Area, Index_Name) & ASCII.LF);
          if Ada.Directories.Exists (Written_Log (Root (Item))) then
             Open (Log, Append_File, Written_Log (Root (Item)));
          else

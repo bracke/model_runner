@@ -1406,7 +1406,7 @@ package body Tests.Framework_Cases is
               and then Tp.Id (Tp.Template_At (Registry, 2)) = "broken",
               "a broken template was not kept as unavailable");
       Assert (Tp.Origin (Tp.Template_At (Registry, 1))
-              = Installed & "/app.template",
+              = Hostkit.Fs.Join (Installed, "app.template"),
               "a template does not say where it was read");
 
       Put_File (Project & "/keep.txt", "mine");
