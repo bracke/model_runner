@@ -421,6 +421,88 @@ package body Model_Runner.Quantization.Interleave is
    --  the byte, and how far to shift it. Both formats pack them the same
    --  way, in two halves of a hundred and twenty-eight with a shift that
    --  steps every thirty-two.
+   --  Four bytes from At, the first lowest, as one word; and one word put
+   --  down as four bytes.
+   --
+   --  These and the builders below read and write without index, range or
+   --  overflow checks: Build has checked that the whole of both matrices'
+   --  spans lie in their arrays before any is called, and a 30B mixture's
+   --  rewrite spent a third of its time on the checks (4.1 s against 2.8).
+   function Word_At
+     (Source : B.Byte_Array; At_Byte : B.Byte_Index)
+      return Interfaces.Unsigned_32
+     with Inline;
+
+   function Word_At
+     (Source : B.Byte_Array; At_Byte : B.Byte_Index)
+      return Interfaces.Unsigned_32
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+   begin
+      return Interfaces.Unsigned_32 (Source (At_Byte))
+        or Interfaces.Shift_Left
+             (Interfaces.Unsigned_32 (Source (At_Byte + 1)), 8)
+        or Interfaces.Shift_Left
+             (Interfaces.Unsigned_32 (Source (At_Byte + 2)), 16)
+        or Interfaces.Shift_Left
+             (Interfaces.Unsigned_32 (Source (At_Byte + 3)), 24);
+   end Word_At;
+
+   procedure Put_Word
+     (Target : in out B.Byte_Array;
+      At_Byte : B.Byte_Index;
+      Word   : Interfaces.Unsigned_32)
+     with Inline;
+
+   procedure Put_Word
+     (Target : in out B.Byte_Array;
+      At_Byte : B.Byte_Index;
+      Word   : Interfaces.Unsigned_32)
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+   begin
+      for K in B.Byte_Count range 0 .. 3 loop
+         Target (At_Byte + K) :=
+           Interfaces.Unsigned_8
+             (Interfaces.Shift_Right (Word, 8 * Natural (K)) and 16#FF#);
+      end loop;
+   end Put_Word;
+
+   --  A group of sixteen two-bit quants as its four bytes of the panel, a
+   --  byte a place, four steps a byte: the group's sixteen elements lie in
+   --  sixteen bytes side by side at one shift (Low_Places), so four words
+   --  of them shifted and masked a byte at a time are the four places at
+   --  once -- where each element was a byte read, a shift and a mask of
+   --  its own, most of a load's rewrite.
+   function Low_Word
+     (Source : B.Byte_Array;
+      Quants : B.Byte_Index;
+      Group  : Element_Count) return Interfaces.Unsigned_32
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+      Base  : constant B.Byte_Index :=
+        Quants + B.Byte_Count (Group / 8) * 32
+        + B.Byte_Count (Group mod 2) * 16;
+      Shift : constant Natural := Natural ((Group mod 8) / 2) * 2;
+      Word  : Interfaces.Unsigned_32 := 0;
+   begin
+      for Step in B.Byte_Count range 0 .. 3 loop
+         Word := Word
+           or Interfaces.Shift_Left
+                (Interfaces.Shift_Right
+                   (Word_At (Source, Base + 4 * Step), Shift)
+                 and 16#0303_0303#,
+                 2 * Natural (Step));
+      end loop;
+      return Word;
+   end Low_Word;
+
    procedure Low_Places
      (Element : Element_Count;
       At_Byte : out B.Byte_Count;
@@ -604,6 +686,9 @@ package body Model_Runner.Quantization.Interleave is
       Out_At : B.Byte_Index;
       Lane   : B.Byte_Count)
    is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
    begin
       Target (Out_At + Two_Scale_At + Lane * 2)     :=
         Source (In_At + Two_D);
@@ -620,31 +705,10 @@ package body Model_Runner.Quantization.Interleave is
       end loop;
 
       for Group in Element_Count range 0 .. 15 loop
-         for Place in Element_Count range 0 .. 3 loop
-            declare
-               Packed : Interfaces.Unsigned_8 := 0;
-            begin
-               for Step in Element_Count range 0 .. 3 loop
-                  declare
-                     At_Byte : B.Byte_Count;
-                     Shift   : Natural;
-                  begin
-                     Low_Places
-                       (Group * 16 + Step * 4 + Place, At_Byte, Shift);
-                     Packed := Packed
-                       or Interfaces.Shift_Left
-                            (Interfaces.Shift_Right
-                               (Source (In_At + Two_Quants + At_Byte), Shift)
-                             and 16#03#,
-                             Natural (Step) * 2);
-                  end;
-               end loop;
-
-               Target
-                 (Out_At + Two_Quants_At + B.Byte_Count (Group) * 32
-                  + Lane * 4 + B.Byte_Count (Place)) := Packed;
-            end;
-         end loop;
+         Put_Word
+           (Target,
+            Out_At + Two_Quants_At + B.Byte_Count (Group) * 32 + Lane * 4,
+            Low_Word (Source, In_At + Two_Quants, Group));
       end loop;
    end Build_Two;
 
@@ -662,6 +726,9 @@ package body Model_Runner.Quantization.Interleave is
       Out_At : B.Byte_Index;
       Lane   : B.Byte_Count)
    is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
       Scale : Scale_Sixteen;
    begin
       Target (Out_At + Three_Scale_At + Lane * 2)     :=
@@ -677,70 +744,38 @@ package body Model_Runner.Quantization.Interleave is
       end loop;
 
       for Group in Element_Count range 0 .. 15 loop
-         for Place in Element_Count range 0 .. 3 loop
-            declare
-               Packed : Interfaces.Unsigned_8 := 0;
-            begin
-               for Step in Element_Count range 0 .. 3 loop
-                  declare
-                     At_Byte : B.Byte_Count;
-                     Shift   : Natural;
-                  begin
-                     Low_Places
-                       (Group * 16 + Step * 4 + Place, At_Byte, Shift);
-                     Packed := Packed
-                       or Interfaces.Shift_Left
-                            (Interfaces.Shift_Right
-                               (Source (In_At + Three_Quants + At_Byte),
-                                Shift)
-                             and 16#03#,
-                             Natural (Step) * 2);
-                  end;
-               end loop;
-
-               Target
-                 (Out_At + Three_Low_At + B.Byte_Count (Group) * 32
-                  + Lane * 4 + B.Byte_Count (Place)) := Packed;
-            end;
-         end loop;
+         Put_Word
+           (Target,
+            Out_At + Three_Low_At + B.Byte_Count (Group) * 32 + Lane * 4,
+            Low_Word (Source, In_At + Three_Quants, Group));
       end loop;
 
+      --  Run R's element at pair P, step S and place L is bit R of the
+      --  high-bit byte 16 P + 4 S + L, and goes to bit 4 P + S of its
+      --  place's byte: eight words of high bits, shifted and masked a byte
+      --  at a time, are the four places at once.
       for Run in Element_Count range 0 .. 7 loop
-         for Place in Element_Count range 0 .. 3 loop
-            declare
-               Packed : Interfaces.Unsigned_8 := 0;
-            begin
-               for Pair in Element_Count range 0 .. 1 loop
-                  for Step in Element_Count range 0 .. 3 loop
-                     declare
-                        Element : constant Element_Count :=
-                          Run * 32 + Pair * 16 + Step * 4 + Place;
-
-                        Half : constant Element_Count := Element / 128;
-                        Rest : constant Element_Count := Element mod 128;
-
-                        Bit : constant Natural :=
-                          Natural (Half) * 4 + Natural (Rest / 32);
-
-                        Mask : constant Interfaces.Unsigned_8 :=
-                          Interfaces.Shift_Right
-                            (Source (In_At + Three_Hmask
-                                     + B.Byte_Count (Rest mod 32)),
-                             Bit)
-                          and 1;
-                     begin
-                        Packed := Packed
-                          or Interfaces.Shift_Left
-                               (Mask, Natural (Pair) * 4 + Natural (Step));
-                     end;
-                  end loop;
+         declare
+            Word : Interfaces.Unsigned_32 := 0;
+         begin
+            for Pair in B.Byte_Count range 0 .. 1 loop
+               for Step in B.Byte_Count range 0 .. 3 loop
+                  Word := Word
+                    or Interfaces.Shift_Left
+                         (Interfaces.Shift_Right
+                            (Word_At (Source,
+                                      In_At + Three_Hmask
+                                      + 16 * Pair + 4 * Step),
+                             Natural (Run))
+                          and 16#0101_0101#,
+                          4 * Natural (Pair) + Natural (Step));
                end loop;
-
-               Target
-                 (Out_At + Three_High_At + B.Byte_Count (Run) * 32
-                  + Lane * 4 + B.Byte_Count (Place)) := Packed;
-            end;
-         end loop;
+            end loop;
+            Put_Word
+              (Target,
+               Out_At + Three_High_At + B.Byte_Count (Run) * 32 + Lane * 4,
+               Word);
+         end;
       end loop;
    end Build_Three;
 
