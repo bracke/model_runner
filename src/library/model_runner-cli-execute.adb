@@ -2694,6 +2694,7 @@ package body Model_Runner.CLI.Execute is
    begin
       if Model_Runner.Backend."=" (Item.Backend, Model_Runner.Backend.Backend_CPU)
         and then L."=" (Item.Repack, L.No_Repack)
+        and then not Item.Repack_Asked
         and then T.Is_Empty (Item.Adapter_Path)
         and then Model_Runner.Quantization.Integers.Has_Integer_Kernel
                    (Model_Runner.GGUF.Type_Q2_K, Interleaved => True)
@@ -2701,6 +2702,10 @@ package body Model_Runner.CLI.Execute is
         --  The panels are held, the file's pages only cached and given back:
         --  room for the panels and a margin is what it takes.
         and then Interfaces."<=" (Interfaces."+" (Weights, 2 ** 30), Model_Runner.Platform.Available_Memory)
+        --  And in one allocation the bounds allow: the panels are one, and
+        --  a model past it -- qwen3.6-35B's 19 GB against 16 GiB -- would be
+        --  refused at load for a default nobody asked for.
+        and then Interfaces."<=" (Weights, Model_Bounds (Item).Max_Allocation_Bytes)
       then
          Result.Repack := L.To_Rows;
       end if;

@@ -1527,6 +1527,7 @@ package body Model_Runner.CLI.Options is
                              = T.To_String (Asked)
                            then
                               Result.Repack := Mode;
+                              Result.Repack_Asked := True;
                               Found := True;
                            end if;
                         end loop;

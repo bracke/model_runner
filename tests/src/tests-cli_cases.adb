@@ -7102,6 +7102,13 @@ package body Tests.CLI_Cases is
       end Refuses;
    begin
       --  The numbers that bound a run.
+      --  "none" said outright is a choice, and the processor's default
+      --  of panels leaves it alone; no --repack at all is no choice.
+      Assert (Read ("--repack", "none").Repack_Asked,
+              "--repack none was not recorded as asked for, so the "
+              & "processor's default would put the weights in panels anyway");
+      Assert (not Read ("--context-size", "512").Repack_Asked,
+              "a command without --repack says it asked for one");
       Assert (Read ("--context-size", "512").Context_Size = 512,
               "--context-size did not reach the context size");
       Assert (Read ("--max-tokens", "9").Max_Tokens = 9,

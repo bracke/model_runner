@@ -559,6 +559,11 @@ package Model_Runner.CLI.Options is
       Repack     : Model_Runner.Llama.Repack_Mode :=
         Model_Runner.Llama.No_Repack;
 
+      --  Whether --repack was given at all: "none" said outright is not
+      --  the absence of a choice, and a run that was told none keeps the
+      --  file's layout rather than taking the processor's default.
+      Repack_Asked : Boolean := False;
+
       --  How the session stores what it has committed. The default is
       --  binary16, half the bytes a token reads at depth and what llama.cpp
       --  keeps: binary32 cost a generated token four to five per cent at a
