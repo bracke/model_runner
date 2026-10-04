@@ -10187,21 +10187,44 @@ package body Model_Runner.Llama is
             Q_Origin : constant Element_Count := Query'First + Head * Head_Size;
             Usable   : Boolean;
          begin
-            for Step in First .. Last loop
-               declare
-                  Origin : constant Element_Count :=
-                    Keys'First + K_Base + Step * KV_Width + Group * Head_Size;
-               begin
+            --  Four positions a call where four are left, the query read
+            --  once for them and each score to the bit what one a call
+            --  gave; one a call for the rest.
+            declare
+               Step : Element_Count := First;
+               Dots : Real_Array (0 .. 3);
+            begin
+               while Step + 3 <= Last loop
+                  K.Key_Dots_Halved_Four
+                    (Left         => Query,
+                     At_Left      => Q_Origin,
+                     Right        => Keys,
+                     At_Right     =>
+                       Keys'First + K_Base + Step * KV_Width
+                       + Group * Head_Size,
+                     Right_Stride => KV_Width,
+                     Span         => Head_Size,
+                     Dots         => Dots);
+                  for Which in Element_Count range 0 .. 3 loop
+                     Scores (At_Score + Step + Which) := Dots (Which) * Scale;
+                  end loop;
+                  Step := Step + 4;
+               end loop;
+
+               while Step <= Last loop
                   Scores (At_Score + Step) :=
                     K.Head_Dot_Halved
                       (Left     => Query,
                        At_Left  => Q_Origin,
                        Right    => Keys,
-                       At_Right => Origin,
+                       At_Right =>
+                         Keys'First + K_Base + Step * KV_Width
+                         + Group * Head_Size,
                        Span     => Head_Size)
                     * Scale;
-               end;
-            end loop;
+                  Step := Step + 1;
+               end loop;
+            end;
 
             --  As above: the bound in a loop of its own, and only when
             --  there is one.

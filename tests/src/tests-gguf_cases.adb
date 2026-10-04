@@ -6632,7 +6632,8 @@ package body Tests.GGUF_Cases is
    --  of those last placed among seven ordinary values, so that a block
    --  holding one goes the slow way and the blocks beside it do not.
    --  The block attention's kernels, against the one-query kernels they
-   --  stand in for: four and eight queries' dot products with a key, and
+   --  stand in for: four and eight queries' dot products with a key, one
+   --  query's with four keys, and
    --  four queries' weighted sums of a value run, the same to the bit --
    --  a prompt's attention must not read differently for being taken a
    --  block of positions at a time. At a span the wide lanes take and at
@@ -6696,6 +6697,18 @@ package body Tests.GGUF_Cases is
                                 & " is not the one query's");
                      end if;
                   end;
+               end loop;
+
+               --  One query against four keys, Stride apart: what a
+               --  generated token's scores take four positions a call.
+               KK.Key_Dots_Halved_Four
+                 (Queries, 3, Keys, 5 * Stride, Stride, Run, Four);
+               for Which in N.Element_Count range 0 .. 3 loop
+                  Assert (Four (Which)
+                          = KK.Head_Dot_Halved
+                              (Queries, 3, Keys, (5 + Which) * Stride, Run),
+                          "four keys' dot product" & Which'Image
+                          & " is not the one key's");
                end loop;
             end;
          end loop;

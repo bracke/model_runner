@@ -597,6 +597,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                "xorq %%rdx, %%rdx"                   & LF &
                "movq %4, %%rax"                      & LF &
                "1:"                                  & LF &
+               "prefetcht1 8192(%1,%%rdx,1)"         & LF &
                "vmovdqu 2(%1,%%rdx,1), %%ymm0"       & LF &
                "vpsignb %%ymm0, %%ymm0, %%ymm3"      & LF &
                "vmovdqu (%2,%%rcx,8), %%ymm4"        & LF &

@@ -1784,6 +1784,108 @@ package body Model_Runner.Kernels is
       end loop;
    end Blend_Sixteen_Four;
 
+   --------------------------
+   -- Key_Dots_Halved_Four --
+   --------------------------
+
+   procedure Key_Dots_Halved_Four
+     (Left         : Real_Array;
+      At_Left      : Element_Count;
+      Right        : Half_Array;
+      At_Right     : Element_Count;
+      Right_Stride : Element_Count;
+      Span         : Element_Count;
+      Dots         : out Real_Array) is
+   begin
+      Dots := [others => 0.0];
+
+      if Span = 0
+        or else Right_Stride < Span
+        or else At_Left < Left'First
+        or else At_Right < Right'First
+        or else At_Left - Left'First + Span > Element_Count (Left'Length)
+        or else At_Right - Right'First + 3 * Right_Stride + Span
+                  > Element_Count (Right'Length)
+      then
+         return;
+      end if;
+
+      if Wide_Lanes and then Span mod 8 = 0 then
+         declare
+            LF : constant Character := ASCII.LF;
+
+            Left_At  : constant System.Address := Left (At_Left)'Address;
+            Right_At : constant System.Address := Right (At_Right)'Address;
+            Blocks   : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Span / 8);
+            Apart    : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Right_Stride * 2);
+            Into     : constant System.Address := Dots (Dots'First)'Address;
+         begin
+            --  The query's eight components read once a turn and multiplied
+            --  into four running sums, a key each, every key's eight halves
+            --  converted where it lies; the four then folded as
+            --  Head_Dots_Halved_Four folds its four.
+            System.Machine_Code.Asm
+              ("vxorps %%ymm0, %%ymm0, %%ymm0"           & LF
+               & "vxorps %%ymm1, %%ymm1, %%ymm1"         & LF
+               & "vxorps %%ymm2, %%ymm2, %%ymm2"         & LF
+               & "vxorps %%ymm3, %%ymm3, %%ymm3"         & LF
+               & "movq %0, %%r8"                         & LF
+               & "movq %1, %%r9"                         & LF
+               & "movq %2, %%r10"                        & LF
+               & "leaq (%%r9,%3), %%r11"                 & LF
+               & "1:"                                    & LF
+               & "vmovups (%%r8), %%ymm4"                & LF
+               & "vcvtph2ps (%%r9), %%ymm5"              & LF
+               & "vfmadd231ps %%ymm4, %%ymm5, %%ymm0"    & LF
+               & "vcvtph2ps (%%r11), %%ymm6"             & LF
+               & "vfmadd231ps %%ymm4, %%ymm6, %%ymm1"    & LF
+               & "vcvtph2ps (%%r11,%3), %%ymm7"          & LF
+               & "vfmadd231ps %%ymm4, %%ymm7, %%ymm2"    & LF
+               & "vcvtph2ps (%%r11,%3,2), %%ymm8"        & LF
+               & "vfmadd231ps %%ymm4, %%ymm8, %%ymm3"    & LF
+               & "addq $32, %%r8"                        & LF
+               & "addq $16, %%r9"                        & LF
+               & "addq $16, %%r11"                       & LF
+               & "decq %%r10"                            & LF
+               & "jnz 1b"                                & LF
+               & "vextractf128 $1, %%ymm0, %%xmm4"       & LF
+               & "vaddps %%xmm4, %%xmm0, %%xmm0"         & LF
+               & "vextractf128 $1, %%ymm1, %%xmm4"       & LF
+               & "vaddps %%xmm4, %%xmm1, %%xmm1"         & LF
+               & "vextractf128 $1, %%ymm2, %%xmm4"       & LF
+               & "vaddps %%xmm4, %%xmm2, %%xmm2"         & LF
+               & "vextractf128 $1, %%ymm3, %%xmm4"       & LF
+               & "vaddps %%xmm4, %%xmm3, %%xmm3"         & LF
+               & "vhaddps %%xmm1, %%xmm0, %%xmm0"        & LF
+               & "vhaddps %%xmm3, %%xmm2, %%xmm2"        & LF
+               & "vhaddps %%xmm2, %%xmm0, %%xmm0"        & LF
+               & "vmovups %%xmm0, (%4)"                  & LF
+               & "vzeroupper",
+               Inputs   =>
+                 [System.Address'Asm_Input ("r", Left_At),
+                  System.Address'Asm_Input ("r", Right_At),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Blocks),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Apart),
+                  System.Address'Asm_Input ("r", Into)],
+               Clobber  =>
+                 "ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, ymm7, ymm8, "
+                 & "r8, r9, r10, r11, cc, memory",
+               Volatile => True);
+
+            return;
+         end;
+      end if;
+
+      for Which in 0 .. 3 loop
+         Dots (Dots'First + Element_Count (Which)) :=
+           Head_Dot_Halved
+             (Left, At_Left,
+              Right, At_Right + Element_Count (Which) * Right_Stride, Span);
+      end loop;
+   end Key_Dots_Halved_Four;
+
    ---------------------------
    -- Head_Dots_Halved_Four --
    ---------------------------
@@ -2894,24 +2996,31 @@ package body Model_Runner.Kernels is
    ----------
 
    procedure GELU (Target : in out Real_Array) is
+      --  As in SiLU, and for the same reason.
+      pragma Suppress (Overflow_Check);
+      pragma Suppress (Range_Check);
+
       --  Square root of two over pi, and the cubic term's weight. Both are
       --  the constants of the approximation rather than anything derived,
       --  and are written out so that a reader can compare them with the
       --  paper rather than with a computation.
-      Root : constant Wide_Real := 0.797_884_560_802_865_4;
-      Bend : constant Wide_Real := 0.044_715;
+      Root : constant Real := 0.797_884_560_802_865_4;
+      Bend : constant Real := 0.044_715;
    begin
+      --  Half of x (1 + tanh u) is x / (1 + e^(-2u)), the same function
+      --  written as SiLU's, so it goes through the same binary32
+      --  exponential rather than the library's binary64 one: a gate on
+      --  the calling task while the workers wait, 3,072 of them a layer
+      --  on GPT-2, was an eighth of a generated token.
       for Index in Target'Range loop
          declare
-            Value : constant Wide_Real := Wide_Real (Target (Index));
-            Inner : constant Wide_Real :=
+            Value : constant Real := Target (Index);
+            Inner : constant Real :=
               Root * (Value + Bend * Value * Value * Value);
          begin
-            Target (Index) :=
-              Real (0.5 * Value * (1.0 + N.Tanh (Inner)));
+            Target (Index) := Value / (1.0 + Raised (-2.0 * Inner));
          end;
       end loop;
-
    end GELU;
 
    ----------------

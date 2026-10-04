@@ -341,6 +341,29 @@ package Model_Runner.Kernels is
       At_Right : Element_Count;
       Span     : Element_Count) return Real;
 
+   --  One query's dot products with four half-precision keys, Right_Stride
+   --  apart from At_Right, Dots receiving them in order: what a generated
+   --  token's scores take four positions at a time, the query read once
+   --  for the four and each folded as Head_Dot_Halved folds its one, so
+   --  every score is the same to the bit.
+   --
+   --  @param Left Vector the query is taken from.
+   --  @param At_Left Index of the query's first component.
+   --  @param Right Half-precision vector the keys are taken from.
+   --  @param At_Right Index of the first key's first component.
+   --  @param Right_Stride Elements from one key to the next.
+   --  @param Span How many components the query and a key have.
+   --  @param Dots Receives the four dot products, from its first index.
+   procedure Key_Dots_Halved_Four
+     (Left         : Real_Array;
+      At_Left      : Element_Count;
+      Right        : Half_Array;
+      At_Right     : Element_Count;
+      Right_Stride : Element_Count;
+      Span         : Element_Count;
+      Dots         : out Real_Array)
+   with Pre => Dots'Length = 4;
+
    --  Four queries' dot products with one half-precision key, the key
    --  converted once for the four: the queries Left_Stride apart from
    --  At_Left, Dots receiving them in order. What a prompt's attention on
