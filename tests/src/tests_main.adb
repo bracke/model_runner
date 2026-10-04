@@ -437,6 +437,11 @@ begin
            Natural'Value (Option ("--threads", "0"));
          Dump      : constant String := Option ("--dump", "");
          Expect    : constant String := Option ("--expect", "");
+
+         --  A picture encoded this many times over, each pass timed: the
+         --  first carries the weights' upload, the later ones are warm.
+         Repeats   : constant Positive :=
+           Positive'Value (Option ("--repeats", "1"));
          On_Device : Boolean := False;
          Eyes      : Model_Runner.Vision.Encoder;
          Picture   : Model_Runner.Images.Raster;
@@ -579,9 +584,20 @@ begin
          begin
             Model_Runner.Backend.CPU.Open (Pool);
             if Image /= "" then
-               Model_Runner.Vision.Encode
-                 (Eyes, Picture, Pool'Unchecked_Access, Rows, Grid_Rows,
-                  Grid_Columns, Status => Status);
+               for Pass in 1 .. Repeats loop
+                  if Pass > 1 then
+                     Ada.Text_IO.Put_Line
+                       ("pass" & Natural'Image (Pass - 1) & ":"
+                        & Duration'Image (Ada.Calendar.Clock - Started)
+                        & " s");
+                     Model_Runner.Tensors.Free (Rows);
+                     Started := Ada.Calendar.Clock;
+                  end if;
+                  Model_Runner.Vision.Encode
+                    (Eyes, Picture, Pool'Unchecked_Access, Rows, Grid_Rows,
+                     Grid_Columns, Status => Status);
+                  exit when Model_Runner.Errors.Is_Error (Status);
+               end loop;
             else
                See_Frames (Pool'Unchecked_Access);
             end if;

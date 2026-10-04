@@ -2558,7 +2558,9 @@ package body Model_Runner.Vision is
    --  The encoder's blocks whole on the device, each one submission over
    --  every patch, the stream left there from one block to the next; see
    --  Encode_Gemma. First_Host is the first block the device did not take,
-   --  which the caller computes from, X then holding its input.
+   --  which the caller computes from, X then holding its input. From and
+   --  Upto bound the blocks offered, for an encoder that does other work
+   --  between two stretches of them.
    procedure Blocks_On_Device
      (Item       : in out Encoder;
       Work       : in out Workspace;
@@ -2566,14 +2568,17 @@ package body Model_Runner.Vision is
       Patches    : Element_Count;
       Cancel     : Model_Runner.Cancellation.Token_Reference;
       Status     : in out E.Error_Info;
-      First_Host : out Natural)
+      First_Host : out Natural;
+      From       : Natural := 0;
+      Upto       : Natural := Natural'Last)
    is
+      Final : constant Integer := Integer'Min (Upto, Item.Blocks - 1);
       Width : constant Element_Count := Element_Count (Item.Width);
       Feed  : constant Element_Count := Element_Count (Item.Feed);
       Heads : constant Element_Count := Element_Count (Item.Heads);
       Head  : constant Element_Count := Width / Heads;
    begin
-      First_Host := 0;
+      First_Host := From;
       --  The blocks whole on the device, where it is open and the encoder
       --  is not held to binary32: a block a submission over every patch --
       --  both normalizations, the projections and their biases, the
@@ -2610,7 +2615,7 @@ package body Model_Runner.Vision is
               (V_Base + Patches * Width_P, V_Base + Patches * Width_P, Ok);
             Ok := Ok and then Keys_M /= null and then Values_M /= null;
 
-            while Ok and then First_Host < Item.Blocks loop
+            while Ok and then First_Host <= Final loop
                declare
                   Current : Block renames Item.Layers (First_Host);
 
@@ -2710,7 +2715,7 @@ package body Model_Runner.Vision is
                        (Work, Current.Norm_2_Weight.all
                                 (Current.Norm_2_Weight.all'First)'Address,
                         2 * Width, Pair_2'Access);
-                     Last : constant Boolean := First_Host = Item.Blocks - 1;
+                     Last : constant Boolean := First_Host = Final;
                   begin
                      exit when Qp.Rows /= Width_P or else Kp.Rows /= Width_P
                        or else Vp.Rows /= Width_P or else Op.Columns /= Width_P
@@ -3576,6 +3581,7 @@ package body Model_Runner.Vision is
 
       Resampled : Model_Runner.Images.Raster;
       Work : Workspace;
+      First_Host : Natural := 0;
 
       procedure Release is
       begin
@@ -3793,8 +3799,13 @@ package body Model_Runner.Vision is
          end loop;
       end if;
 
-      --  The blocks up to the insertion point, over the whole patch grid.
-      for Index in 0 .. Insert loop
+      --  The blocks up to the insertion point, over the whole patch grid,
+      --  on the device from the first, the host from the first it did not
+      --  take.
+      Blocks_On_Device
+        (Item, Work, X, Patches, Cancel, Status, First_Host,
+         From => 0, Upto => Insert);
+      for Index in First_Host .. Insert loop
          exit when E.Is_Error (Status);
          if Model_Runner.Cancellation.Is_Cancelled (Cancel) then
             Status := E.Make (E.Generation_Cancelled); exit;
@@ -3910,7 +3921,12 @@ package body Model_Runner.Vision is
       end if;
 
       --  The blocks after the insertion point, over the merged tokens.
-      for Index in Insert + 1 .. Item.Blocks - 1 loop
+      if E.Is_Ok (Status) then
+         Blocks_On_Device
+           (Item, Work, X2, Tokens1, Cancel, Status, First_Host,
+            From => Insert + 1);
+      end if;
+      for Index in First_Host .. Item.Blocks - 1 loop
          exit when E.Is_Error (Status);
          if Model_Runner.Cancellation.Is_Cancelled (Cancel) then
             Status := E.Make (E.Generation_Cancelled); exit;
