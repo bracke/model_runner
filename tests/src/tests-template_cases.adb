@@ -1245,6 +1245,15 @@ package body Tests.Template_Cases is
             & "|user,assistant,tool",
             "with, raw and do");
 
+      --  Lists joined by '+' are one list: how MiniCPM-V 4.6's template
+      --  gathers a message's parts before it joins them.
+      Same ("{% set ns = namespace(parts=[]) %}"
+            & "{% set ns.parts = ns.parts + ['a'] %}"
+            & "{% set ns.parts = ns.parts + ['b', 'c'] + [] %}"
+            & "{{ ns.parts | join('-') }}|{{ ns.parts | length }}",
+            "a-b-c|3",
+            "lists joined by plus");
+
       --  A loop over a name never assigned is refused as the output
       --  refuses it, and a field a turn has not got is nothing.
       Same ("{% for x in nothing %}x{% endfor %}",

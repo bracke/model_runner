@@ -252,7 +252,7 @@ package body Model_Runner.Generation is
       --  every frame the same. Nothing changes where the set names no
       --  marker text, and a marker past the pictures given is left as it
       --  stands for the count check to refuse.
-      function Written return String is
+      function Written_From (Prompt : String) return String is
          Marker : constant String :=
            Model_Runner.Text.To_String (Pictures.Marker_Text);
          Frame  : constant String :=
@@ -395,6 +395,37 @@ package body Model_Runner.Generation is
          end loop;
 
          return Videos_Written (Ada.Strings.Unbounded.To_String (Result));
+      end Written_From;
+
+      --  The prompt with every alias of the picture marker read as the
+      --  marker, then written out.
+      function Written return String is
+         Alias  : constant String :=
+           Model_Runner.Text.To_String (Pictures.Marker_Alias);
+         Marker : constant String :=
+           Model_Runner.Text.To_String (Pictures.Marker_Text);
+         Result : Ada.Strings.Unbounded.Unbounded_String;
+         From   : Positive := Prompt'First;
+      begin
+         if Alias = "" or else Marker = "" then
+            return Written_From (Prompt);
+         end if;
+         while From <= Prompt'Last loop
+            declare
+               At_Alias : constant Natural :=
+                 Ada.Strings.Fixed.Index (Prompt (From .. Prompt'Last), Alias);
+            begin
+               if At_Alias = 0 then
+                  Ada.Strings.Unbounded.Append
+                    (Result, Prompt (From .. Prompt'Last));
+                  exit;
+               end if;
+               Ada.Strings.Unbounded.Append
+                 (Result, Prompt (From .. At_Alias - 1) & Marker);
+               From := At_Alias + Alias'Length;
+            end;
+         end loop;
+         return Written_From (Ada.Strings.Unbounded.To_String (Result));
       end Written;
 
       --  Whether a token is a marker of either kind, and whether one is a

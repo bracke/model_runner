@@ -403,6 +403,13 @@ package Model_Runner.Generation is
       --  text does and as Qwen's do, or both ways, as Gemma's do.
       Causal_Rows : Boolean := False;
       Marker_Text : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+
+      --  Other text the template may write where a picture stands, read as
+      --  Marker_Text before anything else is done: MiniCPM-V 4.6's template
+      --  gathers a message's parts and writes <|image_pad|> for a picture,
+      --  which its processor opens out into the <image> frame. Empty for
+      --  none.
+      Marker_Alias : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       Frame_Before : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       Frame_After : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       Crops       : Crop_Counts_Access := null;

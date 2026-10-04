@@ -10487,9 +10487,59 @@ package body Model_Runner.Templates is
 
       --  The value of a one-term operand, or text of a longer one.
       function Held_Of (Value : Operand) return Held is
+
+         --  Whether a value is a list written out: data whose JSON is an
+         --  array, and not a message's content parts.
+         function Is_Array (H : Held) return Boolean is
+            Text : constant String := Model_Runner.Text.Trim (Text_Of (H));
+         begin
+            return H.Kind = Value_Data and then not H.Parts
+              and then Text'Length >= 2
+              and then Text (Text'First) = '['
+              and then Text (Text'Last) = ']';
+         end Is_Array;
+
+         --  Lists joined by '+' are one list, the second's elements after
+         --  the first's, as the language adds them: what a template that
+         --  gathers a message's parts writes, a part at a time, before it
+         --  joins them -- "set ns.parts = ns.parts + ['<|image_pad|>']".
+         function Joined_Lists return Held is
+            Result : Ada.Strings.Unbounded.Unbounded_String;
+            Any    : Boolean := False;
+         begin
+            for Index in 1 .. Value.Count loop
+               declare
+                  Text  : constant String :=
+                    Model_Runner.Text.Trim (Text_Of (Resolve (Value.Terms (Index))));
+                  Inner : constant String :=
+                    Model_Runner.Text.Trim
+                      (Text (Text'First + 1 .. Text'Last - 1));
+               begin
+                  if Inner'Length > 0 then
+                     if Any then
+                        Ada.Strings.Unbounded.Append (Result, ", ");
+                     end if;
+                     Ada.Strings.Unbounded.Append (Result, Inner);
+                     Any := True;
+                  end if;
+               end;
+            end loop;
+            return As_Data ("[" & Ada.Strings.Unbounded.To_String (Result) & "]");
+         end Joined_Lists;
+
+         All_Lists : Boolean := Value.Count >= 2;
       begin
          if Value.Count = 1 and then not Is_Sum (Value) then
             return Resolve (Value.Terms (1));
+         end if;
+         for Index in 1 .. Value.Count loop
+            exit when not All_Lists;
+            All_Lists :=
+              (Index = 1 or else Value.Terms (Index).Join = Join_Plus)
+              and then Is_Array (Resolve (Value.Terms (Index)));
+         end loop;
+         if All_Lists then
+            return Joined_Lists;
          end if;
          if Is_Sum (Value) then
             return As_Number (Value_Of (Value));

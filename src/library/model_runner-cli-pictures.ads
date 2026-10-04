@@ -172,7 +172,7 @@ private
       Marker, Soft, Closer : Model_Runner.Tokenizer.Token_Id :=
         Model_Runner.Tokenizer.No_Token;
       Keeps_Marker : Boolean := True;
-      Marker_Text, Before, After : Model_Runner.Text.Bounded :=
+      Marker_Text, Marker_Alias, Before, After : Model_Runner.Text.Bounded :=
         Model_Runner.Text.Empty;
       Lead, Bridge, Gap : Model_Runner.Text.Bounded :=
         Model_Runner.Text.Empty;

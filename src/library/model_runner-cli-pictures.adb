@@ -176,6 +176,7 @@ package body Model_Runner.CLI.Pictures is
    begin
       Close (Item);
       Status := E.Success;
+      Item.Marker_Alias := Model_Runner.Text.Empty;
 
       --  A model with neither family's tokens has no place for a picture
       --  whatever the projector says, and is refused before the projector
@@ -274,6 +275,12 @@ package body Model_Runner.CLI.Pictures is
             return;
          end if;
          Item.Marker_Text := Model_Runner.Text.To_Bounded ("<image>");
+         --  4.6's template writes <|image_pad|> where a picture stands, and
+         --  its processor opens that out into this frame.
+         Item.Marker_Alias :=
+           (if Model_Runner.Vision.Projector (Item.Eyes) = "minicpmv4_6"
+            then Model_Runner.Text.To_Bounded ("<|image_pad|>")
+            else Model_Runner.Text.Empty);
          Item.Before := Model_Runner.Text.Empty;
          Item.After := Model_Runner.Text.Empty;
          Item.Lead := Model_Runner.Text.Empty;
@@ -480,6 +487,7 @@ package body Model_Runner.CLI.Pictures is
       Into.Keep_Marker := Item.Keeps_Marker;
       Into.Causal_Rows := Placed;
       Into.Marker_Text := Item.Marker_Text;
+      Into.Marker_Alias := Item.Marker_Alias;
       Into.Frame_Before := Item.Before;
       Into.Frame_After := Item.After;
       Into.Crop_Lead := Item.Lead;
