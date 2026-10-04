@@ -17,10 +17,11 @@
 //  the constant multiplies the run's activation sum once. The subgroup adds
 //  the partials, and a workgroup answers NUM_ROWS rows.
 //
-//  The codebook formats -- IQ2_XXS, IQ2_XS, IQ3_S, IQ1_S and IQ1_M -- go
-//  further (LANE32): eight lanes a group, each a whole sub-block of
-//  thirty-two, eight groups in flight, with the codebook in the workgroup's
-//  memory (SHARED_GRID).
+//  The codebook formats but IQ2_S -- IQ2_XXS, IQ2_XS, IQ3_XXS, IQ3_S, IQ1_S
+//  and IQ1_M -- go further (LANE32): eight lanes a group, each a whole
+//  sub-block of thirty-two, eight groups in flight, with the codebook in the
+//  workgroup's memory (SHARED_GRID). IQ2_S's grid is 8 KB, which halves the
+//  workgroups a compute unit holds, and that kernel measured level all ways.
 //
 //  A lane finds its block from its column, so the formats of sixty-four and
 //  a hundred and twenty-eight elements need no width a multiple of 256: a
@@ -881,16 +882,38 @@ const uint IQ3XXS_GRID[256] = uint[256](
     0x3E2C0404u, 0x3E2C0414u, 0x3E2C1424u, 0x3E341C04u
 );
 
-float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
-    uint sub = within / 32u;
-    uint l = (within % 32u) / 8u;
-    uint aux = u32_at(at + 66u + 4u * sub);
-    float db = half_at(at) * (0.5 + float(aux >> 28u)) * 0.5;
-    uint q = at + 2u + 8u * sub + 2u * l;
-    return db * (signed_dot(IQ3XXS_GRID[byte_at(q)], IQ3XXS_GRID[byte_at(q + 1u)],
-                            ksign((aux >> (7u * l)) & 127u), a0, a1)
-               + signed_dot(IQ3XXS_GRID[byte_at(q + 2u)], IQ3XXS_GRID[byte_at(q + 3u)],
-                            ksign((aux >> (7u * l + 7u)) & 127u), a2, a3));
+//  As IQ2_XXS's: the grid in the workgroup's memory, and a lane a whole
+//  sub-block of thirty-two -- its eight indices as three words and a
+//  funnel, its signs and scale one word.
+#define SHARED_GRID
+shared uint grid_shared[256];
+void load_grid(uint tid) {
+    for (uint g = tid; g < 256u; g += 64u) {
+        grid_shared[g] = IQ3XXS_GRID[g];
+    }
+}
+
+#define LANE32
+float lane_dot32(uint at, uint sub, vec4 a[8]) {
+    uint q = at + 2u + 8u * sub;
+    uint i = q >> 2u;
+    uint shift = (q & 2u) * 8u;
+    uint w0 = w[i];
+    uint w1 = w[i + 1u];
+    uint w2 = w[i + 2u];
+    uvec2 qs = uvec2(shift == 0u ? w0 : (w0 >> 16u) | (w1 << 16u),
+                     shift == 0u ? w1 : (w1 >> 16u) | (w2 << 16u));
+    uint aux = quad_at(at + 66u + 4u * sub);
+    float sum = 0.0;
+    for (uint l = 0u; l < 4u; ++l) {
+        uint word = l < 2u ? qs.x : qs.y;
+        uint k = 16u * (l & 1u);
+        sum += signed_dot(grid_shared[(word >> k) & 255u],
+                          grid_shared[(word >> (k + 8u)) & 255u],
+                          ksign((aux >> (7u * l)) & 127u),
+                          a[2u * l], a[2u * l + 1u]);
+    }
+    return half_at(at) * (0.5 + float(aux >> 28u)) * 0.5 * sum;
 }
 #endif
 
