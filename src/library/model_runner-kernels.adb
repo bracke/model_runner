@@ -1209,6 +1209,349 @@ package body Model_Runner.Kernels is
       end;
    end Head_Dot_Halved;
 
+   ---------------------------
+   -- Head_Dots_Halved_Four --
+   ---------------------------
+
+   procedure Head_Dots_Halved_Four
+     (Left        : Real_Array;
+      At_Left     : Element_Count;
+      Left_Stride : Element_Count;
+      Right       : Half_Array;
+      At_Right    : Element_Count;
+      Span        : Element_Count;
+      Dots        : out Real_Array) is
+   begin
+      Dots := [others => 0.0];
+
+      if Span = 0
+        or else Left_Stride < Span
+        or else At_Left < Left'First
+        or else At_Right < Right'First
+        or else At_Left - Left'First + 3 * Left_Stride + Span
+                  > Element_Count (Left'Length)
+        or else At_Right - Right'First + Span > Element_Count (Right'Length)
+      then
+         return;
+      end if;
+
+      if Wide_Lanes and then Span mod 8 = 0 then
+         declare
+            LF : constant Character := ASCII.LF;
+
+            Left_At  : constant System.Address := Left (At_Left)'Address;
+            Right_At : constant System.Address := Right (At_Right)'Address;
+            Blocks   : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Span / 8);
+            Apart    : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Left_Stride * 4);
+            Into     : constant System.Address := Dots (Dots'First)'Address;
+         begin
+            --  The key's eight halves converted once a turn and multiplied
+            --  into four running sums, a query each; the four then folded
+            --  into one register of four, a lane a query.
+            System.Machine_Code.Asm
+              ("vxorps %%ymm0, %%ymm0, %%ymm0"           & LF
+               & "vxorps %%ymm1, %%ymm1, %%ymm1"         & LF
+               & "vxorps %%ymm2, %%ymm2, %%ymm2"         & LF
+               & "vxorps %%ymm3, %%ymm3, %%ymm3"         & LF
+               & "movq %0, %%r8"                         & LF
+               & "movq %1, %%r9"                         & LF
+               & "movq %2, %%r10"                        & LF
+               & "leaq (%%r8,%3), %%r11"                 & LF
+               & "1:"                                    & LF
+               & "vcvtph2ps (%%r9), %%ymm4"              & LF
+               & "vfmadd231ps (%%r8), %%ymm4, %%ymm0"    & LF
+               & "vfmadd231ps (%%r11), %%ymm4, %%ymm1"   & LF
+               & "vfmadd231ps (%%r11,%3), %%ymm4, %%ymm2" & LF
+               & "vfmadd231ps (%%r11,%3,2), %%ymm4, %%ymm3" & LF
+               & "addq $32, %%r8"                        & LF
+               & "addq $32, %%r11"                       & LF
+               & "addq $16, %%r9"                        & LF
+               & "decq %%r10"                            & LF
+               & "jnz 1b"                                & LF
+               --  Each sum folded as Head_Dot_Halved folds its one --
+               --  the upper half onto the lower, then two pairwise adds --
+               --  so a query's score is the same to the bit whichever
+               --  kernel took it; the pairwise adds of four at once.
+               & "vextractf128 $1, %%ymm0, %%xmm4"       & LF
+               & "vaddps %%xmm4, %%xmm0, %%xmm0"         & LF
+               & "vextractf128 $1, %%ymm1, %%xmm4"       & LF
+               & "vaddps %%xmm4, %%xmm1, %%xmm1"         & LF
+               & "vextractf128 $1, %%ymm2, %%xmm4"       & LF
+               & "vaddps %%xmm4, %%xmm2, %%xmm2"         & LF
+               & "vextractf128 $1, %%ymm3, %%xmm4"       & LF
+               & "vaddps %%xmm4, %%xmm3, %%xmm3"         & LF
+               & "vhaddps %%xmm1, %%xmm0, %%xmm0"        & LF
+               & "vhaddps %%xmm3, %%xmm2, %%xmm2"        & LF
+               & "vhaddps %%xmm2, %%xmm0, %%xmm0"        & LF
+               & "vmovups %%xmm0, (%4)"                  & LF
+               & "vzeroupper",
+               Inputs   =>
+                 [System.Address'Asm_Input ("r", Left_At),
+                  System.Address'Asm_Input ("r", Right_At),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Blocks),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Apart),
+                  System.Address'Asm_Input ("r", Into)],
+               Clobber  =>
+                 "ymm0, ymm1, ymm2, ymm3, ymm4, r8, r9, r10, r11, cc, memory",
+               Volatile => True);
+
+            return;
+         end;
+      end if;
+
+      for Which in 0 .. 3 loop
+         Dots (Dots'First + Element_Count (Which)) :=
+           Head_Dot_Halved
+             (Left, At_Left + Element_Count (Which) * Left_Stride,
+              Right, At_Right, Span);
+      end loop;
+   end Head_Dots_Halved_Four;
+
+   ----------------------------
+   -- Head_Dots_Halved_Eight --
+   ----------------------------
+
+   procedure Head_Dots_Halved_Eight
+     (Left        : Real_Array;
+      At_Left     : Element_Count;
+      Left_Stride : Element_Count;
+      Right       : Half_Array;
+      At_Right    : Element_Count;
+      Span        : Element_Count;
+      Dots        : out Real_Array) is
+   begin
+      Dots := [others => 0.0];
+
+      if Span = 0
+        or else Left_Stride < Span
+        or else At_Left < Left'First
+        or else At_Right < Right'First
+        or else At_Left - Left'First + 7 * Left_Stride + Span
+                  > Element_Count (Left'Length)
+        or else At_Right - Right'First + Span > Element_Count (Right'Length)
+      then
+         return;
+      end if;
+
+      if Wide_Lanes and then Span mod 8 = 0 then
+         declare
+            LF : constant Character := ASCII.LF;
+
+            Left_At  : constant System.Address := Left (At_Left)'Address;
+            Right_At : constant System.Address := Right (At_Right)'Address;
+            Blocks   : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Span / 8);
+            Apart    : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Left_Stride * 4);
+            Into     : constant System.Address := Dots (Dots'First)'Address;
+         begin
+            --  Rows 0 to 5 through r8 and r11 = r8 + one stride, scaled by
+            --  one, two and four; rows 6 and 7 through r12 = r8 + six.
+            System.Machine_Code.Asm
+              ("vxorps %%ymm0, %%ymm0, %%ymm0"           & LF
+               & "vxorps %%ymm1, %%ymm1, %%ymm1"         & LF
+               & "vxorps %%ymm2, %%ymm2, %%ymm2"         & LF
+               & "vxorps %%ymm3, %%ymm3, %%ymm3"         & LF
+               & "vxorps %%ymm4, %%ymm4, %%ymm4"         & LF
+               & "vxorps %%ymm5, %%ymm5, %%ymm5"         & LF
+               & "vxorps %%ymm6, %%ymm6, %%ymm6"         & LF
+               & "vxorps %%ymm7, %%ymm7, %%ymm7"         & LF
+               & "movq %0, %%r8"                         & LF
+               & "movq %1, %%r9"                         & LF
+               & "movq %2, %%r10"                        & LF
+               & "leaq (%%r8,%3), %%r11"                 & LF
+               & "leaq (%%r11,%3,4), %%r12"              & LF
+               & "addq %3, %%r12"                        & LF
+               & "1:"                                    & LF
+               & "vcvtph2ps (%%r9), %%ymm8"              & LF
+               & "vfmadd231ps (%%r8), %%ymm8, %%ymm0"    & LF
+               & "vfmadd231ps (%%r11), %%ymm8, %%ymm1"   & LF
+               & "vfmadd231ps (%%r8,%3,2), %%ymm8, %%ymm2" & LF
+               & "vfmadd231ps (%%r11,%3,2), %%ymm8, %%ymm3" & LF
+               & "vfmadd231ps (%%r8,%3,4), %%ymm8, %%ymm4" & LF
+               & "vfmadd231ps (%%r11,%3,4), %%ymm8, %%ymm5" & LF
+               & "vfmadd231ps (%%r12), %%ymm8, %%ymm6"   & LF
+               & "vfmadd231ps (%%r12,%3), %%ymm8, %%ymm7" & LF
+               & "addq $32, %%r8"                        & LF
+               & "addq $32, %%r11"                       & LF
+               & "addq $32, %%r12"                       & LF
+               & "addq $16, %%r9"                        & LF
+               & "decq %%r10"                            & LF
+               & "jnz 1b"                                & LF
+               --  Folded as Head_Dots_Halved_Four folds, for the same bits.
+               & "vextractf128 $1, %%ymm0, %%xmm8"       & LF
+               & "vaddps %%xmm8, %%xmm0, %%xmm0"         & LF
+               & "vextractf128 $1, %%ymm1, %%xmm8"       & LF
+               & "vaddps %%xmm8, %%xmm1, %%xmm1"         & LF
+               & "vextractf128 $1, %%ymm2, %%xmm8"       & LF
+               & "vaddps %%xmm8, %%xmm2, %%xmm2"         & LF
+               & "vextractf128 $1, %%ymm3, %%xmm8"       & LF
+               & "vaddps %%xmm8, %%xmm3, %%xmm3"         & LF
+               & "vextractf128 $1, %%ymm4, %%xmm8"       & LF
+               & "vaddps %%xmm8, %%xmm4, %%xmm4"         & LF
+               & "vextractf128 $1, %%ymm5, %%xmm8"       & LF
+               & "vaddps %%xmm8, %%xmm5, %%xmm5"         & LF
+               & "vextractf128 $1, %%ymm6, %%xmm8"       & LF
+               & "vaddps %%xmm8, %%xmm6, %%xmm6"         & LF
+               & "vextractf128 $1, %%ymm7, %%xmm8"       & LF
+               & "vaddps %%xmm8, %%xmm7, %%xmm7"         & LF
+               & "vhaddps %%xmm1, %%xmm0, %%xmm0"        & LF
+               & "vhaddps %%xmm3, %%xmm2, %%xmm2"        & LF
+               & "vhaddps %%xmm2, %%xmm0, %%xmm0"        & LF
+               & "vmovups %%xmm0, (%4)"                  & LF
+               & "vhaddps %%xmm5, %%xmm4, %%xmm4"        & LF
+               & "vhaddps %%xmm7, %%xmm6, %%xmm6"        & LF
+               & "vhaddps %%xmm6, %%xmm4, %%xmm4"        & LF
+               & "vmovups %%xmm4, 16(%4)"                & LF
+               & "vzeroupper",
+               Inputs   =>
+                 [System.Address'Asm_Input ("r", Left_At),
+                  System.Address'Asm_Input ("r", Right_At),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Blocks),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Apart),
+                  System.Address'Asm_Input ("r", Into)],
+               Clobber  =>
+                 "ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, ymm7, ymm8, "
+                 & "r8, r9, r10, r11, r12, cc, memory",
+               Volatile => True);
+
+            return;
+         end;
+      end if;
+
+      for Which in 0 .. 7 loop
+         Dots (Dots'First + Element_Count (Which)) :=
+           Head_Dot_Halved
+             (Left, At_Left + Element_Count (Which) * Left_Stride,
+              Right, At_Right, Span);
+      end loop;
+   end Head_Dots_Halved_Eight;
+
+   -------------------------------
+   -- Blend_Sixteen_Halved_Four --
+   -------------------------------
+
+   procedure Blend_Sixteen_Halved_Four
+     (Sums          : in out Real_Array;
+      Weights       : Real_Array;
+      At_Weight     : Element_Count;
+      Weight_Stride : Element_Count;
+      Values        : Half_Array;
+      At_Value      : Element_Count;
+      Stride        : Element_Count;
+      Steps         : Element_Count) is
+   begin
+      if Steps = 0
+        or else Stride < 16
+        or else Weight_Stride < Steps
+        or else At_Weight < Weights'First
+        or else At_Value < Values'First
+        or else At_Weight - Weights'First + 3 * Weight_Stride + Steps
+                  > Element_Count (Weights'Length)
+        or else At_Value - Values'First + (Steps - 1) * Stride + 16
+                  > Element_Count (Values'Length)
+      then
+         return;
+      end if;
+
+      if Wide_Lanes then
+         declare
+            LF : constant Character := ASCII.LF;
+
+            Sums_At   : constant System.Address := Sums (Sums'First)'Address;
+            Weight_At : constant System.Address := Weights (At_Weight)'Address;
+            Value_At  : constant System.Address := Values (At_Value)'Address;
+            Left      : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Steps);
+            Apart     : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Stride * 2);
+            Rows      : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Weight_Stride * 4);
+         begin
+            --  A position a turn: its sixteen values converted once, and
+            --  each of the four queries' weights broadcast and multiplied
+            --  into that query's two registers of sums.
+            System.Machine_Code.Asm
+              ("vmovups 0(%0), %%ymm0"                   & LF
+               & "vmovups 32(%0), %%ymm1"                & LF
+               & "vmovups 64(%0), %%ymm2"                & LF
+               & "vmovups 96(%0), %%ymm3"                & LF
+               & "vmovups 128(%0), %%ymm4"               & LF
+               & "vmovups 160(%0), %%ymm5"               & LF
+               & "vmovups 192(%0), %%ymm6"               & LF
+               & "vmovups 224(%0), %%ymm7"               & LF
+               & "movq %1, %%r8"                         & LF
+               & "movq %2, %%r9"                         & LF
+               & "movq %3, %%r10"                        & LF
+               & "leaq (%%r8,%5), %%r11"                 & LF
+               & "1:"                                    & LF
+               & "vcvtph2ps 0(%%r9), %%ymm8"             & LF
+               & "vcvtph2ps 16(%%r9), %%ymm9"            & LF
+               & "vbroadcastss (%%r8), %%ymm10"          & LF
+               & "vfmadd231ps %%ymm8, %%ymm10, %%ymm0"   & LF
+               & "vfmadd231ps %%ymm9, %%ymm10, %%ymm1"   & LF
+               & "vbroadcastss (%%r11), %%ymm11"         & LF
+               & "vfmadd231ps %%ymm8, %%ymm11, %%ymm2"   & LF
+               & "vfmadd231ps %%ymm9, %%ymm11, %%ymm3"   & LF
+               & "vbroadcastss (%%r11,%5), %%ymm12"      & LF
+               & "vfmadd231ps %%ymm8, %%ymm12, %%ymm4"   & LF
+               & "vfmadd231ps %%ymm9, %%ymm12, %%ymm5"   & LF
+               & "vbroadcastss (%%r11,%5,2), %%ymm13"    & LF
+               & "vfmadd231ps %%ymm8, %%ymm13, %%ymm6"   & LF
+               & "vfmadd231ps %%ymm9, %%ymm13, %%ymm7"   & LF
+               & "addq $4, %%r8"                         & LF
+               & "addq $4, %%r11"                        & LF
+               & "addq %4, %%r9"                         & LF
+               & "decq %%r10"                            & LF
+               & "jnz 1b"                                & LF
+               & "vmovups %%ymm0, 0(%0)"                 & LF
+               & "vmovups %%ymm1, 32(%0)"                & LF
+               & "vmovups %%ymm2, 64(%0)"                & LF
+               & "vmovups %%ymm3, 96(%0)"                & LF
+               & "vmovups %%ymm4, 128(%0)"               & LF
+               & "vmovups %%ymm5, 160(%0)"               & LF
+               & "vmovups %%ymm6, 192(%0)"               & LF
+               & "vmovups %%ymm7, 224(%0)"               & LF
+               & "vzeroupper",
+               Inputs   =>
+                 [System.Address'Asm_Input ("r", Sums_At),
+                  System.Address'Asm_Input ("r", Weight_At),
+                  System.Address'Asm_Input ("r", Value_At),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Left),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Apart),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Rows)],
+               Clobber  =>
+                 "ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, ymm7, ymm8, "
+                 & "ymm9, ymm10, ymm11, ymm12, ymm13, r8, r9, r10, r11, "
+                 & "cc, memory",
+               Volatile => True);
+
+            return;
+         end;
+      end if;
+
+      for Which in 0 .. 3 loop
+         for Step in 0 .. Steps - 1 loop
+            declare
+               Weight : constant N.Real :=
+                 Weights (At_Weight + Element_Count (Which) * Weight_Stride
+                          + Step);
+               Here   : constant Element_Count := At_Value + Step * Stride;
+               Run    : constant Element_Count :=
+                 Sums'First + Element_Count (Which) * 16;
+            begin
+               for Index in Element_Count range 0 .. 15 loop
+                  Sums (Run + Index) :=
+                    Sums (Run + Index)
+                    + Weight * N.To_Real (Values (Here + Index));
+               end loop;
+            end;
+         end loop;
+      end loop;
+   end Blend_Sixteen_Halved_Four;
+
    ----------------------
    -- Blend_Run_Halved --
    ----------------------

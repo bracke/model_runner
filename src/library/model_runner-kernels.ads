@@ -341,6 +341,75 @@ package Model_Runner.Kernels is
       At_Right : Element_Count;
       Span     : Element_Count) return Real;
 
+   --  Four queries' dot products with one half-precision key, the key
+   --  converted once for the four: the queries Left_Stride apart from
+   --  At_Left, Dots receiving them in order. What a prompt's attention on
+   --  the processor does a block of positions at a time -- one at a time,
+   --  each read and converted every key it saw again, and a 3,863-token
+   --  prompt on qwen3-8b spent 43 per cent of itself there.
+   --
+   --  @param Left Vector the queries are taken from.
+   --  @param At_Left Index of the first query's first component.
+   --  @param Left_Stride Elements from one query to the next.
+   --  @param Right Half-precision vector the key is taken from.
+   --  @param At_Right Index of the key's first component.
+   --  @param Span How many components a query and the key have.
+   --  @param Dots Receives the four dot products, from its first index.
+   procedure Head_Dots_Halved_Four
+     (Left        : Real_Array;
+      At_Left     : Element_Count;
+      Left_Stride : Element_Count;
+      Right       : Half_Array;
+      At_Right    : Element_Count;
+      Span        : Element_Count;
+      Dots        : out Real_Array)
+   with Pre => Dots'Length = 4;
+
+   --  Eight queries' dot products with one half-precision key, as
+   --  Head_Dots_Halved_Four's four: the key converted once for eight.
+   --
+   --  @param Left Vector the queries are taken from.
+   --  @param At_Left Index of the first query's first component.
+   --  @param Left_Stride Elements from one query to the next.
+   --  @param Right Half-precision vector the key is taken from.
+   --  @param At_Right Index of the key's first component.
+   --  @param Span How many components a query and the key have.
+   --  @param Dots Receives the eight dot products, from its first index.
+   procedure Head_Dots_Halved_Eight
+     (Left        : Real_Array;
+      At_Left     : Element_Count;
+      Left_Stride : Element_Count;
+      Right       : Half_Array;
+      At_Right    : Element_Count;
+      Span        : Element_Count;
+      Dots        : out Real_Array)
+   with Pre => Dots'Length = 8;
+
+   --  Four queries' weighted sums of sixteen components of a
+   --  half-precision value cache, each value converted once for the four.
+   --  Sums holds the four runs one after another, sixteen each, and is
+   --  added to; the queries' weights are rows Weight_Stride apart from
+   --  At_Weight.
+   --
+   --  @param Sums Four runs of sixteen sums, added to in place.
+   --  @param Weights Vector the weights are taken from.
+   --  @param At_Weight Index of the first query's first position's weight.
+   --  @param Weight_Stride Elements from one query's weights to the next's.
+   --  @param Values Half-precision vector the values are taken from.
+   --  @param At_Value Index of the first position's first component.
+   --  @param Stride Elements between one position's values and the next's.
+   --  @param Steps How many positions.
+   procedure Blend_Sixteen_Halved_Four
+     (Sums          : in out Real_Array;
+      Weights       : Real_Array;
+      At_Weight     : Element_Count;
+      Weight_Stride : Element_Count;
+      Values        : Half_Array;
+      At_Value      : Element_Count;
+      Stride        : Element_Count;
+      Steps         : Element_Count)
+   with Pre => Sums'Length = 64;
+
    --  What Blend_Run does, reading a value cache kept at half precision.
    --
    --  The narrow cache existed before this and nothing wide read it: a

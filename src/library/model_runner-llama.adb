@@ -10283,6 +10283,189 @@ package body Model_Runner.Llama is
       end loop;
    end Blend_Halved;
 
+   --  Four queries' attention over the same keys, as Blend_Halved does one
+   --  query's: a key read and converted once for the four, a value once.
+   --  The four are consecutive positions of a batch, Q_Stride apart in
+   --  Query and T_Stride apart in Target, each with its own range of
+   --  cells; the block runs over the union of the ranges and a query's
+   --  weights outside its own are nought. A prompt on the processor did
+   --  one query at a time, every key it saw read and converted again:
+   --  qwen3-8b's 3,863 tokens spent 46 s of 106 there.
+   type Cell_Quad is array (0 .. 7) of Element_Count;
+
+   procedure Blend_Halved_Four
+     (Size       : Positive;
+      Query      : Real_Array;
+      Q_At       : Element_Count;
+      Q_Stride   : Element_Count;
+      Keys       : T.Half_Array;
+      Values     : T.Half_Array;
+      K_Base     : Element_Count;
+      V_Base     : Element_Count;
+      KV_Width   : Element_Count;
+      V_Width    : Element_Count;
+      Head_Size  : Element_Count;
+      Value_Size : Element_Count;
+      Group_Size : Element_Count;
+      Heads      : Element_Count;
+      Firsts     : Cell_Quad;
+      Lasts      : Cell_Quad;
+      Query_Ats  : Cell_Quad;
+      Scale      : Real;
+      Cap        : Real;
+      Max_Bias   : Real;
+      Sinks      : Model_Runner.Tensors.Real_Array_Access;
+      From_Head  : Element_Count;
+      To_Head    : Element_Count;
+      Room       : Element_Count;
+      Rows       : in out Real_Array;
+      Target     : in out Real_Array;
+      T_At       : Element_Count;
+      T_Stride   : Element_Count;
+      Ok         : out Boolean)
+   is
+      pragma Suppress (Overflow_Check);
+
+      Last_Row : constant Natural := Size - 1;
+
+      function Lowest return Element_Count is
+         Low : Element_Count := Firsts (0);
+      begin
+         for R in 1 .. Last_Row loop
+            Low := Element_Count'Min (Low, Firsts (R));
+         end loop;
+         return Low;
+      end Lowest;
+
+      function Highest return Element_Count is
+         High : Element_Count := Lasts (0);
+      begin
+         for R in 1 .. Last_Row loop
+            High := Element_Count'Max (High, Lasts (R));
+         end loop;
+         return High;
+      end Highest;
+
+      Lo : constant Element_Count := Lowest;
+      Hi : constant Element_Count := Highest;
+      Dots : Real_Array (0 .. 7);
+   begin
+      Ok := True;
+
+      for Head in From_Head .. To_Head loop
+         declare
+            Group : constant Element_Count := Head / Group_Size;
+            Slope : constant Real := Head_Slope (Max_Bias, Head, Heads);
+         begin
+            for Step in Lo .. Hi loop
+               if Size = 8 then
+                  K.Head_Dots_Halved_Eight
+                    (Query, Q_At + Head * Head_Size, Q_Stride,
+                     Keys, Keys'First + K_Base + Step * KV_Width
+                           + Group * Head_Size,
+                     Head_Size, Dots);
+               else
+                  K.Head_Dots_Halved_Four
+                    (Query, Q_At + Head * Head_Size, Q_Stride,
+                     Keys, Keys'First + K_Base + Step * KV_Width
+                           + Group * Head_Size,
+                     Head_Size, Dots (0 .. 3));
+               end if;
+               for R in 0 .. Last_Row loop
+                  Rows (Rows'First + Element_Count (R) * Room + Step) :=
+                    Dots (Element_Count (R)) * Scale;
+               end loop;
+            end loop;
+
+            for R in 0 .. Last_Row loop
+               declare
+                  Row   : constant Element_Count :=
+                    Rows'First + Element_Count (R) * Room;
+                  Usable : Boolean;
+               begin
+                  if Slope > 0.0 then
+                     for Step in Firsts (R) .. Lasts (R) loop
+                        Rows (Row + Step) :=
+                          Rows (Row + Step)
+                          - Slope
+                            * Real (abs (Integer (Step)
+                                         - Integer (Query_Ats (R))));
+                     end loop;
+                  end if;
+
+                  if Cap > 0.0 then
+                     for Step in Firsts (R) .. Lasts (R) loop
+                        Rows (Row + Step) := Capped (Rows (Row + Step), Cap);
+                     end loop;
+                  end if;
+
+                  if Sinks /= null then
+                     K.Softmax
+                       (Rows (Row + Firsts (R) .. Row + Lasts (R)),
+                        Sinks.all (Sinks.all'First + Element_Count (Head)),
+                        Usable);
+                  else
+                     K.Softmax
+                       (Rows (Row + Firsts (R) .. Row + Lasts (R)), Usable);
+                  end if;
+                  if not Usable then
+                     Ok := False;
+                     return;
+                  end if;
+
+                  for Step in Lo .. Firsts (R) - 1 loop
+                     Rows (Row + Step) := 0.0;
+                  end loop;
+                  for Step in Lasts (R) + 1 .. Hi loop
+                     Rows (Row + Step) := 0.0;
+                  end loop;
+               end;
+            end loop;
+
+            declare
+               At_Component : Element_Count := 0;
+               Sums : Real_Array (0 .. 63);
+            begin
+               while At_Component < Value_Size loop
+                  --  Four queries a pass: sixteen sums each is what the
+                  --  registers hold.
+                  for Quarter in 0 .. Last_Row / 4 loop
+                     Sums := [others => 0.0];
+                     K.Blend_Sixteen_Halved_Four
+                       (Sums          => Sums,
+                        Weights       => Rows,
+                        At_Weight     =>
+                          Rows'First + Element_Count (4 * Quarter) * Room + Lo,
+                        Weight_Stride => Room,
+                        Values        => Values,
+                        At_Value      =>
+                          Values'First + V_Base + Lo * V_Width
+                          + Group * Value_Size + At_Component,
+                        Stride        => V_Width,
+                        Steps         => Hi - Lo + 1);
+
+                     for R in 0 .. 3 loop
+                        declare
+                           Q : constant Element_Count :=
+                             Element_Count (4 * Quarter + R);
+                        begin
+                           Target (T_At + Q * T_Stride
+                                   + Head * Value_Size + At_Component
+                                   .. T_At + Q * T_Stride
+                                      + Head * Value_Size + At_Component + 15)
+                             := Sums (Element_Count (R) * 16
+                                      .. Element_Count (R) * 16 + 15);
+                        end;
+                     end loop;
+                  end loop;
+
+                  At_Component := At_Component + 16;
+               end loop;
+            end;
+         end;
+      end loop;
+   end Blend_Halved_Four;
+
    --  Normalize each head of a projection in place.
    --
    --  The gain is one element per element of a head, shared across the
@@ -21306,8 +21489,41 @@ package body Model_Runner.Llama is
                            return;
                         end if;
 
-                        for Which in 0 .. Count - 1 loop
-                           declare
+                        declare
+                           --  Four positions at a time where the cache is
+                           --  kept in halves: a key read and converted once
+                           --  for the four (Blend_Halved_Four). The rest of a
+                           --  batch, and every other cache, a position at a
+                           --  time as before.
+                           Four : constant Boolean :=
+                             Item.Held = Halved
+                             and then Value_Size mod 16 = 0
+                             and then Count >= 4;
+                           Size : Positive := 4;
+                           Rows : T.Real_Array_Access := null;
+                           Next : Element_Count := 0;
+
+                           function First_Of (Which : Element_Count)
+                             return Element_Count
+                           is (Cell_Of (Item'Unchecked_Access.all,
+                                        Natural (Index),
+                                        Earliest (Settings, Sits_At (Which),
+                                                  Natural (Index))));
+
+                           function Last_Of (Which : Element_Count)
+                             return Element_Count
+                           is (Cell_Of (Item'Unchecked_Access.all,
+                                        Natural (Index),
+                                        (if Settings.Causal
+                                         then Sits_At (Sees_To (Which))
+                                         else Reserved + Count - 1)));
+
+                           function Query_Of (Which : Element_Count)
+                             return Element_Count
+                           is (Cell_Of (Item'Unchecked_Access.all,
+                                        Natural (Index), Sits_At (Which)));
+
+                           procedure One (Which : Element_Count) is
                               --  A causal position looks to itself -- or to
                               --  the end of the run of given rows it is in.
                               --  The window is measured from the position
@@ -21397,8 +21613,60 @@ package body Model_Runner.Llama is
                               if not Usable then
                                  Share.Ok := False;
                               end if;
-                           end;
-                        end loop;
+                           end One;
+                        begin
+                           if Four then
+                              T.Allocate (8 * Item.Score_Room, Rows);
+                           end if;
+
+                           while Next < Count loop
+                              Size :=
+                                (if Next + 7 < Count then 8 else 4);
+                              if Rows /= null and then Next + 3 < Count then
+                                 declare
+                                    Firsts, Lasts, Queries : Cell_Quad;
+                                    Usable : Boolean;
+                                 begin
+                                    Firsts := [others => 0];
+                                    Lasts := [others => 0];
+                                    Queries := [others => 0];
+                                    for R in 0 .. Size - 1 loop
+                                       Firsts (R) :=
+                                         First_Of (Next + Element_Count (R));
+                                       Lasts (R) :=
+                                         Last_Of (Next + Element_Count (R));
+                                       Queries (R) :=
+                                         Query_Of (Next + Element_Count (R));
+                                    end loop;
+
+                                    Blend_Halved_Four
+                                      (Size,
+                                       Query.all, Slot (Next, Wide), Wide,
+                                       Item'Unchecked_Access.Half_Keys.all,
+                                       Item'Unchecked_Access.Half_Values.all,
+                                       Base, V_Base, KV_Width, V_Width,
+                                       Head_Size, Value_Size,
+                                       Element_Count (Settings.Group_Size),
+                                       Heads, Firsts, Lasts, Queries, Scale,
+                                       Settings.Attention_Cap,
+                                       Settings.Max_Bias, Current.Sinks,
+                                       From, To, Item.Score_Room, Rows.all,
+                                       Attend.all, Slot (Next, Blend), Blend,
+                                       Usable);
+
+                                    if not Usable then
+                                       Share.Ok := False;
+                                    end if;
+                                 end;
+                                 Next := Next + Element_Count (Size);
+                              else
+                                 One (Next);
+                                 Next := Next + 1;
+                              end if;
+                           end loop;
+
+                           T.Free (Rows);
+                        end;
                      end Run;
 
                      Share  : aliased Batch_Share;

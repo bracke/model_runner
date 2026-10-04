@@ -6631,6 +6631,93 @@ package body Tests.GGUF_Cases is
    --  the overflow past the largest half, the infinities and a NaN -- each
    --  of those last placed among seven ordinary values, so that a block
    --  holding one goes the slow way and the blocks beside it do not.
+   --  The block attention's kernels, against the one-query kernels they
+   --  stand in for: four and eight queries' dot products with a key, and
+   --  four queries' weighted sums of a value run, the same to the bit --
+   --  a prompt's attention must not read differently for being taken a
+   --  block of positions at a time. At a span the wide lanes take and at
+   --  one they do not.
+   procedure Block_Kernels_Are_The_One_Query_Kernels
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      package KK renames Model_Runner.Kernels;
+
+      Span   : constant N.Element_Count := 128;
+      Stride : constant N.Element_Count := 160;
+      Steps  : constant N.Element_Count := 37;
+
+      Queries : N.Real_Array (0 .. 8 * Stride - 1);
+      Keys    : N.Half_Array (0 .. Steps * Stride - 1);
+      Weights : N.Real_Array (0 .. 4 * 64 - 1);
+      Four    : N.Real_Array (0 .. 3);
+      Eight   : N.Real_Array (0 .. 7);
+      Sums    : N.Real_Array (0 .. 63);
+      --  A run of sixty-four, which is what the one-query blend is
+      --  called with and what its wide lanes take; the block's sixteen
+      --  are its first sixteen.
+      One     : N.Real_Array (0 .. 63);
+   begin
+      for Index in Queries'Range loop
+         Queries (Index) := N.Real (Index mod 53 - 26) * 0.0311;
+      end loop;
+      for Index in Keys'Range loop
+         Keys (Index) := N.To_Half (N.Real (Index mod 41 - 20) * 0.047);
+      end loop;
+      for Index in Weights'Range loop
+         Weights (Index) := N.Real (Index mod 13) * 0.0071;
+      end loop;
+
+      for Wide in Boolean loop
+         KK.Use_Wide_Lanes (Wide and then Model_Runner.Platform.Wide_Vectors);
+
+         for Width in N.Element_Count range 24 .. 25 loop
+            declare
+               Run : constant N.Element_Count :=
+                 (if Width = 24 then Span else 20);
+            begin
+               KK.Head_Dots_Halved_Four
+                 (Queries, 3, Stride, Keys, 5 * Stride, Run, Four);
+               KK.Head_Dots_Halved_Eight
+                 (Queries, 3, Stride, Keys, 5 * Stride, Run, Eight);
+               for Which in N.Element_Count range 0 .. 7 loop
+                  declare
+                     Alone : constant N.Real :=
+                       KK.Head_Dot_Halved
+                         (Queries, 3 + Which * Stride, Keys, 5 * Stride, Run);
+                  begin
+                     Assert (Eight (Which) = Alone,
+                             "eight queries' dot product" & Which'Image
+                             & " is not the one query's");
+                     if Which < 4 then
+                        Assert (Four (Which) = Alone,
+                                "four queries' dot product" & Which'Image
+                                & " is not the one query's");
+                     end if;
+                  end;
+               end loop;
+            end;
+         end loop;
+
+         Sums := [others => 0.0];
+         KK.Blend_Sixteen_Halved_Four
+           (Sums, Weights, 2, 64, Keys, 7, Stride, Steps - 1);
+         for Which in N.Element_Count range 0 .. 3 loop
+            One := [others => 0.0];
+            KK.Blend_Run_Halved
+              (One, Weights, 2 + Which * 64, Keys, 7, Stride, Steps - 1);
+            for Index in N.Element_Count range 0 .. 15 loop
+               Assert (Sums (Which * 16 + Index) = One (Index),
+                       "four queries' blend" & Which'Image
+                       & " differs from the one query's at" & Index'Image);
+            end loop;
+         end loop;
+      end loop;
+
+      KK.Use_Wide_Lanes (Model_Runner.Platform.Wide_Vectors);
+   end Block_Kernels_Are_The_One_Query_Kernels;
+
    procedure Halves_Eight_At_A_Time_Are_To_Half
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -7610,6 +7697,10 @@ package body Tests.GGUF_Cases is
         (T, Every_Half_Widens_To_Its_Value'Access,
          "every one of the 65536 half precision patterns widens to the "
          & "value the format defines");
+      Register_Routine
+        (T, Block_Kernels_Are_The_One_Query_Kernels'Access,
+         "the block attention's kernels, four and eight queries at a time, "
+         & "are the one-query kernels to the bit");
       Register_Routine
         (T, Halves_Eight_At_A_Time_Are_To_Half'Access,
          "values converted to half precision eight at a time are what "
