@@ -7656,7 +7656,10 @@ reference 6FC0C6BBB84302D2 src/library/model_runner-backend-reference.adb src/li
 #   its tables at the front and, read as halves, only them and the copy --
 #   where the cache lives, not what any kernel computes; TinyLlama Q4_0 on
 #   the device read 879-914 / 97.3-97.9 t/s before and after.
-device C335D6AC213F37DB src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Restamped 2026-10-04, not re-measured: a batch of eight to fifteen
+#   positions on a cache read as halves takes the matrix kernel rather
+#   than the tiled one; these figures are a binary32 cache's.
+device 8CDCD2F05CBBCBB6 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 
 # covers: the three-row table under "Drafting", the per-token costs derived
@@ -10727,7 +10730,10 @@ tokenizer CE3B696CD412A3B6 src/library/model_runner-tokenizer.adb
 #   its tables at the front and, read as halves, only them and the copy --
 #   where the cache lives, not what any kernel computes; TinyLlama Q4_0 on
 #   the device read 879-914 / 97.3-97.9 t/s before and after.
-outside C335D6AC213F37DB src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Restamped 2026-10-04, not re-measured: a batch of eight to fifteen
+#   positions on a cache read as halves takes the matrix kernel rather
+#   than the tiled one; these figures are a binary32 cache's.
+outside 8CDCD2F05CBBCBB6 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-27  The row tile at sixty-four, and the instrument's first row
 #
@@ -25584,3 +25590,20 @@ panels FD57EF5FBA70A5D5 src/library/model_runner-quantization-interleave.ads src
 # multiplying every format failed with the new IQ2_S kernel mutated.
 # load: one-minute average 1.0 to 2.3
 # model: TinyLlama 1.1B chat, each format whole (Q8_0 requantized)
+
+
+# 2026-10-04, continued: what the binary32-free cache sent to the host.
+# The matrix attention takes a head of a multiple of sixteen up to 256 --
+# every model in the store -- but only a batch of sixteen queries or more;
+# eight to fifteen went to the tiled kernel, which reads the binary32 rows,
+# and with none kept it was refused and the layer attended on the host. A
+# 12-token prompt on qwen3-8b: 576 of 612 layers whole on the device (a
+# layer pass of 36 on the host), where the build before had all 612. The
+# matrix kernel now takes eight to fifteen where only the copy is kept, a
+# block part empty as it takes the end of any prompt: 1,188 of 1,188 whole,
+# the same 32 tokens of text as before the change, 15.06 t/s against 14.97.
+# Prompts of 1 to 15 words and one of 527 tokens (its last batch 15) give
+# the build before's text with every layer whole. In the suite: a batch of
+# twelve on a paged binary16 cache stays whole on the device, which failed
+# (0 of 2 layers) with the old bound.
+# model: Qwen3-8B Q4_K_M, TinyLlama 1.1B chat Q4_0

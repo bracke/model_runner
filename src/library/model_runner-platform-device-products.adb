@@ -478,7 +478,12 @@ package body Model_Runner.Platform.Device.Products is
       Head_Size  : Natural;
       Value_Size : Natural) return Address
    is (if Item.Exact_Attention
-         or else Positions < Matrix_Queries
+         --  A cache kept as its copy has no binary32 rows for the tiled
+         --  kernel that takes eight to fifteen queries otherwise, so the
+         --  matrix kernel takes them, a block part empty -- as it takes the
+         --  last block of any prompt.
+         or else Positions
+                 < (if Item.Copy_Only then Query_Block else Matrix_Queries)
          or else Head_Size mod 16 /= 0
          or else Value_Size mod 16 /= 0
        then Null_Handle

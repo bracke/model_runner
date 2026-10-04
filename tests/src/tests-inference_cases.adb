@@ -6466,6 +6466,88 @@ package body Tests.Inference_Cases is
    -- A_Paged_Window_Slides_As_A_Block_Slides --
    --------------------------------------------------
 
+   --  A paged cache read as halves keeps no binary32 rows, so the tiled
+   --  kernel that took eight to fifteen queries has nothing to read; the
+   --  matrix kernel takes them instead, and the layer stays on the
+   --  device. Handed to the tiled kernel's refusal, a 12-token prompt went
+   --  to the host a layer pass at a time. Skipped where there is no device.
+   procedure A_Short_Batch_Stays_Whole_On_A_Halves_Cache
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Image : B.Byte_Array_Access;
+      Ready : Boolean;
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready);
+
+      if not Ready then
+         return;
+      end if;
+
+      Tiny_Model.Build (Image, Format => Tiny_Model.Q4_K, Room => 640);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Item   : Containers.Container;
+         Model  : aliased L.Model;
+         Live   : L.Session;
+         Status : E.Error_Info;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse
+           (Item, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+         L.Prepare
+           (Model, Item, Source,
+            Backend => Model_Runner.Backend.Backend_Device,
+            Status  => Status);
+         Assert (E.Is_Ok (Status), "the device would not take the fixture");
+
+         declare
+            Words  : constant access constant Vocab.Vocabulary :=
+              L.Vocabulary (Model);
+            A      : constant Vocab.Token_Id := Vocab.Find (Words.all, "a");
+            Bee    : constant Vocab.Token_Id := Vocab.Find (Words.all, "b");
+            Tokens : Vocab.Token_Array (1 .. 312);
+            Logits : N.Real_Array
+              (0 .. N.Element_Count (L.Config (Model).Vocabulary) - 1);
+            Before : Natural;
+         begin
+            for Index in Tokens'Range loop
+               Tokens (Index) := (if Index mod 3 = 0 then A else Bee);
+            end loop;
+            Tokens (1) := Vocab.Beginning_Token (Words.all);
+
+            --  A binary16 cache, as a run keeps by default: the device then
+            --  reads its rows as halves.
+            L.Open (Live, Model, 640, Status => Status,
+                    Cache => L.Halved, Paged => True);
+            Assert (E.Is_Ok (Status), "the session did not open");
+            L.Evaluate_Batch (Live, Model, Tokens (1 .. 300), Logits,
+                              Status => Status);
+            Assert (E.Is_Ok (Status), "the first batch failed");
+
+            Before := Model_Runner.Backend.Device.Layers_Whole;
+            L.Evaluate_Batch (Live, Model, Tokens (301 .. 312), Logits,
+                              Status => Status);
+            Assert (E.Is_Ok (Status), "the batch of twelve failed");
+            Assert (Model_Runner.Backend.Device.Layers_Whole - Before
+                      = L.Config (Model).Layers,
+                    "a batch of twelve went whole on the device in"
+                    & Natural'Image
+                        (Model_Runner.Backend.Device.Layers_Whole - Before)
+                    & " of" & Natural'Image (L.Config (Model).Layers)
+                    & " layers");
+            L.Close (Live);
+         end;
+      end;
+      B.Free (Image);
+      Model_Runner.Backend.Device.Close;
+   end A_Short_Batch_Stays_Whole_On_A_Halves_Cache;
+
    --  Pages dealt ahead are the pages a batch would have been dealt: a
    --  paged session on the device that reserves its run up front answers
    --  as one that grows a batch at a time. Skipped where there is no
@@ -14611,6 +14693,10 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Adapters_Stack_And_Come_Off_Again'Access,
          "adapters stack, and a scale of minus one takes one off again");
+      Register_Routine
+        (T, A_Short_Batch_Stays_Whole_On_A_Halves_Cache'Access,
+         "a batch of twelve on a paged cache read as halves stays whole on "
+         & "the device");
       Register_Routine
         (T, Pages_Dealt_Ahead_Answer_As_Pages_Dealt_Late'Access,
          "a paged session that deals its run's pages ahead answers as one "
