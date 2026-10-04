@@ -5,6 +5,7 @@ with Interfaces;
 use type Interfaces.Unsigned_64;
 
 with Hostkit.Fs;
+with Hostkit.Host;
 
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
@@ -7697,6 +7698,29 @@ package body Checks is
          Parsed : Natural := 0;
          Broken : Natural := 0;
 
+         --  Whether a body is another host's and names a unit whose contents
+         --  are its own host's runtime: Ada.Interrupts.Names lists the
+         --  signals of the runtime it ships with, and the POSIX signals
+         --  body's SIGHUP is not in Windows's. Analysed here that body fails
+         --  on a Windows machine for a name that is right where it is
+         --  built, so such a body is parsed for its syntax alone on another
+         --  host, and analysed in full on its own -- which the
+         --  continuous-integration runners of each kind are.
+         function Runtime_Bound (Host, Path : String) return Boolean is
+            use type Hostkit.Host.Kind;
+
+            Here : constant Hostkit.Host.Kind := Hostkit.Host.Current;
+            Own  : constant Boolean :=
+              (if Host = "windows" then Here = Hostkit.Host.Windows
+               elsif Host = "unsupported" then False
+               else Here in Hostkit.Host.Linux | Hostkit.Host.MacOS);
+         begin
+            return not Own
+              and then Ada.Strings.Fixed.Index
+                         (Project_Tools.Files.Read_Raw_File (Path),
+                          "Ada.Interrupts.Names") > 0;
+         end Runtime_Bound;
+
          --  Every one of them failing is a statement about the compiler.
          function Failed_All return Boolean is (Broken = Parsed);
       begin
@@ -7746,7 +7770,9 @@ package body Checks is
                                    ("-c"));
                               Args.Append
                                 (Ada.Strings.Unbounded.To_Unbounded_String
-                                   ("-gnatc"));
+                                   (if Runtime_Bound (Host.all,
+                                                      Where & "/" & Name)
+                                    then "-gnats" else "-gnatc"));
                               Args.Append
                                 (Ada.Strings.Unbounded.To_Unbounded_String
                                    ("-I"));
