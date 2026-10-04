@@ -469,12 +469,16 @@ package Model_Runner.Backend.Device is
    --  @param Keys_Upto Where the keys end and the values begin in the
    --    copy, in halves, so that a copy past one buffer is split there.
    --    Zero asks for no split.
+   --  @param Front Elements at the front that hold a paged cache's tables
+   --    rather than rows: with the copy allowed and halves read, only the
+   --    copy and this front are kept. Nought for none.
    procedure Reserve_Cache
      (Elements        : Model_Runner.Numerics.Element_Count;
       Copy_Upto       : Model_Runner.Numerics.Element_Count;
       Ok              : out Boolean;
       Allow_Copy_Only : Boolean := False;
-      Keys_Upto       : Model_Runner.Numerics.Element_Count := 0);
+      Keys_Upto       : Model_Runner.Numerics.Element_Count := 0;
+      Front           : Model_Runner.Numerics.Element_Count := 0);
 
    --  How many bytes one storage buffer may hold here, which is what
    --  bounds a session's context: the cache is one buffer, binary32 with

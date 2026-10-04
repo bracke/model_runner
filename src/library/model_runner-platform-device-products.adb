@@ -4661,6 +4661,8 @@ package body Model_Runner.Platform.Device.Products is
         (Item, Item.Copy_Values_Buffer, Item.Copy_Values_Memory);
       Item.Cache_Bytes := 0;
       Item.Copy_Bytes := 0;
+      Item.Copy_Only := False;
+      Item.Cache_Front := 0;
 
       --  And the linear states' room, the same way.
       declare
@@ -7173,7 +7175,8 @@ package body Model_Runner.Platform.Device.Products is
       Copy_Upto       : Model_Runner.Numerics.Element_Count;
       Ok              : out Boolean;
       Allow_Copy_Only : Boolean := False;
-      Keys_Upto       : Model_Runner.Numerics.Element_Count := 0)
+      Keys_Upto       : Model_Runner.Numerics.Element_Count := 0;
+      Front           : Model_Runner.Numerics.Element_Count := 0)
    is
       Ignored : constant Boolean := Set_Asking (Item);
 
@@ -7240,8 +7243,33 @@ package body Model_Runner.Platform.Device.Products is
       --  the copy-only path is checked against the both-buffers one: for a
       --  sinkless model the cache proper is written and never read, so
       --  the two must answer identically.
+      --  A paged cache kept as its copy and a front of binary32 words
+      --  its tables are read out of: where the caller gives the front and
+      --  allows the copy, and the device's attention reads halves -- the
+      --  rows are then never read as binary32, and a buffer of them is
+      --  four bytes an element nobody reads. Steelman-14B's 3,892
+      --  positions took 2.7 GB of context, its copy a third of it. Kept so
+      --  once it is: a call that gives no front -- a picture's attention,
+      --  whose kernel reads the copy too -- extends the copy and keeps the
+      --  front, and one that gives a front it may not keep so is refused
+      --  below, since the rows already written are in the copy alone.
+      Front_Active : constant Boolean :=
+        Item.Copy_Only and then Item.Cache_Front > 0;
+      Kept_Front : constant Interfaces.Unsigned_64 :=
+        (if Front > 0 then Interfaces.Unsigned_64 (Front)
+         elsif Front_Active then Item.Cache_Front
+         else 0);
+      Front_Copy : constant Boolean :=
+        Kept_Front > 0
+        and then (Allow_Copy_Only or else (Front = 0 and then Front_Active))
+        and then Wants_Copy (Item)
+        and then Copy_Wanted > 0
+        and then Item.Halves
+        and then not Over_Limit (Item, Copy_Wanted);
+
       Copy_Only : constant Boolean :=
         Split
+        or else Front_Copy
         or else
           (Allow_Copy_Only
            and then Wants_Copy (Item)
@@ -7253,6 +7281,14 @@ package body Model_Runner.Platform.Device.Products is
 
       --  What the copy buffer holds and is mapped and filled to: the keys'
       --  half where the copy is split, the whole copy where it is not.
+      --  What the binary32 buffer holds: the whole cache, the front alone
+      --  where the copy and a front are kept, nothing where only the copy
+      --  is.
+      F32_Bytes : constant Interfaces.Unsigned_64 :=
+        (if not Copy_Only then Wanted
+         elsif Front_Copy then Kept_Front * 4
+         else 0);
+
       Copy_Alloc : constant Interfaces.Unsigned_64 :=
         (if Split then Keys_Wanted else Copy_Wanted);
 
@@ -7260,6 +7296,7 @@ package body Model_Runner.Platform.Device.Products is
       --  have been made and mapped.
       Carry_Over     : Boolean := False;
       Carried        : Interfaces.Unsigned_64 := 0;
+      Carried_Bytes  : Interfaces.Unsigned_64 := 0;
       Carried_Buffer : Address := Null_Handle;
       Carried_Memory : Address := Null_Handle;
 
@@ -7271,6 +7308,13 @@ package body Model_Runner.Platform.Device.Products is
       Ok := False;
 
       if not Is_Ready (Item) or else Elements = 0 then
+         return;
+      end if;
+
+      --  A front that may not be kept as the copy, on a cache kept so: the
+      --  rows written so far are in the copy alone, and a binary32 cache
+      --  grown under them would hold none of them.
+      if Front > 0 and then Front_Active and then not Front_Copy then
          return;
       end if;
 
@@ -7299,7 +7343,8 @@ package body Model_Runner.Platform.Device.Products is
       --  mode -- the cache proper kept or not -- is not already done,
       --  however large what is there, because the kernels are told which
       --  to write by what this reserved.
-      if (Copy_Only or else Item.Cache_Bytes >= Wanted)
+      if Item.Cache_Bytes >= F32_Bytes
+        and then Item.Cache_Front = (if Front_Copy then Kept_Front else 0)
         and then Item.Copy_Only = Copy_Only
         and then Item.Copy_Split = Split
         and then (if Split
@@ -7324,6 +7369,7 @@ package body Model_Runner.Platform.Device.Products is
          Was_At       : constant Address := Item.Cache_At;
          Was_Elements : constant Interfaces.Unsigned_64 :=
            Item.Cache_Elements;
+         Was_Bytes    : constant Interfaces.Unsigned_64 := Item.Cache_Bytes;
 
          Was_Copy_Buffer : Address := Item.Copy_Buffer;
          Was_Copy_Memory : Address := Item.Copy_Memory;
@@ -7367,6 +7413,7 @@ package body Model_Runner.Platform.Device.Products is
             Item.Cache_Elements := 0;
             Item.Copy_Only := False;
             Item.Copy_Split := False;
+            Item.Cache_Front := 0;
          end Give_Both_Back;
       begin
          Item.Cache_Buffer := Null_Handle;
@@ -7380,8 +7427,8 @@ package body Model_Runner.Platform.Device.Products is
          Item.Copy_Values_At := Null_Handle;
 
          --  The cache proper, unless only the copy is kept.
-         if not Copy_Only then
-            Take (Item, Wanted, Item.Cache_Buffer, Item.Cache_Memory, Ok);
+         if F32_Bytes > 0 then
+            Take (Item, F32_Bytes, Item.Cache_Buffer, Item.Cache_Memory, Ok);
             if not Ok then
                Give_Both_Back;
                return;
@@ -7419,6 +7466,7 @@ package body Model_Runner.Platform.Device.Products is
 
          Carry_Over := Was_At /= Null_Handle and then Was_Elements > 0;
          Carried := Was_Elements;
+         Carried_Bytes := Was_Bytes;
          Carried_Buffer := Was_Buffer;
          Carried_Memory := Was_Memory;
          Copy_Carried_At := Was_Copy_At;
@@ -7441,8 +7489,8 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
-         if not Copy_Only then
-            if Map (Item.Logical, Item.Cache_Memory, 0, Wanted, 0,
+         if F32_Bytes > 0 then
+            if Map (Item.Logical, Item.Cache_Memory, 0, F32_Bytes, 0,
                     Where'Access) /= 0
             then
                Ok := False;
@@ -7537,7 +7585,7 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          if Item.Cache_Buffer /= Null_Handle then
-            Fill (Item.Buffer, Item.Cache_Buffer, 0, Wanted, 0);
+            Fill (Item.Buffer, Item.Cache_Buffer, 0, F32_Bytes, 0);
          end if;
 
          if Item.Copy_Buffer /= Null_Handle then
@@ -7566,8 +7614,15 @@ package body Model_Runner.Platform.Device.Products is
                                         + Access_Transfer_Write),
                   others => <>);
 
+               --  No more than either buffer holds: a cache kept as its copy
+               --  and a front has a binary32 buffer the front's length, and
+               --  one grown from such a cache carries no more than that.
                Values : aliased Copy_Region :=
-                 (From => 0, Into => 0, Span => Carried * 4);
+                 (From => 0, Into => 0,
+                  Span =>
+                    Interfaces.Unsigned_64'Min
+                      (Interfaces.Unsigned_64'Min (Carried * 4, Carried_Bytes),
+                       F32_Bytes));
                Halves : aliased Copy_Region :=
                  (From => 0, Into => 0,
                   Span =>
@@ -7580,6 +7635,7 @@ package body Model_Runner.Platform.Device.Products is
 
                if Item.Cache_Buffer /= Null_Handle
                  and then Carried_Buffer /= Null_Handle
+                 and then Values.Span > 0
                then
                   Copy_Buffer (Item.Buffer, Carried_Buffer, Item.Cache_Buffer,
                                1, Values'Address);
@@ -7631,7 +7687,8 @@ package body Model_Runner.Platform.Device.Products is
          Give_Back_Buffer (Item, Copy_Carried_Buffer, Copy_Carried_Memory);
       end if;
 
-      Item.Cache_Bytes := (if Copy_Only then 0 else Wanted);
+      Item.Cache_Bytes := F32_Bytes;
+      Item.Cache_Front := (if Front_Copy then Kept_Front else 0);
       Item.Copy_Bytes :=
         (if Item.Copy_Buffer /= Null_Handle then Copy_Alloc else 0);
       Item.Copy_Values_Bytes :=
@@ -7656,7 +7713,8 @@ package body Model_Runner.Platform.Device.Products is
       Copy_Upto       : Model_Runner.Numerics.Element_Count;
       Ok              : out Boolean;
       Allow_Copy_Only : Boolean := False;
-      Keys_Upto       : Model_Runner.Numerics.Element_Count := 0)
+      Keys_Upto       : Model_Runner.Numerics.Element_Count := 0;
+      Front           : Model_Runner.Numerics.Element_Count := 0)
    is
 
       function Roomier
@@ -7669,22 +7727,25 @@ package body Model_Runner.Platform.Device.Products is
       Copy_Wanted : constant Interfaces.Unsigned_64 :=
         Interfaces.Unsigned_64 (Copy_Upto) * 2;
    begin
-      --  Room enough already: the exact call answers at once.
-      if Item.Cache_Bytes >= Wanted
+      --  Room enough already: the exact call answers at once. A cache kept
+      --  as its copy and a front holds no rows in the binary32, so its
+      --  room is the copy's.
+      if (Item.Cache_Bytes >= Wanted
+          or else (Item.Copy_Only and then Item.Cache_Front > 0))
         and then (Item.Copy_Bytes >= Copy_Wanted
                   or else not Wants_Copy (Item))
       then
          Reserve_Exact
-           (Item, Elements, Copy_Upto, Ok, Allow_Copy_Only, Keys_Upto);
+           (Item, Elements, Copy_Upto, Ok, Allow_Copy_Only, Keys_Upto, Front);
          return;
       end if;
 
       Reserve_Exact
         (Item, Roomier (Elements), Roomier (Copy_Upto), Ok, Allow_Copy_Only,
-         (if Keys_Upto = 0 then 0 else Roomier (Keys_Upto)));
+         (if Keys_Upto = 0 then 0 else Roomier (Keys_Upto)), Front);
       if not Ok then
          Reserve_Exact
-           (Item, Elements, Copy_Upto, Ok, Allow_Copy_Only, Keys_Upto);
+           (Item, Elements, Copy_Upto, Ok, Allow_Copy_Only, Keys_Upto, Front);
       end if;
    end Reserve;
 
@@ -7739,6 +7800,7 @@ package body Model_Runner.Platform.Device.Products is
       Item.Copy_Values_Bytes := 0;
       Item.Cache_Elements := 0;
       Item.Copy_Only := False;
+      Item.Cache_Front := 0;
       Item.Copy_Split := False;
    end Release_Cache;
 
@@ -7765,6 +7827,12 @@ package body Model_Runner.Platform.Device.Products is
         Interfaces.Unsigned_64 (At_Value) * 4;
       Span    : constant Interfaces.Unsigned_64 :=
         Interfaces.Unsigned_64 (Values'Length) * 4;
+
+      --  Rows past the front of a cache kept as its copy and a front: the
+      --  binary32 buffer is the front alone, so they go to the copy only.
+      Past_Front : constant Boolean :=
+        Item.Cache_Front > 0
+        and then Interfaces.Unsigned_64 (At_Value) >= Item.Cache_Front;
    begin
       Ok := False;
 
@@ -7773,6 +7841,7 @@ package body Model_Runner.Platform.Device.Products is
         or else (Item.Cache_At = Null_Handle
                  and then Item.Copy_At = Null_Handle)
         or else (Item.Cache_At /= Null_Handle
+                 and then not Past_Front
                  and then At_Byte + Span > Item.Cache_Bytes)
       then
          return;
@@ -7781,7 +7850,7 @@ package body Model_Runner.Platform.Device.Products is
       --  Straight into the standing mapping: a copy and no call to the
       --  driver at all. Only where the cache proper is kept -- a copy-only
       --  session has just the half-precision copy below.
-      if Item.Cache_At /= Null_Handle then
+      if Item.Cache_At /= Null_Handle and then not Past_Front then
          declare
             Room : Model_Runner.Numerics.Real_Array (Values'Range)
               with Import,
@@ -8367,6 +8436,40 @@ package body Model_Runner.Platform.Device.Products is
         Interfaces.Unsigned_64 (Values'Length) * 4;
    begin
       Ok := False;
+
+      --  Rows past the front of a cache kept as its copy and a front are in
+      --  the copy alone, and come back from its halves -- the values the
+      --  device attends with, which a binary16 cache holds anyway.
+      if Item.Cache_Front > 0
+        and then Interfaces.Unsigned_64 (At_Value) >= Item.Cache_Front
+      then
+         if not Is_Ready (Item)
+           or else Item.Copy_At = Null_Handle
+           or else Values'Length = 0
+           or else (Interfaces.Unsigned_64 (At_Value)
+                    + Interfaces.Unsigned_64 (Values'Length)) * 2
+                   > Item.Copy_Bytes
+         then
+            return;
+         end if;
+
+         declare
+            Halves : Model_Runner.Numerics.Half_Array (Values'Range)
+              with Import,
+                   Address =>
+                     System.Storage_Elements.To_Address
+                       (System.Storage_Elements.To_Integer (Item.Copy_At)
+                        + System.Storage_Elements.Integer_Address
+                            (Interfaces.Unsigned_64 (At_Value) * 2));
+         begin
+            for Index in Values'Range loop
+               Values (Index) := Model_Runner.Numerics.To_Real (Halves (Index));
+            end loop;
+         end;
+
+         Ok := True;
+         return;
+      end if;
 
       if not Is_Ready (Item)
         or else Item.Cache_At = Null_Handle
@@ -9020,6 +9123,11 @@ package body Model_Runner.Platform.Device.Products is
         or else (Item.Cache_Buffer = Null_Handle
                  and then not (Item.Copy_Only
                                and then Item.Copy_Buffer /= Null_Handle))
+        --  A cache kept as its copy holds no rows in binary32, so a batch
+        --  for the tiled kernel, or exact attention, attends on the host.
+        or else (Item.Copy_Only
+                 and then not Reads_Copy
+                                (Item, Slots, Head_Size, Value_Size, False))
         --  A split copy's values are on their own binding, read only by the
         --  matrix kernel; a batch too small for it attends on the host.
         or else (Item.Copy_Split
@@ -11041,6 +11149,18 @@ package body Model_Runner.Platform.Device.Products is
                if Item.Copy_Split
                  and then not Attends_By_Matrix
                                 (Item, Count, This.Head_Size, This.Value_Size)
+               then
+                  Item.Refused := Cache_Refused;
+                  return;
+               end if;
+
+               --  And a cache kept as its copy holds no rows in binary32:
+               --  a batch the tiled kernel would take -- it reads the cache
+               --  proper -- is refused here and attends on the host.
+               if Item.Copy_Only
+                 and then not Reads_Copy
+                                (Item, Count, This.Head_Size, This.Value_Size,
+                                 False)
                then
                   Item.Refused := Cache_Refused;
                   return;

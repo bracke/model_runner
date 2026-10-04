@@ -6864,6 +6864,15 @@ package body Model_Runner.Llama is
      [others => null];
    Pages_Taken : Element_Count := 0;
 
+   --  The front of the cache's numbering, before the first page, that a
+   --  paged session's tables are kept in: a word a page a layer and the
+   --  padding, which the pool's slots and a pad a layer bound. Tables past
+   --  the pages moved as the pages grew and had to be held in the binary32
+   --  buffer with every row under them; at the front they stay where they
+   --  are, and a cache whose rows are read only as halves keeps this front
+   --  and the copy and nothing else.
+   Page_Front : constant Element_Count := Element_Count (Page_Cap) + 4_096;
+
    --  Whose page tables are at the front of the pool, and where the front
    --  was when they were written. Every paged session writes its tables
    --  to the same place -- the front, Pages_Taken -- so a session may skip
@@ -8488,8 +8497,9 @@ package body Model_Runner.Llama is
             declare
                Slot : constant Natural :=
                  Natural
-                   (Item.Pages.all
-                      (Natural (Item.Page_First.all (Layer)) + Page)
+                   ((Item.Pages.all
+                       (Natural (Item.Page_First.all (Layer)) + Page)
+                     - Page_Front)
                     / Page_Elements);
             begin
                if Slot in Page_Owner'Range
@@ -8513,7 +8523,8 @@ package body Model_Runner.Llama is
          if Page_Owner (Slot) /= null then
             Pages_Taken :=
               Element_Count'Max
-                (Pages_Taken, Element_Count (Slot + 1) * Page_Elements);
+                (Pages_Taken,
+                 Page_Front + Element_Count (Slot + 1) * Page_Elements);
          end if;
       end loop;
    end Release_Session_Pages;
@@ -8671,13 +8682,14 @@ package body Model_Runner.Llama is
                      Pages_In_Use := Pages_In_Use + 1;
                      Item.Pages.all
                        (Natural (First) + Natural (Item.Page_Count.all (Layer)))
-                       := Element_Count (Slot) * Page_Elements;
+                       := Page_Front + Element_Count (Slot) * Page_Elements;
                      Item.Page_Count.all (Layer) :=
                        Item.Page_Count.all (Layer) + 1;
                      Pages_Taken :=
                        Element_Count'Max
                          (Pages_Taken,
-                          Element_Count (Slot + 1) * Page_Elements);
+                          Page_Front
+                          + Element_Count (Slot + 1) * Page_Elements);
                   end;
                end loop;
             end;
@@ -8699,7 +8711,7 @@ package body Model_Runner.Llama is
       --  only the room for the write back to a member come again.
       if Write_Tables then
          declare
-            Where : Element_Count := Pages_Taken;
+            Where : Element_Count := 0;
             Words : Natural := 0;
          begin
             for Layer in Item.Page_Count.all'Range loop
@@ -8715,10 +8727,22 @@ package body Model_Runner.Llama is
                end if;
             end loop;
 
+            --  The tables are at the front, the rows past it: the binary32
+            --  buffer reaches as far as the pages, and where the session's
+            --  rows are read only as halves the device keeps the front and
+            --  the copy alone. A model with sinks, or a packed cache, reads
+            --  the binary32 and keeps it whole.
+            if Element_Count (Words) > Page_Front then
+               return;
+            end if;
+
             Model_Runner.Backend.Device.Reserve_Cache
-              (Pages_Taken + Element_Count (Words)
-               + Sink_Footprint (Item.Owner.Settings),
-               Copy_Upto => Pages_Taken, Ok => Ok);
+              (Pages_Taken + Sink_Footprint (Item.Owner.Settings),
+               Copy_Upto => Pages_Taken, Ok => Ok,
+               Allow_Copy_Only =>
+                 Sink_Footprint (Item.Owner.Settings) = 0
+                 and then Item.Held = Exact,
+               Front => Page_Front);
             if not Ok then
                return;
             end if;
@@ -8735,8 +8759,7 @@ package body Model_Runner.Llama is
                         Held  : constant Element_Count :=
                           Item.Page_Count.all (Layer);
                         Off   : constant Natural :=
-                          Natural
-                            (Item.Page_Table_At.all (Layer) - Pages_Taken);
+                          Natural (Item.Page_Table_At.all (Layer));
                      begin
                         --  The layer's pages, and the padding a masked
                         --  over-read reads, each pointing at a real page.
@@ -8755,7 +8778,7 @@ package body Model_Runner.Llama is
                   end if;
                end loop;
 
-               Model_Runner.Backend.Device.Put_Table (Pages_Taken, Table, Ok);
+               Model_Runner.Backend.Device.Put_Table (0, Table, Ok);
                if not Ok then
                   return;
                end if;

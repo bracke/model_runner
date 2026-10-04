@@ -3755,7 +3755,11 @@ kernels D5677F10B60E99CF src/library/model_runner-quantization.adb src/library/m
 #   dealt its prompt's and reply's pages before the prompt rather than a
 #   batch at a time (Reserve_Ahead) -- when the cache is reserved, not
 #   what any kernel computes.
-quality 031623CBE7EC16CE tests/fixtures/perplexity-corpus.txt tests/src/perplexity_run.adb tests/src/perplexity_run.ads src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-quantization.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-integers.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb model_runner.gpr
+# Restamped 2026-10-04, not re-measured: a paged cache on the device keeps
+#   its tables at the front and, read as halves, only them and the copy --
+#   where the cache lives, not what any kernel computes; TinyLlama Q4_0 on
+#   the device read 879-914 / 97.3-97.9 t/s before and after.
+quality 79969B0E80528901 tests/fixtures/perplexity-corpus.txt tests/src/perplexity_run.adb tests/src/perplexity_run.ads src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-quantization.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-integers.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb model_runner.gpr
 
 # 2026-08-24, the arithmetic a run uses by default became the quantized one,
 # and every figure in the speed section was taken again at it in one sitting
@@ -5360,7 +5364,11 @@ quality 031623CBE7EC16CE tests/fixtures/perplexity-corpus.txt tests/src/perplexi
 #   dealt its prompt's and reply's pages before the prompt rather than a
 #   batch at a time (Reserve_Ahead) -- when the cache is reserved, not
 #   what any kernel computes.
-engine 7BE6ABE6CE9D7BB5 src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Restamped 2026-10-04, not re-measured: a paged cache on the device keeps
+#   its tables at the front and, read as halves, only them and the copy --
+#   where the cache lives, not what any kernel computes; TinyLlama Q4_0 on
+#   the device read 879-914 / 97.3-97.9 t/s before and after.
+engine 6EC267694C20A420 src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the reference-backend comparison under "Speed" and the ratio quoted
 # in the backend rows of the README and the support matrix
@@ -5722,7 +5730,11 @@ engine 7BE6ABE6CE9D7BB5 src/library/model_runner-llama.adb src/library/model_run
 #   dealt its prompt's and reply's pages before the prompt rather than a
 #   batch at a time (Reserve_Ahead) -- when the cache is reserved, not
 #   what any kernel computes.
-reference C880042E6A18DA1B src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Restamped 2026-10-04, not re-measured: a paged cache on the device keeps
+#   its tables at the front and, read as halves, only them and the copy --
+#   where the cache lives, not what any kernel computes; TinyLlama Q4_0 on
+#   the device read 879-914 / 97.3-97.9 t/s before and after.
+reference 6FC0C6BBB84302D2 src/library/model_runner-backend-reference.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-18, gpt2's feed-forward normalization. These groups carry
 # llama.adb and moved with it. Re-measured rather than argued about, on this
@@ -7640,7 +7652,11 @@ reference C880042E6A18DA1B src/library/model_runner-backend-reference.adb src/li
 #   dealt its prompt's and reply's pages before the prompt rather than a
 #   batch at a time (Reserve_Ahead) -- when the cache is reserved, not
 #   what any kernel computes.
-device 351765822EEC2AB3 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Restamped 2026-10-04, not re-measured: a paged cache on the device keeps
+#   its tables at the front and, read as halves, only them and the copy --
+#   where the cache lives, not what any kernel computes; TinyLlama Q4_0 on
+#   the device read 879-914 / 97.3-97.9 t/s before and after.
+device C335D6AC213F37DB src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 
 # covers: the three-row table under "Drafting", the per-token costs derived
@@ -8035,7 +8051,11 @@ device 351765822EEC2AB3 src/shaders/row_product.comp src/shaders/matrix_product.
 #   dealt its prompt's and reply's pages before the prompt rather than a
 #   batch at a time (Reserve_Ahead) -- when the cache is reserved, not
 #   what any kernel computes.
-drafting 1F7C6092BFC6899C src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Restamped 2026-10-04, not re-measured: a paged cache on the device keeps
+#   its tables at the front and, read as halves, only them and the copy --
+#   where the cache lives, not what any kernel computes; TinyLlama Q4_0 on
+#   the device read 879-914 / 97.3-97.9 t/s before and after.
+drafting 059393C3F0A0DF01 src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # covers: the share-scaling figures, the bytes per second at eight shares, the pinned nine-to-fourteen-thousand comparison, and the four-bit against eight-bit numbers
 # load: 1.03 rising to 2.68, one pinned `tests benchmark` run, 2026-08-14
@@ -10703,7 +10723,11 @@ tokenizer CE3B696CD412A3B6 src/library/model_runner-tokenizer.adb
 #   dealt its prompt's and reply's pages before the prompt rather than a
 #   batch at a time (Reserve_Ahead) -- when the cache is reserved, not
 #   what any kernel computes.
-outside 351765822EEC2AB3 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Restamped 2026-10-04, not re-measured: a paged cache on the device keeps
+#   its tables at the front and, read as halves, only them and the copy --
+#   where the cache lives, not what any kernel computes; TinyLlama Q4_0 on
+#   the device read 879-914 / 97.3-97.9 t/s before and after.
+outside C335D6AC213F37DB src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # 2026-08-27  The row tile at sixty-four, and the instrument's first row
 #
@@ -14983,7 +15007,11 @@ outside 351765822EEC2AB3 src/shaders/row_product.comp src/shaders/matrix_product
 #   dealt its prompt's and reply's pages before the prompt rather than a
 #   batch at a time (Reserve_Ahead) -- when the cache is reserved, not
 #   what any kernel computes.
-panels CD67B01CBB0AC2AE src/library/model_runner-quantization-interleave.ads src/library/model_runner-quantization-interleave.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-tensors.ads src/library/model_runner-tensors.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb tests/src/speed_run.adb model_runner.gpr src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
+# Restamped 2026-10-04, not re-measured: a paged cache on the device keeps
+#   its tables at the front and, read as halves, only them and the copy --
+#   where the cache lives, not what any kernel computes; TinyLlama Q4_0 on
+#   the device read 879-914 / 97.3-97.9 t/s before and after.
+panels FD57EF5FBA70A5D5 src/library/model_runner-quantization-interleave.ads src/library/model_runner-quantization-interleave.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-tensors.ads src/library/model_runner-tensors.adb src/library/model_runner-llama.adb src/library/model_runner-backend-cpu.adb tests/src/speed_run.adb model_runner.gpr src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb
 
 # ---------------------------------------------------------------------------
 #
@@ -25472,3 +25500,41 @@ panels CD67B01CBB0AC2AE src/library/model_runner-quantization-interleave.ads src
 # model: gemma-3-4b-it Q4_K_M with gemma-3-270m-it Q8_0, qwen3.5-4b-mtp
 #   Q8_0, qwen3.6-35b-a3b-mtp Q4_K_S, Steelman-14B r6 Q4_K_M with
 #   Qwen2.5-Coder-0.5B-Instruct Q8_0
+
+
+# 2026-10-04: the device's context, a third of what it was. A paged cache
+# kept a binary32 copy of every row beside the half-precision copy the
+# kernels read -- 15.4 KB a position a layer on Steelman-14B against
+# llama.cpp's 4 for the same f16 cache -- because the page tables were
+# written past the pages, into the binary32 buffer, which therefore had to
+# reach past every row. The tables now sit at a fixed front of the cache's
+# numbering (Page_Front, the pool's slots and a pad a layer), the pages
+# after it; and where the model has no sinks, the cache is unpacked and the
+# device reads halves, the binary32 buffer is that front alone and the rows
+# are in the copy (Reserve's Front: the place step told to skip the
+# binary32 as a copy-only block's is; a row read back to the host out of
+# its halves; a batch for the tiled kernel, or exact attention, refused to
+# the host). Once kept so, a call with no front -- a picture's attention --
+# keeps it so; one with a front that may not is refused.
+#
+#                                   context on the device     peak GTT
+#                                   before      after         before  after
+#   Steelman-14B, 3,892 tokens      2.7 GB      930 MB        11.2    9.3 GB
+#     drafted by Coder-0.5B         3.4 GB      1.4 GB        13.0   10.2
+#   Steelman-14B, 11,614 tokens     --          2.7 GB        out of   11.2
+#     (--context-size 16384)                                  15.6
+#   qwen3-8b, 3,863 tokens          2.0 GB      690 MB
+#     (--kv-cache f32 keeps it)     2.0 GB      2.0 GB
+#   gemma-3-4b, 3,980 tokens                    326 MB
+#   qwen3.5-4b MTP, 3,890 tokens                155 MB
+#
+# The text the same before and after on Steelman (081a5cf6cea9, undrafted
+# and drafted) and qwen3-8b (18df5eaad7a5, and the f32 cache's the same);
+# every layer whole on the device throughout; Steelman generating 7.40 ->
+# 7.42 t/s, qwen3-8b 12.96 -> 13.02; pictures (Gemma 3, Qwen3.5,
+# MiniCPM-V 4.6) read the plaza as before. The llama inference suite, its
+# device cases with it, 114 of 114.
+# load: one-minute average 0.9 to 2.2
+# model: Steelman-14B r6 Q4_K_M with Qwen2.5-Coder-0.5B-Instruct Q8_0,
+#   Qwen3-8B Q4_K_M, gemma-3-4b-it Q4_K_M, qwen3.5-4b-mtp Q8_0,
+#   TinyLlama 1.1B chat Q4_0

@@ -1796,13 +1796,22 @@ package Model_Runner.Platform.Device.Products is
    --    copy, in halves: past it the split copy keeps a buffer of its own,
    --    so that neither half is past what one may hold. Zero asks for no
    --    split.
+   --  @param Front Elements at the front of the cache that hold no rows --
+   --    a paged session's page tables -- and are read as binary32 words
+   --    whatever else is kept. Where it is given, the copy is allowed, and
+   --    the device's attention reads halves, only the copy and this front
+   --    are kept: a paged cache's rows in two bytes an element rather than
+   --    six. Nought keeps the rule above. Once a paged cache is kept so,
+   --    a call without a front (a picture's attention, a block) keeps it
+   --    so too, and a call with a front that may not is refused.
    procedure Reserve
      (Item            : in out Engine;
       Elements        : Model_Runner.Numerics.Element_Count;
       Copy_Upto       : Model_Runner.Numerics.Element_Count;
       Ok              : out Boolean;
       Allow_Copy_Only : Boolean := False;
-      Keys_Upto       : Model_Runner.Numerics.Element_Count := 0);
+      Keys_Upto       : Model_Runner.Numerics.Element_Count := 0;
+      Front           : Model_Runner.Numerics.Element_Count := 0);
 
    --  Write bytes into that cache, as they are.
    --
@@ -3190,6 +3199,12 @@ private
       --  such a model: the matrix kernel reads the copy, and only a sink
       --  or a round reads the binary32, neither of which this holds.
       Copy_Only : Boolean := False;
+
+      --  Where only the copy is kept, the elements at the front the cache
+      --  proper still holds as binary32 -- a paged cache's tables -- and
+      --  its buffer is no longer than they are. Nought where there is no
+      --  such front, which is a block's copy-only cache.
+      Cache_Front : Interfaces.Unsigned_64 := 0;
 
       --  The copy split in two, keys in Copy_Buffer above and values here,
       --  because at a wide enough context even the copy -- two bytes an
