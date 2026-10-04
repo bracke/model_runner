@@ -25708,3 +25708,19 @@ panels 4E85E867BC8AFAC3 src/library/model_runner-quantization-interleave.ads src
 # kernels to the bit, which failed with the other fold.
 # load: one-minute average 1.2 to 5.0 (the prompts themselves)
 # model: Qwen3-8B Q4_K_M, gemma-3-4b-it Q4_K_M, Qwen3-Coder-30B-A3B Q2_K
+
+# 2026-10-04: the opt-in caches on the processor, a long prompt. Qwen3-8B
+# Q4_K_M, 3,871 tokens, run --backend cpu --kv-cache K --show-stats, after
+# b41035f7, against llama-bench -ngl 0 -fa 1 -ctk/-ctv K -p 3871:
+#   q4  7.28 -> 35.53 t/s   (llama.cpp q4_0 29.18)
+#   q8 37.39 -> 37.77       (llama.cpp q8_0 27.87; not changed)
+#   f32 30.52 -> 38.05      (llama-bench takes no f32 cache)
+# The same greedy text before and after on q4 and on f32.
+# And a null, not kept: the binary32 block path at heads sixty-four wide
+# (TinyLlama Q5_K_M, 1,888 tokens), with kernels folded as Score_Run folds
+# and a range's last few keys scored again by Head_Dot -- the same text
+# as a position at a time, and slower: 344-350 t/s against 362-371. At
+# that width Blend_Exact's eight keys a fold already reads as fast as the
+# binary16 block path (367 both), so the block path stays off there.
+# load: one-minute average under 1.5; rests of 20-50 s between runs
+# model: Qwen3-8B Q4_K_M, TinyLlama-1.1B-Chat Q5_K_M
