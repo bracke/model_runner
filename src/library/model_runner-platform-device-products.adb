@@ -2197,17 +2197,18 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
-      --  A matrix of a megabyte or more is copied four ways at once. The
+      --  A matrix of a megabyte or more is copied eight ways at once. The
       --  copy into fresh device memory is not the memory's speed but the
       --  host's faults: the first touch of each page of the mapping, and of
       --  the file's where it is mapped and not yet read, and a second copy
-      --  into the same buffer took a twelfth of the first. Four of them
+      --  into the same buffer took a twelfth of the first. Several of them
       --  overlap: Steelman-14B's first prompt, which uploads its 8 GiB,
-      --  18.5-25.2 -> 9.2-11.5 s.
+      --  18.5-25.2 s one way, 9.8-10.8 four ways, 7.3-8.3 eight; Qwen3.5's
+      --  first picture 0.231, 0.209, 0.189 s, and 0.20 sixteen ways.
       declare
          Room : Model_Runner.Bytes.Byte_Array (Values'Range)
            with Import, Address => Where;
-         Ways : constant := 4;
+         Ways : constant := 8;
       begin
          if Values'Length < 1_048_576 then
             Room := Values;
