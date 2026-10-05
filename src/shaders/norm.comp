@@ -224,19 +224,35 @@ void main() {
     }
 
     //  And out, every lane at once: nothing here is serial either.
-    for (uint c = lane; c < shape.width; c += LANES) {
-        uint k = (c - lane) / LANES;
-        bool held = k < HELD;
-        float scaled = ((held ? row[k] : x[at + c]) - mean) * gain;
+    //
+    //  The held part with its index known when compiled, so the row, the
+    //  gains and the residual stay in registers: indexed by a count worked
+    //  out at run time, they were an array the compiler put in scratch
+    //  memory, and a token's normalization of 2560 took 10 us.
+    [[unroll]] for (uint k = 0u; k < HELD; k++) {
+        uint c = lane + k * LANES;
+        if (c < shape.width) {
+            float made = (row[k] - mean) * gain * gain_of[k]
+                         + (shape.centered != 0u
+                            ? g[shape.base + shape.width + c] : 0.0);
+            if (shape.joins != 0u) {
+                made += join_of[k];
+            }
+            if (halved) {
+                h[at + c] = float16_t (made);
+            } else {
+                y[at + c] = made;
+            }
+        }
+    }
 
-        float made = scaled * (held ? gain_of[k] : g[shape.base + c])
+    for (uint c = lane + HELD * LANES; c < shape.width; c += LANES) {
+        float made = (x[at + c] - mean) * gain * g[shape.base + c]
                      + (shape.centered != 0u
                         ? g[shape.base + shape.width + c] : 0.0);
-
         if (shape.joins != 0u) {
-            made += held ? join_of[k] : rj[at + c];
+            made += rj[at + c];
         }
-
         if (halved) {
             h[at + c] = float16_t (made);
         } else {
