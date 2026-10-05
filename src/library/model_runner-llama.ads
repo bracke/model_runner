@@ -3031,6 +3031,14 @@ private
       Mamba_DT   : Model_Runner.Tensors.Real_Array_Access := null;
       Mamba_Y    : Model_Runner.Tensors.Real_Array_Access := null;
 
+      --  And Mamba2's for a batch, kept from one batch to the next and grown
+      --  when a batch is longer: the projection in, the convolved rows and
+      --  the scan's answer. Allocating them a layer zeroed a megabyte and a
+      --  half a layer while the workers waited.
+      Mamba_Batch_XZ : Model_Runner.Tensors.Real_Array_Access := null;
+      Mamba_Batch_X  : Model_Runner.Tensors.Real_Array_Access := null;
+      Mamba_Batch_Y  : Model_Runner.Tensors.Real_Array_Access := null;
+
       --  RWKV6's scratch for one position: the two normalized inputs and
       --  the residual between the sublayers (Rwkv_N1/Rwkv_Inp/Rwkv_N2), the
       --  five mixed streams laid end to end (Rwkv_Mix), the shift's

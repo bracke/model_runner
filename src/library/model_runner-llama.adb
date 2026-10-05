@@ -15651,6 +15651,28 @@ package body Model_Runner.Llama is
       T.Free (Item.Head_Gate);
       T.Free (Item.Mix_Row);
       T.Free (Item.Z_Row);
+      T.Free (Item.Mamba_XZ);
+      T.Free (Item.Mamba_X);
+      T.Free (Item.Mamba_DBC);
+      T.Free (Item.Mamba_DTR);
+      T.Free (Item.Mamba_DT);
+      T.Free (Item.Mamba_Y);
+      T.Free (Item.Mamba_Batch_XZ);
+      T.Free (Item.Mamba_Batch_X);
+      T.Free (Item.Mamba_Batch_Y);
+      T.Free (Item.Rwkv_N1);
+      T.Free (Item.Rwkv_Inp);
+      T.Free (Item.Rwkv_N2);
+      T.Free (Item.Rwkv_Mix);
+      T.Free (Item.Rwkv_Lora);
+      T.Free (Item.Rwkv_WLora);
+      T.Free (Item.Rwkv_Rr);
+      T.Free (Item.Rwkv_Kk);
+      T.Free (Item.Rwkv_Vv);
+      T.Free (Item.Rwkv_Gg);
+      T.Free (Item.Rwkv_Ww);
+      T.Free (Item.Rwkv_Y);
+      T.Free (Item.Rwkv_CK);
       T.Free (Item.Alpha_Row);
       T.Free (Item.Beta_Row);
       T.Free (Item.Blend_Row);
@@ -16911,6 +16933,12 @@ package body Model_Runner.Llama is
       Bias   : T.Real_Array_Access := null;
       XZ     : T.Real_Array_Access := null;
       Xc     : T.Real_Array_Access := null;
+
+      --  Whether the share puts each row it convolved through the
+      --  logistic-weighted unit as well, rather than the calling task
+      --  putting all of them through it after, alone, while the workers
+      --  wait.
+      Unit   : Boolean := False;
    end record;
 
    overriding procedure Run
@@ -16979,6 +17007,10 @@ package body Model_Runner.Llama is
                   Share.Xc (P * Inner + C) := Acc;
                end;
             end loop;
+         end if;
+
+         if Share.Unit then
+            K.SiLU (Share.Xc.all (P * Inner + From .. P * Inner + To));
          end if;
       end loop;
 
@@ -17185,7 +17217,8 @@ package body Model_Runner.Llama is
            (Count  => Count, Inner => Inner, Stride => 2 * Inner, Shift => 0,
             Taps   => Taps, Base => Conv_Base,
             Memory => Item.Conv_State, Conv => Current.Conv,
-            Bias   => Current.Conv_Bias, XZ => XZ, Xc => Xc);
+            Bias   => Current.Conv_Bias, XZ => XZ, Xc => Xc,
+            Unit   => True);
       begin
          Workers_CPU.Dispatch_Shares
            (Item.Team, Inner, Share'Unchecked_Access, Status,
@@ -17195,7 +17228,6 @@ package body Model_Runner.Llama is
             return;
          end if;
       end;
-      K.SiLU (Xc.all (0 .. Count * Inner - 1));
 
       --  That projected to the time step, B and C.
       Project (Current.Ssm_X, Xc, DBC);
@@ -17404,25 +17436,50 @@ package body Model_Runner.Llama is
                   L0, L1, L2, L3, L4, L5, L6, L7 : Real := 0.0;
                   Sum : Real := 0.0;
                begin
-                  for S in 0 .. State - 1 loop
-                     H (Cells + S) := H (Cells + S) * dA + Xc (G_At + S) * X_Dt;
-                  end loop;
+                  --  The update and the answer in one walk of the row: the row
+                  --  is read and written once rather than twice, each sum
+                  --  taking the same terms in the same order.
                   for S in 0 .. Whole / 8 - 1 loop
                      declare
+                        At_B : constant Element_Count := G_At + S * 8;
                         At_C : constant Element_Count := C_At + S * 8;
                         At_H : constant Element_Count := Cells + S * 8;
+                        H0 : constant Real := H (At_H) * dA + Xc (At_B) * X_Dt;
+                        H1 : constant Real :=
+                          H (At_H + 1) * dA + Xc (At_B + 1) * X_Dt;
+                        H2 : constant Real :=
+                          H (At_H + 2) * dA + Xc (At_B + 2) * X_Dt;
+                        H3 : constant Real :=
+                          H (At_H + 3) * dA + Xc (At_B + 3) * X_Dt;
+                        H4 : constant Real :=
+                          H (At_H + 4) * dA + Xc (At_B + 4) * X_Dt;
+                        H5 : constant Real :=
+                          H (At_H + 5) * dA + Xc (At_B + 5) * X_Dt;
+                        H6 : constant Real :=
+                          H (At_H + 6) * dA + Xc (At_B + 6) * X_Dt;
+                        H7 : constant Real :=
+                          H (At_H + 7) * dA + Xc (At_B + 7) * X_Dt;
                      begin
-                        L0 := L0 + Xc (At_C) * H (At_H);
-                        L1 := L1 + Xc (At_C + 1) * H (At_H + 1);
-                        L2 := L2 + Xc (At_C + 2) * H (At_H + 2);
-                        L3 := L3 + Xc (At_C + 3) * H (At_H + 3);
-                        L4 := L4 + Xc (At_C + 4) * H (At_H + 4);
-                        L5 := L5 + Xc (At_C + 5) * H (At_H + 5);
-                        L6 := L6 + Xc (At_C + 6) * H (At_H + 6);
-                        L7 := L7 + Xc (At_C + 7) * H (At_H + 7);
+                        H (At_H) := H0;
+                        H (At_H + 1) := H1;
+                        H (At_H + 2) := H2;
+                        H (At_H + 3) := H3;
+                        H (At_H + 4) := H4;
+                        H (At_H + 5) := H5;
+                        H (At_H + 6) := H6;
+                        H (At_H + 7) := H7;
+                        L0 := L0 + Xc (At_C) * H0;
+                        L1 := L1 + Xc (At_C + 1) * H1;
+                        L2 := L2 + Xc (At_C + 2) * H2;
+                        L3 := L3 + Xc (At_C + 3) * H3;
+                        L4 := L4 + Xc (At_C + 4) * H4;
+                        L5 := L5 + Xc (At_C + 5) * H5;
+                        L6 := L6 + Xc (At_C + 6) * H6;
+                        L7 := L7 + Xc (At_C + 7) * H7;
                      end;
                   end loop;
                   for S in Whole .. State - 1 loop
+                     H (Cells + S) := H (Cells + S) * dA + Xc (G_At + S) * X_Dt;
                      L0 := L0 + Xc (C_At + S) * H (Cells + S);
                   end loop;
                   Sum := ((L0 + L1) + (L2 + L3)) + ((L4 + L5) + (L6 + L7));
@@ -17535,12 +17592,18 @@ package body Model_Runner.Llama is
 
       XZ, Xc, Y : T.Real_Array_Access := null;
 
-      procedure Release is
+      --  The scratch is the session's either way, kept for the next batch.
+      procedure Release is null;
+
+      --  A batch's scratch at least Length long: kept, or made anew.
+      procedure Grow
+        (Room : in out T.Real_Array_Access; Length : Element_Count) is
       begin
-         if not Own then
-            T.Free (XZ); T.Free (Xc); T.Free (Y);
+         if Room = null or else Room.all'Length < Length then
+            T.Free (Room);
+            T.Allocate (Length, Room);
          end if;
-      end Release;
+      end Grow;
 
       procedure Project
         (Weight : T.View; From, Into : T.Real_Array_Access) is
@@ -17592,11 +17655,13 @@ package body Model_Runner.Llama is
          Xc := Item.Mamba_X;
          Y  := Item.Mamba_Y;
       else
-         T.Allocate (Count * In_Out, XZ);
-         T.Allocate (Count * DXBC, Xc);
-         T.Allocate (Count * Inner, Y);
+         Grow (Item.Mamba_Batch_XZ, Count * In_Out);
+         Grow (Item.Mamba_Batch_X, Count * DXBC);
+         Grow (Item.Mamba_Batch_Y, Count * Inner);
+         XZ := Item.Mamba_Batch_XZ;
+         Xc := Item.Mamba_Batch_X;
+         Y  := Item.Mamba_Batch_Y;
          if XZ = null or else Xc = null or else Y = null then
-            Release;
             Status := E.Make (E.Memory_Allocation_Failed);
             return;
          end if;
@@ -17616,7 +17681,8 @@ package body Model_Runner.Llama is
            (Count  => Count, Inner => DXBC, Stride => In_Out, Shift => Inner,
             Taps   => Taps, Base => Conv_Base,
             Memory => Item.Conv_State, Conv => Current.Conv,
-            Bias   => Current.Conv_Bias, XZ => XZ, Xc => Xc);
+            Bias   => Current.Conv_Bias, XZ => XZ, Xc => Xc,
+            Unit   => True);
       begin
          Workers_CPU.Dispatch_Shares
            (Item.Team, DXBC, Share'Unchecked_Access, Status,
@@ -17626,7 +17692,6 @@ package body Model_Runner.Llama is
             return;
          end if;
       end;
-      K.SiLU (Xc.all (0 .. Count * DXBC - 1));
 
       --  Each head's step a position, through the softplus, and the decay
       --  it makes of the head's scalar transition; then the scan, the
