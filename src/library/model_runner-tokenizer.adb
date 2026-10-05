@@ -248,6 +248,62 @@ package body Model_Runner.Tokenizer is
       end if;
    end Class_Of;
 
+   --  An RWKV piece as the bytes it stands for. The file writes each as a
+   --  Python string literal's body: a backslash before t, n or r is that
+   --  control character, before x it is two hexadecimal digits of a byte,
+   --  and before anything else it is that thing itself.
+   function Unescape_RWKV (Text : String) return String is
+      Result : String (1 .. Text'Length);
+      Filled : Natural := 0;
+      At_Pos : Natural := Text'First;
+
+      function Digit (C : Character) return Natural
+      is (case C is
+             when '0' .. '9' => Character'Pos (C) - Character'Pos ('0'),
+             when 'a' .. 'f' => Character'Pos (C) - Character'Pos ('a') + 10,
+             when 'A' .. 'F' => Character'Pos (C) - Character'Pos ('A') + 10,
+             when others => 0);
+   begin
+      while At_Pos <= Text'Last loop
+         if Text (At_Pos) = '\' and then At_Pos < Text'Last then
+            declare
+               Next : constant Character := Text (At_Pos + 1);
+            begin
+               Filled := Filled + 1;
+               case Next is
+                  when 't' =>
+                     Result (Filled) := ASCII.HT;
+                     At_Pos := At_Pos + 2;
+                  when 'n' =>
+                     Result (Filled) := ASCII.LF;
+                     At_Pos := At_Pos + 2;
+                  when 'r' =>
+                     Result (Filled) := ASCII.CR;
+                     At_Pos := At_Pos + 2;
+                  when 'x' =>
+                     if At_Pos + 3 <= Text'Last then
+                        Result (Filled) :=
+                          Character'Val (Digit (Text (At_Pos + 2)) * 16
+                                         + Digit (Text (At_Pos + 3)));
+                        At_Pos := At_Pos + 4;
+                     else
+                        Result (Filled) := Next;
+                        At_Pos := At_Pos + 2;
+                     end if;
+                  when others =>
+                     Result (Filled) := Next;
+                     At_Pos := At_Pos + 2;
+               end case;
+            end;
+         else
+            Filled := Filled + 1;
+            Result (Filled) := Text (At_Pos);
+            At_Pos := At_Pos + 1;
+         end if;
+      end loop;
+      return Result (1 .. Filled);
+   end Unescape_RWKV;
+
    ----------
    -- Find --
    ----------
@@ -335,6 +391,8 @@ package body Model_Runner.Tokenizer is
             end;
          elsif Name = "t5" then
             Item.Model := Kind_Unigram;
+         elsif Name = "rwkv" then
+            Item.Model := Kind_RWKV;
          elsif Name = "gpt2" then
             Item.Model := Kind_BPE;
 
@@ -666,7 +724,12 @@ package body Model_Runner.Tokenizer is
             --  with a score of zero or with a filler and neither says
             --  anything about what a rare piece costs.
             if Last > 0 then
-               Item.Longest_Piece := Natural'Max (Item.Longest_Piece, Last);
+               Item.Longest_Piece :=
+                 Natural'Max
+                   (Item.Longest_Piece,
+                    (if Item.Model = Kind_RWKV
+                     then Unescape_RWKV (Buffer (1 .. Last))'Length
+                     else Last));
             end if;
 
             if Entry_Value.Class = Class_Normal
@@ -676,8 +739,13 @@ package body Model_Runner.Tokenizer is
             end if;
 
             declare
+               --  An RWKV piece is looked up by the bytes it stands for,
+               --  which is what a text is cut into.
                Text : constant String :=
-                 (if Last = 0 then "" else Buffer (1 .. Last));
+                 (if Last = 0 then ""
+                  elsif Item.Model = Kind_RWKV
+                  then Unescape_RWKV (Buffer (1 .. Last))
+                  else Buffer (1 .. Last));
             begin
                if Text /= "" and then not Item.Lookup.Contains (Text) then
                   Item.Lookup.Insert (Text, Token_Id (Index - 1));
@@ -879,6 +947,14 @@ package body Model_Runner.Tokenizer is
          elsif Scratch.Code /= E.GGUF_Missing_Metadata_Key then
             Status := Scratch;
             return;
+         end if;
+
+         --  RWKV adds nothing at either end, whatever a file says: its
+         --  vocabulary has no beginning or ending to add, as llama.cpp
+         --  reads it.
+         if Item.Model = Kind_RWKV then
+            Item.Add_Beginning := False;
+            Item.Add_End := False;
          end if;
 
          --  And whether the SentencePiece road writes a marker before the
@@ -1774,6 +1850,47 @@ package body Model_Runner.Tokenizer is
          Status := E.Make (E.Tokenizer_Input_Too_Long);
          E.Add_Integer (Status, "limit", Long_Long_Integer (Max_Symbols));
          return;
+      end if;
+
+      --  RWKV's road: the longest piece the text's next bytes begin with,
+      --  then the next, to the end -- the answer llama.cpp's walk of a trie
+      --  of the pieces gives. A byte no piece begins with is the unknown
+      --  token, where there is one, and is passed over.
+      if Item.Model = Kind_RWKV then
+         declare
+            At_Pos : Natural := Text'First;
+            Done   : Boolean := True;
+         begin
+            while At_Pos <= Text'Last loop
+               declare
+                  Reach : constant Natural :=
+                    Natural'Min (Item.Longest_Piece, Text'Last - At_Pos + 1);
+                  Found : Token_Id := No_Token;
+                  Taken : Natural := 1;
+               begin
+                  for Length in reverse 1 .. Reach loop
+                     Found := Find (Item, Text (At_Pos .. At_Pos + Length - 1));
+                     if Found /= No_Token then
+                        Taken := Length;
+                        exit;
+                     end if;
+                  end loop;
+
+                  if Found = No_Token then
+                     Found := Item.Unknown;
+                  end if;
+                  if Found /= No_Token then
+                     Emit (Found, Done);
+                     exit when not Done;
+                  end if;
+                  At_Pos := At_Pos + Taken;
+               end;
+            end loop;
+            if not Done then
+               Status := E.Make (E.Tokenizer_Buffer_Too_Small);
+            end if;
+            return;
+         end;
       end if;
 
       --  A WordPiece vocabulary takes a third road: the text is changed,
@@ -2755,6 +2872,11 @@ package body Model_Runner.Tokenizer is
    begin
       if Raw = "" then
          return "";
+      end if;
+
+      --  An RWKV piece is the bytes its escapes stand for.
+      if Item.Model = Kind_RWKV then
+         return Unescape_RWKV (Raw);
       end if;
 
       --  WordPiece writes a piece that continues a word with two leading

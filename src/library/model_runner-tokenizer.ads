@@ -65,9 +65,14 @@ package Model_Runner.Tokenizer is
    --  have scored higher whole, and a piece that lies on the best path but
    --  never appears as the join of two survivors is unreachable by merging
    --  at all. The two roads share their vocabulary's shape and nothing else.
+   --
+   --  RWKV's "World" vocabulary is a fourth road and the simplest: its
+   --  pieces are byte strings, written in the file with Python-style escapes,
+   --  and a text is cut by taking the longest piece its next bytes begin
+   --  with, again and again. No merging, no scores, no markers.
    type Model_Kind is
      (Kind_SentencePiece, Kind_BPE, Kind_WordPiece, Kind_Unigram,
-      Kind_Unsupported);
+      Kind_RWKV, Kind_Unsupported);
 
    --  Per-token classification carried by the model.
    type Token_Class is

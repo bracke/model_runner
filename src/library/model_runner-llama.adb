@@ -4322,9 +4322,44 @@ package body Model_Runner.Llama is
                      One ("time_mix_decay_w2.weight", RW, D_Dec,
                           Current.Rwkv_Decay_W2);
                   end if;
+                  --  The five shifts' mixes as one table, w, k, v, r, g --
+                  --  or, in a file written before llama.cpp fused them,
+                  --  as five vectors read into the same table in that
+                  --  order: v6-Finch as published is one of those.
                   if E.Is_Ok (Status) then
-                     One ("time_mix_lerp_fused.weight", 5, RW,
-                          Current.Rwkv_Lerp_Fused);
+                     if Containers.Find_Tensor
+                          (Source, Layer_Key (Index, "time_mix_lerp_fused.weight"))
+                        /= 0
+                     then
+                        One ("time_mix_lerp_fused.weight", 5, RW,
+                             Current.Rwkv_Lerp_Fused);
+                     else
+                        T.Allocate (5 * RW, Current.Rwkv_Lerp_Fused);
+                        if Current.Rwkv_Lerp_Fused = null then
+                           Status := E.Make (E.Memory_Allocation_Failed);
+                        end if;
+                        declare
+                           Names : constant array (0 .. 4) of String (1 .. 1) :=
+                             ["w", "k", "v", "r", "g"];
+                        begin
+                           for Part in Names'Range loop
+                              exit when E.Is_Error (Status);
+                              declare
+                                 One_Mix : T.Real_Array_Access;
+                              begin
+                                 Vec ("time_mix_lerp_" & Names (Part)
+                                      & ".weight", One_Mix);
+                                 if E.Is_Ok (Status) then
+                                    Current.Rwkv_Lerp_Fused.all
+                                      (Element_Count (Part) * RW
+                                       .. Element_Count (Part) * RW + RW - 1) :=
+                                      One_Mix.all;
+                                 end if;
+                                 T.Free (One_Mix);
+                              end;
+                           end loop;
+                        end;
+                     end if;
                   end if;
                   if E.Is_Error (Status) then
                      return;
@@ -4332,8 +4367,14 @@ package body Model_Runner.Llama is
 
                   --  And the vectors.
                   Vec ("time_mix_lerp_x.weight", Current.Rwkv_Lerp_X);
+                  --  The bonus a head gives the current position, which the
+                  --  file keeps a head a row: the same numbers in the same
+                  --  order as one vector of the model's width.
                   if E.Is_Ok (Status) then
-                     Vec ("time_mix_first.weight", Current.Rwkv_First);
+                     One ("time_mix_first.weight",
+                          RW / Element_Count (Item.Settings.Head_Dim),
+                          Element_Count (Item.Settings.Head_Dim),
+                          Current.Rwkv_First);
                   end if;
                   if E.Is_Ok (Status) then
                      Vec ("time_mix_decay.weight", Current.Rwkv_Decay);

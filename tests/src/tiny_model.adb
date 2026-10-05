@@ -1264,7 +1264,21 @@ package body Tiny_Model is
                   Fixtures.Encode_F32 (Next (N.Element_Count (5 * Embedding))));
 
                Norm_Of (Layer_Name (Index, "time_mix_lerp_x.weight"), Embedding);
-               Norm_Of (Layer_Name (Index, "time_mix_first.weight"), Embedding);
+               --  The bonus a head, a head a row, as the converter writes
+               --  it: {head_size, heads}.
+               declare
+                  Bonus : N.Real_Array (0 .. N.Element_Count (Embedding) - 1);
+                  Drawn : constant N.Real_Array :=
+                    Next (N.Element_Count (Embedding));
+               begin
+                  for I in Bonus'Range loop
+                     Bonus (I) := Drawn (I) * 0.125;
+                  end loop;
+                  Fixtures.Add_Tensor
+                    (Builder, Layer_Name (Index, "time_mix_first.weight"),
+                     [G.U64 (Embedding / Linear_Heads), G.U64 (Linear_Heads)],
+                     G.Type_F32, Fixtures.Encode_F32 (Bonus));
+               end;
                Norm_Of (Layer_Name (Index, "time_mix_decay.weight"), Embedding);
                Norm_Of (Layer_Name (Index, "time_mix_ln.weight"), Embedding);
                Norm_Of (Layer_Name (Index, "time_mix_ln.bias"), Embedding);
