@@ -41,6 +41,9 @@ const uint MOST_LOW = 64u;
 //  sixty-four ranks for each of POS positions.
 shared float lows[POS * 5u * MOST_LOW];
 
+//  A generated token's partial sums, eight lanes an output element.
+shared float partial[LANES];
+
 layout(local_size_x = LANES) in;
 
 layout(std430, binding = 0) readonly  buffer Weight { float w[]; };
@@ -83,7 +86,54 @@ void main() {
     uint mode = shape.mode;
     uint width = shape.width;
 
-    if (mode == 0u || mode == 1u) {
+    if ((mode == 0u || mode == 1u) && shape.count == 1u && shape.low > 0u) {
+        //  One position: eight lanes an output element, each taking every
+        //  eighth rank of the element's map row, so that the workgroup's
+        //  reads of the map are consecutive words rather than a row a lane
+        //  -- the rank apart, which a token's shift took 90 us over and
+        //  the bytes take 25. The eight partials are added in shared
+        //  memory, in lane order.
+        uint wide = (mode == 0u) ? shape.streams * width : width;
+        uint low = min(shape.low, MOST_LOW);
+        uint per = (mode == 0u) ? shape.streams * low : low;
+        uint j = gl_WorkGroupID.x * (LANES / 8u) + lane / 8u;
+        uint part = lane & 7u;
+        uint jj = min(j, wide - 1u);
+
+        for (uint i = lane; i < per; i += LANES) {
+            lows[i] = r[shape.low_at + i];
+        }
+        barrier();
+
+        uint st = (mode == 0u) ? jj / width : 0u;
+        float acc = 0.0;
+        for (uint k = part; k < low; k += 8u) {
+            acc += w[shape.base + shape.map_at + jj * low + k]
+                   * lows[st * low + k];
+        }
+        partial[lane] = acc;
+        barrier();
+
+        if (part != 0u || j >= wide) {
+            return;
+        }
+
+        float total = 0.0;
+        for (uint q = 0u; q < 8u; ++q) {
+            total += partial[lane + q];
+        }
+
+        if (mode == 0u) {
+            uint c = j - st * width;
+            float mix = w[shape.base + shape.lerp_at + j];
+            float here = x[c];
+            float before = s[shape.state_at + c];
+            y[j] = here + (before - here) * (mix + total);
+        } else {
+            float bias = w[shape.base + shape.bias_at + j];
+            y[j] = exp(-exp(bias + total));
+        }
+    } else if (mode == 0u || mode == 1u) {
         //  A lane an output element, the workgroup's positions at once: the
         //  low-rank rows of those positions staged in shared memory, the
         //  map row read once a rank and multiplied into an accumulator a

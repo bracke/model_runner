@@ -2329,6 +2329,101 @@ package body Model_Runner.Kernels is
 
             return;
          end;
+
+      --  And the shorter runs a head ends in: 96 is 64 and 32 (phi-3),
+      --  80 is 64 and 16 (phi-2). The remainder went through the loop
+      --  below, a software conversion an element, and a phi-3 token's
+      --  attention took 3.6 ms over 67 MB of cache.
+      elsif Wide_Lanes and then Span = 32 then
+         declare
+            LF : constant Character := ASCII.LF;
+
+            Sums_At   : constant System.Address := Sums (Sums'First)'Address;
+            Weight_At : System.Address := Weights (At_Weight)'Address;
+            Value_At  : System.Address := Values (At_Value)'Address;
+            Left      : Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Steps);
+            Apart     : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Stride * 2);
+         begin
+            System.Machine_Code.Asm
+              ("vmovups 0(%3), %%ymm0"                  & LF
+               & "vmovups 32(%3), %%ymm1"                 & LF
+               & "vmovups 64(%3), %%ymm2"                 & LF
+               & "vmovups 96(%3), %%ymm3"                 & LF
+               & "1:"                                     & LF
+               & "vbroadcastss (%0), %%ymm8"              & LF
+               & "vcvtph2ps 0(%1), %%ymm9"                & LF
+               & "vfmadd231ps %%ymm9, %%ymm8, %%ymm0"     & LF
+               & "vcvtph2ps 16(%1), %%ymm9"               & LF
+               & "vfmadd231ps %%ymm9, %%ymm8, %%ymm1"     & LF
+               & "vcvtph2ps 32(%1), %%ymm9"               & LF
+               & "vfmadd231ps %%ymm9, %%ymm8, %%ymm2"     & LF
+               & "vcvtph2ps 48(%1), %%ymm9"               & LF
+               & "vfmadd231ps %%ymm9, %%ymm8, %%ymm3"     & LF
+               & "addq $4, %0"                            & LF
+               & "addq %4, %1"                            & LF
+               & "decq %2"                                & LF
+               & "jnz 1b"                                 & LF
+               & "vmovups %%ymm0, 0(%3)"                  & LF
+               & "vmovups %%ymm1, 32(%3)"                 & LF
+               & "vmovups %%ymm2, 64(%3)"                 & LF
+               & "vmovups %%ymm3, 96(%3)"                 & LF
+               & "vzeroupper",
+               Outputs =>
+                 [System.Address'Asm_Output ("+r", Weight_At),
+                  System.Address'Asm_Output ("+r", Value_At),
+                  Interfaces.Unsigned_64'Asm_Output ("+r", Left)],
+               Inputs   =>
+                 [System.Address'Asm_Input ("r", Sums_At),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Apart)],
+               Clobber  =>
+                 "ymm0, ymm1, ymm2, ymm3, ymm8, ymm9, cc, memory",
+               Volatile => True);
+
+            return;
+         end;
+      elsif Wide_Lanes and then Span = 16 then
+         declare
+            LF : constant Character := ASCII.LF;
+
+            Sums_At   : constant System.Address := Sums (Sums'First)'Address;
+            Weight_At : System.Address := Weights (At_Weight)'Address;
+            Value_At  : System.Address := Values (At_Value)'Address;
+            Left      : Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Steps);
+            Apart     : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (Stride * 2);
+         begin
+            System.Machine_Code.Asm
+              ("vmovups 0(%3), %%ymm0"                  & LF
+               & "vmovups 32(%3), %%ymm1"                 & LF
+               & "1:"                                     & LF
+               & "vbroadcastss (%0), %%ymm8"              & LF
+               & "vcvtph2ps 0(%1), %%ymm9"                & LF
+               & "vfmadd231ps %%ymm9, %%ymm8, %%ymm0"     & LF
+               & "vcvtph2ps 16(%1), %%ymm9"               & LF
+               & "vfmadd231ps %%ymm9, %%ymm8, %%ymm1"     & LF
+               & "addq $4, %0"                            & LF
+               & "addq %4, %1"                            & LF
+               & "decq %2"                                & LF
+               & "jnz 1b"                                 & LF
+               & "vmovups %%ymm0, 0(%3)"                  & LF
+               & "vmovups %%ymm1, 32(%3)"                 & LF
+               & "vzeroupper",
+               Outputs =>
+                 [System.Address'Asm_Output ("+r", Weight_At),
+                  System.Address'Asm_Output ("+r", Value_At),
+                  Interfaces.Unsigned_64'Asm_Output ("+r", Left)],
+               Inputs   =>
+                 [System.Address'Asm_Input ("r", Sums_At),
+                  Interfaces.Unsigned_64'Asm_Input ("r", Apart)],
+               Clobber  =>
+                 "ymm0, ymm1, ymm8, ymm9, cc, memory",
+               Volatile => True);
+
+            return;
+         end;
       end if;
 
       for Step in 0 .. Steps - 1 loop

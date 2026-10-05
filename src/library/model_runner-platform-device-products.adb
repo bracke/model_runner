@@ -14145,6 +14145,20 @@ package body Model_Runner.Platform.Device.Products is
                         Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                               Product_Bytes, Shape'Address);
 
+                        --  A token's shift or decay through a map reads it
+                        --  eight lanes an element: thirty-two elements a
+                        --  workgroup, and one position.
+                        if Count = 1 and then This.Rwkv.Low > 0
+                          and then This.Rwkv.Mode in Shift | Decay
+                        then
+                           Dispatch
+                             (Item.Buffer,
+                              C.unsigned
+                                (Groups ((if This.Rwkv.Mode = Shift
+                                          then This.Rwkv.Streams
+                                          else 1) * This.Rwkv.Width, 32)),
+                              1, 1);
+                        else
                         case This.Rwkv.Mode is
                            when Shift =>
                               Dispatch
@@ -14175,6 +14189,7 @@ package body Model_Runner.Platform.Device.Products is
                                  C.unsigned (Groups (This.Rwkv.Width, 256)),
                                  1, 1);
                         end case;
+                        end if;
                      end if;
                   end;
 

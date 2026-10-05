@@ -17761,7 +17761,11 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      --  The causal convolution, the team's, then the unit.
+      --  The causal convolution, the team's, then the unit. Its cost
+      --  counts the logistic unit and the memory's shift beside the taps:
+      --  counted as the taps alone, a token's was under the pool's floor
+      --  and went on the calling task, 33 us a layer of Jamba where the
+      --  pool takes 10.
       declare
          Share : aliased Mamba_Conv_Share :=
            (Count  => Count, Inner => Inner, Stride => 2 * Inner, Shift => 0,
@@ -17772,7 +17776,7 @@ package body Model_Runner.Llama is
       begin
          Workers_CPU.Dispatch_Shares
            (Item.Team, Inner, Share'Unchecked_Access, Status,
-            Cost => Inner * Taps * Count);
+            Cost => Inner * Taps * Count * 4);
          if E.Is_Error (Status) then
             Release;
             return;
