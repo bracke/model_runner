@@ -3073,6 +3073,12 @@ private
       Mamba_DT   : Model_Runner.Tensors.Real_Array_Access := null;
       Mamba_Y    : Model_Runner.Tensors.Real_Array_Access := null;
 
+      --  Mamba's scan's step sizes and decays, a channel's and a channel's
+      --  states' worth at the channel: allocated a share a layer they were
+      --  a zeroed tens of kilobytes on every worker every token.
+      Mamba_Steps  : Model_Runner.Tensors.Real_Array_Access := null;
+      Mamba_Decays : Model_Runner.Tensors.Real_Array_Access := null;
+
       --  And Mamba2's for a batch, kept from one batch to the next and grown
       --  when a batch is longer: the projection in, the convolved rows and
       --  the scan's answer. Allocating them a layer zeroed a megabyte and a

@@ -160,10 +160,19 @@ void main() {
             vec4 q1 = vec4 (unpack8 (q1u)) - 32.0;
             vec4 q2 = vec4 (unpack8 (q2u)) - 32.0;
             vec4 q3 = vec4 (unpack8 (q3u)) - 32.0;
+#ifdef SHARED_SCALES
+            float mine = d * scale_at (sb + itid);
+            uint lead = gl_SubgroupInvocationID & ~15u;
+            float sc0 = subgroupShuffle (mine, lead + s_offset);
+            float sc1 = subgroupShuffle (mine, lead + s_offset + 2u);
+            float sc2 = subgroupShuffle (mine, lead + s_offset + 4u);
+            float sc3 = subgroupShuffle (mine, lead + s_offset + 6u);
+#else
             float sc0 = d * scale_at (sb + s_offset);
             float sc1 = d * scale_at (sb + s_offset + 2u);
             float sc2 = d * scale_at (sb + s_offset + 4u);
             float sc3 = d * scale_at (sb + s_offset + 6u);
+#endif
 
             for (uint k = 0u; k < VEC; ++k) {
                 temp[r][k] += dot (by0[k],  q0) * sc0 + dot (by32[k], q1) * sc1

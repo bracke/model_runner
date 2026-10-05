@@ -414,6 +414,24 @@ package Model_Runner.Backend.CPU is
       Target  : Model_Runner.Tensors.Real_Array_Access;
       Ok      : out Boolean);
 
+   --  One matrix against every packed row, on the calling task, with
+   --  nothing gathered: what Dispatch_Batch without a pool answers for the
+   --  same rows, packed once by the caller where several tasks each ask a
+   --  slice of the matrix against them.
+   --
+   --  @param Weight The matrix; its format must be one the packed rows
+   --    were made for.
+   --  @param Rows The packed batch.
+   --  @param Target Receives Rows' count of results of Weight's row
+   --    count, the first at Target'First.
+   --  @param Ok False where the format cannot read packed rows; Target is
+   --    then untouched and the caller multiplies the rows as they are.
+   procedure Multiply_Packed_Whole
+     (Weight : Model_Runner.Tensors.View;
+      Rows   : Packed_Rows;
+      Target : in out Model_Runner.Tensors.Real_Array;
+      Ok     : out Boolean);
+
    subtype Task_Item is Model_Runner.Shares.Work;
    subtype Task_Item_Access is Model_Runner.Shares.Work_Access;
 

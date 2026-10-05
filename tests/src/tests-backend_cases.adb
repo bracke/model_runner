@@ -9629,9 +9629,9 @@ package body Tests.Backend_Cases is
 
    --  A batch quantized once and read by members against the same rows
    --  handed to the pool as they are: the same products, so the same bits.
-   --  Holds Pack, Multiply_Packed and Unpack, and the member order, with a
-   --  Q8_0 matrix the integer kernels take and a batch every member reads
-   --  out of order.
+   --  Holds Pack, Multiply_Packed, Multiply_Packed_Whole and Unpack, and
+   --  the member order, with a Q8_0 matrix the integer kernels take and a
+   --  batch every member reads out of order.
    procedure Packed_Rows_Multiply_As_The_Pool_Multiplies
      (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -9650,6 +9650,8 @@ package body Tests.Backend_Cases is
       Gathered : T.Real_Array_Access;
       Straight : T.Real_Array_Access;
       Through  : T.Real_Array_Access;
+      Plain    : T.Real_Array_Access;
+      Whole    : T.Real_Array_Access;
 
       Packed : CPU.Packed_Rows;
       Ok     : Boolean;
@@ -9690,8 +9692,11 @@ package body Tests.Backend_Cases is
       T.Allocate (N.Element_Count (Members'Length) * Columns, Gathered);
       T.Allocate (N.Element_Count (Members'Length) * Rows, Straight);
       T.Allocate (N.Element_Count (Members'Length) * Rows, Through);
+      T.Allocate (Count * Rows, Plain);
+      T.Allocate (Count * Rows, Whole);
       Assert (Vectors /= null and then Gathered /= null
-              and then Straight /= null and then Through /= null,
+              and then Straight /= null and then Through /= null
+              and then Plain /= null and then Whole /= null,
               "no room for the vectors");
 
       for Index in Vectors.all'Range loop
@@ -9728,6 +9733,21 @@ package body Tests.Backend_Cases is
                  & " at" & N.Element_Count'Image (Index));
       end loop;
 
+      --  The whole batch, nothing gathered: the pool's bits again.
+      CPU.Dispatch_Batch (null, View, Vectors, Count, Plain, Status);
+      Assert (E.Is_Ok (Status), "the product of the batch failed");
+
+      CPU.Multiply_Packed_Whole (View, Packed, Whole.all, Ok);
+      Assert (Ok, "the packed batch would not multiply whole");
+
+      for Index in Whole.all'Range loop
+         Assert (Whole.all (Index) = Plain.all (Index),
+                 "the whole packed product answers"
+                 & N.Real'Image (Whole.all (Index))
+                 & " where the pool answers" & N.Real'Image (Plain.all (Index))
+                 & " at" & N.Element_Count'Image (Index));
+      end loop;
+
       --  A member past the batch is refused, and the rows come back.
       CPU.Multiply_Packed (View, Packed, [0, 7], Through, Ok);
       Assert (not Ok, "a member past the batch was multiplied");
@@ -9735,11 +9755,15 @@ package body Tests.Backend_Cases is
       CPU.Unpack (Packed);
       CPU.Multiply_Packed (View, Packed, Members, Through, Ok);
       Assert (not Ok, "rows given back were multiplied");
+      CPU.Multiply_Packed_Whole (View, Packed, Whole.all, Ok);
+      Assert (not Ok, "rows given back were multiplied whole");
 
       T.Free (Vectors);
       T.Free (Gathered);
       T.Free (Straight);
       T.Free (Through);
+      T.Free (Plain);
+      T.Free (Whole);
       B.Free (Held);
       CPU.Use_Integer_Activations (Was);
    end Packed_Rows_Multiply_As_The_Pool_Multiplies;

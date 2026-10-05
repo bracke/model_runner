@@ -1894,6 +1894,39 @@ package body Model_Runner.Backend.CPU is
       Item.Columns := 0;
    end Unpack;
 
+   ---------------------------
+   -- Multiply_Packed_Whole --
+   ---------------------------
+
+   procedure Multiply_Packed_Whole
+     (Weight : T.View;
+      Rows   : Packed_Rows;
+      Target : in out T.Real_Array;
+      Ok     : out Boolean)
+   is
+      package QI renames Model_Runner.Quantization.Integers;
+   begin
+      Ok := False;
+
+      if Rows.Count = 0
+        or else Weight.Columns /= Rows.Columns
+        or else Target'Length < Rows.Count * Weight.Rows
+        or else not QI.Packs_Vectors
+                      (Weight.Format, Rows.Count, Weight.Interleaved)
+        or else QI.Supers_Vectors (Weight.Format) /= Rows.Super
+      then
+         return;
+      end if;
+
+      T.Mat_Mul_Range_Packed
+        (Weight, Rows.Values.all, Rows.Scales.all, Rows.Totals.all,
+         Rows.Halves.all, Rows.Count, Target, 0, Weight.Rows - 1, Ok);
+
+      if Ok then
+         Count_Share (Weight.Format, Handled => True);
+      end if;
+   end Multiply_Packed_Whole;
+
    ---------------------
    -- Multiply_Packed --
    ---------------------

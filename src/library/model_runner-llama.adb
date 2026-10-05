@@ -16002,6 +16002,8 @@ package body Model_Runner.Llama is
                     (Element_Count (Settings.Time_Rank), Item.Mamba_DTR);
                   T.Allocate (Inner, Item.Mamba_DT);
                   T.Allocate (Inner, Item.Mamba_Y);
+                  T.Allocate (Inner, Item.Mamba_Steps);
+                  T.Allocate (Inner * State, Item.Mamba_Decays);
                end if;
             end;
          end if;
@@ -16237,6 +16239,8 @@ package body Model_Runner.Llama is
       T.Free (Item.Mamba_DTR);
       T.Free (Item.Mamba_DT);
       T.Free (Item.Mamba_Y);
+      T.Free (Item.Mamba_Steps);
+      T.Free (Item.Mamba_Decays);
       T.Free (Item.Mamba_Batch_XZ);
       T.Free (Item.Mamba_Batch_X);
       T.Free (Item.Mamba_Batch_Y);
@@ -17640,6 +17644,16 @@ package body Model_Runner.Llama is
       Dt_Bias : T.Real_Array_Access := null;
       DTR     : T.Real_Array_Access := null;
       Roles   : Workers_CPU.Role_Set := Workers_CPU.Integer_Activation_Roles;
+
+      --  DTR packed once for every share, or null where it was not: a
+      --  share packing it itself was four allocations and as many
+      --  releases around a product of a few microseconds.
+      Packed  : access constant Workers_CPU.Packed_Rows := null;
+
+      --  The session's step sizes and decays, a channel's at the channel:
+      --  the shares' channels do not overlap, so neither do their runs.
+      Steps   : T.Real_Array_Access := null;
+      Decays  : T.Real_Array_Access := null;
       Ok      : Boolean := True;
    end record;
 
@@ -17682,8 +17696,8 @@ package body Model_Runner.Llama is
       --  binary32 exponential, as llama.cpp's scan takes it. It was a run
       --  of sixteen a channel, and the call and its constants were most of
       --  a token's scan -- 59 us a share of 1,024 channels of Jamba.
-      Steps  : T.Real_Array_Access;
-      Decays : T.Real_Array_Access;
+      Steps  : Real_Array renames Share.Steps.all;
+      Decays : Real_Array renames Share.Decays.all;
 
       function Softplus (X : N.Wide_Real) return N.Wide_Real
       is (if X > 20.0 then X else N.Log (1.0 + N.Exp (X)));
@@ -17692,30 +17706,43 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      T.Allocate (Channels, Steps);
-      T.Allocate (Channels * State, Decays);
-      if Steps = null or else Decays = null then
-         T.Free (Steps);
-         T.Free (Decays);
-         Share.Ok := False;
-         return;
-      end if;
-
       if Share.Fused then
          declare
-            Local : E.Error_Info;
+            Slice  : constant T.View :=
+              Row_Slice (Share.Dt_View, Lo, Channels);
+            Local  : E.Error_Info := E.Success;
+            Packed : Boolean := False;
          begin
-            Workers_CPU.Dispatch_Batch
-              (null, Row_Slice (Share.Dt_View, Lo, Channels), Share.DTR, 1,
-               Steps, Local, Roles => Share.Roles);
+            if Share.Packed /= null then
+               Workers_CPU.Multiply_Packed_Whole
+                 (Slice, Share.Packed.all, Steps (Lo .. Hi), Packed);
+            end if;
+            if not Packed then
+               --  Its own answer, not the session's: the start of that is
+               --  another share's channels.
+               declare
+                  Own : T.Real_Array_Access;
+               begin
+                  T.Allocate (Channels, Own);
+                  if Own = null then
+                     Share.Ok := False;
+                     return;
+                  end if;
+                  Workers_CPU.Dispatch_Batch
+                    (null, Slice, Share.DTR, 1, Own, Local,
+                     Roles => Share.Roles);
+                  if E.Is_Ok (Local) then
+                     Steps (Lo .. Hi) := Own (0 .. Channels - 1);
+                  end if;
+                  T.Free (Own);
+               end;
+            end if;
             if E.Is_Error (Local) then
-               T.Free (Steps);
-               T.Free (Decays);
                Share.Ok := False;
                return;
             end if;
             for C in Lo .. Hi loop
-               Share.DT (C) := Steps (C - Lo) + Share.Dt_Bias (C);
+               Share.DT (C) := Steps (C) + Share.Dt_Bias (C);
             end loop;
          end;
       end if;
@@ -17725,22 +17752,22 @@ package body Model_Runner.Llama is
             declare
                Dt_Soft : constant Real :=
                  Real (Softplus (N.Wide_Real (Share.DT (P * Inner + C))));
-               At_C    : constant Element_Count := (C - Lo) * State;
+               At_C    : constant Element_Count := C * State;
             begin
-               Steps (C - Lo) := Dt_Soft;
+               Steps (C) := Dt_Soft;
                for S in 0 .. State - 1 loop
                   Decays (At_C + S) := Dt_Soft * A (C * State + S);
                end loop;
             end;
          end loop;
-         K.Exponentiate (Decays.all (0 .. Channels * State - 1), 0.0);
+         K.Exponentiate (Decays (Lo * State .. (Hi + 1) * State - 1), 0.0);
 
          for C in Lo .. Hi loop
             declare
                Cells   : constant Element_Count := Share.Base + C * State;
-               At_C    : constant Element_Count := (C - Lo) * State;
+               At_C    : constant Element_Count := C * State;
                X       : constant Real := Share.Xc (P * Inner + C);
-               X_Dt    : constant Real := X * Steps (C - Lo);
+               X_Dt    : constant Real := X * Steps (C);
                Row     : constant Element_Count := P * Wide;
                Sum     : Real := 0.0;
                Z       : constant N.Wide_Real :=
@@ -17764,9 +17791,6 @@ package body Model_Runner.Llama is
             end;
          end loop;
       end loop;
-
-      T.Free (Steps);
-      T.Free (Decays);
    end Run;
 
    --  Count positions through one Mamba layer: Rows holds their normalized
@@ -17956,33 +17980,58 @@ package body Model_Runner.Llama is
          end loop;
       end if;
 
+      if Item.Mamba_Steps = null or else Item.Mamba_Decays = null then
+         Release;
+         Status := E.Make (E.Memory_Allocation_Failed);
+         return;
+      end if;
+
       --  The scan, the team's -- for a token, with the step projection
-      --  in it.
+      --  in it, and the steps packed for it once.
       declare
-         Share : aliased Mamba_Scan_Share :=
-           (Count => Count, Inner => Inner, State => State, Rank => Rank,
-            Base  => State_Base,
-            H     => Item.Delta_State, A => Current.Ssm_A,
-            D     => Current.Ssm_D,
-            Xc    => Xc, DT => DT, DBC => DBC, XZ => XZ, Y => Y,
-            Fused => Fused, Dt_View => Current.Ssm_Dt,
-            Dt_Bias => Current.DT_Bias, DTR => DTR,
-            Roles => Item.Arithmetic, Ok => True);
+         Packed    : aliased Workers_CPU.Packed_Rows;
+         Is_Packed : Boolean := False;
       begin
-         Workers_CPU.Dispatch_Shares
-           (Item.Team,
-            (if Fused then Inner / Fused_Channels else Inner),
-            Share'Unchecked_Access, Status,
-            Cost => Inner * State * Count * 4);
-         if E.Is_Error (Status) then
-            Release;
-            return;
+         if Fused and then Item.Arithmetic (Current.Ssm_Dt.Role) then
+            Workers_CPU.Pack
+              (Packed, DTR, 1, Rank,
+               Super  => Supers (Current.Ssm_Dt)
+                         and then Rank mod Model_Runner.Quantization.Integers
+                                             .Activation_Super = 0,
+               Ok     => Is_Packed,
+               Roles  => Item.Arithmetic);
          end if;
-         if not Share.Ok then
-            Release;
-            Status := E.Make (E.Memory_Allocation_Failed);
-            return;
-         end if;
+
+         declare
+            Share : aliased Mamba_Scan_Share :=
+              (Count => Count, Inner => Inner, State => State, Rank => Rank,
+               Base  => State_Base,
+               H     => Item.Delta_State, A => Current.Ssm_A,
+               D     => Current.Ssm_D,
+               Xc    => Xc, DT => DT, DBC => DBC, XZ => XZ, Y => Y,
+               Fused => Fused, Dt_View => Current.Ssm_Dt,
+               Dt_Bias => Current.DT_Bias, DTR => DTR,
+               Roles => Item.Arithmetic,
+               Packed => (if Is_Packed then Packed'Unchecked_Access else null),
+               Steps => Item.Mamba_Steps, Decays => Item.Mamba_Decays,
+               Ok => True);
+         begin
+            Workers_CPU.Dispatch_Shares
+              (Item.Team,
+               (if Fused then Inner / Fused_Channels else Inner),
+               Share'Unchecked_Access, Status,
+               Cost => Inner * State * Count * 4);
+            Workers_CPU.Unpack (Packed);
+            if E.Is_Error (Status) then
+               Release;
+               return;
+            end if;
+            if not Share.Ok then
+               Release;
+               Status := E.Make (E.Memory_Allocation_Failed);
+               return;
+            end if;
+         end;
       end;
 
       --  And the projections back, into the rows the residual reads.
