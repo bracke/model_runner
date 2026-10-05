@@ -2999,11 +2999,24 @@ package body Model_Runner.Llama is
    is
       Inner : constant Element_Count := Element_Count (Settings.Inner_Size);
       Heads : constant Element_Count := Element_Count (Settings.Ssm_Heads);
+      State : constant Element_Count := Element_Count (Settings.State_Size);
       DXBC  : constant Element_Count :=
-        Inner + 2 * Element_Count (Settings.Groups)
-                  * Element_Count (Settings.State_Size);
+        Inner + 2 * Element_Count (Settings.Groups) * State;
       R     : Mamba2_Places;
    begin
+      --  Mamba's: the taps over x alone, and dt's bias, A and D a channel
+      --  -- A a channel and a state -- with no gain.
+      if not Is_Mamba2 (Settings.Kind) then
+         R.Conv  := 0;
+         R.Bias  := Inner * Element_Count (Settings.Conv_Kernel);
+         R.Dt    := R.Bias + Inner;
+         R.A     := R.Dt + Inner;
+         R.D     := R.A + Inner * State;
+         R.Gain  := R.D + Inner;
+         R.Total := R.Gain;
+         return R;
+      end if;
+
       R.Conv  := 0;
       R.Bias  := DXBC * Element_Count (Settings.Conv_Kernel);
       R.Dt    := R.Bias + DXBC;
@@ -3133,12 +3146,14 @@ package body Model_Runner.Llama is
          end;
       end if;
 
-      --  And a Mamba2 mixer's, every table present at the length its
-      --  place says, or no pack and the mixer goes a step at a time.
-      if Is_Mamba2 (Item.Settings.Kind)
+      --  And a Mamba or Mamba2 mixer's, every table present at the length
+      --  its place says, or no pack and the mixer goes a step at a time.
+      if Pure_SSM (Item.Settings.Kind)
         and then Current.Conv /= null and then Current.Conv_Bias /= null
         and then Current.DT_Bias /= null and then Current.Ssm_A /= null
-        and then Current.Ssm_D /= null and then Current.State_Norm /= null
+        and then Current.Ssm_D /= null
+        and then (Current.State_Norm /= null
+                  or else not Is_Mamba2 (Item.Settings.Kind))
       then
          declare
             P : constant Mamba2_Places := Mamba2_Places_Of (Item.Settings);
@@ -3155,7 +3170,9 @@ package body Model_Runner.Llama is
               and then Current.DT_Bias.all'Length = P.A - P.Dt
               and then Current.Ssm_A.all'Length = P.D - P.A
               and then Current.Ssm_D.all'Length = P.Gain - P.D
-              and then Current.State_Norm.all'Length = P.Total - P.Gain
+              and then (if Is_Mamba2 (Item.Settings.Kind)
+                        then Current.State_Norm.all'Length = P.Total - P.Gain
+                        else P.Total = P.Gain)
             then
                T.Allocate (P.Total, Current.Ssm_Pack);
                if Current.Ssm_Pack /= null then
@@ -3164,7 +3181,9 @@ package body Model_Runner.Llama is
                   Put (P.Dt, Current.DT_Bias);
                   Put (P.A, Current.Ssm_A);
                   Put (P.D, Current.Ssm_D);
-                  Put (P.Gain, Current.State_Norm);
+                  if Is_Mamba2 (Item.Settings.Kind) then
+                     Put (P.Gain, Current.State_Norm);
+                  end if;
                end if;
             end if;
          end;
@@ -8167,22 +8186,31 @@ package body Model_Runner.Llama is
          A_At      => Natural (P.A),
          D_At      => Natural (P.D),
          Gain_At   => Natural (P.Gain),
-         In_Proj   => Rows_Of (Current.Ssm_In, 0, Main),
+         In_Proj   =>
+           (if Is_Mamba2 (Settings.Kind) then Rows_Of (Current.Ssm_In, 0, Main)
+            else Current.Ssm_In),
          Dt_Proj   =>
-           Rows_Of (Current.Ssm_In, Main, Element_Count (Settings.Ssm_Heads)),
+           (if Is_Mamba2 (Settings.Kind)
+            then Rows_Of (Current.Ssm_In, Main,
+                          Element_Count (Settings.Ssm_Heads))
+            else T.Empty_View),
          Out_Proj  => Current.Linear_Out,
          Memory_At => Natural (Item.State_Base + Conv_At (Settings, Index)),
          State_At  => Natural (Item.State_Base) + Linear_State_At (Item, Index),
          Epsilon   => Settings.Epsilon,
          Norm      => (if With_Norm then Current.Attention_Norm else null),
-         Norm_Floor => Settings.Epsilon);
+         Norm_Floor => Settings.Epsilon,
+         Version   => (if Is_Mamba2 (Settings.Kind) then 2 else 1),
+         Rank      => Settings.Time_Rank,
+         X_Proj    => Current.Ssm_X,
+         Dt_Up     => Current.Ssm_Dt);
    end Mamba2_Block_Of;
 
    --  Whether a Mamba2 layer can go to the device whole: the device runs
    --  the mixer, the layer has its pack and a plain normalization, the
    --  shapes are the scan's, and the session keeps one state.
    function Mamba2_Fits (Item : Session; Current : Layer) return Boolean
-   is (Is_Mamba2 (Item.Owner.Settings.Kind)
+   is (Pure_SSM (Item.Owner.Settings.Kind)
        and then Model_Runner.Backend."="
                   (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_Device)
        and then Current.Ssm_Pack /= null
@@ -8191,13 +8219,23 @@ package body Model_Runner.Llama is
        and then Item.Kept_States = 0
        and then Item.Delta_State /= null
        and then Item.Conv_State /= null
-       and then Item.Owner.Settings.Head_Dim
-                = Model_Runner.Backend.Device.Mamba2_Head
-       and then Item.Owner.Settings.State_Size
-                = Model_Runner.Backend.Device.Mamba2_State
-       and then Item.Owner.Settings.Ssm_Heads * Item.Owner.Settings.Head_Dim
-                = Item.Owner.Settings.Inner_Size
-       and then Model_Runner.Backend.Device.Runs_Mamba2);
+       and then
+         (if Is_Mamba2 (Item.Owner.Settings.Kind)
+          then Item.Owner.Settings.Head_Dim
+                 = Model_Runner.Backend.Device.Mamba2_Head
+               and then Item.Owner.Settings.State_Size
+                        = Model_Runner.Backend.Device.Mamba2_State
+               and then Item.Owner.Settings.Ssm_Heads
+                        * Item.Owner.Settings.Head_Dim
+                        = Item.Owner.Settings.Inner_Size
+               and then Model_Runner.Backend.Device.Runs_Mamba2
+          else Item.Owner.Settings.State_Size
+                 <= Model_Runner.Backend.Device.Mamba_Most_State
+               and then Item.Owner.Settings.Time_Rank > 0
+               and then Current.Ssm_Dt_Norm = null
+               and then T.Is_Present (Current.Ssm_X)
+               and then T.Is_Present (Current.Ssm_Dt)
+               and then Model_Runner.Backend.Device.Runs_Mamba));
 
    --  Give a session a block of the device's cache, and keep it there.
    --
@@ -17441,6 +17479,10 @@ package body Model_Runner.Llama is
    begin
       Status := E.Success;
 
+      --  The host's copy of the memory and the state, where a layer before
+      --  this one went whole on the device and left them there.
+      Fetch_States (Item'Unchecked_Access);
+
       if Own then
          XZ  := Item.Mamba_XZ;
          Xc  := Item.Mamba_X;
@@ -19325,7 +19367,7 @@ package body Model_Runner.Llama is
       --  Whichever of the two a layer is: what the carry from the layer
       --  before asks of the layer after.
       function Layer_Fits (L : Layer; Index : Natural) return Boolean
-      is (if Is_Mamba2 (Settings.Kind) then Mamba2_Fits (Item, L)
+      is (if Pure_SSM (Settings.Kind) then Mamba2_Fits (Item, L)
           elsif Linear (Settings, Index) then Linear_Layer_Fits (L)
           else Whole_Layer_Fits (L, Index));
 
@@ -21454,7 +21496,7 @@ package body Model_Runner.Llama is
       --  Whichever of the two a layer is: what the carry from the layer
       --  before asks of the layer after.
       function Layer_Fits (L : Layer; Index : Natural) return Boolean
-      is (if Is_Mamba2 (Settings.Kind) then Mamba2_Fits (Item, L)
+      is (if Pure_SSM (Settings.Kind) then Mamba2_Fits (Item, L)
           elsif Linear (Settings, Index) then Linear_Layer_Fits (L)
           else Whole_Layer_Fits (L, Index));
 

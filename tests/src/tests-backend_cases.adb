@@ -5377,7 +5377,8 @@ package body Tests.Backend_Cases is
            Groups => Groups, XZ_Step => 1, Dt_Step => 2,
            Conv_At => Conv_At, Bias_At => Bias_At, Dt_At => Dt_At,
            A_At => A_At, D_At => D_At, Gain_At => Gain_At,
-           Memory_At => 0, State_At => Memory_Len, Epsilon => 1.0E-5));
+           Memory_At => 0, State_At => Memory_Len, Epsilon => 1.0E-5,
+           Version => 2, X_At => Inner, Dbc_Step => 0, Rank => 0));
 
       procedure Over (Count : Positive) is
          C       : constant N.Element_Count := N.Element_Count (Count);
@@ -5648,6 +5649,311 @@ package body Tests.Backend_Cases is
       Free (Start);
    end A_Mamba2_Mixer_Says_What_The_Host_Says;
 
+   ----------------------------------------
+   -- A_Mamba_Mixer_Says_What_The_Host_Says --
+   ----------------------------------------
+
+   --  Mamba 1's steps on the device: the convolution over x before z, the
+   --  x-projection, dt's rank taken out of it and projected up, and the
+   --  scan a channel a lane -- each channel's own decay a state, B and C
+   --  shared, the gate z after -- against the host's arithmetic, over one
+   --  position and over a batch, the memory and the state holding numbers.
+   procedure A_Mamba_Mixer_Says_What_The_Host_Says
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Width  : constant := 64;
+      Inner  : constant := 128;
+      State  : constant := 16;
+      Rank   : constant := 8;
+      Taps   : constant := 4;
+      Back   : constant := Taps - 1;
+      In_Out : constant := 2 * Inner;
+      Wide_X : constant := Rank + 2 * State;
+      W      : constant N.Element_Count := Width;
+
+      Conv_At  : constant := 0;
+      Bias_At  : constant := Inner * Taps;
+      Dt_At    : constant := Bias_At + Inner;
+      A_At     : constant := Dt_At + Inner;
+      D_At     : constant := A_At + Inner * State;
+      Pack_Len : constant := D_At + Inner;
+
+      Memory_Len : constant := Back * Inner;
+      State_Len  : constant := Memory_Len + Inner * State;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+
+      Found, Ready, Ok, Added, Halted : Boolean;
+
+      In_W  : N.Real_Array (0 .. In_Out * W - 1);
+      X_W   : N.Real_Array (0 .. Wide_X * Inner - 1);
+      Dt_W  : N.Real_Array (0 .. Inner * Rank - 1);
+      Pack  : N.Real_Array (0 .. Pack_Len - 1);
+      Start : N.Real_Array (0 .. State_Len - 1);
+
+      Steps : Products.Sequence;
+
+      function Bytes_Of (Values : N.Real_Array)
+        return Model_Runner.Bytes.Byte_Count
+      is (Model_Runner.Bytes.Byte_Count (Values'Length) * 4);
+
+      package L renames Ada.Numerics.Long_Elementary_Functions;
+      use type Products.Mamba2_Mode;
+
+      function Shape (Mode : Products.Mamba2_Mode)
+        return Products.Mamba2_Shape
+      is ((Mode => Mode, Inner => Inner, DXBC => Inner, In_Out => In_Out,
+           Taps => Taps, Heads => 1, Head => 0, State => State,
+           Groups => 1, XZ_Step => 1, Dt_Step => (if Mode = Products.Scan
+                                                  then 6 else 0),
+           Conv_At => Conv_At, Bias_At => Bias_At, Dt_At => Dt_At,
+           A_At => A_At, D_At => D_At, Gain_At => 0,
+           Memory_At => 0, State_At => Memory_Len, Epsilon => 0.0,
+           Version => 1, X_At => 0,
+           Dbc_Step => (if Mode = Products.Scan then 4 else 0),
+           Rank => Rank));
+
+      procedure Over (Count : Positive) is
+         C       : constant N.Element_Count := N.Element_Count (Count);
+         Input   : N.Real_Array (0 .. C * W - 1);
+         XZ      : N.Real_Array (0 .. C * In_Out - 1);
+         Xc      : N.Real_Array (0 .. C * Inner - 1);
+         DBC     : N.Real_Array (0 .. C * Wide_X - 1);
+         DT      : N.Real_Array (0 .. C * Inner - 1);
+         Y       : N.Real_Array (0 .. C * Inner - 1);
+         H       : N.Real_Array (0 .. Inner * State - 1) :=
+           Start (Memory_Len .. State_Len - 1);
+         Landing : N.Real_Array
+           (0 .. C * (In_Out + Inner + 1 + Wide_X + Rank + 2 * Inner) - 1)
+           := [others => 0.0];
+         After   : N.Real_Array (0 .. State_Len - 1);
+         Worst   : N.Real := 0.0;
+
+         At_Conv : constant N.Element_Count := C * In_Out;
+         At_Scan : constant N.Element_Count :=
+           At_Conv + C * (Inner + 1 + Wide_X + Rank + Inner);
+
+         procedure Near (Got, Want : N.Real) is
+         begin
+            Worst := N.Real'Max
+              (Worst, abs (Got - Want) / N.Real'Max (1.0, abs Want));
+         end Near;
+
+         function Input_At (Ch : N.Element_Count; Q : Long_Long_Integer)
+           return N.Real
+         is (if Q >= 0 then XZ (N.Element_Count (Q) * In_Out + Ch)
+             else Start (N.Element_Count (Q + Back) * Inner + Ch));
+
+         function Dot (M : N.Real_Array; Row, Cols : N.Element_Count;
+                       V : N.Real_Array; At_V : N.Element_Count)
+           return N.Real
+         is
+            Acc : Long_Float := 0.0;
+         begin
+            for K in 0 .. Cols - 1 loop
+               Acc := Acc + Long_Float (M (Row * Cols + K))
+                            * Long_Float (V (At_V + K));
+            end loop;
+            return N.Real (Acc);
+         end Dot;
+      begin
+         for Index in Input'Range loop
+            Input (Index) := N.Real ((Index * 7) mod 13) / 13.0 - 0.45;
+         end loop;
+
+         Products.Put_State (Engine, 0, Start, Ok);
+         Assert (Ok, "the memory and the state would not be written");
+
+         --  1 the projection in; 2 the convolution; 3 the memory saved; 4
+         --  the x-projection; 5 dt's rank; 6 dt up; 7 the scan.
+         Products.Open_Sequence (Steps);
+         Products.Add_Product
+           (Steps, In_W (In_W'First)'Address, Bytes_Of (In_W), 0,
+            Products.Values_F32, In_Out, Width, Added, Kept => False,
+            Exact => True);
+         Products.Add_Mamba2
+           (Steps, Pack (0)'Address, Bytes_Of (Pack), Shape (Products.Conv),
+            Added, From_Step => 1, Key => Pack (0)'Address);
+         Assert (Added, "the convolution was refused");
+         Products.Add_Mamba2
+           (Steps, Pack (0)'Address, Bytes_Of (Pack), Shape (Products.Save),
+            Added, From_Step => 1, Key => Pack (0)'Address, Kept => False);
+         Assert (Added, "the save was refused");
+         Products.Add_Chained_Product
+           (Steps, X_W (X_W'First)'Address, Bytes_Of (X_W), 0,
+            Products.Values_F32, Wide_X, Inner, Added, From_Step => 2,
+            Kept => False);
+         Products.Add_Assemble
+           (Steps, 1, 4, 4, [Rank, 0, 0, Wide_X, 0, 0, 0, Wide_X], Added,
+            Kept => False);
+         Assert (Added, "dt's rank was not taken out");
+         Products.Add_Chained_Product
+           (Steps, Dt_W (Dt_W'First)'Address, Bytes_Of (Dt_W), 0,
+            Products.Values_F32, Inner, Rank, Added, From_Step => 5,
+            Kept => False);
+         Products.Add_Mamba2
+           (Steps, Pack (0)'Address, Bytes_Of (Pack), Shape (Products.Scan),
+            Added, From_Step => 2, Key => Pack (0)'Address);
+         Assert (Added, "the scan was refused");
+
+         --  And Mamba 1 has no gate step, and no more states a channel than
+         --  the scan holds.
+         Products.Add_Mamba2
+           (Steps, Pack (0)'Address, Bytes_Of (Pack), Shape (Products.Gate),
+            Added, From_Step => 7);
+         Assert (not Added, "a Mamba 1 gate was taken");
+         declare
+            Many : Products.Mamba2_Shape := Shape (Products.Scan);
+         begin
+            Many.State := Products.Mamba_Most_State + 1;
+            Products.Add_Mamba2
+              (Steps, Pack (0)'Address, Bytes_Of (Pack), Many, Added,
+               From_Step => 2);
+            Assert (not Added, "more states than the scan holds were taken");
+         end;
+
+         Products.Run (Engine, Steps, Input, Count, Landing, Ok, Halted);
+         Assert (Ok, "the sequence was refused over"
+                 & Positive'Image (Count) & " positions");
+         Products.Get_State (Engine, 0, After, Ok);
+         Assert (Ok, "the memory and the state would not be read back");
+
+         for P in 0 .. C - 1 loop
+            for J in N.Element_Count range 0 .. In_Out - 1 loop
+               XZ (P * In_Out + J) := Dot (In_W, J, W, Input, P * W);
+            end loop;
+         end loop;
+         for P in 0 .. C - 1 loop
+            for Ch in N.Element_Count range 0 .. Inner - 1 loop
+               declare
+                  Acc : Long_Float := Long_Float (Pack (Bias_At + Ch));
+               begin
+                  for K in N.Element_Count range 0 .. Taps - 1 loop
+                     Acc := Acc
+                       + Long_Float (Pack (Conv_At + Ch * Taps + K))
+                         * Long_Float (Input_At
+                                         (Ch, Long_Long_Integer (P + K)
+                                              - Long_Long_Integer (Back)));
+                  end loop;
+                  Xc (P * Inner + Ch) := N.Real (Acc / (1.0 + L.Exp (-Acc)));
+               end;
+            end loop;
+            for J in N.Element_Count range 0 .. Wide_X - 1 loop
+               DBC (P * Wide_X + J) := Dot (X_W, J, Inner, Xc, P * Inner);
+            end loop;
+            for Ch in N.Element_Count range 0 .. Inner - 1 loop
+               DT (P * Inner + Ch) := Dot (Dt_W, Ch, Rank, DBC, P * Wide_X);
+            end loop;
+         end loop;
+         for P in 0 .. C - 1 loop
+            for Ch in N.Element_Count range 0 .. Inner - 1 loop
+               declare
+                  Raw : constant Long_Float :=
+                    Long_Float (DT (P * Inner + Ch))
+                    + Long_Float (Pack (Dt_At + Ch));
+                  Dt  : constant Long_Float :=
+                    (if Raw > 20.0 then Raw else L.Log (1.0 + L.Exp (Raw)));
+                  X   : constant Long_Float := Long_Float (Xc (P * Inner + Ch));
+                  Z   : constant Long_Float :=
+                    Long_Float (XZ (P * In_Out + Inner + Ch));
+                  Sum : Long_Float := 0.0;
+               begin
+                  for S in N.Element_Count range 0 .. State - 1 loop
+                     declare
+                        Cell : constant N.Element_Count := Ch * State + S;
+                     begin
+                        H (Cell) := N.Real
+                          (Long_Float (H (Cell))
+                           * L.Exp (Dt * Long_Float (Pack (A_At + Cell)))
+                           + Long_Float (DBC (P * Wide_X + Rank + S)) * X * Dt);
+                        Sum := Sum
+                          + Long_Float (DBC (P * Wide_X + Rank + State + S))
+                            * Long_Float (H (Cell));
+                     end;
+                  end loop;
+                  Y (P * Inner + Ch) := N.Real
+                    ((Sum + Long_Float (Pack (D_At + Ch)) * X)
+                     * (Z / (1.0 + L.Exp (-Z))));
+               end;
+            end loop;
+         end loop;
+
+         for I in Xc'Range loop
+            Near (Landing (At_Conv + I), Xc (I));
+            Near (Landing (At_Scan + I), Y (I));
+         end loop;
+         for J in N.Element_Count range 0 .. Back - 1 loop
+            for Ch in N.Element_Count range 0 .. Inner - 1 loop
+               Near (After (J * Inner + Ch),
+                     Input_At (Ch, Long_Long_Integer (C + J)
+                                   - Long_Long_Integer (Back)));
+            end loop;
+         end loop;
+         for I in H'Range loop
+            Near (After (Memory_Len + I), H (I));
+         end loop;
+
+         Assert (Worst <= 1.0E-4,
+                 "over" & Positive'Image (Count)
+                 & " positions the Mamba steps differ from the host's by "
+                 & N.Real'Image (Worst));
+      end Over;
+   begin
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+      Products.Open (Engine, Opened, Ready);
+      if not Ready or else not Products.Runs_Mamba (Engine) then
+         if Ready then
+            Products.Close (Engine);
+         end if;
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      for Index in In_W'Range loop
+         In_W (Index) := N.Real ((Index * 5) mod 11) / 44.0 - 0.12;
+      end loop;
+      for Index in X_W'Range loop
+         X_W (Index) := N.Real ((Index * 3) mod 13) / 52.0 - 0.12;
+      end loop;
+      for Index in Dt_W'Range loop
+         Dt_W (Index) := N.Real ((Index * 7) mod 9) / 36.0 - 0.1;
+      end loop;
+      for Index in Pack'Range loop
+         Pack (Index) := N.Real ((Index * 11) mod 17) / 17.0 - 0.4;
+      end loop;
+      --  A negative, as the file's is.
+      for Index in N.Element_Count range 0 .. Inner * State - 1 loop
+         Pack (A_At + Index) := -0.3 - N.Real (Index mod 5) * 0.2;
+      end loop;
+      for Index in Start'Range loop
+         Start (Index) := N.Real ((Index * 3) mod 19) / 19.0 - 0.5;
+      end loop;
+
+      Products.Reserve_State (Engine, State_Len, Ok);
+      Assert (Ok, "no room for the memory and the state");
+
+      Over (1);
+      Over (3);
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Mamba_Mixer_Says_What_The_Host_Says;
+
    ------------------------------------------------
    -- A_Mamba2_Layer_Without_Its_Pack_Is_Refused --
    ------------------------------------------------
@@ -5671,6 +5977,24 @@ package body Tests.Backend_Cases is
 
       Assert (Model_Runner.Backend.Device.Runs_Mamba2,
               "an open device does not run Mamba2 mixers");
+      Assert (Model_Runner.Backend.Device.Runs_Mamba,
+              "an open device does not run Mamba mixers");
+      --  And a Mamba 1 mixer as wide in states as the scan holds, refused
+      --  as the other is for want of its tables.
+      declare
+         Block : constant Model_Runner.Backend.Device.Mamba2_Block :=
+           (Width => 64, Inner => 128, Version => 1, Rank => 8, Taps => 4,
+            State => Model_Runner.Backend.Device.Mamba_Most_State,
+            Pack => null, others => <>);
+         Rows  : constant N.Real_Array (0 .. 63) := [others => 0.25];
+         Into  : N.Real_Array (0 .. 63) := [others => 7.0];
+         Ok    : Boolean;
+      begin
+         Model_Runner.Backend.Device.Mamba2_Layer (Block, Rows, 1, Into, Ok);
+         Assert (not Ok, "a Mamba mixer without its tables was run");
+         Assert ((for all Value of Into => Value = 7.0),
+                 "a refused Mamba mixer wrote its rows");
+      end;
 
       declare
          Block : constant Model_Runner.Backend.Device.Mamba2_Block :=
@@ -9867,6 +10191,12 @@ package body Tests.Backend_Cases is
          "a Mamba2 mixer's device steps -- the convolution, its memory, the "
          & "scan and the gate with its grouped normalization -- say what the "
          & "host says, the state buffer read and written");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Mamba_Mixer_Says_What_The_Host_Says'Access,
+         "a Mamba mixer's device steps -- the convolution over x, the "
+         & "x-projection, dt's rank projected up and the scan a channel a "
+         & "lane -- say what the host says, the state buffer read and "
+         & "written");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, A_Mamba2_Layer_Without_Its_Pack_Is_Refused'Access,
          "the device runs Mamba2 mixers while it is open, and refuses one "

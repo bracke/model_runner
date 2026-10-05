@@ -49,6 +49,7 @@ layout(push_constant) uniform Shape {
     uint head;
     uint epsilon_bits;
     uint dt_at;
+    uint x_at;
 } shape;
 
 shared float bs[STATE];

@@ -2834,6 +2834,20 @@ package body Model_Runner.Platform.Device.Products is
                end if;
             end;
 
+            declare
+               One : aliased constant Model_Runner.Shaders.Word_Array :=
+                 Model_Runner.Shaders.Mamba_Scan;
+            begin
+               Request.Size := Interfaces.C.size_t (One'Length * 4);
+               Request.Code := One'Address;
+
+               if Create (Item.Logical, Request'Address, Null_Handle,
+                          Made'Access) = 0
+               then
+                  Item.Scanner1 := Made;
+               end if;
+            end;
+
             Request.Size := Interfaces.C.size_t (Conved'Length * 4);
             Request.Code := Conved'Address;
 
@@ -3876,6 +3890,16 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Scan_Line := Made;
+            end if;
+         end if;
+
+         if Item.Scanner1 /= Null_Handle then
+            Request.Stage.Module := Item.Scanner1;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Scan1_Line := Made;
             end if;
          end if;
 
@@ -4958,6 +4982,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Wkv_Line, "vkDestroyPipeline");
       Give_Back (Item.Mamba_Line, "vkDestroyPipeline");
       Give_Back (Item.Scan_Line, "vkDestroyPipeline");
+      Give_Back (Item.Scan1_Line, "vkDestroyPipeline");
       Give_Back (Item.Conv_Line, "vkDestroyPipeline");
       Give_Back (Item.Rule_Line, "vkDestroyPipeline");
       Give_Back (Item.Held_Rule_Line, "vkDestroyPipeline");
@@ -4975,6 +5000,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Wkver, "vkDestroyShaderModule");
       Give_Back (Item.Mambaer, "vkDestroyShaderModule");
       Give_Back (Item.Scanner, "vkDestroyShaderModule");
+      Give_Back (Item.Scanner1, "vkDestroyShaderModule");
       Give_Back (Item.Conver, "vkDestroyShaderModule");
       Give_Back (Item.Ruler, "vkDestroyShaderModule");
       Give_Back (Item.Held_Ruler, "vkDestroyShaderModule");
@@ -9191,6 +9217,9 @@ package body Model_Runner.Platform.Device.Products is
    function Runs_Mamba2 (Item : Engine) return Boolean
    is (Item.Mamba_Line /= Null_Handle and then Item.Scan_Line /= Null_Handle);
 
+   function Runs_Mamba (Item : Engine) return Boolean
+   is (Runs_Mamba2 (Item) and then Item.Scan1_Line /= Null_Handle);
+
    function Last_Refusal (Item : Engine) return Refusal
    is (Item.Refused);
 
@@ -10562,14 +10591,33 @@ package body Model_Runner.Platform.Device.Products is
         or else Base = System.Null_Address
         or else Shape.Inner = 0
         or else Shape.Taps < 1
-        or else Shape.Groups = 0
-        or else Shape.Heads = 0
-        or else Shape.Heads mod Shape.Groups /= 0
-        or else Shape.Inner mod Shape.Groups /= 0
-        or else Shape.DXBC /= Shape.Inner + 2 * Shape.Groups * Shape.State
-        or else Shape.In_Out /= Shape.Inner + Shape.DXBC
         or else not Holds (Shape.XZ_Step, Shape.In_Out)
-        or else not Holds (Shape.Dt_Step, Shape.Heads)
+        or else (case Shape.Version is
+                    when 2 =>
+                       Shape.Groups = 0
+                       or else Shape.Heads = 0
+                       or else Shape.Heads mod Shape.Groups /= 0
+                       or else Shape.Inner mod Shape.Groups /= 0
+                       or else Shape.DXBC
+                               /= Shape.Inner + 2 * Shape.Groups * Shape.State
+                       or else Shape.In_Out /= Shape.Inner + Shape.DXBC
+                       or else Shape.X_At /= Shape.Inner
+                       or else not Holds (Shape.Dt_Step, Shape.Heads),
+                    when 1 =>
+                       Shape.DXBC /= Shape.Inner
+                       or else Shape.In_Out /= 2 * Shape.Inner
+                       or else Shape.X_At /= 0
+                       or else Shape.Mode = Gate
+                       or else (Shape.Mode = Scan
+                                and then
+                                  (Shape.State = 0
+                                   or else Shape.State > Mamba_Most_State
+                                   or else not Holds (Shape.Dt_Step,
+                                                      Shape.Inner)
+                                   or else not Holds
+                                     (Shape.Dbc_Step,
+                                      Shape.Rank + 2 * Shape.State))),
+                    when others => True)
       then
          return;
       end if;
@@ -10581,9 +10629,10 @@ package body Model_Runner.Platform.Device.Products is
             end if;
             Rows := (if Shape.Mode = Conv then Shape.DXBC else 1);
          when Scan =>
-            if Shape.Head /= Mamba2_Head
-              or else Shape.State /= Mamba2_State
-              or else Shape.Heads * Shape.Head /= Shape.Inner
+            if (Shape.Version = 2
+                and then (Shape.Head /= Mamba2_Head
+                          or else Shape.State /= Mamba2_State
+                          or else Shape.Heads * Shape.Head /= Shape.Inner))
               or else not Holds (Source, Shape.DXBC)
             then
                return;
@@ -11715,11 +11764,17 @@ package body Model_Runner.Platform.Device.Products is
                  or else This.Span < 4
                  or else This.Reads not in 1 .. Index - 1
                  or else This.Mamba.XZ_Step not in 1 .. Index - 1
-                 or else This.Mamba.Dt_Step not in 1 .. Index - 1
+                 or else This.Mamba.Dt_Step > Index - 1
+                 or else (This.Mamba.Mode = Scan
+                          and then This.Mamba.Dt_Step = 0)
                  or else Item.State_At = Null_Handle
                  or else (if This.Mamba.Mode = Scan
+                            and then This.Mamba.Version = 1
+                          then Item.Scan1_Line = Null_Handle
+                          elsif This.Mamba.Mode = Scan
                           then Item.Scan_Line = Null_Handle
                           else Item.Mamba_Line = Null_Handle)
+                 or else This.Mamba.Dbc_Step > Index - 1
                then
                   return;
                end if;
@@ -13156,7 +13211,10 @@ package body Model_Runner.Platform.Device.Products is
                      elsif This.Mambas and then This.Mamba.Mode = Save
                      then Index - 1
                      elsif This.Mambas
-                     then Natural'Max (This.Mamba.XZ_Step, This.Mamba.Dt_Step)
+                     then Natural'Max
+                            (This.Mamba.XZ_Step,
+                             Natural'Max (This.Mamba.Dt_Step,
+                                          This.Mamba.Dbc_Step))
                      else 0);
 
                   Source : constant Natural :=
@@ -13907,13 +13965,21 @@ package body Model_Runner.Platform.Device.Products is
                            10 => C.unsigned (M.Groups),
                            11 => C.unsigned (M.Head),
                            12 => Bits (M.Epsilon),
-                           13 => C.unsigned (Places (M.Dt_Step).At_Byte / 4),
-                           others => 0],
+                           13 => (if M.Dt_Step = 0 then 0
+                                  else C.unsigned
+                                         (Places (M.Dt_Step).At_Byte / 4)),
+                           14 => C.unsigned (M.X_At),
+                           15 => (if M.Dbc_Step = 0 then 0
+                                  else C.unsigned
+                                         (Places (M.Dbc_Step).At_Byte / 4))],
+                        Stride  => C.unsigned (M.Rank),
                         others  => <>);
                   begin
                      Bind_Pipeline
                        (Item.Buffer, Bind_Point_Compute,
-                        (if M.Mode = Scan then Item.Scan_Line
+                        (if M.Mode = Scan and then M.Version = 1
+                         then Item.Scan1_Line
+                         elsif M.Mode = Scan then Item.Scan_Line
                          else Item.Mamba_Line));
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
@@ -13928,7 +13994,14 @@ package body Model_Runner.Platform.Device.Products is
                              (Item.Buffer, C.unsigned (Groups (M.DXBC, 256)),
                               1, 1);
                         when Scan =>
-                           Dispatch (Item.Buffer, C.unsigned (M.Heads), 1, 1);
+                           if M.Version = 1 then
+                              Dispatch
+                                (Item.Buffer,
+                                 C.unsigned (Groups (M.Inner, 64)), 1, 1);
+                           else
+                              Dispatch
+                                (Item.Buffer, C.unsigned (M.Heads), 1, 1);
+                           end if;
                         when Gate =>
                            Dispatch
                              (Item.Buffer, C.unsigned (Count),

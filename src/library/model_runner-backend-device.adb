@@ -4676,6 +4676,10 @@ package body Model_Runner.Backend.Device is
    is (Ready_Now and then Products.Runs_Mamba2 (Engine)
        and then Products.Runs_Linear (Engine));
 
+   function Runs_Mamba return Boolean
+   is (Ready_Now and then Products.Runs_Mamba (Engine)
+       and then Products.Runs_Linear (Engine));
+
    ------------------
    -- Mamba2_Layer --
    ------------------
@@ -4692,15 +4696,19 @@ package body Model_Runner.Backend.Device is
    is
       Whole_Layer : constant Boolean := Block.Norm /= null;
 
-      --  The steps' numbers, one on where the normalization comes first.
-      Lift : constant Natural := (if Whole_Layer then 1 else 0);
-
       Wide : constant Model_Runner.Numerics.Element_Count :=
         Model_Runner.Numerics.Element_Count (Block.Width);
 
+      One : constant Boolean := Block.Version = 1;
+
+      --  The block convolved and the in-projection's row: Mamba2's x, B
+      --  and C past z, and z beside them; Mamba's x, and z after it.
       DXBC   : constant Natural :=
-        Block.Inner + 2 * Block.Groups * Block.State;
-      In_Out : constant Natural := Block.Inner + DXBC;
+        (if One then Block.Inner
+         else Block.Inner + 2 * Block.Groups * Block.State);
+      In_Out : constant Natural :=
+        (if One then 2 * Block.Inner else Block.Inner + DXBC);
+      Wide_X : constant Natural := Block.Rank + 2 * Block.State;
 
       Steps     : Products.Sequence;
       Added     : Boolean := True;
@@ -4709,14 +4717,46 @@ package body Model_Runner.Backend.Device is
       Cancelled : Boolean := False;
       Pack_At   : System.Address := System.Null_Address;
       Pack_Span : Model_Runner.Bytes.Byte_Count := 0;
-      In_P, Dt_P, Out_P : Products.Weight_Packing;
-      Known_In, Known_Dt, Known_Out : Boolean;
+
+      --  The steps' numbers as they are added.
+      S_XZ, S_Dt, S_Conv, S_Dbc, S_Scan, S_Last : Natural := 0;
+
+      function Last return Natural is (Products.Length (Steps));
 
       procedure Room (Rows_Of : Natural) is
       begin
          Wanted := Wanted
            + Model_Runner.Numerics.Element_Count (Rows_Of) * Count;
       end Room;
+
+      --  A projection of the step named, or of the caller's rows where
+      --  the step is nought.
+      procedure Project (Weight : T.View; From : Natural) is
+         Packing : Products.Weight_Packing;
+         Known   : Boolean;
+      begin
+         if not Added then
+            return;
+         end if;
+         Packing_Of (Weight.Format, Packing, Known);
+         if not Known or else Weight.Base = System.Null_Address then
+            Added := False;
+            return;
+         end if;
+         if From = 0 then
+            Products.Add_Product
+              (Steps, Weight.Base, Weight.Span, Weight.Offset, Packing,
+               Natural (Weight.Rows), Natural (Weight.Columns), Added,
+               Key => At_Offset (Weight.Base, Weight.Offset), Kept => False);
+         else
+            Products.Add_Chained_Product
+              (Steps, Weight.Base, Weight.Span, Weight.Offset, Packing,
+               Natural (Weight.Rows), Natural (Weight.Columns), Added,
+               Key => At_Offset (Weight.Base, Weight.Offset), Kept => False,
+               From_Step => From);
+         end if;
+         Room (Natural (Weight.Rows));
+      end Project;
 
       procedure Step (Mode : Products.Mamba2_Mode; From : Natural;
                       Rows_Of : Natural) is
@@ -4727,50 +4767,63 @@ package body Model_Runner.Backend.Device is
                (Mode => Mode, Inner => Block.Inner, DXBC => DXBC,
                 In_Out => In_Out, Taps => Block.Taps, Heads => Block.Heads,
                 Head => Block.Head, State => Block.State,
-                Groups => Block.Groups, XZ_Step => 1 + Lift,
-                Dt_Step => 2 + Lift,
+                Groups => Block.Groups, XZ_Step => S_XZ,
+                Dt_Step => S_Dt,
                 Conv_At => Block.Conv_At, Bias_At => Block.Bias_At,
                 Dt_At => Block.Dt_At, A_At => Block.A_At,
                 D_At => Block.D_At, Gain_At => Block.Gain_At,
                 Memory_At => Block.Memory_At, State_At => Block.State_At,
-                Epsilon => Block.Epsilon),
+                Epsilon => Block.Epsilon,
+                Version => Block.Version,
+                X_At => (if One then 0 else Block.Inner),
+                Dbc_Step => S_Dbc, Rank => Block.Rank),
                Added, From_Step => From, Key => Pack_At, Kept => False);
             Room (Rows_Of);
          end if;
       end Step;
+
+      Source_Step : Natural := 0;
+      Out_P       : Products.Weight_Packing;
+      Out_Known   : Boolean;
    begin
       Ok := False;
 
-      if not Runs_Mamba2
+      if not (if One then Runs_Mamba else Runs_Mamba2)
         or else Block.Pack = null
         or else Block.Width = 0 or else Count = 0
         or else Rows'Length < Count * Wide
         or else Into'Length < Count * Wide
         or else Block.In_Proj.Base = System.Null_Address
         or else Block.Out_Proj.Base = System.Null_Address
-        or else Block.Dt_Proj.Base = System.Null_Address
         or else Natural (Block.In_Proj.Rows) /= In_Out
-        or else Natural (Block.Dt_Proj.Rows) /= Block.Heads
+        or else (One
+                 and then (Natural (Block.X_Proj.Rows) /= Wide_X
+                           or else Natural (Block.Dt_Up.Rows) /= Block.Inner
+                           or else Natural (Block.Dt_Up.Columns)
+                                   /= Block.Rank))
+        or else (not One
+                 and then (Block.Dt_Proj.Base = System.Null_Address
+                           or else Natural (Block.Dt_Proj.Rows)
+                                   /= Block.Heads))
         or else ((Carry_In or else Carry_Out) and then not Whole_Layer)
         or else (Whole_Layer and then Block.Norm.all'Length /= Wide)
       then
          return;
       end if;
 
-      Packing_Of (Block.In_Proj.Format, In_P, Known_In);
-      Packing_Of (Block.Dt_Proj.Format, Dt_P, Known_Dt);
-      Packing_Of (Block.Out_Proj.Format, Out_P, Known_Out);
-      if not Known_In or else not Known_Dt or else not Known_Out then
+      Packing_Of (Block.Out_Proj.Format, Out_P, Out_Known);
+      if not Out_Known then
          return;
       end if;
 
       Pack_At := Block.Pack.all (Block.Pack.all'First)'Address;
       Pack_Span := Model_Runner.Bytes.Byte_Count (Block.Pack.all'Length) * 4;
 
-      --  The normalization, where the layer is whole; then 1 the
-      --  projection in; 2 dt's; 3 the convolution; 4 the memory saved; 5
-      --  the scan; 6 the gate; 7 the projection back -- each one on past
-      --  the normalization -- and the join to the residual.
+      --  The normalization, where the layer is whole; the projection in,
+      --  and Mamba2's dt beside it; the convolution and its memory saved;
+      --  Mamba's x-projection, dt's rank taken out of it and projected up;
+      --  the scan, Mamba2's gate after it; the projection back and the
+      --  join to the residual.
       Products.Open_Sequence (Steps);
       if Whole_Layer then
          Products.Add_Norm
@@ -4780,54 +4833,49 @@ package body Model_Runner.Backend.Device is
             Key => Block.Norm.all (Block.Norm.all'First)'Address,
             Kept => False);
          Room (Block.Width);
-         if Added then
-            Products.Add_Chained_Product
-              (Steps, Block.In_Proj.Base, Block.In_Proj.Span,
-               Block.In_Proj.Offset, In_P, In_Out,
-               Natural (Block.In_Proj.Columns), Added,
-               Key => At_Offset (Block.In_Proj.Base, Block.In_Proj.Offset),
-               Kept => False, From_Step => 1);
-            Room (In_Out);
-         end if;
-         if Added then
-            Products.Add_Chained_Product
-              (Steps, Block.Dt_Proj.Base, Block.Dt_Proj.Span,
-               Block.Dt_Proj.Offset, Dt_P, Block.Heads,
-               Natural (Block.Dt_Proj.Columns), Added,
-               Key => At_Offset (Block.Dt_Proj.Base, Block.Dt_Proj.Offset),
-               Kept => False, From_Step => 1);
-            Room (Block.Heads);
-         end if;
-      else
-         Products.Add_Product
-           (Steps, Block.In_Proj.Base, Block.In_Proj.Span,
-            Block.In_Proj.Offset, In_P, In_Out,
-            Natural (Block.In_Proj.Columns), Added,
-            Key => At_Offset (Block.In_Proj.Base, Block.In_Proj.Offset),
-            Kept => False);
-         Room (In_Out);
-         if Added then
-            Products.Add_Product
-              (Steps, Block.Dt_Proj.Base, Block.Dt_Proj.Span,
-               Block.Dt_Proj.Offset, Dt_P, Block.Heads,
-               Natural (Block.Dt_Proj.Columns), Added,
-               Key => At_Offset (Block.Dt_Proj.Base, Block.Dt_Proj.Offset),
-               Kept => False);
-            Room (Block.Heads);
-         end if;
+         Source_Step := 1;
       end if;
-      Step (Products.Conv, 1 + Lift, DXBC);
-      Step (Products.Save, 1 + Lift, 1);
-      Step (Products.Scan, 3 + Lift, Block.Inner);
-      Step (Products.Gate, 5 + Lift, Block.Inner);
+
+      Project (Block.In_Proj, Source_Step);
+      S_XZ := Last;
+      if not One then
+         Project (Block.Dt_Proj, Source_Step);
+         S_Dt := Last;
+      end if;
+      Step (Products.Conv, S_XZ, DXBC);
+      S_Conv := Last;
+      Step (Products.Save, S_XZ, 1);
+
+      if One then
+         Project (Block.X_Proj, S_Conv);
+         S_Dbc := Last;
+         if Added then
+            Products.Add_Assemble
+              (Steps, 1, S_Dbc, S_Dbc,
+               [Block.Rank, 0, 0, Wide_X, 0, 0, 0, Wide_X], Added,
+               Kept => False);
+            Room (Block.Rank);
+         end if;
+         Project (Block.Dt_Up, Last);
+         S_Dt := Last;
+      end if;
+
+      Step (Products.Scan, S_Conv, Block.Inner);
+      S_Scan := Last;
+      if not One then
+         Step (Products.Gate, S_Scan, Block.Inner);
+      end if;
+      S_Last := Last;
+
       if Added then
          At_Out := Wanted;
          Products.Add_Chained_Product
            (Steps, Block.Out_Proj.Base, Block.Out_Proj.Span,
-            Block.Out_Proj.Offset, Out_P, Natural (Block.Out_Proj.Rows),
+            Block.Out_Proj.Offset, Out_P,
+            Natural (Block.Out_Proj.Rows),
             Natural (Block.Out_Proj.Columns), Added,
             Key => At_Offset (Block.Out_Proj.Base, Block.Out_Proj.Offset),
-            From_Step => 6 + Lift, Kept => not Whole_Layer);
+            From_Step => S_Last, Kept => not Whole_Layer);
          Room (Natural (Block.Out_Proj.Rows));
       end if;
       if Added and then Whole_Layer then

@@ -1164,7 +1164,23 @@ package Model_Runner.Platform.Device.Products is
       State_At  : Natural := 0;
       --  The normalization's floor.
       Epsilon   : Model_Runner.Numerics.Real := 0.0;
+
+      --  Which Mamba: 2, as above, or 1 -- whose in-projection is x then
+      --  z, whose convolved block is x alone (DXBC the inner width, In_Out
+      --  twice it), whose x-projection gives dt's rank and then B and C,
+      --  whose dt is its own up-projection a channel, and whose transition
+      --  is a channel's and a state's own, A Inner by State in the pack.
+      Version   : Positive := 2;
+      --  Where the convolved block begins in the in-projection's row.
+      X_At      : Natural := 0;
+      --  Mamba 1: the x-projection's step, Rank + 2 * State a position,
+      --  and dt's rank.
+      Dbc_Step  : Natural := 0;
+      Rank      : Natural := 0;
    end record;
+
+   --  The most states a channel the Mamba 1 scan holds.
+   Mamba_Most_State : constant := 64;
 
    --  The head width and the state the scan kernel takes.
    Mamba2_Head  : constant := 64;
@@ -1210,6 +1226,12 @@ package Model_Runner.Platform.Device.Products is
    --  @param Item The engine.
    --  @return True where Add_Mamba2's steps can run.
    function Runs_Mamba2 (Item : Engine) return Boolean;
+
+   --  Whether the engine has the Mamba 1 scan beside the Mamba2 kernels.
+   --
+   --  @param Item The engine.
+   --  @return True where Add_Mamba2's steps of version 1 can run.
+   function Runs_Mamba (Item : Engine) return Boolean;
 
    --  The eight numbers an assembling step is shaped by: A's stretch
    --  width, offset in a head, head stride and position stride, then B's.
@@ -3063,6 +3085,7 @@ private
       Wkver      : System.Address := System.Null_Address;
       Mambaer    : System.Address := System.Null_Address;
       Scanner    : System.Address := System.Null_Address;
+      Scanner1   : System.Address := System.Null_Address;
       Ruler      : System.Address := System.Null_Address;
       Held_Ruler : System.Address := System.Null_Address;
       Single_Ruler : System.Address := System.Null_Address;
@@ -3222,6 +3245,7 @@ private
       Wkv_Line    : System.Address := System.Null_Address;
       Mamba_Line  : System.Address := System.Null_Address;
       Scan_Line   : System.Address := System.Null_Address;
+      Scan1_Line  : System.Address := System.Null_Address;
       Held_Rule_Line : System.Address := System.Null_Address;
       Single_Rule_Line : System.Address := System.Null_Address;
       Merge_Line  : System.Address := System.Null_Address;

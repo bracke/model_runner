@@ -6490,6 +6490,26 @@ package body Checks is
          end if;
       end;
 
+      --  And Mamba's own scan.
+      declare
+         Found : Boolean;
+
+         Digest : constant Interfaces.Unsigned_64 :=
+           Shader_Generation.Source_Digest
+             (Root & "/src/shaders/mamba_scan.comp", Found);
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if not Found then
+            Fail ("src/shaders/mamba_scan.comp is missing, and the words "
+                  & "compiled from it are committed");
+         elsif Digest /= Model_Runner.Shaders.Mamba_Scan_Digest then
+            Fail ("src/shaders/mamba_scan.comp has changed since it was "
+                  & "compiled; compile it and run 'tests shader' again with "
+                  & "every shader named");
+         end if;
+      end;
+
       --  And the one that unpacks a layer of it into the copy.
       declare
          Found : Boolean;

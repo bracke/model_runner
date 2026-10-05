@@ -1253,6 +1253,14 @@ package Model_Runner.Backend.Device is
       --  whole layer.
       Norm      : Model_Runner.Tensors.Real_Array_Access := null;
       Norm_Floor : Model_Runner.Numerics.Real := 0.0;
+
+      --  Which Mamba: 2, or 1 -- whose in-projection is x then z, whose
+      --  x-projection gives dt's rank, B and C, and whose dt is projected up
+      --  a channel; its pack's A is Inner by State. Dt_Proj is then unused.
+      Version   : Positive := 2;
+      Rank      : Natural := 0;
+      X_Proj    : Model_Runner.Tensors.View;
+      Dt_Up     : Model_Runner.Tensors.View;
    end record;
 
    --  The head width and the state a channel the device's Mamba2 scan
@@ -1266,6 +1274,15 @@ package Model_Runner.Backend.Device is
    --
    --  @return True where Mamba2_Layer can be asked.
    function Runs_Mamba2 return Boolean;
+
+   --  Whether the device runs a Mamba 1 mixer whole as well.
+   --
+   --  @return True where Mamba2_Layer can be asked for version 1.
+   function Runs_Mamba return Boolean;
+
+   --  The most states a channel the device's Mamba 1 scan takes.
+   Mamba_Most_State : constant :=
+     Model_Runner.Platform.Device.Products.Mamba_Most_State;
 
    --  Count positions through one Mamba2 mixer, one submission: the
    --  projection in, the convolution against the memory and its saving,

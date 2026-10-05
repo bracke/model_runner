@@ -1,0 +1,115 @@
+#version 450
+
+//  Mamba's selective scan over a batch, a lane a channel.
+//
+//  Mamba's transition is a channel's and a state's own: a channel keeps
+//  State numbers, and at each position each decays by exp (dt * A) for its
+//  channel and state, where dt is the softplus of the channel's own step
+//  and bias, and takes B times the input times dt; the answer is C against
+//  them plus D times the input, through the logistic-weighted unit of the
+//  gate z. A lane holds its channel's states in registers for the run, and
+//  a position's B and C -- one set for every channel -- are shared across
+//  the workgroup.
+//
+//  The step read is the convolved x; the in-projection's row (for z), the
+//  x-projection's (dt's rank, then B, then C) and dt's up-projection are
+//  read through the whole result buffer where the push block says.
+
+const uint LANES = 64u;
+const uint MOST_STATE = 64u;
+
+layout(local_size_x = LANES) in;
+
+layout(std430, binding = 0) readonly  buffer Weight { float w[]; };
+layout(std430, binding = 1) readonly  buffer Source { float x[]; };
+layout(std430, binding = 2) writeonly buffer Target { float y[]; };
+layout(std430, binding = 3) readonly  buffer Result { float r[]; };
+layout(std430, binding = 4) buffer State { float s[]; };
+
+layout(push_constant) uniform Shape {
+    uint mode;
+    uint dxbc;
+    uint count;
+    uint inner;
+    uint in_out;
+    uint base;
+    uint taps;
+    uint heads;
+
+    uint xz_at;
+    uint conv_at;
+    uint conv_bias_at;
+    uint dt_bias_at;
+    uint a_at;
+    uint d_at;
+    uint gain_at;
+    uint memory_at;
+    uint state_at;
+    uint state;
+    uint groups;
+    uint head;
+    uint epsilon_bits;
+    uint dt_at;
+    uint x_at;
+    uint dbc_at;
+    uint rank;
+} shape;
+
+shared float bs[MOST_STATE];
+shared float cs[MOST_STATE];
+
+void main() {
+    uint lane = gl_LocalInvocationID.x;
+    uint c = gl_WorkGroupID.x * LANES + lane;
+    bool mine = c < shape.inner;
+    uint states = min(shape.state, MOST_STATE);
+    uint wide = shape.rank + 2u * shape.state;
+
+    float h[MOST_STATE];
+    float a[MOST_STATE];
+    for (uint i = 0u; i < MOST_STATE; ++i) {
+        h[i] = 0.0;
+        a[i] = 0.0;
+    }
+    float dt_bias = 0.0;
+    float d = 0.0;
+    if (mine) {
+        for (uint i = 0u; i < states; ++i) {
+            h[i] = s[shape.state_at + c * shape.state + i];
+            a[i] = w[shape.base + shape.a_at + c * shape.state + i];
+        }
+        dt_bias = w[shape.base + shape.dt_bias_at + c];
+        d = w[shape.base + shape.d_at + c];
+    }
+
+    for (uint p = 0u; p < shape.count; ++p) {
+        uint row = shape.dbc_at + p * wide + shape.rank;
+
+        barrier();
+        for (uint i = lane; i < states; i += LANES) {
+            bs[i] = r[row + i];
+            cs[i] = r[row + shape.state + i];
+        }
+        barrier();
+
+        if (mine) {
+            float raw = r[shape.dt_at + p * shape.inner + c] + dt_bias;
+            float dt = raw > 20.0 ? raw : log(1.0 + exp(raw));
+            float v = x[p * shape.inner + c];
+            float v_dt = v * dt;
+            float sum = 0.0;
+            for (uint i = 0u; i < states; ++i) {
+                h[i] = h[i] * exp(dt * a[i]) + bs[i] * v_dt;
+                sum += cs[i] * h[i];
+            }
+            float z = r[shape.xz_at + p * shape.in_out + shape.inner + c];
+            y[p * shape.inner + c] = (sum + d * v) * (z / (1.0 + exp(-z)));
+        }
+    }
+
+    if (mine) {
+        for (uint i = 0u; i < states; ++i) {
+            s[shape.state_at + c * shape.state + i] = h[i];
+        }
+    }
+}
