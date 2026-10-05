@@ -4398,6 +4398,12 @@ package body Model_Runner.CLI.Execute is
                        and then not Item.Draft_Tokens_Set
                      then Next_Draft_Tokens
                      elsif Auto_Drafted then Store_Draft_Tokens
+                     --  A named draft model starts where a found one does
+                     --  unless a length was named: three, then adapting.
+                     --  Started at four it was slower on every pair
+                     --  measured.
+                     elsif Draft_Ready and then not Item.Draft_Tokens_Set
+                     then Store_Draft_Tokens
                      elsif Draft_Ready or else Item.Draft_Lookup
                        or else Request.Draft_From_Next
                      then Item.Draft_Tokens else 0);
