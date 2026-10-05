@@ -17592,7 +17592,22 @@ package body Model_Runner.Llama is
       DBC    : T.Real_Array_Access := null;
       XZ     : T.Real_Array_Access := null;
       Y      : T.Real_Array_Access := null;
+
+      --  A token's step sizes made here rather than before: each share
+      --  projects its own channels' rows of the step projection from DTR
+      --  and adds their bias, which saves a job of the pool a layer -- 17
+      --  us of Jamba's, nearly all of it the job and not the bytes. An
+      --  item is then sixteen channels, a whole number of panels.
+      Fused   : Boolean := False;
+      Dt_View : T.View := T.Empty_View;
+      Dt_Bias : T.Real_Array_Access := null;
+      DTR     : T.Real_Array_Access := null;
+      Roles   : Workers_CPU.Role_Set := Workers_CPU.Integer_Activation_Roles;
+      Ok      : Boolean := True;
    end record;
+
+   --  Channels an item of a fused scan holds.
+   Fused_Channels : constant Element_Count := 16;
 
    overriding procedure Run
      (Share : in out Mamba_Scan_Share;
@@ -17615,53 +17630,106 @@ package body Model_Runner.Llama is
 
       H   : Real_Array renames Share.H.all;
       A   : Real_Array renames Share.A.all;
-      Decay : Real_Array (0 .. State - 1);
+
+      Lo : constant Element_Count :=
+        (if Share.Fused then From * Fused_Channels else From);
+      Hi : constant Element_Count :=
+        (if Share.Fused
+         then Element_Count'Min ((To + 1) * Fused_Channels, Inner) - 1
+         else To);
+
+      Channels : constant Element_Count := Hi - Lo + 1;
+
+      --  Every channel's step size and decays for a position, made before
+      --  any channel reads them: the decays as one run through the kernels'
+      --  binary32 exponential, as llama.cpp's scan takes it. It was a run
+      --  of sixteen a channel, and the call and its constants were most of
+      --  a token's scan -- 59 us a share of 1,024 channels of Jamba.
+      Steps  : T.Real_Array_Access;
+      Decays : T.Real_Array_Access;
 
       function Softplus (X : N.Wide_Real) return N.Wide_Real
       is (if X > 20.0 then X else N.Log (1.0 + N.Exp (X)));
    begin
-      for C in From .. To loop
+      if Lo > Hi then
+         return;
+      end if;
+
+      T.Allocate (Channels, Steps);
+      T.Allocate (Channels * State, Decays);
+      if Steps = null or else Decays = null then
+         T.Free (Steps);
+         T.Free (Decays);
+         Share.Ok := False;
+         return;
+      end if;
+
+      if Share.Fused then
          declare
-            Cells : constant Element_Count := Share.Base + C * State;
+            Local : E.Error_Info;
          begin
-            for P in 0 .. Share.Count - 1 loop
-               declare
-                  Dt_Soft : constant Real :=
-                    Real (Softplus (N.Wide_Real (Share.DT (P * Inner + C))));
-                  X       : constant Real := Share.Xc (P * Inner + C);
-                  X_Dt    : constant Real := X * Dt_Soft;
-                  Row     : constant Element_Count := P * Wide;
-                  Sum     : Real := 0.0;
-                  Z       : constant N.Wide_Real :=
-                    N.Wide_Real (Share.XZ (P * 2 * Inner + Inner + C));
-               begin
-                  --  exp (dt * A) for every state at once, eight lanes a
-                  --  step through the kernels' binary32 exponential, as
-                  --  llama.cpp's scan takes it.
-                  for S in 0 .. State - 1 loop
-                     Decay (S) := Dt_Soft * A (C * State + S);
-                  end loop;
-                  K.Exponentiate (Decay, 0.0);
-
-                  for S in 0 .. State - 1 loop
-                     declare
-                        New_H : constant Real :=
-                          H (Cells + S) * Decay (S)
-                          + Share.DBC (Row + Rank + S) * X_Dt;
-                     begin
-                        H (Cells + S) := New_H;
-                        Sum := Sum + Share.DBC (Row + Rank + State + S) * New_H;
-                     end;
-                  end loop;
-
-                  Share.Y (P * Inner + C) :=
-                    Real ((N.Wide_Real (Sum)
-                           + N.Wide_Real (Share.D (C)) * N.Wide_Real (X))
-                          * (Z / (1.0 + N.Exp (-Z))));
-               end;
+            Workers_CPU.Dispatch_Batch
+              (null, Row_Slice (Share.Dt_View, Lo, Channels), Share.DTR, 1,
+               Steps, Local, Roles => Share.Roles);
+            if E.Is_Error (Local) then
+               T.Free (Steps);
+               T.Free (Decays);
+               Share.Ok := False;
+               return;
+            end if;
+            for C in Lo .. Hi loop
+               Share.DT (C) := Steps (C - Lo) + Share.Dt_Bias (C);
             end loop;
          end;
+      end if;
+
+      for P in 0 .. Share.Count - 1 loop
+         for C in Lo .. Hi loop
+            declare
+               Dt_Soft : constant Real :=
+                 Real (Softplus (N.Wide_Real (Share.DT (P * Inner + C))));
+               At_C    : constant Element_Count := (C - Lo) * State;
+            begin
+               Steps (C - Lo) := Dt_Soft;
+               for S in 0 .. State - 1 loop
+                  Decays (At_C + S) := Dt_Soft * A (C * State + S);
+               end loop;
+            end;
+         end loop;
+         K.Exponentiate (Decays.all (0 .. Channels * State - 1), 0.0);
+
+         for C in Lo .. Hi loop
+            declare
+               Cells   : constant Element_Count := Share.Base + C * State;
+               At_C    : constant Element_Count := (C - Lo) * State;
+               X       : constant Real := Share.Xc (P * Inner + C);
+               X_Dt    : constant Real := X * Steps (C - Lo);
+               Row     : constant Element_Count := P * Wide;
+               Sum     : Real := 0.0;
+               Z       : constant N.Wide_Real :=
+                 N.Wide_Real (Share.XZ (P * 2 * Inner + Inner + C));
+            begin
+               for S in 0 .. State - 1 loop
+                  declare
+                     New_H : constant Real :=
+                       H (Cells + S) * Decays (At_C + S)
+                       + Share.DBC (Row + Rank + S) * X_Dt;
+                  begin
+                     H (Cells + S) := New_H;
+                     Sum := Sum + Share.DBC (Row + Rank + State + S) * New_H;
+                  end;
+               end loop;
+
+               Share.Y (P * Inner + C) :=
+                 Real ((N.Wide_Real (Sum)
+                        + N.Wide_Real (Share.D (C)) * N.Wide_Real (X))
+                       * (Z / (1.0 + N.Exp (-Z))));
+            end;
+         end loop;
       end loop;
+
+      T.Free (Steps);
+      T.Free (Decays);
    end Run;
 
    --  Count positions through one Mamba layer: Rows holds their normalized
@@ -17704,6 +17772,16 @@ package body Model_Runner.Llama is
       --  scratch, sized for one position, rather than allocating and
       --  clearing six arrays a layer a token.
       Own : constant Boolean := Count = 1;
+
+      --  Whether a token's step projection goes inside the scan's shares,
+      --  sixteen channels an item: its rows must be the channels, whole
+      --  panels of them.
+      Fused : constant Boolean :=
+        Count = 1
+        and then Inner mod Fused_Channels = 0
+        and then Current.Ssm_Dt.Rows = Inner
+        and then Halves_Whole (Current.Ssm_Dt)
+        and then Current.DT_Bias /= null;
 
       procedure Release is
       begin
@@ -17827,31 +17905,45 @@ package body Model_Runner.Llama is
          DTR (P * Rank .. P * Rank + Rank - 1) :=
            DBC (P * Wide .. P * Wide + Rank - 1);
       end loop;
-      Project (Current.Ssm_Dt, DTR, DT);
-      if E.Is_Error (Status) then
-         Release;
-         return;
-      end if;
-      for P in 0 .. Count - 1 loop
-         for C in 0 .. Inner - 1 loop
-            DT (P * Inner + C) := DT (P * Inner + C) + Current.DT_Bias.all (C);
+      if not Fused then
+         Project (Current.Ssm_Dt, DTR, DT);
+         if E.Is_Error (Status) then
+            Release;
+            return;
+         end if;
+         for P in 0 .. Count - 1 loop
+            for C in 0 .. Inner - 1 loop
+               DT (P * Inner + C) :=
+                 DT (P * Inner + C) + Current.DT_Bias.all (C);
+            end loop;
          end loop;
-      end loop;
+      end if;
 
-      --  The scan, the team's.
+      --  The scan, the team's -- for a token, with the step projection
+      --  in it.
       declare
          Share : aliased Mamba_Scan_Share :=
            (Count => Count, Inner => Inner, State => State, Rank => Rank,
             Base  => State_Base,
             H     => Item.Delta_State, A => Current.Ssm_A,
             D     => Current.Ssm_D,
-            Xc    => Xc, DT => DT, DBC => DBC, XZ => XZ, Y => Y);
+            Xc    => Xc, DT => DT, DBC => DBC, XZ => XZ, Y => Y,
+            Fused => Fused, Dt_View => Current.Ssm_Dt,
+            Dt_Bias => Current.DT_Bias, DTR => DTR,
+            Roles => Item.Arithmetic, Ok => True);
       begin
          Workers_CPU.Dispatch_Shares
-           (Item.Team, Inner, Share'Unchecked_Access, Status,
+           (Item.Team,
+            (if Fused then Inner / Fused_Channels else Inner),
+            Share'Unchecked_Access, Status,
             Cost => Inner * State * Count * 4);
          if E.Is_Error (Status) then
             Release;
+            return;
+         end if;
+         if not Share.Ok then
+            Release;
+            Status := E.Make (E.Memory_Allocation_Failed);
             return;
          end if;
       end;

@@ -47,6 +47,9 @@ shared float partial[LANES];
 layout(local_size_x = LANES) in;
 
 layout(std430, binding = 0) readonly  buffer Weight { float w[]; };
+//  The same words four at a time, for a token's map where its rows lie on
+//  sixteen bytes.
+layout(std430, binding = 0) readonly  buffer Weight4 { vec4 w4[]; };
 layout(std430, binding = 1) readonly  buffer Source { float x[]; };
 layout(std430, binding = 2) writeonly buffer Target { float y[]; };
 layout(std430, binding = 3) readonly  buffer Result { float r[]; };
@@ -107,9 +110,21 @@ void main() {
 
         uint st = (mode == 0u) ? jj / width : 0u;
         float acc = 0.0;
-        for (uint k = part; k < low; k += 8u) {
-            acc += w[shape.base + shape.map_at + jj * low + k]
-                   * lows[st * low + k];
+        uint row_at = shape.base + shape.map_at + jj * low;
+        if ((row_at & 3u) == 0u && (low & 3u) == 0u) {
+            //  Four ranks a lane a step: eight lanes take thirty-two
+            //  consecutive words, a rank of 32 in one step.
+            for (uint k = part * 4u; k < low; k += 32u) {
+                vec4 m = w4[(row_at + k) >> 2u];
+                acc += m.x * lows[st * low + k]
+                     + m.y * lows[st * low + k + 1u]
+                     + m.z * lows[st * low + k + 2u]
+                     + m.w * lows[st * low + k + 3u];
+            }
+        } else {
+            for (uint k = part; k < low; k += 8u) {
+                acc += w[row_at + k] * lows[st * low + k];
+            }
         }
         partial[lane] = acc;
         barrier();

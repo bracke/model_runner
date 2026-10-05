@@ -10,6 +10,7 @@ package body Model_Runner.Platform.Pages is
 
    use System.Storage_Elements;
    use type Model_Runner.Bytes.Byte_Array_Access;
+   use type Model_Runner.Bytes.Byte_Count;
 
    Page        : constant := 4096;
    Huge_Advice : constant := 14;   --  MADV_HUGEPAGE
@@ -20,27 +21,40 @@ package body Model_Runner.Platform.Pages is
       Advice : Interfaces.C.int) return Interfaces.C.int
      with Import, Convention => C, External_Name => "madvise";
 
-   procedure Prefer_Large (Bytes : Model_Runner.Bytes.Byte_Array_Access) is
+   procedure Prefer_Large_At
+     (Start  : System.Address;
+      Length : Model_Runner.Bytes.Byte_Count)
+   is
    begin
-      if Bytes = null or else Bytes.all'Length < 2 * Page then
+      if Length < 2 * Page then
          return;
       end if;
 
       declare
-         First : constant Integer_Address :=
-           To_Integer (Bytes.all (Bytes.all'First)'Address);
-         Last  : constant Integer_Address :=
-           First + Integer_Address (Bytes.all'Length);
-         Start : constant Integer_Address := (First + Page - 1) / Page * Page;
-         Whole : constant Integer_Address := (Last - Start) / Page * Page;
+         First : constant Integer_Address := To_Integer (Start);
+         Last  : constant Integer_Address := First + Integer_Address (Length);
+         Begin_At : constant Integer_Address :=
+           (First + Page - 1) / Page * Page;
+         Whole : constant Integer_Address := (Last - Begin_At) / Page * Page;
          Answer : Interfaces.C.int;
       begin
          if Whole > 0 then
-            Answer := Madvise (To_Address (Start),
+            Answer := Madvise (To_Address (Begin_At),
                                Interfaces.C.size_t (Whole), Huge_Advice);
             pragma Unreferenced (Answer);
          end if;
       end;
+   end Prefer_Large_At;
+
+   procedure Prefer_Large (Bytes : Model_Runner.Bytes.Byte_Array_Access) is
+   begin
+      if Bytes = null or else Bytes.all'Length = 0 then
+         return;
+      end if;
+
+      Prefer_Large_At
+        (Bytes.all (Bytes.all'First)'Address,
+         Model_Runner.Bytes.Byte_Count (Bytes.all'Length));
    end Prefer_Large;
 
 end Model_Runner.Platform.Pages;

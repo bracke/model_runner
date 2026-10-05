@@ -9,4 +9,13 @@ package body Model_Runner.Platform.Pages is
       null;
    end Prefer_Large;
 
+   procedure Prefer_Large_At
+     (Start  : System.Address;
+      Length : Model_Runner.Bytes.Byte_Count)
+   is
+      pragma Unreferenced (Start, Length);
+   begin
+      null;
+   end Prefer_Large_At;
+
 end Model_Runner.Platform.Pages;

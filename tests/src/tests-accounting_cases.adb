@@ -6,6 +6,8 @@ with Model_Runner.Clocks;
 with Model_Runner.Errors;
 with Model_Runner.Limits;
 with Model_Runner.Arithmetic;
+with Model_Runner.Numerics;
+with Model_Runner.Tensors;
 with Packaging;
 with Tarlib.Entries;
 with Tarlib.Errors;
@@ -214,6 +216,32 @@ package body Tests.Accounting_Cases is
       Assert ((for all V of Small.all => V = 7),
               "a buffer smaller than a page was changed by the advice");
       Model_Runner.Platform.Pages.Prefer_Large (null);
+
+      --  And named by its start and its length, as the zeroed pool asks for
+      --  every large array it hands out: nothing moves, and nought bytes
+      --  is nothing asked.
+      Model_Runner.Platform.Pages.Prefer_Large_At
+        (Big.all (Big.all'First)'Address, Size);
+      Model_Runner.Platform.Pages.Prefer_Large_At
+        (Big.all (Big.all'First)'Address, 0);
+      Kept := True;
+      for I in Big.all'Range loop
+         Kept := Kept and then Big (I) = B.Byte (I mod 251);
+      end loop;
+      Assert (Kept, "a run asked for large pages by address read back "
+              & "otherwise");
+
+      --  A large array from the zeroed pool, which asks for them itself,
+      --  is still nought throughout.
+      declare
+         Wide : Model_Runner.Tensors.Real_Array_Access;
+         use type Model_Runner.Numerics.Real;
+      begin
+         Model_Runner.Tensors.Allocate (3_145_728, Wide);
+         Assert ((for all V of Wide.all => V = 0.0),
+                 "a large array from the zeroed pool was not nought");
+         Model_Runner.Tensors.Free (Wide);
+      end;
 
       B.Free (Big);
       B.Free (Small);
