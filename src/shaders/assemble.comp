@@ -1,0 +1,73 @@
+#version 450
+
+//  A row of heads put together from two others, a stretch of each.
+//
+//  DeepSeek's latent attention does not project its queries, keys and
+//  values as the rest do. A query head comes out of its projection as a
+//  nope part then a rotated slice; a key head is a nope part out of the
+//  latent's up projection and a rotated slice shared by every head out of
+//  the latent's own projection; a value head is the rest of the up
+//  projection. The engine keeps every head with its rotated slice first --
+//  a score is the same sum whichever order its terms are in, and a head
+//  that turns from its first element is the shape the heads and rotation
+//  kernels take -- so this step writes each head as A's stretch then B's,
+//  reading A and B where they lie: a stretch a head from each, at an
+//  offset, a group a head, and a group stride of nought for a stretch every
+//  head shares.
+//
+//  A workgroup a position, its lanes over the row it writes.
+
+const uint LANES = 256u;
+
+layout(local_size_x = LANES) in;
+
+layout(std430, binding = 0) readonly  buffer First  { float a[]; };
+layout(std430, binding = 1) readonly  buffer Second { float b[]; };
+layout(std430, binding = 2) writeonly buffer Target { float y[]; };
+
+layout(push_constant) uniform Shape {
+    //  Heads a position writes.
+    uint heads;
+
+    //  Positions in this batch.
+    uint count;
+
+    //  A's stretch: how wide, where in a head of A it begins, how far
+    //  apart A's heads are, and how far apart A's positions are.
+    uint a_len;
+    uint a_off;
+    uint a_stride;
+    uint a_row;
+
+    //  And B's.
+    uint b_len;
+    uint b_off;
+    uint b_stride;
+    uint b_row;
+} shape;
+
+void main() {
+    uint slot = gl_WorkGroupID.x;
+    uint lane = gl_LocalInvocationID.x;
+
+    if (slot >= shape.count) {
+        return;
+    }
+
+    uint head_len = shape.a_len + shape.b_len;
+    uint width = shape.heads * head_len;
+    uint into = slot * width;
+
+    for (uint c = lane; c < width; c += LANES) {
+        uint head = c / head_len;
+        uint at = c - head * head_len;
+
+        if (at < shape.a_len) {
+            y[into + c] = a[slot * shape.a_row + head * shape.a_stride
+                            + shape.a_off + at];
+        } else {
+            y[into + c] = b[slot * shape.b_row + head * shape.b_stride
+                            + shape.b_off + (at - shape.a_len)];
+        }
+    }
+}

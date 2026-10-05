@@ -120,6 +120,19 @@ package body Model_Runner.Llama is
                   else Settings.Head_Size)))
          * Settings.Score_Gain);
 
+   --  A view that says only how many rows DeepSeek's keys or values are:
+   --  the device's whole layer reads their count off the views it is given
+   --  for them, and makes them from the latent itself.
+   function MLA_Rows
+     (Up : Model_Runner.Tensors.View; Rows : Model_Runner.Numerics.Element_Count)
+      return Model_Runner.Tensors.View
+   is
+      Result : Model_Runner.Tensors.View := Up;
+   begin
+      Result.Rows := Rows;
+      return Result;
+   end MLA_Rows;
+
    package A renames Model_Runner.Arithmetic;
    package B renames Model_Runner.Bytes;
    package C renames Model_Runner.Cancellation;
@@ -4553,6 +4566,24 @@ package body Model_Runner.Llama is
                   return;
                end if;
 
+               --  And its two row ranges as views of their own, the latent's
+               --  and then the rotated slice's: the same bytes, a row range
+               --  each, for the device's whole layer to project apart.
+               declare
+                  Lat_Rows : constant Element_Count :=
+                    Element_Count (Item.Settings.KV_Lora_Rank);
+               begin
+                  Current.KV_A_Lat := Current.KV_A_MQA;
+                  Current.KV_A_Lat.Rows := Lat_Rows;
+                  Current.KV_A_Rope := Current.KV_A_MQA;
+                  Current.KV_A_Rope.Rows :=
+                    Element_Count (Item.Settings.Rotary);
+                  Current.KV_A_Rope.Offset :=
+                    Current.KV_A_MQA.Offset
+                    + B.Byte_Count (Lat_Rows)
+                      * T.Row_Bytes (Current.KV_A_MQA);
+               end;
+
                Resolve_Norm
                  (Item, Source, Layer_Key (Index, "attn_kv_a_norm.weight"),
                   Element_Count (Item.Settings.KV_Lora_Rank),
@@ -6343,6 +6374,38 @@ package body Model_Runner.Llama is
       end loop;
    end Product_Group;
 
+   --  DeepSeek's queries as the projection makes them, each head its nope
+   --  part then its rotated slice, reordered in place to the rotated slice
+   --  then the nope part, for Count positions from At.
+   procedure Rope_First
+     (Item  : Session;
+      Rows  : in out Real_Array;
+      At_Row : Element_Count;
+      Count : Element_Count)
+   is
+      Settings  : Configuration renames Item.Owner.Settings;
+      Heads     : constant Element_Count := Element_Count (Settings.Heads);
+      Head_Size : constant Element_Count := Element_Count (Settings.Head_Size);
+      Rope      : constant Element_Count := Element_Count (Settings.Rotary);
+      Nope      : constant Element_Count := Head_Size - Rope;
+      Held      : Real_Array (0 .. Head_Size - 1);
+   begin
+      for P in 0 .. Count - 1 loop
+         for Head in 0 .. Heads - 1 loop
+            declare
+               At_Head : constant Element_Count :=
+                 At_Row + (P * Heads + Head) * Head_Size;
+            begin
+               Held := Rows (At_Head .. At_Head + Head_Size - 1);
+               Rows (At_Head .. At_Head + Rope - 1) :=
+                 Held (Nope .. Head_Size - 1);
+               Rows (At_Head + Rope .. At_Head + Head_Size - 1) :=
+                 Held (0 .. Nope - 1);
+            end;
+         end loop;
+      end loop;
+   end Rope_First;
+
    --  DeepSeek's latent attention projection for one position: the query,
    --  keys and values reconstructed a head at a time from their latents,
    --  into the same rows a plain attention writes -- a key of the nope part
@@ -6407,16 +6470,21 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      --  A head's key -- the nope part from the up projection, the shared
-      --  rope part -- and its value, the rest of the up projection.
+      --  A head's key -- the shared rotated slice first, then the nope
+      --  part from the up projection -- and its value, the rest of the up
+      --  projection. Rotated first, and the query reordered to match: a
+      --  score is the same sum whichever order its terms are in, and a head
+      --  that turns from its first element is the shape the device's
+      --  kernels take.
+      Rope_First (Item, Item.Query.all, Item.Query.all'First, 1);
       for Head in 0 .. Heads - 1 loop
-         for I in 0 .. Nope - 1 loop
-            Item.Key_Row.all (K_At + Head * Head_Size + I) :=
-              Item.MLA_KV.all (L_At + Head * KV_Stride + I);
-         end loop;
          for I in 0 .. Rope - 1 loop
-            Item.Key_Row.all (K_At + Head * Head_Size + Nope + I) :=
+            Item.Key_Row.all (K_At + Head * Head_Size + I) :=
               Item.MLA_KV_Lat.all (R_At + KV_Lora + I);
+         end loop;
+         for I in 0 .. Nope - 1 loop
+            Item.Key_Row.all (K_At + Head * Head_Size + Rope + I) :=
+              Item.MLA_KV.all (L_At + Head * KV_Stride + I);
          end loop;
          for I in 0 .. V_Size - 1 loop
             Item.Value_Row.all (V_At + Head * V_Size + I) :=
@@ -6535,8 +6603,10 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      --  Each position's keys -- a head's nope part from the up projection
-      --  and the shared rotated slice -- and values, the rest of it.
+      --  Each position's queries reordered rotated slice first, and its
+      --  keys -- the shared rotated slice, then a head's nope part from the
+      --  up projection -- and values, the rest of it; see MLA_Project.
+      Rope_First (Item, Query.all, Query.all'First, Count);
       for P in 0 .. Count - 1 loop
          declare
             K_Row : constant Element_Count := P * Heads * Head_Size;
@@ -6546,12 +6616,12 @@ package body Model_Runner.Llama is
          begin
             for Head in 0 .. Heads - 1 loop
                Keys.all (K_Row + Head * Head_Size
-                         .. K_Row + Head * Head_Size + Nope - 1) :=
+                         .. K_Row + Head * Head_Size + Rope - 1) :=
+                 KV_Lat.all (R_Row .. R_Row + Rope - 1);
+               Keys.all (K_Row + Head * Head_Size + Rope
+                         .. K_Row + Head * Head_Size + Head_Size - 1) :=
                  KV.all (L_Row + Head * KV_Stride
                          .. L_Row + Head * KV_Stride + Nope - 1);
-               Keys.all (K_Row + Head * Head_Size + Nope
-                         .. K_Row + Head * Head_Size + Head_Size - 1) :=
-                 KV_Lat.all (R_Row .. R_Row + Rope - 1);
                Values.all (V_Row + Head * V_Size
                            .. V_Row + Head * V_Size + V_Size - 1) :=
                  KV.all (L_Row + Head * KV_Stride + Nope
@@ -18430,6 +18500,13 @@ package body Model_Runner.Llama is
       --  the experts that the device does not do: no expert biases. The
       --  clamped gate is a unit of the combining kernel now. The routing
       --  then happens where the router ran.
+      --  A dense layer in a mixture's stack -- DeepSeek's first -- whose
+      --  feed-forward is the plain one and goes whole as a dense model's.
+      function Dense_Among_Experts (L : Layer) return Boolean
+      is (L.Experts = null
+          and then not T.Is_Present (L.Router)
+          and then T.Is_Present (L.Up));
+
       function Mixture_Whole (L : Layer) return Boolean
       is (Source.Stacked
           and then L.Experts /= null
@@ -18548,14 +18625,24 @@ package body Model_Runner.Llama is
                              | Chatglm | Command_R
           and then Settings.Max_Bias = 0.0
           and then L.Second_Attention_Norm = null
-          and then L.Query_Whole_Norm = null);
+          and then L.Query_Whole_Norm = null
+
+          --  DeepSeek's latent attention goes whole where its queries are
+          --  one projection (V2-Lite's); a query through a latent of its
+          --  own is not a shape the device's layer builds yet.
+          and then (not Is_MLA (Settings.Kind)
+                    or else (Settings.Q_Lora_Rank = 0
+                             and then T.Is_Present (L.KV_A_Lat)
+                             and then T.Is_Present (L.KV_A_Rope)
+                             and then L.KV_A_Norm /= null)));
 
       --  A layer goes whole where its front half does and the device takes
       --  its feed-forward too: a mixture whose stacks it holds, or a dense
       --  feed-forward, whose biases -- and a mixture's post-norm -- are
       --  steps of the sequence.
       function Whole_Layer_Fits (L : Layer; Index : Natural) return Boolean
-      is ((if Settings.Experts > 0 then Mixture_Whole (L)
+      is ((if Settings.Experts > 0 and then not Dense_Among_Experts (L)
+           then Mixture_Whole (L)
            else T.Is_Present (L.Up))
           and then Front_Fits (L, Index)
           and then (Settings.Experts = 0
@@ -19291,6 +19378,7 @@ package body Model_Runner.Llama is
                if Item.Held in Exact | Eighth | Fourth
                  and then Element_Count (Settings.Rotary) <= Head_Size
                  and then (((Settings.Experts = 0
+                             or else Dense_Among_Experts (Current)
                              or else Mixture_Whole (Current))
                             and then Whole_Layer_Fits (Current, Natural (Index)))
                            or else (Split_Here (Current)
@@ -19301,6 +19389,7 @@ package body Model_Runner.Llama is
                              Model_Runner.Backend.Backend_Device)
                then
                   Half := not ((Settings.Experts = 0
+                                or else Dense_Among_Experts (Current)
                                 or else Mixture_Whole (Current))
                                and then Whole_Layer_Fits
                                           (Current, Natural (Index)));
@@ -19350,7 +19439,13 @@ package body Model_Runner.Llama is
                         Device_Norm (Current.Feed_Norm,
                                      Current.Feed_Norm_Pair),
                         Settings.Epsilon,
-                        Current.Query, Current.Key, Current.Value,
+                        Current.Query,
+                        (if Is_MLA (Settings.Kind)
+                         then MLA_Rows (Current.KV_A_MQA, Heads * Head_Size)
+                         else Current.Key),
+                        (if Is_MLA (Settings.Kind)
+                         then MLA_Rows (Current.KV_A_MQA, Heads * Value_Size)
+                         else Current.Value),
                         Angles, Natural (Head_Size), Settings.Rotary,
                         K."=" (Settings.Pairing, K.Split),
                         (if Item.Paged then 0
@@ -19481,7 +19576,17 @@ package body Model_Runner.Llama is
                         Shared_Up     => Current.Shared_Up,
                         Shared_Down   => Current.Shared_Down,
                         Shared_Router => Current.Shared_Router,
-                        No_Feed       => Half);
+                        No_Feed       => Half,
+                        MLA_Latent    =>
+                          (if Is_MLA (Settings.Kind) then Current.KV_A_Lat
+                           else T.Empty_View),
+                        MLA_Rope      =>
+                          (if Is_MLA (Settings.Kind) then Current.KV_A_Rope
+                           else T.Empty_View),
+                        MLA_Norm      => Current.KV_A_Norm,
+                        MLA_Up        =>
+                          (if Is_MLA (Settings.Kind) then Current.KV_B
+                           else T.Empty_View));
                      Start_Shared (Current, Half and then Fused);
                      Half_Done := Half and then Fused;
                      Went_Whole := Fused and then not Half;
@@ -19646,10 +19751,9 @@ package body Model_Runner.Llama is
                     Turn_Scaling (Settings, Natural (Index));
                   Pairs   : constant Element_Count :=
                     Element_Count (Settings.Rotary) / 2;
-                  Shift   : constant Element_Count :=
-                    (if Is_MLA (Settings.Kind)
-                     then Head_Size - Element_Count (Settings.Rotary)
-                     else 0);
+                  --  Every head turns from its first element: DeepSeek's
+                  --  heads are laid out rotated slice first (MLA_Project).
+                  Shift   : constant Element_Count := 0;
                begin
                   --  A rotation by the position alone turns every layer of
                   --  this token by the same angles where the base and the
@@ -20148,7 +20252,17 @@ package body Model_Runner.Llama is
 
                   Read : Boolean;
                begin
-                  if Item.Held in Eighth | Fourth then
+                  --  Paged, the position is in the layer's pages, found
+                  --  through the page table as the settling reads them.
+                  if Item.Paged and then Item.Held = Exact then
+                     Read_Pages_Layer
+                       (Item, Natural (Index), KV_Width, V_Width,
+                        Cell_Of (Item, Natural (Index), Reserved), 1, Read);
+                  elsif Item.Paged then
+                     Read_Packed_Pages_Layer
+                       (Item, Natural (Index), KV_Width, V_Width,
+                        Cell_Of (Item, Natural (Index), Reserved), 1, Read);
+                  elsif Item.Held in Eighth | Fourth then
                      Read_Back_Packed
                        (Item, At_Key, At_Val, 1, KV_Width, V_Width, Read);
                   else
@@ -20486,6 +20600,13 @@ package body Model_Runner.Llama is
       --  that the device does not do -- as a token's does, and for a batch
       --  through the routing inverted and every expert run over the
       --  positions that chose it as one dispatch a matrix.
+      --  A dense layer in a mixture's stack -- DeepSeek's first -- whose
+      --  feed-forward is the plain one and goes whole as a dense model's.
+      function Dense_Among_Experts (L : Layer) return Boolean
+      is (L.Experts = null
+          and then not T.Is_Present (L.Router)
+          and then T.Is_Present (L.Up));
+
       function Mixture_Whole (L : Layer) return Boolean
       is ((Source.Stacked
            or else (Source.Split_Feed
@@ -20598,7 +20719,8 @@ package body Model_Runner.Llama is
       --  feed-forward, whose biases -- and a mixture's post-norm -- are
       --  steps of the sequence.
       function Whole_Layer_Fits (L : Layer; Index : Natural) return Boolean
-      is ((if Settings.Experts > 0 then Mixture_Whole (L)
+      is ((if Settings.Experts > 0 and then not Dense_Among_Experts (L)
+           then Mixture_Whole (L)
            else T.Is_Present (L.Up))
           and then Front_Fits (L, Index)
           and then (Settings.Experts = 0
@@ -21695,6 +21817,7 @@ package body Model_Runner.Llama is
                     and then Resident
                     and then Item.Held in Exact | Eighth | Fourth
                     and then (((Settings.Experts = 0
+                                or else Dense_Among_Experts (Current)
                                 or else Mixture_Whole (Current))
                                and then Whole_Layer_Fits
                                           (Current, Natural (Index)))
@@ -21704,6 +21827,7 @@ package body Model_Runner.Llama is
                     and then not Has_Runs
                   then
                      Half := not ((Settings.Experts = 0
+                                   or else Dense_Among_Experts (Current)
                                    or else Mixture_Whole (Current))
                                   and then Whole_Layer_Fits
                                              (Current, Natural (Index)));
@@ -21721,7 +21845,13 @@ package body Model_Runner.Llama is
                         Device_Norm (Current.Feed_Norm,
                                      Current.Feed_Norm_Pair),
                         Settings.Epsilon,
-                        Current.Query, Current.Key, Current.Value,
+                        Current.Query,
+                        (if Is_MLA (Settings.Kind)
+                         then MLA_Rows (Current.KV_A_MQA, Heads * Head_Size)
+                         else Current.Key),
+                        (if Is_MLA (Settings.Kind)
+                         then MLA_Rows (Current.KV_A_MQA, Heads * Value_Size)
+                         else Current.Value),
                         (if Turnable
                          then Angles.all (0 .. Count * Pairs * 2 - 1)
                          else No_Turns),
@@ -21895,7 +22025,17 @@ package body Model_Runner.Llama is
                         Shared_Up     => Current.Shared_Up,
                         Shared_Down   => Current.Shared_Down,
                         Shared_Router => Current.Shared_Router,
-                        No_Feed       => Half);
+                        No_Feed       => Half,
+                        MLA_Latent    =>
+                          (if Is_MLA (Settings.Kind) then Current.KV_A_Lat
+                           else T.Empty_View),
+                        MLA_Rope      =>
+                          (if Is_MLA (Settings.Kind) then Current.KV_A_Rope
+                           else T.Empty_View),
+                        MLA_Norm      => Current.KV_A_Norm,
+                        MLA_Up        =>
+                          (if Is_MLA (Settings.Kind) then Current.KV_B
+                           else T.Empty_View));
                      Half_Done := Half and then Whole_Layer_Done;
                      if Half_Done then
                         Whole_Layer_Done := False;
@@ -22277,10 +22417,7 @@ package body Model_Runner.Llama is
                            Place =>
                              Place_At (Item'Unchecked_Access.all,
                                        Natural (Sits_At (Which))),
-                           Offset =>
-                             (if Is_MLA (Settings.Kind)
-                              then Head_Size - Element_Count (Settings.Rotary)
-                              else 0));
+                           Offset => 0);
                      end if;
 
                      if Item.Held in Eighth | Fourth then
@@ -23086,7 +23223,15 @@ package body Model_Runner.Llama is
                      V_At : constant Element_Count :=
                        Layer_Vals + Cell * V_Width;
                   begin
-                     if Item.Held in Eighth | Fourth then
+                     if Item.Paged and then Item.Held = Exact then
+                        Read_Pages_Layer
+                          (Item, Natural (Index), KV_Width, V_Width,
+                           Cell, Count, Read);
+                     elsif Item.Paged then
+                        Read_Packed_Pages_Layer
+                          (Item, Natural (Index), KV_Width, V_Width,
+                           Cell, Count, Read);
+                     elsif Item.Held in Eighth | Fourth then
                         Read_Back_Packed
                           (Item, Base, V_At, Count, KV_Width, V_Width,
                            Read);

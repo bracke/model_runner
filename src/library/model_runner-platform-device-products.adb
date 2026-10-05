@@ -2770,6 +2770,20 @@ package body Model_Runner.Platform.Device.Products is
                Item.Picker := Made;
             end if;
 
+            declare
+               Assembled : aliased constant Model_Runner.Shaders.Word_Array :=
+                 Model_Runner.Shaders.Assemble;
+            begin
+               Request.Size := Interfaces.C.size_t (Assembled'Length * 4);
+               Request.Code := Assembled'Address;
+
+               if Create (Item.Logical, Request'Address, Null_Handle,
+                          Made'Access) = 0
+               then
+                  Item.Assembler := Made;
+               end if;
+            end;
+
             Request.Size := Interfaces.C.size_t (Conved'Length * 4);
             Request.Code := Conved'Address;
 
@@ -3762,6 +3776,16 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Pick_Line := Made;
+            end if;
+         end if;
+
+         if Item.Assembler /= Null_Handle then
+            Request.Stage.Module := Item.Assembler;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Assemble_Line := Made;
             end if;
          end if;
 
@@ -4839,6 +4863,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Mix_Line, "vkDestroyPipeline");
       Give_Back (Item.Bias_Line, "vkDestroyPipeline");
       Give_Back (Item.Pick_Line, "vkDestroyPipeline");
+      Give_Back (Item.Assemble_Line, "vkDestroyPipeline");
       Give_Back (Item.Conv_Line, "vkDestroyPipeline");
       Give_Back (Item.Rule_Line, "vkDestroyPipeline");
       Give_Back (Item.Held_Rule_Line, "vkDestroyPipeline");
@@ -4851,6 +4876,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Mixer, "vkDestroyShaderModule");
       Give_Back (Item.Biaser, "vkDestroyShaderModule");
       Give_Back (Item.Picker, "vkDestroyShaderModule");
+      Give_Back (Item.Assembler, "vkDestroyShaderModule");
       Give_Back (Item.Conver, "vkDestroyShaderModule");
       Give_Back (Item.Ruler, "vkDestroyShaderModule");
       Give_Back (Item.Held_Ruler, "vkDestroyShaderModule");
@@ -9588,6 +9614,8 @@ package body Model_Runner.Platform.Device.Products is
             return "mix";
          elsif This.Biases then
             return "bias";
+         elsif This.Assembles then
+            return "assemble";
          elsif This.Picks then
             return "pick";
          elsif This.Convolves then
@@ -10115,6 +10143,46 @@ package body Model_Runner.Platform.Device.Products is
          others => <>);
       Added := True;
    end Add_Pick;
+
+   ------------------
+   -- Add_Assemble --
+   ------------------
+
+   procedure Add_Assemble
+     (Steps  : in out Sequence;
+      Heads  : Natural;
+      A_Step : Natural;
+      B_Step : Natural;
+      Shape  : Assemble_Shape;
+      Added  : out Boolean;
+      Kept   : Boolean := True)
+   is
+      Head_Width : constant Natural := Shape (1) + Shape (5);
+   begin
+      Added := False;
+
+      if Steps.Held = Sequence_Limit
+        or else Heads = 0
+        or else Head_Width = 0
+        or else A_Step not in 1 .. Steps.Held
+        or else B_Step not in 1 .. Steps.Held
+      then
+         return;
+      end if;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Base => System.Null_Address, Span => 0, At_Byte => 0,
+         Packing => Weight_Packing'First,
+         Rows => Heads * Head_Width, Columns => Heads * Head_Width,
+         Key => System.Null_Address,
+         Chained => True, Reads => A_Step, Reads_Two => B_Step, Kept => Kept,
+         Picks => True, Assembles => True, Shapes => Shape,
+         Each => Head_Width, Which => Heads, Among => 1,
+         Attends => False, Blends => False,
+         others => <>);
+      Added := True;
+   end Add_Assemble;
 
    --------------
    -- Add_Conv --
@@ -11299,10 +11367,14 @@ package body Model_Runner.Platform.Device.Products is
 
                Places (Index).Weight := 0;
             elsif This.Picks then
-               --  A picking step reads one step and carries no weight.
+               --  A picking step reads one step and carries no weight; an
+               --  assembling one reads two.
                if This.Rows = 0
                  or else This.Reads not in 1 .. Index - 1
-                 or else Item.Pick_Line = Null_Handle
+                 or else (if This.Assembles
+                          then This.Reads_Two not in 1 .. Index - 1
+                            or else Item.Assemble_Line = Null_Handle
+                          else Item.Pick_Line = Null_Handle)
                then
                   return;
                end if;
@@ -12034,9 +12106,13 @@ package body Model_Runner.Platform.Device.Products is
             end if;
 
             if Steps.Items (Index).Picks then
-               --  The step it takes apart, and its own room out.
+               --  The step it takes apart, and its own room out -- or the
+               --  two an assembling step reads.
                Told (1) := Source_Of (Index, Steps.Items (Index).Reads);
-               Told (2) := Told (1);
+               Told (2) :=
+                 (if Steps.Items (Index).Assembles
+                  then Source_Of (Index, Steps.Items (Index).Reads_Two)
+                  else Told (1));
                Told (3) :=
                  (Buffer => Item.Result_Buffer,
                   Offset => Places (Index).At_Byte,
@@ -13496,6 +13572,41 @@ package body Model_Runner.Platform.Device.Products is
                      Dispatch
                        (Item.Buffer, C.unsigned (This.Linear.Value_Heads),
                         C.unsigned (This.Linear.Runs), 1);
+                  end;
+
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute,
+                     Row_Line (Item, Count));
+                  goto Next_Dispatch;
+               end if;
+
+               if This.Assembles then
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute, Item.Assemble_Line);
+
+                  declare
+                     --  A workgroup a position: the heads, the positions,
+                     --  then A's and B's stretch, offset, head stride and
+                     --  position stride, in the order the shader reads.
+                     Words : Member_Words := [others => 0];
+                     Shape : aliased Shape_Constants;
+                  begin
+                     Words (0) := C.unsigned (This.Shapes (7));
+                     Words (1) := C.unsigned (This.Shapes (8));
+                     Shape :=
+                       (Rows    => C.unsigned (This.Which),
+                        Columns => C.unsigned (Count),
+                        Count   => C.unsigned (This.Shapes (1)),
+                        First   => C.unsigned (This.Shapes (2)),
+                        Packing => C.unsigned (This.Shapes (3)),
+                        Base    => C.unsigned (This.Shapes (4)),
+                        Joins   => C.unsigned (This.Shapes (5)),
+                        Table   => C.unsigned (This.Shapes (6)),
+                        Members => Words,
+                        others  => <>);
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+                     Dispatch (Item.Buffer, C.unsigned (Count), 1, 1);
                   end;
 
                   Bind_Pipeline

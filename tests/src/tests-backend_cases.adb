@@ -4763,6 +4763,137 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end A_Pick_And_A_Scaled_Join_Say_What_The_Host_Says;
 
+   ------------------------------------------
+   -- An_Assembled_Head_Says_What_It_Reads --
+   ------------------------------------------
+
+   --  The step DeepSeek's latent attention lays its heads out with: each
+   --  head a stretch of one step's row and then a stretch of another's,
+   --  here A's a stretch a head and B's one stretch every head shares.
+   --  Copies, so to the bit, over one position and over a batch; and a
+   --  shape it refuses.
+   procedure An_Assembled_Head_Says_What_It_Reads
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Width  : constant := 32;
+      Heads  : constant := 4;
+      A_Len  : constant := 2;
+      A_Off  : constant := 3;
+      B_Len  : constant := 3;
+      B_Off  : constant := 5;
+      Stride : constant := Width / Heads;
+      Head   : constant := A_Len + B_Len;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+
+      Found, Ready, Ok, Added, Halted : Boolean;
+
+      --  The identity, so the first product hands its input on, and
+      --  twice it, so the second's row is told from the first's.
+      Identity : N.Real_Array (0 .. Width * Width - 1) := [others => 0.0];
+      Twice    : N.Real_Array (0 .. Width * Width - 1) := [others => 0.0];
+
+      Steps : Products.Sequence;
+
+      function Bytes_Of (Values : N.Real_Array)
+        return Model_Runner.Bytes.Byte_Count
+      is (Model_Runner.Bytes.Byte_Count (Values'Length) * 4);
+
+      procedure Over (Count : Positive) is
+         Input   : N.Real_Array (0 .. N.Element_Count (Count * Width) - 1);
+         Landing : N.Real_Array
+           (0 .. N.Element_Count (Count * (2 * Width + Heads * Head)) - 1)
+           := [others => 0.0];
+         Into    : constant N.Element_Count :=
+           N.Element_Count (2 * Count * Width);
+         Worst   : N.Real := 0.0;
+      begin
+         for Index in Input'Range loop
+            Input (Index) := N.Real ((Index * 7) mod 13) / 13.0 - 0.45;
+         end loop;
+
+         Products.Open_Sequence (Steps);
+         Products.Add_Product
+           (Steps, Identity (Identity'First)'Address, Bytes_Of (Identity), 0,
+            Products.Values_F32, Width, Width, Added, Kept => False);
+         Assert (Added, "the first product was refused");
+         Products.Add_Product
+           (Steps, Twice (Twice'First)'Address, Bytes_Of (Twice), 0,
+            Products.Values_F32, Width, Width, Added, Kept => False);
+         Assert (Added, "the second product was refused");
+
+         --  A step that reads a step not yet in the sequence is refused.
+         Products.Add_Assemble
+           (Steps, Heads, 1, 3,
+            [A_Len, A_Off, Stride, Width, B_Len, B_Off, 0, Width], Added);
+         Assert (not Added, "an assembly from a step to come was taken");
+
+         Products.Add_Assemble
+           (Steps, Heads, 1, 2,
+            [A_Len, A_Off, Stride, Width, B_Len, B_Off, 0, Width], Added);
+         Assert (Added, "the assembly was refused");
+
+         Products.Run (Engine, Steps, Input, Count, Landing, Ok, Halted);
+         Assert (Ok, "the sequence was refused over"
+                 & Positive'Image (Count) & " positions");
+
+         for Slot in 0 .. N.Element_Count (Count) - 1 loop
+            for H in 0 .. N.Element_Count (Heads) - 1 loop
+               for C in 0 .. N.Element_Count (Head) - 1 loop
+                  declare
+                     Got  : constant N.Real :=
+                       Landing (Into + Slot * Heads * Head + H * Head + C);
+                     Want : constant N.Real :=
+                       (if C < A_Len
+                        then Input (Slot * Width + H * Stride + A_Off + C)
+                        else 2.0 * Input (Slot * Width + B_Off + C - A_Len));
+                  begin
+                     Worst := N.Real'Max (Worst, abs (Got - Want));
+                  end;
+               end loop;
+            end loop;
+         end loop;
+
+         Assert (Worst = 0.0,
+                 "over" & Positive'Image (Count)
+                 & " positions the assembled heads differ from what they "
+                 & "read by " & N.Real'Image (Worst));
+      end Over;
+   begin
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+      Products.Open (Engine, Opened, Ready);
+      if not Ready then
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      for Index in 0 .. N.Element_Count (Width) - 1 loop
+         Identity (Index * Width + Index) := 1.0;
+         Twice (Index * Width + Index) := 2.0;
+      end loop;
+
+      Over (1);
+      Over (3);
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end An_Assembled_Head_Says_What_It_Reads;
+
    ---------------------------------------------------------------
    -- The_Linear_Layer_On_The_Device_Says_What_The_Host_Says --
    ---------------------------------------------------------------
@@ -8918,6 +9049,11 @@ package body Tests.Backend_Cases is
          & "blend through the logistic of its gate, and an answer scaled by "
          & "the logistic of one score a position -- what a hybrid's "
          & "attention layer needs -- say what the host says");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, An_Assembled_Head_Says_What_It_Reads'Access,
+         "heads assembled from a stretch of one step's row a head and a "
+         & "stretch of another's every head shares -- DeepSeek's latent "
+         & "attention's layout -- are what they read, to the bit");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, The_Packed_Attention_Says_Which_Heads_It_Reads'Access,
          "the packed attention says which head shapes it reads: a whole "

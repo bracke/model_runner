@@ -995,6 +995,33 @@ package Model_Runner.Platform.Device.Products is
       Source_At     : Natural := 0;
       Source_Stride : Natural := 0);
 
+   --  The eight numbers an assembling step is shaped by: A's stretch
+   --  width, offset in a head, head stride and position stride, then B's.
+   type Assemble_Shape is array (1 .. 8) of Natural;
+
+   --  Add a step that writes Heads heads a position, each A's stretch then
+   --  B's, read from the steps A_Step and B_Step where they lie: what
+   --  DeepSeek's latent attention needs to lay its queries, keys and values
+   --  out as heads with the rotated slice first. A stretch's head stride
+   --  of nought is one every head shares.
+   --
+   --  @param Steps Sequence to append to.
+   --  @param Heads Heads a position.
+   --  @param A_Step The step A's stretches are read from.
+   --  @param B_Step The step B's stretches are read from.
+   --  @param Shape A's and B's stretch width, offset, head stride and
+   --    position stride, in that order.
+   --  @param Added False when the sequence or the shape will not take it.
+   --  @param Kept Whether the host reads the assembled heads back.
+   procedure Add_Assemble
+     (Steps  : in out Sequence;
+      Heads  : Natural;
+      A_Step : Natural;
+      B_Step : Natural;
+      Shape  : Assemble_Shape;
+      Added  : out Boolean;
+      Kept   : Boolean := True);
+
    --  Name a step that picks every other stretch of a row.
    --
    --  The hybrid architecture projects each head's queries and a gate for
@@ -2814,6 +2841,7 @@ private
       --  answers, for the mixture that carries them.
       Biaser     : System.Address := System.Null_Address;
       Picker     : System.Address := System.Null_Address;
+      Assembler  : System.Address := System.Null_Address;
       Conver     : System.Address := System.Null_Address;
       Ruler      : System.Address := System.Null_Address;
       Held_Ruler : System.Address := System.Null_Address;
@@ -2967,6 +2995,7 @@ private
       Mix_Line    : System.Address := System.Null_Address;
       Bias_Line   : System.Address := System.Null_Address;
       Pick_Line   : System.Address := System.Null_Address;
+      Assemble_Line : System.Address := System.Null_Address;
       Conv_Line   : System.Address := System.Null_Address;
       Rule_Line   : System.Address := System.Null_Address;
       Held_Rule_Line : System.Address := System.Null_Address;
@@ -3495,6 +3524,13 @@ private
       Picks   : Boolean := False;
       Which   : Natural := 0;
       Among   : Positive := 1;
+
+      --  An assembling step, as Add_Assemble describes it: a picking step
+      --  that reads two steps, Reads and Reads_Two, and writes Which heads
+      --  of A's stretch then B's; Shapes holds the two stretches' widths,
+      --  offsets, head strides and position strides.
+      Assembles : Boolean := False;
+      Shapes    : Assemble_Shape := [others => 0];
 
       --  A convolving step or a rule step, as Add_Conv and Add_Rule
       --  describe them: the front and the middle of a hybrid's linear

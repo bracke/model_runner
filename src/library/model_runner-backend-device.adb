@@ -2522,7 +2522,20 @@ package body Model_Runner.Backend.Device is
       Pages_At       : Natural := 0;
       Page_Shift     : Natural := 0;
       First_Position : Natural := 0;
-      No_Feed        : Boolean := False)
+      No_Feed        : Boolean := False;
+
+      --  DeepSeek's latent attention, where the layer is one: the
+      --  latent's projection and its rotated slice's -- the two row
+      --  ranges of attn_kv_a_mqa -- the latent's norm, and its up
+      --  projection; Query is then the plain query projection, and Key and
+      --  Value only say how many rows the keys and the values are.
+      MLA_Latent     : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      MLA_Rope       : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      MLA_Norm       : Model_Runner.Tensors.Real_Array_Access := null;
+      MLA_Up         : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View)
    is
       --  Whether this is a hybrid's linear layer rather than attention.
       Linear_Layer : constant Boolean := T.Is_Present (Linear_Mix);
@@ -2848,8 +2861,9 @@ package body Model_Runner.Backend.Device is
                     and then (not Mixed
                               or else not T.Is_Present (Shared_Up)
                               or else not T.Is_Present (Shared_Down)
-                              or else Shared_Router = null
-                              or else Shared_Router.all'Length /= Width
+                              or else (Shared_Router /= null
+                                       and then Shared_Router.all'Length
+                                                /= Width)
                               or else Shared_Gate.Columns /= Width
                               or else Shared_Up.Columns /= Width
                               or else Shared_Up.Rows /= Shared_Gate.Rows
@@ -3099,6 +3113,126 @@ package body Model_Runner.Backend.Device is
             end;
 
             goto Attended;
+         end if;
+
+         --  DeepSeek's latent attention: the plain queries; the latent and
+         --  its rotated slice, each its own row range of the one tensor; the
+         --  latent normalized and projected up; and the heads laid out from
+         --  those, the rotated slice first -- the queries' own and the keys'
+         --  shared one -- and the values picked from the up projection.
+         --  Everything after reads Step_Q, Step_K and Step_V as it reads a
+         --  plain layer's.
+         if T.Is_Present (MLA_Up) then
+            declare
+               Nope   : constant Natural := Head_Size - Rotary;
+               Lat_P, Rope_P, Up_P_M : Products.Weight_Packing;
+               Step_Q_Raw, Step_Lat, Step_Lat_Norm, Step_Up, Step_Rope :
+                 Natural;
+            begin
+               if MLA_Norm = null
+                 or else not T.Is_Present (MLA_Latent)
+                 or else not T.Is_Present (MLA_Rope)
+                 or else Rotary = 0 or else Nope = 0
+                 or else Natural (MLA_Up.Rows) /= Heads * (Nope + Value_Size)
+               then
+                  return;
+               end if;
+               Packing_Of (MLA_Latent.Format, Lat_P, Known);
+               if not Known then
+                  return;
+               end if;
+               Packing_Of (MLA_Rope.Format, Rope_P, Known);
+               if not Known then
+                  return;
+               end if;
+               Packing_Of (MLA_Up.Format, Up_P_M, Known);
+               if not Known then
+                  return;
+               end if;
+
+               Add_Input_Product (Query, Q_P, False, Added);
+               if not Added then
+                  return;
+               end if;
+               Step_Q_Raw := Products.Length (Steps);
+               Step_Room (Query.Rows);
+
+               Add_Input_Product (MLA_Latent, Lat_P, False, Added);
+               if not Added then
+                  return;
+               end if;
+               Step_Lat := Products.Length (Steps);
+               Step_Room (MLA_Latent.Rows);
+
+               Products.Add_Norm
+                 (Steps, MLA_Norm.all (MLA_Norm.all'First)'Address,
+                  Model_Runner.Bytes.Byte_Count (MLA_Norm.all'Length) * 4, 0,
+                  Natural (MLA_Latent.Rows), Epsilon, Added,
+                  From_Step => Step_Lat,
+                  Key => MLA_Norm.all (MLA_Norm.all'First)'Address,
+                  Kept => False);
+               if not Added then
+                  return;
+               end if;
+               Step_Lat_Norm := Products.Length (Steps);
+               Step_Room (MLA_Latent.Rows);
+
+               Products.Add_Chained_Product
+                 (Steps, MLA_Up.Base, MLA_Up.Span, MLA_Up.Offset, Up_P_M,
+                  Natural (MLA_Up.Rows), Natural (MLA_Up.Columns), Added,
+                  Key => At_Offset (MLA_Up.Base, MLA_Up.Offset), Kept => False,
+                  From_Step => Step_Lat_Norm);
+               if not Added then
+                  return;
+               end if;
+               Step_Up := Products.Length (Steps);
+               Step_Room (MLA_Up.Rows);
+
+               Add_Input_Product (MLA_Rope, Rope_P, False, Added);
+               if not Added then
+                  return;
+               end if;
+               Step_Rope := Products.Length (Steps);
+               Step_Room (MLA_Rope.Rows);
+
+               --  The queries, each head's rotated slice moved to its front.
+               Products.Add_Assemble
+                 (Steps, Heads, Step_Q_Raw, Step_Q_Raw,
+                  [Rotary, Nope, Head_Size, Natural (Query.Rows),
+                   Nope, 0, Head_Size, Natural (Query.Rows)], Added,
+                  Kept => False);
+               if not Added then
+                  return;
+               end if;
+               Step_Q := Products.Length (Steps);
+               Step_Room (Query.Rows);
+
+               --  The keys: the shared rotated slice, then each head's nope
+               --  part out of the up projection.
+               Products.Add_Assemble
+                 (Steps, Heads, Step_Rope, Step_Up,
+                  [Rotary, 0, 0, Rotary,
+                   Nope, 0, Nope + Value_Size, Natural (MLA_Up.Rows)], Added,
+                  Kept => False);
+               if not Added then
+                  return;
+               end if;
+               Step_K := Products.Length (Steps);
+               Step_Room (Key.Rows);
+
+               --  The values: the rest of each head of the up projection.
+               Products.Add_Pick
+                 (Steps, Heads * Value_Size, Value_Size, 1, 2, Added,
+                  From_Step => Step_Up, Kept => Mirror);
+               if not Added then
+                  return;
+               end if;
+               Step_V := Products.Length (Steps);
+               Step_Room (Value.Rows);
+               At_Keys := Wanted;
+               At_Values := Wanted;
+               goto After_Projections;
+            end;
          end if;
 
          --  One matmul for the queries, keys and values where the file keeps
@@ -4004,33 +4138,38 @@ package body Model_Runner.Backend.Device is
                end if;
                Step_Room (Width);
 
-               declare
-                  Step_Shared : constant Natural := Products.Length (Steps);
+               --  Gated by the sigmoid of its own router row where the
+               --  mixture has one; DeepSeek's shared experts have none and
+               --  join as they are.
+               if Shared_Router /= null then
+                  declare
+                     Step_Shared : constant Natural := Products.Length (Steps);
 
-                  --  The router's row as a matrix of one row, resident as
-                  --  a norm's weight is.
-                  At_Row : constant System.Address :=
-                    Shared_Router.all (Shared_Router.all'First)'Address;
-               begin
-                  Products.Add_Chained_Product
-                    (Steps, At_Row,
-                     Model_Runner.Bytes.Byte_Count (Shared_Router.all'Length) * 4,
-                     0, Products.Values_F32, 1, Natural (Width), Added,
-                     Key => At_Row, Kept => False, From_Step => Step_Norm_Feed);
-                  if not Added then
-                     return;
-                  end if;
-                  Step_Room (1);
+                     --  The router's row as a matrix of one row, resident as
+                     --  a norm's weight is.
+                     At_Row : constant System.Address :=
+                       Shared_Router.all (Shared_Router.all'First)'Address;
+                  begin
+                     Products.Add_Chained_Product
+                       (Steps, At_Row,
+                        Model_Runner.Bytes.Byte_Count (Shared_Router.all'Length) * 4,
+                        0, Products.Values_F32, 1, Natural (Width), Added,
+                        Key => At_Row, Kept => False, From_Step => Step_Norm_Feed);
+                     if not Added then
+                        return;
+                     end if;
+                     Step_Room (1);
 
-                  Products.Add_Combination
-                    (Steps, 7, Added, Kept => False,
-                     From_Step => Step_Shared,
-                     Other_Step => Products.Length (Steps));
-                  if not Added then
-                     return;
-                  end if;
-                  Step_Room (Width);
-               end;
+                     Products.Add_Combination
+                       (Steps, 7, Added, Kept => False,
+                        From_Step => Step_Shared,
+                        Other_Step => Products.Length (Steps));
+                     if not Added then
+                        return;
+                     end if;
+                     Step_Room (Width);
+                  end;
+               end if;
 
                Products.Add_Join
                  (Steps, Added, From_Step => Products.Length (Steps),

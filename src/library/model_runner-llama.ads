@@ -2254,6 +2254,12 @@ private
       Q_A       : aliased Model_Runner.Tensors.View;
       Q_B       : aliased Model_Runner.Tensors.View;
       KV_A_MQA  : aliased Model_Runner.Tensors.View;
+
+      --  Its two row ranges, the latent's and the rotated slice's, as views
+      --  of their own for the device's whole layer, which projects them
+      --  apart; the host reads KV_A_MQA whole.
+      KV_A_Lat  : aliased Model_Runner.Tensors.View;
+      KV_A_Rope : aliased Model_Runner.Tensors.View;
       KV_B      : aliased Model_Runner.Tensors.View;
       Q_A_Norm  : Model_Runner.Tensors.Real_Array_Access;
       KV_A_Norm : Model_Runner.Tensors.Real_Array_Access;

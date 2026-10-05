@@ -6390,6 +6390,26 @@ package body Checks is
          end if;
       end;
 
+      --  And the one that assembles heads out of two rows.
+      declare
+         Found : Boolean;
+
+         Digest : constant Interfaces.Unsigned_64 :=
+           Shader_Generation.Source_Digest
+             (Root & "/src/shaders/assemble.comp", Found);
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if not Found then
+            Fail ("src/shaders/assemble.comp is missing, and the words "
+                  & "compiled from it are committed");
+         elsif Digest /= Model_Runner.Shaders.Assemble_Digest then
+            Fail ("src/shaders/assemble.comp has changed since it was "
+                  & "compiled; compile it and run 'tests shader' again with "
+                  & "every shader named");
+         end if;
+      end;
+
       --  And the one that unpacks a layer of it into the copy.
       declare
          Found : Boolean;

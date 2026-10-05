@@ -1363,6 +1363,15 @@ package Model_Runner.Backend.Device is
    --    -- the residual after attention lands in Into for the host to run
    --    the feed-forward on. For a mixture too large for the device, whose
    --    experts the processor runs. Refused with Carry_Out and with After.
+   --  @param MLA_Latent DeepSeek's latent attention, where the layer is
+   --    one: the latent's projection, the first row range of attn_kv_a_mqa.
+   --    Query is then the plain query projection, and Key and Value only
+   --    say how many rows the keys and the values are.
+   --  @param MLA_Rope The rotated slice's projection, the rest of
+   --    attn_kv_a_mqa, one slice every key head shares.
+   --  @param MLA_Norm The latent's normalization gain.
+   --  @param MLA_Up The latent's up projection, each head's keys' plain
+   --    part then its values.
    procedure Whole_Layer
      (Residual       : Model_Runner.Tensors.Real_Array;
       Attention_Norm : Model_Runner.Tensors.Real_Array_Access;
@@ -1461,7 +1470,15 @@ package Model_Runner.Backend.Device is
       Pages_At       : Natural := 0;
       Page_Shift     : Natural := 0;
       First_Position : Natural := 0;
-      No_Feed        : Boolean := False);
+      No_Feed        : Boolean := False;
+
+      MLA_Latent     : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      MLA_Rope       : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      MLA_Norm       : Model_Runner.Tensors.Real_Array_Access := null;
+      MLA_Up         : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View);
 
    --  A gated feed-forward block, whole, in one submission.
    --
