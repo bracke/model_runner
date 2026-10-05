@@ -162,6 +162,14 @@ package Model_Runner.Generation is
       --  stack; the context proposes what it finds.
       Draft_Adapts : Boolean := False;
 
+      --  Stop a round's drafting from a draft model once the draft's own
+      --  probability of its proposal falls below this, rather than always
+      --  drafting the round's full count: code alternates stretches a small
+      --  model predicts -- a closing "end loop;" -- with ones it does not, and
+      --  a fixed count drafts the second kind at the first kind's length.
+      --  Greedy drafting only; nought never stops early.
+      Draft_Floor : Model_Runner.Numerics.Real := 0.0;
+
       --  Whether the end of the sequence ends the run. False goes on to
       --  Max_Tokens whatever the model says, which is what a measurement of
       --  speed asks for: llama-bench generates its count whatever comes,
@@ -216,6 +224,10 @@ package Model_Runner.Generation is
    --  What a run produced.
    --
    --  Release the result with Release when Retain_Text was requested.
+   --  A count for each proposal position of a drafted round.
+   Most_Proposals : constant := 16;
+   type Round_Counts is array (1 .. Most_Proposals) of Natural;
+
    type Result is record
       Reason           : Completion_Reason := Runtime_Error;
       Prompt_Tokens    : Natural := 0;
@@ -265,6 +277,13 @@ package Model_Runner.Generation is
       --  and buys nothing, and the two are indistinguishable from the text.
       Drafted          : Natural := 0;
       Accepted         : Natural := 0;
+
+      --  And by position in the round: how many rounds offered a k-th
+      --  proposal, and how many kept it -- the first k proposals all
+      --  agreed with. Kept_At (k) / Offered_At (k) is the chance a round
+      --  reaches k, which is what decides how long a round should be.
+      Offered_At       : Round_Counts := [others => 0];
+      Kept_At          : Round_Counts := [others => 0];
 
       --  How many times the context was shifted to make room. Zero for a run
       --  that never filled it, and the number of times the beginning of the

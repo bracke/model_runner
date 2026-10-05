@@ -1,3 +1,4 @@
+with Model_Runner.Generation;
 --  The published speed figures, taken again.
 --
 --  The README publishes what twelve tokens cost from a short prompt. That
@@ -100,6 +101,11 @@ package Speed_Run is
       Drafted   : Natural := 0;
       Accepted  : Natural := 0;
 
+      --  And by position in a round: rounds that offered a k-th proposal,
+      --  and rounds that kept it with every one before it.
+      Offered_At : Model_Runner.Generation.Round_Counts := [others => 0];
+      Kept_At    : Model_Runner.Generation.Round_Counts := [others => 0];
+
       Wall      : Duration := 0.0;
       Evaluate  : Duration := 0.0;
       Generate  : Duration := 0.0;
@@ -168,6 +174,8 @@ package Speed_Run is
    --    the command does on a device and nowhere else unless told.
    --  @param Ignore_End Whether the run goes on past the end of the
    --    sequence to the count asked for, as llama-bench does.
+   --  @param Draft_Floor The draft's own probability below which a round
+   --    stops drafting and is checked, as --draft-floor sets; nought never.
    --  @param Result What it measured.
    procedure Run
      (Path        : String;
@@ -192,6 +200,7 @@ package Speed_Run is
       Device_Bytes : Interfaces.Unsigned_64 := 0;
       Paged       : Boolean := False;
       Ignore_End  : Boolean := False;
+      Draft_Floor : Model_Runner.Numerics.Real := 0.0;
       Result      : out Report);
 
    --  The digest this tool prints, over any text.

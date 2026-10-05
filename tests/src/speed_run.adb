@@ -1,3 +1,5 @@
+with Ada.Strings.Fixed;
+with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 with Ada.Directories;
 
@@ -10,7 +12,6 @@ with Model_Runner.Clocks;
 with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.GGUF.Shards;
-with Model_Runner.Generation;
 with Model_Runner.Output;
 with Model_Runner.Stops;
 with Model_Runner.Text;
@@ -146,6 +147,7 @@ package body Speed_Run is
       Device_Bytes : Interfaces.Unsigned_64 := 0;
       Paged       : Boolean := False;
       Ignore_End  : Boolean := False;
+      Draft_Floor : Model_Runner.Numerics.Real := 0.0;
       Result      : out Report)
    is
       use type Model_Runner.Backend.Backend_Kind;
@@ -397,6 +399,7 @@ package body Speed_Run is
                   Model_Runner.Stops.Open (Stop);
                   Request.Max_Tokens := Tokens;
                   Request.Ignore_End := Ignore_End;
+                  Request.Draft_Floor := Draft_Floor;
 
                   --  As the command sets it: a backend that does not batch
                   --  gets one, whatever was asked for. Passing the asked-for
@@ -521,6 +524,8 @@ package body Speed_Run is
                   Result.Produced := Outcome.Generated_Tokens;
                   Result.Drafted := Outcome.Drafted;
                   Result.Accepted := Outcome.Accepted;
+                  Result.Offered_At := Outcome.Offered_At;
+                  Result.Kept_At := Outcome.Kept_At;
                   Result.Runs := Pass;
 
                   --  Where the time went, for the caller who asked. Written
@@ -614,6 +619,22 @@ package body Speed_Run is
    -- Summary --
    -------------
 
+   --  Each position's kept and offered counts, while any round offered
+   --  one: " 40/50 30/48 ...".
+   function Kept_By_Position (Item : Report) return String is
+      Line : Ada.Strings.Unbounded.Unbounded_String;
+   begin
+      for Position in Item.Offered_At'Range loop
+         exit when Item.Offered_At (Position) = 0;
+         Ada.Strings.Unbounded.Append
+           (Line, Natural'Image (Item.Kept_At (Position)) & "/"
+                  & Ada.Strings.Fixed.Trim
+                      (Natural'Image (Item.Offered_At (Position)),
+                       Ada.Strings.Left));
+      end loop;
+      return Ada.Strings.Unbounded.To_String (Line);
+   end Kept_By_Position;
+
    function Summary (Item : Report) return String is
       function Seconds (Value : Duration) return String
       is (T.Image (Long_Float (Value), 3) & " s");
@@ -631,7 +652,9 @@ package body Speed_Run is
         & Seconds (Item.Load) & "; output " & Item.Digest
         & (if Item.Drafted = 0 then ""
            else ", proposed" & Natural'Image (Item.Drafted)
-                & " accepted" & Natural'Image (Item.Accepted))
+                & " accepted" & Natural'Image (Item.Accepted)
+                & " (kept/offered by position:" & Kept_By_Position (Item)
+                & ")")
         & "; "
         & T.Image (Long_Float (Item.Processor), 2)
         & " s of processor time"

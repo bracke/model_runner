@@ -4,6 +4,7 @@ with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.Unchecked_Deallocation;
 
+with Model_Runner.Kernels;
 with Model_Runner.Lookup;
 with Model_Runner.Shares;
 with Model_Runner.Backend.CPU;
@@ -1668,6 +1669,33 @@ package body Model_Runner.Generation is
 
                   Count := Count + 1;
                   Proposed.all (Count) := Guess;
+
+                  --  The draft's own probability of what it proposed: one
+                  --  over the sum of e to each logit less the chosen one's,
+                  --  the chosen one being the largest. Below the floor, the
+                  --  round is checked now rather than drafted further.
+                  if N.">" (Item.Draft_Floor, 0.0)
+                    and then not Sampled_Draft
+                    and then N.Element_Count (Guess) < Draft_Words
+                  then
+                     declare
+                        use type N.Real;
+
+                        Run : N.Real_Array renames
+                          Aside.all (Aside.all'First
+                                     .. Aside.all'First + Draft_Words - 1);
+                        Chosen : constant N.Real :=
+                          Run (Run'First + N.Element_Count (Guess));
+                        Total : N.Real := 0.0;
+                     begin
+                        Model_Runner.Kernels.Exponentiate (Run, Chosen);
+                        for Value of Run loop
+                           Total := Total + Value;
+                        end loop;
+                        exit when Total > 0.0
+                          and then 1.0 / Total < Item.Draft_Floor;
+                     end;
+                  end if;
                end loop;
             end if;
 
@@ -2025,6 +2053,14 @@ package body Model_Runner.Generation is
             --  Accepted proposals, not counting the target's own first token
             --  nor a residual that replaced a rejected one.
             Outcome.Accepted := Outcome.Accepted + Accepted - 1;
+
+            for Position in 1 .. Natural'Min (Count - 1, Most_Proposals) loop
+               Outcome.Offered_At (Position) :=
+                 Outcome.Offered_At (Position) + 1;
+               if Position <= Accepted - 1 then
+                  Outcome.Kept_At (Position) := Outcome.Kept_At (Position) + 1;
+               end if;
+            end loop;
 
             if Adapting then
                if Accepted - 1 >= Count - 1 and then Count - 1 = Round_Draft
