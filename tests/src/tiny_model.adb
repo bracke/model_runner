@@ -522,9 +522,16 @@ package body Tiny_Model is
       Fixtures.Add_U32
         (Builder, Prefix & ".block_count",
          Interfaces.Unsigned_32 (Blocks));
+      --  A pure state-space model states nought for both, and RWKV6 nought
+      --  heads, as llama.cpp's converter writes them: neither has the
+      --  attention the counts describe.
       Fixtures.Add_U32
-        (Builder, Prefix & ".feed_forward_length", Interfaces.Unsigned_32 (Feed_Forward));
-      Fixtures.Add_U32 (Builder, Prefix & ".attention.head_count", Heads);
+        (Builder, Prefix & ".feed_forward_length",
+         (if Kind in Mamba | Mamba2 then 0
+          else Interfaces.Unsigned_32 (Feed_Forward)));
+      Fixtures.Add_U32
+        (Builder, Prefix & ".attention.head_count",
+         (if Kind in Mamba | Mamba2 | Rwkv6 then 0 else Heads));
 
       --  Jamba states its key-value head count a layer, nought where a layer
       --  keeps a Mamba state and the attention count where it attends, which
@@ -754,6 +761,11 @@ package body Tiny_Model is
          Fixtures.Add_U32
            (Builder, Prefix & ".leading_dense_block_count",
             Interfaces.Unsigned_32 (DS_Leading));
+
+         --  Two shared experts, as DeepSeek-V2 states them: a count and no
+         --  width -- the width is the count's worth of experts -- and no
+         --  row to gate them, so they are added as they are.
+         Fixtures.Add_U32 (Builder, Prefix & ".expert_shared_count", 2);
       end if;
       Fixtures.Add_F32 (Builder, Prefix & ".rope.freq_base", 10_000.0);
 
@@ -1679,6 +1691,16 @@ package body Tiny_Model is
             --  is, and a row that gates its answer against the input. Every
             --  layer of a hybrid mixture carries one, the block past the
             --  stack included.
+            --  DeepSeek2's two shared experts, side by side in one block
+            --  twice an expert wide, with no gating row.
+            if Kind = Deepseek2 then
+               Weight (Layer_Name (Index, "ffn_gate_shexp.weight"),
+                       [G.U64 (Embedding), G.U64 (2 * Expert_Feed)]);
+               Weight (Layer_Name (Index, "ffn_up_shexp.weight"),
+                       [G.U64 (Embedding), G.U64 (2 * Expert_Feed)]);
+               Weight (Layer_Name (Index, "ffn_down_shexp.weight"),
+                       [G.U64 (2 * Expert_Feed), G.U64 (Embedding)]);
+            end if;
             if Kind = Qwen35 then
                Weight (Layer_Name (Index, "ffn_gate_shexp.weight"),
                        [G.U64 (Embedding), G.U64 (Expert_Feed)]);

@@ -117,7 +117,8 @@ package body Model_Runner.Llama is
                      and then Settings.Layers = 62
                      and then Settings.Heads > 0
                   then Settings.Embedding / Settings.Heads
-                  else Settings.Head_Size))));
+                  else Settings.Head_Size)))
+         * Settings.Score_Gain);
 
    package A renames Model_Runner.Arithmetic;
    package B renames Model_Runner.Bytes;
@@ -223,6 +224,27 @@ package body Model_Runner.Llama is
    --  other runtime computes them.
    function Sigmoid (Value : Real) return Real
    is (Real (1.0 / (1.0 + N.Exp (N.Wide_Real (-Value)))));
+
+   --  The weight a shared expert's answer is added with: the sigmoid of
+   --  the layer's own router row against the input, or one where the
+   --  mixture keeps no such row.
+   function Shared_Weight
+     (Router : T.Real_Array_Access;
+      Input  : Real_Array;
+      At_Row : Element_Count) return Real
+   is
+      Gate : N.Wide_Real := 0.0;
+   begin
+      if Router = null then
+         return 1.0;
+      end if;
+      for C in Router.all'Range loop
+         Gate := Gate
+           + N.Wide_Real (Input (At_Row + (C - Router.all'First)))
+             * N.Wide_Real (Router.all (C));
+      end loop;
+      return Sigmoid (Real (Gate));
+   end Shared_Weight;
 
    function Softplus (Value : Real) return Real
    is (if Value > 20.0 then Value
@@ -462,6 +484,10 @@ package body Model_Runner.Llama is
    is
       Number : Long_Long_Integer;
       Value  : N.Wide_Real;
+
+      --  How many shared experts the file states, which DeepSeek2 gives
+      --  their width by.
+      Shared_Count : Natural := 0;
       Local  : E.Error_Info;
 
       --  Read a required positive integer key.
@@ -523,14 +549,17 @@ package body Model_Runner.Llama is
                --  wrong one reads as a model that has lost the thread.
                Settings.Pairing :=
                  (case Kind is
+                    --  DeepSeek2 is llama.cpp's "normal" rotation as Llama
+                    --  is: read split, DeepSeek-Coder-V2-Lite answered in
+                    --  scraps of four languages.
                     when Llama | Granite | Granite_MoE | Glm4 | Internlm2
-                       | Baichuan | Chatglm | Command_R =>
+                       | Baichuan | Chatglm | Command_R | Deepseek2 =>
                       K.Interleaved,
                     when Qwen2 | Qwen3 | Qwen3_MoE | GPT_OSS | Gemma | Gemma2
                        | Gemma3 | Phi3 | Falcon | Phi2 | GPT2 | Bert
                        | Nomic_Bert | Jina_Bert_V2 | Qwen35 | Qwen35_MoE
                        | Olmo2 | Starcoder2 | Stablelm | Gptneox | Mpt | Mamba
-                       | Mamba2 | Rwkv6 | Jamba | Deepseek2 =>
+                       | Mamba2 | Rwkv6 | Jamba =>
                       K.Split);
 
                --  What a position may see. Every architecture here
@@ -635,7 +664,9 @@ package body Model_Runner.Llama is
          end if;
       end if;
 
-      if Pure_SSM (Settings.Kind) then
+      --  RWKV6 states nought heads as well: its heads are its wkv.head_size,
+      --  read below, and the attention's count is bookkeeping alone.
+      if Pure_SSM (Settings.Kind) or else Is_RWKV (Settings.Kind) then
          Containers.Get_Integer
            (Source, Model_Key (Settings.Kind, "attention.head_count"),
             0, Long_Long_Integer (Bounds.Max_Heads), Number, Status);
@@ -1016,6 +1047,43 @@ package body Model_Runner.Llama is
          end if;
       end if;
 
+      --  DeepSeek2 under YaRN, as llama.cpp reads it: the rotation keeps the
+      --  magnitude the file states (one where it states none) rather than
+      --  YaRN's own one-plus-a-tenth-of-the-log, and the scores take the
+      --  square of mscale instead, mscale being one plus the file's
+      --  yarn_log_multiplier times the log of the stretch. Applied to the
+      --  rotated part alone, YaRN's magnitude weighted the sixty-four
+      --  rotated dimensions of each key 1.87 times against its 128 plain
+      --  ones, and DeepSeek-Coder-V2-Lite answered with nothing a reader
+      --  could follow.
+      if Settings.Kind = Deepseek2
+        and then K."=" (Settings.Scaling.Kind, K.Yarn)
+        and then Settings.Scaling.Frequency > 0.0
+        and then Settings.Scaling.Frequency < 1.0
+      then
+         declare
+            Stretch : constant N.Wide_Real :=
+              N.Log (1.0 / Settings.Scaling.Frequency);
+            Log_Mul : N.Wide_Real := 0.0;
+         begin
+            Containers.Get_Float
+              (Source,
+               Model_Key (Settings.Kind, "rope.scaling.yarn_log_multiplier"),
+               0.0, 1.0E3, Value, Local);
+            if Present_And_Wrong (Local) then
+               Status := Local;
+               return;
+            end if;
+            if E.Is_Ok (Local) then
+               Log_Mul := Value;
+            end if;
+
+            Settings.Scaling.Attenuation :=
+              Settings.Scaling.Attenuation / (1.0 + 0.1 * Stretch);
+            Settings.Score_Gain :=
+              Real ((1.0 + Log_Mul * Stretch) * (1.0 + Log_Mul * Stretch));
+         end;
+      end if;
 
       --  A mixture of experts, when the model names one. The count is what
       --  each layer holds and the used count is how many of them run for one
@@ -1326,8 +1394,15 @@ package body Model_Runner.Llama is
                Status := Local;
                return;
             end if;
+            --  DeepSeek2 states it where it renormalizes and is silent
+            --  where it does not: V2 and V2-Lite train with the few taken
+            --  as the softmax left them, which is llama.cpp's default too.
+            --  Renormalized, DeepSeek-Coder-V2-Lite's six experts summed
+            --  to one where they sum to a fraction, every mixture layer's
+            --  answer several times too large.
             Settings.Renormalize_Experts :=
-              (if E.Is_Ok (Local) then Normalized else True);
+              (if E.Is_Ok (Local) then Normalized
+               else Settings.Kind /= Deepseek2);
 
             --  Jamba softmaxes its experts and takes the highest few as
             --  they are, without renormalizing the few over themselves,
@@ -1362,6 +1437,7 @@ package body Model_Runner.Llama is
             Status := Local;
             return;
          end if;
+         Shared_Count := (if E.Is_Ok (Local) then Natural (Number) else 0);
 
          --  One expert's width, when the file states it separately. A
          --  mixture-of-experts file often carries both numbers, and they are
@@ -1378,6 +1454,18 @@ package body Model_Runner.Llama is
            (if E.Is_Ok (Local)
             then Natural (Number)
             else Settings.Feed_Forward);
+
+         --  DeepSeek2 states how many shared experts it has and not their
+         --  width, which is that many experts' worth side by side -- as
+         --  llama.cpp derives it. Without it the shared experts were never
+         --  read, and every mixture layer of DeepSeek-Coder-V2-Lite ran
+         --  without the two experts every position goes through.
+         if Settings.Kind = Deepseek2
+           and then Settings.Shared_Feed = 0
+           and then Shared_Count > 0
+         then
+            Settings.Shared_Feed := Settings.Expert_Feed * Shared_Count;
+         end if;
       end if;
 
       --  A sliding window, when the model names one. Read rather than
@@ -4919,12 +5007,20 @@ package body Model_Runner.Llama is
                      return;
                   end if;
 
-                  Resolve_Norm
-                    (Item, Source,
-                     Layer_Key (Index, "ffn_gate_inp_shexp.weight"),
-                     Width, Current.Shared_Router, Status);
-                  if E.Is_Error (Status) then
-                     return;
+                  --  The row that gates it, where there is one; a
+                  --  mixture without -- DeepSeek2's -- adds its shared
+                  --  experts as they are.
+                  if Containers.Find_Tensor
+                       (Source,
+                        Layer_Key (Index, "ffn_gate_inp_shexp.weight")) /= 0
+                  then
+                     Resolve_Norm
+                       (Item, Source,
+                        Layer_Key (Index, "ffn_gate_inp_shexp.weight"),
+                        Width, Current.Shared_Router, Status);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
                   end if;
                end if;
             end if;
@@ -10683,7 +10779,6 @@ package body Model_Runner.Llama is
       Result  : in out Real_Array;
       Status  : out E.Error_Info)
    is
-      Gate : N.Wide_Real := 0.0;
    begin
       Product_Group
         (Item, [Current.Shared_Gate, Current.Shared_Up], Input,
@@ -10702,14 +10797,9 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      for Index in Input.all'Range loop
-         Gate := Gate
-           + N.Wide_Real (Input.all (Index))
-             * N.Wide_Real (Current.Shared_Router.all (Index));
-      end loop;
-
       declare
-         Scale : constant Real := Sigmoid (Real (Gate));
+         Scale : constant Real :=
+           Shared_Weight (Current.Shared_Router, Input.all, Input.all'First);
       begin
          for Index in Result'Range loop
             Result (Index) :=
@@ -11429,20 +11519,10 @@ package body Model_Runner.Llama is
             --  The gates first, after the answer's room: one number a
             --  row, the sigmoid of the router row against the input.
             for Which in 0 .. Count - 1 loop
-               declare
-                  At_Row : constant Element_Count :=
-                    Rows.all'First + Which * Width;
-                  Gate : N.Wide_Real := 0.0;
-               begin
-                  for C in 0 .. Width - 1 loop
-                     Gate := Gate
-                       + N.Wide_Real (Rows.all (At_Row + C))
-                         * N.Wide_Real (Current.Shared_Router.all (C));
-                  end loop;
-
-                  Item.Shared_Rows_Out.all (Wide + Which) :=
-                    Sigmoid (Real (Gate));
-               end;
+               Item.Shared_Rows_Out.all (Wide + Which) :=
+                 Shared_Weight
+                   (Current.Shared_Router, Rows.all,
+                    Rows.all'First + Which * Width);
             end loop;
 
             --  Its answer, unless the pool will make it below among the
@@ -12488,16 +12568,9 @@ package body Model_Runner.Llama is
                     .. Item.Shared_Given.all'First + Width - 1);
                Item.Shared_Rows_Out.all (Wide) := 1.0;
             else
-               declare
-                  Gate : N.Wide_Real := 0.0;
-               begin
-                  for C in 0 .. Width - 1 loop
-                     Gate := Gate
-                       + N.Wide_Real (Rows.all (Rows.all'First + C))
-                         * N.Wide_Real (Current.Shared_Router.all (C));
-                  end loop;
-                  Item.Shared_Rows_Out.all (Wide) := Sigmoid (Real (Gate));
-               end;
+               Item.Shared_Rows_Out.all (Wide) :=
+                 Shared_Weight
+                   (Current.Shared_Router, Rows.all, Rows.all'First);
 
                Product_Batch
                  (Item, Current.Shared_Gate, Rows, 1, Item.Shared_Rows_A,
@@ -14797,6 +14870,24 @@ package body Model_Runner.Llama is
                Item.Conv_State.all := [others => 0.0];
                Item.Delta_State.all := [others => 0.0];
             end;
+         end if;
+
+         --  The shared expert's rows, for a mixture that has one and is not
+         --  the hybrid, which makes them with the rest of its own above:
+         --  DeepSeek2's two shared experts run on every mixture layer.
+         if Settings.Shared_Feed > 0 and then Item.Shared_Row = null then
+            T.Allocate
+              (Element_Count (Settings.Shared_Feed), Item.Shared_Row);
+            T.Allocate
+              (Element_Count (Settings.Shared_Feed), Item.Shared_Up_Row);
+            T.Allocate (Width, Item.Shared_Out_Row);
+            if Item.Shared_Row = null or else Item.Shared_Up_Row = null
+              or else Item.Shared_Out_Row = null
+            then
+               Close (Item);
+               Status := E.Make (E.Memory_Allocation_Failed);
+               return;
+            end if;
          end if;
 
          --  Mamba keeps a state a session as a hybrid's linear layers do:

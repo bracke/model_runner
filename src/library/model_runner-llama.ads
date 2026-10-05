@@ -481,6 +481,13 @@ package Model_Runner.Llama is
       Attention_Mul   : Model_Runner.Numerics.Real := 0.0;
       Logit_Mul       : Model_Runner.Numerics.Real := 0.0;
 
+      --  A factor on the attention scores past one over the square root of
+      --  the head width: DeepSeek2 under YaRN squares its mscale -- one
+      --  plus the file's yarn_log_multiplier times the log of the stretch --
+      --  into the scores and leaves the rotation's magnitude at one, as the
+      --  reference implementation does. One everywhere else.
+      Score_Gain      : Model_Runner.Numerics.Real := 1.0;
+
       --  Command-R multiplies its final logits by Logit_Scale, where Granite
       --  divides by Logit_Mul; a separate field so neither reads as the
       --  other. Zero is the identity.

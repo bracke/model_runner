@@ -3256,6 +3256,13 @@ package body Reference_Transformer is
       end if;
 
       Item.Heads := Metadata (Source, Prefix (Item) & "attention.head_count", 0);
+
+      --  A state-space model and RWKV6 state nought heads, having no
+      --  attention for the count to describe; one stands in for the
+      --  bookkeeping that divides by it.
+      if Item.Kind in Mamba | Mamba2 | Rwkv6 and then Item.Heads = 0 then
+         Item.Heads := 1;
+      end if;
       --  Jamba writes its key-value head count as a per-layer array -- nought
       --  where a layer keeps a Mamba state, the attention count where it
       --  attends -- so a scalar read finds nothing and falls back to the query
@@ -3408,6 +3415,14 @@ package body Reference_Transformer is
       Item.Shared_Feed :=
         Metadata
           (Source, Prefix (Item) & "expert_shared_feed_forward_length", 0);
+
+      --  DeepSeek2 states a count of shared experts and no width: the width
+      --  is that many experts' worth.
+      if Item.Kind = Deepseek2 and then Item.Shared_Feed = 0 then
+         Item.Shared_Feed :=
+           Item.Expert_Feed
+           * Metadata (Source, Prefix (Item) & "expert_shared_count", 0);
+      end if;
 
       declare
          Value  : Model_Runner.Numerics.Wide_Real;
@@ -3614,6 +3629,23 @@ package body Reference_Transformer is
                0.0, 1.0E3, Value, Status);
             if Model_Runner.Errors.Is_Ok (Status) then
                Item.Attenuation := Long_Float (Value);
+            end if;
+
+            Containers.Get_Float
+              (Source, Prefix (Item) & "rope.scaling.yarn_log_multiplier",
+               0.0, 1.0E3, Value, Status);
+            if Model_Runner.Errors.Is_Ok (Status)
+              and then Item.Kind = Deepseek2
+              and then Item.Frequency > 0.0
+              and then Item.Frequency < 1.0
+            then
+               declare
+                  M : constant Long_Float :=
+                    1.0 + Long_Float (Value)
+                          * Functions.Log (1.0 / Item.Frequency);
+               begin
+                  Item.Score_Gain := M * M;
+               end;
             end if;
 
             Containers.Get_Float
@@ -4474,12 +4506,16 @@ package body Reference_Transformer is
                   if not Present then
                      return;
                   end if;
-                  Current.Shared_Router :=
-                    Read_Vector
-                      (Layer_Name (Index, "ffn_gate_inp_shexp.weight"),
-                       Present);
-                  if not Present then
-                     return;
+                  --  The gating row, which DeepSeek2 does not have: its
+                  --  shared experts are added as they are.
+                  if Item.Kind /= Deepseek2 then
+                     Current.Shared_Router :=
+                       Read_Vector
+                         (Layer_Name (Index, "ffn_gate_inp_shexp.weight"),
+                          Present);
+                     if not Present then
+                        return;
+                     end if;
                   end if;
                end if;
             else
@@ -5122,10 +5158,14 @@ package body Reference_Transformer is
 
                   --  And it scales what comes out, because interpolating
                   --  angles brings the scores they produce together.
+                  --  DeepSeek2 keeps the file's attenuation as it is and
+                  --  puts its YaRN factor on the scores instead.
                   Size : constant Long_Float :=
                     (if Item.Stretch = Yarn and then not Unstretched
-                     then Item.Attenuation
-                          * (1.0 + 0.1 * Functions.Log (1.0 / Item.Frequency))
+                     then (if Item.Kind = Deepseek2 then Item.Attenuation
+                           else Item.Attenuation
+                                * (1.0 + 0.1 * Functions.Log
+                                                 (1.0 / Item.Frequency)))
                      else 1.0);
                   --  Llama pairs an element with its neighbour; Qwen2
                   --  pairs it with the one half a rotation later. Written
@@ -5135,13 +5175,13 @@ package body Reference_Transformer is
                   Even  : constant Natural :=
                     (if Item.Kind in Llama | Granite | Granite_MoE | Glm4 | Internlm2 | Chatglm
                         | Command_R
-                        | Baichuan
+                        | Baichuan | Deepseek2
                      then Head * Item.Head_Size + Offset + 2 * Pair
                      else Head * Item.Head_Size + Offset + Pair);
                   Odd   : constant Natural :=
                     (if Item.Kind in Llama | Granite | Granite_MoE | Glm4 | Internlm2 | Chatglm
                         | Command_R
-                        | Baichuan
+                        | Baichuan | Deepseek2
                      then Even + 1
                      else Even + Item.Rotary / 2);
                   Left  : constant Long_Float := Vector (Even);
@@ -5241,12 +5281,12 @@ package body Reference_Transformer is
                end loop;
 
                --  The highest few put back on a scale of one, except where
-               --  the model takes them as they are -- Jamba softmaxes over
-               --  every expert and keeps the few's shares without
-               --  renormalizing them over the few.
+               --  the model takes them as they are -- Jamba and DeepSeek-V2
+               --  softmax over every expert and keep the few's shares
+               --  without renormalizing them over the few.
                for Slot in Share'Range loop
                   Share (Slot) :=
-                    (if Item.Kind = Jamba then Share (Slot)
+                    (if Item.Kind in Jamba | Deepseek2 then Share (Slot)
                      else Share (Slot) / Total) * Item.Expert_Scale;
                end loop;
 
@@ -5369,11 +5409,15 @@ package body Reference_Transformer is
                         S_Gate (Index) := Gated (S_Gate (Index)) * S_Up (Index);
                      end loop;
                      Project (Current.Shared_Down.all, S_Gate, S_Out);
-                     for Index in Input'Range loop
-                        G_Sum := G_Sum
-                          + Input (Index) * Current.Shared_Router (Index);
-                     end loop;
-                     Scale := 1.0 / (1.0 + Functions.Exp (-G_Sum));
+                     if Current.Shared_Router = null then
+                        Scale := 1.0;
+                     else
+                        for Index in Input'Range loop
+                           G_Sum := G_Sum
+                             + Input (Index) * Current.Shared_Router (Index);
+                        end loop;
+                        Scale := 1.0 / (1.0 + Functions.Exp (-G_Sum));
+                     end if;
                      for Index in Sum'Range loop
                         Sum (Index) := Sum (Index) + Scale * S_Out (Index);
                      end loop;
@@ -6623,7 +6667,8 @@ package body Reference_Transformer is
                         elsif Item.Kind = Gemma3 and then Item.Layers = 62
                         then 1.0 / Functions.Sqrt
                                      (Long_Float (Item.Embedding / Item.Heads))
-                        else 1.0 / Functions.Sqrt (Long_Float (Item.Head_Size)));
+                        else Item.Score_Gain
+                             / Functions.Sqrt (Long_Float (Item.Head_Size)));
                   begin
                      for Head in 0 .. Item.Heads - 1 loop
                         declare
