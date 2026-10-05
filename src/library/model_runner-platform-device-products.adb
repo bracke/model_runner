@@ -159,6 +159,16 @@ package body Model_Runner.Platform.Device.Products is
    --  workgroups, which a format that is read rather than decoded wants.
    Q8_Wave_Rows   : constant := 2;
 
+   --  And for rows shorter than this, four rows a workgroup: a short row is
+   --  a few groups of 256, which leaves most of a workgroup's four groups in
+   --  flight with nothing to read, and a row more a workgroup gives them
+   --  work. Measured a token, two rows against four: gpt-2 (768 wide)
+   --  378.7 -> 384, qwen3.5-0.8b (1024) 72.8 -> 75.3, DeepSeek-V2-Lite's
+   --  experts' down (1408) 296 -> 276 us; TinyLlama (2048 and wider) 62.0
+   --  -> 60.1 the other way.
+   Q8_Short_Rows    : constant := 4;
+   Q8_Short_Columns : constant := 2048;
+
    --  And its compilations over several vectors, which load each vector's
    --  activations once for this many rows.
    Q8_Multi_Rows  : constant := 4;
@@ -996,12 +1006,27 @@ package body Model_Runner.Platform.Device.Products is
              else Wave_Lanes)
        else Row_Lanes);
 
+   --  Whether a token's Q8_0 product takes the four-row compilation: a
+   --  short row, where the device made it.
+   function Q8_Short
+     (Item    : Engine;
+      Packing : Weight_Packing;
+      Count   : Natural;
+      Columns : Natural) return Boolean
+   is (Packing = Packed_Q8_0
+       and then Count = 1
+       and then Columns in 1 .. Q8_Short_Columns - 1
+       and then Item.Q8_Short_Line /= Null_Handle);
+
    --  Rows a subgroup kernel's workgroup lands: the k-quants' band, or the
    --  low-bit formats' own.
    function Wave_Band
-     (Packing : Weight_Packing; Count : Natural := 1) return Positive
+     (Packing : Weight_Packing;
+      Count   : Natural := 1;
+      Short   : Boolean := False) return Positive
    is (if Packing = Packed_Q8_0 and then Count in Multi_Count
        then Q8_Multi_Rows
+       elsif Short then Q8_Short_Rows
        elsif Packing in Low_Packing then Low_Wave_Rows
        elsif Packing in Packed_IQ4_NL | Packed_IQ4_XS | Legacy_Packing
        then IQ4_Wave_Rows
@@ -1013,11 +1038,17 @@ package body Model_Runner.Platform.Device.Products is
    --  Rows the dispatch reckons in: the super-block kernel's workgroup lands
    --  a band of Wave_Band rows, so it asks for a band's worth fewer.
    function Row_Reach
-     (Item : Engine; Packing : Weight_Packing; Count : Natural; Rows : Natural)
-      return Natural
+     (Item    : Engine;
+      Packing : Weight_Packing;
+      Count   : Natural;
+      Rows    : Natural;
+      Columns : Natural := 0) return Natural
    is (if Waved (Item, Packing, Count)
-       then (Rows + Wave_Band (Packing, Count) - 1)
-            / Wave_Band (Packing, Count)
+       then (Rows
+             + Wave_Band (Packing, Count,
+                          Q8_Short (Item, Packing, Count, Columns)) - 1)
+            / Wave_Band (Packing, Count,
+                         Q8_Short (Item, Packing, Count, Columns))
        else Rows);
 
    function Row_Line
@@ -1029,6 +1060,8 @@ package body Model_Runner.Platform.Device.Products is
        then Item.Low_Wave_Lines (Packing)
        elsif Packing = Packed_Q8_0 and then Waved (Item, Packing, Count)
        then (if Count in Multi_Count then Item.Q8_Multi_Lines (Count)
+             elsif Q8_Short (Item, Packing, Count, Columns)
+             then Item.Q8_Short_Line
              else Item.Q8_Wave_Line)
        elsif Packing = Packed_IQ4_NL and then Waved (Item, Packing, Count)
        then Item.NL_Wave_Line
@@ -2626,6 +2659,22 @@ package body Model_Runner.Platform.Device.Products is
                   Item.Q8_Wave_Shader := Made;
                end if;
 
+               --  And its four-row compilation, for short rows.
+               declare
+                  Short : aliased constant Model_Runner.Shaders.Word_Array :=
+                    Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_Short;
+               begin
+                  Request.Size := Interfaces.C.size_t (Short'Length * 4);
+                  Request.Code := Short'Address;
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Q8_Short_Shader := Made;
+                  end if;
+                  Request.Size := Interfaces.C.size_t (Words'Length * 4);
+                  Request.Code := Words'Address;
+               end;
+
                --  And its compilations over several vectors.
                for Count in Multi_Count loop
                   declare
@@ -3692,6 +3741,11 @@ package body Model_Runner.Platform.Device.Products is
                if Item.Q8_Wave_Shader /= Null_Handle then
                   Request.Stage.Module := Item.Q8_Wave_Shader;
                   Line (Low_Wave_Lanes, 1, Item.Q8_Wave_Line);
+               end if;
+
+               if Item.Q8_Short_Shader /= Null_Handle then
+                  Request.Stage.Module := Item.Q8_Short_Shader;
+                  Line (Low_Wave_Lanes, 1, Item.Q8_Short_Line);
                end if;
 
                for Count in Multi_Count loop
@@ -4907,6 +4961,7 @@ package body Model_Runner.Platform.Device.Products is
          Give_Back (Item.Low_Wave_Lines (Packing), "vkDestroyPipeline");
       end loop;
       Give_Back (Item.Q8_Wave_Line, "vkDestroyPipeline");
+      Give_Back (Item.Q8_Short_Line, "vkDestroyPipeline");
       for Count in Multi_Count loop
          Give_Back (Item.Q8_Multi_Lines (Count), "vkDestroyPipeline");
       end loop;
@@ -5045,6 +5100,7 @@ package body Model_Runner.Platform.Device.Products is
          Give_Back (Item.Low_Wave_Shaders (Packing), "vkDestroyShaderModule");
       end loop;
       Give_Back (Item.Q8_Wave_Shader, "vkDestroyShaderModule");
+      Give_Back (Item.Q8_Short_Shader, "vkDestroyShaderModule");
       for Count in Multi_Count loop
          Give_Back (Item.Q8_Multi_Shaders (Count), "vkDestroyShaderModule");
       end loop;
@@ -7307,7 +7363,7 @@ package body Model_Runner.Platform.Device.Products is
                      Dispatch
                        (Item.Buffer,
                         C.unsigned
-                          ((Row_Reach (Item, Packing, Count, Rows)
+                          ((Row_Reach (Item, Packing, Count, Rows, Columns)
                               * Row_Lane_Count (Item, Packing, Count)
                             + Row_Width (Item, Packing, Count) - 1)
                            / Row_Width (Item, Packing, Count)), 1, 1);
@@ -14830,7 +14886,7 @@ package body Model_Runner.Platform.Device.Products is
                        (Item.Buffer,
                         C.unsigned
                           ((Row_Reach (Item, This.Packing, Count,
-                                       Natural (Shape.Rows))
+                                       Natural (Shape.Rows), This.Columns)
                               * Row_Lane_Count (Item, This.Packing, Count)
                             + Row_Width (Item, This.Packing, Count) - 1)
                            / Row_Width (Item, This.Packing, Count)),
@@ -14888,7 +14944,7 @@ package body Model_Runner.Platform.Device.Products is
                        (Item.Buffer,
                         C.unsigned
                           ((Row_Reach (Item, This.Packing, Count,
-                                       Natural (Shape.Rows))
+                                       Natural (Shape.Rows), This.Columns)
                               * Row_Lane_Count (Item, This.Packing, Count)
                             + Row_Width (Item, This.Packing, Count) - 1)
                            / Row_Width (Item, This.Packing, Count)),

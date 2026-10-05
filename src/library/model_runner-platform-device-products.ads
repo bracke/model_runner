@@ -3210,6 +3210,9 @@ private
 
       --  And Q8_0, on the same kernel compiled for it.
       Q8_Wave_Shader : System.Address := System.Null_Address;
+      --  And its four-row compilation, which short rows take.
+      Q8_Short_Shader : System.Address := System.Null_Address;
+      Q8_Short_Line   : System.Address := System.Null_Address;
       Q8_Wave_Line   : System.Address := System.Null_Address;
 
       --  And the same walk over two, three or four vectors at once, for a
