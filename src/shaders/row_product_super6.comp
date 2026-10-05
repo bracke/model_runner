@@ -71,6 +71,122 @@ float scale_at (uint at_byte) {
     return float (b >= 128u ? int (b) - 256 : int (b));
 }
 
+#ifdef MULTI
+//  A few positions at once, as row_product_super.comp's MULTI: a lane's
+//  weights decoded once and dotted with every position's activations.
+layout(constant_id = 1) const uint VEC = 2u;
+
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+    uint itid = tid & 15u;
+    uint ix = tid >> 4u;
+    uint v_im = itid >> 3u;
+    uint v_in = itid & 7u;
+    uint l0 = 4u * v_in;
+    uint is = v_in >> 2u;
+    uint ql_offset = 64u * v_im + l0;
+    uint qh_offset = 32u * v_im + l0;
+    uint s_offset  = 8u * v_im + is;
+    uint y_offset  = 128u * v_im + l0;
+
+    uint member = gl_WorkGroupID.z;
+    bool listed = shape.routed >= LISTED_BY_POSITION;
+    uint which = listed ? member
+               : shape.routed != 0u ? route[member] : shape.members[member];
+    uint slice = which * shape.stride;
+    uint experts = shape.members[0];
+    uint run_at = listed ? route[experts + member] : 0u;
+    uint run_count = listed ? route[member] : shape.count - shape.first;
+    uint list_at = 2u * experts;
+
+    if (run_count == 0u) {
+        return;
+    }
+
+    //  Where each position's vector begins, and whether it is one: past
+    //  the run or the batch it reads the last real one and is not stored.
+    uint from_k[VEC];
+    bool real_k[VEC];
+    for (uint k = 0u; k < VEC; ++k) {
+        uint kk = min(k, run_count - 1u);
+        real_k[k] = k < run_count;
+        from_k[k] = listed
+              ? (shape.routed == LISTED_BY_POSITION
+                   ? route[list_at + run_at + kk] : run_at + kk)
+                * shape.columns
+              : (shape.first + kk) * shape.columns + member * shape.apart;
+    }
+
+    uint first_row = NUM_ROWS * gl_WorkGroupID.x;
+    uint blocks = shape.columns / 256u;
+    uint span = blocks * 210u;
+
+    float temp[NUM_ROWS][VEC];
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        for (uint k = 0u; k < VEC; ++k) {
+            temp[r][k] = 0.0;
+        }
+    }
+
+    for (uint i = ix; i < blocks; i += 4u) {
+        vec4 by0[VEC], by32[VEC], by64[VEC], by96[VEC];
+        for (uint k = 0u; k < VEC; ++k) {
+            uint xb = (from_k[k] + i * 256u + y_offset) >> 2u;
+            by0[k]  = x4[xb];
+            by32[k] = x4[xb + 8u];
+            by64[k] = x4[xb + 16u];
+            by96[k] = x4[xb + 24u];
+        }
+
+        for (uint r = 0u; r < NUM_ROWS; ++r) {
+            uint row = min (first_row + r, shape.rows - 1u);
+            uint at = shape.base + slice + row * span + i * 210u;
+            uint qlb = at;
+            uint qhb = at + 128u;
+            uint sb  = at + 192u;
+            uint dp  = at + 208u;
+            float d = unpackHalf2x16 (w[dp >> 2u] >> ((dp & 2u) * 8u)).x;
+            uint ql0  = u16 (qlb, ql_offset / 2u)
+                      | (u16 (qlb, ql_offset / 2u + 1u) << 16u);
+            uint ql32 = u16 (qlb, ql_offset / 2u + 16u)
+                      | (u16 (qlb, ql_offset / 2u + 17u) << 16u);
+            uint qh   = u16 (qhb, qh_offset / 2u)
+                      | (u16 (qhb, qh_offset / 2u + 1u) << 16u);
+            uint q0u = (ql0 & 0x0F0F0F0Fu)         | ((qh & 0x03030303u) << 4u);
+            uint q1u = (ql32 & 0x0F0F0F0Fu)        | ((qh & 0x0C0C0C0Cu) << 2u);
+            uint q2u = ((ql0 >> 4u) & 0x0F0F0F0Fu) |  (qh & 0x30303030u);
+            uint q3u = ((ql32 >> 4u) & 0x0F0F0F0Fu)| ((qh & 0xC0C0C0C0u) >> 2u);
+            vec4 q0 = vec4 (unpack8 (q0u)) - 32.0;
+            vec4 q1 = vec4 (unpack8 (q1u)) - 32.0;
+            vec4 q2 = vec4 (unpack8 (q2u)) - 32.0;
+            vec4 q3 = vec4 (unpack8 (q3u)) - 32.0;
+            float sc0 = d * scale_at (sb + s_offset);
+            float sc1 = d * scale_at (sb + s_offset + 2u);
+            float sc2 = d * scale_at (sb + s_offset + 4u);
+            float sc3 = d * scale_at (sb + s_offset + 6u);
+
+            for (uint k = 0u; k < VEC; ++k) {
+                temp[r][k] += dot (by0[k],  q0) * sc0 + dot (by32[k], q1) * sc1
+                            + dot (by64[k], q2) * sc2 + dot (by96[k], q3) * sc3;
+            }
+        }
+    }
+
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        uint row = first_row + r;
+        for (uint k = 0u; k < VEC; ++k) {
+            float whole = subgroupAdd (temp[r][k]);
+            if (tid == 0u && row < shape.rows && real_k[k]) {
+                uint out_at = listed
+                              ? (run_at + k) * shape.rows + row
+                              : member * shape.rows * shape.count
+                                + (shape.first + k) * shape.rows + row;
+                y[out_at] = shape.joins != 0u ? whole + rj[out_at] : whole;
+            }
+        }
+    }
+}
+#else
 void main() {
     uint tid = gl_LocalInvocationID.x;
     uint itid = tid & 15u;
@@ -216,3 +332,4 @@ void main() {
         }
     }
 }
+#endif

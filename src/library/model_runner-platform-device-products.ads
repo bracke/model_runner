@@ -73,6 +73,12 @@ package Model_Runner.Platform.Device.Products is
 
    --  The vector counts the Q8_0 subgroup kernel takes several at a time.
    subtype Multi_Count is Positive range 2 .. 4;
+
+   --  How many positions a check round's K-quant products carry at once
+   --  through the subgroup kernels: a drafted round's target and its
+   --  proposals, up to a row group's worth.
+   subtype Many_Count is Positive range 2 .. Batch_Group;
+   type Many_Array is array (Many_Count) of System.Address;
    type Multi_Array is array (Multi_Count) of System.Address;
 
    --  Query positions one workgroup of the tiled attention kernel answers.
@@ -3194,6 +3200,14 @@ private
       --  And for Q6_K, six bits an element and a signed scale a sub-block.
       Wave_Shader6 : System.Address := System.Null_Address;
       Wave_Line6   : System.Address := System.Null_Address;
+
+      --  Q4_K's and Q6_K's compilations over a few positions at once, a
+      --  pipeline a count: a check round's products, each weight decoded
+      --  once for every position.
+      Many_Shader4 : System.Address := System.Null_Address;
+      Many_Shader6 : System.Address := System.Null_Address;
+      Many_Lines4  : Many_Array := [others => System.Null_Address];
+      Many_Lines6  : Many_Array := [others => System.Null_Address];
       Long_Shader6 : System.Address := System.Null_Address;
       Long_Line6   : System.Address := System.Null_Address;
       Mid_Shader6  : System.Address := System.Null_Address;
