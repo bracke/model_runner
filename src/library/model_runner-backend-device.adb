@@ -4400,6 +4400,274 @@ package body Model_Runner.Backend.Device is
       end if;
    end Whole_Layer;
 
+   ---------------
+   -- Runs_Rwkv --
+   ---------------
+
+   function Runs_Rwkv return Boolean
+   is (Ready_Now and then Products.Runs_Rwkv (Engine)
+       and then Products.Runs_Linear (Engine));
+
+   ----------------
+   -- Rwkv_Layer --
+   ----------------
+
+   procedure Rwkv_Layer
+     (Block    : Rwkv_Block;
+      Residual : Model_Runner.Tensors.Real_Array;
+      Count    : Model_Runner.Numerics.Element_Count;
+      Into     : in out Model_Runner.Tensors.Real_Array;
+      Ok       : out Boolean;
+      Cancel   : Model_Runner.Cancellation.Token_Reference := null)
+   is
+      use type Products.Rwkv_Mode;
+
+      Width : constant Natural := Block.Width;
+      Wide  : constant Model_Runner.Numerics.Element_Count :=
+        Model_Runner.Numerics.Element_Count (Width);
+
+      Steps     : Products.Sequence;
+      Added     : Boolean := True;
+      Wanted    : Model_Runner.Numerics.Element_Count := 0;
+      At_Out    : Model_Runner.Numerics.Element_Count := 0;
+      Cancelled : Boolean := False;
+
+      Pack_At   : System.Address := System.Null_Address;
+      Pack_Span : Model_Runner.Bytes.Byte_Count := 0;
+
+      --  Room in the landing for the step just added, which every step
+      --  has whether the host reads it or not.
+      procedure Room (Rows : Natural) is
+      begin
+         Wanted := Wanted + Model_Runner.Numerics.Element_Count (Rows) * Count;
+      end Room;
+
+      procedure Small
+        (Shape : Products.Rwkv_Shape; From : Natural; Kept : Boolean := False)
+      is
+      begin
+         if Added then
+            Products.Add_Rwkv
+              (Steps, Pack_At, Pack_Span, Shape, Added, From_Step => From,
+               Key => Pack_At, Kept => Kept);
+            if Added then
+               Room (case Shape.Mode is
+                        when Products.Shift => Shape.Streams * Shape.Width,
+                        when Products.Save => 1,
+                        when others => Shape.Width);
+            end if;
+         end if;
+      end Small;
+
+      procedure Norm (At_Element : Natural; From : Natural) is
+      begin
+         if Added then
+            Products.Add_Norm
+              (Steps, Pack_At, Pack_Span,
+               Model_Runner.Bytes.Byte_Count (At_Element) * 4, Width,
+               Block.Epsilon, Added, From_Step => From,
+               Key => Block.Pack.all (Block.Pack.all'First
+                                      + Model_Runner.Numerics.Element_Count
+                                          (At_Element))'Address,
+               Kept => False, Shift => True);
+            Room (Width);
+         end if;
+      end Norm;
+
+      procedure Table
+        (Tab : T.Real_Array_Access; Rows, Columns : Natural; From : Natural)
+      is
+      begin
+         if Added then
+            Products.Add_Chained_Product
+              (Steps, Tab.all (Tab.all'First)'Address,
+               Model_Runner.Bytes.Byte_Count (Tab.all'Length) * 4, 0,
+               Products.Values_F32, Rows, Columns, Added,
+               Key => Tab.all (Tab.all'First)'Address, Kept => False,
+               From_Step => From);
+            Room (Rows);
+         end if;
+      end Table;
+
+      procedure Project (Weight : T.View; From : Natural) is
+         Packing : Products.Weight_Packing;
+         Known   : Boolean;
+      begin
+         if Added then
+            Packing_Of (Weight.Format, Packing, Known);
+            if not Known or else Weight.Base = System.Null_Address then
+               Added := False;
+               return;
+            end if;
+            Products.Add_Chained_Product
+              (Steps, Weight.Base, Weight.Span, Weight.Offset, Packing,
+               Natural (Weight.Rows), Natural (Weight.Columns), Added,
+               Key => At_Offset (Weight.Base, Weight.Offset), Kept => False,
+               From_Step => From);
+            Room (Natural (Weight.Rows));
+         end if;
+      end Project;
+
+      procedure Pick (Which, Among : Natural; From : Natural) is
+      begin
+         if Added then
+            Products.Add_Pick
+              (Steps, Width, Width, Which, Among, Added, From_Step => From,
+               Kept => False);
+            Room (Width);
+         end if;
+      end Pick;
+
+      function Last return Natural is (Products.Length (Steps));
+
+      S_N1, S_Xs, S_Low, S_Five, S_Xw, S_Xk, S_Xv, S_Xr, S_Xg : Natural := 0;
+      S_R, S_K, S_V, S_G, S_Dec_Low, S_W, S_Y, S_Inp, S_N2 : Natural := 0;
+      S_Two, S_Ck, S_Cv, S_Cr : Natural := 0;
+   begin
+      Ok := False;
+
+      if not Runs_Rwkv
+        or else Block.Pack = null or else Block.Mix_Down = null
+        or else Block.Decay_Down = null
+        or else Width = 0 or else Count = 0
+        or else Residual'Length < Count * Wide
+        or else Into'Length < Count * Wide
+      then
+         return;
+      end if;
+
+      Pack_At := Block.Pack.all (Block.Pack.all'First)'Address;
+      Pack_Span := Model_Runner.Bytes.Byte_Count (Block.Pack.all'Length) * 4;
+
+      Products.Open_Sequence (Steps);
+
+      --  The time mix: ln1, the plain shift, the five ranks through a
+      --  tanh, the five streams, apart.
+      Norm (Block.First_Norm, 0);
+      S_N1 := Last;
+      Small ((Mode => Products.Shift, Width => Width, Streams => 1,
+              Lerp_At => Block.Plain_Mix, State_At => Block.Shift_At,
+              others => <>), S_N1);
+      S_Xs := Last;
+      Table (Block.Mix_Down, 5 * Block.Mix_Rank, Width, S_Xs);
+      Small ((Mode => Products.Tanh, Width => 5 * Block.Mix_Rank,
+              others => <>), Last);
+      S_Low := Last;
+      Small ((Mode => Products.Shift, Width => Width, Streams => 5,
+              Low => Block.Mix_Rank, Low_Step => S_Low,
+              Lerp_At => Block.Stream_Mix, Map_At => Block.Stream_Map,
+              State_At => Block.Shift_At, others => <>), S_N1);
+      S_Five := Last;
+      Pick (0, 5, S_Five);
+      S_Xw := Last;
+      Pick (1, 5, S_Five);
+      S_Xk := Last;
+      Pick (2, 5, S_Five);
+      S_Xv := Last;
+      Pick (3, 5, S_Five);
+      S_Xr := Last;
+      Pick (4, 5, S_Five);
+      S_Xg := Last;
+
+      --  Receptance, key, value and gate; the decay.
+      Project (Block.Receptance, S_Xr);
+      S_R := Last;
+      Project (Block.Key, S_Xk);
+      S_K := Last;
+      Project (Block.Value, S_Xv);
+      S_V := Last;
+      Project (Block.Gate, S_Xg);
+      S_G := Last;
+      Table (Block.Decay_Down, Block.Decay_Rank, Width, S_Xw);
+      Small ((Mode => Products.Tanh, Width => Block.Decay_Rank,
+              others => <>), Last);
+      S_Dec_Low := Last;
+      Small ((Mode => Products.Decay, Width => Width, Low => Block.Decay_Rank,
+              Low_Step => S_Dec_Low, Map_At => Block.Decay_Map,
+              Bias_At => Block.Decay_Bias, others => <>), S_Dec_Low);
+      S_W := Last;
+
+      --  The linear attention, its normalization and gate; the way out
+      --  and the first residual.
+      if Added then
+         Products.Add_Wkv
+           (Steps, Pack_At, Pack_Span,
+            (Heads => Block.Heads, Head => Block.Head,
+             K_Step => S_K, V_Step => S_V, W_Step => S_W, G_Step => S_G,
+             U_At => Block.Bonus, Gain_At => Block.Out_Norm,
+             Shift_At => Block.Out_Norm + Width,
+             State_At => Block.State_At, Floor => Block.Floor),
+            Added, From_Step => S_R, Key => Pack_At, Kept => False);
+         Room (Width);
+      end if;
+      S_Y := Last;
+      Project (Block.Output, S_Y);
+      if Added then
+         Products.Add_Join (Steps, Added, From_Step => Last, From_Vector => 0,
+                            Kept => False);
+         Room (Width);
+      end if;
+      S_Inp := Last;
+
+      --  The channel mix: ln2, its two streams, the squared ReLU arm, the
+      --  logistic gate, the second residual and the rescale.
+      Norm (Block.Second_Norm, S_Inp);
+      S_N2 := Last;
+      Small ((Mode => Products.Shift, Width => Width, Streams => 2,
+              Lerp_At => Block.Channel_Mix, State_At => Block.Shift_At + Width,
+              others => <>), S_N2);
+      S_Two := Last;
+      Pick (0, 2, S_Two);
+      Project (Block.Channel_Key, Last);
+      Small ((Mode => Products.Squared_Relu, Width => Block.Feed,
+              others => <>), Last);
+      S_Ck := Last;
+      Project (Block.Channel_Value, S_Ck);
+      S_Cv := Last;
+      Pick (1, 2, S_Two);
+      Project (Block.Channel_Receptance, Last);
+      S_Cr := Last;
+      At_Out := Wanted;
+      Small ((Mode => Products.Finish, Width => Width, B_Step => S_Cr,
+              C_Step => S_Cv, Scale => Block.Scale, others => <>),
+             S_Inp, Kept => True);
+
+      --  And the last position's two normalized rows, for the next batch.
+      Small ((Mode => Products.Save, Width => Width, B_Step => S_N2,
+              State_At => Block.Shift_At, State_Two => Block.Shift_At + Width,
+              others => <>), S_N1);
+
+      if not Added then
+         return;
+      end if;
+
+      if Landing = null or else Landing.all'Length < Wanted then
+         T.Free (Landing);
+         T.Allocate (Wanted, Landing);
+         if Landing = null then
+            return;
+         end if;
+      end if;
+
+      Products.Run
+        (Engine, Steps,
+         Residual (Residual'First .. Residual'First + Count * Wide - 1),
+         Positive (Count),
+         Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
+         Ok, Cancelled, Cancel);
+
+      if not Ok or else Cancelled then
+         Ok := False;
+         return;
+      end if;
+
+      Note_Timeline (Steps, Positive (Count));
+
+      Into (Into'First .. Into'First + Count * Wide - 1) :=
+        Landing.all (Landing.all'First + At_Out
+                     .. Landing.all'First + At_Out + Count * Wide - 1);
+   end Rwkv_Layer;
+
    --------------------
    -- Dispatch_Gated --
    --------------------

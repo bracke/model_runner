@@ -1,0 +1,125 @@
+#version 450
+
+//  RWKV6's linear attention over a batch, a head a workgroup.
+//
+//  A head keeps a state its width by its width, key-major as the host
+//  keeps it -- row i the state of key element i against every value
+//  element -- and the positions go in order: each answer reads the state
+//  before the position's update, its own key-value lifted by the bonus,
+//  and the update decays the state a key element and adds the key-value.
+//  A lane is a value element and holds its column of the state in
+//  registers for the run; the receptance, key, decay and bonus of a
+//  position are shared across the lanes.
+//
+//  The answer is then normalized a head -- centred, the floor the push
+//  block says -- scaled by the gain and shift in the pack, and weighted by
+//  the gate through the logistic-weighted unit: the time mix's way out,
+//  before its projection.
+//
+//  The receptance is the step read; the key, value, decay and gate are
+//  other steps', read through the whole result buffer at the places the
+//  push block says.
+
+const uint HEAD = 64u;
+
+layout(local_size_x = HEAD) in;
+
+layout(std430, binding = 0) readonly  buffer Weight { float w[]; };
+layout(std430, binding = 1) readonly  buffer Source { float x[]; };
+layout(std430, binding = 2) writeonly buffer Target { float y[]; };
+layout(std430, binding = 3) readonly  buffer Result { float r[]; };
+layout(std430, binding = 4) buffer State { float s[]; };
+
+layout(push_constant) uniform Shape {
+    uint heads;
+    uint head;
+    uint count;
+    uint unused_a;
+    uint unused_b;
+    uint base;
+    uint unused_c;
+    uint unused_d;
+
+    uint k_at;
+    uint v_at;
+    uint w_at;
+    uint g_at;
+    uint u_at;
+    uint gain_at;
+    uint shift_at;
+    uint state_at;
+    uint floor_bits;
+} shape;
+
+shared float rs[HEAD];
+shared float ks[HEAD];
+shared float ws[HEAD];
+shared float us[HEAD];
+shared float sums[HEAD];
+
+void main() {
+    uint h = gl_WorkGroupID.x;
+    uint j = gl_LocalInvocationID.x;
+    uint width = shape.heads * HEAD;
+    uint at_head = h * HEAD;
+    uint cells = shape.state_at + h * HEAD * HEAD;
+
+    float st[HEAD];
+    for (uint i = 0u; i < HEAD; ++i) {
+        st[i] = s[cells + i * HEAD + j];
+    }
+
+    us[j] = w[shape.base + shape.u_at + at_head + j];
+    float gain = w[shape.base + shape.gain_at + at_head + j];
+    float shift = w[shape.base + shape.shift_at + at_head + j];
+    float floor_v = uintBitsToFloat(shape.floor_bits);
+
+    for (uint p = 0u; p < shape.count; ++p) {
+        uint row = p * width + at_head;
+
+        barrier();
+        rs[j] = x[row + j];
+        ks[j] = r[shape.k_at + row + j];
+        ws[j] = r[shape.w_at + row + j];
+        barrier();
+
+        float v = r[shape.v_at + row + j];
+        float acc = 0.0;
+        for (uint i = 0u; i < HEAD; ++i) {
+            float kv = ks[i] * v;
+            acc += rs[i] * (us[i] * kv + st[i]);
+            st[i] = ws[i] * st[i] + kv;
+        }
+
+        //  The head's mean, then its variance about it.
+        sums[j] = acc;
+        barrier();
+        for (uint step = HEAD / 2u; step > 0u; step >>= 1u) {
+            if (j < step) {
+                sums[j] += sums[j + step];
+            }
+            barrier();
+        }
+        float mean = sums[0] / float(HEAD);
+        barrier();
+
+        float d = acc - mean;
+        sums[j] = d * d;
+        barrier();
+        for (uint step = HEAD / 2u; step > 0u; step >>= 1u) {
+            if (j < step) {
+                sums[j] += sums[j + step];
+            }
+            barrier();
+        }
+        float inv = inversesqrt(sums[0] / float(HEAD) + floor_v);
+
+        float g = r[shape.g_at + row + j];
+        float unit = g / (1.0 + exp(-g));
+        y[row + j] = (d * inv * gain + shift) * unit;
+    }
+
+    for (uint i = 0u; i < HEAD; ++i) {
+        s[cells + i * HEAD + j] = st[i];
+    }
+}

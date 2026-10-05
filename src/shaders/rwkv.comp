@@ -1,0 +1,159 @@
+#version 450
+
+//  The small elementwise parts of an RWKV6 block, one kernel told apart by
+//  a mode, so that the block is one submission rather than a round trip a
+//  projection.
+//
+//  A block shifts each position against the one before it -- the first of
+//  a batch against the row the batch before it left in the state buffer --
+//  and mixes the two by a fixed amount a channel and, in the time mix, a
+//  data-dependent one: a low-rank map of a tanh. Its decay is the double
+//  exponential of another low-rank map. Its channel mix squares a ReLU and
+//  gates by a logistic. The products between are the engine's own; these
+//  are the steps around them:
+//
+//    0  shift: Streams rows of Width a position, stream s of channel c the
+//       position moved toward the one before by the stream's mix -- a
+//       weight, and with a low rank the stream's map of its stretch of the
+//       low-rank step's row. The step read is the rows shifted.
+//    1  decay: exp (-exp (bias + map . low)) a channel.
+//    2  tanh of the step read, elementwise.
+//    3  the square of its ReLU, elementwise.
+//    4  finish: (read + logistic (B) * C) * scale, the channel mix's gate,
+//       its residual and the rescale.
+//    5  save: the last position's rows of the step read and of B into the
+//       state buffer, where the next batch's first position reads them.
+//
+//  The weight is the layer's pack of small tables; offsets into it, into
+//  the result buffer for the other steps read, and into the state buffer
+//  come in the push block, in elements.
+
+const uint LANES = 256u;
+
+//  Positions a workgroup takes in the two that read a map, each lane
+//  holding its row of the map for all of them.
+const uint POS = 16u;
+
+//  The widest low rank a lane holds.
+const uint MOST_LOW = 64u;
+
+layout(local_size_x = LANES) in;
+
+layout(std430, binding = 0) readonly  buffer Weight { float w[]; };
+layout(std430, binding = 1) readonly  buffer Source { float x[]; };
+layout(std430, binding = 2) writeonly buffer Target { float y[]; };
+layout(std430, binding = 3) readonly  buffer Result { float r[]; };
+layout(std430, binding = 4) buffer State { float s[]; };
+
+layout(push_constant) uniform Shape {
+    uint mode;
+    uint width;
+    uint count;
+    uint streams;
+    uint low;
+    uint base;
+    uint unused_a;
+    uint unused_b;
+
+    //  The low-rank step's place in the result buffer.
+    uint low_at;
+    //  The mix's offset in the pack, the map's and the bias's.
+    uint lerp_at;
+    uint map_at;
+    uint bias_at;
+    //  Two other steps' places: B and C.
+    uint b_at;
+    uint c_at;
+    //  The state slot read or written, and the second one save writes.
+    uint state_at;
+    uint scale_bits;
+    uint state_two;
+} shape;
+
+float safe_tanh(float v) {
+    return tanh(clamp(v, -15.0, 15.0));
+}
+
+void main() {
+    uint lane = gl_LocalInvocationID.x;
+    uint mode = shape.mode;
+    uint width = shape.width;
+
+    if (mode == 0u) {
+        uint j = gl_WorkGroupID.x * LANES + lane;
+        uint wide = shape.streams * width;
+        if (j >= wide) {
+            return;
+        }
+        uint st = j / width;
+        uint c = j - st * width;
+        uint low = min(shape.low, MOST_LOW);
+
+        float map_row[MOST_LOW];
+        for (uint k = 0u; k < low; ++k) {
+            map_row[k] = w[shape.base + shape.map_at + j * low + k];
+        }
+        float mix = w[shape.base + shape.lerp_at + j];
+
+        uint first = gl_WorkGroupID.y * POS;
+        uint last = min(first + POS, shape.count);
+        for (uint p = first; p < last; ++p) {
+            float here = x[p * width + c];
+            float before =
+                p == 0u ? s[shape.state_at + c] : x[(p - 1u) * width + c];
+            float d = 0.0;
+            uint at = shape.low_at + p * shape.streams * low + st * low;
+            for (uint k = 0u; k < low; ++k) {
+                d += map_row[k] * r[at + k];
+            }
+            y[p * wide + j] = here + (before - here) * (mix + d);
+        }
+    } else if (mode == 1u) {
+        uint j = gl_WorkGroupID.x * LANES + lane;
+        if (j >= width) {
+            return;
+        }
+        uint low = min(shape.low, MOST_LOW);
+
+        float map_row[MOST_LOW];
+        for (uint k = 0u; k < low; ++k) {
+            map_row[k] = w[shape.base + shape.map_at + j * low + k];
+        }
+        float bias = w[shape.base + shape.bias_at + j];
+
+        uint first = gl_WorkGroupID.y * POS;
+        uint last = min(first + POS, shape.count);
+        for (uint p = first; p < last; ++p) {
+            float d = 0.0;
+            uint at = shape.low_at + p * low;
+            for (uint k = 0u; k < low; ++k) {
+                d += map_row[k] * r[at + k];
+            }
+            y[p * width + j] = exp(-exp(bias + d));
+        }
+    } else if (mode == 2u || mode == 3u || mode == 4u) {
+        uint i = gl_WorkGroupID.x * LANES + lane
+                 + gl_WorkGroupID.y * gl_NumWorkGroups.x * LANES;
+        if (i >= shape.count * width) {
+            return;
+        }
+        float v = x[i];
+        if (mode == 2u) {
+            y[i] = safe_tanh(v);
+        } else if (mode == 3u) {
+            float t = max(v, 0.0);
+            y[i] = t * t;
+        } else {
+            float gate = 1.0 / (1.0 + exp(-r[shape.b_at + i]));
+            y[i] = (v + gate * r[shape.c_at + i]) * uintBitsToFloat(shape.scale_bits);
+        }
+    } else {
+        uint c = gl_WorkGroupID.x * LANES + lane;
+        if (c >= width) {
+            return;
+        }
+        uint at = (shape.count - 1u) * width + c;
+        s[shape.state_at + c] = x[at];
+        s[shape.state_two + c] = r[shape.b_at + at];
+    }
+}

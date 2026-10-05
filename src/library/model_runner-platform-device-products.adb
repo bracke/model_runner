@@ -2784,6 +2784,31 @@ package body Model_Runner.Platform.Device.Products is
                end if;
             end;
 
+            declare
+               Small : aliased constant Model_Runner.Shaders.Word_Array :=
+                 Model_Runner.Shaders.Rwkv;
+               Wkv   : aliased constant Model_Runner.Shaders.Word_Array :=
+                 Model_Runner.Shaders.Rwkv_Wkv;
+            begin
+               Request.Size := Interfaces.C.size_t (Small'Length * 4);
+               Request.Code := Small'Address;
+
+               if Create (Item.Logical, Request'Address, Null_Handle,
+                          Made'Access) = 0
+               then
+                  Item.Rwkver := Made;
+               end if;
+
+               Request.Size := Interfaces.C.size_t (Wkv'Length * 4);
+               Request.Code := Wkv'Address;
+
+               if Create (Item.Logical, Request'Address, Null_Handle,
+                          Made'Access) = 0
+               then
+                  Item.Wkver := Made;
+               end if;
+            end;
+
             Request.Size := Interfaces.C.size_t (Conved'Length * 4);
             Request.Code := Conved'Address;
 
@@ -3786,6 +3811,26 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Assemble_Line := Made;
+            end if;
+         end if;
+
+         if Item.Rwkver /= Null_Handle then
+            Request.Stage.Module := Item.Rwkver;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Rwkv_Line := Made;
+            end if;
+         end if;
+
+         if Item.Wkver /= Null_Handle then
+            Request.Stage.Module := Item.Wkver;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Wkv_Line := Made;
             end if;
          end if;
 
@@ -4864,6 +4909,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Bias_Line, "vkDestroyPipeline");
       Give_Back (Item.Pick_Line, "vkDestroyPipeline");
       Give_Back (Item.Assemble_Line, "vkDestroyPipeline");
+      Give_Back (Item.Rwkv_Line, "vkDestroyPipeline");
+      Give_Back (Item.Wkv_Line, "vkDestroyPipeline");
       Give_Back (Item.Conv_Line, "vkDestroyPipeline");
       Give_Back (Item.Rule_Line, "vkDestroyPipeline");
       Give_Back (Item.Held_Rule_Line, "vkDestroyPipeline");
@@ -4877,6 +4924,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Biaser, "vkDestroyShaderModule");
       Give_Back (Item.Picker, "vkDestroyShaderModule");
       Give_Back (Item.Assembler, "vkDestroyShaderModule");
+      Give_Back (Item.Rwkver, "vkDestroyShaderModule");
+      Give_Back (Item.Wkver, "vkDestroyShaderModule");
       Give_Back (Item.Conver, "vkDestroyShaderModule");
       Give_Back (Item.Ruler, "vkDestroyShaderModule");
       Give_Back (Item.Held_Ruler, "vkDestroyShaderModule");
@@ -9087,6 +9136,9 @@ package body Model_Runner.Platform.Device.Products is
    function Runs_Linear (Item : Engine) return Boolean
    is (Item.Conv_Line /= Null_Handle and then Item.Rule_Line /= Null_Handle);
 
+   function Runs_Rwkv (Item : Engine) return Boolean
+   is (Item.Rwkv_Line /= Null_Handle and then Item.Wkv_Line /= Null_Handle);
+
    function Last_Refusal (Item : Engine) return Refusal
    is (Item.Refused);
 
@@ -9618,6 +9670,10 @@ package body Model_Runner.Platform.Device.Products is
             return "assemble";
          elsif This.Picks then
             return "pick";
+         elsif This.Rwkvs then
+            return "rwkv " & Rwkv_Mode'Image (This.Rwkv.Mode);
+         elsif This.Wkvs then
+            return "wkv";
          elsif This.Convolves then
             return "conv";
          elsif This.Rules then
@@ -10286,6 +10342,144 @@ package body Model_Runner.Platform.Device.Products is
       Added := True;
    end Add_Rule;
 
+   --------------
+   -- Add_Rwkv --
+   --------------
+
+   procedure Add_Rwkv
+     (Steps     : in out Sequence;
+      Base      : System.Address;
+      Span      : Model_Runner.Bytes.Byte_Count;
+      Shape     : Rwkv_Shape;
+      Added     : out Boolean;
+      From_Step : Natural := 0;
+      Key       : System.Address := System.Null_Address;
+      Kept      : Boolean := True)
+   is
+      Source : constant Natural :=
+        (if From_Step = 0 then Steps.Held else From_Step);
+
+      --  Whether a step named holds Wide a position.
+      function Holds (Which : Natural; Wide : Natural) return Boolean
+      is (Which in 1 .. Steps.Held and then Steps.Items (Which).Rows = Wide);
+
+      Read : Natural := 0;
+      Rows : Natural := 0;
+   begin
+      Added := False;
+
+      if Steps.Held = Sequence_Limit
+        or else Base = System.Null_Address
+        or else Shape.Width = 0
+        or else Shape.Low > 64
+        or else Source not in 1 .. Steps.Held
+      then
+         return;
+      end if;
+
+      Read := Steps.Items (Source).Rows;
+
+      case Shape.Mode is
+         when Shift =>
+            if Shape.Streams = 0
+              or else Read /= Shape.Width
+              or else (Shape.Low > 0
+                       and then not Holds (Shape.Low_Step,
+                                           Shape.Streams * Shape.Low))
+            then
+               return;
+            end if;
+            Rows := Shape.Streams * Shape.Width;
+         when Decay =>
+            if Shape.Low = 0
+              or else not Holds (Shape.Low_Step, Shape.Low)
+            then
+               return;
+            end if;
+            Rows := Shape.Width;
+         when Tanh | Squared_Relu =>
+            if Read /= Shape.Width then
+               return;
+            end if;
+            Rows := Shape.Width;
+         when Finish =>
+            if Read /= Shape.Width
+              or else not Holds (Shape.B_Step, Shape.Width)
+              or else not Holds (Shape.C_Step, Shape.Width)
+            then
+               return;
+            end if;
+            Rows := Shape.Width;
+         when Save =>
+            if Read /= Shape.Width
+              or else not Holds (Shape.B_Step, Shape.Width)
+            then
+               return;
+            end if;
+            Rows := 1;
+      end case;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Base => Base, Span => Span, At_Byte => 0,
+         Packing => Weight_Packing'First,
+         Rows => Rows, Columns => Read,
+         Key => Key, Chained => True, Reads => Source, Kept => Kept,
+         Rwkvs => True, Rwkv => Shape,
+         Attends => False, Blends => False,
+         others => <>);
+      Added := True;
+   end Add_Rwkv;
+
+   -------------
+   -- Add_Wkv --
+   -------------
+
+   procedure Add_Wkv
+     (Steps     : in out Sequence;
+      Base      : System.Address;
+      Span      : Model_Runner.Bytes.Byte_Count;
+      Shape     : Wkv_Shape;
+      Added     : out Boolean;
+      From_Step : Natural := 0;
+      Key       : System.Address := System.Null_Address;
+      Kept      : Boolean := True)
+   is
+      Source : constant Natural :=
+        (if From_Step = 0 then Steps.Held else From_Step);
+
+      Wide : constant Natural := Shape.Heads * Shape.Head;
+
+      function Holds (Which : Natural) return Boolean
+      is (Which in 1 .. Steps.Held and then Steps.Items (Which).Rows = Wide);
+   begin
+      Added := False;
+
+      if Steps.Held = Sequence_Limit
+        or else Base = System.Null_Address
+        or else Shape.Heads = 0
+        or else Shape.Head /= Wkv_Head
+        or else not Holds (Source)
+        or else not Holds (Shape.K_Step)
+        or else not Holds (Shape.V_Step)
+        or else not Holds (Shape.W_Step)
+        or else not Holds (Shape.G_Step)
+      then
+         return;
+      end if;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Base => Base, Span => Span, At_Byte => 0,
+         Packing => Weight_Packing'First,
+         Rows => Wide, Columns => Wide,
+         Key => Key, Chained => True, Reads => Source, Kept => Kept,
+         Wkvs => True, Wkv => Shape,
+         Attends => False, Blends => False,
+         others => <>);
+      Added := True;
+   end Add_Wkv;
+
    ---------------------
    -- Add_Combination --
    ---------------------
@@ -10795,6 +10989,7 @@ package body Model_Runner.Platform.Device.Products is
                     or else This.Inverts or else This.Picks
                     or else This.Norms or else This.Biases
                     or else This.Convolves or else This.Rules
+                    or else This.Rwkvs or else This.Wkvs
                     or else This.Routes or else This.Readies)
               and then This.Base /= System.Null_Address
               and then This.Columns mod (2 * Wide_Step) /= 0
@@ -10939,6 +11134,8 @@ package body Model_Runner.Platform.Device.Products is
                or else Steps.Items (Which).Picks
                or else Steps.Items (Which).Convolves
                or else Steps.Items (Which).Rules
+               or else Steps.Items (Which).Rwkvs
+               or else Steps.Items (Which).Wkvs
                or else Steps.Items (Which).Inverts
                or else Steps.Items (Which).Blends));
 
@@ -11380,6 +11577,33 @@ package body Model_Runner.Platform.Device.Products is
                end if;
 
                Places (Index).Weight := 0;
+            elsif This.Rwkvs or else This.Wkvs then
+               --  An RWKV step carries the layer's pack, whole, as a
+               --  norm's weight is kept, and reads the state buffer.
+               if This.Rows = 0
+                 or else This.Base = System.Null_Address
+                 or else This.Span < 4
+                 or else This.Reads not in 1 .. Index - 1
+                 or else Item.State_At = Null_Handle
+                 or else (if This.Rwkvs then Item.Rwkv_Line = Null_Handle
+                          else Item.Wkv_Line = Null_Handle)
+                 or else (This.Rwkvs
+                          and then (This.Rwkv.Low_Step > Index - 1
+                                    or else This.Rwkv.B_Step > Index - 1
+                                    or else This.Rwkv.C_Step > Index - 1))
+                 or else (This.Wkvs
+                          and then (This.Wkv.K_Step not in 1 .. Index - 1
+                                    or else This.Wkv.V_Step
+                                            not in 1 .. Index - 1
+                                    or else This.Wkv.W_Step
+                                            not in 1 .. Index - 1
+                                    or else This.Wkv.G_Step
+                                            not in 1 .. Index - 1))
+               then
+                  return;
+               end if;
+
+               Places (Index).Weight := Interfaces.Unsigned_64 (This.Span);
             elsif This.Convolves or else This.Rules then
                --  A convolving step carries the taps and a rule step the
                --  three rows of the rule's numbers, each as a norm's
@@ -11622,11 +11846,14 @@ package body Model_Runner.Platform.Device.Products is
                (if This.Norms or else This.Rotates or else This.Routes
                   or else This.Readies or else This.Biases
                   or else This.Convolves or else This.Rules
+                  or else This.Rwkvs or else This.Wkvs
                 then 1
                 elsif This.Gathers > 0 then This.Stack
                 else This.Rows),
                (if This.Norms then This.Rows / This.Groups
                 elsif This.Biases then This.Stack * This.Each
+                elsif This.Rwkvs or else This.Wkvs
+                then Natural (This.Span / 4)
                 elsif This.Convolves then This.Linear.Taps * This.Linear.Mix
                 elsif This.Rules
                 then 2 * This.Linear.Value_Heads + This.Linear.Head
@@ -12074,6 +12301,7 @@ package body Model_Runner.Platform.Device.Products is
             end if;
 
             if Steps.Items (Index).Convolves or else Steps.Items (Index).Rules
+              or else Steps.Items (Index).Rwkvs or else Steps.Items (Index).Wkvs
             then
                --  The weight, the rows it reads, its own room out, the
                --  whole of the result buffer for the rule's other rows,
@@ -12760,9 +12988,28 @@ package body Model_Runner.Platform.Device.Products is
                                           This.Linear.Beta_Step))
                      else 0);
 
+                  --  An RWKV step reads the steps its shape names; a save
+                  --  overwrites what the shifts before it read, so it
+                  --  waits for everything before it.
+                  Small : constant Natural :=
+                    (if This.Rwkvs and then This.Rwkv.Mode = Save
+                     then Index - 1
+                     elsif This.Rwkvs
+                     then Natural'Max
+                            (This.Rwkv.Low_Step,
+                             Natural'Max (This.Rwkv.B_Step,
+                                          This.Rwkv.C_Step))
+                     elsif This.Wkvs
+                     then Natural'Max
+                            (Natural'Max (This.Wkv.K_Step, This.Wkv.V_Step),
+                             Natural'Max (This.Wkv.W_Step, This.Wkv.G_Step))
+                     else 0);
+
                   Source : constant Natural :=
                     Natural'Max
-                      (Natural'Max (Joined, Natural'Max (This.Routed, Ruled)),
+                      (Natural'Max
+                         (Natural'Max (Joined, Small),
+                          Natural'Max (This.Routed, Ruled)),
                        Natural'Max
                          (Natural'Max
                             (This.Reads,
@@ -12792,6 +13039,7 @@ package body Model_Runner.Platform.Device.Products is
                        or else This.Mixes or else This.Biases
                        or else This.Inverts or else This.Picks
                        or else This.Convolves or else This.Rules
+                       or else This.Rwkvs or else This.Wkvs
                      then False
                      else Tiled (Index)
                           and then (Was_From /= Source
@@ -13463,6 +13711,109 @@ package body Model_Runner.Platform.Device.Products is
                            Product_Bytes, Shape'Address);
                      Dispatch
                        (Item.Buffer, C.unsigned ((Whole + 255) / 256), 1, 1);
+                  end;
+
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute,
+                     Row_Line (Item, Count));
+                  goto Next_Dispatch;
+               end if;
+
+               if This.Rwkvs or else This.Wkvs then
+                  declare
+                     function Bits is new Ada.Unchecked_Conversion
+                       (Model_Runner.Numerics.Real, C.unsigned);
+
+                     function At_Of (Which : Natural) return C.unsigned
+                     is (if Which = 0 then 0
+                         else C.unsigned (Places (Which).At_Byte / 4));
+
+                     function Groups (Of_Many, Each : Natural) return Natural
+                     is ((Of_Many + Each - 1) / Each);
+
+                     Shape : aliased Shape_Constants;
+                  begin
+                     if This.Wkvs then
+                        Bind_Pipeline
+                          (Item.Buffer, Bind_Point_Compute, Item.Wkv_Line);
+                        Shape :=
+                          (Rows    => C.unsigned (This.Wkv.Heads),
+                           Columns => C.unsigned (This.Wkv.Head),
+                           Count   => C.unsigned (Count),
+                           Base    => C.unsigned (Places (Index).Base / 4),
+                           Members =>
+                             [0 => At_Of (This.Wkv.K_Step),
+                              1 => At_Of (This.Wkv.V_Step),
+                              2 => At_Of (This.Wkv.W_Step),
+                              3 => At_Of (This.Wkv.G_Step),
+                              4 => C.unsigned (This.Wkv.U_At),
+                              5 => C.unsigned (This.Wkv.Gain_At),
+                              6 => C.unsigned (This.Wkv.Shift_At),
+                              7 => C.unsigned (This.Wkv.State_At),
+                              8 => Bits (This.Wkv.Floor),
+                              others => 0],
+                           others  => <>);
+                        Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                              Product_Bytes, Shape'Address);
+                        Dispatch
+                          (Item.Buffer, C.unsigned (This.Wkv.Heads), 1, 1);
+                     else
+                        Bind_Pipeline
+                          (Item.Buffer, Bind_Point_Compute, Item.Rwkv_Line);
+                        Shape :=
+                          (Rows    =>
+                             C.unsigned (Rwkv_Mode'Pos (This.Rwkv.Mode)),
+                           Columns => C.unsigned (This.Rwkv.Width),
+                           Count   => C.unsigned (Count),
+                           First   => C.unsigned (This.Rwkv.Streams),
+                           Packing => C.unsigned (This.Rwkv.Low),
+                           Base    => C.unsigned (Places (Index).Base / 4),
+                           Members =>
+                             [0 => At_Of (This.Rwkv.Low_Step),
+                              1 => C.unsigned (This.Rwkv.Lerp_At),
+                              2 => C.unsigned (This.Rwkv.Map_At),
+                              3 => C.unsigned (This.Rwkv.Bias_At),
+                              4 => At_Of (This.Rwkv.B_Step),
+                              5 => At_Of (This.Rwkv.C_Step),
+                              6 => C.unsigned (This.Rwkv.State_At),
+                              7 => Bits (This.Rwkv.Scale),
+                              8 => C.unsigned (This.Rwkv.State_Two),
+                              others => 0],
+                           others  => <>);
+                        Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                              Product_Bytes, Shape'Address);
+
+                        case This.Rwkv.Mode is
+                           when Shift =>
+                              Dispatch
+                                (Item.Buffer,
+                                 C.unsigned
+                                   (Groups (This.Rwkv.Streams
+                                            * This.Rwkv.Width, 256)),
+                                 C.unsigned (Groups (Count, 16)), 1);
+                           when Decay =>
+                              Dispatch
+                                (Item.Buffer,
+                                 C.unsigned (Groups (This.Rwkv.Width, 256)),
+                                 C.unsigned (Groups (Count, 16)), 1);
+                           when Tanh | Squared_Relu | Finish =>
+                              declare
+                                 Blocks : constant Natural :=
+                                   Groups (Count * This.Rwkv.Width, 256);
+                                 Across : constant Natural :=
+                                   Natural'Min (Blocks, 65_535);
+                              begin
+                                 Dispatch
+                                   (Item.Buffer, C.unsigned (Across),
+                                    C.unsigned (Groups (Blocks, Across)), 1);
+                              end;
+                           when Save =>
+                              Dispatch
+                                (Item.Buffer,
+                                 C.unsigned (Groups (This.Rwkv.Width, 256)),
+                                 1, 1);
+                        end case;
+                     end if;
                   end;
 
                   Bind_Pipeline

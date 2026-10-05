@@ -4894,6 +4894,420 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end An_Assembled_Head_Says_What_It_Reads;
 
+   -----------------------------------------
+   -- An_Rwkv_Block_Says_What_The_Host_Says --
+   -----------------------------------------
+
+   --  The steps an RWKV6 block goes to the device as: a shift with a
+   --  low-rank mix, a decay, the tanh and the squared ReLU, the finish, the
+   --  linear attention with its per-head normalization and gate, and the
+   --  save of the last rows into the state buffer -- each against the
+   --  host's arithmetic, over one position and over a batch, the state
+   --  holding numbers rather than zeros so a slot read wrong shows.
+   procedure An_Rwkv_Block_Says_What_The_Host_Says
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Width   : constant := Products.Wkv_Head;
+      Low     : constant := 4;
+      Streams : constant := 2;
+      W       : constant N.Element_Count := Width;
+
+      --  The pack: the shift's mixes, its map, the decay's map, the
+      --  decay's bias, the bonus, the gain and the shift.
+      Lerp_At  : constant := 0;
+      Map_At   : constant := Lerp_At + Streams * Width;
+      DMap_At  : constant := Map_At + Streams * Width * Low;
+      Bias_At  : constant := DMap_At + Width * Low;
+      U_At     : constant := Bias_At + Width;
+      Gain_At  : constant := U_At + Width;
+      Shift_At : constant := Gain_At + Width;
+      Pack_Len : constant := Shift_At + Width;
+
+      --  The state: two shift rows, then the head's state.
+      Heads_At  : constant := 2 * Width;
+      State_Len : constant := Heads_At + Width * Width;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+
+      Found, Ready, Ok, Added, Halted : Boolean;
+
+      Identity : N.Real_Array (0 .. W * W - 1) := [others => 0.0];
+      Down     : N.Real_Array (0 .. Streams * Low * W - 1);
+      Dec_Down : N.Real_Array (0 .. Low * W - 1);
+      Pack     : N.Real_Array (0 .. Pack_Len - 1);
+      Start    : N.Real_Array (0 .. State_Len - 1);
+
+      Steps : Products.Sequence;
+
+      function Bytes_Of (Values : N.Real_Array)
+        return Model_Runner.Bytes.Byte_Count
+      is (Model_Runner.Bytes.Byte_Count (Values'Length) * 4);
+
+      function F (X : Long_Float) return N.Real is (N.Real (X));
+
+      package L renames Ada.Numerics.Long_Elementary_Functions;
+
+      procedure Over (Count : Positive) is
+         C       : constant N.Element_Count := N.Element_Count (Count);
+         Input   : N.Real_Array (0 .. C * W - 1);
+         Rooms   : constant array (1 .. 12) of N.Element_Count :=
+           [W, Streams * Low, Streams * Low, Streams * W, Low, Low, W, W, W,
+            W, 1, 0];
+         Place   : array (1 .. 12) of N.Element_Count := [others => 0];
+         Landing : N.Real_Array (0 .. C * (8 * W + 3 * Streams * Low
+                                           + 2 * Low + 1) - 1)
+           := [others => 0.0];
+         After   : N.Real_Array (0 .. State_Len - 1);
+         Worst   : N.Real := 0.0;
+
+         --  The host's numbers.
+         Low_Rows : N.Real_Array (0 .. C * Streams * Low - 1);
+         Dec_Rows : N.Real_Array (0 .. C * Low - 1);
+         Shifted  : N.Real_Array (0 .. C * Streams * W - 1);
+         Decay    : N.Real_Array (0 .. C * W - 1);
+         Squared  : N.Real_Array (0 .. C * W - 1);
+         Finished : N.Real_Array (0 .. C * W - 1);
+         Answer   : N.Real_Array (0 .. C * W - 1);
+         State    : N.Real_Array (0 .. W * W - 1) :=
+           Start (Heads_At .. State_Len - 1);
+
+         procedure Near (Got, Want : N.Real) is
+         begin
+            Worst := N.Real'Max
+              (Worst, abs (Got - Want) / N.Real'Max (1.0, abs Want));
+         end Near;
+      begin
+         for Index in Input'Range loop
+            Input (Index) := N.Real ((Index * 7) mod 13) / 13.0 - 0.45;
+         end loop;
+
+         Products.Put_State (Engine, 0, Start, Ok);
+         Assert (Ok, "the state would not be written");
+
+         Products.Open_Sequence (Steps);
+         --  1 the rows; 2 their low ranks; 3 those through a tanh; 4 the
+         --  shift; 5 the decay's ranks; 6 through a tanh; 7 the decay; 8
+         --  the squared ReLU; 9 the finish; 10 the linear attention; 11
+         --  the save.
+         Products.Add_Product
+           (Steps, Identity (Identity'First)'Address, Bytes_Of (Identity), 0,
+            Products.Values_F32, Width, Width, Added, Kept => False);
+         Assert (Added, "the identity was refused");
+         Products.Add_Chained_Product
+           (Steps, Down (Down'First)'Address, Bytes_Of (Down), 0,
+            Products.Values_F32, Streams * Low, Width, Added,
+            From_Step => 1, Kept => False);
+         Assert (Added, "the low ranks were refused");
+         Products.Add_Rwkv
+           (Steps, Pack (0)'Address, Bytes_Of (Pack),
+            (Mode => Products.Tanh, Width => Streams * Low, others => <>),
+            Added, Key => Pack (0)'Address);
+         Assert (Added, "the tanh was refused");
+         Products.Add_Rwkv
+           (Steps, Pack (0)'Address, Bytes_Of (Pack),
+            (Mode => Products.Shift, Width => Width, Streams => Streams,
+             Low => Low, Low_Step => 3, Lerp_At => Lerp_At,
+             Map_At => Map_At, State_At => 0, others => <>),
+            Added, From_Step => 1, Key => Pack (0)'Address);
+         Assert (Added, "the shift was refused");
+         Products.Add_Chained_Product
+           (Steps, Dec_Down (Dec_Down'First)'Address, Bytes_Of (Dec_Down), 0,
+            Products.Values_F32, Low, Width, Added, From_Step => 1,
+            Kept => False);
+         Assert (Added, "the decay's ranks were refused");
+         Products.Add_Rwkv
+           (Steps, Pack (0)'Address, Bytes_Of (Pack),
+            (Mode => Products.Tanh, Width => Low, others => <>),
+            Added, Key => Pack (0)'Address, Kept => False);
+         Assert (Added, "the second tanh was refused");
+         Products.Add_Rwkv
+           (Steps, Pack (0)'Address, Bytes_Of (Pack),
+            (Mode => Products.Decay, Width => Width, Low => Low,
+             Low_Step => 6, Map_At => DMap_At, Bias_At => Bias_At,
+             others => <>),
+            Added, From_Step => 6, Key => Pack (0)'Address);
+         Assert (Added, "the decay was refused");
+         Products.Add_Rwkv
+           (Steps, Pack (0)'Address, Bytes_Of (Pack),
+            (Mode => Products.Squared_Relu, Width => Width, others => <>),
+            Added, From_Step => 1, Key => Pack (0)'Address);
+         Assert (Added, "the squared ReLU was refused");
+         Products.Add_Rwkv
+           (Steps, Pack (0)'Address, Bytes_Of (Pack),
+            (Mode => Products.Finish, Width => Width, B_Step => 8,
+             C_Step => 7, Scale => 0.5, others => <>),
+            Added, From_Step => 1, Key => Pack (0)'Address);
+         Assert (Added, "the finish was refused");
+         Products.Add_Wkv
+           (Steps, Pack (0)'Address, Bytes_Of (Pack),
+            (Heads => 1, Head => Width, K_Step => 8, V_Step => 9,
+             W_Step => 7, G_Step => 1, U_At => U_At, Gain_At => Gain_At,
+             Shift_At => Shift_At, State_At => Heads_At, Floor => 64.0E-5),
+            Added, From_Step => 1, Key => Pack (0)'Address);
+         Assert (Added, "the linear attention was refused");
+         Products.Add_Rwkv
+           (Steps, Pack (0)'Address, Bytes_Of (Pack),
+            (Mode => Products.Save, Width => Width, B_Step => 9,
+             State_At => 0, State_Two => Width, others => <>),
+            Added, From_Step => 1, Key => Pack (0)'Address);
+         Assert (Added, "the save was refused");
+
+         --  And what they refuse: a shift whose low step is not as wide
+         --  as its ranks, and a head other than the kernel's.
+         Products.Add_Rwkv
+           (Steps, Pack (0)'Address, Bytes_Of (Pack),
+            (Mode => Products.Shift, Width => Width, Streams => Streams,
+             Low => Low, Low_Step => 1, others => <>),
+            Added, From_Step => 1);
+         Assert (not Added, "a shift over the wrong low ranks was taken");
+         Products.Add_Wkv
+           (Steps, Pack (0)'Address, Bytes_Of (Pack),
+            (Heads => 2, Head => Width / 2, K_Step => 8, V_Step => 9,
+             W_Step => 7, G_Step => 1, others => <>),
+            Added, From_Step => 1);
+         Assert (not Added, "a head of another width was taken");
+
+         Products.Run (Engine, Steps, Input, Count, Landing, Ok, Halted);
+         Assert (Ok, "the sequence was refused over"
+                 & Positive'Image (Count) & " positions");
+         Products.Get_State (Engine, 0, After, Ok);
+         Assert (Ok, "the state would not be read back");
+
+         for Index in 2 .. 12 loop
+            Place (Index) := Place (Index - 1) + Rooms (Index - 1) * C;
+         end loop;
+
+         --  The host's: the ranks, the shift, the decay, the square, the
+         --  finish.
+         for P in 0 .. C - 1 loop
+            for J in N.Element_Count range 0 .. Streams * Low - 1 loop
+               declare
+                  Acc : Long_Float := 0.0;
+               begin
+                  for K in 0 .. W - 1 loop
+                     Acc := Acc + Long_Float (Down (J * W + K))
+                                  * Long_Float (Input (P * W + K));
+                  end loop;
+                  Low_Rows (P * Streams * Low + J) := F (L.Tanh (Acc));
+               end;
+            end loop;
+            for J in N.Element_Count range 0 .. Low - 1 loop
+               declare
+                  Acc : Long_Float := 0.0;
+               begin
+                  for K in 0 .. W - 1 loop
+                     Acc := Acc + Long_Float (Dec_Down (J * W + K))
+                                  * Long_Float (Input (P * W + K));
+                  end loop;
+                  Dec_Rows (P * Low + J) := F (L.Tanh (Acc));
+               end;
+            end loop;
+            for J in 0 .. Streams * W - 1 loop
+               declare
+                  St     : constant N.Element_Count := J / W;
+                  Ch     : constant N.Element_Count := J mod W;
+                  Here   : constant N.Real := Input (P * W + Ch);
+                  Before : constant N.Real :=
+                    (if P = 0 then Start (Ch) else Input ((P - 1) * W + Ch));
+                  Acc    : Long_Float := 0.0;
+               begin
+                  for K in N.Element_Count range 0 .. Low - 1 loop
+                     Acc := Acc
+                       + Long_Float (Pack (Map_At + J * Low + K))
+                         * Long_Float (Low_Rows (P * Streams * Low
+                                                 + St * Low + K));
+                  end loop;
+                  Shifted (P * Streams * W + J) :=
+                    Here + (Before - Here) * (Pack (Lerp_At + J) + F (Acc));
+               end;
+            end loop;
+            for J in 0 .. W - 1 loop
+               declare
+                  Acc : Long_Float := Long_Float (Pack (Bias_At + J));
+                  X   : constant N.Real := Input (P * W + J);
+               begin
+                  for K in N.Element_Count range 0 .. Low - 1 loop
+                     Acc := Acc + Long_Float (Pack (DMap_At + J * Low + K))
+                                  * Long_Float (Dec_Rows (P * Low + K));
+                  end loop;
+                  Decay (P * W + J) := F (L.Exp (-L.Exp (Acc)));
+                  Squared (P * W + J) :=
+                    (if X > 0.0 then X * X else 0.0);
+                  Finished (P * W + J) :=
+                    (X + F (1.0 / (1.0 + L.Exp (-Long_Float (Squared
+                                                               (P * W + J)))))
+                         * Decay (P * W + J)) * 0.5;
+               end;
+            end loop;
+         end loop;
+
+         --  The linear attention: receptance and gate the rows, key the
+         --  square, value the finish, decay the decay.
+         for P in 0 .. C - 1 loop
+            declare
+               Y    : N.Real_Array (0 .. W - 1) := [others => 0.0];
+               Mean, Var : Long_Float := 0.0;
+            begin
+               for I in 0 .. W - 1 loop
+                  declare
+                     Ri : constant N.Real := Input (P * W + I);
+                     Ki : constant N.Real := Squared (P * W + I);
+                     Wi : constant N.Real := Decay (P * W + I);
+                     Ui : constant N.Real := Pack (U_At + I);
+                  begin
+                     for J in 0 .. W - 1 loop
+                        declare
+                           KV  : constant N.Real := Ki * Finished (P * W + J);
+                           Old : constant N.Real := State (I * W + J);
+                        begin
+                           Y (J) := Y (J) + Ri * (Ui * KV + Old);
+                           State (I * W + J) := Wi * Old + KV;
+                        end;
+                     end loop;
+                  end;
+               end loop;
+               for J in Y'Range loop
+                  Mean := Mean + Long_Float (Y (J));
+               end loop;
+               Mean := Mean / Long_Float (W);
+               for J in Y'Range loop
+                  Var := Var + (Long_Float (Y (J)) - Mean) ** 2;
+               end loop;
+               for J in Y'Range loop
+                  declare
+                     G : constant Long_Float := Long_Float (Input (P * W + J));
+                  begin
+                     Answer (P * W + J) :=
+                       F (((Long_Float (Y (J)) - Mean)
+                           / L.Sqrt (Var / Long_Float (W) + 64.0E-5)
+                           * Long_Float (Pack (Gain_At + J))
+                           + Long_Float (Pack (Shift_At + J)))
+                          * G / (1.0 + L.Exp (-G)));
+                  end;
+               end loop;
+            end;
+         end loop;
+
+         for I in Shifted'Range loop
+            Near (Landing (Place (4) + I), Shifted (I));
+         end loop;
+         for I in Decay'Range loop
+            Near (Landing (Place (7) + I), Decay (I));
+            Near (Landing (Place (8) + I), Squared (I));
+            Near (Landing (Place (9) + I), Finished (I));
+            Near (Landing (Place (10) + I), Answer (I));
+         end loop;
+         for Ch in 0 .. W - 1 loop
+            Near (After (Ch), Input ((C - 1) * W + Ch));
+            Near (After (W + Ch), Finished ((C - 1) * W + Ch));
+         end loop;
+         for I in State'Range loop
+            Near (After (Heads_At + I), State (I));
+         end loop;
+
+         Assert (Worst <= 1.0E-4,
+                 "over" & Positive'Image (Count)
+                 & " positions the RWKV steps differ from the host's by "
+                 & N.Real'Image (Worst));
+      end Over;
+   begin
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+      Products.Open (Engine, Opened, Ready);
+      if not Ready or else not Products.Runs_Rwkv (Engine) then
+         if Ready then
+            Products.Close (Engine);
+         end if;
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      for Index in 0 .. W - 1 loop
+         Identity (Index * W + Index) := 1.0;
+      end loop;
+      for Index in Down'Range loop
+         Down (Index) := N.Real ((Index * 5) mod 11) / 22.0 - 0.25;
+      end loop;
+      for Index in Dec_Down'Range loop
+         Dec_Down (Index) := N.Real ((Index * 3) mod 7) / 14.0 - 0.25;
+      end loop;
+      for Index in Pack'Range loop
+         Pack (Index) := N.Real ((Index * 11) mod 17) / 17.0 - 0.4;
+      end loop;
+      for Index in Start'Range loop
+         Start (Index) := N.Real ((Index * 3) mod 19) / 19.0 - 0.5;
+      end loop;
+
+      Products.Reserve_State (Engine, State_Len, Ok);
+      Assert (Ok, "no room for the state");
+
+      Over (1);
+      Over (3);
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end An_Rwkv_Block_Says_What_The_Host_Says;
+
+   -----------------------------------------------
+   -- An_Rwkv_Layer_Without_Its_Pack_Is_Refused --
+   -----------------------------------------------
+
+   --  The block-level call: the device runs RWKV6 blocks while it is open
+   --  and has the kernels, and refuses one it has not been given the
+   --  tables of, leaving the rows it would have written alone -- which is
+   --  what lets the host take the block instead. The block's own numbers
+   --  are the step test's and a real file's perplexity.
+   procedure An_Rwkv_Layer_Without_Its_Pack_Is_Refused
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Ready : Boolean;
+   begin
+      Model_Runner.Backend.Device.Open (Ready);
+      if not Ready then
+         Assert (not Model_Runner.Backend.Device.Runs_Rwkv,
+                 "a closed device says it runs RWKV blocks");
+         return;
+      end if;
+
+      Assert (Model_Runner.Backend.Device.Runs_Rwkv,
+              "an open device does not run RWKV blocks");
+
+      declare
+         Block : constant Model_Runner.Backend.Device.Rwkv_Block :=
+           (Width => 64, Heads => 1,
+            Head => Model_Runner.Backend.Device.Rwkv_Head, Mix_Rank => 4,
+            Decay_Rank => 4, Feed => 128, Pack => null, others => <>);
+         Rows  : constant N.Real_Array (0 .. 63) := [others => 0.25];
+         Into  : N.Real_Array (0 .. 63) := [others => 7.0];
+         Ok    : Boolean;
+      begin
+         Model_Runner.Backend.Device.Rwkv_Layer (Block, Rows, 1, Into, Ok);
+         Assert (not Ok, "a block without its tables was run");
+         Assert ((for all Value of Into => Value = 7.0),
+                 "a refused block wrote its rows");
+      end;
+
+      Model_Runner.Backend.Device.Close;
+      Assert (not Model_Runner.Backend.Device.Runs_Rwkv,
+              "a closed device says it runs RWKV blocks");
+   end An_Rwkv_Layer_Without_Its_Pack_Is_Refused;
+
    ---------------------------------------------------------------
    -- The_Linear_Layer_On_The_Device_Says_What_The_Host_Says --
    ---------------------------------------------------------------
@@ -9054,6 +9468,15 @@ package body Tests.Backend_Cases is
          "heads assembled from a stretch of one step's row a head and a "
          & "stretch of another's every head shares -- DeepSeek's latent "
          & "attention's layout -- are what they read, to the bit");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, An_Rwkv_Block_Says_What_The_Host_Says'Access,
+         "an RWKV6 block's device steps -- the shifts, the decay, the tanh, "
+         & "the squared ReLU, the finish, the linear attention and the save "
+         & "-- say what the host says, the state buffer read and written");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, An_Rwkv_Layer_Without_Its_Pack_Is_Refused'Access,
+         "the device runs RWKV6 blocks while it is open, and refuses one "
+         & "without its tables, writing nothing");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, The_Packed_Attention_Says_Which_Heads_It_Reads'Access,
          "the packed attention says which head shapes it reads: a whole "

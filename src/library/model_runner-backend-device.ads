@@ -1147,6 +1147,95 @@ package Model_Runner.Backend.Device is
       Up   : Model_Runner.Tensors.View;
       Down : Model_Runner.Tensors.View);
 
+   --  One RWKV6 block as the device's sequence takes it: its widths, the
+   --  pack of its small tables and where each lies in it, its two
+   --  low-rank maps down, its eight projections, and where its two
+   --  token-shift rows and its state lie in the state buffer.
+   type Rwkv_Block is record
+      --  The model's width, its heads and their width, the two low ranks
+      --  and the channel mix's width.
+      Width       : Natural := 0;
+      Heads       : Natural := 0;
+      Head        : Natural := 0;
+      Mix_Rank    : Natural := 0;
+      Decay_Rank  : Natural := 0;
+      Feed        : Natural := 0;
+
+      --  The layer's pack of small tables, in binary32, and where each
+      --  lies in it, in elements: the two normalizations' gains and
+      --  shifts, the plain shift's mix, the five streams' mixes, their
+      --  map up, the decay's bias and its map up, the bonus, the
+      --  answer's normalization gain and shift, and the channel mix's two
+      --  mixes.
+      Pack        : Model_Runner.Tensors.Real_Array_Access := null;
+      First_Norm  : Natural := 0;
+      Second_Norm : Natural := 0;
+      Plain_Mix   : Natural := 0;
+      Stream_Mix  : Natural := 0;
+      Stream_Map  : Natural := 0;
+      Decay_Bias  : Natural := 0;
+      Decay_Map   : Natural := 0;
+      Bonus       : Natural := 0;
+      Out_Norm    : Natural := 0;
+      Channel_Mix : Natural := 0;
+
+      --  The two maps down, in binary32: five streams' ranks by the width,
+      --  and the decay's rank by the width.
+      Mix_Down    : Model_Runner.Tensors.Real_Array_Access := null;
+      Decay_Down  : Model_Runner.Tensors.Real_Array_Access := null;
+
+      --  The projections.
+      Receptance  : Model_Runner.Tensors.View;
+      Key         : Model_Runner.Tensors.View;
+      Value       : Model_Runner.Tensors.View;
+      Gate        : Model_Runner.Tensors.View;
+      Output      : Model_Runner.Tensors.View;
+      Channel_Key   : Model_Runner.Tensors.View;
+      Channel_Value : Model_Runner.Tensors.View;
+      Channel_Receptance : Model_Runner.Tensors.View;
+
+      --  Where the two shift rows lie in the state buffer, the time mix's
+      --  then the channel mix's, and where the heads' state lies.
+      Shift_At    : Natural := 0;
+      State_At    : Natural := 0;
+
+      --  The normalizations' floor, the answer's per-head floor, and what
+      --  the block's output is multiplied by.
+      Epsilon     : Model_Runner.Numerics.Real := 0.0;
+      Floor       : Model_Runner.Numerics.Real := 0.0;
+      Scale       : Model_Runner.Numerics.Real := 1.0;
+   end record;
+
+   --  The head width the device's RWKV6 linear attention takes.
+   Rwkv_Head : constant := Model_Runner.Platform.Device.Products.Wkv_Head;
+
+   --  Whether the device runs an RWKV6 block whole: it is open and has
+   --  the kernels.
+   --
+   --  @return True where Rwkv_Layer can be asked.
+   function Runs_Rwkv return Boolean;
+
+   --  Count positions through one RWKV6 block, one submission: both
+   --  normalizations, the shifts, the low-rank mixes and decay, the eight
+   --  projections, the linear attention against the state the buffer
+   --  holds, both residuals and the rescale. The state's shift rows and
+   --  heads are read and written where the block says, on the device.
+   --
+   --  @param Block The block.
+   --  @param Residual The block's input rows, Width a position.
+   --  @param Count Positions.
+   --  @param Into Receives the block's output rows.
+   --  @param Ok False where the device refused or failed; Into and the
+   --    state on the device are then not to be trusted.
+   --  @param Cancel Stops the wait for the submission.
+   procedure Rwkv_Layer
+     (Block    : Rwkv_Block;
+      Residual : Model_Runner.Tensors.Real_Array;
+      Count    : Model_Runner.Numerics.Element_Count;
+      Into     : in out Model_Runner.Tensors.Real_Array;
+      Ok       : out Boolean;
+      Cancel   : Model_Runner.Cancellation.Token_Reference := null);
+
    --  A whole layer, in one submission.
    --
    --  `Attend_And_Feed` takes its second half and `Normalize_And_Project`

@@ -2441,6 +2441,10 @@ private
       Rwkv_CM_Lerp_K  : Model_Runner.Tensors.Real_Array_Access;
       Rwkv_CM_Lerp_R  : Model_Runner.Tensors.Real_Array_Access;
 
+      --  The block's small tables laid end to end for the device, which
+      --  keeps them as one resident weight: see Pair_Norms.
+      Rwkv_Pack       : Model_Runner.Tensors.Real_Array_Access;
+
       --  The expert every position of a mixture goes through as well,
       --  with the row that gates it; absent where the mixture has none.
       Shared_Gate   : aliased Model_Runner.Tensors.View;

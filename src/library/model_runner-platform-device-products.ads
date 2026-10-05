@@ -995,6 +995,137 @@ package Model_Runner.Platform.Device.Products is
       Source_At     : Natural := 0;
       Source_Stride : Natural := 0);
 
+   --  What an RWKV6 step does: see Add_Rwkv.
+   type Rwkv_Mode is (Shift, Decay, Tanh, Squared_Relu, Finish, Save);
+
+   --  An RWKV6 step's shape. Offsets into the pack are in elements; the
+   --  state offsets are in elements of the state buffer.
+   type Rwkv_Shape is record
+      --  What the step does.
+      Mode      : Rwkv_Mode := Shift;
+      --  Elements a position of the step read holds, and of every other
+      --  step it reads but the low-rank one.
+      Width     : Natural := 0;
+      --  Streams a shift writes, each Width a position.
+      Streams   : Natural := 1;
+      --  The low rank a shift or decay maps from, or nought for none.
+      Low       : Natural := 0;
+      --  The step holding the low-rank rows: Streams stretches of Low a
+      --  position for a shift, one for a decay.
+      Low_Step  : Natural := 0;
+      --  Where a shift's mix lies in the pack, Streams by Width.
+      Lerp_At   : Natural := 0;
+      --  Where the low-rank map lies, a row of Low an output element.
+      Map_At    : Natural := 0;
+      --  Where a decay's bias lies.
+      Bias_At   : Natural := 0;
+      --  The finish's logistic arm and its value arm; the save's second
+      --  row.
+      B_Step    : Natural := 0;
+      C_Step    : Natural := 0;
+      --  The state slot a shift reads its first position's row before
+      --  from, and the one a save writes the step read's last row into.
+      State_At  : Natural := 0;
+      --  The slot a save writes B's last row into.
+      State_Two : Natural := 0;
+      --  What the finish multiplies by: one, or a half where the model
+      --  rescales.
+      Scale     : Model_Runner.Numerics.Real := 1.0;
+   end record;
+
+   --  Name one of the small steps of an RWKV6 block, which go around its
+   --  products so the block is one submission.
+   --
+   --  Shift writes Streams rows of Width a position: stream s of channel c
+   --  is the position moved toward the one before it -- the batch's first
+   --  toward the row in the state slot -- by the stream's mix in the pack,
+   --  plus, with a low rank, the stream's map of its stretch of the
+   --  low-rank step's row. Decay writes exp (-exp (bias + map . low)) a
+   --  channel. Tanh and Squared_Relu are elementwise on the step read.
+   --  Finish writes (read + logistic (B) * C) * Scale. Save writes the
+   --  last position's rows of the step read and of B into the two state
+   --  slots, and fences everything before it, since it overwrites what the
+   --  shifts read.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param Base First byte of the layer's pack of small tables, the
+   --    weight every RWKV step binds.
+   --  @param Span Bytes the pack holds.
+   --  @param Shape What the step does and where it reads.
+   --  @param Added False when the sequence is full, when the shape does
+   --    not hold together, or when a step named is not there or not of
+   --    the width it should be.
+   --  @param From_Step The step read, or zero for the one before.
+   --  @param Key Identifies the pack so the device may keep it.
+   --  @param Kept False when nothing on the host reads this step's answer.
+   procedure Add_Rwkv
+     (Steps     : in out Sequence;
+      Base      : System.Address;
+      Span      : Model_Runner.Bytes.Byte_Count;
+      Shape     : Rwkv_Shape;
+      Added     : out Boolean;
+      From_Step : Natural := 0;
+      Key       : System.Address := System.Null_Address;
+      Kept      : Boolean := True);
+
+   --  The shape of RWKV6's linear attention over a batch.
+   type Wkv_Shape is record
+      --  Heads, and the width of each, which the kernel takes as 64.
+      Heads    : Natural := 0;
+      Head     : Natural := 0;
+      --  The key, value, decay and gate steps, each Heads by Head a
+      --  position.
+      K_Step   : Natural := 0;
+      V_Step   : Natural := 0;
+      W_Step   : Natural := 0;
+      G_Step   : Natural := 0;
+      --  Where the bonus, the normalization's gain and its shift lie in
+      --  the pack.
+      U_At     : Natural := 0;
+      Gain_At  : Natural := 0;
+      Shift_At : Natural := 0;
+      --  Where the layer's state lies in the state buffer.
+      State_At : Natural := 0;
+      --  The floor under a head's variance.
+      Floor    : Model_Runner.Numerics.Real := 0.0;
+   end record;
+
+   --  The width of a head the linear-attention kernel takes.
+   Wkv_Head : constant := 64;
+
+   --  Name RWKV6's linear attention: the receptance read from the step
+   --  named, the key, value, decay and gate from the steps the shape names,
+   --  the state from and back into the state buffer, a head a workgroup
+   --  over the positions in order; each answer normalized a head, scaled
+   --  and shifted, and gated through the logistic-weighted unit.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param Base First byte of the layer's pack.
+   --  @param Span Bytes the pack holds.
+   --  @param Shape The heads, the steps read and the offsets.
+   --  @param Added False when the sequence is full, when a head is not
+   --    Wkv_Head wide, or when a step named is not there or not as wide
+   --    as the heads.
+   --  @param From_Step The receptance's step, or zero for the one before.
+   --  @param Key Identifies the pack so the device may keep it.
+   --  @param Kept False when nothing on the host reads this step's answer.
+   procedure Add_Wkv
+     (Steps     : in out Sequence;
+      Base      : System.Address;
+      Span      : Model_Runner.Bytes.Byte_Count;
+      Shape     : Wkv_Shape;
+      Added     : out Boolean;
+      From_Step : Natural := 0;
+      Key       : System.Address := System.Null_Address;
+      Kept      : Boolean := True);
+
+   --  Whether the engine has the RWKV6 kernels: a device that would not
+   --  build them has no RWKV block to run.
+   --
+   --  @param Item The engine.
+   --  @return True where Add_Rwkv's and Add_Wkv's steps can run.
+   function Runs_Rwkv (Item : Engine) return Boolean;
+
    --  The eight numbers an assembling step is shaped by: A's stretch
    --  width, offset in a head, head stride and position stride, then B's.
    type Assemble_Shape is array (1 .. 8) of Natural;
@@ -2843,6 +2974,8 @@ private
       Picker     : System.Address := System.Null_Address;
       Assembler  : System.Address := System.Null_Address;
       Conver     : System.Address := System.Null_Address;
+      Rwkver     : System.Address := System.Null_Address;
+      Wkver      : System.Address := System.Null_Address;
       Ruler      : System.Address := System.Null_Address;
       Held_Ruler : System.Address := System.Null_Address;
       Single_Ruler : System.Address := System.Null_Address;
@@ -2998,6 +3131,8 @@ private
       Assemble_Line : System.Address := System.Null_Address;
       Conv_Line   : System.Address := System.Null_Address;
       Rule_Line   : System.Address := System.Null_Address;
+      Rwkv_Line   : System.Address := System.Null_Address;
+      Wkv_Line    : System.Address := System.Null_Address;
       Held_Rule_Line : System.Address := System.Null_Address;
       Single_Rule_Line : System.Address := System.Null_Address;
       Merge_Line  : System.Address := System.Null_Address;
@@ -3539,6 +3674,13 @@ private
       Convolves : Boolean := False;
       Rules     : Boolean := False;
       Linear    : Linear_Shape;
+
+      --  An RWKV6 step or its linear attention, as Add_Rwkv and Add_Wkv
+      --  describe them, over the layer's pack and the state buffer.
+      Rwkvs     : Boolean := False;
+      Rwkv      : Rwkv_Shape;
+      Wkvs      : Boolean := False;
+      Wkv       : Wkv_Shape;
 
       --  A product kept off the tile whatever the count: the row kernel
       --  reads its activations in binary32 where the tile's operand is

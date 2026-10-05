@@ -2957,6 +2957,37 @@ package body Model_Runner.Llama is
       end if;
    end Clip_QKV;
 
+   --  Where each of an RWKV6 block's small tables lies in its pack, in
+   --  elements, the model's width W and the two low ranks given: the two
+   --  normalizations' gains and shifts, the plain shift's mix, the five
+   --  streams' mixes and their map up, the decay's bias and map up, the
+   --  bonus, the answer's normalization, and the channel mix's two mixes.
+   type Rwkv_Places is record
+      First_Norm, Second_Norm, Plain_Mix, Stream_Mix, Stream_Map,
+      Decay_Bias, Decay_Map, Bonus, Out_Norm, Channel_Mix, Total :
+        Element_Count := 0;
+   end record;
+
+   function Rwkv_Places_Of (Settings : Configuration) return Rwkv_Places is
+      W     : constant Element_Count := Element_Count (Settings.Embedding);
+      D_TM  : constant Element_Count := Element_Count (Settings.Mix_Extra);
+      D_Dec : constant Element_Count := Element_Count (Settings.Decay_Extra);
+      R     : Rwkv_Places;
+   begin
+      R.First_Norm  := 0;
+      R.Second_Norm := 2 * W;
+      R.Plain_Mix   := 4 * W;
+      R.Stream_Mix  := 5 * W;
+      R.Stream_Map  := 10 * W;
+      R.Decay_Bias  := R.Stream_Map + 5 * W * D_TM;
+      R.Decay_Map   := R.Decay_Bias + W;
+      R.Bonus       := R.Decay_Map + W * D_Dec;
+      R.Out_Norm    := R.Bonus + W;
+      R.Channel_Mix := R.Out_Norm + 2 * W;
+      R.Total       := R.Channel_Mix + 2 * W;
+      return R;
+   end Rwkv_Places_Of;
+
    --  The gain and the shift of each of a layer's centred normalizations
    --  laid end to end, for the device, which takes the two as one
    --  resident weight of twice the width. Built once, here, because the
@@ -3013,6 +3044,65 @@ package body Model_Runner.Llama is
                  Current.DT_Bias.all;
                Current.Linear_Numbers.all (2 * Heads .. 2 * Heads + Wide - 1) :=
                  Current.State_Norm.all;
+            end if;
+         end;
+      end if;
+
+      --  And an RWKV6 block's small tables as one, for the device's
+      --  sequence: every one of them present and of the length its place
+      --  says, or no pack and the block goes a step at a time.
+      if Is_RWKV (Item.Settings.Kind)
+        and then Current.Attention_Norm /= null
+        and then Current.Attention_Norm_Bias /= null
+        and then Current.Second_Attention_Norm /= null
+        and then Current.Second_Attention_Norm_Bias /= null
+        and then Current.Rwkv_Lerp_X /= null
+        and then Current.Rwkv_Lerp_Fused /= null
+        and then Current.Rwkv_TM_W2 /= null
+        and then Current.Rwkv_Decay /= null
+        and then Current.Rwkv_Decay_W2 /= null
+        and then Current.Rwkv_First /= null
+        and then Current.Rwkv_TM_LN /= null
+        and then Current.Rwkv_TM_LN_Bias /= null
+        and then Current.Rwkv_CM_Lerp_K /= null
+        and then Current.Rwkv_CM_Lerp_R /= null
+      then
+         declare
+            P : constant Rwkv_Places := Rwkv_Places_Of (Item.Settings);
+            W : constant Element_Count :=
+              Element_Count (Item.Settings.Embedding);
+
+            procedure Put (At_Element : Element_Count; From : T.Real_Array_Access)
+            is
+            begin
+               Current.Rwkv_Pack.all
+                 (At_Element .. At_Element + From.all'Length - 1) := From.all;
+            end Put;
+         begin
+            if Current.Rwkv_Lerp_Fused.all'Length = 5 * W
+              and then Current.Rwkv_TM_W2.all'Length
+                       = P.Decay_Bias - P.Stream_Map
+              and then Current.Rwkv_Decay_W2.all'Length
+                       = P.Bonus - P.Decay_Map
+              and then Current.Rwkv_First.all'Length = W
+            then
+               T.Allocate (P.Total, Current.Rwkv_Pack);
+               if Current.Rwkv_Pack /= null then
+                  Put (P.First_Norm, Current.Attention_Norm);
+                  Put (P.First_Norm + W, Current.Attention_Norm_Bias);
+                  Put (P.Second_Norm, Current.Second_Attention_Norm);
+                  Put (P.Second_Norm + W, Current.Second_Attention_Norm_Bias);
+                  Put (P.Plain_Mix, Current.Rwkv_Lerp_X);
+                  Put (P.Stream_Mix, Current.Rwkv_Lerp_Fused);
+                  Put (P.Stream_Map, Current.Rwkv_TM_W2);
+                  Put (P.Decay_Bias, Current.Rwkv_Decay);
+                  Put (P.Decay_Map, Current.Rwkv_Decay_W2);
+                  Put (P.Bonus, Current.Rwkv_First);
+                  Put (P.Out_Norm, Current.Rwkv_TM_LN);
+                  Put (P.Out_Norm + W, Current.Rwkv_TM_LN_Bias);
+                  Put (P.Channel_Mix, Current.Rwkv_CM_Lerp_K);
+                  Put (P.Channel_Mix + W, Current.Rwkv_CM_Lerp_R);
+               end if;
             end if;
          end;
       end if;
@@ -12962,6 +13052,7 @@ package body Model_Runner.Llama is
             T.Free (Which.Post_Attention_Norm_Pair);
             T.Free (Which.Post_Feed_Norm_Pair);
             T.Free (Which.Linear_Numbers);
+            T.Free (Which.Rwkv_Pack);
 
             --  The attention biases, which nothing released: a qwen2 model
             --  held three vectors a layer past its own closing, and only
@@ -17712,6 +17803,7 @@ package body Model_Runner.Llama is
       Acts        : T.Real_Array_Access;
       Count       : Element_Count;
       Into        : T.Real_Array_Access;
+      Whole       : out Boolean;
       Status      : out E.Error_Info)
    is
       pragma Suppress (Index_Check);
@@ -17796,6 +17888,82 @@ package body Model_Runner.Llama is
       end Stream;
    begin
       Status := E.Success;
+      Whole := False;
+
+      --  The block whole on the device, where it runs there: the state
+      --  seated in the device's room and the shift rows and heads read and
+      --  written there, one submission a block. Refused, the state comes
+      --  home first and the host takes the block.
+      if Model_Runner.Backend."="
+           (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_Device)
+        and then Current.Rwkv_Pack /= null
+        and then Item.Kept_States = 0
+        and then HN = Model_Runner.Backend.Device.Rwkv_Head
+        and then Heads * HN = RW
+        and then Model_Runner.Backend.Device.Runs_Rwkv
+      then
+         declare
+            Seated : Boolean;
+            Ran    : Boolean := False;
+            P      : constant Rwkv_Places := Rwkv_Places_Of (Settings);
+            Halve  : constant Boolean :=
+              Settings.Rescale_Every > 0
+              and then (Layer_Index + 1) mod Settings.Rescale_Every = 0;
+         begin
+            Send_States (Item'Unchecked_Access, Seated);
+            if Seated then
+               Model_Runner.Backend.Device.Rwkv_Layer
+                 ((Width       => Natural (RW),
+                   Heads       => Natural (Heads),
+                   Head        => Natural (HN),
+                   Mix_Rank    => Natural (D_TM),
+                   Decay_Rank  => Natural (D_Dec),
+                   Feed        => Natural (Feed),
+                   Pack        => Current.Rwkv_Pack,
+                   First_Norm  => Natural (P.First_Norm),
+                   Second_Norm => Natural (P.Second_Norm),
+                   Plain_Mix   => Natural (P.Plain_Mix),
+                   Stream_Mix  => Natural (P.Stream_Mix),
+                   Stream_Map  => Natural (P.Stream_Map),
+                   Decay_Bias  => Natural (P.Decay_Bias),
+                   Decay_Map   => Natural (P.Decay_Map),
+                   Bonus       => Natural (P.Bonus),
+                   Out_Norm    => Natural (P.Out_Norm),
+                   Channel_Mix => Natural (P.Channel_Mix),
+                   Mix_Down    => Current.Rwkv_TM_W1,
+                   Decay_Down  => Current.Rwkv_Decay_W1,
+                   Receptance  => Current.Rwkv_R,
+                   Key         => Current.Rwkv_K,
+                   Value       => Current.Rwkv_V,
+                   Gate        => Current.Rwkv_G,
+                   Output      => Current.Rwkv_TM_Out,
+                   Channel_Key   => Current.Rwkv_CM_K,
+                   Channel_Value => Current.Rwkv_CM_V,
+                   Channel_Receptance => Current.Rwkv_CM_R,
+                   Shift_At    => Natural (Item.State_Base + Conv_Base),
+                   State_At    =>
+                     Natural (Item.State_Base)
+                     + Linear_State_At (Item, Layer_Index),
+                   Epsilon     => Settings.Epsilon,
+                   Floor       => 64.0e-5,
+                   Scale       => (if Halve then 0.5 else 1.0)),
+                  Acts.all (A0 .. A0 + Rows - 1), Count,
+                  Into.all (Into.all'First .. Into.all'First + Rows - 1),
+                  Ran, Item.Stopping);
+            end if;
+
+            if Ran then
+               Whole := True;
+               return;
+            end if;
+
+            --  Whatever the device did with the state before it refused,
+            --  the host's copy is the one the host goes on from.
+            Fetch_States (Item'Unchecked_Access);
+         end;
+      else
+         Fetch_States (Item'Unchecked_Access);
+      end if;
 
       T.Allocate (Rows, Sx);       T.Allocate (Rows, Xs);
       T.Allocate (Count * 5 * D_TM, WL);
@@ -18012,12 +18180,13 @@ package body Model_Runner.Llama is
       Source      : Model'Class;
       Current     : Layer;
       Layer_Index : Natural;
+      Whole       : out Boolean;
       Status      : out E.Error_Info)
    is
    begin
       RWKV6_Batch
         (Item, Source, Current, Layer_Index, Item.Normalized,
-         Item.Activation, 1, Item.Activation, Status);
+         Item.Activation, 1, Item.Activation, Whole, Status);
    end RWKV6_Step;
 
    procedure Linear_Position
@@ -19327,7 +19496,9 @@ package body Model_Runner.Llama is
                --  below and the layer is done once the step returns.
                if Is_RWKV (Settings.Kind) then
                   RWKV6_Step
-                    (Item, Source, Current, Natural (Index), Status);
+                    (Item, Source, Current, Natural (Index), Went_Whole,
+                     Status);
+                  Asked := Went_Whole;
                   exit when E.Is_Error (Status);
                   Charge (Item, Attending, Mark);
                   goto Layer_Done;
@@ -22177,7 +22348,8 @@ package body Model_Runner.Llama is
                   else
                      RWKV6_Batch
                        (Item, Source, Current, Natural (Index), Norm, Acts,
-                        Count, Block_Out, Status);
+                        Count, Block_Out, Went_Whole, Status);
+                     Asked := Went_Whole;
                      if E.Is_Ok (Status) then
                         for I in 0 .. Count * Width - 1 loop
                            Norm.all (Norm.all'First + I) :=
