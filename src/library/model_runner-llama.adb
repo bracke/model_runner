@@ -6601,8 +6601,17 @@ package body Model_Runner.Llama is
             Item.MLA_Q_Lat.all := Normed;
          end;
          Product (Item, Current.Q_B, Item.MLA_Q_Lat, Item.Query, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         Product
+           (Item, Current.KV_A_MQA, Item.Normalized, Item.MLA_KV_Lat, Status);
       else
-         Product (Item, Current.Query, Item.Normalized, Item.Query, Status);
+         --  The query and the key-value latent read the same row: one job
+         --  rather than two, the row quantized once.
+         Product_Group
+           (Item, [Current.Query, Current.KV_A_MQA], Item.Normalized,
+            [Item.Query, Item.MLA_KV_Lat], Status);
       end if;
       if E.Is_Error (Status) then
          return;
@@ -6610,11 +6619,6 @@ package body Model_Runner.Llama is
 
       --  The key-value latent and the rotated slice it shares across the
       --  heads; the latent normalized by itself and projected out a head.
-      Product
-        (Item, Current.KV_A_MQA, Item.Normalized, Item.MLA_KV_Lat, Status);
-      if E.Is_Error (Status) then
-         return;
-      end if;
       K.RMS_Norm
         (Item.MLA_KV_Lat.all (R_At .. R_At + KV_Lora - 1),
          Current.KV_A_Norm.all, Settings.Epsilon, Item.MLA_C_Norm.all);
@@ -11907,6 +11911,14 @@ package body Model_Runner.Llama is
                    (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_CPU))
         and then Workers_CPU."/=" (Item.Team, null);
 
+      --  Whether the shared expert goes as three products of its own, cut
+      --  across the whole pool, rather than as one item of the experts'
+      --  job: off the pool, and for a token. A token's shared expert is
+      --  one item, and one worker read all of it -- twice an expert's
+      --  bytes where each of the others read one expert -- while the rest
+      --  of the pool waited on that worker every layer.
+      Shared_Apart : constant Boolean := not On_Pool or else Count = 1;
+
       --  The shared expert's feed width, where there is one; the experts'
       --  otherwise, so the rooms below are never too narrow.
       Shared_Feed : constant Element_Count :=
@@ -12009,7 +12021,7 @@ package body Model_Runner.Llama is
 
             --  Its answer, unless the pool will make it below among the
             --  experts' chunks.
-            if not On_Pool then
+            if Shared_Apart then
                Product_Batch
                  (Item, Current.Shared_Gate, Rows, Count, Item.Shared_Rows_A,
                   Status);
@@ -12260,7 +12272,8 @@ package body Model_Runner.Llama is
             --  And the shared expert's, one for every Chunk_Size rows of
             --  the batch, its number being Many: the expert past the last.
             Dealing_Shared : constant Boolean :=
-              T.Is_Present (Current.Shared_Gate) and then not Given_Shared;
+              T.Is_Present (Current.Shared_Gate) and then not Given_Shared
+              and then not Shared_Apart;
 
             Most_Chunks : constant Natural :=
               Natural (Count) * Used + Many + Natural (Count);
