@@ -1569,6 +1569,12 @@ package Model_Runner.Backend.Device is
    --  route shader hold the whole chosen set. Mirrors Products.Max_Route.
    Max_Route : constant := 64;
 
+   --  Whether the routing steps leave the chosen experts' shares as the
+   --  softmax gave them; see Platform.Device.Products.Keep_Route_Shares.
+   --
+   --  @param Keep True for a mixture that does not renormalize them.
+   procedure Keep_Route_Shares (Keep : Boolean);
+
    type Member_List is array (1 .. Max_Members) of Natural;
 
    --  A batch's choices, position by position.

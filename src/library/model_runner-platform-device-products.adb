@@ -231,6 +231,15 @@ package body Model_Runner.Platform.Device.Products is
    --  batch is rounded to is asked in places that know only its length.
    Wider_Ready : Boolean := False;
 
+   --  Whether the routing steps leave the chosen shares as the softmax gave
+   --  them; see Keep_Route_Shares.
+   Route_Keeps : Boolean := False;
+
+   procedure Keep_Route_Shares (Keep : Boolean) is
+   begin
+      Route_Keeps := Keep;
+   end Keep_Route_Shares;
+
    --  Set by Run for the sequence it is running: true where a product in
    --  it is a width the wider tile does not step through -- it steps 256
    --  columns at a time, and a SigLIP or Gemma 3 1B is 1152 wide -- so the
@@ -13330,8 +13339,9 @@ package body Model_Runner.Platform.Device.Products is
                         Count   => C.unsigned (Count),
                         Base    => C.unsigned (Places (Index).Base / 4),
                         Joins   =>
-                          (if This.Base /= System.Null_Address then 1
-                           else 0),
+                          (if This.Base /= System.Null_Address
+                           then (if Route_Keeps then 3 else 1)
+                           else (if Route_Keeps then 2 else 0)),
                         others  => <>);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,

@@ -4381,6 +4381,33 @@ package body Tests.Backend_Cases is
               "the shares do not sum to one");
       Assert (Shares (0) >= Shares (1), "the shares are not best first");
 
+      --  And with the shares left as the softmax gave them, as DeepSeek-V2
+      --  asks: the same experts, each share the renormalized one times the
+      --  chosen few's total, which is under one.
+      declare
+         Kept_Choice : Device.Choice_Array (0 .. Used - 1);
+         Kept_Shares : N.Real_Array (0 .. Used - 1);
+         Total       : N.Real;
+      begin
+         Device.Keep_Route_Shares (True);
+         Device.Dispatch_Route
+           (Router, null, Experts, Used, Input, 1, Kept_Choice, Kept_Shares,
+            Status);
+         Device.Keep_Route_Shares (False);
+         Assert (E.Is_Ok (Status), "the unnormalized routing was refused");
+         Assert (Kept_Choice (0) = Choice (0)
+                 and then Kept_Choice (1) = Choice (1),
+                 "leaving the shares chose other experts");
+         Total := Kept_Shares (0) + Kept_Shares (1);
+         Assert (Total < 1.0 - 1.0E-4,
+                 "the shares were put back on a scale of one");
+         for Slot in 0 .. Used - 1 loop
+            Assert (abs (Kept_Shares (N.Element_Count (Slot)) / Total
+                         - Shares (N.Element_Count (Slot))) < 1.0E-5,
+                    "an unnormalized share is not the normalized one scaled");
+         end loop;
+      end;
+
       for Slot in 0 .. Used - 1 loop
          Members (Slot + 1) := Choice (Slot);
       end loop;

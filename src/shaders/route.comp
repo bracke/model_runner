@@ -48,7 +48,10 @@ layout(push_constant) uniform Shape {
     //  Where the bias begins in the weight buffer, in elements.
     uint base;
 
-    //  Whether a bias is added before the choosing.
+    //  Bit 0: whether a bias is added before the choosing. Bit 1: whether
+    //  the chosen shares are left as the softmax gave them rather than
+    //  put back on a scale where they sum to one -- DeepSeek-V2 leaves
+    //  them.
     uint joins;
 } shape;
 
@@ -87,7 +90,7 @@ void main() {
 
     for (uint e = lane; e < experts; e += LANES) {
         float s = x[at + e];
-        if (shape.joins != 0u) {
+        if ((shape.joins & 1u) != 0u) {
             s += g[shape.base + e];
         }
         score[e] = s;
@@ -178,7 +181,9 @@ void main() {
 
         for (uint k = 0u; k < shape.used; ++k) {
             r[out_at + k] = chosen[k];
-            r[out_at + shape.used + k] = floatBitsToUint(share[k] / total);
+            r[out_at + shape.used + k] =
+                floatBitsToUint((shape.joins & 2u) != 0u ? share[k]
+                                                         : share[k] / total);
         }
     }
 }

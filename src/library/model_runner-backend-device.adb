@@ -641,6 +641,11 @@ package body Model_Runner.Backend.Device is
 
    function Layers_Whole return Natural is (Whole_Count);
 
+   procedure Keep_Route_Shares (Keep : Boolean) is
+   begin
+      Products.Keep_Route_Shares (Keep);
+   end Keep_Route_Shares;
+
    function Tiled_Products return Natural is (Products.Tiled_Products);
 
    function Untiled_Products return Natural is (Products.Untiled_Products);

@@ -6105,6 +6105,12 @@ package body Model_Runner.Llama is
 
             Item.Stacked := Total <= Item.Able.Memory_Bytes;
 
+            --  And the route kernel told whether this mixture's shares stay
+            --  as the softmax gave them, so that one that does not
+            --  renormalize -- DeepSeek-V2 -- routes on the device too.
+            Model_Runner.Backend.Device.Keep_Route_Shares
+              (not Item.Settings.Renormalize_Experts);
+
             --  Where the stacks do not fit, the device may still hold
             --  everything else: the feed-forward -- the stacks, the router
             --  and the shared expert, which the host's mixture reads -- goes
@@ -6420,6 +6426,142 @@ package body Model_Runner.Llama is
 
       Status := E.Success;
    end MLA_Project;
+
+   procedure Product_Batch
+     (Item    : Session;
+      Weight  : T.View;
+      Vectors : T.Real_Array_Access;
+      Count   : Element_Count;
+      Target  : T.Real_Array_Access;
+      Status  : out E.Error_Info);
+
+   --  DeepSeek's latent projection for a batch: what MLA_Project does a
+   --  position, each projection taken once over every position -- the
+   --  query (through its latent and norm where the file has one), the
+   --  key-value latent with the shared rotated slice, its norm a row, and
+   --  the up projection -- then the rows laid out as MLA_Project lays them.
+   --  A position at a time it was a product a projection a position, which
+   --  on the device is a round trip each: a prompt of a hundred went at
+   --  five tokens a second.
+   procedure MLA_Project_Batch
+     (Item    : Session;
+      Current : Layer;
+      Rows    : T.Real_Array_Access;
+      Count   : Element_Count;
+      Query   : T.Real_Array_Access;
+      Keys    : T.Real_Array_Access;
+      Values  : T.Real_Array_Access;
+      Status  : out E.Error_Info)
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      Settings  : Configuration renames Item.Owner.Settings;
+      Heads     : constant Element_Count := Element_Count (Settings.Heads);
+      Head_Size : constant Element_Count := Element_Count (Settings.Head_Size);
+      Rope      : constant Element_Count := Element_Count (Settings.Rotary);
+      Nope      : constant Element_Count := Head_Size - Rope;
+      V_Size    : constant Element_Count := Element_Count (Settings.Value_Size);
+      KV_Lora   : constant Element_Count :=
+        Element_Count (Settings.KV_Lora_Rank);
+      Q_Lora    : constant Element_Count :=
+        Element_Count (Settings.Q_Lora_Rank);
+      KV_Stride : constant Element_Count := Nope + V_Size;
+      Lat_Width : constant Element_Count := KV_Lora + Rope;
+
+      Q_Lat, KV_Lat, C_Norm, KV : T.Real_Array_Access;
+
+      procedure Release is
+      begin
+         T.Free (Q_Lat); T.Free (KV_Lat); T.Free (C_Norm); T.Free (KV);
+      end Release;
+   begin
+      Status := E.Success;
+      T.Allocate (Count * Lat_Width, KV_Lat);
+      T.Allocate (Count * KV_Lora, C_Norm);
+      T.Allocate (Count * Heads * KV_Stride, KV);
+      if Q_Lora > 0 then
+         T.Allocate (Count * Q_Lora, Q_Lat);
+      end if;
+      if KV_Lat = null or else C_Norm = null or else KV = null
+        or else (Q_Lora > 0 and then Q_Lat = null)
+      then
+         Release;
+         Status := E.Make (E.Memory_Allocation_Failed);
+         return;
+      end if;
+
+      --  The queries.
+      if Q_Lora > 0 then
+         Product_Batch (Item, Current.Q_A, Rows, Count, Q_Lat, Status);
+         if E.Is_Ok (Status) then
+            for P in 0 .. Count - 1 loop
+               declare
+                  Normed : Real_Array (0 .. Q_Lora - 1);
+               begin
+                  K.RMS_Norm
+                    (Q_Lat.all (P * Q_Lora .. P * Q_Lora + Q_Lora - 1),
+                     Current.Q_A_Norm.all, Settings.Epsilon, Normed);
+                  Q_Lat.all (P * Q_Lora .. P * Q_Lora + Q_Lora - 1) := Normed;
+               end;
+            end loop;
+            Product_Batch (Item, Current.Q_B, Q_Lat, Count, Query, Status);
+         end if;
+      else
+         Product_Batch (Item, Current.Query, Rows, Count, Query, Status);
+      end if;
+      if E.Is_Error (Status) then
+         Release;
+         return;
+      end if;
+
+      --  The key-value latents with their rotated slices, each latent
+      --  normalized by itself, and the up projection of all of them.
+      Product_Batch (Item, Current.KV_A_MQA, Rows, Count, KV_Lat, Status);
+      if E.Is_Error (Status) then
+         Release;
+         return;
+      end if;
+      for P in 0 .. Count - 1 loop
+         K.RMS_Norm
+           (KV_Lat.all (P * Lat_Width .. P * Lat_Width + KV_Lora - 1),
+            Current.KV_A_Norm.all, Settings.Epsilon,
+            C_Norm.all (P * KV_Lora .. P * KV_Lora + KV_Lora - 1));
+      end loop;
+      Product_Batch (Item, Current.KV_B, C_Norm, Count, KV, Status);
+      if E.Is_Error (Status) then
+         Release;
+         return;
+      end if;
+
+      --  Each position's keys -- a head's nope part from the up projection
+      --  and the shared rotated slice -- and values, the rest of it.
+      for P in 0 .. Count - 1 loop
+         declare
+            K_Row : constant Element_Count := P * Heads * Head_Size;
+            V_Row : constant Element_Count := P * Heads * V_Size;
+            L_Row : constant Element_Count := P * Heads * KV_Stride;
+            R_Row : constant Element_Count := P * Lat_Width + KV_Lora;
+         begin
+            for Head in 0 .. Heads - 1 loop
+               Keys.all (K_Row + Head * Head_Size
+                         .. K_Row + Head * Head_Size + Nope - 1) :=
+                 KV.all (L_Row + Head * KV_Stride
+                         .. L_Row + Head * KV_Stride + Nope - 1);
+               Keys.all (K_Row + Head * Head_Size + Nope
+                         .. K_Row + Head * Head_Size + Head_Size - 1) :=
+                 KV_Lat.all (R_Row .. R_Row + Rope - 1);
+               Values.all (V_Row + Head * V_Size
+                           .. V_Row + Head * V_Size + V_Size - 1) :=
+                 KV.all (L_Row + Head * KV_Stride + Nope
+                         .. L_Row + Head * KV_Stride + Nope + V_Size - 1);
+            end loop;
+         end;
+      end loop;
+
+      Release;
+   end MLA_Project_Batch;
 
    procedure Product_Batch
      (Item    : Session;
@@ -10885,10 +11027,9 @@ package body Model_Runner.Llama is
                  = (Current.Expert_Up_Bias = null)
         and then Used <= Model_Runner.Backend.Device.Max_Route
 
-        --  The route kernel softmaxes the scores and renormalizes the
-        --  chosen, so a mixture that does neither -- sigmoid-gated, or with
-        --  its weights left unnormalized -- is routed on the host instead.
-        and then Settings.Renormalize_Experts
+        --  The route kernel softmaxes the scores, and renormalizes the
+        --  chosen or leaves them as the model asks (Keep_Route_Shares); a
+        --  sigmoid-gated mixture is routed on the host instead.
         and then not Settings.Sigmoid_Gate
         and then T.Is_Present (Current.Gate_Stack)
         and then T.Is_Present (Current.Up_Stack)
@@ -11608,10 +11749,9 @@ package body Model_Runner.Llama is
                     Model_Runner.Backend.Backend_Device)
         and then Used <= Model_Runner.Backend.Device.Max_Route
 
-        --  The route kernel softmaxes and renormalizes; a mixture that is
-        --  sigmoid-gated or unnormalized is routed on the host, as one
+        --  The route kernel softmaxes, and renormalizes or not as the model
+        --  asks; a sigmoid-gated mixture is routed on the host, as one
         --  position's is.
-        and then Settings.Renormalize_Experts
         and then not Settings.Sigmoid_Gate
       then
          declare
@@ -18303,8 +18443,7 @@ package body Model_Runner.Llama is
           and then (L.Expert_Gate_Bias = null) = (L.Expert_Up_Bias = null)
           and then Settings.Experts_Used
                    <= Model_Runner.Backend.Device.Max_Members
-          and then Settings.Renormalize_Experts
-          and then not Settings.Sigmoid_Gate);
+            and then not Settings.Sigmoid_Gate);
 
       --  A hybrid's linear layer goes whole where the device has the
       --  rule and the convolution, the session a ring that is over, and
@@ -20362,8 +20501,7 @@ package body Model_Runner.Llama is
           and then (L.Expert_Gate_Bias = null) = (L.Expert_Up_Bias = null)
           and then Settings.Experts_Used
                    <= Model_Runner.Backend.Device.Max_Route
-          and then Settings.Renormalize_Experts
-          and then not Settings.Sigmoid_Gate);
+            and then not Settings.Sigmoid_Gate);
 
       --  The next layer's expert stacks, copied to the device in the
       --  background while this layer runs, where the device streams them.
@@ -21994,36 +22132,12 @@ package body Model_Runner.Llama is
                   --  room where it carries a gate beside each head, and
                   --  each row's queries and gates are taken out of it.
                   if Is_MLA (Settings.Kind) then
-                     --  DeepSeek's latent projection is a position at a
-                     --  time: each row's normalized input through the same
-                     --  single-position path the token evaluator takes, its
-                     --  queries, keys and values copied into the batch's
-                     --  rows in their place.
-                     declare
-                        N_At : constant Element_Count :=
-                          Item.Normalized.all'First;
-                        Q_At : constant Element_Count := Item.Query.all'First;
-                        K_At : constant Element_Count :=
-                          Item.Key_Row.all'First;
-                        V_At : constant Element_Count :=
-                          Item.Value_Row.all'First;
-                     begin
-                        for P in 0 .. Count - 1 loop
-                           Item.Normalized.all (N_At .. N_At + Width - 1) :=
-                             Norm.all (P * Width .. P * Width + Width - 1);
-                           MLA_Project (Item, Current, Status);
-                           exit when E.Is_Error (Status);
-                           Query.all (P * Wide .. P * Wide + Wide - 1) :=
-                             Item.Query.all (Q_At .. Q_At + Wide - 1);
-                           Keys.all
-                             (P * KV_Width .. P * KV_Width + KV_Width - 1) :=
-                             Item.Key_Row.all (K_At .. K_At + KV_Width - 1);
-                           Values.all
-                             (P * V_Width .. P * V_Width + V_Width - 1) :=
-                             Item.Value_Row.all (V_At .. V_At + V_Width - 1);
-                        end loop;
-                        exit when E.Is_Error (Status);
-                     end;
+                     --  DeepSeek's latent projection, every projection once
+                     --  over the batch; see MLA_Project_Batch.
+                     MLA_Project_Batch
+                       (Item, Current, Norm, Count, Query, Keys, Values,
+                        Status);
+                     exit when E.Is_Error (Status);
                   elsif Hybrid (Settings.Kind) then
                      Product_Batch
                        (Item, Current.Query, Norm, Count, Query_Full, Status);

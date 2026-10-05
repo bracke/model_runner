@@ -780,6 +780,15 @@ package Model_Runner.Platform.Device.Products is
       Apart     : Natural := 0;
       Routed    : Natural := 0);
 
+   --  Whether the routing steps of the model now open leave the chosen
+   --  experts' shares as the softmax gave them, rather than putting them
+   --  back on a scale where they sum to one. DeepSeek-V2 leaves them; every
+   --  other mixture here renormalizes. Set when a model prepares, before
+   --  any sequence routes.
+   --
+   --  @param Keep True to leave them.
+   procedure Keep_Route_Shares (Keep : Boolean);
+
    --  Name a mixture's routing for a sequence to perform.
    --
    --  Reads the step it names -- a router's product, Experts scores a
