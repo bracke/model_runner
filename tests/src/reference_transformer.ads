@@ -390,6 +390,11 @@ private
       Beta_Slow    : Long_Float := 1.0;
       Attenuation  : Long_Float := 1.0;
 
+      --  DeepSeek2 under YaRN: the scores' factor, the square of one plus
+      --  the file's yarn_log_multiplier times the log of the stretch, with
+      --  the rotation's magnitude left at the attenuation the file states.
+      Score_Gain   : Long_Float := 1.0;
+
       --  How far back a position may attend, counting itself. Zero is no
       --  window: everything before it is visible. Read from the model's own
       --  metadata here, as everything else is, so that the two
