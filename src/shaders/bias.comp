@@ -21,7 +21,9 @@
 //
 //  And a bias that is nobody's expert's: the one slice added to every
 //  row a product made, which is what a projection's bias is. Used is
-//  zero then, and the routing is not read.
+//  zero then, and the routing is not read. Such a step may also bound
+//  what it writes -- cap times the tanh of the answer over cap, the soft
+//  cap Gemma 2 puts on its logits -- with or without a bias before it.
 //
 //  And a gather whose members the host chose, named in the push block
 //  rather than read from a routing step: member m is the expert listed
@@ -29,7 +31,10 @@
 //  of a batch or a position's few experts one after another.
 //
 //  A workgroup a member -- a position and rank, or a slot -- its lanes
-//  over the slice.
+//  over the slice; and where there are few members, several workgroups
+//  a member down the second axis, each a stretch of the slice. A token's
+//  10240-wide bias was one workgroup whose lanes went forty times round,
+//  19.5 us; phi-2 adds four a layer.
 
 const uint LANES = 256u;
 
@@ -72,6 +77,11 @@ layout(push_constant) uniform Shape {
 
     //  The members the host chose, where listed is one: Used of them.
     uint members[16];
+
+    //  The bound a projection's answers are taken to, by its bits, or
+    //  nought for none; and whether there is no bias to add before it.
+    uint cap_bits;
+    uint no_bias;
 } shape;
 
 shared uint chosen;
@@ -79,6 +89,10 @@ shared uint chosen;
 void main() {
     uint member = gl_WorkGroupID.x;
     uint lane = gl_LocalInvocationID.x;
+
+    //  Where this workgroup's lanes begin in the slice, and their step.
+    uint start = gl_WorkGroupID.y * LANES + lane;
+    uint step_by = LANES * gl_NumWorkGroups.y;
 
     if (shape.used == 0u) {
         //  The answer is written a position after another, Each wide; the
@@ -89,8 +103,19 @@ void main() {
         uint out_at = member * shape.each;
         uint src_at = member * stride + shape.src_base;
 
-        for (uint c = lane; c < shape.each; c += LANES) {
-            y[out_at + c] = x[src_at + c] + b[shape.base + c];
+        float cap = uintBitsToFloat(shape.cap_bits);
+
+        for (uint c = start; c < shape.each; c += step_by) {
+            float v = x[src_at + c];
+            if (shape.no_bias == 0u) {
+                v += b[shape.base + c];
+            }
+            //  cap * tanh (v / cap), written as the host writes it: one
+            //  exponential, and at either end it comes back at the bound.
+            if (shape.cap_bits != 0u) {
+                v = cap * (2.0 / (1.0 + exp(-2.0 * (v / cap))) - 1.0);
+            }
+            y[out_at + c] = v;
         }
         return;
     }
@@ -99,7 +124,7 @@ void main() {
         uint expert = shape.members[member % shape.used];
         uint at = member * shape.each;
 
-        for (uint c = lane; c < shape.each; c += LANES) {
+        for (uint c = start; c < shape.each; c += step_by) {
             y[at + c] = x[at + c] + b[shape.base + expert * shape.each + c];
         }
         return;
@@ -112,7 +137,7 @@ void main() {
         uint expert = r[pos * 2u * shape.used + k];
         uint at = member * shape.each;
 
-        for (uint c = lane; c < shape.each; c += LANES) {
+        for (uint c = start; c < shape.each; c += step_by) {
             y[at + c] = x[at + c] + b[shape.base + expert * shape.each + c];
         }
         return;
@@ -138,7 +163,7 @@ void main() {
     uint expert = chosen;
     uint at = member * shape.each;
 
-    for (uint c = lane; c < shape.each; c += LANES) {
+    for (uint c = start; c < shape.each; c += step_by) {
         y[at + c] = x[at + c]
                     + (expert < shape.experts
                        ? b[shape.base + expert * shape.each + c] : 0.0);

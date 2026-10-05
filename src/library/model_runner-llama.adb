@@ -21111,14 +21111,26 @@ package body Model_Runner.Llama is
          declare
             Done : Boolean;
             Back : Boolean;
+
+            --  Where the bound is the only thing finishing the logits, the
+            --  device takes it after the head rather than the host over
+            --  every logit while the device waits.
+            Cap_There : constant Boolean :=
+              Settings.Logit_Cap > 0.0
+              and then Source.Output_Bias = null
+              and then Settings.Kind not in Granite | Granite_MoE | Command_R;
          begin
             Model_Runner.Backend.Device.Normalize_And_Project
               ([Source.Output], Item.Activation, Source.Output_Norm.all,
                Settings.Epsilon, [Row], Done,
-               Cancel => Item.Stopping, Carry_In => True);
+               Cancel => Item.Stopping, Carry_In => True,
+               Cap => (if Cap_There then Settings.Logit_Cap else 0.0));
 
             if Done then
                Charge (Item, Reading_Out, Mark);
+               if Cap_There then
+                  goto Logits_Finished;
+               end if;
                goto Logits_Made;
             end if;
 
@@ -21155,6 +21167,8 @@ package body Model_Runner.Llama is
       <<Logits_Made>>
 
       Finish_Logits (Source, Row.all);
+
+      <<Logits_Finished>>
 
       --  Commit: the position becomes readable context only now, after every
       --  layer of this token has succeeded.

@@ -10192,7 +10192,15 @@ package body Model_Runner.Platform.Device.Products is
       Members     : Member_List := [others => 0];
       Count       : Natural := 0;
       Source_At     : Natural := 0;
-      Source_Stride : Natural := 0) is
+      Source_Stride : Natural := 0;
+      Cap           : Model_Runner.Numerics.Real := 0.0) is
+
+      use type Model_Runner.Numerics.Real;
+
+      --  A bound with no bias: a projection's rows, capped and nothing
+      --  added.
+      Cap_Only : constant Boolean :=
+        Base = System.Null_Address and then Cap > 0.0;
 
       --  A sliced bias reads Each rows out of a wider fused product, its own
       --  lying at Source_At and every Source_Stride after; the stride is the
@@ -10203,10 +10211,18 @@ package body Model_Runner.Platform.Device.Products is
       Added := False;
 
       if Steps.Held = Sequence_Limit
-        or else Base = System.Null_Address
+        or else (Base = System.Null_Address and then not Cap_Only)
+        or else (Cap_Only
+                 and then (Experts /= 1 or else Route_Step /= 0
+                           or else Count /= 0 or else Source_Stride /= 0))
+        or else Cap < 0.0
         or else Experts = 0
         or else Each = 0
-        or else Span < At_Byte + Model_Runner.Bytes.Byte_Count (Experts * Each) * 4
+        or else (not Cap_Only
+                 and then Span
+                          < At_Byte
+                            + Model_Runner.Bytes.Byte_Count (Experts * Each)
+                              * 4)
         or else Source_Step > Steps.Held
         or else Route_Step > Steps.Held
         or else (not Sliced and then Steps.Items (Source_Step).Rows mod Each /= 0)
@@ -10256,8 +10272,8 @@ package body Model_Runner.Platform.Device.Products is
          Reads_At => Source_At, Reads_Stride => Source_Stride,
          Key => Key,
          Chained => True, Reads => Source_Step, Reads_Two => Route_Step,
-         Kept => Kept, Biases => True,
-         Stack => Experts, Each => Each,
+         Kept => Kept, Biases => True, Cap => Cap,
+         Stack => (if Cap_Only then 0 else Experts), Each => Each,
          Used => (if Count > 0 then Count
                   elsif Route_Step = 0 then 0
                   else Steps.Items (Route_Step).Used),
@@ -11615,7 +11631,8 @@ package body Model_Runner.Platform.Device.Products is
                --  keeps the way it keeps a matrix, and reads a gathered
                --  product and its routing.
                if This.Rows = 0
-                 or else This.Base = System.Null_Address
+                 or else (This.Base = System.Null_Address
+                          and then This.Stack /= 0)
                  or else This.Reads = 0
                  or else This.Reads > Steps.Held
                  or else This.Reads_Two > Steps.Held
@@ -12076,6 +12093,7 @@ package body Model_Runner.Platform.Device.Products is
               or else This.Picks
               or else (This.Routes and then This.Base = System.Null_Address)
               or else (This.Readies and then This.Base = System.Null_Address)
+              or else (This.Biases and then This.Base = System.Null_Address)
             then
                goto Next_Step;
             end if;
@@ -12677,11 +12695,15 @@ package body Model_Runner.Platform.Device.Products is
             if Steps.Items (Index).Biases then
                --  The bias stack, the gathered answers it is added to,
                --  its own room out, and the routing that says which
-               --  expert each answer is.
-               Told (1) :=
-                 (Buffer => Places (Index).Buffer, Offset => 0,
-                  Extent => Places (Index).Base + Places (Index).Weight);
+               --  expert each answer is. A bound with no bias binds its
+               --  source at nought too, and does not read it there.
                Told (2) := Source_Of (Index, Steps.Items (Index).Reads);
+               Told (1) :=
+                 (if Steps.Items (Index).Base = System.Null_Address
+                  then Told (2)
+                  else (Buffer => Places (Index).Buffer, Offset => 0,
+                        Extent =>
+                          Places (Index).Base + Places (Index).Weight));
                Told (3) :=
                  (Buffer => Item.Result_Buffer,
                   Offset => Places (Index).At_Byte,
@@ -14338,6 +14360,9 @@ package body Model_Runner.Platform.Device.Products is
                     (Item.Buffer, Bind_Point_Compute, Item.Bias_Line);
 
                   declare
+                     function Bits is new Ada.Unchecked_Conversion
+                       (Model_Runner.Numerics.Real, C.unsigned);
+
                      --  A workgroup a member: a position's rank, or a
                      --  slot of the inversion's runs, which is every
                      --  answer the source made.
@@ -14375,11 +14400,30 @@ package body Model_Runner.Platform.Device.Products is
                         Members =>
                           [for Which in Member_Words'Range =>
                              C.unsigned (This.Members (Which + 1))],
+
+                        --  The bound, by its bits, and whether there is no
+                        --  bias to add before it.
+                        Stride  => Bits (This.Cap),
+                        Apart   =>
+                          (if This.Base = System.Null_Address then 1 else 0),
                         others  => <>);
+
+                     --  Few members are spread down the second axis, a
+                     --  stretch of 256 of the slice a workgroup, until
+                     --  there are about as many workgroups as the device
+                     --  wants.
+                     Spread : constant Natural :=
+                       (if Members >= Want_Workgroups then 1
+                        else Natural'Max
+                               (1, Natural'Min
+                                     ((This.Each + 255) / 256,
+                                      Want_Workgroups
+                                      / Natural'Max (1, Members))));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
-                     Dispatch (Item.Buffer, C.unsigned (Members), 1, 1);
+                     Dispatch (Item.Buffer, C.unsigned (Members),
+                               C.unsigned (Spread), 1);
                   end;
 
                   Bind_Pipeline

@@ -982,6 +982,10 @@ package Model_Runner.Platform.Device.Products is
    --  @param Source_Stride Gap between the fused source's rows, so every
    --    Source_Stride after Source_At. Both zero is a bias over the whole
    --    source.
+   --  @param Cap Where positive, each answer is taken to Cap times the
+   --    tanh of it over Cap after the bias -- the bound some architectures
+   --    put on their logits. Base may then be null, for a bound alone over
+   --    a projection's rows.
    procedure Add_Bias
      (Steps       : in out Sequence;
       Base        : System.Address;
@@ -997,7 +1001,8 @@ package Model_Runner.Platform.Device.Products is
       Members     : Member_List := [others => 0];
       Count       : Natural := 0;
       Source_At     : Natural := 0;
-      Source_Stride : Natural := 0);
+      Source_Stride : Natural := 0;
+      Cap           : Model_Runner.Numerics.Real := 0.0);
 
    --  What an RWKV6 step does: see Add_Rwkv.
    type Rwkv_Mode is (Shift, Decay, Tanh, Squared_Relu, Finish, Save);
@@ -3714,6 +3719,8 @@ private
       V_Width    : Natural := 0;
       Window     : Natural := 0;
       Scale      : Model_Runner.Numerics.Real := 1.0;
+      --  An attention's bound on its scores; a biasing step's on what it
+      --  writes, after the bias, where it may carry no bias at all.
       Cap        : Model_Runner.Numerics.Real := 0.0;
       Max_Bias   : Model_Runner.Numerics.Real := 0.0;
 

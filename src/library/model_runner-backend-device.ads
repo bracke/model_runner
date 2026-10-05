@@ -1081,6 +1081,10 @@ package Model_Runner.Backend.Device is
    --  @param Carry_In True where the input is what the sequence before
    --    left on the device rather than Vector, which then says only how
    --    long it is: a token's output head after its last layer.
+   --  @param Cap Where positive, the one result is taken to Cap times the
+   --    tanh of it over Cap on the device -- Gemma 2's bound on its logits,
+   --    which the host took over 256,000 of them a token while the device
+   --    waited. Nought leaves the results as the products made them.
    procedure Normalize_And_Project
      (Weights     : Model_Runner.Tensors.View_Group;
       Vector      : Model_Runner.Tensors.Real_Array_Access;
@@ -1095,7 +1099,8 @@ package Model_Runner.Backend.Device is
       Rotary      : Natural := 0;
       Split       : Boolean := False;
       Cancel      : Model_Runner.Cancellation.Token_Reference := null;
-      Carry_In    : Boolean := False);
+      Carry_In    : Boolean := False;
+      Cap         : Model_Runner.Numerics.Real := 0.0);
 
    --  A mixture's shared expert for one position, sent over and not waited
    --  for: the normalization the feed-forward reads, the gated block, and

@@ -1930,7 +1930,8 @@ package body Model_Runner.Backend.Device is
       Rotary      : Natural := 0;
       Split       : Boolean := False;
       Cancel      : Model_Runner.Cancellation.Token_Reference := null;
-      Carry_In    : Boolean := False)
+      Carry_In    : Boolean := False;
+      Cap         : Model_Runner.Numerics.Real := 0.0)
    is
 
       Slots : constant Model_Runner.Numerics.Element_Count :=
@@ -1954,6 +1955,11 @@ package body Model_Runner.Backend.Device is
         and then Rotary <= Head_Size
         and then Turns'Length
                    = Slots * Model_Runner.Numerics.Element_Count (Rotary);
+
+      --  Whether the one result is bounded on the device.
+      Capping : constant Boolean :=
+        Model_Runner.Numerics.">" (Cap, 0.0) and then Weights'Length = 1
+        and then not Rotating;
    begin
       Ok := False;
 
@@ -2019,13 +2025,15 @@ package body Model_Runner.Backend.Device is
 
             --  A result the rotation reaches is not what the host reads:
             --  the turning below writes its own answer and that is the one
-            --  kept, so the product's own room is stepped over.
+            --  kept, so the product's own room is stepped over. Nor is a
+            --  capped one: the bound after it is kept instead.
             Products.Add_Chained_Product
               (Steps, This.Base, This.Span, This.Offset, Packing,
                Natural (This.Rows), Natural (This.Columns), Added,
                Key => At_Offset (This.Base, This.Offset),
                Kept => not (Rotating
-                            and then Index - Weights'First < Turned),
+                            and then Index - Weights'First < Turned)
+                       and then not Capping,
                From_Step => 1);
 
             if not Added then
@@ -2035,6 +2043,20 @@ package body Model_Runner.Backend.Device is
             Wanted := Wanted + This.Rows * Slots;
          end;
       end loop;
+
+      --  The bound over the one result, as a bias step carrying no bias.
+      if Capping then
+         Products.Add_Bias
+           (Steps, System.Null_Address, 0, 0, 1,
+            Natural (Weights (Weights'First).Rows), 2, 0, Added,
+            Kept => True, Cap => Cap);
+
+         if not Added then
+            return;
+         end if;
+
+         Wanted := Wanted + Weights (Weights'First).Rows * Slots;
+      end if;
 
       --  And the turning, one step for each result it reaches, each reading
       --  the product that made it.
