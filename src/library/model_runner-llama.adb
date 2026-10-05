@@ -17259,6 +17259,529 @@ package body Model_Runner.Llama is
         (Item, Source, Current, Layer_Index, Item.Normalized, 1, Status);
    end Mamba2_Step;
 
+   --  A small binary32 table against a batch of vectors, a share of the
+   --  table's rows each: Out (P, J) := the unit of Tab (J) . X (P), the
+   --  vector read Seg_Width further along for every Seg_Rows rows -- RWKV6's
+   --  second shift projection reads each stream's own ranks. Kind 0 is no
+   --  unit, 1 the hyperbolic tangent, 2 the decay exp (-exp (Bias + x)).
+   type Table_Share is limited new Workers_CPU.Task_Item with record
+      Tab        : T.Real_Array_Access := null;
+      Width      : Element_Count := 0;
+      X          : T.Real_Array_Access := null;
+      X_Stride   : Element_Count := 0;
+      Seg_Rows   : Element_Count := 1;
+      Seg_Width  : Element_Count := 0;
+      Count      : Element_Count := 0;
+      Out_Rows   : T.Real_Array_Access := null;
+      Out_Stride : Element_Count := 0;
+      Kind       : Natural := 0;
+      Bias       : T.Real_Array_Access := null;
+   end record;
+
+   overriding procedure Run
+     (Share : in out Table_Share;
+      From  : Element_Count;
+      To    : Element_Count);
+
+   overriding procedure Run
+     (Share : in out Table_Share;
+      From  : Element_Count;
+      To    : Element_Count)
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      Width : constant Element_Count := Share.Width;
+      Whole : constant Element_Count := Width - Width mod 8;
+      Tab   : Real_Array renames Share.Tab.all;
+      X     : Real_Array renames Share.X.all;
+   begin
+      for J in From .. To loop
+         declare
+            Row  : constant Element_Count := J * Width;
+            Xoff : constant Element_Count :=
+              (J / Share.Seg_Rows) * Share.Seg_Width;
+         begin
+            for P in 0 .. Share.Count - 1 loop
+               declare
+                  At_X : constant Element_Count := P * Share.X_Stride + Xoff;
+                  L0, L1, L2, L3, L4, L5, L6, L7 : Real := 0.0;
+                  Acc : N.Wide_Real;
+               begin
+                  for C in 0 .. Whole / 8 - 1 loop
+                     declare
+                        A : constant Element_Count := Row + C * 8;
+                        B : constant Element_Count := At_X + C * 8;
+                     begin
+                        L0 := L0 + Tab (A) * X (B);
+                        L1 := L1 + Tab (A + 1) * X (B + 1);
+                        L2 := L2 + Tab (A + 2) * X (B + 2);
+                        L3 := L3 + Tab (A + 3) * X (B + 3);
+                        L4 := L4 + Tab (A + 4) * X (B + 4);
+                        L5 := L5 + Tab (A + 5) * X (B + 5);
+                        L6 := L6 + Tab (A + 6) * X (B + 6);
+                        L7 := L7 + Tab (A + 7) * X (B + 7);
+                     end;
+                  end loop;
+                  for C in Whole .. Width - 1 loop
+                     L0 := L0 + Tab (Row + C) * X (At_X + C);
+                  end loop;
+                  Acc := N.Wide_Real (((L0 + L1) + (L2 + L3))
+                                      + ((L4 + L5) + (L6 + L7)));
+                  Share.Out_Rows (P * Share.Out_Stride + J) :=
+                    (case Share.Kind is
+                        when 1 => Real (N.Tanh (Acc)),
+                        when 2 =>
+                          Real (N.Exp (-N.Exp (N.Wide_Real (Share.Bias (J))
+                                               + Acc))),
+                        when others => Real (Acc));
+               end;
+            end loop;
+         end;
+      end loop;
+   end Run;
+
+   --  RWKV6's linear-attention recurrence over a batch, a share of the heads
+   --  each: a head's state is its width by its width, and the positions go
+   --  in order, each answer reading the state before the update with the
+   --  bonus lifting the position's own key-value out of the decay.
+   type Wkv_Share is limited new Workers_CPU.Task_Item with record
+      Count : Element_Count := 0;
+      RW    : Element_Count := 0;
+      HN    : Element_Count := 0;
+      Base  : Element_Count := 0;
+      St    : T.Real_Array_Access := null;
+      U     : T.Real_Array_Access := null;
+      R     : T.Real_Array_Access := null;
+      K_Row : T.Real_Array_Access := null;
+      V     : T.Real_Array_Access := null;
+      W     : T.Real_Array_Access := null;
+      Y     : T.Real_Array_Access := null;
+   end record;
+
+   overriding procedure Run
+     (Share : in out Wkv_Share;
+      From  : Element_Count;
+      To    : Element_Count);
+
+   overriding procedure Run
+     (Share : in out Wkv_Share;
+      From  : Element_Count;
+      To    : Element_Count)
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      HN : constant Element_Count := Share.HN;
+      St : Real_Array renames Share.St.all;
+      Y  : Real_Array renames Share.Y.all;
+   begin
+      for H in From .. To loop
+         declare
+            SB : constant Element_Count := Share.Base + H * HN * HN;
+         begin
+            for P in 0 .. Share.Count - 1 loop
+               declare
+                  At_Row : constant Element_Count := P * Share.RW + H * HN;
+               begin
+                  for J in 0 .. HN - 1 loop
+                     Y (At_Row + J) := 0.0;
+                  end loop;
+                  --  A row of the state a key element, so the update and
+                  --  the answer run along the value width.
+                  for I in 0 .. HN - 1 loop
+                     declare
+                        Ki   : constant Real := Share.K_Row (At_Row + I);
+                        Ri   : constant Real := Share.R (At_Row + I);
+                        Ui   : constant Real := Share.U (H * HN + I);
+                        Wi   : constant Real := Share.W (At_Row + I);
+                        Cell : constant Element_Count := SB + I * HN;
+                     begin
+                        for J in 0 .. HN - 1 loop
+                           declare
+                              KV  : constant Real :=
+                                Ki * Share.V (At_Row + J);
+                              Old : constant Real := St (Cell + J);
+                           begin
+                              Y (At_Row + J) :=
+                                Y (At_Row + J) + Ri * (Ui * KV + Old);
+                              St (Cell + J) := Wi * Old + KV;
+                           end;
+                        end loop;
+                     end;
+                  end loop;
+               end;
+            end loop;
+         end;
+      end loop;
+   end Run;
+
+   --  The answer's per-head normalization -- centred, a floor of its own --
+   --  scaled by the stored gain and shift, then weighted by the
+   --  sigmoid-weighted gate, a share of the positions each.
+   type Wkv_Out_Share is limited new Workers_CPU.Task_Item with record
+      RW    : Element_Count := 0;
+      HN    : Element_Count := 0;
+      Gain  : T.Real_Array_Access := null;
+      Shift : T.Real_Array_Access := null;
+      G     : T.Real_Array_Access := null;
+      Y     : T.Real_Array_Access := null;
+   end record;
+
+   overriding procedure Run
+     (Share : in out Wkv_Out_Share;
+      From  : Element_Count;
+      To    : Element_Count);
+
+   overriding procedure Run
+     (Share : in out Wkv_Out_Share;
+      From  : Element_Count;
+      To    : Element_Count)
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      RW    : constant Element_Count := Share.RW;
+      HN    : constant Element_Count := Share.HN;
+      Floor : constant N.Wide_Real := 64.0e-5;
+      Y     : Real_Array renames Share.Y.all;
+      Gate  : Real_Array (0 .. RW - 1);
+   begin
+      for P in From .. To loop
+         for H in 0 .. RW / HN - 1 loop
+            declare
+               Base : constant Element_Count := P * RW + H * HN;
+               Mean : N.Wide_Real := 0.0;
+               Var  : N.Wide_Real := 0.0;
+               Inv  : Real;
+               M    : Real;
+            begin
+               for I in 0 .. HN - 1 loop
+                  Mean := Mean + N.Wide_Real (Y (Base + I));
+               end loop;
+               Mean := Mean / N.Wide_Real (HN);
+               for I in 0 .. HN - 1 loop
+                  Var := Var
+                    + (N.Wide_Real (Y (Base + I)) - Mean)
+                      * (N.Wide_Real (Y (Base + I)) - Mean);
+               end loop;
+               Inv := Real (1.0 / N.Sqrt (Var / N.Wide_Real (HN) + Floor));
+               M := Real (Mean);
+               for I in 0 .. HN - 1 loop
+                  Y (Base + I) :=
+                    (Y (Base + I) - M) * Inv * Share.Gain (H * HN + I)
+                    + Share.Shift (H * HN + I);
+               end loop;
+            end;
+         end loop;
+
+         Gate := Share.G (P * RW .. P * RW + RW - 1);
+         K.SiLU (Gate);
+         for C in 0 .. RW - 1 loop
+            Y (P * RW + C) := Y (P * RW + C) * Gate (C);
+         end loop;
+      end loop;
+   end Run;
+
+   --  Count positions through one RWKV6 block. Cur holds their ln1 outputs
+   --  and Acts their residual stream, Width apart; Into receives the block's
+   --  output -- both residuals taken, and the rescale -- and may be Acts. The
+   --  token shifts are a subtraction a position; every projection, large or
+   --  small, is taken once over the batch; the recurrence is the team's, a
+   --  share of the heads each, its positions in order. A generated token is
+   --  a batch of one.
+   procedure RWKV6_Batch
+     (Item        : in out Session;
+      Source      : Model'Class;
+      Current     : Layer;
+      Layer_Index : Natural;
+      Cur         : T.Real_Array_Access;
+      Acts        : T.Real_Array_Access;
+      Count       : Element_Count;
+      Into        : T.Real_Array_Access;
+      Status      : out E.Error_Info)
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      Settings : Configuration renames Source.Settings;
+      RW    : constant Element_Count := Element_Count (Settings.Embedding);
+      Heads : constant Element_Count := Element_Count (Settings.Ssm_Heads);
+      HN    : constant Element_Count := Element_Count (Settings.Head_Dim);
+      D_TM  : constant Element_Count := Element_Count (Settings.Mix_Extra);
+      D_Dec : constant Element_Count := Element_Count (Settings.Decay_Extra);
+      Feed  : constant Element_Count := Element_Count (Settings.Feed_Forward);
+      Rows  : constant Element_Count := Count * RW;
+
+      Conv_Base  : constant Element_Count := Conv_At (Settings, Layer_Index);
+      State_Base : constant Element_Count := State_At (Settings, Layer_Index);
+
+      Mem : Real_Array renames Item.Conv_State.all;
+      C0  : constant Element_Count := Cur.all'First;
+      A0  : constant Element_Count := Acts.all'First;
+
+      Sx, Xs, WL, Lora, Xw, Xk, Xv, Xr, Xg, D1, Ww : T.Real_Array_Access;
+      Rr, Kk, Vv, Gg, Y, Inp, N2, CK, CR, CV : T.Real_Array_Access;
+
+      procedure Release is
+      begin
+         T.Free (Sx); T.Free (Xs); T.Free (WL); T.Free (Lora);
+         T.Free (Xw); T.Free (Xk); T.Free (Xv); T.Free (Xr); T.Free (Xg);
+         T.Free (D1); T.Free (Ww); T.Free (Rr); T.Free (Kk); T.Free (Vv);
+         T.Free (Gg); T.Free (Y); T.Free (Inp); T.Free (N2);
+         T.Free (CK); T.Free (CR); T.Free (CV);
+      end Release;
+
+      procedure Project
+        (Weight : T.View; From, Target : T.Real_Array_Access) is
+      begin
+         if Count = 1 then
+            Product (Item, Weight, From, Target, Status);
+         else
+            Product_Batch (Item, Weight, From, Count, Target, Status);
+         end if;
+      end Project;
+
+      procedure Table
+        (Tab : T.Real_Array_Access; Rows_Of, Width_Of : Element_Count;
+         X : T.Real_Array_Access; X_Stride : Element_Count;
+         Target : T.Real_Array_Access; Out_Stride : Element_Count;
+         Kind : Natural;
+         Seg_Rows  : Element_Count := 0;
+         Seg_Width : Element_Count := 0;
+         Bias : T.Real_Array_Access := null)
+      is
+         Share : aliased Table_Share :=
+           (Tab        => Tab, Width => Width_Of, X => X,
+            X_Stride   => X_Stride,
+            Seg_Rows   => (if Seg_Rows = 0 then Rows_Of else Seg_Rows),
+            Seg_Width  => Seg_Width, Count => Count, Out_Rows => Target,
+            Out_Stride => Out_Stride, Kind => Kind, Bias => Bias);
+      begin
+         if E.Is_Ok (Status) then
+            Workers_CPU.Dispatch_Shares
+              (Item.Team, Rows_Of, Share'Unchecked_Access, Status,
+               Cost => Rows_Of * Width_Of * Count);
+         end if;
+      end Table;
+
+      --  Stream S of the time mix's shift, for every position, into Target:
+      --  the input moved toward the position before by the stream's own
+      --  mix, fixed and data-dependent.
+      procedure Stream (S : Element_Count; Target : T.Real_Array_Access) is
+      begin
+         for P in 0 .. Count - 1 loop
+            for C in 0 .. RW - 1 loop
+               Target (P * RW + C) :=
+                 Cur (C0 + P * RW + C)
+                 + Sx (P * RW + C)
+                   * (Current.Rwkv_Lerp_Fused.all (S * RW + C)
+                      + Lora (P * 5 * RW + S * RW + C));
+            end loop;
+         end loop;
+      end Stream;
+   begin
+      Status := E.Success;
+
+      T.Allocate (Rows, Sx);       T.Allocate (Rows, Xs);
+      T.Allocate (Count * 5 * D_TM, WL);
+      T.Allocate (Count * 5 * RW, Lora);
+      T.Allocate (Rows, Xw);       T.Allocate (Rows, Xk);
+      T.Allocate (Rows, Xv);       T.Allocate (Rows, Xr);
+      T.Allocate (Rows, Xg);       T.Allocate (Count * D_Dec, D1);
+      T.Allocate (Rows, Ww);       T.Allocate (Rows, Rr);
+      T.Allocate (Rows, Kk);       T.Allocate (Rows, Vv);
+      T.Allocate (Rows, Gg);       T.Allocate (Rows, Y);
+      T.Allocate (Rows, Inp);      T.Allocate (Rows, N2);
+      T.Allocate (Count * Feed, CK);
+      T.Allocate (Rows, CR);       T.Allocate (Rows, CV);
+      if Sx = null or else Xs = null or else WL = null or else Lora = null
+        or else Xw = null or else Xk = null or else Xv = null
+        or else Xr = null or else Xg = null or else D1 = null
+        or else Ww = null or else Rr = null or else Kk = null
+        or else Vv = null or else Gg = null or else Y = null
+        or else Inp = null or else N2 = null or else CK = null
+        or else CR = null or else CV = null
+      then
+         Release;
+         Status := E.Make (E.Memory_Allocation_Failed);
+         return;
+      end if;
+
+      --  === Time mix ===
+      --  Each position's shift against the one before -- the first against
+      --  the ln1 output the last batch left in the first slot -- and the
+      --  plain mix that feeds the data-dependent one.
+      for P in 0 .. Count - 1 loop
+         for C in 0 .. RW - 1 loop
+            declare
+               Before : constant Real :=
+                 (if P = 0 then Mem (Conv_Base + C)
+                  else Cur (C0 + (P - 1) * RW + C));
+               Here   : constant Real := Cur (C0 + P * RW + C);
+            begin
+               Sx (P * RW + C) := Before - Here;
+               Xs (P * RW + C) :=
+                 Here + Sx (P * RW + C) * Current.Rwkv_Lerp_X.all (C);
+            end;
+         end loop;
+      end loop;
+
+      --  The data-dependent mix: five ranks through a tanh, then each
+      --  stream's ranks back to the model width through its own map.
+      Table (Current.Rwkv_TM_W1, 5 * D_TM, RW, Xs, RW, WL, 5 * D_TM, 1);
+      Table (Current.Rwkv_TM_W2, 5 * RW, D_TM, WL, 5 * D_TM, Lora, 5 * RW, 0,
+             Seg_Rows => RW, Seg_Width => D_TM);
+      if E.Is_Error (Status) then
+         Release;
+         return;
+      end if;
+
+      --  Receptance, key, value and the gate, each from its own stream.
+      Stream (3, Xr);
+      Stream (1, Xk);
+      Stream (2, Xv);
+      Stream (4, Xg);
+      Stream (0, Xw);
+      Project (Current.Rwkv_R, Xr, Rr);
+      if E.Is_Ok (Status) then
+         Project (Current.Rwkv_K, Xk, Kk);
+      end if;
+      if E.Is_Ok (Status) then
+         Project (Current.Rwkv_V, Xv, Vv);
+      end if;
+      if E.Is_Ok (Status) then
+         Project (Current.Rwkv_G, Xg, Gg);
+      end if;
+
+      --  The decay a channel: its stream through two low projections and a
+      --  tanh, biased, and the double exponential that keeps it in (0, 1).
+      Table (Current.Rwkv_Decay_W1, D_Dec, RW, Xw, RW, D1, D_Dec, 1);
+      Table (Current.Rwkv_Decay_W2, RW, D_Dec, D1, D_Dec, Ww, RW, 2,
+             Bias => Current.Rwkv_Decay);
+      if E.Is_Error (Status) then
+         Release;
+         return;
+      end if;
+
+      --  The recurrence, the team's.
+      declare
+         Share : aliased Wkv_Share :=
+           (Count => Count, RW => RW, HN => HN, Base => State_Base,
+            St    => Item.Delta_State, U => Current.Rwkv_First,
+            R     => Rr, K_Row => Kk, V => Vv, W => Ww, Y => Y);
+      begin
+         Workers_CPU.Dispatch_Shares
+           (Item.Team, Heads, Share'Unchecked_Access, Status,
+            Cost => Heads * HN * HN * Count * 3);
+      end;
+      if E.Is_Error (Status) then
+         Release;
+         return;
+      end if;
+
+      --  Its normalization and the gate, a share of the positions each.
+      declare
+         Share : aliased Wkv_Out_Share :=
+           (RW => RW, HN => HN, Gain => Current.Rwkv_TM_LN,
+            Shift => Current.Rwkv_TM_LN_Bias, G => Gg, Y => Y);
+      begin
+         Workers_CPU.Dispatch_Shares
+           (Item.Team, Count, Share'Unchecked_Access, Status,
+            Cost => Rows * 4);
+      end;
+      if E.Is_Error (Status) then
+         Release;
+         return;
+      end if;
+
+      --  The way out of the time mix, and the first residual.
+      Project (Current.Rwkv_TM_Out, Y, N2);
+      if E.Is_Error (Status) then
+         Release;
+         return;
+      end if;
+      for I in 0 .. Rows - 1 loop
+         Inp (I) := N2 (I) + Acts (A0 + I);
+      end loop;
+
+      --  The last position's ln1 output, kept for the next batch's shift.
+      Mem (Conv_Base .. Conv_Base + RW - 1) :=
+        Cur (C0 + (Count - 1) * RW .. C0 + Count * RW - 1);
+
+      --  === Channel mix ===
+      --  ln2 of the first residual a position, and its shift against the
+      --  position before -- the first against the second slot's.
+      for P in 0 .. Count - 1 loop
+         Normalize
+           (Source, Inp (P * RW .. P * RW + RW - 1),
+            Current.Second_Attention_Norm.all,
+            Current.Second_Attention_Norm_Bias,
+            N2 (P * RW .. P * RW + RW - 1));
+      end loop;
+      for P in 0 .. Count - 1 loop
+         for C in 0 .. RW - 1 loop
+            declare
+               Before : constant Real :=
+                 (if P = 0 then Mem (Conv_Base + RW + C)
+                  else N2 ((P - 1) * RW + C));
+               Here   : constant Real := N2 (P * RW + C);
+               Shift  : constant Real := Before - Here;
+            begin
+               Xk (P * RW + C) :=
+                 Here + Shift * Current.Rwkv_CM_Lerp_K.all (C);
+               Xr (P * RW + C) :=
+                 Here + Shift * Current.Rwkv_CM_Lerp_R.all (C);
+            end;
+         end loop;
+      end loop;
+      Mem (Conv_Base + RW .. Conv_Base + 2 * RW - 1) :=
+        N2 ((Count - 1) * RW .. Count * RW - 1);
+
+      --  The key's stream squared-ReLU'd, the receptance's through a
+      --  sigmoid, and the value of the key weighted by it.
+      Project (Current.Rwkv_CM_K, Xk, CK);
+      if E.Is_Ok (Status) then
+         for I in 0 .. Count * Feed - 1 loop
+            CK (I) := (if CK (I) > 0.0 then CK (I) * CK (I) else 0.0);
+         end loop;
+         Project (Current.Rwkv_CM_R, Xr, CR);
+      end if;
+      if E.Is_Ok (Status) then
+         Project (Current.Rwkv_CM_V, CK, CV);
+      end if;
+      if E.Is_Error (Status) then
+         Release;
+         return;
+      end if;
+
+      --  The second residual, and the rescale every so many layers that
+      --  keeps the residual from growing without bound over the depth.
+      declare
+         Halve : constant Boolean :=
+           Settings.Rescale_Every > 0
+           and then (Layer_Index + 1) mod Settings.Rescale_Every = 0;
+      begin
+         for I in 0 .. Rows - 1 loop
+            declare
+               Value : constant Real :=
+                 Inp (I)
+                 + Real (1.0 / (1.0 + N.Exp (-N.Wide_Real (CR (I)))))
+                   * CV (I);
+            begin
+               Into (Into.all'First + I) :=
+                 (if Halve then Value * 0.5 else Value);
+            end;
+         end loop;
+      end;
+
+      Release;
+   end RWKV6_Batch;
+
    --  One position through one RWKV6 layer, on the host. Two sublayers each
    --  with its own residual, and no attention or feed-forward: a time mix
    --  where attention would be and a channel mix where the feed-forward
@@ -17281,305 +17804,10 @@ package body Model_Runner.Llama is
       Layer_Index : Natural;
       Status      : out E.Error_Info)
    is
-      Settings : Configuration renames Source.Settings;
-      RW    : constant Element_Count := Element_Count (Settings.Embedding);
-      Heads : constant Element_Count := Element_Count (Settings.Ssm_Heads);
-      HN    : constant Element_Count := Element_Count (Settings.Head_Dim);
-      D_TM  : constant Element_Count := Element_Count (Settings.Mix_Extra);
-      D_Dec : constant Element_Count := Element_Count (Settings.Decay_Extra);
-
-      Conv_Base  : constant Element_Count := Conv_At (Settings, Layer_Index);
-      State_Base : constant Element_Count := State_At (Settings, Layer_Index);
-
-      Group_Eps : constant N.Wide_Real := 64.0e-5;
-
-      Mem : Real_Array renames Item.Conv_State.all;
-      St  : Real_Array renames Item.Delta_State.all;
-      Cur : Real_Array renames Item.Normalized.all;
-      Sx  : Real_Array renames Item.Rwkv_N1.all;
-      Xs  : Real_Array renames Item.Rwkv_Mix.all;
-      Lora : Real_Array renames Item.Rwkv_Lora.all;
-      W1  : Real_Array renames Current.Rwkv_TM_W1.all;
-      W2  : Real_Array renames Current.Rwkv_TM_W2.all;
-
-      function Sigmoid (X : N.Wide_Real) return N.Wide_Real
-      is (1.0 / (1.0 + N.Exp (-X)));
-
-      --  The chosen stream (0=w 1=k 2=v 3=r 4=g) shifted against the
-      --  position before through its own interpolation, into Xs.
-      procedure Stream (S_At : Element_Count) is
-      begin
-         for C in 0 .. RW - 1 loop
-            Xs (C) :=
-              Cur (C)
-              + Sx (C)
-                * (Current.Rwkv_Lerp_Fused.all (S_At * RW + C)
-                   + Lora (S_At * RW + C));
-         end loop;
-      end Stream;
    begin
-      Status := E.Success;
-
-      --  === Time mix ===
-      --  The shift against the position before -- its ln1 output, kept in
-      --  the first convolution slot -- and the interpolation it feeds.
-      for C in 0 .. RW - 1 loop
-         Sx (C) := Mem (Conv_Base + C) - Cur (C);
-      end loop;
-
-      --  The data-dependent part of the interpolation: the shifted input
-      --  through the first low projection and a tanh, five ranks, then each
-      --  rank back to the model width through its own map -- one a stream.
-      for C in 0 .. RW - 1 loop
-         Xs (C) := Cur (C) + Sx (C) * Current.Rwkv_Lerp_X.all (C);
-      end loop;
-      for J in 0 .. 5 * D_TM - 1 loop
-         declare
-            Acc : N.Wide_Real := 0.0;
-         begin
-            for C in 0 .. RW - 1 loop
-               Acc := Acc + N.Wide_Real (W1 (J * RW + C)) * N.Wide_Real (Xs (C));
-            end loop;
-            Item.Rwkv_WLora.all (J) := Real (N.Tanh (Acc));
-         end;
-      end loop;
-      for Str in 0 .. 4 loop
-         for Out_C in 0 .. RW - 1 loop
-            declare
-               Acc : N.Wide_Real := 0.0;
-            begin
-               for K in 0 .. D_TM - 1 loop
-                  Acc := Acc
-                    + N.Wide_Real
-                        (W2 ((Element_Count (Str) * RW + Out_C) * D_TM + K))
-                      * N.Wide_Real
-                          (Item.Rwkv_WLora.all (Element_Count (Str) * D_TM + K));
-               end loop;
-               Lora (Element_Count (Str) * RW + Out_C) := Real (Acc);
-            end;
-         end loop;
-      end loop;
-
-      --  Receptance, key, value and the gate, each from its own shifted
-      --  stream through its own product.
-      Stream (3);
-      Product (Item, Current.Rwkv_R, Item.Rwkv_Mix, Item.Rwkv_Rr, Status);
-      if E.Is_Error (Status) then
-         return;
-      end if;
-      Stream (1);
-      Product (Item, Current.Rwkv_K, Item.Rwkv_Mix, Item.Rwkv_Kk, Status);
-      if E.Is_Error (Status) then
-         return;
-      end if;
-      Stream (2);
-      Product (Item, Current.Rwkv_V, Item.Rwkv_Mix, Item.Rwkv_Vv, Status);
-      if E.Is_Error (Status) then
-         return;
-      end if;
-      Stream (4);
-      Product (Item, Current.Rwkv_G, Item.Rwkv_Mix, Item.Rwkv_Gg, Status);
-      if E.Is_Error (Status) then
-         return;
-      end if;
-
-      --  The decay a channel: its own shifted stream through its two low
-      --  projections and a tanh, biased, then the double exponential that
-      --  keeps it between nought and one.
-      Stream (0);
-      declare
-         D1 : array (0 .. D_Dec - 1) of N.Wide_Real := [others => 0.0];
-      begin
-         for I in 0 .. D_Dec - 1 loop
-            declare
-               Acc : N.Wide_Real := 0.0;
-            begin
-               for C in 0 .. RW - 1 loop
-                  Acc := Acc
-                    + N.Wide_Real (Current.Rwkv_Decay_W1.all (I * RW + C))
-                      * N.Wide_Real (Xs (C));
-               end loop;
-               D1 (I) := N.Tanh (Acc);
-            end;
-         end loop;
-         for C in 0 .. RW - 1 loop
-            declare
-               Acc : N.Wide_Real :=
-                 N.Wide_Real (Current.Rwkv_Decay.all (C));
-            begin
-               for I in 0 .. D_Dec - 1 loop
-                  Acc := Acc
-                    + N.Wide_Real (Current.Rwkv_Decay_W2.all (C * D_Dec + I))
-                      * D1 (I);
-               end loop;
-               Item.Rwkv_Ww.all (C) := Real (N.Exp (-N.Exp (Acc)));
-            end;
-         end loop;
-      end;
-
-      --  The linear-attention recurrence, a head at a time: a state a head,
-      --  the head's width by the head's width. The receptance, key, decay
-      --  and the first token's bonus are the summed dimension; the value and
-      --  the answer the other. The answer reads the state before the update,
-      --  the bonus lifting this position's own key-value out of the decay.
-      declare
-         R  : Real_Array renames Item.Rwkv_Rr.all;
-         Kk : Real_Array renames Item.Rwkv_Kk.all;
-         Vv : Real_Array renames Item.Rwkv_Vv.all;
-         Ww : Real_Array renames Item.Rwkv_Ww.all;
-         U  : Real_Array renames Current.Rwkv_First.all;
-         Y  : Real_Array renames Item.Rwkv_Y.all;
-      begin
-         for H in 0 .. Heads - 1 loop
-            declare
-               Base : constant Element_Count := H * HN;
-               SB   : constant Element_Count := State_Base + H * HN * HN;
-            begin
-               for J in 0 .. HN - 1 loop
-                  declare
-                     Acc : N.Wide_Real := 0.0;
-                  begin
-                     for I in 0 .. HN - 1 loop
-                        declare
-                           KV : constant N.Wide_Real :=
-                             N.Wide_Real (Kk (Base + I))
-                             * N.Wide_Real (Vv (Base + J));
-                           Cell : constant Element_Count := SB + I * HN + J;
-                           Old  : constant N.Wide_Real := N.Wide_Real (St (Cell));
-                        begin
-                           Acc := Acc
-                             + N.Wide_Real (R (Base + I))
-                               * (N.Wide_Real (U (Base + I)) * KV + Old);
-                           St (Cell) :=
-                             Real (N.Wide_Real (Ww (Base + I)) * Old + KV);
-                        end;
-                     end loop;
-                     Y (Base + J) := Real (Acc);
-                  end;
-               end loop;
-            end;
-         end loop;
-
-         --  The per-head normalization on the answer -- centred, a hardcoded
-         --  floor of its own -- scaled by the stored gain and shift; then
-         --  the gate, the answer weighted by the sigmoid-weighted gate.
-         for H in 0 .. Heads - 1 loop
-            declare
-               Base : constant Element_Count := H * HN;
-               Mean : N.Wide_Real := 0.0;
-               Var  : N.Wide_Real := 0.0;
-               Inv  : N.Wide_Real;
-            begin
-               for I in 0 .. HN - 1 loop
-                  Mean := Mean + N.Wide_Real (Y (Base + I));
-               end loop;
-               Mean := Mean / N.Wide_Real (HN);
-               for I in 0 .. HN - 1 loop
-                  Var := Var
-                    + (N.Wide_Real (Y (Base + I)) - Mean)
-                      * (N.Wide_Real (Y (Base + I)) - Mean);
-               end loop;
-               Inv := 1.0 / N.Sqrt (Var / N.Wide_Real (HN) + Group_Eps);
-               for I in 0 .. HN - 1 loop
-                  Y (Base + I) :=
-                    Real ((N.Wide_Real (Y (Base + I)) - Mean) * Inv
-                          * N.Wide_Real (Current.Rwkv_TM_LN.all (Base + I))
-                          + N.Wide_Real
-                              (Current.Rwkv_TM_LN_Bias.all (Base + I)));
-               end loop;
-            end;
-         end loop;
-
-         for C in 0 .. RW - 1 loop
-            declare
-               G : constant N.Wide_Real := N.Wide_Real (Item.Rwkv_Gg.all (C));
-            begin
-               Y (C) := Real (N.Wide_Real (Y (C)) * (G * Sigmoid (G)));
-            end;
-         end loop;
-      end;
-
-      --  The way out of the time mix, and the first residual.
-      Product (Item, Current.Rwkv_TM_Out, Item.Rwkv_Y, Item.Rwkv_N2, Status);
-      if E.Is_Error (Status) then
-         return;
-      end if;
-      for C in 0 .. RW - 1 loop
-         Item.Rwkv_Inp.all (C) :=
-           Item.Rwkv_N2.all (C) + Item.Activation.all (C);
-      end loop;
-
-      --  Keep this position's ln1 output for the next position's time-mix
-      --  shift, now that the shift above has read the last one's.
-      Mem (Conv_Base .. Conv_Base + RW - 1) := Cur (0 .. RW - 1);
-
-      --  === Channel mix ===
-      --  ln2 of the first residual, shifted against the position before --
-      --  its own ln2 output, kept in the second convolution slot.
-      Normalize
-        (Source, Item.Rwkv_Inp.all, Current.Second_Attention_Norm.all,
-         Current.Second_Attention_Norm_Bias, Item.Rwkv_N2.all);
-
-      declare
-         Cur2 : Real_Array renames Item.Rwkv_N2.all;
-      begin
-         for C in 0 .. RW - 1 loop
-            Sx (C) := Mem (Conv_Base + RW + C) - Cur2 (C);
-         end loop;
-
-         --  The key's shifted stream, squared-ReLU'd; the receptance's,
-         --  through a sigmoid; the value of the key weighted by the
-         --  receptance is the channel mix's answer.
-         for C in 0 .. RW - 1 loop
-            Xs (C) := Cur2 (C) + Sx (C) * Current.Rwkv_CM_Lerp_K.all (C);
-         end loop;
-         Product (Item, Current.Rwkv_CM_K, Item.Rwkv_Mix, Item.Rwkv_CK, Status);
-         if E.Is_Error (Status) then
-            return;
-         end if;
-         for C in 0 .. Element_Count (Settings.Feed_Forward) - 1 loop
-            declare
-               V : constant N.Wide_Real :=
-                 N.Wide_Real (Item.Rwkv_CK.all (C));
-            begin
-               Item.Rwkv_CK.all (C) :=
-                 (if V > 0.0 then Real (V * V) else 0.0);
-            end;
-         end loop;
-
-         for C in 0 .. RW - 1 loop
-            Xs (C) := Cur2 (C) + Sx (C) * Current.Rwkv_CM_Lerp_R.all (C);
-         end loop;
-         Product (Item, Current.Rwkv_CM_R, Item.Rwkv_Mix, Item.Rwkv_Rr, Status);
-         if E.Is_Error (Status) then
-            return;
-         end if;
-         Product (Item, Current.Rwkv_CM_V, Item.Rwkv_CK, Item.Rwkv_Gg, Status);
-         if E.Is_Error (Status) then
-            return;
-         end if;
-
-         --  The second residual, into the buffer the block leaves, and this
-         --  position's ln2 output kept for the next channel-mix shift.
-         for C in 0 .. RW - 1 loop
-            Item.Activation.all (C) :=
-              Item.Rwkv_Inp.all (C)
-              + Real (Sigmoid (N.Wide_Real (Item.Rwkv_Rr.all (C)))
-                      * N.Wide_Real (Item.Rwkv_Gg.all (C)));
-         end loop;
-         Mem (Conv_Base + RW .. Conv_Base + 2 * RW - 1) := Cur2 (0 .. RW - 1);
-      end;
-
-      --  The whole block's output halved every so many layers, which keeps
-      --  the residual from growing without bound over the depth.
-      if Settings.Rescale_Every > 0
-        and then (Layer_Index + 1) mod Settings.Rescale_Every = 0
-      then
-         for C in 0 .. RW - 1 loop
-            Item.Activation.all (C) := Item.Activation.all (C) * 0.5;
-         end loop;
-      end if;
-
+      RWKV6_Batch
+        (Item, Source, Current, Layer_Index, Item.Normalized,
+         Item.Activation, 1, Item.Activation, Status);
    end RWKV6_Step;
 
    procedure Linear_Position
@@ -21655,32 +21883,32 @@ package body Model_Runner.Llama is
                exit when E.Is_Error (Status);
                Charge (Item, Attending, Mark);
             elsif Is_Linear and then Is_RWKV (Settings.Kind) then
-               --  RWKV6's batch is its positions one after another, each the
-               --  single-token step carrying the state and the two shifts
-               --  the one before it left. The step owns both residuals and
-               --  writes the block's whole output into the activation; what
-               --  the join below adds to the residual is that output less
-               --  the row it started from, so the sum is the output whatever
-               --  the rescale did to it, and the feed is skipped as Mamba's
-               --  is.
+               --  RWKV6's batch goes through the block whole (RWKV6_Batch),
+               --  which owns both residuals and writes the block's output;
+               --  what the join below adds to the residual is that output
+               --  less the row it started from, so the sum is the output
+               --  whatever the rescale did to it, and the feed is skipped
+               --  as Mamba's is.
                Charge (Item, Normalizing, Mark);
-               for P in 0 .. Count - 1 loop
-                  declare
-                     At_Row : constant Element_Count := P * Width;
-                  begin
-                     Item.Normalized.all (0 .. Width - 1) :=
-                       Norm.all (At_Row .. At_Row + Width - 1);
-                     Item.Activation.all (0 .. Width - 1) :=
-                       Acts.all (At_Row .. At_Row + Width - 1);
-                     RWKV6_Step
-                       (Item, Source, Current, Natural (Index), Status);
-                     exit when E.Is_Error (Status);
-                     for C in 0 .. Width - 1 loop
-                        Norm.all (At_Row + C) :=
-                          Item.Activation.all (C) - Acts.all (At_Row + C);
-                     end loop;
-                  end;
-               end loop;
+               declare
+                  Block_Out : T.Real_Array_Access;
+               begin
+                  T.Allocate (Count * Width, Block_Out);
+                  if Block_Out = null then
+                     Status := E.Make (E.Memory_Allocation_Failed);
+                  else
+                     RWKV6_Batch
+                       (Item, Source, Current, Natural (Index), Norm, Acts,
+                        Count, Block_Out, Status);
+                     if E.Is_Ok (Status) then
+                        for I in 0 .. Count * Width - 1 loop
+                           Norm.all (Norm.all'First + I) :=
+                             Block_Out.all (I) - Acts.all (Acts.all'First + I);
+                        end loop;
+                     end if;
+                     T.Free (Block_Out);
+                  end if;
+               end;
                exit when E.Is_Error (Status);
                Charge (Item, Attending, Mark);
             elsif Is_Linear then
