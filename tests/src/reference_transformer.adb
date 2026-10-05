@@ -3091,8 +3091,11 @@ package body Reference_Transformer is
          end if;
 
          declare
+            --  Every element, whatever the shape: a vector a file keeps as
+            --  a column of one-element rows -- Mamba2's {1, n_head} -- is
+            --  the same numbers in the same order.
             Width  : constant Natural :=
-              Natural (Containers.Tensor_Dimension (Source, Index, 1));
+              Natural (Containers.Tensor_Elements (Source, Index));
             Offset : constant Interfaces.Unsigned_64 :=
               Containers.Tensor_Offset (Source, Index);
             Result : constant Vector_Access := new Real_Vector (0 .. Width - 1);

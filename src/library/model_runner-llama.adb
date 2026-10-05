@@ -611,6 +611,21 @@ package body Model_Runner.Llama is
                        (Source, Model_Key (Settings.Kind, "feed_forward_length"))
       then
          Settings.Feed_Forward := 0;
+      elsif Pure_SSM (Settings.Kind) then
+         --  A pure state-space model has no feed-forward and no attention,
+         --  and the files llama.cpp's converter writes say so with a
+         --  nought for each: Mamba-2.8B and Mamba2-130M state
+         --  feed_forward_length 0 and attention.head_count 0. Both are taken
+         --  as they are -- the width is nought -- and the head count, which
+         --  only the attention's bookkeeping reads, is held at one.
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "feed_forward_length"),
+            0, Long_Long_Integer (Bounds.Max_Embedding) * 64, Number,
+            Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         Settings.Feed_Forward := Natural (Number);
       else
          Required (Model_Key (Settings.Kind, "feed_forward_length"),
                    Long_Long_Integer (Bounds.Max_Embedding) * 64,
@@ -620,10 +635,20 @@ package body Model_Runner.Llama is
          end if;
       end if;
 
-      Required (Model_Key (Settings.Kind, "attention.head_count"),
-                Long_Long_Integer (Bounds.Max_Heads), Settings.Heads);
-      if E.Is_Error (Status) then
-         return;
+      if Pure_SSM (Settings.Kind) then
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "attention.head_count"),
+            0, Long_Long_Integer (Bounds.Max_Heads), Number, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         Settings.Heads := Natural'Max (1, Natural (Number));
+      else
+         Required (Model_Key (Settings.Kind, "attention.head_count"),
+                   Long_Long_Integer (Bounds.Max_Heads), Settings.Heads);
+         if E.Is_Error (Status) then
+            return;
+         end if;
       end if;
 
       --  Jamba states its key-value head count a layer, nought where the
@@ -990,6 +1015,7 @@ package body Model_Runner.Llama is
             Settings.Scaling.Beta_Slow := Value;
          end if;
       end if;
+
 
       --  A mixture of experts, when the model names one. The count is what
       --  each layer holds and the used count is how many of them run for one
@@ -3970,16 +3996,20 @@ package body Model_Runner.Llama is
                         return;
                      end if;
 
-                     Resolve_Norm
+                     --  A number a head, which the file keeps as a head a
+                     --  row of one -- llama.cpp's {1, n_head} -- rather than
+                     --  as one row of heads; read as the table it is, the
+                     --  same numbers in the same order.
+                     Resolve_Table
                        (Item, Source, Layer_Key (Index, "ssm_a"),
-                        Heads, Current.Ssm_A, Status);
+                        Heads, 1, Current.Ssm_A, Status);
                      if E.Is_Error (Status) then
                         return;
                      end if;
 
-                     Resolve_Norm
+                     Resolve_Table
                        (Item, Source, Layer_Key (Index, "ssm_d"),
-                        Heads, Current.Ssm_D, Status);
+                        Heads, 1, Current.Ssm_D, Status);
                      if E.Is_Error (Status) then
                         return;
                      end if;
@@ -16286,11 +16316,417 @@ package body Model_Runner.Llama is
         Natural'Max (Item.Kept_Newest, Position + Natural (Rows.Count));
    end Linear_Chunk;
 
-   --  One position through one Mamba layer, on the host. It reads the
-   --  layer's normalized input in Item.Normalized and leaves the block's
-   --  output there for the residual to take, carrying the convolution's
-   --  memory and the scan's state a session in the same ring a hybrid's
-   --  linear layers use -- one slot, since Mamba neither drafts nor rewinds.
+   --  Mamba's causal convolution over a batch, a share of the channels
+   --  each: a channel's last Taps activations, oldest first and this one
+   --  last, against its taps, biased, a position at a time, and its memory
+   --  slid on after each. Channels share nothing, so the team takes them.
+   --  Width is the channels convolved; a position's inputs are Width
+   --  consecutive numbers Shift into its row of XZ, rows Stride apart.
+   --  Mamba convolves its inner activation, the front of a row of the
+   --  activation and the gate; Mamba2 the activation with B and C, past
+   --  the gate at the front of its one projection in.
+   type Mamba_Conv_Share is limited new Workers_CPU.Task_Item with record
+      Count  : Element_Count := 0;
+      Inner  : Element_Count := 0;
+      Stride : Element_Count := 0;
+      Shift  : Element_Count := 0;
+      Taps   : Element_Count := 0;
+      Base   : Element_Count := 0;
+      Memory : T.Real_Array_Access := null;
+      Conv   : T.Real_Array_Access := null;
+      Bias   : T.Real_Array_Access := null;
+      XZ     : T.Real_Array_Access := null;
+      Xc     : T.Real_Array_Access := null;
+   end record;
+
+   overriding procedure Run
+     (Share : in out Mamba_Conv_Share;
+      From  : Element_Count;
+      To    : Element_Count);
+
+   overriding procedure Run
+     (Share : in out Mamba_Conv_Share;
+      From  : Element_Count;
+      To    : Element_Count)
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      Inner  : constant Element_Count := Share.Inner;
+      Taps   : constant Element_Count := Share.Taps;
+      Back   : constant Element_Count := Taps - 1;
+      Base   : constant Element_Count := Share.Base;
+      Count  : constant Element_Count := Share.Count;
+      Memory : Real_Array renames Share.Memory.all;
+      Conv   : Real_Array renames Share.Conv.all;
+
+      --  Position Q's input to channel C, Q counted from the batch's first
+      --  and signed: a position before it is in the memory, oldest first.
+      function Input (C : Element_Count; Q : Long_Long_Integer) return Real
+      is (if Q >= 0
+          then Share.XZ (Element_Count (Q) * Share.Stride + Share.Shift + C)
+          else Memory (Base + Element_Count (Q + Long_Long_Integer (Back))
+                              * Inner + C));
+   begin
+      --  A position at a time and the share's channels within it, so that a
+      --  position's inputs are read along its row rather than across rows.
+      for P in 0 .. Count - 1 loop
+         if P >= Back then
+            --  Every input in the batch: read straight from its rows.
+            declare
+               First_Row : constant Element_Count :=
+                 (P - Back) * Share.Stride + Share.Shift;
+            begin
+               for C in From .. To loop
+                  declare
+                     Acc : Real := Share.Bias (C);
+                  begin
+                     for K_At in 0 .. Taps - 1 loop
+                        Acc := Acc
+                          + Conv (C * Taps + K_At)
+                            * Share.XZ (First_Row + K_At * Share.Stride + C);
+                     end loop;
+                     Share.Xc (P * Inner + C) := Acc;
+                  end;
+               end loop;
+            end;
+         else
+            for C in From .. To loop
+               declare
+                  Acc : Real := Share.Bias (C);
+               begin
+                  for K_At in 0 .. Taps - 1 loop
+                     Acc := Acc
+                       + Conv (C * Taps + K_At)
+                         * Input (C, Long_Long_Integer (P + K_At)
+                                     - Long_Long_Integer (Back));
+                  end loop;
+                  Share.Xc (P * Inner + C) := Acc;
+               end;
+            end loop;
+         end if;
+      end loop;
+
+      --  The memory taken on past the batch once, at its end: the last
+      --  Back inputs, each read before it is overwritten -- a slot is
+      --  filled from a later one, or from the batch.
+      for J in 0 .. Back - 1 loop
+         for C in From .. To loop
+            Memory (Base + J * Inner + C) :=
+              Input (C, Long_Long_Integer (Count + J)
+                        - Long_Long_Integer (Back));
+         end loop;
+      end loop;
+   end Run;
+
+   --  The selective scan over a batch, a share of the channels each:
+   --  channels are independent of each other, and within one the positions
+   --  go in order, each reading the state the one before it left. For a
+   --  channel and a position, the time step through the softplus; the
+   --  state decayed by exp (dt * A) and driven by B times the input times
+   --  the step; the answer C against the state, the skip D times the input
+   --  added, and the gate applied.
+   type Mamba_Scan_Share is limited new Workers_CPU.Task_Item with record
+      Count  : Element_Count := 0;
+      Inner  : Element_Count := 0;
+      State  : Element_Count := 0;
+      Rank   : Element_Count := 0;
+      Base   : Element_Count := 0;
+      H      : T.Real_Array_Access := null;
+      A      : T.Real_Array_Access := null;
+      D      : T.Real_Array_Access := null;
+      Xc     : T.Real_Array_Access := null;
+      DT     : T.Real_Array_Access := null;
+      DBC    : T.Real_Array_Access := null;
+      XZ     : T.Real_Array_Access := null;
+      Y      : T.Real_Array_Access := null;
+   end record;
+
+   overriding procedure Run
+     (Share : in out Mamba_Scan_Share;
+      From  : Element_Count;
+      To    : Element_Count);
+
+   overriding procedure Run
+     (Share : in out Mamba_Scan_Share;
+      From  : Element_Count;
+      To    : Element_Count)
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      Inner : constant Element_Count := Share.Inner;
+      State : constant Element_Count := Share.State;
+      Rank  : constant Element_Count := Share.Rank;
+      Wide  : constant Element_Count := Rank + 2 * State;
+
+      H   : Real_Array renames Share.H.all;
+      A   : Real_Array renames Share.A.all;
+      Decay : Real_Array (0 .. State - 1);
+
+      function Softplus (X : N.Wide_Real) return N.Wide_Real
+      is (if X > 20.0 then X else N.Log (1.0 + N.Exp (X)));
+   begin
+      for C in From .. To loop
+         declare
+            Cells : constant Element_Count := Share.Base + C * State;
+         begin
+            for P in 0 .. Share.Count - 1 loop
+               declare
+                  Dt_Soft : constant Real :=
+                    Real (Softplus (N.Wide_Real (Share.DT (P * Inner + C))));
+                  X       : constant Real := Share.Xc (P * Inner + C);
+                  X_Dt    : constant Real := X * Dt_Soft;
+                  Row     : constant Element_Count := P * Wide;
+                  Sum     : Real := 0.0;
+                  Z       : constant N.Wide_Real :=
+                    N.Wide_Real (Share.XZ (P * 2 * Inner + Inner + C));
+               begin
+                  --  exp (dt * A) for every state at once, eight lanes a
+                  --  step through the kernels' binary32 exponential, as
+                  --  llama.cpp's scan takes it.
+                  for S in 0 .. State - 1 loop
+                     Decay (S) := Dt_Soft * A (C * State + S);
+                  end loop;
+                  K.Exponentiate (Decay, 0.0);
+
+                  for S in 0 .. State - 1 loop
+                     declare
+                        New_H : constant Real :=
+                          H (Cells + S) * Decay (S)
+                          + Share.DBC (Row + Rank + S) * X_Dt;
+                     begin
+                        H (Cells + S) := New_H;
+                        Sum := Sum + Share.DBC (Row + Rank + State + S) * New_H;
+                     end;
+                  end loop;
+
+                  Share.Y (P * Inner + C) :=
+                    Real ((N.Wide_Real (Sum)
+                           + N.Wide_Real (Share.D (C)) * N.Wide_Real (X))
+                          * (Z / (1.0 + N.Exp (-Z))));
+               end;
+            end loop;
+         end;
+      end loop;
+   end Run;
+
+   --  Count positions through one Mamba layer: Rows holds their normalized
+   --  inputs, Width apart, and is left holding the block's outputs in their
+   --  place. Every projection is taken once over the batch; the causal
+   --  convolution goes position by position, since each reads the ones
+   --  before it, but it reads only the projection in and not the scan, so it
+   --  is done whole before the scan begins; and the scan is the team's,
+   --  a share of the channels each. A generated token is a batch of one.
+   procedure Mamba_Batch
+     (Item        : in out Session;
+      Source      : Model'Class;
+      Current     : Layer;
+      Layer_Index : Natural;
+      Rows        : T.Real_Array_Access;
+      Count       : Element_Count;
+      Status      : out E.Error_Info)
+   is
+      --  Every index below is a position, a channel or a state inside
+      --  arrays sized from the same three counts; the checks stop the
+      --  element loops vectorizing.
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      Settings : Configuration renames Source.Settings;
+      Width : constant Element_Count := Element_Count (Settings.Embedding);
+      Inner : constant Element_Count := Element_Count (Settings.Inner_Size);
+      State : constant Element_Count := Element_Count (Settings.State_Size);
+      Rank  : constant Element_Count := Element_Count (Settings.Time_Rank);
+      Taps  : constant Element_Count := Element_Count (Settings.Conv_Kernel);
+      Wide  : constant Element_Count := Rank + 2 * State;
+
+      Conv_Base  : constant Element_Count := Conv_At (Settings, Layer_Index);
+      State_Base : constant Element_Count := State_At (Settings, Layer_Index);
+
+      XZ, Xc, DBC, DTR, DT, Y : T.Real_Array_Access := null;
+
+      --  A batch of one is a generated token, and takes the session's own
+      --  scratch, sized for one position, rather than allocating and
+      --  clearing six arrays a layer a token.
+      Own : constant Boolean := Count = 1;
+
+      procedure Release is
+      begin
+         if not Own then
+            T.Free (XZ); T.Free (Xc); T.Free (DBC);
+            T.Free (DTR); T.Free (DT); T.Free (Y);
+         end if;
+      end Release;
+
+      --  A projection of the batch: the single-vector product for one.
+      procedure Project
+        (Weight : T.View; From, Into : T.Real_Array_Access) is
+      begin
+         if Count = 1 then
+            Product (Item, Weight, From, Into, Status);
+         else
+            Product_Batch (Item, Weight, From, Count, Into, Status);
+         end if;
+      end Project;
+   begin
+      Status := E.Success;
+
+      if Own then
+         XZ  := Item.Mamba_XZ;
+         Xc  := Item.Mamba_X;
+         DBC := Item.Mamba_DBC;
+         DTR := Item.Mamba_DTR;
+         DT  := Item.Mamba_DT;
+         Y   := Item.Mamba_Y;
+      else
+         T.Allocate (Count * 2 * Inner, XZ);
+         T.Allocate (Count * Inner, Xc);
+         T.Allocate (Count * Wide, DBC);
+         T.Allocate (Count * Rank, DTR);
+         T.Allocate (Count * Inner, DT);
+         T.Allocate (Count * Inner, Y);
+      end if;
+      if XZ = null or else Xc = null or else DBC = null or else DTR = null
+        or else DT = null or else Y = null
+      then
+         Release;
+         Status := E.Make (E.Memory_Allocation_Failed);
+         return;
+      end if;
+
+      --  The inputs projected to the inner activations and their gates.
+      Project (Current.Ssm_In, Rows, XZ);
+      if E.Is_Error (Status) then
+         Release;
+         return;
+      end if;
+
+      --  The causal convolution, the team's, then the unit.
+      declare
+         Share : aliased Mamba_Conv_Share :=
+           (Count  => Count, Inner => Inner, Stride => 2 * Inner, Shift => 0,
+            Taps   => Taps, Base => Conv_Base,
+            Memory => Item.Conv_State, Conv => Current.Conv,
+            Bias   => Current.Conv_Bias, XZ => XZ, Xc => Xc);
+      begin
+         Workers_CPU.Dispatch_Shares
+           (Item.Team, Inner, Share'Unchecked_Access, Status,
+            Cost => Inner * Taps * Count);
+         if E.Is_Error (Status) then
+            Release;
+            return;
+         end if;
+      end;
+      K.SiLU (Xc.all (0 .. Count * Inner - 1));
+
+      --  That projected to the time step, B and C.
+      Project (Current.Ssm_X, Xc, DBC);
+      if E.Is_Error (Status) then
+         Release;
+         return;
+      end if;
+
+      --  Jamba normalizes the time step and the B and C the projection
+      --  produced -- each its own slice of a row -- by root mean square with
+      --  a gain of its own, before the scan reads them. Plain Mamba leaves
+      --  the three gains null and does not.
+      if Current.Ssm_Dt_Norm /= null then
+         for P in 0 .. Count - 1 loop
+            declare
+               procedure RMS (First, Width : Element_Count; Gain : Real_Array)
+               is
+                  Sum : N.Wide_Real := 0.0;
+                  Inv : N.Wide_Real;
+               begin
+                  for I in 0 .. Width - 1 loop
+                     Sum := Sum + N.Wide_Real (DBC (First + I))
+                                * N.Wide_Real (DBC (First + I));
+                  end loop;
+                  Inv := 1.0 / N.Sqrt (Sum / N.Wide_Real (Width)
+                                       + N.Wide_Real (Settings.Epsilon));
+                  for I in 0 .. Width - 1 loop
+                     DBC (First + I) :=
+                       Real (N.Wide_Real (DBC (First + I)) * Inv
+                             * N.Wide_Real (Gain (Gain'First + I)));
+                  end loop;
+               end RMS;
+            begin
+               RMS (P * Wide, Rank, Current.Ssm_Dt_Norm.all);
+               RMS (P * Wide + Rank, State, Current.Ssm_B_Norm.all);
+               RMS (P * Wide + Rank + State, State, Current.Ssm_C_Norm.all);
+            end;
+         end loop;
+      end if;
+
+      --  The time steps projected up to the inner width and biased.
+      for P in 0 .. Count - 1 loop
+         DTR (P * Rank .. P * Rank + Rank - 1) :=
+           DBC (P * Wide .. P * Wide + Rank - 1);
+      end loop;
+      Project (Current.Ssm_Dt, DTR, DT);
+      if E.Is_Error (Status) then
+         Release;
+         return;
+      end if;
+      for P in 0 .. Count - 1 loop
+         for C in 0 .. Inner - 1 loop
+            DT (P * Inner + C) := DT (P * Inner + C) + Current.DT_Bias.all (C);
+         end loop;
+      end loop;
+
+      --  The scan, the team's.
+      declare
+         Share : aliased Mamba_Scan_Share :=
+           (Count => Count, Inner => Inner, State => State, Rank => Rank,
+            Base  => State_Base,
+            H     => Item.Delta_State, A => Current.Ssm_A,
+            D     => Current.Ssm_D,
+            Xc    => Xc, DT => DT, DBC => DBC, XZ => XZ, Y => Y);
+      begin
+         Workers_CPU.Dispatch_Shares
+           (Item.Team, Inner, Share'Unchecked_Access, Status,
+            Cost => Inner * State * Count * 4);
+         if E.Is_Error (Status) then
+            Release;
+            return;
+         end if;
+      end;
+
+      --  And the projections back, into the rows the residual reads.
+      if Count = 1 then
+         Project (Current.Linear_Out, Y, Rows);
+      else
+         declare
+            Out_Rows : T.Real_Array_Access;
+         begin
+            T.Allocate (Count * Width, Out_Rows);
+            if Out_Rows = null then
+               Release;
+               Status := E.Make (E.Memory_Allocation_Failed);
+               return;
+            end if;
+            Project (Current.Linear_Out, Y, Out_Rows);
+            if E.Is_Ok (Status) then
+               Rows.all (Rows.all'First .. Rows.all'First + Count * Width - 1) :=
+                 Out_Rows.all (0 .. Count * Width - 1);
+            end if;
+            T.Free (Out_Rows);
+         end;
+      end if;
+
+      Release;
+   end Mamba_Batch;
+
+   --  One position through one Mamba layer, on the host: Mamba_Batch over a
+   --  batch of one. It reads the layer's normalized input in
+   --  Item.Normalized and leaves the block's output there for the residual
+   --  to take, carrying the convolution's memory and the scan's state a
+   --  session in the same ring a hybrid's linear layers use -- one slot,
+   --  since Mamba neither drafts nor rewinds.
    --
    --  The block: the input projected to an inner activation and its gate; a
    --  depthwise causal convolution over the activation, biased and passed
@@ -16307,160 +16743,9 @@ package body Model_Runner.Llama is
       Layer_Index : Natural;
       Status  : out E.Error_Info)
    is
-      Settings : Configuration renames Source.Settings;
-      Inner : constant Element_Count := Element_Count (Settings.Inner_Size);
-      State : constant Element_Count := Element_Count (Settings.State_Size);
-      Rank  : constant Element_Count := Element_Count (Settings.Time_Rank);
-      Taps  : constant Element_Count := Element_Count (Settings.Conv_Kernel);
-
-      Conv_Base  : constant Element_Count := Conv_At (Settings, Layer_Index);
-      State_Base : constant Element_Count := State_At (Settings, Layer_Index);
-
-      Memory : Real_Array renames Item.Conv_State.all;
-      H      : Real_Array renames Item.Delta_State.all;
-      XZ     : Real_Array renames Item.Mamba_XZ.all;
-      Xc     : Real_Array renames Item.Mamba_X.all;
-      DBC    : Real_Array renames Item.Mamba_DBC.all;
-      DT     : Real_Array renames Item.Mamba_DT.all;
-      Yc     : Real_Array renames Item.Mamba_Y.all;
-      Conv   : Real_Array renames Current.Conv.all;
-      A      : Real_Array renames Current.Ssm_A.all;
-
-      function Softplus (X : N.Wide_Real) return N.Wide_Real
-      is (if X > 20.0 then X else N.Log (1.0 + N.Exp (X)));
    begin
-      --  The input projected to the inner activation and its gate.
-      Product (Item, Current.Ssm_In, Item.Normalized, Item.Mamba_XZ, Status);
-      if E.Is_Error (Status) then
-         return;
-      end if;
-
-      --  The causal convolution over each channel: the last Taps positions,
-      --  oldest first and this one last, against the channel's taps, biased.
-      for C in 0 .. Inner - 1 loop
-         declare
-            Acc : N.Wide_Real := N.Wide_Real (Current.Conv_Bias.all (C));
-         begin
-            for K_At in 0 .. Taps - 1 loop
-               declare
-                  Value : constant Real :=
-                    (if K_At < Taps - 1
-                     then Memory (Conv_Base + K_At * Inner + C)
-                     else XZ (C));
-               begin
-                  Acc := Acc
-                    + N.Wide_Real (Conv (C * Taps + K_At)) * N.Wide_Real (Value);
-               end;
-            end loop;
-            Xc (C) := Real (Acc);
-         end;
-      end loop;
-
-      --  And the memory slides on: the oldest dropped, this position's
-      --  inner activation appended.
-      for C in 0 .. Inner - 1 loop
-         for T_At in 0 .. Taps - 3 loop
-            Memory (Conv_Base + T_At * Inner + C) :=
-              Memory (Conv_Base + (T_At + 1) * Inner + C);
-         end loop;
-         if Taps >= 2 then
-            Memory (Conv_Base + (Taps - 2) * Inner + C) := XZ (C);
-         end if;
-      end loop;
-
-      --  The unit on the convolved activation.
-      K.SiLU (Xc (0 .. Inner - 1));
-
-      --  That projected to the time step, B and C.
-      Product (Item, Current.Ssm_X, Item.Mamba_X, Item.Mamba_DBC, Status);
-      if E.Is_Error (Status) then
-         return;
-      end if;
-
-      --  Jamba normalizes the time step and the B and C the projection
-      --  produced -- each its own slice of DBC -- by root mean square with a
-      --  gain of its own, before the scan reads them. Plain Mamba leaves the
-      --  three gains null and does not.
-      if Current.Ssm_Dt_Norm /= null then
-         declare
-            procedure RMS (First, Count : Element_Count; Gain : Real_Array) is
-               Sum : N.Wide_Real := 0.0;
-               Inv : N.Wide_Real;
-            begin
-               for I in 0 .. Count - 1 loop
-                  Sum := Sum + N.Wide_Real (DBC (First + I))
-                             * N.Wide_Real (DBC (First + I));
-               end loop;
-               Inv := 1.0 / N.Sqrt (Sum / N.Wide_Real (Count)
-                                    + N.Wide_Real (Settings.Epsilon));
-               for I in 0 .. Count - 1 loop
-                  DBC (First + I) :=
-                    Real (N.Wide_Real (DBC (First + I)) * Inv
-                          * N.Wide_Real (Gain (Gain'First + I)));
-               end loop;
-            end RMS;
-         begin
-            RMS (0, Rank, Current.Ssm_Dt_Norm.all);
-            RMS (Rank, State, Current.Ssm_B_Norm.all);
-            RMS (Rank + State, State, Current.Ssm_C_Norm.all);
-         end;
-      end if;
-
-      --  The time step projected up to the inner width and biased.
-      Item.Mamba_DTR.all (0 .. Rank - 1) := DBC (0 .. Rank - 1);
-      Product (Item, Current.Ssm_Dt, Item.Mamba_DTR, Item.Mamba_DT, Status);
-      if E.Is_Error (Status) then
-         return;
-      end if;
-      for C in 0 .. Inner - 1 loop
-         DT (C) := DT (C) + Current.DT_Bias.all (C);
-      end loop;
-
-      --  The selective scan, a channel at a time: the time step through the
-      --  softplus, the state decayed by exp(dt*A) and driven by B times the
-      --  input times the time step, the answer C against the state, and the
-      --  skip D times the input added.
-      for C in 0 .. Inner - 1 loop
-         declare
-            Dt_Soft : constant N.Wide_Real := Softplus (N.Wide_Real (DT (C)));
-            X_Dt    : constant N.Wide_Real :=
-              N.Wide_Real (Xc (C)) * Dt_Soft;
-            Sum     : N.Wide_Real := 0.0;
-         begin
-            for S in 0 .. State - 1 loop
-               declare
-                  dA : constant N.Wide_Real :=
-                    N.Exp (Dt_Soft * N.Wide_Real (A (C * State + S)));
-                  B_S : constant N.Wide_Real :=
-                    N.Wide_Real (DBC (Rank + S));
-                  C_S : constant N.Wide_Real :=
-                    N.Wide_Real (DBC (Rank + State + S));
-                  Cell : constant Element_Count := State_Base + C * State + S;
-                  New_H : constant N.Wide_Real :=
-                    N.Wide_Real (H (Cell)) * dA + B_S * X_Dt;
-               begin
-                  H (Cell) := Real (New_H);
-                  Sum := Sum + C_S * New_H;
-               end;
-            end loop;
-            Yc (C) :=
-              Real (Sum + N.Wide_Real (Current.Ssm_D.all (C))
-                            * N.Wide_Real (Xc (C)));
-         end;
-      end loop;
-
-      --  The gate: the answer weighted by the sigmoid-weighted gate.
-      for C in 0 .. Inner - 1 loop
-         declare
-            Z : constant N.Wide_Real := N.Wide_Real (XZ (Inner + C));
-         begin
-            Yc (C) :=
-              Real (N.Wide_Real (Yc (C)) * (Z / (1.0 + N.Exp (-Z))));
-         end;
-      end loop;
-
-      --  And the projection back, into the buffer the residual reads.
-      Product (Item, Current.Linear_Out, Item.Mamba_Y, Item.Normalized, Status);
+      Mamba_Batch
+        (Item, Source, Current, Layer_Index, Item.Normalized, 1, Status);
    end Mamba_Step;
 
    --  One position through one Mamba2 layer, on the host. Mamba's block
@@ -16473,14 +16758,191 @@ package body Model_Runner.Llama is
    --  input's gate and normalized in groups before the projection back,
    --  where Mamba only gates. State and convolution memory carry a session
    --  in the same one-slot ring, since Mamba2 neither drafts nor rewinds.
-   procedure Mamba2_Step
+   --  Mamba2's scan over a batch, a share of the heads each: a head
+   --  decays by one scalar a position, reads its group's B and C, and its
+   --  channels -- Head_Dim of them -- each keep a row of the state. Within
+   --  a head the positions go in order.
+   type Mamba2_Scan_Share is limited new Workers_CPU.Task_Item with record
+      Count  : Element_Count := 0;
+      Inner  : Element_Count := 0;
+      State  : Element_Count := 0;
+      Group  : Element_Count := 0;
+      Per_G  : Element_Count := 0;
+      Heads  : Element_Count := 0;
+      Wide   : Element_Count := 0;
+      DXBC   : Element_Count := 0;
+      Base   : Element_Count := 0;
+      H      : T.Real_Array_Access := null;
+      D      : T.Real_Array_Access := null;
+      Steps  : T.Real_Array_Access := null;
+      Decays : T.Real_Array_Access := null;
+      Xc     : T.Real_Array_Access := null;
+      Y      : T.Real_Array_Access := null;
+   end record;
+
+   overriding procedure Run
+     (Share : in out Mamba2_Scan_Share;
+      From  : Element_Count;
+      To    : Element_Count);
+
+   --  A share is a run of channels rather than of heads: a head is Head_Dim
+   --  channels, each with its own row of the state, and twenty-four heads
+   --  on eight workers left a third of them idle for the last round. The
+   --  head's step and decay a position are worked out once, before.
+   overriding procedure Run
+     (Share : in out Mamba2_Scan_Share;
+      From  : Element_Count;
+      To    : Element_Count)
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      Inner : constant Element_Count := Share.Inner;
+      State : constant Element_Count := Share.State;
+      DXBC  : constant Element_Count := Share.DXBC;
+      Whole : constant Element_Count := State - State mod 8;
+      H     : Real_Array renames Share.H.all;
+      Xc    : Real_Array renames Share.Xc.all;
+   begin
+      --  A position at a time, the share's channels within it: a channel's
+      --  positions still go in order, and a position's activations are read
+      --  along its row.
+      for P in 0 .. Share.Count - 1 loop
+         declare
+            Row : constant Element_Count := P * DXBC;
+         begin
+            for Ch in From .. To loop
+               declare
+                  Hd    : constant Element_Count := Ch / Share.Wide;
+                  Cells : constant Element_Count := Share.Base + Ch * State;
+                  G_At  : constant Element_Count :=
+                    Row + Inner + (Hd / Share.Per_G) * State;
+                  C_At  : constant Element_Count := G_At + Share.Group * State;
+                  dA    : constant Real := Share.Decays (P * Share.Heads + Hd);
+                  X     : constant Real := Xc (Row + Ch);
+                  X_Dt  : constant Real :=
+                    X * Share.Steps (P * Share.Heads + Hd);
+
+                  --  Eight running sums rather than one: a single sum over
+                  --  a head's 128 states is a chain of 128 dependent
+                  --  additions, and that chain was the scan.
+                  L0, L1, L2, L3, L4, L5, L6, L7 : Real := 0.0;
+                  Sum : Real := 0.0;
+               begin
+                  for S in 0 .. State - 1 loop
+                     H (Cells + S) := H (Cells + S) * dA + Xc (G_At + S) * X_Dt;
+                  end loop;
+                  for S in 0 .. Whole / 8 - 1 loop
+                     declare
+                        At_C : constant Element_Count := C_At + S * 8;
+                        At_H : constant Element_Count := Cells + S * 8;
+                     begin
+                        L0 := L0 + Xc (At_C) * H (At_H);
+                        L1 := L1 + Xc (At_C + 1) * H (At_H + 1);
+                        L2 := L2 + Xc (At_C + 2) * H (At_H + 2);
+                        L3 := L3 + Xc (At_C + 3) * H (At_H + 3);
+                        L4 := L4 + Xc (At_C + 4) * H (At_H + 4);
+                        L5 := L5 + Xc (At_C + 5) * H (At_H + 5);
+                        L6 := L6 + Xc (At_C + 6) * H (At_H + 6);
+                        L7 := L7 + Xc (At_C + 7) * H (At_H + 7);
+                     end;
+                  end loop;
+                  for S in Whole .. State - 1 loop
+                     L0 := L0 + Xc (C_At + S) * H (Cells + S);
+                  end loop;
+                  Sum := ((L0 + L1) + (L2 + L3)) + ((L4 + L5) + (L6 + L7));
+                  Share.Y (P * Inner + Ch) := Sum + Share.D (Hd) * X;
+               end;
+            end loop;
+         end;
+      end loop;
+   end Run;
+
+   --  Mamba2's gate and grouped normalization over a batch, a share of the
+   --  positions each: the answer weighted by the sigmoid-weighted front of
+   --  the position's projection in, then normalized by root mean square in
+   --  groups -- the width B and C share -- and scaled by the gain.
+   type Mamba2_Gate_Share is limited new Workers_CPU.Task_Item with record
+      Inner   : Element_Count := 0;
+      In_Out  : Element_Count := 0;
+      Group   : Element_Count := 0;
+      Epsilon : Real := 0.0;
+      Gain    : T.Real_Array_Access := null;
+      XZ      : T.Real_Array_Access := null;
+      Y       : T.Real_Array_Access := null;
+   end record;
+
+   overriding procedure Run
+     (Share : in out Mamba2_Gate_Share;
+      From  : Element_Count;
+      To    : Element_Count);
+
+   overriding procedure Run
+     (Share : in out Mamba2_Gate_Share;
+      From  : Element_Count;
+      To    : Element_Count)
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      Inner : constant Element_Count := Share.Inner;
+      Grp_W : constant Element_Count := Inner / Share.Group;
+      Y     : Real_Array renames Share.Y.all;
+      Gate  : Real_Array (0 .. Inner - 1);
+   begin
+      for P in From .. To loop
+         Gate := Share.XZ (P * Share.In_Out .. P * Share.In_Out + Inner - 1);
+         K.SiLU (Gate);
+         for C in 0 .. Inner - 1 loop
+            Y (P * Inner + C) := Y (P * Inner + C) * Gate (C);
+         end loop;
+
+         for Grp in 0 .. Share.Group - 1 loop
+            declare
+               At_G : constant Element_Count := P * Inner + Grp * Grp_W;
+               Sum  : N.Wide_Real := 0.0;
+               Rms  : Real;
+            begin
+               for I in 0 .. Grp_W - 1 loop
+                  Sum := Sum + N.Wide_Real (Y (At_G + I))
+                               * N.Wide_Real (Y (At_G + I));
+               end loop;
+               Rms := Real (1.0 / N.Sqrt
+                                    (Sum / N.Wide_Real (Grp_W)
+                                     + N.Wide_Real (Share.Epsilon)));
+               for I in 0 .. Grp_W - 1 loop
+                  Y (At_G + I) :=
+                    Y (At_G + I) * Rms * Share.Gain (Grp * Grp_W + I);
+               end loop;
+            end;
+         end loop;
+      end loop;
+   end Run;
+
+   --  Count positions through one Mamba2 layer, as Mamba_Batch takes
+   --  them through a Mamba one: the projections in and out over the batch,
+   --  the convolution and the scan the team's, and between them the gate
+   --  and the grouped normalization, a position at a time.
+   procedure Mamba2_Batch
      (Item        : in out Session;
       Source      : Model'Class;
       Current     : Layer;
       Layer_Index : Natural;
+      Rows        : T.Real_Array_Access;
+      Count       : Element_Count;
       Status      : out E.Error_Info)
    is
+      --  Every index below is a position, a channel or a state inside
+      --  arrays sized from the same three counts; the checks stop the
+      --  element loops vectorizing.
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
       Settings : Configuration renames Source.Settings;
+      Width : constant Element_Count := Element_Count (Settings.Embedding);
       Inner : constant Element_Count := Element_Count (Settings.Inner_Size);
       State : constant Element_Count := Element_Count (Settings.State_Size);
       Taps  : constant Element_Count := Element_Count (Settings.Conv_Kernel);
@@ -16488,157 +16950,181 @@ package body Model_Runner.Llama is
       Heads : constant Element_Count := Element_Count (Settings.Ssm_Heads);
       Wide  : constant Element_Count := Element_Count (Settings.Head_Dim);
 
-      --  The convolution block (the activation with B and C), the group's
-      --  width for the normalization, and how many heads share a group's
-      --  B and C.
-      DXBC  : constant Element_Count := Inner + 2 * Group * State;
-      Grp_W : constant Element_Count := Inner / Group;
-      Per_G : constant Element_Count := Heads / Group;
+      DXBC   : constant Element_Count := Inner + 2 * Group * State;
+      In_Out : constant Element_Count := Inner + DXBC + Heads;
 
       Conv_Base  : constant Element_Count := Conv_At (Settings, Layer_Index);
       State_Base : constant Element_Count := State_At (Settings, Layer_Index);
 
-      Memory : Real_Array renames Item.Conv_State.all;
-      H      : Real_Array renames Item.Delta_State.all;
-      XZ     : Real_Array renames Item.Mamba_XZ.all;
-      Xc     : Real_Array renames Item.Mamba_X.all;
-      DT     : Real_Array renames Item.Mamba_DT.all;
-      Yc     : Real_Array renames Item.Mamba_Y.all;
-      Conv   : Real_Array renames Current.Conv.all;
-      A      : Real_Array renames Current.Ssm_A.all;
+      Own : constant Boolean := Count = 1;
 
-      function Softplus (X : N.Wide_Real) return N.Wide_Real
-      is (if X > 20.0 then X else N.Log (1.0 + N.Exp (X)));
+      XZ, Xc, Y : T.Real_Array_Access := null;
+
+      procedure Release is
+      begin
+         if not Own then
+            T.Free (XZ); T.Free (Xc); T.Free (Y);
+         end if;
+      end Release;
+
+      procedure Project
+        (Weight : T.View; From, Into : T.Real_Array_Access) is
+      begin
+         if Count = 1 then
+            Product (Item, Weight, From, Into, Status);
+         else
+            Product_Batch (Item, Weight, From, Count, Into, Status);
+         end if;
+      end Project;
    begin
-      --  The one projection in: the gate, the inner activation, B and C,
-      --  and a time step a head, laid out z | x | B | C | dt.
-      Product (Item, Current.Ssm_In, Item.Normalized, Item.Mamba_XZ, Status);
+      Status := E.Success;
+
+      if Own then
+         XZ := Item.Mamba_XZ;
+         Xc := Item.Mamba_X;
+         Y  := Item.Mamba_Y;
+      else
+         T.Allocate (Count * In_Out, XZ);
+         T.Allocate (Count * DXBC, Xc);
+         T.Allocate (Count * Inner, Y);
+         if XZ = null or else Xc = null or else Y = null then
+            Release;
+            Status := E.Make (E.Memory_Allocation_Failed);
+            return;
+         end if;
+      end if;
+
+      --  The one projection in: z | x | B | C | dt a position.
+      Project (Current.Ssm_In, Rows, XZ);
       if E.Is_Error (Status) then
+         Release;
          return;
       end if;
 
-      --  The causal convolution over the activation and B and C beside it --
-      --  the block past the gate -- each channel against its own taps, the
-      --  last Taps positions oldest first and this one last, biased.
-      for C in 0 .. DXBC - 1 loop
-         declare
-            Acc : N.Wide_Real := N.Wide_Real (Current.Conv_Bias.all (C));
-         begin
-            for K_At in 0 .. Taps - 1 loop
-               declare
-                  Value : constant Real :=
-                    (if K_At < Taps - 1
-                     then Memory (Conv_Base + K_At * DXBC + C)
-                     else XZ (Inner + C));
-               begin
-                  Acc := Acc
-                    + N.Wide_Real (Conv (C * Taps + K_At)) * N.Wide_Real (Value);
-               end;
-            end loop;
-            Xc (C) := Real (Acc);
-         end;
-      end loop;
-
-      --  And the memory slides on: the oldest dropped, this position's
-      --  convolution block appended.
-      for C in 0 .. DXBC - 1 loop
-         for T_At in 0 .. Taps - 3 loop
-            Memory (Conv_Base + T_At * DXBC + C) :=
-              Memory (Conv_Base + (T_At + 1) * DXBC + C);
-         end loop;
-         if Taps >= 2 then
-            Memory (Conv_Base + (Taps - 2) * DXBC + C) := XZ (Inner + C);
+      --  The convolution over the block past the gate, the team's, then
+      --  the unit over all of it, so B and C pass through it as x does.
+      declare
+         Share : aliased Mamba_Conv_Share :=
+           (Count  => Count, Inner => DXBC, Stride => In_Out, Shift => Inner,
+            Taps   => Taps, Base => Conv_Base,
+            Memory => Item.Conv_State, Conv => Current.Conv,
+            Bias   => Current.Conv_Bias, XZ => XZ, Xc => Xc);
+      begin
+         Workers_CPU.Dispatch_Shares
+           (Item.Team, DXBC, Share'Unchecked_Access, Status,
+            Cost => DXBC * Taps * Count);
+         if E.Is_Error (Status) then
+            Release;
+            return;
          end if;
-      end loop;
+      end;
+      K.SiLU (Xc.all (0 .. Count * DXBC - 1));
 
-      --  The unit on the whole convolved block, so B and C pass through it
-      --  as the activation does.
-      K.SiLU (Xc (0 .. DXBC - 1));
+      --  Each head's step a position, through the softplus, and the decay
+      --  it makes of the head's scalar transition; then the scan, the
+      --  team's, a share of the channels each.
+      declare
+         Steps, Decays : T.Real_Array_Access;
+      begin
+         T.Allocate (Count * Heads, Steps);
+         T.Allocate (Count * Heads, Decays);
+         if Steps = null or else Decays = null then
+            T.Free (Steps);
+            T.Free (Decays);
+            Release;
+            Status := E.Make (E.Memory_Allocation_Failed);
+            return;
+         end if;
 
-      --  The time step a head, biased before the softplus that the scan
-      --  takes below.
-      for Hd in 0 .. Heads - 1 loop
-         DT (Hd) := XZ (Inner + DXBC + Hd) + Current.DT_Bias.all (Hd);
-      end loop;
-
-      --  The selective scan, a head at a time. A head decays by one scalar,
-      --  its B and C are its group's, and its skip is one number: the state
-      --  a channel by a state, driven by B times the activation times the
-      --  step, read back by C, and the skip D times the activation added.
-      --  Xc holds the activation in 0 .. Inner - 1, then B, then C.
-      for Hd in 0 .. Heads - 1 loop
-         declare
-            Dt_Soft : constant N.Wide_Real := Softplus (N.Wide_Real (DT (Hd)));
-            dA      : constant N.Wide_Real :=
-              N.Exp (Dt_Soft * N.Wide_Real (A (Hd)));
-            G_At    : constant Element_Count :=
-              Inner + (Hd / Per_G) * State;
-         begin
-            for P in 0 .. Wide - 1 loop
+         for P in 0 .. Count - 1 loop
+            for Hd in 0 .. Heads - 1 loop
                declare
-                  Ch   : constant Element_Count := Hd * Wide + P;
-                  X_Dt : constant N.Wide_Real :=
-                    N.Wide_Real (Xc (Ch)) * Dt_Soft;
-                  Sum  : N.Wide_Real := 0.0;
+                  Raw  : constant N.Wide_Real :=
+                    N.Wide_Real (XZ (P * In_Out + Inner + DXBC + Hd)
+                                 + Current.DT_Bias.all (Hd));
+                  Soft : constant N.Wide_Real :=
+                    (if Raw > 20.0 then Raw else N.Log (1.0 + N.Exp (Raw)));
                begin
-                  for S in 0 .. State - 1 loop
-                     declare
-                        B_S : constant N.Wide_Real :=
-                          N.Wide_Real (Xc (G_At + S));
-                        C_S : constant N.Wide_Real :=
-                          N.Wide_Real (Xc (G_At + Group * State + S));
-                        Cell : constant Element_Count :=
-                          State_Base + Ch * State + S;
-                        New_H : constant N.Wide_Real :=
-                          N.Wide_Real (H (Cell)) * dA + B_S * X_Dt;
-                     begin
-                        H (Cell) := Real (New_H);
-                        Sum := Sum + C_S * New_H;
-                     end;
-                  end loop;
-                  Yc (Ch) :=
-                    Real (Sum + N.Wide_Real (Current.Ssm_D.all (Hd))
-                                  * N.Wide_Real (Xc (Ch)));
+                  Steps (P * Heads + Hd) := Real (Soft);
+                  Decays (P * Heads + Hd) :=
+                    Real (N.Exp (Soft * N.Wide_Real (Current.Ssm_A.all (Hd))));
                end;
             end loop;
-         end;
-      end loop;
+         end loop;
 
-      --  The gate first -- the answer weighted by the sigmoid-weighted gate,
-      --  the gate the front of the projection in -- then a root-mean-square
-      --  normalization in groups, the group the width B and C share, scaled
-      --  by the stored gain. Mamba gates and stops; Mamba2 normalizes here.
-      for C in 0 .. Inner - 1 loop
          declare
-            Z : constant N.Wide_Real := N.Wide_Real (XZ (C));
+            Share : aliased Mamba2_Scan_Share :=
+              (Count  => Count, Inner => Inner, State => State,
+               Group  => Group, Per_G => Heads / Group, Heads => Heads,
+               Wide   => Wide, DXBC => DXBC, Base => State_Base,
+               H      => Item.Delta_State, D => Current.Ssm_D,
+               Steps  => Steps, Decays => Decays, Xc => Xc, Y => Y);
          begin
-            Yc (C) :=
-              Real (N.Wide_Real (Yc (C)) * (Z / (1.0 + N.Exp (-Z))));
+            Workers_CPU.Dispatch_Shares
+              (Item.Team, Inner, Share'Unchecked_Access, Status,
+               Cost => Inner * State * Count * 2);
          end;
-      end loop;
 
-      for Grp in 0 .. Group - 1 loop
+         T.Free (Steps);
+         T.Free (Decays);
+         if E.Is_Error (Status) then
+            Release;
+            return;
+         end if;
+      end;
+
+      --  The gate and the grouped normalization, the team's, a share of
+      --  the positions each.
+      declare
+         Share : aliased Mamba2_Gate_Share :=
+           (Inner   => Inner, In_Out => In_Out, Group => Group,
+            Epsilon => Settings.Epsilon, Gain => Current.State_Norm,
+            XZ      => XZ, Y => Y);
+      begin
+         Workers_CPU.Dispatch_Shares
+           (Item.Team, Count, Share'Unchecked_Access, Status,
+            Cost => Count * Inner * 4);
+         if E.Is_Error (Status) then
+            Release;
+            return;
+         end if;
+      end;
+
+      --  And the projections back, into the rows the residual reads.
+      if Count = 1 then
+         Project (Current.Linear_Out, Y, Rows);
+      else
          declare
-            Sum : N.Wide_Real := 0.0;
-            Rms : N.Wide_Real;
+            Out_Rows : T.Real_Array_Access;
          begin
-            for I in 0 .. Grp_W - 1 loop
-               Sum := Sum + N.Wide_Real (Yc (Grp * Grp_W + I))
-                            * N.Wide_Real (Yc (Grp * Grp_W + I));
-            end loop;
-            Rms := 1.0 / N.Sqrt
-                           (Sum / N.Wide_Real (Grp_W)
-                            + N.Wide_Real (Settings.Epsilon));
-            for I in 0 .. Grp_W - 1 loop
-               Yc (Grp * Grp_W + I) :=
-                 Real (N.Wide_Real (Yc (Grp * Grp_W + I)) * Rms
-                       * N.Wide_Real (Current.State_Norm.all (Grp * Grp_W + I)));
-            end loop;
+            T.Allocate (Count * Width, Out_Rows);
+            if Out_Rows = null then
+               Release;
+               Status := E.Make (E.Memory_Allocation_Failed);
+               return;
+            end if;
+            Project (Current.Linear_Out, Y, Out_Rows);
+            if E.Is_Ok (Status) then
+               Rows.all (Rows.all'First .. Rows.all'First + Count * Width - 1)
+                 := Out_Rows.all (0 .. Count * Width - 1);
+            end if;
+            T.Free (Out_Rows);
          end;
-      end loop;
+      end if;
 
-      --  And the projection back, into the buffer the residual reads.
-      Product (Item, Current.Linear_Out, Item.Mamba_Y, Item.Normalized, Status);
+      Release;
+   end Mamba2_Batch;
+
+   procedure Mamba2_Step
+     (Item        : in out Session;
+      Source      : Model'Class;
+      Current     : Layer;
+      Layer_Index : Natural;
+      Status      : out E.Error_Info)
+   is
+   begin
+      Mamba2_Batch
+        (Item, Source, Current, Layer_Index, Item.Normalized, 1, Status);
    end Mamba2_Step;
 
    --  One position through one RWKV6 layer, on the host. Two sublayers each
@@ -21023,20 +21509,17 @@ package body Model_Runner.Llama is
                --  Mamba layers go the same way, and then on to a
                --  feed-forward where a pure state-space model stops.
                Charge (Item, Normalizing, Mark);
-               for P in 0 .. Count - 1 loop
-                  Item.Normalized.all (0 .. Width - 1) :=
-                    Norm.all (P * Width .. P * Width + Width - 1);
-                  if Is_Mamba2 (Settings.Kind) then
-                     Mamba2_Step
-                       (Item, Source, Current, Natural (Index), Status);
-                  else
-                     Mamba_Step
-                       (Item, Source, Current, Natural (Index), Status);
-                  end if;
-                  exit when E.Is_Error (Status);
-                  Norm.all (P * Width .. P * Width + Width - 1) :=
-                    Item.Normalized.all (0 .. Width - 1);
-               end loop;
+               --  The projections over the whole batch and the scan the
+               --  team's; see Mamba_Batch and Mamba2_Batch.
+               if Is_Mamba2 (Settings.Kind) then
+                  Mamba2_Batch
+                    (Item, Source, Current, Natural (Index), Norm, Count,
+                     Status);
+               else
+                  Mamba_Batch
+                    (Item, Source, Current, Natural (Index), Norm, Count,
+                     Status);
+               end if;
                exit when E.Is_Error (Status);
                Charge (Item, Attending, Mark);
             elsif Is_Linear and then Is_RWKV (Settings.Kind) then

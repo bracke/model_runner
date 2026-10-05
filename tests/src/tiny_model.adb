@@ -1291,12 +1291,26 @@ package body Tiny_Model is
                for H in A_Vals'Range loop
                   A_Vals (H) := -(0.5 + 0.25 * N.Real (Natural (H)));
                end loop;
+               --  A head a row of one, as llama.cpp's converter writes
+               --  both: {1, n_head}.
                Fixtures.Add_Tensor
                  (Builder, Layer_Name (Index, "ssm_a"),
-                  [G.U64 (Heads)], G.Type_F32,
+                  [1, G.U64 (Heads)], G.Type_F32,
                   Fixtures.Encode_F32 (A_Vals));
 
-               Norm_Of (Layer_Name (Index, "ssm_d"), Heads);
+               declare
+                  D_Vals : N.Real_Array (0 .. N.Element_Count (Heads) - 1);
+                  Drawn  : constant N.Real_Array :=
+                    Next (N.Element_Count (Heads));
+               begin
+                  for H in D_Vals'Range loop
+                     D_Vals (H) := Drawn (H) * 0.125;
+                  end loop;
+                  Fixtures.Add_Tensor
+                    (Builder, Layer_Name (Index, "ssm_d"),
+                     [1, G.U64 (Heads)], G.Type_F32,
+                     Fixtures.Encode_F32 (D_Vals));
+               end;
                Norm_Of (Layer_Name (Index, "ssm_dt.bias"), Heads);
                Norm_Of (Layer_Name (Index, "ssm_norm.weight"), Inner);
                Weight (Layer_Name (Index, "ssm_out.weight"),

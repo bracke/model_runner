@@ -380,6 +380,76 @@ package body Model_Runner.Quantization is
          end if;
       end;
 
+      --  A binary32 matrix needs no decoding: its row is already the floats,
+      --  so they are read where the file holds them rather than copied into
+      --  the buffer below first, and summed exactly as that buffer is --
+      --  four binary64 lanes, a tail, the four added -- so the answer is the
+      --  same to the bit. Mamba keeps its time-step and B-C projections in
+      --  binary32, 460 MB a token on Mamba-2.8B, and the copy was a fifth of
+      --  a token's processor time.
+      if Format = G.Type_F32 then
+         declare
+            pragma Suppress (Index_Check);
+            pragma Suppress (Range_Check);
+            pragma Suppress (Overflow_Check);
+
+            Length : constant Element_Count := Blocks * Per;
+            Row    : Real_Array (0 .. Length - 1)
+              with Import, Address => Data (Data'First + Offset)'Address;
+            Column : Element_Count := 0;
+         begin
+            --  A span at a time, as the buffer below takes them, so that the
+            --  partial sums are the ones it forms.
+            while Column < Length loop
+               declare
+                  Span  : constant Element_Count :=
+                    Element_Count'Min (Span_Elements, Length - Column);
+                  Whole : constant Element_Count := Span - Span mod 4;
+               begin
+                  for Which in 0 .. Count - 1 loop
+                     declare
+                        At_Vec : constant Element_Count :=
+                          First + Which * Stride + Column;
+                        Sum_0  : N.Wide_Real := 0.0;
+                        Sum_1  : N.Wide_Real := 0.0;
+                        Sum_2  : N.Wide_Real := 0.0;
+                        Sum_3  : N.Wide_Real := 0.0;
+                     begin
+                        for Index in 0 .. Whole / 4 - 1 loop
+                           declare
+                              At_Elt : constant Element_Count := Index * 4;
+                              At_Row : constant Element_Count :=
+                                Column + At_Elt;
+                           begin
+                              Sum_0 := Sum_0 + N.Wide_Real (Row (At_Row))
+                                * N.Wide_Real (Vectors (At_Vec + At_Elt));
+                              Sum_1 := Sum_1 + N.Wide_Real (Row (At_Row + 1))
+                                * N.Wide_Real (Vectors (At_Vec + At_Elt + 1));
+                              Sum_2 := Sum_2 + N.Wide_Real (Row (At_Row + 2))
+                                * N.Wide_Real (Vectors (At_Vec + At_Elt + 2));
+                              Sum_3 := Sum_3 + N.Wide_Real (Row (At_Row + 3))
+                                * N.Wide_Real (Vectors (At_Vec + At_Elt + 3));
+                           end;
+                        end loop;
+
+                        for Index in Whole .. Span - 1 loop
+                           Sum_0 := Sum_0 + N.Wide_Real (Row (Column + Index))
+                             * N.Wide_Real (Vectors (At_Vec + Index));
+                        end loop;
+
+                        Sums (Sums'First + Which) := Sums (Sums'First + Which)
+                          + (Sum_0 + Sum_1 + Sum_2 + Sum_3);
+                     end;
+                  end loop;
+                  Column := Column + Span;
+               end;
+            end loop;
+         end;
+
+         Ok := True;
+         return;
+      end if;
+
       --  Decode a span, then multiply it by each vector.
       --
       --  The buffer looks like waste when one vector is passed, because every
