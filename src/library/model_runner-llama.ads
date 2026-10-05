@@ -1,5 +1,7 @@
 with System;
 private with Ada.Finalization;
+private with Model_Runner.Byte_Sources.Files;
+private with Model_Runner.Panel_Cache;
 
 with Interfaces;
 
@@ -1031,6 +1033,11 @@ package Model_Runner.Llama is
    --    file states. A model stretched by request may then be opened at a
    --    context longer than the one it was trained on; a model that was not
    --    may not, which is the rule as it was.
+   --  @param Panel_Cache Where the weights written in panels are kept
+   --    between processes, or empty for nowhere: with --repack rows, a
+   --    file there whose panels still match the model's is mapped and read
+   --    where it lies rather than written again, and a model whose panels
+   --    were written afresh writes them there for the next load.
    procedure Prepare
      (Item     : in out Model;
       Source   : Model_Runner.GGUF.Containers.Container;
@@ -1045,7 +1052,8 @@ package Model_Runner.Llama is
       Fit_Required : Boolean := True;
       Threads  : Positive := 1;
       Status   : out Model_Runner.Errors.Error_Info;
-      Stretch  : Rotary_Request := No_Rotary_Request);
+      Stretch  : Rotary_Request := No_Rotary_Request;
+      Panel_Cache : String := "");
 
    --  Merge a low-rank adapter into a prepared model's weights.
    --
@@ -1872,6 +1880,13 @@ package Model_Runner.Llama is
    --  @return The copy's size in bytes.
    function Repacked_Bytes (Item : Model) return Interfaces.Unsigned_64;
 
+   --  The bytes of panels a load mapped from the panel cache rather than
+   --  wrote, or zero where it wrote them or wrote none.
+   --
+   --  @param Item Prepared model.
+   --  @return The mapped panels' size in bytes.
+   function Panels_Cached (Item : Model) return Interfaces.Unsigned_64;
+
    --  How long the rewrite of the weights took at load, zero where there
    --  was none.
    --
@@ -2480,6 +2495,12 @@ private
    type Named_View_List is array (Positive range <>) of Named_View;
    type Named_View_Access is access Named_View_List;
 
+   --  A mapped panel cache, held for as long as the model reads it.
+   type Panel_Map_Access is access Model_Runner.Byte_Sources.Files.File_Source;
+
+   --  The copy of fresh panels to the cache, while it runs.
+   type Panel_Writing_Access is access Model_Runner.Panel_Cache.Writing;
+
    type Model is limited new Ada.Finalization.Limited_Controlled with record
       Ready       : Boolean := False;
       Sessions    : Natural := 0;
@@ -2504,6 +2525,13 @@ private
       --  own bytes, and the file's arena stays mapped for whatever was not
       --  repacked.
       Repacked    : Model_Runner.Bytes.Byte_Array_Access := null;
+
+      --  Or the same panels mapped from the cache a load before wrote, when
+      --  they were found there; null otherwise.
+      Panel_Map   : Panel_Map_Access := null;
+
+      --  The copy of fresh panels to the cache, while it runs.
+      Panel_Writer : Panel_Writing_Access := null;
 
       --  How long writing it took.
       Repack_Ns   : Model_Runner.Clocks.Nanoseconds := 0;

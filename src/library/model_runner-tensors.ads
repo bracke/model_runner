@@ -220,6 +220,28 @@ package Model_Runner.Tensors is
       Result  : out View;
       Status  : out Model_Runner.Errors.Error_Info);
 
+   --  Build a view over panels that lie at an address this program did not
+   --  allocate -- a mapped panel cache -- as Make_Panels does over a buffer.
+   --
+   --  @param Format Element format.
+   --  @param Rows Number of rows; a whole number of panels.
+   --  @param Columns Contiguous elements per row.
+   --  @param Base First byte of the storage the panels lie in.
+   --  @param Span Bytes that storage holds.
+   --  @param Offset Byte position of the first panel.
+   --  @param Result Constructed view; empty on failure.
+   --  @param Status Success, Tensor_Format_Unsupported or
+   --    Tensor_Out_Of_Bounds.
+   procedure Make_Panels_At
+     (Format  : Model_Runner.GGUF.Tensor_Type;
+      Rows    : Element_Count;
+      Columns : Element_Count;
+      Base    : System.Address;
+      Span    : Model_Runner.Bytes.Byte_Count;
+      Offset  : Model_Runner.Bytes.Byte_Count;
+      Result  : out View;
+      Status  : out Model_Runner.Errors.Error_Info);
+
    --  Report whether a view refers to storage.
    --
    --  @param Item View to inspect.

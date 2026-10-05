@@ -3684,7 +3684,8 @@ package body Model_Runner.Llama is
       Fit_Required : Boolean := True;
       Threads  : Positive := 1;
       Status   : out E.Error_Info;
-      Stretch  : Rotary_Request := No_Rotary_Request)
+      Stretch  : Rotary_Request := No_Rotary_Request;
+      Panel_Cache : String := "")
    is
       Ignored : E.Error_Info;
 
@@ -5664,6 +5665,198 @@ package body Model_Runner.Llama is
                     (Model_Runner.GGUF.Block_Elements (Where.all.Format)));
 
             Held : constant View_List := To_Panel;
+
+            --  The panel cache's file: a header of Header_Bytes -- a mark,
+            --  the layout's version, the panels' bytes and how many matrices
+            --  -- and then every matrix's panels in Held's order, as the
+            --  rewrite lays them out in memory.
+            Header_Bytes : constant := 4096;
+            Mark         : constant String := "MRPANELS";
+            Version      : constant := 1;
+
+            package Files renames Model_Runner.Byte_Sources.Files;
+            package IL renames Model_Runner.Quantization.Interleave;
+
+            --  Where matrix Which's panels begin past the header.
+            function Base_Of (Which : Positive) return B.Byte_Count is
+               Running : B.Byte_Count := 0;
+            begin
+               for Index in Held'First .. Which - 1 loop
+                  Running := Running
+                    + IL.Panel_Bytes
+                        (Held (Index).all.Format, Held (Index).all.Rows,
+                         Blocks_Of (Held (Index)));
+               end loop;
+               return Running;
+            end Base_Of;
+
+            --  The header's four numbers, a word of eight bytes each after
+            --  the mark, least significant byte first.
+            function Header_Word (Value : Interfaces.Unsigned_64) return String
+            is
+               Result : String (1 .. 8);
+               Rest   : Interfaces.Unsigned_64 := Value;
+            begin
+               for Index in Result'Range loop
+                  Result (Index) :=
+                    Character'Val (Natural (Interfaces."and" (Rest, 255)));
+                  Rest := Interfaces.Shift_Right (Rest, 8);
+               end loop;
+               return Result;
+            end Header_Word;
+
+            function Header (Total : B.Byte_Count) return String
+            is (Mark
+                & Header_Word (Version)
+                & Header_Word (Interfaces.Unsigned_64 (Total))
+                & Header_Word (Interfaces.Unsigned_64 (Held'Length)));
+
+            --  The cached panels mapped and read where they lie, where the
+            --  file is there, is the size and says what these panels say,
+            --  and the first panel of every matrix is the one the rewrite
+            --  would write now: a file from a build that lays panels out
+            --  otherwise, or of another file at the same path, fails that and
+            --  is written afresh. False where anything is off; the views are
+            --  then as they were.
+            function Map_Panels (Total : B.Byte_Count) return Boolean is
+               Map : Panel_Map_Access;
+               Ok  : E.Error_Info;
+
+               procedure Release is new Ada.Unchecked_Deallocation
+                 (Files.File_Source, Panel_Map_Access);
+
+               procedure Give_Up is
+               begin
+                  Files.Close (Map.all);
+                  Release (Map);
+               end Give_Up;
+            begin
+               if not Model_Runner.Panel_Cache.Is_There (Panel_Cache) then
+                  return False;
+               end if;
+
+               Map := new Files.File_Source;
+               Files.Open (Map.all, Panel_Cache, Files.Mapping_Required,
+                           Status => Ok);
+               if E.Is_Error (Ok)
+                 or else Files.Size (Map.all) /= Header_Bytes + Total
+               then
+                  Give_Up;
+                  return False;
+               end if;
+
+               declare
+                  Expected : constant String := Header (Total);
+                  Held_Header : String (1 .. Expected'Length)
+                    with Import, Address => Files.Base (Map.all);
+               begin
+                  if Held_Header /= Expected then
+                     Give_Up;
+                     return False;
+                  end if;
+               end;
+
+               for Which in Held'Range loop
+                  declare
+                     Where : constant View_Access := Held (Which);
+                     Size  : constant B.Byte_Count :=
+                       IL.Panel_Bytes
+                         (Where.all.Format, IL.Panel_Rows, Blocks_Of (Where));
+                     Source : B.Byte_Array (1 .. Where.all.Span)
+                       with Import, Address => Where.all.Base;
+                     Kept  : B.Byte_Array (1 .. Size)
+                       with Import,
+                            Address =>
+                              System.Storage_Elements.To_Address
+                                (System.Storage_Elements.To_Integer
+                                   (Files.Base (Map.all))
+                                 + System.Storage_Elements.Integer_Address
+                                     (Header_Bytes + Base_Of (Which)));
+                     Probe : B.Byte_Array_Access := new B.Byte_Array (1 .. Size);
+                     Taken : Boolean;
+                     Same  : Boolean;
+                  begin
+                     Probe.all := [others => 0];
+                     IL.Build
+                       (Format => Where.all.Format,
+                        Source => Source,
+                        From   => Where.all.Offset,
+                        Target => Probe.all,
+                        Into   => 0,
+                        Rows   => IL.Panel_Rows,
+                        Blocks => Blocks_Of (Where),
+                        Ok     => Taken);
+                     Same := Taken and then B."=" (Probe.all, Kept);
+                     B.Free (Probe);
+                     if not Same then
+                        Give_Up;
+                        return False;
+                     end if;
+                  end;
+               end loop;
+
+               for Which in Held'Range loop
+                  declare
+                     Fresh : T.View;
+                  begin
+                     T.Make_Panels_At
+                       (Format  => Held (Which).all.Format,
+                        Rows    => Held (Which).all.Rows,
+                        Columns => Held (Which).all.Columns,
+                        Base    => Files.Base (Map.all),
+                        Span    => Files.Size (Map.all),
+                        Offset  => Header_Bytes + Base_Of (Which),
+                        Result  => Fresh,
+                        Status  => Ok);
+                     if E.Is_Error (Ok) then
+                        --  Nothing has been moved yet but this one, which
+                        --  failed: the views are still the file's.
+                        Give_Up;
+                        return False;
+                     end if;
+                  end;
+               end loop;
+
+               for Which in Held'Range loop
+                  declare
+                     Fresh : T.View;
+                  begin
+                     T.Make_Panels_At
+                       (Held (Which).all.Format, Held (Which).all.Rows,
+                        Held (Which).all.Columns, Files.Base (Map.all),
+                        Files.Size (Map.all), Header_Bytes + Base_Of (Which),
+                        Fresh, Ok);
+                     Held (Which).all := Fresh;
+                  end;
+               end loop;
+
+               Item.Panel_Map := Map;
+               Mem.Record_Mapping
+                 (Item.Accounting, Interfaces.Unsigned_64 (Total));
+               return True;
+            exception
+               when others =>
+                  if Map /= null then
+                     Give_Up;
+                  end if;
+                  return False;
+            end Map_Panels;
+
+            --  The panels just written, kept for the next load: a file
+            --  beside its final name and renamed into it whole, so a load
+            --  never maps half of one. Anything that goes wrong -- no room,
+            --  no directory -- leaves no file and costs nothing but the
+            --  attempt.
+            procedure Write_Panels (Total : B.Byte_Count) is
+            begin
+               Item.Panel_Writer := new Model_Runner.Panel_Cache.Writing;
+               Item.Panel_Writer.Start
+                 (Panel_Cache, Header (Total),
+                  Item.Repacked.all (Item.Repacked.all'First)'Address, Total);
+            exception
+               when others =>
+                  null;
+            end Write_Panels;
          begin
             --  A model with nothing to interleave keeps every view it has
             --  and allocates nothing, which is the honest answer for a file
@@ -5676,6 +5869,10 @@ package body Model_Runner.Llama is
                         (Where.all.Format, Where.all.Rows,
                          Blocks_Of (Where));
                end loop;
+
+               if Panel_Cache /= "" and then Map_Panels (Needed) then
+                  goto Panels_Done;
+               end if;
 
                Mem.Check_Allocation
                  (Item.Accounting, Mem.Converted_Weights,
@@ -5841,6 +6038,13 @@ package body Model_Runner.Llama is
                      end;
                   end loop;
                end;
+
+               if Panel_Cache /= "" then
+                  Write_Panels (Needed);
+               end if;
+
+               <<Panels_Done>>
+               null;
             end if;
          end;
       end if;
@@ -13282,7 +13486,27 @@ package body Model_Runner.Llama is
       --  has been told to give everything back, so there is no address left
       --  for it to be wrong about.
       Release_Weights (Item);
+      if Item.Panel_Writer /= null then
+         while not Item.Panel_Writer'Terminated loop
+            delay 0.01;
+         end loop;
+         declare
+            procedure Release is new Ada.Unchecked_Deallocation
+              (Model_Runner.Panel_Cache.Writing, Panel_Writing_Access);
+         begin
+            Release (Item.Panel_Writer);
+         end;
+      end if;
       B.Free (Item.Repacked);
+      if Item.Panel_Map /= null then
+         declare
+            procedure Release is new Ada.Unchecked_Deallocation
+              (Model_Runner.Byte_Sources.Files.File_Source, Panel_Map_Access);
+         begin
+            Model_Runner.Byte_Sources.Files.Close (Item.Panel_Map.all);
+            Release (Item.Panel_Map);
+         end;
+      end if;
       if Item.Light_Head /= null then
          Mem.Record_Release
            (Item.Accounting, Mem.Converted_Weights,
@@ -13358,6 +13582,11 @@ package body Model_Runner.Llama is
    function Repacked_Bytes (Item : Model) return Interfaces.Unsigned_64
    is (if Item.Repacked = null then 0
        else Interfaces.Unsigned_64 (Item.Repacked.all'Length));
+
+   function Panels_Cached (Item : Model) return Interfaces.Unsigned_64
+   is (if Item.Panel_Map = null then 0
+       else Interfaces.Unsigned_64
+              (Model_Runner.Byte_Sources.Files.Size (Item.Panel_Map.all)));
 
    function Repack_Time (Item : Model) return Model_Runner.Clocks.Nanoseconds
    is (Item.Repack_Ns);
@@ -24049,5 +24278,6 @@ package body Model_Runner.Llama is
       T.Free (Dense);
       T.Free (Out_Row);
    end Rank;
+
 
 end Model_Runner.Llama;

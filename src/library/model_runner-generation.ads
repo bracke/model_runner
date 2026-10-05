@@ -246,6 +246,9 @@ package Model_Runner.Generation is
       Repacked_Bytes   : Interfaces.Unsigned_64 := 0;
       Repack_Ns        : Model_Runner.Clocks.Nanoseconds := 0;
 
+      --  The panels mapped from the panel cache instead, zero without.
+      Panels_Cached    : Interfaces.Unsigned_64 := 0;
+
       --  How many tokens a draft model proposed and how many of those the
       --  real one agreed with. Both zero without a draft.
       --

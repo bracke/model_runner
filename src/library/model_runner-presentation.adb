@@ -1420,6 +1420,11 @@ package body Model_Runner.Presentation is
                 Loc.Named ("other", Seconds (Outcome.Repack_Ns))]),
             Diagnostic);
       end if;
+      if Interfaces."/=" (Outcome.Panels_Cached, 0) then
+         Put_Field
+           (Item, "statistics.panels_cached",
+            Size_Image (Outcome.Panels_Cached), Diagnostic);
+      end if;
       if Outcome.Shifted > 0 then
          Put_Field
            (Item, "statistics.shifted",

@@ -1,3 +1,7 @@
+with Model_Runner.Panel_Cache;
+with Model_Runner.GGUF;
+with System;
+with Model_Runner.Platform;
 with Model_Runner.GGUF.Containers;
 with Model_Runner.GGUF.Shards;
 with Model_Runner.Drafts;
@@ -2396,6 +2400,194 @@ package body Tests.Inference_Cases is
 
       B.Free (Image);
    end Weights_Are_Not_Repacked;
+
+   --  Panels are kept between loads. A model prepared in panels with a
+   --  panel cache named writes its panels there; prepared again, it maps
+   --  them rather than writing them and answers the same, to the bit; and a
+   --  cache whose bytes are not what the rewrite would write now -- here one
+   --  byte of the first panel -- is refused, written afresh and replaced.
+   procedure Panels_Are_Kept_Between_Loads
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Interfaces.Unsigned_64;
+
+      Path : constant String :=
+        Ada.Directories.Compose
+          (Ada.Directories.Current_Directory, "panel-cache-test.panels");
+
+      Image : B.Byte_Array_Access;
+
+      type Logit_Row is array (0 .. 255) of N.Real;
+
+      --  Prepare the fixture in panels against the cache, and the logits of
+      --  one token through it.
+      procedure Load_And_Ask
+        (Ready : in out L.Model; Row : out Logit_Row)
+      is
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source (Held'Access);
+         Parsed : Containers.Container;
+         Status : E.Error_Info;
+      begin
+         Containers.Reader.Parse (Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+         L.Prepare (Ready, Parsed, Source, Repack => L.To_Rows,
+                    Status => Status, Panel_Cache => Path);
+         Assert (E.Is_Ok (Status), "the model did not prepare in panels");
+
+         declare
+            Settings : constant L.Configuration := L.Config (Ready);
+            Live     : L.Session;
+            Logits   : N.Real_Array
+              (0 .. N.Element_Count (Settings.Vocabulary) - 1);
+         begin
+            L.Open (Live, Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "session did not open");
+            L.Evaluate (Live, Ready, 4, Logits, Status => Status);
+            Assert (E.Is_Ok (Status), "the token was not evaluated");
+            Row := [others => 0.0];
+            for Index in Row'Range loop
+               exit when N.Element_Count (Index) > Logits'Last;
+               Row (Index) := Logits (N.Element_Count (Index));
+            end loop;
+            L.Close (Live);
+         end;
+      end Load_And_Ask;
+
+      procedure Close (Ready : in out L.Model) is
+         Status : E.Error_Info;
+      begin
+         L.Close (Ready, Status);
+      end Close;
+
+      --  The cache file's bytes, and the file written again from them.
+      function Read_Cache return B.Byte_Array is
+         use Ada.Streams.Stream_IO;
+         F    : File_Type;
+         Size : constant Ada.Directories.File_Size :=
+           Ada.Directories.Size (Path);
+      begin
+         Open (F, In_File, Path);
+         declare
+            Bytes : B.Byte_Array (1 .. B.Byte_Count (Size));
+            Raw   : Ada.Streams.Stream_Element_Array
+              (1 .. Ada.Streams.Stream_Element_Offset (Size))
+              with Import, Address => Bytes'Address;
+            Last  : Ada.Streams.Stream_Element_Offset;
+         begin
+            Read (F, Raw, Last);
+            Close (F);
+            return Bytes;
+         end;
+      end Read_Cache;
+
+      procedure Write_Cache (Bytes : B.Byte_Array) is
+         use Ada.Streams.Stream_IO;
+         F   : File_Type;
+         Raw : Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (Bytes'Length))
+           with Import, Address => Bytes'Address;
+      begin
+         Create (F, Out_File, Path);
+         Write (F, Raw);
+         Close (F);
+      end Write_Cache;
+
+      First, Again, Fresh : Logit_Row;
+   begin
+      --  The platform's place for such a file, keyed as a run keys it: the
+      --  same key, the same path; another, another.
+      declare
+         One : constant String := Model_Runner.Platform.Panel_File ("a|1|t");
+      begin
+         if One /= "" then
+            Assert (One = Model_Runner.Platform.Panel_File ("a|1|t"),
+                    "the same key gave two panel files");
+            Assert (One /= Model_Runner.Platform.Panel_File ("a|2|t"),
+                    "two keys gave one panel file");
+            Assert (One'Length > 7
+                    and then One (One'Last - 6 .. One'Last) = ".panels",
+                    "a panel file is not named as one: " & One);
+         end if;
+      end;
+
+      --  And a view over panels at no address is refused.
+      declare
+         Nowhere : Model_Runner.Tensors.View;
+         Status  : E.Error_Info;
+      begin
+         Model_Runner.Tensors.Make_Panels_At
+           (Model_Runner.GGUF.Type_Q8_0, 8, 32, System.Null_Address, 0, 0,
+            Nowhere, Status);
+         Assert (E.Is_Error (Status), "panels at no address were taken");
+      end;
+
+      if Ada.Directories.Exists (Path) then
+         Ada.Directories.Delete_File (Path);
+      end if;
+
+      Tiny_Model.Build (Image, Format => Tiny_Model.Q8_0);
+
+      --  Written afresh, and kept.
+      declare
+         Ready : L.Model;
+      begin
+         Load_And_Ask (Ready, First);
+         Assert (L.Repacked_Bytes (Ready) > 0,
+                 "the fixture was not written in panels, so this tests "
+                 & "nothing");
+         Assert (L.Panels_Cached (Ready) = 0,
+                 "an empty cache was read from");
+         Close (Ready);
+      end;
+      Assert (Model_Runner.Panel_Cache.Is_There (Path),
+              "no panel cache was written");
+      Assert (not Model_Runner.Panel_Cache.Is_There (""),
+              "a cache was found at no path");
+
+      --  Mapped, and the same answer.
+      declare
+         Ready : L.Model;
+      begin
+         Load_And_Ask (Ready, Again);
+         Assert (L.Panels_Cached (Ready) > 0
+                 and then L.Repacked_Bytes (Ready) = 0,
+                 "the second load did not map the panels it was given");
+         Assert (First = Again,
+                 "the mapped panels answer otherwise than the written ones");
+         Close (Ready);
+      end;
+
+      --  One byte of the first panel changed: refused, written afresh,
+      --  and the file put right.
+      declare
+         Kept   : constant B.Byte_Array := Read_Cache;
+         Broken : B.Byte_Array := Kept;
+         At_Byte : constant B.Byte_Index := Broken'First + 4096 + 3;
+      begin
+         Broken (At_Byte) := Interfaces."xor" (Broken (At_Byte), 16#5A#);
+         Write_Cache (Broken);
+
+         declare
+            Ready : L.Model;
+         begin
+            Load_And_Ask (Ready, Fresh);
+            Assert (L.Panels_Cached (Ready) = 0
+                    and then L.Repacked_Bytes (Ready) > 0,
+                    "a changed panel cache was mapped");
+            Assert (First = Fresh,
+                    "the panels written again answer otherwise");
+            Close (Ready);
+         end;
+
+         Assert (B."=" (Read_Cache, Kept),
+                 "the changed cache was not written afresh");
+      end;
+
+      Ada.Directories.Delete_File (Path);
+      B.Free (Image);
+   end Panels_Are_Kept_Between_Loads;
 
    --  Evaluation refuses arguments it cannot serve.
    --
@@ -14659,6 +14851,10 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Weights_Are_Not_Repacked'Access,
          "weights are used where the file put them, not repacked");
+      Register_Routine
+        (T, Panels_Are_Kept_Between_Loads'Access,
+         "panels are kept between loads: mapped from the cache and answering "
+         & "the same, and a cache that no longer matches written afresh");
       Register_Routine
         (T, Evaluation_Refuses_Arguments_It_Cannot_Serve'Access,
          "evaluation refuses arguments it cannot serve");

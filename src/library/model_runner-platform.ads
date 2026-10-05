@@ -92,6 +92,15 @@ package Model_Runner.Platform is
    --  @return The path, or an empty string when there is no directory.
    function Cache_File (Key : String) return String;
 
+   --  A panel cache file path for a key: the key hashed, under the cache
+   --  home's panels directory beside the prefill one. Empty when no home
+   --  is known. The same key gives the same path, so a load keys the file
+   --  by the model file and what says it has not changed.
+   --
+   --  @param Key What the panels are of.
+   --  @return The path, or an empty string when there is no directory.
+   function Panel_File (Key : String) return String;
+
    --  Directory searched for a model named without a path.
    --
    --  MODEL_RUNNER_MODELS overrides it. Otherwise it is

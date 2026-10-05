@@ -265,6 +265,31 @@ package body Model_Runner.Tensors is
       Data    : B.Byte_Array_Access;
       Offset  : B.Byte_Count;
       Result  : out View;
+      Status  : out E.Error_Info) is
+   begin
+      if Data = null then
+         Result := Empty_View;
+         Status := E.Make (E.Tensor_Out_Of_Bounds);
+         return;
+      end if;
+
+      Make_Panels_At
+        (Format, Rows, Columns, Data.all'Address,
+         B.Byte_Count (Data.all'Length), Offset, Result, Status);
+   end Make_Panels;
+
+   --------------------
+   -- Make_Panels_At --
+   --------------------
+
+   procedure Make_Panels_At
+     (Format  : G.Tensor_Type;
+      Rows    : Element_Count;
+      Columns : Element_Count;
+      Base    : System.Address;
+      Span    : B.Byte_Count;
+      Offset  : B.Byte_Count;
+      Result  : out View;
       Status  : out E.Error_Info)
    is
       package IL renames Model_Runner.Quantization.Interleave;
@@ -274,7 +299,7 @@ package body Model_Runner.Tensors is
    begin
       Result := Empty_View;
 
-      if Data = null then
+      if Base = System.Null_Address then
          Status := E.Make (E.Tensor_Out_Of_Bounds);
          return;
       end if;
@@ -290,15 +315,14 @@ package body Model_Runner.Tensors is
          Total : constant B.Byte_Count :=
            IL.Panel_Bytes (Format, Rows, Columns / Per_Block);
       begin
-         if Offset + Total > B.Byte_Count (Data.all'Length) then
+         if Offset + Total > Span then
             Status := E.Make (E.Tensor_Out_Of_Bounds);
             E.Add_Integer
               (Status, "offset", Long_Long_Integer (Offset), E.Param_Offset);
             E.Add_Integer
               (Status, "size", Long_Long_Integer (Total), E.Param_Bytes);
             E.Add_Integer
-              (Status, "available",
-               Long_Long_Integer (Data.all'Length), E.Param_Bytes);
+              (Status, "available", Long_Long_Integer (Span), E.Param_Bytes);
             return;
          end if;
 
@@ -307,14 +331,14 @@ package body Model_Runner.Tensors is
             Rows        => Rows,
             Columns     => Columns,
             Role        => Role_Other,
-            Base        => Data.all'Address,
-            Span        => B.Byte_Count (Data.all'Length),
+            Base        => Base,
+            Span        => Span,
             Offset      => Offset,
             Length      => Total,
             Interleaved => True);
          Status := E.Success;
       end;
-   end Make_Panels;
+   end Make_Panels_At;
 
    --------------
    -- Row_Dot --

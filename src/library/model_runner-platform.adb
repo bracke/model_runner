@@ -355,6 +355,31 @@ package body Model_Runner.Platform is
          return "";
    end Cache_File;
 
+   ----------------
+   -- Panel_File --
+   ----------------
+
+   function Panel_File (Key : String) return String is
+      Prefill : constant String := Cache_Directory;
+   begin
+      if Prefill = "" then
+         return "";
+      end if;
+      declare
+         Image : constant String :=
+           Ada.Containers.Hash_Type'Image (Ada.Strings.Hash (Key));
+      begin
+         return Hostkit.Fs.Join
+                  (Hostkit.Fs.Join
+                     (Ada.Directories.Containing_Directory (Prefill),
+                      "panels"),
+                   Image (Image'First + 1 .. Image'Last) & ".panels");
+      end;
+   exception
+      when others =>
+         return "";
+   end Panel_File;
+
    ---------------------
    -- Data_Directory --
    ---------------------

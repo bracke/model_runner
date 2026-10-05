@@ -1,3 +1,4 @@
+with Ada.Calendar.Formatting;
 with Ada.Calendar;
 with Ada.Directories;
 with Ada.Environment_Variables;
@@ -1576,6 +1577,25 @@ package body Model_Runner.CLI.Execute is
           (if Instead = "" then T.To_String (Item.Model_Path) else Instead);
       Path   : constant String :=
         Model_Runner.Platform.Resolve_Model_Path (Named);
+
+      --  Where the weights written in panels are kept between loads, keyed
+      --  by the file and what says it is unchanged -- its size and when it
+      --  was last written -- unless the caller opted out of caches.
+      function Panel_Path return String is
+      begin
+         if Item.No_Cache or else not Ada.Directories.Exists (Path) then
+            return "";
+         end if;
+         return Model_Runner.Platform.Panel_File
+           (Path
+            & "|" & Ada.Directories.File_Size'Image (Ada.Directories.Size (Path))
+            & "|" & Ada.Calendar.Formatting.Image
+                      (Ada.Directories.Modification_Time (Path),
+                       Include_Time_Fraction => True));
+      exception
+         when others =>
+            return "";
+      end Panel_Path;
    begin
       --  A model named for the Hugging Face hub and not on disk: the user
       --  is offered its download, and where they take it the fetched file
@@ -1651,7 +1671,8 @@ package body Model_Runner.CLI.Execute is
             Fit_Required => not Item.Device_Memory_Set,
             Threads      => Selected_Workers (Item),
             Status       => Status,
-            Stretch      => Asked_Rotation (Item));
+            Stretch      => Asked_Rotation (Item),
+            Panel_Cache  => Panel_Path);
 
          --  A chat format named on the command line replaces the model's
          --  own, and whatever Prepare chose. Nothing here guesses a format
