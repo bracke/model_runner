@@ -7146,6 +7146,29 @@ package body Model_Runner.Llama is
    function Supers (Weight : T.View) return Boolean
    is (Model_Runner.Quantization.Integers.Supers_Vectors (Weight.Format));
 
+   --  Whether a matrix splits into two halves of whole panels, its bytes a
+   --  whole number a row: what Row_Slice needs of it.
+   function Halves_Whole (Weight : T.View) return Boolean
+   is (Weight.Rows > 0
+       and then Weight.Rows mod 16 = 0
+       and then Weight.Length mod B.Byte_Count (Weight.Rows) = 0);
+
+   --  Rows First .. First + Count - 1 of a matrix, as a matrix. A file's
+   --  rows lie one after another and a panelled copy's panels do, eight
+   --  rows each, so either way a run of rows starting on a panel is a run
+   --  of bytes at the same rate a row.
+   function Row_Slice
+     (Weight : T.View;
+      First  : Element_Count;
+      Count  : Element_Count) return T.View
+   is (Weight with delta
+         Rows   => Count,
+         Offset => Weight.Offset
+                   + Weight.Length / B.Byte_Count (Weight.Rows)
+                     * B.Byte_Count (First),
+         Length => Weight.Length / B.Byte_Count (Weight.Rows)
+                   * B.Byte_Count (Count));
+
    --  The model's per-dimension divisors, or none when it carries no table.
    function Turns (Item : Model'Class) return Real_Array
    is (if Item.Rope_Factors = null
@@ -12215,7 +12238,28 @@ package body Model_Runner.Llama is
       --  one item, and one worker read all of it -- twice an expert's
       --  bytes where each of the others read one expert -- while the rest
       --  of the pool waited on that worker every layer.
-      Shared_Apart : constant Boolean := not On_Pool or else Count = 1;
+      --  Whether a token's shared expert goes into the experts' job cut
+      --  by rows: its gate and up as two halves, taken first, and its down
+      --  as two halves taken last, each waiting for both of the first. Six
+      --  experts on a pool of eight left two of it idle through the job,
+      --  and the shared expert's three products after it each paid a wake
+      --  and a settle: 236 and 747 us a layer of DeepSeek-V2-Lite, both
+      --  at 46 GB/s of the box's 48. A row range of a matrix is a range of
+      --  its panels, so the halves are whole panels: rows a multiple of
+      --  sixteen.
+      Shared_Split : constant Boolean :=
+        On_Pool
+        and then Count = 1
+        and then T.Is_Present (Current.Shared_Gate)
+        and then not Given_Shared
+        and then Halves_Whole (Current.Shared_Gate)
+        and then Halves_Whole (Current.Shared_Up)
+        and then Halves_Whole (Current.Shared_Down)
+        and then Current.Shared_Gate.Rows = Element_Count (Settings.Shared_Feed)
+        and then Current.Shared_Down.Rows = Width;
+
+      Shared_Apart : constant Boolean :=
+        not On_Pool or else (Count = 1 and then not Shared_Split);
 
       --  The shared expert's feed width, where there is one; the experts'
       --  otherwise, so the rooms below are never too narrow.
@@ -12571,10 +12615,15 @@ package body Model_Runner.Llama is
             --  the batch, its number being Many: the expert past the last.
             Dealing_Shared : constant Boolean :=
               T.Is_Present (Current.Shared_Gate) and then not Given_Shared
-              and then not Shared_Apart;
+              and then not Shared_Apart and then not Shared_Split;
+
+            --  A token's shared expert cut by rows: the item numbers past
+            --  the shared expert's own, a half its start.
+            Split_Gate_Up : constant Natural := Many + 1;
+            Split_Down    : constant Natural := Many + 2;
 
             Most_Chunks : constant Natural :=
-              Natural (Count) * Used + Many + Natural (Count);
+              Natural (Count) * Used + Many + Natural (Count) + 4;
 
             Chunk_Expert : array (0 .. Most_Chunks - 1) of Natural;
             Chunk_Start  : array (0 .. Most_Chunks - 1) of Natural;
@@ -12606,6 +12655,10 @@ package body Model_Runner.Llama is
                   --  took its slowest share 2.3 ms a layer where the whole
                   --  of the work was 1.4 ms a worker.
                   Next : aliased Take_Counter := 0;
+
+                  --  The halves of a split shared expert's gate and up
+                  --  that are done, which its down waits for.
+                  Shared_Done : aliased Take_Counter := 0;
                end record;
 
             overriding procedure Run
@@ -12651,7 +12704,115 @@ package body Model_Runner.Llama is
                        Natural (Takes.Atomic_Fetch_And_Add (Share.Next, 1));
                   begin
                      exit when Index_Of >= Chunks;
-                     if Share.Ok and then Chunk_Expert (Order (Index_Of)) = Many
+                     if Chunk_Expert (Order (Index_Of)) = Split_Gate_Up then
+                        --  Half of the shared expert's gate and up rows and
+                        --  the gated middle over them, into its row; told
+                        --  done whatever came of it, since its down waits.
+                        if Share.Ok then
+                           declare
+                              Half : constant Element_Count :=
+                                Element_Count (Settings.Shared_Feed) / 2;
+                              Start : constant Element_Count :=
+                                Element_Count
+                                  (Chunk_Start (Order (Index_Of))) * Half;
+                              Picked : constant Model_Runner.Shares.Member_Rows
+                                (0 .. 0) := [0];
+                              Arms : constant T.View_Group :=
+                                [Row_Slice (Current.Shared_Gate, Start, Half),
+                                 Row_Slice (Current.Shared_Up, Start, Half)];
+                              Into : constant T.Group_Room :=
+                                [A_Room, B_Room];
+                              Done : Boolean;
+                           begin
+                              In_Room.all (In_Room.all'First
+                                           .. In_Room.all'First + Width - 1)
+                                := Rows.all (Rows.all'First
+                                             .. Rows.all'First + Width - 1);
+
+                              for Arm in Arms'Range loop
+                                 Done := False;
+                                 if Supers (Arms (Arm)) and then Has_Super then
+                                    Workers_CPU.Multiply_Packed
+                                      (Arms (Arm), Packed_Super, Picked,
+                                       Into (Arm), Done);
+                                 elsif not Supers (Arms (Arm))
+                                   and then Has_Plain
+                                 then
+                                    Workers_CPU.Multiply_Packed
+                                      (Arms (Arm), Packed_Plain, Picked,
+                                       Into (Arm), Done);
+                                 end if;
+
+                                 if not Done then
+                                    Workers_CPU.Dispatch_Batch
+                                      (null, Arms (Arm), In_Room, 1,
+                                       Into (Arm), Local,
+                                       Roles => Item.Arithmetic);
+                                    if E.Is_Error (Local) then
+                                       Share.Ok := False;
+                                    end if;
+                                 end if;
+                              end loop;
+
+                              declare
+                                 Gate_Part : T.Real_Array renames
+                                   A_Room.all (A_Room.all'First
+                                               .. A_Room.all'First + Half - 1);
+                                 Up_Part : T.Real_Array renames
+                                   B_Room.all (B_Room.all'First
+                                               .. B_Room.all'First + Half - 1);
+                              begin
+                                 K.SiLU (Gate_Part);
+                                 K.Multiply (Gate_Part, Up_Part);
+                                 Item.Shared_Rows_A.all
+                                   (Item.Shared_Rows_A.all'First + Start
+                                    .. Item.Shared_Rows_A.all'First + Start
+                                       + Half - 1) := Gate_Part;
+                              end;
+                           end;
+                        end if;
+
+                        declare
+                           Unused : constant Take_Counter :=
+                             Takes.Atomic_Fetch_And_Add (Share.Shared_Done, 1);
+                        begin
+                           null;
+                        end;
+                     elsif Chunk_Expert (Order (Index_Of)) = Split_Down then
+                        --  Half of the shared expert's down rows, once both
+                        --  halves of its middle are in: they were taken
+                        --  before every expert, so the wait is short.
+                        while Takes.Atomic_Fetch_And_Add (Share.Shared_Done, 0)
+                              < 2
+                        loop
+                           null;
+                        end loop;
+
+                        if Share.Ok then
+                           declare
+                              Half : constant Element_Count := Width / 2;
+                              Start : constant Element_Count :=
+                                Element_Count
+                                  (Chunk_Start (Order (Index_Of))) * Half;
+                           begin
+                              Workers_CPU.Dispatch_Batch
+                                (null, Row_Slice (Current.Shared_Down, Start, Half),
+                                 Item.Shared_Rows_A, 1, Out_Room, Local,
+                                 Roles => Item.Arithmetic);
+                              if E.Is_Error (Local) then
+                                 Share.Ok := False;
+                              else
+                                 Item.Shared_Rows_Out.all
+                                   (Item.Shared_Rows_Out.all'First + Start
+                                    .. Item.Shared_Rows_Out.all'First + Start
+                                       + Half - 1) :=
+                                   Out_Room.all (Out_Room.all'First
+                                                 .. Out_Room.all'First
+                                                    + Half - 1);
+                              end if;
+                           end;
+                        end if;
+                     elsif Share.Ok and then Chunk_Expert (Order (Index_Of)) = Many
                      then
                         --  The shared expert over a run of the batch's rows:
                         --  the same three products an expert is, over the
@@ -13056,7 +13217,25 @@ package body Model_Runner.Llama is
                end if;
             end loop;
 
-            if Dealing_Shared then
+            --  The split shared expert's four items: its gate and up
+            --  halves, then its down halves.
+            if Shared_Split then
+               for Half in 0 .. 1 loop
+                  Chunk_Expert (Chunks) := Split_Gate_Up;
+                  Chunk_Start (Chunks) := Half;
+                  Chunk_Count (Chunks) := 1;
+                  Chunks := Chunks + 1;
+               end loop;
+               for Half in 0 .. 1 loop
+                  Chunk_Expert (Chunks) := Split_Down;
+                  Chunk_Start (Chunks) := Half;
+                  Chunk_Count (Chunks) := 1;
+                  Chunks := Chunks + 1;
+               end loop;
+               Widest := Natural'Max (Widest, 1);
+            end if;
+
+            if Dealing_Shared or else Shared_Split then
                if Supers (Current.Shared_Gate) or else Supers (Current.Shared_Up)
                then
                   Has_Super := True;
@@ -13105,6 +13284,33 @@ package body Model_Runner.Llama is
                for Rank in Sorted'Range loop
                   Order (Rank) := Sorted (Rank);
                end loop;
+
+               --  A split shared expert's gate and up halves first and its
+               --  down halves last, the experts between, so that nothing
+               --  takes a down half before both middles are taken.
+               if Shared_Split then
+                  declare
+                     Placed : Natural := 0;
+                  begin
+                     for Pass in 1 .. 3 loop
+                        for Rank in Sorted'Range loop
+                           if (Pass = 1
+                               and then Chunk_Expert (Sorted (Rank))
+                                        = Split_Gate_Up)
+                             or else (Pass = 2
+                                      and then Chunk_Expert (Sorted (Rank))
+                                               < Split_Gate_Up)
+                             or else (Pass = 3
+                                      and then Chunk_Expert (Sorted (Rank))
+                                               = Split_Down)
+                           then
+                              Order (Placed) := Sorted (Rank);
+                              Placed := Placed + 1;
+                           end if;
+                        end loop;
+                     end loop;
+                  end;
+               end if;
             end;
 
             if Chunks > 0 then
