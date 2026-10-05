@@ -24694,5 +24694,4 @@ package body Model_Runner.Llama is
       T.Free (Out_Row);
    end Rank;
 
-
 end Model_Runner.Llama;

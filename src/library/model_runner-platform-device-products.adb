@@ -14159,36 +14159,36 @@ package body Model_Runner.Platform.Device.Products is
                                           else 1) * This.Rwkv.Width, 32)),
                               1, 1);
                         else
-                        case This.Rwkv.Mode is
-                           when Shift =>
-                              Dispatch
-                                (Item.Buffer,
-                                 C.unsigned
-                                   (Groups (This.Rwkv.Streams
-                                            * This.Rwkv.Width, 256)),
-                                 C.unsigned (Groups (Count, 16)), 1);
-                           when Decay =>
-                              Dispatch
-                                (Item.Buffer,
-                                 C.unsigned (Groups (This.Rwkv.Width, 256)),
-                                 C.unsigned (Groups (Count, 16)), 1);
-                           when Tanh | Squared_Relu | Finish =>
-                              declare
-                                 Blocks : constant Natural :=
-                                   Groups (Count * This.Rwkv.Width, 256);
-                                 Across : constant Natural :=
-                                   Natural'Min (Blocks, 65_535);
-                              begin
+                           case This.Rwkv.Mode is
+                              when Shift =>
                                  Dispatch
-                                   (Item.Buffer, C.unsigned (Across),
-                                    C.unsigned (Groups (Blocks, Across)), 1);
-                              end;
-                           when Save =>
-                              Dispatch
-                                (Item.Buffer,
-                                 C.unsigned (Groups (This.Rwkv.Width, 256)),
-                                 1, 1);
-                        end case;
+                                   (Item.Buffer,
+                                    C.unsigned
+                                      (Groups (This.Rwkv.Streams
+                                               * This.Rwkv.Width, 256)),
+                                    C.unsigned (Groups (Count, 16)), 1);
+                              when Decay =>
+                                 Dispatch
+                                   (Item.Buffer,
+                                    C.unsigned (Groups (This.Rwkv.Width, 256)),
+                                    C.unsigned (Groups (Count, 16)), 1);
+                              when Tanh | Squared_Relu | Finish =>
+                                 declare
+                                    Blocks : constant Natural :=
+                                      Groups (Count * This.Rwkv.Width, 256);
+                                    Across : constant Natural :=
+                                      Natural'Min (Blocks, 65_535);
+                                 begin
+                                    Dispatch
+                                      (Item.Buffer, C.unsigned (Across),
+                                       C.unsigned (Groups (Blocks, Across)), 1);
+                                 end;
+                              when Save =>
+                                 Dispatch
+                                   (Item.Buffer,
+                                    C.unsigned (Groups (This.Rwkv.Width, 256)),
+                                    1, 1);
+                           end case;
                         end if;
                      end if;
                   end;
