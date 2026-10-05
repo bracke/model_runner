@@ -542,20 +542,29 @@ package body Model_Runner.Generation is
                  L.Max_Batch - 1)
          else 0);
 
-      --  How many this round proposes: all it may, or where it adapts, one
-      --  more after a round that kept every proposal, up to two more than
-      --  asked, and after one that turned down more than the last, straight
-      --  back to the length asked for where it had grown past it and one
-      --  fewer below that. A reply that repeats its context keeps most and
-      --  a free one few, and the best length follows. Stepping down one at
-      --  a time from a grown length left a free reply in the long rounds a
-      --  run of agreement had made: Steelman-14B drafted by Qwen2.5-Coder-
-      --  0.5B wrote a package body at 13.97 t/s that way and 14.48 this,
-      --  and edited one at 21.3 either way; never going below the length
-      --  asked cost prose -- qwen3-8b 18.6 -> 16.9, gemma-3-4b 28.4 -> 23.8
-      --  -- and this keeps it (18.7, 28.6).
+      --  How many this round proposes: all it may, or where it adapts, by
+      --  what the run has kept so far. A round that kept every proposal
+      --  makes the next one longer, up to two past the length asked for --
+      --  but past that length only while the run keeps Grow_Above per cent
+      --  of what it proposes; a round that turned one down goes straight
+      --  back to the length asked for, and below it one at a time only
+      --  while the run keeps less than Shrink_Below. A reply that repeats
+      --  its context keeps nearly all and wants long rounds, prose keeps a
+      --  third to a half and wants short ones, and fresh code keeps about
+      --  three in five and wants the length asked for. Steelman-14B drafted
+      --  by Qwen2.5-Coder-0.5B, Ada: a new package 14.45 -> 15.22 t/s, an
+      --  edit 21.4 -> 21.1 (within a run's noise); qwen3-8b and gemma-3-4b
+      --  with their small drafts within a per cent on code and prose.
       Round_Draft : Natural :=
         Natural'Min (Item.Draft_Tokens, Largest_Draft);
+
+      --  The share of proposals kept so far, in per cent, below which a
+      --  rejected round shortens past the length asked for.
+      Shrink_Below : constant := 55;
+
+      --  And the share at or above which a round that kept every proposal
+      --  grows past the length asked for.
+      Grow_Above : constant := 70;
 
       --  How many logits the draft model writes: its own vocabulary, which
       --  may stop short of the target's -- Qwen's larger models pad theirs
@@ -2070,11 +2079,19 @@ package body Model_Runner.Generation is
             if Adapting then
                if Accepted - 1 >= Count - 1 and then Count - 1 = Round_Draft
                then
-                  Round_Draft := Natural'Min (Round_Draft + 1, Largest_Draft);
+                  Round_Draft :=
+                    (if Round_Draft < Item.Draft_Tokens
+                       or else Outcome.Accepted * 100
+                               >= Grow_Above * Outcome.Drafted
+                     then Natural'Min (Round_Draft + 1, Largest_Draft)
+                     else Round_Draft);
                elsif Accepted < Count - 1 then
                   Round_Draft :=
-                    Natural'Max
-                      (Natural'Min (Item.Draft_Tokens, Round_Draft - 1), 1);
+                    (if Round_Draft > Item.Draft_Tokens
+                       or else Outcome.Accepted * 100
+                               >= Shrink_Below * Outcome.Drafted
+                     then Item.Draft_Tokens
+                     else Natural'Max (Round_Draft - 1, 1));
                end if;
             end if;
 
