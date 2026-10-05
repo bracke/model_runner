@@ -8203,6 +8203,16 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      --  A model without an attention layer -- Mamba, Mamba2, RWKV6 -- has
+      --  no heads for the device to keep room for; its head width is its
+      --  model width, which said it attended on the processor when it
+      --  attends nowhere.
+      if (for all Index in 0 .. Item.Owner.Settings.Layers - 1 =>
+            Linear (Item.Owner.Settings, Index))
+      then
+         return;
+      end if;
+
       declare
          Settings : Configuration renames Item.Owner.Settings;
 
