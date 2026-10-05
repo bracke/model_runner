@@ -37,6 +37,10 @@ const uint POS = 16u;
 //  The widest low rank a lane holds.
 const uint MOST_LOW = 64u;
 
+//  The low-rank rows of the workgroup's positions: five streams of up to
+//  sixty-four ranks for each of POS positions.
+shared float lows[POS * 5u * MOST_LOW];
+
 layout(local_size_x = LANES) in;
 
 layout(std430, binding = 0) readonly  buffer Weight { float w[]; };
@@ -79,57 +83,65 @@ void main() {
     uint mode = shape.mode;
     uint width = shape.width;
 
-    if (mode == 0u) {
+    if (mode == 0u || mode == 1u) {
+        //  A lane an output element, the workgroup's positions at once: the
+        //  low-rank rows of those positions staged in shared memory, the
+        //  map row read once a rank and multiplied into an accumulator a
+        //  position -- a loop of constant length, so the accumulators stay
+        //  in registers where a row of the map held in an array indexed by
+        //  the rank would not.
+        uint wide = (mode == 0u) ? shape.streams * width : width;
         uint j = gl_WorkGroupID.x * LANES + lane;
-        uint wide = shape.streams * width;
+        uint low = min(shape.low, MOST_LOW);
+        uint per = (mode == 0u) ? shape.streams * low : low;
+        uint first = gl_WorkGroupID.y * POS;
+        uint last = min(first + POS, shape.count);
+
+        //  The stream this workgroup's lanes are in, where every lane is in
+        //  the same one; otherwise each reads its own from shared memory.
+        for (uint i = lane; i < POS * per; i += LANES) {
+            uint p = first + i / per;
+            lows[i] = p < last ? r[shape.low_at + p * per + i % per] : 0.0;
+        }
+        barrier();
+
         if (j >= wide) {
             return;
         }
-        uint st = j / width;
-        uint c = j - st * width;
-        uint low = min(shape.low, MOST_LOW);
 
-        float map_row[MOST_LOW];
+        uint st = (mode == 0u) ? j / width : 0u;
+        float acc[POS];
+        for (uint q = 0u; q < POS; ++q) {
+            acc[q] = 0.0;
+        }
         for (uint k = 0u; k < low; ++k) {
-            map_row[k] = w[shape.base + shape.map_at + j * low + k];
-        }
-        float mix = w[shape.base + shape.lerp_at + j];
-
-        uint first = gl_WorkGroupID.y * POS;
-        uint last = min(first + POS, shape.count);
-        for (uint p = first; p < last; ++p) {
-            float here = x[p * width + c];
-            float before =
-                p == 0u ? s[shape.state_at + c] : x[(p - 1u) * width + c];
-            float d = 0.0;
-            uint at = shape.low_at + p * shape.streams * low + st * low;
-            for (uint k = 0u; k < low; ++k) {
-                d += map_row[k] * r[at + k];
+            float m = w[shape.base + shape.map_at + j * low + k];
+            for (uint q = 0u; q < POS; ++q) {
+                acc[q] += m * lows[q * per + st * low + k];
             }
-            y[p * wide + j] = here + (before - here) * (mix + d);
         }
-    } else if (mode == 1u) {
-        uint j = gl_WorkGroupID.x * LANES + lane;
-        if (j >= width) {
-            return;
-        }
-        uint low = min(shape.low, MOST_LOW);
 
-        float map_row[MOST_LOW];
-        for (uint k = 0u; k < low; ++k) {
-            map_row[k] = w[shape.base + shape.map_at + j * low + k];
-        }
-        float bias = w[shape.base + shape.bias_at + j];
-
-        uint first = gl_WorkGroupID.y * POS;
-        uint last = min(first + POS, shape.count);
-        for (uint p = first; p < last; ++p) {
-            float d = 0.0;
-            uint at = shape.low_at + p * low;
-            for (uint k = 0u; k < low; ++k) {
-                d += map_row[k] * r[at + k];
+        if (mode == 0u) {
+            uint c = j - st * width;
+            float mix = w[shape.base + shape.lerp_at + j];
+            for (uint q = 0u; q < POS; ++q) {
+                uint p = first + q;
+                if (p < last) {
+                    float here = x[p * width + c];
+                    float before =
+                        p == 0u ? s[shape.state_at + c]
+                                : x[(p - 1u) * width + c];
+                    y[p * wide + j] = here + (before - here) * (mix + acc[q]);
+                }
             }
-            y[p * width + j] = exp(-exp(bias + d));
+        } else {
+            float bias = w[shape.base + shape.bias_at + j];
+            for (uint q = 0u; q < POS; ++q) {
+                uint p = first + q;
+                if (p < last) {
+                    y[p * width + j] = exp(-exp(bias + acc[q]));
+                }
+            }
         }
     } else if (mode == 2u || mode == 3u || mode == 4u) {
         uint i = gl_WorkGroupID.x * LANES + lane

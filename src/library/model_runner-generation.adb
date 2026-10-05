@@ -2200,7 +2200,9 @@ package body Model_Runner.Generation is
                   --  of the sequence, or of the turn: a model whose chat format
                   --  closes a turn with a token other than its end-of-sequence
                   --  one is done at either.
-                  if Vocab.Ends_Generation (Words.all, Token) then
+                  if Vocab.Ends_Generation (Words.all, Token)
+                    and then not Item.Ignore_End
+                  then
                      Conclude (End_Of_Sequence);
                      exit Decode_Loop;
                   end if;

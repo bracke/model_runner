@@ -166,6 +166,8 @@ package Speed_Run is
    --    mixture takes on the device.
    --  @param Paged Whether the session keeps its context in pages, which
    --    the command does on a device and nowhere else unless told.
+   --  @param Ignore_End Whether the run goes on past the end of the
+   --    sequence to the count asked for, as llama-bench does.
    --  @param Result What it measured.
    procedure Run
      (Path        : String;
@@ -189,6 +191,7 @@ package Speed_Run is
       Context     : Natural := 0;
       Device_Bytes : Interfaces.Unsigned_64 := 0;
       Paged       : Boolean := False;
+      Ignore_End  : Boolean := False;
       Result      : out Report);
 
    --  The digest this tool prints, over any text.

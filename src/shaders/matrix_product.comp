@@ -286,6 +286,7 @@ shared float16_t wt[CHUNKS * TILE_R * WT_STRIDE];
 
 //  The two formats this decodes, numbered as Weight_Packing'Pos numbers
 //  them, which is the same numbering row_product.comp is given.
+const uint FMT_F32  = 0u;
 const uint FMT_F16  = 1u;
 const uint FMT_BF16 = 2u;
 const uint FMT_Q8_0 = 7u;
@@ -1740,7 +1741,9 @@ void main() {
     uint block = shape.format == FMT_Q4_K ? 144u
                  : (shape.format == FMT_Q5_K ? 176u : 210u);
 
-    uint rb = shape.format <= FMT_BF16
+    uint rb = shape.format == FMT_F32
+              ? shape.columns * 4u
+              : shape.format <= FMT_BF16
               ? shape.columns * 2u
               : (shape.format == FMT_Q8_0
                  ? (shape.columns / 32u) * 34u
@@ -2101,7 +2104,17 @@ void main() {
                      - 4.0 * float (1u - ((m3 >> (24u + bit)) & 1u))));
             }
 #else
-            if (shape.format <= FMT_BF16) {
+            if (shape.format == FMT_F32) {
+                //  Binary32 and no blocks: the sixteen an invocation wants
+                //  are sixteen words, each rounded once to the half the
+                //  tile holds -- the rounding every other format's weights
+                //  and every operand of the tile already take.
+                uint i = (row + (k0 + half_of * 16u) * 4u) >> 2u;
+
+                for (uint j = 0u; j < 16u; ++j) {
+                    wt[into + j] = float16_t(uintBitsToFloat(w[i + j]));
+                }
+            } else if (shape.format <= FMT_BF16) {
                 //  Sixteen bits a weight and no blocks: the sixteen an
                 //  invocation wants are eight words, and they always start
                 //  on a word boundary because a row is a whole number of

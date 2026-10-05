@@ -2863,6 +2863,7 @@ begin
               not Given ("--no-paged")
               and then (Given ("--paged")
                         or else Option ("--backend", "cpu") = "device"),
+            Ignore_End  => Given ("--ignore-eos"),
             Result      => Result);
 
          Ada.Text_IO.Put_Line

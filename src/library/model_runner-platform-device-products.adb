@@ -1111,7 +1111,8 @@ package body Model_Runner.Platform.Device.Products is
       Packing : Weight_Packing;
       Rows    : Natural;
       Columns : Natural;
-      Count   : Natural) return Boolean
+      Count   : Natural;
+      Rounded : Boolean := False) return Boolean
    is (Item.Matrices
        and then Item.Matrix_Line /= Null_Handle
        and then Rows mod Tile_Grain = 0
@@ -1131,7 +1132,8 @@ package body Model_Runner.Platform.Device.Products is
        --  multiplies, so a whole number of chunks is what it needs:
        --  Falcon-7B is 4544 wide, and its prompts went to the row product,
        --  at an eighth of the tile's rate.
-       and then ((Packing in Values_F16 | Values_BF16
+       and then (((Packing in Values_F16 | Values_BF16
+                   or else (Packing = Values_F32 and then Rounded))
                   and then Columns mod 32 = 0)
                  or else (Packing in Packed_Q4_0 | Packed_Q4_1 | Packed_Q5_0
                                      | Packed_Q5_1 | Packed_Q8_0
@@ -9830,7 +9832,8 @@ package body Model_Runner.Platform.Device.Products is
       Added   : out Boolean;
       Key     : System.Address := System.Null_Address;
       Kept    : Boolean := True;
-      From_Step : Natural := 0)
+      From_Step : Natural := 0;
+      Rounded   : Boolean := False)
    is
       Source : constant Natural :=
         (if From_Step = 0 then Steps.Held else From_Step);
@@ -9854,7 +9857,7 @@ package body Model_Runner.Platform.Device.Products is
         (Base => Base, Span => Span, At_Byte => At_Byte, Packing => Packing,
          Rows => Rows, Columns => Columns, Key => Key, Chained => True,
          Reads => (if From_Step = 0 then 0 else From_Step),
-         Kept => Kept,
+         Kept => Kept, Rounded => Rounded,
          Blends => False, Unit => 0, Attends => False,
          others => <>);
       Added := True;
@@ -11333,7 +11336,8 @@ package body Model_Runner.Platform.Device.Products is
           and then Uses_Matrix
                      (Item, Steps.Items (Which).Packing,
                       Steps.Items (Which).Rows,
-                      Steps.Items (Which).Columns, Count));
+                      Steps.Items (Which).Columns, Count,
+                      Rounded => Steps.Items (Which).Rounded));
 
       --  The stretch of the result buffer a step that readies heads reads:
       --  from the first byte of the steps it names to the last. It is bound

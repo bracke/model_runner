@@ -145,6 +145,7 @@ package body Speed_Run is
       Context     : Natural := 0;
       Device_Bytes : Interfaces.Unsigned_64 := 0;
       Paged       : Boolean := False;
+      Ignore_End  : Boolean := False;
       Result      : out Report)
    is
       use type Model_Runner.Backend.Backend_Kind;
@@ -395,6 +396,7 @@ package body Speed_Run is
 
                   Model_Runner.Stops.Open (Stop);
                   Request.Max_Tokens := Tokens;
+                  Request.Ignore_End := Ignore_End;
 
                   --  As the command sets it: a backend that does not batch
                   --  gets one, whatever was asked for. Passing the asked-for

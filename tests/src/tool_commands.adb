@@ -46,7 +46,7 @@ package body Tool_Commands is
      & " --kv-cache --repeats"
      & " --paged --no-paged"
      & " --anyway --wait"
-     & " --budget --device-timeline --context-size --device-memory ";
+     & " --budget --device-timeline --context-size --device-memory --ignore-eos ";
    Opts_Benchmark : aliased constant String := " --seconds --rounds --anyway --wait ";
    --  The bare "--" is in this list because the command really does
    --  accept it -- it is what separates this tool's options from the
@@ -82,7 +82,7 @@ package body Tool_Commands is
      & " [--draft-lookup] [--draft-next]"
      & " [--kv-cache MODE] [--repeats N] [--paged] [--no-paged]"
      & " [--anyway] [--wait MINUTES]"
-     & " [--budget] [--device-timeline] [--context-size N]"
+     & " [--budget] [--device-timeline] [--context-size N] [--ignore-eos]"
      & " [--device-memory BYTES]";
    Takes_Benchmark : aliased constant String := "[--seconds N] [--rounds N] [--anyway] [--wait MINUTES]";
    Takes_Outside   : aliased constant String :=

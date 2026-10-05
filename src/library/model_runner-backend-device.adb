@@ -3128,7 +3128,28 @@ package body Model_Runner.Backend.Device is
                Lat_P, Rope_P, Up_P_M : Products.Weight_Packing;
                Step_Q_Raw, Step_Lat, Step_Lat_Norm, Step_Up, Step_Rope :
                  Natural;
+
+               --  The latent and the rotated slice are two row ranges of one
+               --  tensor, the slice right after the latent: one product of
+               --  both rather than two. Sixty-four rows alone are one row of
+               --  tiles, one workgroup on a device of twelve units, and took
+               --  twice the five hundred and twelve beside them.
+               Joint : constant Boolean :=
+                 T.Is_Present (MLA_Latent) and then T.Is_Present (MLA_Rope)
+                 and then MLA_Rope.Base = MLA_Latent.Base
+                 and then MLA_Rope.Format = MLA_Latent.Format
+                 and then MLA_Rope.Columns = MLA_Latent.Columns
+                 and then MLA_Rope.Offset
+                          = MLA_Latent.Offset
+                            + Model_Runner.Bytes.Byte_Count (MLA_Latent.Rows)
+                              * T.Row_Bytes (MLA_Latent);
+
+               Both : T.View := MLA_Latent;
+               Lat_Rows  : constant Natural := Natural (MLA_Latent.Rows);
+               Both_Rows : constant Natural :=
+                 Lat_Rows + Natural (MLA_Rope.Rows);
             begin
+               Both.Rows := MLA_Latent.Rows + MLA_Rope.Rows;
                if MLA_Norm = null
                  or else not T.Is_Present (MLA_Latent)
                  or else not T.Is_Present (MLA_Rope)
@@ -3157,7 +3178,23 @@ package body Model_Runner.Backend.Device is
                Step_Q_Raw := Products.Length (Steps);
                Step_Room (Query.Rows);
 
-               Add_Input_Product (MLA_Latent, Lat_P, False, Added);
+               if Joint then
+                  --  Both ranges, then the latent taken out of the row for
+                  --  its normalization; the slice is read where it lies.
+                  Add_Input_Product (Both, Lat_P, False, Added);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Rope := Products.Length (Steps);
+                  Step_Room (Both.Rows);
+
+                  Products.Add_Assemble
+                    (Steps, 1, Step_Rope, Step_Rope,
+                     [Lat_Rows, 0, 0, Both_Rows, 0, 0, 0, Both_Rows], Added,
+                     Kept => False);
+               else
+                  Add_Input_Product (MLA_Latent, Lat_P, False, Added);
+               end if;
                if not Added then
                   return;
                end if;
@@ -3188,12 +3225,14 @@ package body Model_Runner.Backend.Device is
                Step_Up := Products.Length (Steps);
                Step_Room (MLA_Up.Rows);
 
-               Add_Input_Product (MLA_Rope, Rope_P, False, Added);
-               if not Added then
-                  return;
+               if not Joint then
+                  Add_Input_Product (MLA_Rope, Rope_P, False, Added);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Rope := Products.Length (Steps);
+                  Step_Room (MLA_Rope.Rows);
                end if;
-               Step_Rope := Products.Length (Steps);
-               Step_Room (MLA_Rope.Rows);
 
                --  The queries, each head's rotated slice moved to its front.
                Products.Add_Assemble
@@ -3211,7 +3250,8 @@ package body Model_Runner.Backend.Device is
                --  part out of the up projection.
                Products.Add_Assemble
                  (Steps, Heads, Step_Rope, Step_Up,
-                  [Rotary, 0, 0, Rotary,
+                  [Rotary, (if Joint then Lat_Rows else 0), 0,
+                   (if Joint then Both_Rows else Rotary),
                    Nope, 0, Nope + Value_Size, Natural (MLA_Up.Rows)], Added,
                   Kept => False);
                if not Added then
@@ -4484,7 +4524,7 @@ package body Model_Runner.Backend.Device is
                Model_Runner.Bytes.Byte_Count (Tab.all'Length) * 4, 0,
                Products.Values_F32, Rows, Columns, Added,
                Key => Tab.all (Tab.all'First)'Address, Kept => False,
-               From_Step => From);
+               From_Step => From, Rounded => True);
             Room (Rows);
          end if;
       end Table;

@@ -1449,6 +1449,12 @@ package Model_Runner.Platform.Device.Products is
    --    zero for the step immediately before this one. A layer's
    --    feed-forward reads the normalization twice, and its second arm is
    --    not the step before it.
+   --  @param Rounded Whether a binary32 matrix may go to the prompt tile,
+   --    rounded once to the half it holds as every other format's weights
+   --    are. Off, binary32 keeps binary32 -- what a model stored that way
+   --    asks; on, for a small table feeding a unit where the rounding is
+   --    below what the unit lets through, and the row kernel at a batch is
+   --    the slow part of the layer.
    procedure Add_Chained_Product
      (Steps     : in out Sequence;
       Base      : System.Address;
@@ -1460,7 +1466,8 @@ package Model_Runner.Platform.Device.Products is
       Added     : out Boolean;
       Key       : System.Address := System.Null_Address;
       Kept      : Boolean := True;
-      From_Step : Natural := 0);
+      From_Step : Natural := 0;
+      Rounded   : Boolean := False);
 
    --  Name a step that combines the two results before it.
    --
@@ -3808,6 +3815,10 @@ private
       --  over twenty-seven blocks -- asks for the row kernel and pays its
       --  reading of the weights once a group of vectors.
       Exact   : Boolean := False;
+
+      --  A binary32 product the caller lets the tile round; see
+      --  Add_Chained_Product.
+      Rounded : Boolean := False;
 
       --  A heads step rather than a product, as Add_Heads describes it:
       --  the queries or keys in Reads, Heads of Head_Size, each head

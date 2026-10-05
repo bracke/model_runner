@@ -162,6 +162,13 @@ package Model_Runner.Generation is
       --  stack; the context proposes what it finds.
       Draft_Adapts : Boolean := False;
 
+      --  Whether the end of the sequence ends the run. False goes on to
+      --  Max_Tokens whatever the model says, which is what a measurement of
+      --  speed asks for: llama-bench generates its count whatever comes,
+      --  and a model that stopped early was compared over the few tokens it
+      --  made. Never what a reader of the text wants.
+      Ignore_End : Boolean := False;
+
       --  Explicit seed. When Has_Seed is False the seed comes from the entropy
       --  source, and the value actually used is reported in the result.
       Seed     : Seed_Value := 0;
