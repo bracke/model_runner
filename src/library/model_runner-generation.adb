@@ -543,12 +543,17 @@ package body Model_Runner.Generation is
          else 0);
 
       --  How many this round proposes: all it may, or where it adapts, one
-      --  more after a round that kept every proposal and one fewer after
-      --  one that turned down more than the last. A reply that repeats its
-      --  context keeps most and a free one few, and the best length
-      --  follows: gemma-3-4b drafted by its 270M wrote code fastest at
-      --  four a round (46.1 against 43.7 at three) and prose at three
-      --  (29.4 against 27.0 at four), Steelman-14B code at four.
+      --  more after a round that kept every proposal, up to two more than
+      --  asked, and after one that turned down more than the last, straight
+      --  back to the length asked for where it had grown past it and one
+      --  fewer below that. A reply that repeats its context keeps most and
+      --  a free one few, and the best length follows. Stepping down one at
+      --  a time from a grown length left a free reply in the long rounds a
+      --  run of agreement had made: Steelman-14B drafted by Qwen2.5-Coder-
+      --  0.5B wrote a package body at 13.97 t/s that way and 14.48 this,
+      --  and edited one at 21.3 either way; never going below the length
+      --  asked cost prose -- qwen3-8b 18.6 -> 16.9, gemma-3-4b 28.4 -> 23.8
+      --  -- and this keeps it (18.7, 28.6).
       Round_Draft : Natural :=
         Natural'Min (Item.Draft_Tokens, Largest_Draft);
 
@@ -2067,7 +2072,9 @@ package body Model_Runner.Generation is
                then
                   Round_Draft := Natural'Min (Round_Draft + 1, Largest_Draft);
                elsif Accepted < Count - 1 then
-                  Round_Draft := Natural'Max (Round_Draft - 1, 1);
+                  Round_Draft :=
+                    Natural'Max
+                      (Natural'Min (Item.Draft_Tokens, Round_Draft - 1), 1);
                end if;
             end if;
 

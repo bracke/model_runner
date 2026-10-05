@@ -2865,6 +2865,7 @@ begin
                         or else Option ("--backend", "cpu") = "device"),
             Ignore_End  => Given ("--ignore-eos"),
             Draft_Floor => Real_Of (Option ("--draft-floor", "0")),
+            Draft_Adapts => Given ("--draft-adapts"),
             Result      => Result);
 
          Ada.Text_IO.Put_Line

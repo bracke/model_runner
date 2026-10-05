@@ -148,6 +148,7 @@ package body Speed_Run is
       Paged       : Boolean := False;
       Ignore_End  : Boolean := False;
       Draft_Floor : Model_Runner.Numerics.Real := 0.0;
+      Draft_Adapts : Boolean := False;
       Result      : out Report)
    is
       use type Model_Runner.Backend.Backend_Kind;
@@ -418,6 +419,7 @@ package body Speed_Run is
                   Request.Max_Tokens := Tokens;
                   Request.Ignore_End := Ignore_End;
                   Request.Draft_Floor := Draft_Floor;
+                  Request.Draft_Adapts := Draft_Adapts;
 
                   --  As the command sets it: a backend that does not batch
                   --  gets one, whatever was asked for. Passing the asked-for

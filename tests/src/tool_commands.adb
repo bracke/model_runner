@@ -42,7 +42,7 @@ package body Tool_Commands is
    Opts_Speed     : aliased constant String :=
      " --model --prompt-file --max-tokens --threads --batch-size --repack"
      & " --backend --arith --repeat-penalty --draft-model --draft-tokens"
-     & " --draft-lookup --draft-next --draft-floor"
+     & " --draft-lookup --draft-next --draft-floor --draft-adapts"
      & " --kv-cache --repeats"
      & " --paged --no-paged"
      & " --anyway --wait"
@@ -79,7 +79,7 @@ package body Tool_Commands is
      "--model PATH [--prompt-file PATH] [--max-tokens N] [--threads N]"
      & " [--batch-size N] [--repack MODE] [--backend NAME] [--arith MODE]"
      & " [--repeat-penalty X] [--draft-model PATH] [--draft-tokens N]"
-     & " [--draft-lookup] [--draft-next] [--draft-floor P]"
+     & " [--draft-lookup] [--draft-next] [--draft-floor P] [--draft-adapts]"
      & " [--kv-cache MODE] [--repeats N] [--paged] [--no-paged]"
      & " [--anyway] [--wait MINUTES]"
      & " [--budget] [--device-timeline] [--context-size N] [--ignore-eos]"

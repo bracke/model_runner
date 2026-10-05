@@ -176,6 +176,8 @@ package Speed_Run is
    --    sequence to the count asked for, as llama-bench does.
    --  @param Draft_Floor The draft's own probability below which a round
    --    stops drafting and is checked, as --draft-floor sets; nought never.
+   --  @param Draft_Adapts Whether a round's length follows what the rounds
+   --    before kept, as run's own drafting from the store does.
    --  @param Result What it measured.
    procedure Run
      (Path        : String;
@@ -201,6 +203,7 @@ package Speed_Run is
       Paged       : Boolean := False;
       Ignore_End  : Boolean := False;
       Draft_Floor : Model_Runner.Numerics.Real := 0.0;
+      Draft_Adapts : Boolean := False;
       Result      : out Report);
 
    --  The digest this tool prints, over any text.
