@@ -1,0 +1,102 @@
+#version 450
+
+//  Mamba2's selective scan over a batch, a head a workgroup.
+//
+//  A head is Head channels, each with its own row of State numbers of the
+//  state, and a scalar transition the head shares: a position's step is
+//  the softplus of its dt and the head's bias, its decay the exponential
+//  of the step times the head's A. A lane is a channel and holds its row
+//  of the state in registers for the run; the position's B and C, the
+//  group's, are shared across the lanes. The positions go in order, each
+//  decaying the row and adding B times the input times the step, and
+//  answering C against the row plus D times the input.
+//
+//  The input is the step read -- the convolved x, B and C -- and dt is
+//  its own projection's, read through the whole result buffer.
+
+const uint HEAD = 64u;
+const uint STATE = 128u;
+
+layout(local_size_x = HEAD) in;
+
+layout(std430, binding = 0) readonly  buffer Weight { float w[]; };
+layout(std430, binding = 1) readonly  buffer Source { float x[]; };
+layout(std430, binding = 2) writeonly buffer Target { float y[]; };
+layout(std430, binding = 3) readonly  buffer Result { float r[]; };
+layout(std430, binding = 4) buffer State { float s[]; };
+
+layout(push_constant) uniform Shape {
+    uint mode;
+    uint dxbc;
+    uint count;
+    uint inner;
+    uint in_out;
+    uint base;
+    uint taps;
+    uint heads;
+
+    uint xz_at;
+    uint conv_at;
+    uint conv_bias_at;
+    uint dt_bias_at;
+    uint a_at;
+    uint d_at;
+    uint gain_at;
+    uint memory_at;
+    uint state_at;
+    uint state;
+    uint groups;
+    uint head;
+    uint epsilon_bits;
+    uint dt_at;
+} shape;
+
+shared float bs[STATE];
+shared float cs[STATE];
+
+void main() {
+    uint hd = gl_WorkGroupID.x;
+    uint lane = gl_LocalInvocationID.x;
+    uint ch = hd * HEAD + lane;
+    uint g = hd / (shape.heads / shape.groups);
+    uint cells = shape.state_at + ch * STATE;
+
+    float h[STATE];
+    for (uint i = 0u; i < STATE; ++i) {
+        h[i] = s[cells + i];
+    }
+
+    float dt_bias = w[shape.base + shape.dt_bias_at + hd];
+    float a = w[shape.base + shape.a_at + hd];
+    float d = w[shape.base + shape.d_at + hd];
+
+    for (uint p = 0u; p < shape.count; ++p) {
+        uint row = p * shape.dxbc;
+        uint b_at = row + shape.inner + g * STATE;
+        uint c_at = row + shape.inner + shape.groups * STATE + g * STATE;
+
+        barrier();
+        for (uint i = lane; i < STATE; i += HEAD) {
+            bs[i] = x[b_at + i];
+            cs[i] = x[c_at + i];
+        }
+        barrier();
+
+        float raw = r[shape.dt_at + p * shape.heads + hd] + dt_bias;
+        float step = raw > 20.0 ? raw : log(1.0 + exp(raw));
+        float decay = exp(step * a);
+        float v = x[row + ch];
+        float v_dt = v * step;
+
+        float sum = 0.0;
+        for (uint i = 0u; i < STATE; ++i) {
+            h[i] = h[i] * decay + bs[i] * v_dt;
+            sum += cs[i] * h[i];
+        }
+        y[p * shape.inner + ch] = sum + d * v;
+    }
+
+    for (uint i = 0u; i < STATE; ++i) {
+        s[cells + i] = h[i];
+    }
+}

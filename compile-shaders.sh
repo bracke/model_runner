@@ -120,6 +120,8 @@ compile pick                         pick.comp             vulkan1.0
 compile assemble                     assemble.comp         vulkan1.0
 compile rwkv                         rwkv.comp             vulkan1.0
 compile rwkv_wkv                     rwkv_wkv.comp         vulkan1.0
+compile mamba2                       mamba2.comp           vulkan1.0
+compile mamba2_scan                  mamba2_scan.comp      vulkan1.0
 compile conv                         conv.comp             vulkan1.0
 compile rule                         rule.comp             vulkan1.0
 compile rule_held                    rule_held.comp        vulkan1.1

@@ -2809,6 +2809,31 @@ package body Model_Runner.Platform.Device.Products is
                end if;
             end;
 
+            declare
+               Around : aliased constant Model_Runner.Shaders.Word_Array :=
+                 Model_Runner.Shaders.Mamba2;
+               Scan   : aliased constant Model_Runner.Shaders.Word_Array :=
+                 Model_Runner.Shaders.Mamba2_Scan;
+            begin
+               Request.Size := Interfaces.C.size_t (Around'Length * 4);
+               Request.Code := Around'Address;
+
+               if Create (Item.Logical, Request'Address, Null_Handle,
+                          Made'Access) = 0
+               then
+                  Item.Mambaer := Made;
+               end if;
+
+               Request.Size := Interfaces.C.size_t (Scan'Length * 4);
+               Request.Code := Scan'Address;
+
+               if Create (Item.Logical, Request'Address, Null_Handle,
+                          Made'Access) = 0
+               then
+                  Item.Scanner := Made;
+               end if;
+            end;
+
             Request.Size := Interfaces.C.size_t (Conved'Length * 4);
             Request.Code := Conved'Address;
 
@@ -3831,6 +3856,26 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Wkv_Line := Made;
+            end if;
+         end if;
+
+         if Item.Mambaer /= Null_Handle then
+            Request.Stage.Module := Item.Mambaer;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Mamba_Line := Made;
+            end if;
+         end if;
+
+         if Item.Scanner /= Null_Handle then
+            Request.Stage.Module := Item.Scanner;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Scan_Line := Made;
             end if;
          end if;
 
@@ -4911,6 +4956,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Assemble_Line, "vkDestroyPipeline");
       Give_Back (Item.Rwkv_Line, "vkDestroyPipeline");
       Give_Back (Item.Wkv_Line, "vkDestroyPipeline");
+      Give_Back (Item.Mamba_Line, "vkDestroyPipeline");
+      Give_Back (Item.Scan_Line, "vkDestroyPipeline");
       Give_Back (Item.Conv_Line, "vkDestroyPipeline");
       Give_Back (Item.Rule_Line, "vkDestroyPipeline");
       Give_Back (Item.Held_Rule_Line, "vkDestroyPipeline");
@@ -4926,6 +4973,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Assembler, "vkDestroyShaderModule");
       Give_Back (Item.Rwkver, "vkDestroyShaderModule");
       Give_Back (Item.Wkver, "vkDestroyShaderModule");
+      Give_Back (Item.Mambaer, "vkDestroyShaderModule");
+      Give_Back (Item.Scanner, "vkDestroyShaderModule");
       Give_Back (Item.Conver, "vkDestroyShaderModule");
       Give_Back (Item.Ruler, "vkDestroyShaderModule");
       Give_Back (Item.Held_Ruler, "vkDestroyShaderModule");
@@ -9139,6 +9188,9 @@ package body Model_Runner.Platform.Device.Products is
    function Runs_Rwkv (Item : Engine) return Boolean
    is (Item.Rwkv_Line /= Null_Handle and then Item.Wkv_Line /= Null_Handle);
 
+   function Runs_Mamba2 (Item : Engine) return Boolean
+   is (Item.Mamba_Line /= Null_Handle and then Item.Scan_Line /= Null_Handle);
+
    function Last_Refusal (Item : Engine) return Refusal
    is (Item.Refused);
 
@@ -9674,6 +9726,8 @@ package body Model_Runner.Platform.Device.Products is
             return "rwkv " & Rwkv_Mode'Image (This.Rwkv.Mode);
          elsif This.Wkvs then
             return "wkv";
+         elsif This.Mambas then
+            return "mamba2 " & Mamba2_Mode'Image (This.Mamba.Mode);
          elsif This.Convolves then
             return "conv";
          elsif This.Rules then
@@ -10480,6 +10534,80 @@ package body Model_Runner.Platform.Device.Products is
       Added := True;
    end Add_Wkv;
 
+   ----------------
+   -- Add_Mamba2 --
+   ----------------
+
+   procedure Add_Mamba2
+     (Steps     : in out Sequence;
+      Base      : System.Address;
+      Span      : Model_Runner.Bytes.Byte_Count;
+      Shape     : Mamba2_Shape;
+      Added     : out Boolean;
+      From_Step : Natural := 0;
+      Key       : System.Address := System.Null_Address;
+      Kept      : Boolean := True)
+   is
+      Source : constant Natural :=
+        (if From_Step = 0 then Steps.Held else From_Step);
+
+      function Holds (Which : Natural; Wide : Natural) return Boolean
+      is (Which in 1 .. Steps.Held and then Steps.Items (Which).Rows = Wide);
+
+      Rows : Natural := 0;
+   begin
+      Added := False;
+
+      if Steps.Held = Sequence_Limit
+        or else Base = System.Null_Address
+        or else Shape.Inner = 0
+        or else Shape.Taps < 1
+        or else Shape.Groups = 0
+        or else Shape.Heads = 0
+        or else Shape.Heads mod Shape.Groups /= 0
+        or else Shape.Inner mod Shape.Groups /= 0
+        or else Shape.DXBC /= Shape.Inner + 2 * Shape.Groups * Shape.State
+        or else Shape.In_Out /= Shape.Inner + Shape.DXBC
+        or else not Holds (Shape.XZ_Step, Shape.In_Out)
+        or else not Holds (Shape.Dt_Step, Shape.Heads)
+      then
+         return;
+      end if;
+
+      case Shape.Mode is
+         when Conv | Save =>
+            if Source /= Shape.XZ_Step then
+               return;
+            end if;
+            Rows := (if Shape.Mode = Conv then Shape.DXBC else 1);
+         when Scan =>
+            if Shape.Head /= Mamba2_Head
+              or else Shape.State /= Mamba2_State
+              or else Shape.Heads * Shape.Head /= Shape.Inner
+              or else not Holds (Source, Shape.DXBC)
+            then
+               return;
+            end if;
+            Rows := Shape.Inner;
+         when Gate =>
+            if not Holds (Source, Shape.Inner) then
+               return;
+            end if;
+            Rows := Shape.Inner;
+      end case;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Base => Base, Span => Span, At_Byte => 0,
+         Packing => Weight_Packing'First,
+         Rows => Rows, Columns => Steps.Items (Source).Rows,
+         Key => Key, Chained => True, Reads => Source, Kept => Kept,
+         Mambas => True, Mamba => Shape,
+         Attends => False, Blends => False,
+         others => <>);
+      Added := True;
+   end Add_Mamba2;
+
    ---------------------
    -- Add_Combination --
    ---------------------
@@ -10990,6 +11118,7 @@ package body Model_Runner.Platform.Device.Products is
                     or else This.Norms or else This.Biases
                     or else This.Convolves or else This.Rules
                     or else This.Rwkvs or else This.Wkvs
+                    or else This.Mambas
                     or else This.Routes or else This.Readies)
               and then This.Base /= System.Null_Address
               and then This.Columns mod (2 * Wide_Step) /= 0
@@ -11136,6 +11265,7 @@ package body Model_Runner.Platform.Device.Products is
                or else Steps.Items (Which).Rules
                or else Steps.Items (Which).Rwkvs
                or else Steps.Items (Which).Wkvs
+               or else Steps.Items (Which).Mambas
                or else Steps.Items (Which).Inverts
                or else Steps.Items (Which).Blends));
 
@@ -11577,6 +11707,24 @@ package body Model_Runner.Platform.Device.Products is
                end if;
 
                Places (Index).Weight := 0;
+            elsif This.Mambas then
+               --  A Mamba2 step carries the layer's pack, whole, and reads
+               --  the state buffer and the in-projection's step.
+               if This.Rows = 0
+                 or else This.Base = System.Null_Address
+                 or else This.Span < 4
+                 or else This.Reads not in 1 .. Index - 1
+                 or else This.Mamba.XZ_Step not in 1 .. Index - 1
+                 or else This.Mamba.Dt_Step not in 1 .. Index - 1
+                 or else Item.State_At = Null_Handle
+                 or else (if This.Mamba.Mode = Scan
+                          then Item.Scan_Line = Null_Handle
+                          else Item.Mamba_Line = Null_Handle)
+               then
+                  return;
+               end if;
+
+               Places (Index).Weight := Interfaces.Unsigned_64 (This.Span);
             elsif This.Rwkvs or else This.Wkvs then
                --  An RWKV step carries the layer's pack, whole, as a
                --  norm's weight is kept, and reads the state buffer.
@@ -11847,12 +11995,13 @@ package body Model_Runner.Platform.Device.Products is
                   or else This.Readies or else This.Biases
                   or else This.Convolves or else This.Rules
                   or else This.Rwkvs or else This.Wkvs
+                    or else This.Mambas
                 then 1
                 elsif This.Gathers > 0 then This.Stack
                 else This.Rows),
                (if This.Norms then This.Rows / This.Groups
                 elsif This.Biases then This.Stack * This.Each
-                elsif This.Rwkvs or else This.Wkvs
+                elsif This.Rwkvs or else This.Wkvs or else This.Mambas
                 then Natural (This.Span / 4)
                 elsif This.Convolves then This.Linear.Taps * This.Linear.Mix
                 elsif This.Rules
@@ -12302,6 +12451,7 @@ package body Model_Runner.Platform.Device.Products is
 
             if Steps.Items (Index).Convolves or else Steps.Items (Index).Rules
               or else Steps.Items (Index).Rwkvs or else Steps.Items (Index).Wkvs
+              or else Steps.Items (Index).Mambas
             then
                --  The weight, the rows it reads, its own room out, the
                --  whole of the result buffer for the rule's other rows,
@@ -13003,6 +13153,10 @@ package body Model_Runner.Platform.Device.Products is
                      then Natural'Max
                             (Natural'Max (This.Wkv.K_Step, This.Wkv.V_Step),
                              Natural'Max (This.Wkv.W_Step, This.Wkv.G_Step))
+                     elsif This.Mambas and then This.Mamba.Mode = Save
+                     then Index - 1
+                     elsif This.Mambas
+                     then Natural'Max (This.Mamba.XZ_Step, This.Mamba.Dt_Step)
                      else 0);
 
                   Source : constant Natural :=
@@ -13040,6 +13194,7 @@ package body Model_Runner.Platform.Device.Products is
                        or else This.Inverts or else This.Picks
                        or else This.Convolves or else This.Rules
                        or else This.Rwkvs or else This.Wkvs
+                    or else This.Mambas
                      then False
                      else Tiled (Index)
                           and then (Was_From /= Source
@@ -13711,6 +13866,74 @@ package body Model_Runner.Platform.Device.Products is
                            Product_Bytes, Shape'Address);
                      Dispatch
                        (Item.Buffer, C.unsigned ((Whole + 255) / 256), 1, 1);
+                  end;
+
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute,
+                     Row_Line (Item, Count));
+                  goto Next_Dispatch;
+               end if;
+
+               if This.Mambas then
+                  declare
+                     function Bits is new Ada.Unchecked_Conversion
+                       (Model_Runner.Numerics.Real, C.unsigned);
+
+                     function Groups (Of_Many, Each : Natural) return Natural
+                     is ((Of_Many + Each - 1) / Each);
+
+                     M : Mamba2_Shape renames This.Mamba;
+
+                     Shape : aliased constant Shape_Constants :=
+                       (Rows    => C.unsigned (Mamba2_Mode'Pos (M.Mode)),
+                        Columns => C.unsigned (M.DXBC),
+                        Count   => C.unsigned (Count),
+                        First   => C.unsigned (M.Inner),
+                        Packing => C.unsigned (M.In_Out),
+                        Base    => C.unsigned (Places (Index).Base / 4),
+                        Joins   => C.unsigned (M.Taps),
+                        Table   => C.unsigned (M.Heads),
+                        Members =>
+                          [0  => C.unsigned (Places (M.XZ_Step).At_Byte / 4),
+                           1  => C.unsigned (M.Conv_At),
+                           2  => C.unsigned (M.Bias_At),
+                           3  => C.unsigned (M.Dt_At),
+                           4  => C.unsigned (M.A_At),
+                           5  => C.unsigned (M.D_At),
+                           6  => C.unsigned (M.Gain_At),
+                           7  => C.unsigned (M.Memory_At),
+                           8  => C.unsigned (M.State_At),
+                           9  => C.unsigned (M.State),
+                           10 => C.unsigned (M.Groups),
+                           11 => C.unsigned (M.Head),
+                           12 => Bits (M.Epsilon),
+                           13 => C.unsigned (Places (M.Dt_Step).At_Byte / 4),
+                           others => 0],
+                        others  => <>);
+                  begin
+                     Bind_Pipeline
+                       (Item.Buffer, Bind_Point_Compute,
+                        (if M.Mode = Scan then Item.Scan_Line
+                         else Item.Mamba_Line));
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+
+                     case M.Mode is
+                        when Conv =>
+                           Dispatch
+                             (Item.Buffer, C.unsigned (Groups (M.DXBC, 256)),
+                              C.unsigned (Groups (Count, 16)), 1);
+                        when Save =>
+                           Dispatch
+                             (Item.Buffer, C.unsigned (Groups (M.DXBC, 256)),
+                              1, 1);
+                        when Scan =>
+                           Dispatch (Item.Buffer, C.unsigned (M.Heads), 1, 1);
+                        when Gate =>
+                           Dispatch
+                             (Item.Buffer, C.unsigned (Count),
+                              C.unsigned (M.Groups), 1);
+                     end case;
                   end;
 
                   Bind_Pipeline

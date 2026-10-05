@@ -2445,6 +2445,10 @@ private
       --  keeps them as one resident weight: see Pair_Norms.
       Rwkv_Pack       : Model_Runner.Tensors.Real_Array_Access;
 
+      --  A Mamba2 mixer's small tables laid end to end for the device:
+      --  see Pair_Norms.
+      Ssm_Pack        : Model_Runner.Tensors.Real_Array_Access;
+
       --  The expert every position of a mixture goes through as well,
       --  with the row that gates it; absent where the mixture has none.
       Shared_Gate   : aliased Model_Runner.Tensors.View;

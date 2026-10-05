@@ -6450,6 +6450,46 @@ package body Checks is
          end if;
       end;
 
+      --  And the steps around a Mamba2 mixer's scan.
+      declare
+         Found : Boolean;
+
+         Digest : constant Interfaces.Unsigned_64 :=
+           Shader_Generation.Source_Digest
+             (Root & "/src/shaders/mamba2.comp", Found);
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if not Found then
+            Fail ("src/shaders/mamba2.comp is missing, and the words "
+                  & "compiled from it are committed");
+         elsif Digest /= Model_Runner.Shaders.Mamba2_Digest then
+            Fail ("src/shaders/mamba2.comp has changed since it was "
+                  & "compiled; compile it and run 'tests shader' again with "
+                  & "every shader named");
+         end if;
+      end;
+
+      --  And a Mamba2 mixer's scan.
+      declare
+         Found : Boolean;
+
+         Digest : constant Interfaces.Unsigned_64 :=
+           Shader_Generation.Source_Digest
+             (Root & "/src/shaders/mamba2_scan.comp", Found);
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if not Found then
+            Fail ("src/shaders/mamba2_scan.comp is missing, and the words "
+                  & "compiled from it are committed");
+         elsif Digest /= Model_Runner.Shaders.Mamba2_Scan_Digest then
+            Fail ("src/shaders/mamba2_scan.comp has changed since it was "
+                  & "compiled; compile it and run 'tests shader' again with "
+                  & "every shader named");
+         end if;
+      end;
+
       --  And the one that unpacks a layer of it into the copy.
       declare
          Found : Boolean;

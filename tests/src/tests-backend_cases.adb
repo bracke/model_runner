@@ -5308,6 +5308,391 @@ package body Tests.Backend_Cases is
               "a closed device says it runs RWKV blocks");
    end An_Rwkv_Layer_Without_Its_Pack_Is_Refused;
 
+   -------------------------------------------
+   -- A_Mamba2_Mixer_Says_What_The_Host_Says --
+   -------------------------------------------
+
+   --  The steps a Mamba2 mixer goes to the device as -- the convolution
+   --  against the memory, its saving, the scan against the state, and the
+   --  gate with the grouped normalization -- each against the host's
+   --  arithmetic, over one position and over a batch, the memory and the
+   --  state holding numbers so a slot read wrong shows.
+   procedure A_Mamba2_Mixer_Says_What_The_Host_Says
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Width  : constant := 64;
+      Heads  : constant := 2;
+      Head   : constant := Products.Mamba2_Head;
+      State  : constant := Products.Mamba2_State;
+      Groups : constant := 2;
+      Taps   : constant := 4;
+      Inner  : constant := Heads * Head;
+      DXBC   : constant := Inner + 2 * Groups * State;
+      In_Out : constant := Inner + DXBC;
+      Back   : constant := Taps - 1;
+      W      : constant N.Element_Count := Width;
+
+      --  The pack: the taps a channel, their biases, dt's bias, A, D, the
+      --  gain.
+      Conv_At  : constant := 0;
+      Bias_At  : constant := DXBC * Taps;
+      Dt_At    : constant := Bias_At + DXBC;
+      A_At     : constant := Dt_At + Heads;
+      D_At     : constant := A_At + Heads;
+      Gain_At  : constant := D_At + Heads;
+      Pack_Len : constant := Gain_At + Inner;
+
+      Memory_Len : constant := Back * DXBC;
+      State_Len  : constant := Memory_Len + Inner * State;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+
+      Found, Ready, Ok, Added, Halted : Boolean;
+
+      type Real_Access is access N.Real_Array;
+      procedure Free is new Ada.Unchecked_Deallocation
+        (N.Real_Array, Real_Access);
+
+      Mix   : Real_Access := new N.Real_Array (0 .. In_Out * W - 1);
+      Dt    : N.Real_Array (0 .. Heads * W - 1);
+      Pack  : N.Real_Array (0 .. Pack_Len - 1);
+      Start : Real_Access := new N.Real_Array (0 .. State_Len - 1);
+
+      Steps : Products.Sequence;
+
+      function Bytes_Of (Values : N.Real_Array)
+        return Model_Runner.Bytes.Byte_Count
+      is (Model_Runner.Bytes.Byte_Count (Values'Length) * 4);
+
+      package L renames Ada.Numerics.Long_Elementary_Functions;
+
+      function Shape (Mode : Products.Mamba2_Mode)
+        return Products.Mamba2_Shape
+      is ((Mode => Mode, Inner => Inner, DXBC => DXBC, In_Out => In_Out,
+           Taps => Taps, Heads => Heads, Head => Head, State => State,
+           Groups => Groups, XZ_Step => 1, Dt_Step => 2,
+           Conv_At => Conv_At, Bias_At => Bias_At, Dt_At => Dt_At,
+           A_At => A_At, D_At => D_At, Gain_At => Gain_At,
+           Memory_At => 0, State_At => Memory_Len, Epsilon => 1.0E-5));
+
+      procedure Over (Count : Positive) is
+         C       : constant N.Element_Count := N.Element_Count (Count);
+         Input   : N.Real_Array (0 .. C * W - 1);
+         XZ      : N.Real_Array (0 .. C * In_Out - 1);
+         Steps_D : N.Real_Array (0 .. C * Heads - 1);
+         Xc      : N.Real_Array (0 .. C * DXBC - 1);
+         Y       : N.Real_Array (0 .. C * Inner - 1);
+         Gated   : N.Real_Array (0 .. C * Inner - 1);
+         H       : N.Real_Array (0 .. Inner * State - 1) :=
+           Start (Memory_Len .. State_Len - 1);
+         Landing : N.Real_Array
+           (0 .. C * (In_Out + Heads + DXBC + 1 + 2 * Inner) - 1)
+           := [others => 0.0];
+         After   : N.Real_Array (0 .. State_Len - 1);
+         Worst   : N.Real := 0.0;
+
+         At_Conv : constant N.Element_Count := C * (In_Out + Heads);
+         At_Scan : constant N.Element_Count := At_Conv + C * (DXBC + 1);
+         At_Gate : constant N.Element_Count := At_Scan + C * Inner;
+
+         procedure Near (Got, Want : N.Real) is
+         begin
+            Worst := N.Real'Max
+              (Worst, abs (Got - Want) / N.Real'Max (1.0, abs Want));
+         end Near;
+
+         --  Channel Ch's input at position Q, signed: before the batch, the
+         --  memory.
+         function Input_At (Ch : N.Element_Count; Q : Long_Long_Integer)
+           return N.Real
+         is (if Q >= 0
+             then XZ (N.Element_Count (Q) * In_Out + Inner + Ch)
+             else Start (N.Element_Count (Q + Back) * DXBC + Ch));
+      begin
+         for Index in Input'Range loop
+            Input (Index) := N.Real ((Index * 7) mod 13) / 13.0 - 0.45;
+         end loop;
+
+         Products.Put_State (Engine, 0, Start.all, Ok);
+         Assert (Ok, "the memory and the state would not be written");
+
+         Products.Open_Sequence (Steps);
+         --  1 the projection in; 2 dt's; 3 the convolution; 4 the memory
+         --  saved; 5 the scan; 6 the gate.
+         Products.Add_Product
+           (Steps, Mix (Mix'First)'Address, Bytes_Of (Mix.all), 0,
+            Products.Values_F32, In_Out, Width, Added, Kept => False,
+            Exact => True);
+         Assert (Added, "the projection in was refused");
+         Products.Add_Product
+           (Steps, Dt (Dt'First)'Address, Bytes_Of (Dt), 0,
+            Products.Values_F32, Heads, Width, Added, Kept => False,
+            Exact => True);
+         Assert (Added, "dt's projection was refused");
+         Products.Add_Mamba2
+           (Steps, Pack (0)'Address, Bytes_Of (Pack), Shape (Products.Conv),
+            Added, From_Step => 1, Key => Pack (0)'Address);
+         Assert (Added, "the convolution was refused");
+         Products.Add_Mamba2
+           (Steps, Pack (0)'Address, Bytes_Of (Pack), Shape (Products.Save),
+            Added, From_Step => 1, Key => Pack (0)'Address, Kept => False);
+         Assert (Added, "the save was refused");
+         Products.Add_Mamba2
+           (Steps, Pack (0)'Address, Bytes_Of (Pack), Shape (Products.Scan),
+            Added, From_Step => 3, Key => Pack (0)'Address);
+         Assert (Added, "the scan was refused");
+         Products.Add_Mamba2
+           (Steps, Pack (0)'Address, Bytes_Of (Pack), Shape (Products.Gate),
+            Added, From_Step => 5, Key => Pack (0)'Address);
+         Assert (Added, "the gate was refused");
+
+         --  And what they refuse: a scan over a step that is not the
+         --  convolution's width, and a head the kernel does not take.
+         Products.Add_Mamba2
+           (Steps, Pack (0)'Address, Bytes_Of (Pack), Shape (Products.Scan),
+            Added, From_Step => 1);
+         Assert (not Added, "a scan over the projection was taken");
+         declare
+            Odd : Products.Mamba2_Shape := Shape (Products.Scan);
+         begin
+            Odd.Head := Head / 2;
+            Odd.Heads := 2 * Heads;
+            Odd.In_Out := Inner + DXBC;
+            Products.Add_Mamba2
+              (Steps, Pack (0)'Address, Bytes_Of (Pack), Odd, Added,
+               From_Step => 3);
+            Assert (not Added, "a head of another width was taken");
+         end;
+
+         Products.Run (Engine, Steps, Input, Count, Landing, Ok, Halted);
+         Assert (Ok, "the sequence was refused over"
+                 & Positive'Image (Count) & " positions");
+         Products.Get_State (Engine, 0, After, Ok);
+         Assert (Ok, "the memory and the state would not be read back");
+
+         --  The host's: the projections, the convolution, the scan and the
+         --  gate.
+         for P in 0 .. C - 1 loop
+            for J in N.Element_Count range 0 .. In_Out - 1 loop
+               declare
+                  Acc : Long_Float := 0.0;
+               begin
+                  for K in 0 .. W - 1 loop
+                     Acc := Acc + Long_Float (Mix (J * W + K))
+                                  * Long_Float (Input (P * W + K));
+                  end loop;
+                  XZ (P * In_Out + J) := N.Real (Acc);
+               end;
+            end loop;
+            for Hd in N.Element_Count range 0 .. Heads - 1 loop
+               declare
+                  Acc : Long_Float := Long_Float (Pack (Dt_At + Hd));
+               begin
+                  for K in 0 .. W - 1 loop
+                     Acc := Acc + Long_Float (Dt (Hd * W + K))
+                                  * Long_Float (Input (P * W + K));
+                  end loop;
+                  Steps_D (P * Heads + Hd) :=
+                    N.Real (if Acc > 20.0 then Acc else L.Log (1.0 + L.Exp (Acc)));
+               end;
+            end loop;
+         end loop;
+         for P in 0 .. C - 1 loop
+            for Ch in N.Element_Count range 0 .. DXBC - 1 loop
+               declare
+                  Acc : Long_Float := Long_Float (Pack (Bias_At + Ch));
+               begin
+                  for K in N.Element_Count range 0 .. Taps - 1 loop
+                     Acc := Acc
+                       + Long_Float (Pack (Conv_At + Ch * Taps + K))
+                         * Long_Float (Input_At
+                                         (Ch, Long_Long_Integer (P + K)
+                                              - Long_Long_Integer (Back)));
+                  end loop;
+                  Xc (P * DXBC + Ch) := N.Real (Acc / (1.0 + L.Exp (-Acc)));
+               end;
+            end loop;
+         end loop;
+         for P in 0 .. C - 1 loop
+            for Ch in N.Element_Count range 0 .. Inner - 1 loop
+               declare
+                  Hd  : constant N.Element_Count := Ch / Head;
+                  G   : constant N.Element_Count := Hd / (Heads / Groups);
+                  B0  : constant N.Element_Count := P * DXBC + Inner + G * State;
+                  C0  : constant N.Element_Count :=
+                    P * DXBC + Inner + Groups * State + G * State;
+                  Stp : constant N.Real := Steps_D (P * Heads + Hd);
+                  Dec : constant N.Real :=
+                    N.Real (L.Exp (Long_Float (Stp) * Long_Float (Pack (A_At + Hd))));
+                  X   : constant N.Real := Xc (P * DXBC + Ch);
+                  Sum : N.Real := 0.0;
+               begin
+                  for S in N.Element_Count range 0 .. State - 1 loop
+                     H (Ch * State + S) :=
+                       H (Ch * State + S) * Dec + Xc (B0 + S) * X * Stp;
+                     Sum := Sum + Xc (C0 + S) * H (Ch * State + S);
+                  end loop;
+                  Y (P * Inner + Ch) := Sum + Pack (D_At + Hd) * X;
+               end;
+            end loop;
+            for G in N.Element_Count range 0 .. Groups - 1 loop
+               declare
+                  Wide : constant N.Element_Count := Inner / Groups;
+                  Sum  : Long_Float := 0.0;
+                  Rms  : Long_Float;
+               begin
+                  for I in 0 .. Wide - 1 loop
+                     declare
+                        Z : constant Long_Float :=
+                          Long_Float (XZ (P * In_Out + G * Wide + I));
+                        V : constant Long_Float :=
+                          Long_Float (Y (P * Inner + G * Wide + I))
+                          * Z / (1.0 + L.Exp (-Z));
+                     begin
+                        Gated (P * Inner + G * Wide + I) := N.Real (V);
+                        Sum := Sum + V * V;
+                     end;
+                  end loop;
+                  Rms := 1.0 / L.Sqrt (Sum / Long_Float (Wide) + 1.0E-5);
+                  for I in 0 .. Wide - 1 loop
+                     Gated (P * Inner + G * Wide + I) :=
+                       N.Real (Long_Float (Gated (P * Inner + G * Wide + I))
+                               * Rms
+                               * Long_Float (Pack (Gain_At + G * Wide + I)));
+                  end loop;
+               end;
+            end loop;
+         end loop;
+
+         for I in Xc'Range loop
+            Near (Landing (At_Conv + I), Xc (I));
+         end loop;
+         for I in Y'Range loop
+            Near (Landing (At_Scan + I), Y (I));
+            Near (Landing (At_Gate + I), Gated (I));
+         end loop;
+         for J in N.Element_Count range 0 .. Back - 1 loop
+            for Ch in N.Element_Count range 0 .. DXBC - 1 loop
+               Near (After (J * DXBC + Ch),
+                     Input_At (Ch, Long_Long_Integer (C + J)
+                                   - Long_Long_Integer (Back)));
+            end loop;
+         end loop;
+         for I in H'Range loop
+            Near (After (Memory_Len + I), H (I));
+         end loop;
+
+         Assert (Worst <= 1.0E-4,
+                 "over" & Positive'Image (Count)
+                 & " positions the Mamba2 steps differ from the host's by "
+                 & N.Real'Image (Worst));
+      end Over;
+   begin
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         Free (Mix);
+         Free (Start);
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if not Ready then
+         Devices.Close (Held);
+         Free (Mix);
+         Free (Start);
+         return;
+      end if;
+      Products.Open (Engine, Opened, Ready);
+      if not Ready or else not Products.Runs_Mamba2 (Engine) then
+         if Ready then
+            Products.Close (Engine);
+         end if;
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         Free (Mix);
+         Free (Start);
+         return;
+      end if;
+
+      for Index in Mix'Range loop
+         Mix (Index) := N.Real ((Index * 5) mod 11) / 44.0 - 0.12;
+      end loop;
+      for Index in Dt'Range loop
+         Dt (Index) := N.Real ((Index * 3) mod 7) / 28.0 - 0.1;
+      end loop;
+      for Index in Pack'Range loop
+         Pack (Index) := N.Real ((Index * 11) mod 17) / 17.0 - 0.4;
+      end loop;
+      --  A negative, as the file's is.
+      for Hd in N.Element_Count range 0 .. Heads - 1 loop
+         Pack (A_At + Hd) := -0.5 - 0.25 * N.Real (Hd);
+      end loop;
+      for Index in Start'Range loop
+         Start (Index) := N.Real ((Index * 3) mod 19) / 19.0 - 0.5;
+      end loop;
+
+      Products.Reserve_State (Engine, State_Len, Ok);
+      Assert (Ok, "no room for the memory and the state");
+
+      Over (1);
+      Over (3);
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+      Free (Mix);
+      Free (Start);
+   end A_Mamba2_Mixer_Says_What_The_Host_Says;
+
+   ------------------------------------------------
+   -- A_Mamba2_Layer_Without_Its_Pack_Is_Refused --
+   ------------------------------------------------
+
+   --  The mixer-level call: the device runs Mamba2 mixers while it is open
+   --  and has the kernels, and refuses one it has not been given the
+   --  tables of, leaving the rows alone, so the host takes it instead.
+   procedure A_Mamba2_Layer_Without_Its_Pack_Is_Refused
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Ready : Boolean;
+   begin
+      Model_Runner.Backend.Device.Open (Ready);
+      if not Ready then
+         Assert (not Model_Runner.Backend.Device.Runs_Mamba2,
+                 "a closed device says it runs Mamba2 mixers");
+         return;
+      end if;
+
+      Assert (Model_Runner.Backend.Device.Runs_Mamba2,
+              "an open device does not run Mamba2 mixers");
+
+      declare
+         Block : constant Model_Runner.Backend.Device.Mamba2_Block :=
+           (Width => 64, Inner => 128, Heads => 2,
+            Head  => Model_Runner.Backend.Device.Mamba2_Head,
+            State => Model_Runner.Backend.Device.Mamba2_State,
+            Groups => 1, Taps => 4, Pack => null, others => <>);
+         Rows  : constant N.Real_Array (0 .. 63) := [others => 0.25];
+         Into  : N.Real_Array (0 .. 63) := [others => 7.0];
+         Ok    : Boolean;
+      begin
+         Model_Runner.Backend.Device.Mamba2_Layer (Block, Rows, 1, Into, Ok);
+         Assert (not Ok, "a mixer without its tables was run");
+         Assert ((for all Value of Into => Value = 7.0),
+                 "a refused mixer wrote its rows");
+      end;
+
+      Model_Runner.Backend.Device.Close;
+      Assert (not Model_Runner.Backend.Device.Runs_Mamba2,
+              "a closed device says it runs Mamba2 mixers");
+   end A_Mamba2_Layer_Without_Its_Pack_Is_Refused;
+
    ---------------------------------------------------------------
    -- The_Linear_Layer_On_The_Device_Says_What_The_Host_Says --
    ---------------------------------------------------------------
@@ -9476,6 +9861,15 @@ package body Tests.Backend_Cases is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, An_Rwkv_Layer_Without_Its_Pack_Is_Refused'Access,
          "the device runs RWKV6 blocks while it is open, and refuses one "
+         & "without its tables, writing nothing");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Mamba2_Mixer_Says_What_The_Host_Says'Access,
+         "a Mamba2 mixer's device steps -- the convolution, its memory, the "
+         & "scan and the gate with its grouped normalization -- say what the "
+         & "host says, the state buffer read and written");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Mamba2_Layer_Without_Its_Pack_Is_Refused'Access,
+         "the device runs Mamba2 mixers while it is open, and refuses one "
          & "without its tables, writing nothing");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, The_Packed_Attention_Says_Which_Heads_It_Reads'Access,

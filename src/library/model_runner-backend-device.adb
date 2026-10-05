@@ -4668,6 +4668,207 @@ package body Model_Runner.Backend.Device is
                      .. Landing.all'First + At_Out + Count * Wide - 1);
    end Rwkv_Layer;
 
+   -----------------
+   -- Runs_Mamba2 --
+   -----------------
+
+   function Runs_Mamba2 return Boolean
+   is (Ready_Now and then Products.Runs_Mamba2 (Engine)
+       and then Products.Runs_Linear (Engine));
+
+   ------------------
+   -- Mamba2_Layer --
+   ------------------
+
+   procedure Mamba2_Layer
+     (Block     : Mamba2_Block;
+      Rows      : Model_Runner.Tensors.Real_Array;
+      Count     : Model_Runner.Numerics.Element_Count;
+      Into      : in out Model_Runner.Tensors.Real_Array;
+      Ok        : out Boolean;
+      Cancel    : Model_Runner.Cancellation.Token_Reference := null;
+      Carry_In  : Boolean := False;
+      Carry_Out : Boolean := False)
+   is
+      Whole_Layer : constant Boolean := Block.Norm /= null;
+
+      --  The steps' numbers, one on where the normalization comes first.
+      Lift : constant Natural := (if Whole_Layer then 1 else 0);
+
+      Wide : constant Model_Runner.Numerics.Element_Count :=
+        Model_Runner.Numerics.Element_Count (Block.Width);
+
+      DXBC   : constant Natural :=
+        Block.Inner + 2 * Block.Groups * Block.State;
+      In_Out : constant Natural := Block.Inner + DXBC;
+
+      Steps     : Products.Sequence;
+      Added     : Boolean := True;
+      Wanted    : Model_Runner.Numerics.Element_Count := 0;
+      At_Out    : Model_Runner.Numerics.Element_Count := 0;
+      Cancelled : Boolean := False;
+      Pack_At   : System.Address := System.Null_Address;
+      Pack_Span : Model_Runner.Bytes.Byte_Count := 0;
+      In_P, Dt_P, Out_P : Products.Weight_Packing;
+      Known_In, Known_Dt, Known_Out : Boolean;
+
+      procedure Room (Rows_Of : Natural) is
+      begin
+         Wanted := Wanted
+           + Model_Runner.Numerics.Element_Count (Rows_Of) * Count;
+      end Room;
+
+      procedure Step (Mode : Products.Mamba2_Mode; From : Natural;
+                      Rows_Of : Natural) is
+      begin
+         if Added then
+            Products.Add_Mamba2
+              (Steps, Pack_At, Pack_Span,
+               (Mode => Mode, Inner => Block.Inner, DXBC => DXBC,
+                In_Out => In_Out, Taps => Block.Taps, Heads => Block.Heads,
+                Head => Block.Head, State => Block.State,
+                Groups => Block.Groups, XZ_Step => 1 + Lift,
+                Dt_Step => 2 + Lift,
+                Conv_At => Block.Conv_At, Bias_At => Block.Bias_At,
+                Dt_At => Block.Dt_At, A_At => Block.A_At,
+                D_At => Block.D_At, Gain_At => Block.Gain_At,
+                Memory_At => Block.Memory_At, State_At => Block.State_At,
+                Epsilon => Block.Epsilon),
+               Added, From_Step => From, Key => Pack_At, Kept => False);
+            Room (Rows_Of);
+         end if;
+      end Step;
+   begin
+      Ok := False;
+
+      if not Runs_Mamba2
+        or else Block.Pack = null
+        or else Block.Width = 0 or else Count = 0
+        or else Rows'Length < Count * Wide
+        or else Into'Length < Count * Wide
+        or else Block.In_Proj.Base = System.Null_Address
+        or else Block.Out_Proj.Base = System.Null_Address
+        or else Block.Dt_Proj.Base = System.Null_Address
+        or else Natural (Block.In_Proj.Rows) /= In_Out
+        or else Natural (Block.Dt_Proj.Rows) /= Block.Heads
+        or else ((Carry_In or else Carry_Out) and then not Whole_Layer)
+        or else (Whole_Layer and then Block.Norm.all'Length /= Wide)
+      then
+         return;
+      end if;
+
+      Packing_Of (Block.In_Proj.Format, In_P, Known_In);
+      Packing_Of (Block.Dt_Proj.Format, Dt_P, Known_Dt);
+      Packing_Of (Block.Out_Proj.Format, Out_P, Known_Out);
+      if not Known_In or else not Known_Dt or else not Known_Out then
+         return;
+      end if;
+
+      Pack_At := Block.Pack.all (Block.Pack.all'First)'Address;
+      Pack_Span := Model_Runner.Bytes.Byte_Count (Block.Pack.all'Length) * 4;
+
+      --  The normalization, where the layer is whole; then 1 the
+      --  projection in; 2 dt's; 3 the convolution; 4 the memory saved; 5
+      --  the scan; 6 the gate; 7 the projection back -- each one on past
+      --  the normalization -- and the join to the residual.
+      Products.Open_Sequence (Steps);
+      if Whole_Layer then
+         Products.Add_Norm
+           (Steps, Block.Norm.all (Block.Norm.all'First)'Address,
+            Model_Runner.Bytes.Byte_Count (Block.Norm.all'Length) * 4, 0,
+            Block.Width, Block.Norm_Floor, Added,
+            Key => Block.Norm.all (Block.Norm.all'First)'Address,
+            Kept => False);
+         Room (Block.Width);
+         if Added then
+            Products.Add_Chained_Product
+              (Steps, Block.In_Proj.Base, Block.In_Proj.Span,
+               Block.In_Proj.Offset, In_P, In_Out,
+               Natural (Block.In_Proj.Columns), Added,
+               Key => At_Offset (Block.In_Proj.Base, Block.In_Proj.Offset),
+               Kept => False, From_Step => 1);
+            Room (In_Out);
+         end if;
+         if Added then
+            Products.Add_Chained_Product
+              (Steps, Block.Dt_Proj.Base, Block.Dt_Proj.Span,
+               Block.Dt_Proj.Offset, Dt_P, Block.Heads,
+               Natural (Block.Dt_Proj.Columns), Added,
+               Key => At_Offset (Block.Dt_Proj.Base, Block.Dt_Proj.Offset),
+               Kept => False, From_Step => 1);
+            Room (Block.Heads);
+         end if;
+      else
+         Products.Add_Product
+           (Steps, Block.In_Proj.Base, Block.In_Proj.Span,
+            Block.In_Proj.Offset, In_P, In_Out,
+            Natural (Block.In_Proj.Columns), Added,
+            Key => At_Offset (Block.In_Proj.Base, Block.In_Proj.Offset),
+            Kept => False);
+         Room (In_Out);
+         if Added then
+            Products.Add_Product
+              (Steps, Block.Dt_Proj.Base, Block.Dt_Proj.Span,
+               Block.Dt_Proj.Offset, Dt_P, Block.Heads,
+               Natural (Block.Dt_Proj.Columns), Added,
+               Key => At_Offset (Block.Dt_Proj.Base, Block.Dt_Proj.Offset),
+               Kept => False);
+            Room (Block.Heads);
+         end if;
+      end if;
+      Step (Products.Conv, 1 + Lift, DXBC);
+      Step (Products.Save, 1 + Lift, 1);
+      Step (Products.Scan, 3 + Lift, Block.Inner);
+      Step (Products.Gate, 5 + Lift, Block.Inner);
+      if Added then
+         At_Out := Wanted;
+         Products.Add_Chained_Product
+           (Steps, Block.Out_Proj.Base, Block.Out_Proj.Span,
+            Block.Out_Proj.Offset, Out_P, Natural (Block.Out_Proj.Rows),
+            Natural (Block.Out_Proj.Columns), Added,
+            Key => At_Offset (Block.Out_Proj.Base, Block.Out_Proj.Offset),
+            From_Step => 6 + Lift, Kept => not Whole_Layer);
+         Room (Natural (Block.Out_Proj.Rows));
+      end if;
+      if Added and then Whole_Layer then
+         At_Out := Wanted;
+         Products.Add_Join
+           (Steps, Added, From_Vector => 0, Kept => not Carry_Out);
+         Room (Block.Width);
+      end if;
+
+      if not Added then
+         return;
+      end if;
+
+      if Landing = null or else Landing.all'Length < Wanted then
+         T.Free (Landing);
+         T.Allocate (Wanted, Landing);
+         if Landing = null then
+            return;
+         end if;
+      end if;
+
+      Products.Run
+        (Engine, Steps, Rows (Rows'First .. Rows'First + Count * Wide - 1),
+         Positive (Count),
+         Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
+         Ok, Cancelled, Cancel, Carry_In, Carry_Out);
+
+      if not Ok or else Cancelled then
+         Ok := False;
+         return;
+      end if;
+
+      Note_Timeline (Steps, Positive (Count));
+
+      if not Carry_Out then
+         Into (Into'First .. Into'First + Count * Wide - 1) :=
+           Landing.all (Landing.all'First + At_Out
+                        .. Landing.all'First + At_Out + Count * Wide - 1);
+      end if;
+   end Mamba2_Layer;
+
    --------------------
    -- Dispatch_Gated --
    --------------------

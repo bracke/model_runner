@@ -1,0 +1,132 @@
+#version 450
+
+//  The parts of a Mamba2 mixer around its scan, one kernel told apart by a
+//  mode, so the mixer is one submission rather than a round trip a
+//  projection with the host's loops between.
+//
+//    0  conv: each channel of the block past the gate -- x, B and C --
+//       convolved over the last Taps positions, the ones before the batch
+//       from the memory in the state buffer, biased, through the
+//       logistic-weighted unit.
+//    1  save: the last Taps - 1 positions' inputs into the memory, oldest
+//       first, for the next batch. Every slot is read before it is
+//       written: a lane's channel goes slot by slot, and a slot is filled
+//       from a later one or from the batch.
+//    3  gate: a position's answer times the unit of its gate, then each
+//       group of channels scaled to unit root mean square and by the gain.
+//
+//  The scan, mode 2, is mamba2_scan.comp. The weight is the layer's pack:
+//  the taps a channel, their biases, then past the scan's numbers the
+//  gain. The in-projection's rows -- z, then x, B and C -- are read
+//  through the whole result buffer where the push block says.
+
+const uint LANES = 256u;
+const uint POS = 16u;
+
+layout(local_size_x = LANES) in;
+
+layout(std430, binding = 0) readonly  buffer Weight { float w[]; };
+layout(std430, binding = 1) readonly  buffer Source { float x[]; };
+layout(std430, binding = 2) writeonly buffer Target { float y[]; };
+layout(std430, binding = 3) readonly  buffer Result { float r[]; };
+layout(std430, binding = 4) buffer State { float s[]; };
+
+layout(push_constant) uniform Shape {
+    uint mode;
+    uint dxbc;
+    uint count;
+    uint inner;
+    uint in_out;
+    uint base;
+    uint taps;
+    uint heads;
+
+    uint xz_at;
+    uint conv_at;
+    uint conv_bias_at;
+    uint dt_bias_at;
+    uint a_at;
+    uint d_at;
+    uint gain_at;
+    uint memory_at;
+    uint state_at;
+    uint state;
+    uint groups;
+    uint head;
+    uint epsilon_bits;
+    uint dt_at;
+} shape;
+
+shared float sums[LANES];
+
+//  Channel c's input at position q of the batch, q counted signed from
+//  the batch's first: before it, the memory, oldest first.
+float input_at(uint c, int q) {
+    int back = int(shape.taps) - 1;
+    if (q >= 0) {
+        return r[shape.xz_at + uint(q) * shape.in_out + shape.inner + c];
+    }
+    return s[shape.memory_at + uint(q + back) * shape.dxbc + c];
+}
+
+void main() {
+    uint lane = gl_LocalInvocationID.x;
+
+    if (shape.mode == 0u) {
+        uint c = gl_WorkGroupID.x * LANES + lane;
+        if (c >= shape.dxbc) {
+            return;
+        }
+        int back = int(shape.taps) - 1;
+        float bias = w[shape.base + shape.conv_bias_at + c];
+        uint first = gl_WorkGroupID.y * POS;
+        uint last = min(first + POS, shape.count);
+        for (uint p = first; p < last; ++p) {
+            float acc = bias;
+            for (uint k = 0u; k < shape.taps; ++k) {
+                acc += w[shape.base + shape.conv_at + c * shape.taps + k]
+                       * input_at(c, int(p) + int(k) - back);
+            }
+            y[p * shape.dxbc + c] = acc / (1.0 + exp(-acc));
+        }
+    } else if (shape.mode == 1u) {
+        uint c = gl_WorkGroupID.x * LANES + lane;
+        if (c >= shape.dxbc) {
+            return;
+        }
+        int back = int(shape.taps) - 1;
+        for (int j = 0; j < back; ++j) {
+            s[shape.memory_at + uint(j) * shape.dxbc + c] =
+                input_at(c, int(shape.count) + j - back);
+        }
+    } else {
+        //  A workgroup a position and a group.
+        uint p = gl_WorkGroupID.x;
+        uint g = gl_WorkGroupID.y;
+        uint wide = shape.inner / shape.groups;
+        uint at = p * shape.inner + g * wide;
+        uint z_at = shape.xz_at + p * shape.in_out + g * wide;
+
+        float mine = 0.0;
+        for (uint i = lane; i < wide; i += LANES) {
+            float z = r[z_at + i];
+            float v = x[at + i] * (z / (1.0 + exp(-z)));
+            mine += v * v;
+        }
+        sums[lane] = mine;
+        barrier();
+        for (uint step = LANES / 2u; step > 0u; step >>= 1u) {
+            if (lane < step) {
+                sums[lane] += sums[lane + step];
+            }
+            barrier();
+        }
+        float scale = inversesqrt(sums[0] / float(wide)
+                                  + uintBitsToFloat(shape.epsilon_bits));
+        for (uint i = lane; i < wide; i += LANES) {
+            float z = r[z_at + i];
+            float v = x[at + i] * (z / (1.0 + exp(-z)));
+            y[at + i] = v * scale * w[shape.base + shape.gain_at + g * wide + i];
+        }
+    }
+}

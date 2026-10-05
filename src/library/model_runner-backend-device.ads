@@ -1206,6 +1206,96 @@ package Model_Runner.Backend.Device is
       Scale       : Model_Runner.Numerics.Real := 1.0;
    end record;
 
+   --  One Mamba2 mixer as the device's sequence takes it: its widths, the
+   --  pack of its small tables and where each lies in it, its two
+   --  projections, and where its convolution's memory and its state lie
+   --  in the state buffer.
+   type Mamba2_Block is record
+      --  The model's width, the inner width, the heads and their width,
+      --  the state a channel, the groups, and the convolution's taps.
+      Width     : Natural := 0;
+      Inner     : Natural := 0;
+      Heads     : Natural := 0;
+      Head      : Natural := 0;
+      State     : Natural := 0;
+      Groups    : Natural := 1;
+      Taps      : Natural := 0;
+
+      --  The layer's pack, in binary32, and where each table lies in it,
+      --  in elements: the taps a channel, their biases, dt's bias, A, D
+      --  and the normalization's gain.
+      Pack      : Model_Runner.Tensors.Real_Array_Access := null;
+      Conv_At   : Natural := 0;
+      Bias_At   : Natural := 0;
+      Dt_At     : Natural := 0;
+      A_At      : Natural := 0;
+      D_At      : Natural := 0;
+      Gain_At   : Natural := 0;
+
+      --  The projection in -- z, x, B and C -- its rows for dt, a number
+      --  a head, and the projection back. The file keeps dt's rows last in
+      --  the one tensor; apart, the rest is a whole number of the tile's
+      --  rows and goes to the tile.
+      In_Proj   : Model_Runner.Tensors.View;
+      Dt_Proj   : Model_Runner.Tensors.View;
+      Out_Proj  : Model_Runner.Tensors.View;
+
+      --  Where the memory and the state lie in the state buffer.
+      Memory_At : Natural := 0;
+      State_At  : Natural := 0;
+
+      --  The normalization's floor.
+      Epsilon   : Model_Runner.Numerics.Real := 0.0;
+
+      --  The layer's normalization on the way in, or null for a mixer
+      --  given rows already normalized: with it the call takes the
+      --  residual, normalizes it, and joins the mixer's answer to it, the
+      --  whole layer.
+      Norm      : Model_Runner.Tensors.Real_Array_Access := null;
+      Norm_Floor : Model_Runner.Numerics.Real := 0.0;
+   end record;
+
+   --  The head width and the state a channel the device's Mamba2 scan
+   --  takes.
+   Mamba2_Head  : constant := Model_Runner.Platform.Device.Products.Mamba2_Head;
+   Mamba2_State : constant :=
+     Model_Runner.Platform.Device.Products.Mamba2_State;
+
+   --  Whether the device runs a Mamba2 mixer whole: it is open and has
+   --  the kernels.
+   --
+   --  @return True where Mamba2_Layer can be asked.
+   function Runs_Mamba2 return Boolean;
+
+   --  Count positions through one Mamba2 mixer, one submission: the
+   --  projection in, the convolution against the memory and its saving,
+   --  the scan against the state, the gate and the grouped normalization,
+   --  and the projection back. The memory and the state are read and
+   --  written where the block says, on the device.
+   --
+   --  @param Block The mixer.
+   --  @param Rows The mixer's input rows, the normalized residual, Width a
+   --    position -- or the residual itself where the block names its
+   --    normalization.
+   --  @param Count Positions.
+   --  @param Into Receives the projection back, Width a position -- or,
+   --    with the normalization, the layer's output, the residual joined.
+   --  @param Ok False where the device refused or failed.
+   --  @param Cancel Stops the wait for the submission.
+   --  @param Carry_In The rows are the ones the sequence before left on
+   --    the device, and Rows is not sent; only with the normalization.
+   --  @param Carry_Out The layer's output stays on the device for the next
+   --    sequence and Into is not written; only with the normalization.
+   procedure Mamba2_Layer
+     (Block     : Mamba2_Block;
+      Rows      : Model_Runner.Tensors.Real_Array;
+      Count     : Model_Runner.Numerics.Element_Count;
+      Into      : in out Model_Runner.Tensors.Real_Array;
+      Ok        : out Boolean;
+      Cancel    : Model_Runner.Cancellation.Token_Reference := null;
+      Carry_In  : Boolean := False;
+      Carry_Out : Boolean := False);
+
    --  The head width the device's RWKV6 linear attention takes.
    Rwkv_Head : constant := Model_Runner.Platform.Device.Products.Wkv_Head;
 

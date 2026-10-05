@@ -1126,6 +1126,91 @@ package Model_Runner.Platform.Device.Products is
    --  @return True where Add_Rwkv's and Add_Wkv's steps can run.
    function Runs_Rwkv (Item : Engine) return Boolean;
 
+   --  What a Mamba2 step does: see Add_Mamba2.
+   type Mamba2_Mode is (Conv, Save, Scan, Gate);
+
+   --  A Mamba2 step's shape. Offsets into the pack are in elements; the
+   --  state offsets are in elements of the state buffer.
+   type Mamba2_Shape is record
+      --  What the step does.
+      Mode      : Mamba2_Mode := Conv;
+      --  The inner width, the block past the gate -- x, B and C -- that
+      --  is convolved, and the in-projection's row: z, then that block.
+      Inner     : Natural := 0;
+      DXBC      : Natural := 0;
+      In_Out    : Natural := 0;
+      --  Positions the convolution reaches over, this one included.
+      Taps      : Natural := 0;
+      --  The heads, each Head channels, the state a channel, and the
+      --  groups B, C and the normalization are taken in.
+      Heads     : Natural := 0;
+      Head      : Natural := 0;
+      State     : Natural := 0;
+      Groups    : Natural := 1;
+      --  The in-projection's step, and dt's, a number a head.
+      XZ_Step   : Natural := 0;
+      Dt_Step   : Natural := 0;
+      --  Where the taps, their biases, dt's bias, A, D and the gain lie
+      --  in the pack.
+      Conv_At   : Natural := 0;
+      Bias_At   : Natural := 0;
+      Dt_At     : Natural := 0;
+      A_At      : Natural := 0;
+      D_At      : Natural := 0;
+      Gain_At   : Natural := 0;
+      --  Where the convolution's memory and the state lie in the state
+      --  buffer.
+      Memory_At : Natural := 0;
+      State_At  : Natural := 0;
+      --  The normalization's floor.
+      Epsilon   : Model_Runner.Numerics.Real := 0.0;
+   end record;
+
+   --  The head width and the state the scan kernel takes.
+   Mamba2_Head  : constant := 64;
+   Mamba2_State : constant := 128;
+
+   --  Name one step of a Mamba2 mixer, which go around its two products
+   --  so the mixer is one submission.
+   --
+   --  Conv reads the in-projection's rows and writes DXBC a position: the
+   --  block convolved over the last Taps positions -- the ones before the
+   --  batch from the memory -- biased and through the logistic-weighted
+   --  unit. Save writes the last Taps - 1 positions' inputs into the
+   --  memory, and fences everything before it. Scan reads the convolved
+   --  rows and dt and writes Inner a position, a head a workgroup with the
+   --  state in registers, Head and State as the kernel takes them. Gate
+   --  reads the scan's rows and z and writes them gated and normalized a
+   --  group.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param Base First byte of the layer's pack.
+   --  @param Span Bytes the pack holds.
+   --  @param Shape What the step does and where it reads.
+   --  @param Added False when the sequence is full, when the shape does
+   --    not hold together, or when a step named is not there or not as
+   --    wide as it should be.
+   --  @param From_Step The step read, or zero for the one before: the
+   --    in-projection for Conv and Save, the convolution for Scan, the
+   --    scan for Gate.
+   --  @param Key Identifies the pack so the device may keep it.
+   --  @param Kept False when nothing on the host reads this step's answer.
+   procedure Add_Mamba2
+     (Steps     : in out Sequence;
+      Base      : System.Address;
+      Span      : Model_Runner.Bytes.Byte_Count;
+      Shape     : Mamba2_Shape;
+      Added     : out Boolean;
+      From_Step : Natural := 0;
+      Key       : System.Address := System.Null_Address;
+      Kept      : Boolean := True);
+
+   --  Whether the engine has the Mamba2 kernels.
+   --
+   --  @param Item The engine.
+   --  @return True where Add_Mamba2's steps can run.
+   function Runs_Mamba2 (Item : Engine) return Boolean;
+
    --  The eight numbers an assembling step is shaped by: A's stretch
    --  width, offset in a head, head stride and position stride, then B's.
    type Assemble_Shape is array (1 .. 8) of Natural;
@@ -2976,6 +3061,8 @@ private
       Conver     : System.Address := System.Null_Address;
       Rwkver     : System.Address := System.Null_Address;
       Wkver      : System.Address := System.Null_Address;
+      Mambaer    : System.Address := System.Null_Address;
+      Scanner    : System.Address := System.Null_Address;
       Ruler      : System.Address := System.Null_Address;
       Held_Ruler : System.Address := System.Null_Address;
       Single_Ruler : System.Address := System.Null_Address;
@@ -3133,6 +3220,8 @@ private
       Rule_Line   : System.Address := System.Null_Address;
       Rwkv_Line   : System.Address := System.Null_Address;
       Wkv_Line    : System.Address := System.Null_Address;
+      Mamba_Line  : System.Address := System.Null_Address;
+      Scan_Line   : System.Address := System.Null_Address;
       Held_Rule_Line : System.Address := System.Null_Address;
       Single_Rule_Line : System.Address := System.Null_Address;
       Merge_Line  : System.Address := System.Null_Address;
@@ -3681,6 +3770,10 @@ private
       Rwkv      : Rwkv_Shape;
       Wkvs      : Boolean := False;
       Wkv       : Wkv_Shape;
+
+      --  A Mamba2 step, as Add_Mamba2 describes it.
+      Mambas    : Boolean := False;
+      Mamba     : Mamba2_Shape;
 
       --  A product kept off the tile whatever the count: the row kernel
       --  reads its activations in binary32 where the tile's operand is

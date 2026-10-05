@@ -2988,6 +2988,32 @@ package body Model_Runner.Llama is
       return R;
    end Rwkv_Places_Of;
 
+   --  Where each of a Mamba2 mixer's small tables lies in its pack, in
+   --  elements: the taps a channel, their biases, dt's bias, A, D, and the
+   --  normalization's gain.
+   type Mamba2_Places is record
+      Conv, Bias, Dt, A, D, Gain, Total : Element_Count := 0;
+   end record;
+
+   function Mamba2_Places_Of (Settings : Configuration) return Mamba2_Places
+   is
+      Inner : constant Element_Count := Element_Count (Settings.Inner_Size);
+      Heads : constant Element_Count := Element_Count (Settings.Ssm_Heads);
+      DXBC  : constant Element_Count :=
+        Inner + 2 * Element_Count (Settings.Groups)
+                  * Element_Count (Settings.State_Size);
+      R     : Mamba2_Places;
+   begin
+      R.Conv  := 0;
+      R.Bias  := DXBC * Element_Count (Settings.Conv_Kernel);
+      R.Dt    := R.Bias + DXBC;
+      R.A     := R.Dt + Heads;
+      R.D     := R.A + Heads;
+      R.Gain  := R.D + Heads;
+      R.Total := R.Gain + Inner;
+      return R;
+   end Mamba2_Places_Of;
+
    --  The gain and the shift of each of a layer's centred normalizations
    --  laid end to end, for the device, which takes the two as one
    --  resident weight of twice the width. Built once, here, because the
@@ -3102,6 +3128,43 @@ package body Model_Runner.Llama is
                   Put (P.Out_Norm + W, Current.Rwkv_TM_LN_Bias);
                   Put (P.Channel_Mix, Current.Rwkv_CM_Lerp_K);
                   Put (P.Channel_Mix + W, Current.Rwkv_CM_Lerp_R);
+               end if;
+            end if;
+         end;
+      end if;
+
+      --  And a Mamba2 mixer's, every table present at the length its
+      --  place says, or no pack and the mixer goes a step at a time.
+      if Is_Mamba2 (Item.Settings.Kind)
+        and then Current.Conv /= null and then Current.Conv_Bias /= null
+        and then Current.DT_Bias /= null and then Current.Ssm_A /= null
+        and then Current.Ssm_D /= null and then Current.State_Norm /= null
+      then
+         declare
+            P : constant Mamba2_Places := Mamba2_Places_Of (Item.Settings);
+
+            procedure Put (At_Element : Element_Count;
+                           From : T.Real_Array_Access) is
+            begin
+               Current.Ssm_Pack.all
+                 (At_Element .. At_Element + From.all'Length - 1) := From.all;
+            end Put;
+         begin
+            if Current.Conv.all'Length = P.Bias - P.Conv
+              and then Current.Conv_Bias.all'Length = P.Dt - P.Bias
+              and then Current.DT_Bias.all'Length = P.A - P.Dt
+              and then Current.Ssm_A.all'Length = P.D - P.A
+              and then Current.Ssm_D.all'Length = P.Gain - P.D
+              and then Current.State_Norm.all'Length = P.Total - P.Gain
+            then
+               T.Allocate (P.Total, Current.Ssm_Pack);
+               if Current.Ssm_Pack /= null then
+                  Put (P.Conv, Current.Conv);
+                  Put (P.Bias, Current.Conv_Bias);
+                  Put (P.Dt, Current.DT_Bias);
+                  Put (P.A, Current.Ssm_A);
+                  Put (P.D, Current.Ssm_D);
+                  Put (P.Gain, Current.State_Norm);
                end if;
             end if;
          end;
@@ -7843,6 +7906,83 @@ package body Model_Runner.Llama is
    function Linear_State_At (Item : Session; Index : Natural) return Natural
    is (Natural (Conv_Room (Item.Owner.Settings)
                 + State_At (Item.Owner.Settings, Index)));
+
+   --  A Mamba2 mixer as the device takes it, the session's seat in the
+   --  state room included -- with the layer's normalization on the way in
+   --  where the whole layer goes, residual and all.
+   function Mamba2_Block_Of
+     (Item      : Session;
+      Current   : Layer;
+      Index     : Natural;
+      With_Norm : Boolean) return Model_Runner.Backend.Device.Mamba2_Block
+   is
+      Settings : Configuration renames Item.Owner.Settings;
+      P : constant Mamba2_Places := Mamba2_Places_Of (Settings);
+
+      --  z, x, B and C: the in-projection's rows before dt's.
+      Main : constant Element_Count :=
+        2 * Element_Count (Settings.Inner_Size)
+        + 2 * Element_Count (Settings.Groups)
+            * Element_Count (Settings.State_Size);
+
+      --  Count rows of a matrix from row First on, as a view of their own.
+      function Rows_Of (Whole : T.View; First, Count : Element_Count)
+        return T.View
+      is
+         Result : T.View := Whole;
+      begin
+         Result.Rows := Count;
+         Result.Offset :=
+           Whole.Offset + B.Byte_Count (First) * T.Row_Bytes (Whole);
+         return Result;
+      end Rows_Of;
+   begin
+      return
+        (Width     => Settings.Embedding,
+         Inner     => Settings.Inner_Size,
+         Heads     => Settings.Ssm_Heads,
+         Head      => Settings.Head_Dim,
+         State     => Settings.State_Size,
+         Groups    => Settings.Groups,
+         Taps      => Settings.Conv_Kernel,
+         Pack      => Current.Ssm_Pack,
+         Conv_At   => Natural (P.Conv),
+         Bias_At   => Natural (P.Bias),
+         Dt_At     => Natural (P.Dt),
+         A_At      => Natural (P.A),
+         D_At      => Natural (P.D),
+         Gain_At   => Natural (P.Gain),
+         In_Proj   => Rows_Of (Current.Ssm_In, 0, Main),
+         Dt_Proj   =>
+           Rows_Of (Current.Ssm_In, Main, Element_Count (Settings.Ssm_Heads)),
+         Out_Proj  => Current.Linear_Out,
+         Memory_At => Natural (Item.State_Base + Conv_At (Settings, Index)),
+         State_At  => Natural (Item.State_Base) + Linear_State_At (Item, Index),
+         Epsilon   => Settings.Epsilon,
+         Norm      => (if With_Norm then Current.Attention_Norm else null),
+         Norm_Floor => Settings.Epsilon);
+   end Mamba2_Block_Of;
+
+   --  Whether a Mamba2 layer can go to the device whole: the device runs
+   --  the mixer, the layer has its pack and a plain normalization, the
+   --  shapes are the scan's, and the session keeps one state.
+   function Mamba2_Fits (Item : Session; Current : Layer) return Boolean
+   is (Is_Mamba2 (Item.Owner.Settings.Kind)
+       and then Model_Runner.Backend."="
+                  (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_Device)
+       and then Current.Ssm_Pack /= null
+       and then Current.Attention_Norm /= null
+       and then Current.Attention_Norm_Bias = null
+       and then Item.Kept_States = 0
+       and then Item.Delta_State /= null
+       and then Item.Conv_State /= null
+       and then Item.Owner.Settings.Head_Dim
+                = Model_Runner.Backend.Device.Mamba2_Head
+       and then Item.Owner.Settings.State_Size
+                = Model_Runner.Backend.Device.Mamba2_State
+       and then Item.Owner.Settings.Ssm_Heads * Item.Owner.Settings.Head_Dim
+                = Item.Owner.Settings.Inner_Size
+       and then Model_Runner.Backend.Device.Runs_Mamba2);
 
    --  Give a session a block of the device's cache, and keep it there.
    --
@@ -13053,6 +13193,7 @@ package body Model_Runner.Llama is
             T.Free (Which.Post_Feed_Norm_Pair);
             T.Free (Which.Linear_Numbers);
             T.Free (Which.Rwkv_Pack);
+            T.Free (Which.Ssm_Pack);
 
             --  The attention biases, which nothing released: a qwen2 model
             --  held three vectors a layer past its own closing, and only
@@ -17365,6 +17506,7 @@ package body Model_Runner.Llama is
       Layer_Index : Natural;
       Rows        : T.Real_Array_Access;
       Count       : Element_Count;
+      Whole       : out Boolean;
       Status      : out E.Error_Info)
    is
       --  Every index below is a position, a channel or a state inside
@@ -17411,6 +17553,39 @@ package body Model_Runner.Llama is
       end Project;
    begin
       Status := E.Success;
+      Whole := False;
+
+      --  The mixer whole on the device, where it runs there: the memory
+      --  and the state seated in the device's room and read and written
+      --  there, one submission a mixer. Refused, they come home first and
+      --  the host takes the mixer.
+      if Mamba2_Fits (Item, Current) then
+         declare
+            Seated : Boolean;
+            Ran    : Boolean := False;
+         begin
+            Send_States (Item'Unchecked_Access, Seated);
+            if Seated then
+               Model_Runner.Backend.Device.Mamba2_Layer
+                 (Mamba2_Block_Of (Item, Current, Layer_Index, False),
+                  Rows.all (Rows.all'First
+                            .. Rows.all'First + Count * Width - 1),
+                  Count,
+                  Rows.all (Rows.all'First
+                            .. Rows.all'First + Count * Width - 1),
+                  Ran, Item.Stopping);
+            end if;
+
+            if Ran then
+               Whole := True;
+               return;
+            end if;
+         end;
+      end if;
+
+      --  The host's copy of the memory and the state, where a mixer before
+      --  this one left them on the device.
+      Fetch_States (Item'Unchecked_Access);
 
       if Own then
          XZ := Item.Mamba_XZ;
@@ -17553,11 +17728,13 @@ package body Model_Runner.Llama is
       Source      : Model'Class;
       Current     : Layer;
       Layer_Index : Natural;
+      Whole       : out Boolean;
       Status      : out E.Error_Info)
    is
    begin
       Mamba2_Batch
-        (Item, Source, Current, Layer_Index, Item.Normalized, 1, Status);
+        (Item, Source, Current, Layer_Index, Item.Normalized, 1, Whole,
+         Status);
    end Mamba2_Step;
 
    --  A small binary32 table against a batch of vectors, a share of the
@@ -18823,7 +19000,8 @@ package body Model_Runner.Llama is
       --  Whichever of the two a layer is: what the carry from the layer
       --  before asks of the layer after.
       function Layer_Fits (L : Layer; Index : Natural) return Boolean
-      is (if Linear (Settings, Index) then Linear_Layer_Fits (L)
+      is (if Is_Mamba2 (Settings.Kind) then Mamba2_Fits (Item, L)
+          elsif Linear (Settings, Index) then Linear_Layer_Fits (L)
           else Whole_Layer_Fits (L, Index));
 
       --  Whether the final normalization and the output head follow the
@@ -19334,6 +19512,52 @@ package body Model_Runner.Llama is
             Is_Linear : constant Boolean :=
               Linear (Settings, Natural (Index));
          begin
+            --  A Mamba2 layer whole on the device, normalization, mixer and
+            --  residual, carried on to the next where that one goes too:
+            --  the memory and the state seated in the device's room.
+            if Mamba2_Fits (Item, Current) then
+               declare
+                  Out_Too : constant Boolean :=
+                    Chaining and then Carries_On (Index);
+                  Seated  : Boolean;
+                  Ran     : Boolean := False;
+                  Back    : Boolean;
+               begin
+                  Send_States (Item'Unchecked_Access, Seated);
+                  if Seated then
+                     Asked := True;
+                     Model_Runner.Backend.Device.Mamba2_Layer
+                       (Mamba2_Block_Of (Item, Current, Natural (Index), True),
+                        Item.Activation.all, 1, Item.Normalized.all, Ran,
+                        Item.Stopping, Carry_In => Carried,
+                        Carry_Out => Out_Too);
+                  end if;
+
+                  if Ran then
+                     if not Out_Too then
+                        Item.Activation.all := Item.Normalized.all;
+                     end if;
+                     Went_Whole := True;
+                     Carried := Out_Too;
+                     Charge (Item, Fusing, Mark);
+                     goto Layer_Done;
+                  end if;
+
+                  --  Refused: the host goes on from the activation the
+                  --  layer before left on the device.
+                  if Carried then
+                     Model_Runner.Backend.Device.Fetch_Carried
+                       (Item.Activation.all, Back);
+                     Carried := False;
+                     if not Back then
+                        Item.Current := Failed;
+                        Status := E.Make (E.Backend_Device_Refused);
+                        return;
+                     end if;
+                  end if;
+               end;
+            end if;
+
             if Is_Linear then
                --  The whole of it on the device, the ring included: the
                --  four projections, the convolution over the memory the
@@ -19511,7 +19735,9 @@ package body Model_Runner.Llama is
                if Pure_SSM (Settings.Kind) or else Is_Jamba (Settings.Kind) then
                   if Is_Mamba2 (Settings.Kind) then
                      Mamba2_Step
-                       (Item, Source, Current, Natural (Index), Status);
+                       (Item, Source, Current, Natural (Index), Went_Whole,
+                        Status);
+                     Asked := Went_Whole;
                   else
                      Mamba_Step
                        (Item, Source, Current, Natural (Index), Status);
@@ -20903,7 +21129,8 @@ package body Model_Runner.Llama is
       --  Whichever of the two a layer is: what the carry from the layer
       --  before asks of the layer after.
       function Layer_Fits (L : Layer; Index : Natural) return Boolean
-      is (if Linear (Settings, Index) then Linear_Layer_Fits (L)
+      is (if Is_Mamba2 (Settings.Kind) then Mamba2_Fits (Item, L)
+          elsif Linear (Settings, Index) then Linear_Layer_Fits (L)
           else Whole_Layer_Fits (L, Index));
 
       --  A layer whose front half goes to the device and whose feed-forward
@@ -21663,6 +21890,54 @@ package body Model_Runner.Llama is
             --  the queries, the keys and the values.
             Projected := False;
 
+            --  A Mamba2 layer whole on the device, as the token's: one
+            --  session's rows, carried on to the next layer where that one
+            --  goes too.
+            if Mamba2_Fits (Item, Current)
+              and then not Has_Runs
+              and then Row_Owner (0) = Row_Owner (Count - 1)
+            then
+               declare
+                  Out_Too : constant Boolean :=
+                    Carrying
+                    and then Index < Source.Layers.all'Last
+                    and then Layer_Fits (Source.Layers.all (Index + 1),
+                                         Natural (Index) + 1);
+                  Seated  : Boolean;
+                  Ran     : Boolean := False;
+                  Back    : Boolean;
+               begin
+                  Send_States (Item'Unchecked_Access, Seated);
+                  if Seated then
+                     Asked := True;
+                     Model_Runner.Backend.Device.Mamba2_Layer
+                       (Mamba2_Block_Of (Item, Current, Natural (Index), True),
+                        Acts.all (0 .. Count * Width - 1), Count,
+                        Acts.all (0 .. Count * Width - 1), Ran,
+                        Item.Stopping, Carry_In => Carried,
+                        Carry_Out => Out_Too);
+                  end if;
+
+                  if Ran then
+                     Went_Whole := True;
+                     Carried := Out_Too;
+                     goto Mamba_Done_Batch;
+                  end if;
+
+                  if Carried then
+                     Model_Runner.Backend.Device.Fetch_Carried
+                       (Acts.all (0 .. Count * Width - 1), Back);
+                     Carried := False;
+                     if not Back then
+                        Release;
+                        Item.Current := Failed;
+                        Status := E.Make (E.Backend_Device_Refused);
+                        return;
+                     end if;
+                  end if;
+               end;
+            end if;
+
             --  The normalization and the three matrices that read it, as
             --  one sequence. A round takes this: it names no cache and no
             --  run of positions -- it reads the layer's input, normalizes
@@ -22323,7 +22598,8 @@ package body Model_Runner.Llama is
                if Is_Mamba2 (Settings.Kind) then
                   Mamba2_Batch
                     (Item, Source, Current, Natural (Index), Norm, Count,
-                     Status);
+                     Went_Whole, Status);
+                  Asked := Went_Whole;
                else
                   Mamba_Batch
                     (Item, Source, Current, Natural (Index), Norm, Count,
@@ -23311,6 +23587,8 @@ package body Model_Runner.Llama is
                <<After_Feed_Batch>>
                null;
             end if;
+
+            <<Mamba_Done_Batch>>
 
             --  What became of this layer, for the run's report.
             if Model_Runner.Backend."="
