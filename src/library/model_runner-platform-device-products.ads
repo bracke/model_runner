@@ -218,6 +218,10 @@ package Model_Runner.Platform.Device.Products is
    --  One handle for each low-bit packing.
    type Low_Address_Array is array (Low_Packing) of System.Address;
 
+   --  ggml's four older formats, which generate on the subgroup kernel too.
+   subtype Legacy_Packing is Weight_Packing range Packed_Q4_0 .. Packed_Q5_1;
+   type Legacy_Address_Array is array (Legacy_Packing) of System.Address;
+
    --  The packings whose blocks hold two hundred and fifty-six elements
    --  rather than thirty-two. A row in one of these is a whole number of
    --  super-blocks, so a width that is not a multiple of 256 is refused
@@ -3222,6 +3226,14 @@ private
       Q2K_Wave_Line   : System.Address := System.Null_Address;
       Q3K_Wave_Shader : System.Address := System.Null_Address;
       Q3K_Wave_Line   : System.Address := System.Null_Address;
+
+      --  And Q4_0, Q4_1, Q5_0 and Q5_1, read as IQ4_NL is: the generic row
+      --  kernel read falcon's Q5_0 and Q5_1 at four fifths of llama.cpp's
+      --  rate.
+      Legacy_Wave_Shaders : Legacy_Address_Array :=
+        [others => System.Null_Address];
+      Legacy_Wave_Lines   : Legacy_Address_Array :=
+        [others => System.Null_Address];
 
       Wide_Line   : System.Address := System.Null_Address;
 

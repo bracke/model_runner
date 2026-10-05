@@ -1756,6 +1756,77 @@ float lane_dot_own(uint at, uint lane, uint xg, out float total) {
 }
 #endif
 
+#if defined(Q4_0) || defined(Q4_1) || defined(Q5_0) || defined(Q5_1)
+//  ggml's four older formats: blocks of thirty-two behind a half-precision
+//  scale -- and for Q4_1 and Q5_1 a minimum after it, for Q5_0 and Q5_1 a
+//  word of fifth bits before the quants -- with element j of a block byte
+//  j's low nibble and element j + 16 its high one, as IQ4_NL lays them. So
+//  they are read as IQ4_NL is: eight blocks a group, two lanes a block, each
+//  taking eight bytes and both nibbles of every one. A fifth bit goes on
+//  above its nibble before the bytes unpack; the centre (eight, sixteen) or
+//  the minimum multiplies the activation sum once. The generic row kernel
+//  read these a byte at a time, eight lanes a row, and a falcon token's
+//  Q5_0 and Q5_1 products ran at four fifths of llama.cpp's rate.
+#if defined(Q4_0)
+const uint SUB_BYTES = 18u;
+#elif defined(Q4_1)
+const uint SUB_BYTES = 20u;
+#elif defined(Q5_0)
+const uint SUB_BYTES = 22u;
+#else
+const uint SUB_BYTES = 24u;
+#endif
+//  The sixteen bytes of quants end the block.
+const uint QUANTS_AT = SUB_BYTES - 16u;
+#if defined(Q4_1) || defined(Q5_1)
+#define LIFTED
+#endif
+#if defined(Q5_0) || defined(Q5_1)
+#define FIFTHS
+#endif
+const uint BLOCK_ELEMS = 256u;
+const uint BLOCK_BYTES = 8u * SUB_BYTES;
+#define OWN_ACTIVATIONS
+#define SUB_BYTES_OF_32
+
+//  Four fifth bits, the lowest first, each moved to bit four of its byte.
+uint fifth4(uint f) {
+    return ((f & 1u) << 4u) | ((f & 2u) << 11u)
+         | ((f & 4u) << 18u) | ((f & 8u) << 25u);
+}
+
+float lane_dot_own(uint at, uint lane, uint xg, out float total) {
+    uint block = lane / 2u;
+    uint half_of = lane % 2u;
+
+    uint b = at + block * SUB_BYTES;
+    uint q0 = quad_at(b + QUANTS_AT + half_of * 8u);
+    uint q1 = quad_at(b + QUANTS_AT + 4u + half_of * 8u);
+    uvec4 v = uvec4(q0 & 0x0F0F0F0Fu, q1 & 0x0F0F0F0Fu,
+                    (q0 >> 4u) & 0x0F0F0F0Fu, (q1 >> 4u) & 0x0F0F0F0Fu);
+#ifdef FIFTHS
+    uint f = quad_at(b + QUANTS_AT - 4u) >> (half_of * 8u);
+    v |= uvec4(fifth4(f), fifth4(f >> 4u), fifth4(f >> 16u), fifth4(f >> 20u));
+#endif
+    uint xb = xg + block * 8u + half_of * 2u;
+    vec4 a0 = x4[xb];
+    vec4 a1 = x4[xb + 1u];
+    vec4 a2 = x4[xb + 4u];
+    vec4 a3 = x4[xb + 5u];
+
+    float sum = dot(a0, vec4(unpack8(v.x))) + dot(a1, vec4(unpack8(v.y)))
+              + dot(a2, vec4(unpack8(v.z))) + dot(a3, vec4(unpack8(v.w)));
+    total = dot(a0 + a1 + a2 + a3, vec4(1.0));
+#if defined(LIFTED)
+    return half_at(b) * sum + half_at(b + 2u) * total;
+#elif defined(FIFTHS)
+    return half_at(b) * (sum - 16.0 * total);
+#else
+    return half_at(b) * (sum - 8.0 * total);
+#endif
+}
+#endif
+
 #ifdef Q2_K
 const uint BLOCK_ELEMS = 256u;
 const uint BLOCK_BYTES = 84u;
@@ -1997,9 +2068,9 @@ void main() {
 
     uint first_row = NUM_ROWS * gl_WorkGroupID.x;
     uint groups = (shape.columns + 255u) / 256u;
-#ifdef IQ4_NL
+#if defined(IQ4_NL) || defined(SUB_BYTES_OF_32)
     //  Its row is whole blocks of thirty-two, not whole groups.
-    uint span = (shape.columns / 32u) * 18u;
+    uint span = (shape.columns / 32u) * (BLOCK_BYTES / 8u);
 #else
     uint span = (shape.columns / BLOCK_ELEMS) * BLOCK_BYTES;
 #endif

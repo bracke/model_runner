@@ -962,7 +962,10 @@ package body Model_Runner.Platform.Device.Products is
                   and then Item.Q2K_Wave_Line /= Null_Handle)
                  or else
                  (Packing = Packed_Q3_K
-                  and then Item.Q3K_Wave_Line /= Null_Handle))));
+                  and then Item.Q3K_Wave_Line /= Null_Handle)
+                 or else
+                 (Packing in Legacy_Packing
+                  and then Item.Legacy_Wave_Lines (Packing) /= Null_Handle))));
 
    --  Invocations a workgroup of the bound row kernel has. The super-block
    --  kernel's workgroup is a single subgroup of thirty-two; the half-group
@@ -973,6 +976,7 @@ package body Model_Runner.Platform.Device.Products is
    is (if Waved (Item, Packing, Count)
        then (if Packing in Low_Packing | Packed_Q8_0 | Packed_IQ4_NL
                           | Packed_IQ4_XS | Packed_Q2_K | Packed_Q3_K
+                          | Legacy_Packing
              then Low_Wave_Lanes
              else Wave_Lanes)
        elsif Half_Grouped (Item, Packing, Count) then Half_Group
@@ -987,6 +991,7 @@ package body Model_Runner.Platform.Device.Products is
    is (if Waved (Item, Packing, Count)
        then (if Packing in Low_Packing | Packed_Q8_0 | Packed_IQ4_NL
                           | Packed_IQ4_XS | Packed_Q2_K | Packed_Q3_K
+                          | Legacy_Packing
              then Low_Wave_Lanes
              else Wave_Lanes)
        else Row_Lanes);
@@ -998,7 +1003,8 @@ package body Model_Runner.Platform.Device.Products is
    is (if Packing = Packed_Q8_0 and then Count in Multi_Count
        then Q8_Multi_Rows
        elsif Packing in Low_Packing then Low_Wave_Rows
-       elsif Packing in Packed_IQ4_NL | Packed_IQ4_XS then IQ4_Wave_Rows
+       elsif Packing in Packed_IQ4_NL | Packed_IQ4_XS | Legacy_Packing
+       then IQ4_Wave_Rows
        elsif Packing in Packed_Q2_K | Packed_Q3_K then Q2K_Wave_Rows
        elsif Packing = Packed_Q8_0 then Q8_Wave_Rows
        elsif Packing = Packed_Q6_K then Q6_Wave_Rows
@@ -1032,6 +1038,8 @@ package body Model_Runner.Platform.Device.Products is
        then Item.Q2K_Wave_Line
        elsif Packing = Packed_Q3_K and then Waved (Item, Packing, Count)
        then Item.Q3K_Wave_Line
+       elsif Packing in Legacy_Packing and then Waved (Item, Packing, Count)
+       then Item.Legacy_Wave_Lines (Packing)
        elsif Packing in Low_Packing
        then (if Count in Row_Line_Array'Range
                and then Item.Low_Row_Lines (Count) /= Null_Handle
@@ -2671,6 +2679,14 @@ package body Model_Runner.Platform.Device.Products is
                     Item.Q2K_Wave_Shader);
             Module (Model_Runner.Shaders.Low.Row_Product_Wave_Q3_K,
                     Item.Q3K_Wave_Shader);
+            Module (Model_Runner.Shaders.Low.Row_Product_Wave_Q4_0,
+                    Item.Legacy_Wave_Shaders (Packed_Q4_0));
+            Module (Model_Runner.Shaders.Low.Row_Product_Wave_Q4_1,
+                    Item.Legacy_Wave_Shaders (Packed_Q4_1));
+            Module (Model_Runner.Shaders.Low.Row_Product_Wave_Q5_0,
+                    Item.Legacy_Wave_Shaders (Packed_Q5_0));
+            Module (Model_Runner.Shaders.Low.Row_Product_Wave_Q5_1,
+                    Item.Legacy_Wave_Shaders (Packed_Q5_1));
          end;
       end if;
 
@@ -3704,6 +3720,14 @@ package body Model_Runner.Platform.Device.Products is
                   Request.Stage.Module := Item.Q3K_Wave_Shader;
                   Line (Low_Wave_Lanes, 1, Item.Q3K_Wave_Line);
                end if;
+
+               for Packing in Legacy_Packing loop
+                  if Item.Legacy_Wave_Shaders (Packing) /= Null_Handle then
+                     Request.Stage.Module := Item.Legacy_Wave_Shaders (Packing);
+                     Line (Low_Wave_Lanes, 1,
+                           Item.Legacy_Wave_Lines (Packing));
+                  end if;
+               end loop;
 
                Request.Stage.Module := Item.Shader;
                Request.Stage.Next := Null_Handle;
@@ -4890,6 +4914,9 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.XS_Wave_Line, "vkDestroyPipeline");
       Give_Back (Item.Q2K_Wave_Line, "vkDestroyPipeline");
       Give_Back (Item.Q3K_Wave_Line, "vkDestroyPipeline");
+      for Packing in Legacy_Packing loop
+         Give_Back (Item.Legacy_Wave_Lines (Packing), "vkDestroyPipeline");
+      end loop;
       Give_Back (Item.Low_Pipeline, "vkDestroyPipeline");
       Give_Back (Item.Low_Wide_Line, "vkDestroyPipeline");
       for Count in Item.Low_Row_Lines'Range loop
@@ -5025,6 +5052,10 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.XS_Wave_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Q2K_Wave_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Q3K_Wave_Shader, "vkDestroyShaderModule");
+      for Packing in Legacy_Packing loop
+         Give_Back (Item.Legacy_Wave_Shaders (Packing),
+                    "vkDestroyShaderModule");
+      end loop;
       Give_Back (Item.Low_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Wave_Shader6, "vkDestroyShaderModule");
       Give_Back (Item.Long_Shader6, "vkDestroyShaderModule");
