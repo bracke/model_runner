@@ -12144,9 +12144,10 @@ shorter -- Qwen2.5's large models pad theirs to 152,064 where the small ones
 stop at 151,936 -- as long as the tokens both have are the same text; a draft
 never proposes a token it does not have. So Qwen2.5-Coder-0.5B-Instruct drafts
 for a Qwen2.5-14B fine-tune: Steelman-14B Q4_K_M, 256 tokens of Ada, went from
-7.6 tokens a second alone (8.8 with `run`'s own lookup drafting) to 12.7 with
-`--draft-model qwen2.5-coder-0.5b-instruct-q8_0.gguf --draft-tokens 3`, 64 per
-cent of proposals accepted.
+7.6 tokens a second alone (8.8 with `run`'s own lookup drafting) to 15.6 with
+`--draft-model qwen2.5-coder-0.5b-instruct-q8_0.gguf --draft-tokens 3`, 60 per
+cent of proposals accepted (12.7 before the check rounds' Q4_K and Q6_K
+products decoded each weight once for every position).
 
 With no draft option named, `run` looks for one itself. A dense model of two
 gigabytes a token or more, with no next-token block of its own, takes the

@@ -330,6 +330,16 @@ package body Speed_Run is
                return;
             end if;
 
+            --  Its head at four bits, as the command takes it: a proposal
+            --  is checked token by token, so this changes how many are kept
+            --  and never what is written. A head that will not go stays as
+            --  the file has it.
+            declare
+               Lighter : E.Error_Info;
+            begin
+               L.Lighten_Head (Draft_Engine, Threads, Lighter);
+            end;
+
             Drafting := True;
          end if;
 
@@ -391,8 +401,16 @@ package body Speed_Run is
                   L.Account (Session, Budget);
 
                   if Drafting then
-                     L.Open (Draft_Session, Draft_Engine, Workers => Where,
-                             Status => Local);
+                     --  As the command opens it: the same context, cache and
+                     --  paging as the session it drafts for. Opened with the
+                     --  model's own context, unpaged and in binary32, a
+                     --  Qwen2.5 draft's 32,768 positions did not fit on the
+                     --  device and its every layer attended on the host --
+                     --  three submissions a layer where the command makes
+                     --  one, and the tool measured drafting short.
+                     L.Open (Draft_Session, Draft_Engine, Context => Context,
+                             Workers => Where, Cache => Cache,
+                             Status => Local, Paged => Paged);
                      exit when E.Is_Error (Local);
                   end if;
 
