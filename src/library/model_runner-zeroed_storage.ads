@@ -1,3 +1,4 @@
+with System;
 with System.Storage_Elements;
 with System.Storage_Pools;
 
@@ -46,5 +47,23 @@ package Model_Runner.Zeroed_Storage is
 
    --  The one pool the engine's arrays come from.
    Arrays : Pool;
+
+   --  Ask the host to back a block from this pool with large pages, before
+   --  most of it is written.
+   --
+   --  For a block written a little at a time over a long life -- a
+   --  session's cache, a position's rows a token: in the host's ordinary
+   --  pages each token took a fault for every page it reached first, 17.5
+   --  us a layer of phi-3 against 2 once the pages are there. Not for every
+   --  large block: scratch made and given back a layer faults a large page
+   --  in for each, and a DeepSeek-V2 prompt on the processor lost a tenth
+   --  when every block of four megabytes asked. Advice only; the block is
+   --  as zero as it was.
+   --
+   --  @param Start The block's first byte, or within it.
+   --  @param Length Bytes from Start; nought asks nothing.
+   procedure Prefer_Large
+     (Start  : System.Address;
+      Length : System.Storage_Elements.Storage_Count);
 
 end Model_Runner.Zeroed_Storage;

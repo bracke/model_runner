@@ -13,6 +13,7 @@ with Model_Runner.Backend.Device;
 with Model_Runner.Backend.Reference;
 with Model_Runner.Quantization.Integers;
 with Model_Runner.Quantization.Interleave;
+with Model_Runner.Zeroed_Storage;
 
 package body Model_Runner.Llama is
 
@@ -15733,6 +15734,42 @@ package body Model_Runner.Llama is
                T.Allocate
                  (Rows * Blocks_Of (Item.Held_Values, KV_Out), Item.Value_Scales);
          end case;
+
+         --  The cache in large pages where the host gives them: it is
+         --  written a position at a time, and in ordinary pages a generated
+         --  token's rows faulted in a page or two a layer.
+         declare
+            use System.Storage_Elements;
+
+            procedure Advise (Start : System.Address; Length : Storage_Count)
+            is
+            begin
+               if Length > 0 then
+                  Model_Runner.Zeroed_Storage.Prefer_Large (Start, Length);
+               end if;
+            end Advise;
+         begin
+            if Item.Keys /= null and then Item.Keys.all'Length > 0 then
+               Advise (Item.Keys.all (Item.Keys.all'First)'Address,
+                       Storage_Count (Item.Keys.all'Length) * 4);
+            end if;
+            if Item.Values /= null and then Item.Values.all'Length > 0 then
+               Advise (Item.Values.all (Item.Values.all'First)'Address,
+                       Storage_Count (Item.Values.all'Length) * 4);
+            end if;
+            if Item.Half_Keys /= null and then Item.Half_Keys.all'Length > 0
+            then
+               Advise (Item.Half_Keys.all (Item.Half_Keys.all'First)'Address,
+                       Storage_Count (Item.Half_Keys.all'Length) * 2);
+            end if;
+            if Item.Half_Values /= null
+              and then Item.Half_Values.all'Length > 0
+            then
+               Advise
+                 (Item.Half_Values.all (Item.Half_Values.all'First)'Address,
+                  Storage_Count (Item.Half_Values.all'Length) * 2);
+            end if;
+         end;
          T.Allocate (Width, Item.Activation);
          T.Allocate (Width, Item.Normalized);
 
