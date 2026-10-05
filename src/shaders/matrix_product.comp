@@ -2375,41 +2375,84 @@ void main() {
         }
 #endif
 
-        uint span = min(KCH * CHUNKS, shape.columns - kb);
+        //  A whole step has a constant bound, which keeps the accumulators
+        //  in registers (see above); only the step a row ends in partway --
+        //  a width of whole chunks that is not a whole number of steps --
+        //  is bounded by where the row stops.
+        if (kb + KCH * CHUNKS <= shape.columns) {
+            for (uint step = 0u; step < KCH * CHUNKS; step += 16u) {
+                uint chunk = step / KCH;
+                uint kk    = step - chunk * KCH;
 
-        for (uint step = 0u; step < span; step += 16u) {
-            uint chunk = step / KCH;
-            uint kk    = step - chunk * KCH;
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA>
+                    a[AR];
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB>
+                    b[AV];
 
-            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA>
-                a[AR];
-            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB>
-                b[AV];
+                for (uint i = 0u; i < AR; ++i) {
+                    coopMatLoad(a[i], wt,
+                                chunk * TILE_R * WT_STRIDE
+                                + i * 16u * WT_STRIDE + kk,
+                                WT_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
+                }
 
-            for (uint i = 0u; i < AR; ++i) {
-                coopMatLoad(a[i], wt,
-                            chunk * TILE_R * WT_STRIDE
-                            + i * 16u * WT_STRIDE + kk,
-                            WT_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
-            }
-
-            //  Column major with the batch's own stride is the transpose
-            //  the product wants, so nothing is turned round on the way in:
-            //  element (k, n) of the operand is column k of vector n, which
-            //  is where the batch already keeps it.
-            for (uint j = 0u; j < AV; ++j) {
-                coopMatLoad(b[j], x,
-#ifndef LISTED
-                            shape.stride +
-#endif
-                            (vec0 + j * 16u) * shape.columns + kb + step,
-                            shape.columns,
-                            gl_CooperativeMatrixLayoutColumnMajor);
-            }
-
-            for (uint i = 0u; i < AR; ++i) {
+                //  Column major with the batch's own stride is the transpose
+                //  the product wants, so nothing is turned round on the way in:
+                //  element (k, n) of the operand is column k of vector n, which
+                //  is where the batch already keeps it.
                 for (uint j = 0u; j < AV; ++j) {
-                    acc[i][j] = coopMatMulAdd(a[i], b[j], acc[i][j]);
+                    coopMatLoad(b[j], x,
+    #ifndef LISTED
+                                shape.stride +
+    #endif
+                                (vec0 + j * 16u) * shape.columns + kb + step,
+                                shape.columns,
+                                gl_CooperativeMatrixLayoutColumnMajor);
+                }
+
+                for (uint i = 0u; i < AR; ++i) {
+                    for (uint j = 0u; j < AV; ++j) {
+                        acc[i][j] = coopMatMulAdd(a[i], b[j], acc[i][j]);
+                    }
+                }
+            }
+        } else {
+            uint span = shape.columns - kb;
+
+            for (uint step = 0u; step < span; step += 16u) {
+                uint chunk = step / KCH;
+                uint kk    = step - chunk * KCH;
+
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA>
+                    a[AR];
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB>
+                    b[AV];
+
+                for (uint i = 0u; i < AR; ++i) {
+                    coopMatLoad(a[i], wt,
+                                chunk * TILE_R * WT_STRIDE
+                                + i * 16u * WT_STRIDE + kk,
+                                WT_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
+                }
+
+                //  Column major with the batch's own stride is the transpose
+                //  the product wants, so nothing is turned round on the way in:
+                //  element (k, n) of the operand is column k of vector n, which
+                //  is where the batch already keeps it.
+                for (uint j = 0u; j < AV; ++j) {
+                    coopMatLoad(b[j], x,
+    #ifndef LISTED
+                                shape.stride +
+    #endif
+                                (vec0 + j * 16u) * shape.columns + kb + step,
+                                shape.columns,
+                                gl_CooperativeMatrixLayoutColumnMajor);
+                }
+
+                for (uint i = 0u; i < AR; ++i) {
+                    for (uint j = 0u; j < AV; ++j) {
+                        acc[i][j] = coopMatMulAdd(a[i], b[j], acc[i][j]);
+                    }
                 }
             }
         }
