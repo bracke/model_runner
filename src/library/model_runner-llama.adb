@@ -3587,7 +3587,9 @@ package body Model_Runner.Llama is
       Threads : Positive := 1;
       Status  : out E.Error_Info)
    is
-      Head : constant T.View := Item.Output;
+      Head : constant T.View :=
+        (if T.Is_Present (Item.Output_As_Stored) then Item.Output_As_Stored
+         else Item.Output);
    begin
       Status := E.Success;
       if Item.Light_Head /= null then
@@ -3611,7 +3613,9 @@ package body Model_Runner.Llama is
       Threads : Positive := 1;
       Status  : out E.Error_Info)
    is
-      Head : constant T.View := Item.Output;
+      Head : constant T.View :=
+        (if T.Is_Present (Item.Output_As_Stored) then Item.Output_As_Stored
+         else Item.Output);
       Rows : constant Element_Count :=
         Element_Count'Min (Head.Rows, Draft_Vocabulary);
    begin
@@ -5622,6 +5626,9 @@ package body Model_Runner.Llama is
 
       if Repack = To_Rows then
          P.Publish (Observer, P.Load_Progress (P.Repacking_Weights));
+
+         --  The head as the file has it, before it may be written in panels.
+         Item.Output_As_Stored := Item.Output;
 
          declare
             Needed : B.Byte_Count := 0;
@@ -13522,6 +13529,7 @@ package body Model_Runner.Llama is
       Item.Draft_Head := T.Empty_View;
       Item.Embeddings := T.Empty_View;
       Item.Output := T.Empty_View;
+      Item.Output_As_Stored := T.Empty_View;
       Item.Settings := (others => <>);
       Model_Runner.Tokenizer.Close (Item.Words);
       Model_Runner.Templates.Close (Item.Chat);

@@ -2539,6 +2539,12 @@ private
       --  The output head at four bits, for a model that only drafts.
       Light_Head  : Model_Runner.Bytes.Byte_Array_Access := null;
 
+      --  The output head as the file stores it, kept where the head was
+      --  written in panels: the four-bit heads are encoded from the file's
+      --  own rows, not from rows put back together out of panels one at a
+      --  time.
+      Output_As_Stored : Model_Runner.Tensors.View;
+
       --  The rows of the head a draft from the block past the stack reads,
       --  at four bits, where the run asked for them; empty otherwise.
       Draft_Head       : aliased Model_Runner.Tensors.View;
