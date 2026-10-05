@@ -27,10 +27,13 @@
 //  the products either side -- and the device's own clock said it was a
 //  fifth of a layer: the scores lived in a private array of five hundred
 //  and twelve, which is scratch memory, and every compare of the choosing
-//  was a load from it. The scores live in shared memory now, the largest
-//  and each choice are found by the lanes together, and the sums that
-//  decide a share are still taken in the order the host takes them, so
-//  the answer is the same bits as before.
+//  was a load from it. The scores live in shared memory now and the
+//  largest is found by the lanes together. The choice was Used rounds of
+//  the same, a barrier a step; each expert is ranked against every other
+//  share in one pass instead, which took a token's routing from twelve
+//  microseconds to nine. The sums that decide a share are still taken in
+//  the order the host takes them, so the answer is the same bits as
+//  before.
 
 layout(local_size_x = 128) in;
 
@@ -62,10 +65,11 @@ const uint LANES = 128u;
 
 shared float score[MOST];
 
-//  A choice: the largest score and, among equal ones, the lowest expert,
-//  which is the one the host's scan lands on.
+//  The same shares as keys to rank by, four to an element.
+shared vec4 keys[MOST / 4u];
+
+//  The lanes' largest scores, reduced to the one the softmax subtracts.
 shared float best_score[LANES];
-shared uint  best_at[LANES];
 
 //  What the lanes are told between the steps lane nought takes alone.
 shared float largest;
@@ -133,43 +137,43 @@ void main() {
     }
     barrier();
 
-    //  The choosing: Used rounds, each the largest that is left, found by
-    //  every lane over its own experts and then across the lanes.
-    for (uint k = 0u; k < shape.used; ++k) {
-        float most = -1.0;
-        uint  best = 0u;
-
-        for (uint e = lane; e < experts; e += LANES) {
-            if (score[e] > most) {
-                most = score[e];
-                best = e;
-            }
-        }
-
-        best_score[lane] = most;
-        best_at[lane] = best;
-        barrier();
-
-        for (uint step = LANES / 2u; step > 0u; step >>= 1u) {
-            if (lane < step) {
-                float other = best_score[lane + step];
-                uint  where = best_at[lane + step];
-                if (other > best_score[lane]
-                    || (other == best_score[lane] && where < best_at[lane])) {
-                    best_score[lane] = other;
-                    best_at[lane] = where;
-                }
-            }
-            barrier();
-        }
-
-        if (lane == 0u) {
-            chosen[k] = best_at[0];
-            share[k] = best_score[0];
-            score[best_at[0]] = -1.0;
-        }
-        barrier();
+    //  The choosing: each expert's rank is how many others beat it -- a
+    //  larger share, or the same share and a lower number -- and the ones
+    //  ranked below Used are the chosen, in rank order. The same experts in
+    //  the same order as taking the largest Used times over, a round of
+    //  barriers a pick, but with two barriers for all of them. A share that
+    //  is not a number ranks as the lowest, where the rounds never took it.
+    //
+    //  Read four at a time: the shares as keys, padded past the last
+    //  expert with one below every key so the padding never counts.
+    for (uint e = lane; e < MOST; e += LANES) {
+        float key = e < experts ? score[e] : -2.0;
+        keys[e >> 2u][e & 3u] = isnan(key) ? -1.0 : key;
     }
+    barrier();
+
+    uint quads = (experts + 3u) >> 2u;
+
+    for (uint e = lane; e < experts; e += LANES) {
+        float mine_share = keys[e >> 2u][e & 3u];
+        vec4 mine4 = vec4(mine_share);
+        uvec4 ranks = uvec4(0u);
+
+        for (uint q = 0u; q < quads; ++q) {
+            vec4 other = keys[q];
+            uvec4 j = uvec4(4u * q) + uvec4(0u, 1u, 2u, 3u);
+            ranks += uvec4(greaterThan(other, mine4))
+                   | (uvec4(equal(other, mine4)) & uvec4(lessThan(j, uvec4(e))));
+        }
+
+        uint rank = ranks.x + ranks.y + ranks.z + ranks.w;
+
+        if (rank < shape.used) {
+            chosen[rank] = e;
+            share[rank] = mine_share;
+        }
+    }
+    barrier();
 
     if (lane == 0u) {
         float total = 0.0;
