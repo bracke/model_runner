@@ -4783,6 +4783,13 @@ package body Model_Runner.Backend.Device is
       end Step;
 
       Source_Step : Natural := 0;
+
+      --  Whether the feed-forward follows the mixer in the one sequence.
+      Feeds : constant Boolean :=
+        Whole_Layer and then Block.Feed_Norm /= null
+        and then T.Is_Present (Block.Gate) and then T.Is_Present (Block.Up)
+        and then T.Is_Present (Block.Down);
+
       Out_P       : Products.Weight_Packing;
       Out_Known   : Boolean;
    begin
@@ -4849,6 +4856,10 @@ package body Model_Runner.Backend.Device is
       if One then
          Project (Block.X_Proj, S_Conv);
          S_Dbc := Last;
+         if Block.Dbc_Norm then
+            Step (Products.Dbc_Norm, S_Dbc, Wide_X);
+            S_Dbc := Last;
+         end if;
          if Added then
             Products.Add_Assemble
               (Steps, 1, S_Dbc, S_Dbc,
@@ -4881,8 +4892,43 @@ package body Model_Runner.Backend.Device is
       if Added and then Whole_Layer then
          At_Out := Wanted;
          Products.Add_Join
-           (Steps, Added, From_Vector => 0, Kept => not Carry_Out);
+           (Steps, Added, From_Vector => 0,
+            Kept => not Carry_Out and then not Feeds);
          Room (Block.Width);
+      end if;
+
+      --  And the feed-forward after the mixer, from the residual the
+      --  join made, joined back to it.
+      if Added and then Whole_Layer and then Feeds then
+         declare
+            S_Join : constant Natural := Last;
+            S_Gate : Natural;
+         begin
+            Products.Add_Norm
+              (Steps, Block.Feed_Norm.all (Block.Feed_Norm.all'First)'Address,
+               Model_Runner.Bytes.Byte_Count (Block.Feed_Norm.all'Length) * 4,
+               0, Block.Width, Block.Norm_Floor, Added, From_Step => S_Join,
+               Key => Block.Feed_Norm.all (Block.Feed_Norm.all'First)'Address,
+               Kept => False);
+            Room (Block.Width);
+            Project (Block.Gate, Last);
+            S_Gate := Last;
+            Project (Block.Up, S_Gate - 1);
+            if Added then
+               Products.Add_Combination
+                 (Steps, 0, Added, Kept => False,
+                  From_Step => S_Gate, Other_Step => Last);
+               Room (Natural (Block.Gate.Rows));
+            end if;
+            Project (Block.Down, Last);
+            if Added then
+               At_Out := Wanted;
+               Products.Add_Join
+                 (Steps, Added, From_Step => Last, Residual_Step => S_Join,
+                  Kept => not Carry_Out);
+               Room (Block.Width);
+            end if;
+         end;
       end if;
 
       if not Added then

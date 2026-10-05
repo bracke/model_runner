@@ -1261,6 +1261,18 @@ package Model_Runner.Backend.Device is
       Rank      : Natural := 0;
       X_Proj    : Model_Runner.Tensors.View;
       Dt_Up     : Model_Runner.Tensors.View;
+
+      --  Jamba's: the x-projection's dt, B and C each normalized, their
+      --  gains one after another at Gain_At in the pack; and the dense
+      --  feed-forward after the mixer, its normalization and its gate, up
+      --  and down, through the logistic-weighted unit -- the whole layer,
+      --  residual and all, where Norm is given as well. No feed-forward
+      --  where Feed_Norm is null.
+      Dbc_Norm  : Boolean := False;
+      Feed_Norm : Model_Runner.Tensors.Real_Array_Access := null;
+      Gate      : Model_Runner.Tensors.View;
+      Up        : Model_Runner.Tensors.View;
+      Down      : Model_Runner.Tensors.View;
    end record;
 
    --  The head width and the state a channel the device's Mamba2 scan

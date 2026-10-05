@@ -3036,6 +3036,14 @@ private
       --  home first.
       State_On_Device : Boolean := False;
 
+      --  Whether the host has written its copy of the ring since it last went
+      --  to the device or was made nought: a seat freshly taken is noughts, and
+      --  where nothing is committed yet the copy is taken to be noughts too --
+      --  unless a layer on the host has already written it, as a Jamba's
+      --  mixture layer does before its first Mamba layer on the device is
+      --  seated.
+      Ring_Written : Boolean := False;
+
       --  Where the session's ring lies in the device's state room, in
       --  elements, while it holds a seat there; every session seated has
       --  a ring of its own, so a round's members run their rule on the

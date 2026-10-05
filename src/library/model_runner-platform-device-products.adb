@@ -10643,6 +10643,13 @@ package body Model_Runner.Platform.Device.Products is
                return;
             end if;
             Rows := Shape.Inner;
+         when Dbc_Norm =>
+            if Shape.Version /= 1
+              or else not Holds (Source, Shape.Rank + 2 * Shape.State)
+            then
+               return;
+            end if;
+            Rows := Shape.Rank + 2 * Shape.State;
       end case;
 
       Steps.Held := Steps.Held + 1;
@@ -14006,6 +14013,8 @@ package body Model_Runner.Platform.Device.Products is
                            Dispatch
                              (Item.Buffer, C.unsigned (Count),
                               C.unsigned (M.Groups), 1);
+                        when Dbc_Norm =>
+                           Dispatch (Item.Buffer, C.unsigned (Count), 1, 1);
                      end case;
                   end;
 

@@ -14,6 +14,10 @@
 //       from a later one or from the batch.
 //    3  gate: a position's answer times the unit of its gate, then each
 //       group of channels scaled to unit root mean square and by the gain.
+//    4  Jamba's x-projection normalized: dt's rank, B and C, each of a
+//       position's three stretches scaled to unit root mean square and by
+//       its own gain, the three gains one after another from the gain's
+//       place in the pack.
 //
 //  The scan, mode 2, is mamba2_scan.comp. The weight is the layer's pack:
 //  the taps a channel, their biases, then past the scan's numbers the
@@ -56,6 +60,8 @@ layout(push_constant) uniform Shape {
     uint epsilon_bits;
     uint dt_at;
     uint x_at;
+    uint dbc_at;
+    uint rank;
 } shape;
 
 shared float sums[LANES];
@@ -99,6 +105,37 @@ void main() {
         for (int j = 0; j < back; ++j) {
             s[shape.memory_at + uint(j) * shape.dxbc + c] =
                 input_at(c, int(shape.count) + j - back);
+        }
+    } else if (shape.mode == 4u) {
+        //  A workgroup a position, a stretch at a time.
+        uint p = gl_WorkGroupID.x;
+        uint wide = shape.rank + 2u * shape.state;
+        uint row = p * wide;
+        for (uint part = 0u; part < 3u; ++part) {
+            uint first = part == 0u ? 0u
+                       : (part == 1u ? shape.rank : shape.rank + shape.state);
+            uint len = part == 0u ? shape.rank : shape.state;
+
+            float mine = 0.0;
+            for (uint i = lane; i < len; i += LANES) {
+                float v = x[row + first + i];
+                mine += v * v;
+            }
+            barrier();
+            sums[lane] = mine;
+            barrier();
+            for (uint step = LANES / 2u; step > 0u; step >>= 1u) {
+                if (lane < step) {
+                    sums[lane] += sums[lane + step];
+                }
+                barrier();
+            }
+            float scale = inversesqrt(sums[0] / float(len)
+                                      + uintBitsToFloat(shape.epsilon_bits));
+            for (uint i = lane; i < len; i += LANES) {
+                y[row + first + i] = x[row + first + i] * scale
+                    * w[shape.base + shape.gain_at + first + i];
+            }
         }
     } else {
         //  A workgroup a position and a group.

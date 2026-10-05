@@ -5678,7 +5678,9 @@ package body Tests.Backend_Cases is
       Dt_At    : constant := Bias_At + Inner;
       A_At     : constant := Dt_At + Inner;
       D_At     : constant := A_At + Inner * State;
-      Pack_Len : constant := D_At + Inner;
+      Norm_At  : constant := D_At + Inner;
+      Pack_Len : constant := Norm_At + Wide_X;
+      Floor    : constant := 1.0E-6;
 
       Memory_Len : constant := Back * Inner;
       State_Len  : constant := Memory_Len + Inner * State;
@@ -5709,12 +5711,12 @@ package body Tests.Backend_Cases is
       is ((Mode => Mode, Inner => Inner, DXBC => Inner, In_Out => In_Out,
            Taps => Taps, Heads => 1, Head => 0, State => State,
            Groups => 1, XZ_Step => 1, Dt_Step => (if Mode = Products.Scan
-                                                  then 6 else 0),
+                                                  then 7 else 0),
            Conv_At => Conv_At, Bias_At => Bias_At, Dt_At => Dt_At,
-           A_At => A_At, D_At => D_At, Gain_At => 0,
-           Memory_At => 0, State_At => Memory_Len, Epsilon => 0.0,
+           A_At => A_At, D_At => D_At, Gain_At => Norm_At,
+           Memory_At => 0, State_At => Memory_Len, Epsilon => Floor,
            Version => 1, X_At => 0,
-           Dbc_Step => (if Mode = Products.Scan then 4 else 0),
+           Dbc_Step => (if Mode = Products.Scan then 5 else 0),
            Rank => Rank));
 
       procedure Over (Count : Positive) is
@@ -5728,14 +5730,14 @@ package body Tests.Backend_Cases is
          H       : N.Real_Array (0 .. Inner * State - 1) :=
            Start (Memory_Len .. State_Len - 1);
          Landing : N.Real_Array
-           (0 .. C * (In_Out + Inner + 1 + Wide_X + Rank + 2 * Inner) - 1)
+           (0 .. C * (In_Out + Inner + 1 + 2 * Wide_X + Rank + 2 * Inner) - 1)
            := [others => 0.0];
          After   : N.Real_Array (0 .. State_Len - 1);
          Worst   : N.Real := 0.0;
 
          At_Conv : constant N.Element_Count := C * In_Out;
          At_Scan : constant N.Element_Count :=
-           At_Conv + C * (Inner + 1 + Wide_X + Rank + Inner);
+           At_Conv + C * (Inner + 1 + 2 * Wide_X + Rank + Inner);
 
          procedure Near (Got, Want : N.Real) is
          begin
@@ -5769,7 +5771,8 @@ package body Tests.Backend_Cases is
          Assert (Ok, "the memory and the state would not be written");
 
          --  1 the projection in; 2 the convolution; 3 the memory saved; 4
-         --  the x-projection; 5 dt's rank; 6 dt up; 7 the scan.
+         --  the x-projection; 5 its three stretches normalized, as Jamba
+         --  has them; 6 dt's rank; 7 dt up; 8 the scan.
          Products.Open_Sequence (Steps);
          Products.Add_Product
            (Steps, In_W (In_W'First)'Address, Bytes_Of (In_W), 0,
@@ -5787,13 +5790,18 @@ package body Tests.Backend_Cases is
            (Steps, X_W (X_W'First)'Address, Bytes_Of (X_W), 0,
             Products.Values_F32, Wide_X, Inner, Added, From_Step => 2,
             Kept => False);
+         Products.Add_Mamba2
+           (Steps, Pack (0)'Address, Bytes_Of (Pack),
+            Shape (Products.Dbc_Norm), Added, From_Step => 4,
+            Key => Pack (0)'Address, Kept => False);
+         Assert (Added, "the normalization of dt, B and C was refused");
          Products.Add_Assemble
-           (Steps, 1, 4, 4, [Rank, 0, 0, Wide_X, 0, 0, 0, Wide_X], Added,
+           (Steps, 1, 5, 5, [Rank, 0, 0, Wide_X, 0, 0, 0, Wide_X], Added,
             Kept => False);
          Assert (Added, "dt's rank was not taken out");
          Products.Add_Chained_Product
            (Steps, Dt_W (Dt_W'First)'Address, Bytes_Of (Dt_W), 0,
-            Products.Values_F32, Inner, Rank, Added, From_Step => 5,
+            Products.Values_F32, Inner, Rank, Added, From_Step => 6,
             Kept => False);
          Products.Add_Mamba2
            (Steps, Pack (0)'Address, Bytes_Of (Pack), Shape (Products.Scan),
@@ -5804,7 +5812,7 @@ package body Tests.Backend_Cases is
          --  the scan holds.
          Products.Add_Mamba2
            (Steps, Pack (0)'Address, Bytes_Of (Pack), Shape (Products.Gate),
-            Added, From_Step => 7);
+            Added, From_Step => 8);
          Assert (not Added, "a Mamba 1 gate was taken");
          declare
             Many : Products.Mamba2_Shape := Shape (Products.Scan);
@@ -5844,6 +5852,29 @@ package body Tests.Backend_Cases is
             end loop;
             for J in N.Element_Count range 0 .. Wide_X - 1 loop
                DBC (P * Wide_X + J) := Dot (X_W, J, Inner, Xc, P * Inner);
+            end loop;
+            --  dt's rank, B and C, each to unit root mean square by its
+            --  own gain.
+            for Part in 0 .. 2 loop
+               declare
+                  First : constant N.Element_Count :=
+                    (case Part is when 0 => 0, when 1 => Rank,
+                                  when others => Rank + State);
+                  Len   : constant N.Element_Count :=
+                    (if Part = 0 then Rank else State);
+                  Sum   : Long_Float := 0.0;
+                  Scale : Long_Float;
+               begin
+                  for I in 0 .. Len - 1 loop
+                     Sum := Sum + Long_Float (DBC (P * Wide_X + First + I)) ** 2;
+                  end loop;
+                  Scale := 1.0 / L.Sqrt (Sum / Long_Float (Len) + Floor);
+                  for I in 0 .. Len - 1 loop
+                     DBC (P * Wide_X + First + I) := N.Real
+                       (Long_Float (DBC (P * Wide_X + First + I)) * Scale
+                        * Long_Float (Pack (Norm_At + First + I)));
+                  end loop;
+               end;
             end loop;
             for Ch in N.Element_Count range 0 .. Inner - 1 loop
                DT (P * Inner + Ch) := Dot (Dt_W, Ch, Rank, DBC, P * Wide_X);

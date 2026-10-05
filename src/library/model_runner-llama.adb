@@ -3005,7 +3005,8 @@ package body Model_Runner.Llama is
       R     : Mamba2_Places;
    begin
       --  Mamba's: the taps over x alone, and dt's bias, A and D a channel
-      --  -- A a channel and a state -- with no gain.
+      --  -- A a channel and a state -- with no gain; Jamba's then the gains
+      --  of its x-projection's three normalizations, dt's rank, B and C.
       if not Is_Mamba2 (Settings.Kind) then
          R.Conv  := 0;
          R.Bias  := Inner * Element_Count (Settings.Conv_Kernel);
@@ -3013,7 +3014,10 @@ package body Model_Runner.Llama is
          R.A     := R.Dt + Inner;
          R.D     := R.A + Inner * State;
          R.Gain  := R.D + Inner;
-         R.Total := R.Gain;
+         R.Total := R.Gain
+           + (if Is_Jamba (Settings.Kind)
+              then Element_Count (Settings.Time_Rank) + 2 * State
+              else 0);
          return R;
       end if;
 
@@ -3148,7 +3152,11 @@ package body Model_Runner.Llama is
 
       --  And a Mamba or Mamba2 mixer's, every table present at the length
       --  its place says, or no pack and the mixer goes a step at a time.
-      if Pure_SSM (Item.Settings.Kind)
+      if (Pure_SSM (Item.Settings.Kind)
+          or else (Is_Jamba (Item.Settings.Kind)
+                   and then Current.Ssm_Dt_Norm /= null
+                   and then Current.Ssm_B_Norm /= null
+                   and then Current.Ssm_C_Norm /= null))
         and then Current.Conv /= null and then Current.Conv_Bias /= null
         and then Current.DT_Bias /= null and then Current.Ssm_A /= null
         and then Current.Ssm_D /= null
@@ -3172,6 +3180,11 @@ package body Model_Runner.Llama is
               and then Current.Ssm_D.all'Length = P.Gain - P.D
               and then (if Is_Mamba2 (Item.Settings.Kind)
                         then Current.State_Norm.all'Length = P.Total - P.Gain
+                        elsif Is_Jamba (Item.Settings.Kind)
+                        then Current.Ssm_Dt_Norm.all'Length
+                             + Current.Ssm_B_Norm.all'Length
+                             + Current.Ssm_C_Norm.all'Length
+                             = P.Total - P.Gain
                         else P.Total = P.Gain)
             then
                T.Allocate (P.Total, Current.Ssm_Pack);
@@ -3183,6 +3196,13 @@ package body Model_Runner.Llama is
                   Put (P.D, Current.Ssm_D);
                   if Is_Mamba2 (Item.Settings.Kind) then
                      Put (P.Gain, Current.State_Norm);
+                  elsif Is_Jamba (Item.Settings.Kind) then
+                     Put (P.Gain, Current.Ssm_Dt_Norm);
+                     Put (P.Gain + Current.Ssm_Dt_Norm.all'Length,
+                          Current.Ssm_B_Norm);
+                     Put (P.Gain + Current.Ssm_Dt_Norm.all'Length
+                          + Current.Ssm_B_Norm.all'Length,
+                          Current.Ssm_C_Norm);
                   end if;
                end if;
             end if;
@@ -8065,7 +8085,9 @@ package body Model_Runner.Llama is
          --  nothing to send. A session that has committed something has
          --  a ring that says so, and a seat it was already in holds
          --  whatever it left there, so both are sent as before.
-         if Cleared and then Item.Committed = 0 then
+         if Cleared and then Item.Committed = 0
+           and then not Item.Ring_Written
+         then
             Item.State_On_Device := True;
             return;
          end if;
@@ -8075,6 +8097,7 @@ package body Model_Runner.Llama is
 
       if Ok then
          Item.State_On_Device := True;
+         Item.Ring_Written := False;
       end if;
    end Send_States;
 
@@ -8203,14 +8226,29 @@ package body Model_Runner.Llama is
          Version   => (if Is_Mamba2 (Settings.Kind) then 2 else 1),
          Rank      => Settings.Time_Rank,
          X_Proj    => Current.Ssm_X,
-         Dt_Up     => Current.Ssm_Dt);
+         Dt_Up     => Current.Ssm_Dt,
+         Dbc_Norm  => Current.Ssm_Dt_Norm /= null,
+         Feed_Norm =>
+           (if With_Norm and then Is_Jamba (Settings.Kind)
+            then Current.Feed_Norm else null),
+         Gate      => Current.Gate,
+         Up        => Current.Up,
+         Down      => Current.Down);
    end Mamba2_Block_Of;
 
    --  Whether a Mamba2 layer can go to the device whole: the device runs
    --  the mixer, the layer has its pack and a plain normalization, the
    --  shapes are the scan's, and the session keeps one state.
    function Mamba2_Fits (Item : Session; Current : Layer) return Boolean
-   is (Pure_SSM (Item.Owner.Settings.Kind)
+   is ((Pure_SSM (Item.Owner.Settings.Kind)
+        or else
+          (Is_Jamba (Item.Owner.Settings.Kind)
+           and then Current.Experts = null
+           and then Current.Feed_Norm /= null
+           and then Current.Feed_Norm_Bias = null
+           and then T.Is_Present (Current.Gate)
+           and then T.Is_Present (Current.Up)
+           and then T.Is_Present (Current.Down)))
        and then Model_Runner.Backend."="
                   (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_Device)
        and then Current.Ssm_Pack /= null
@@ -8232,7 +8270,8 @@ package body Model_Runner.Llama is
           else Item.Owner.Settings.State_Size
                  <= Model_Runner.Backend.Device.Mamba_Most_State
                and then Item.Owner.Settings.Time_Rank > 0
-               and then Current.Ssm_Dt_Norm = null
+               and then (Is_Jamba (Item.Owner.Settings.Kind)
+                         or else Current.Ssm_Dt_Norm = null)
                and then T.Is_Present (Current.Ssm_X)
                and then T.Is_Present (Current.Ssm_Dt)
                and then Model_Runner.Backend.Device.Runs_Mamba));
@@ -16652,6 +16691,7 @@ package body Model_Runner.Llama is
          Item.Delta_State.all := [others => 0.0];
       end if;
       Item.State_On_Device := False;
+      Item.Ring_Written := False;
       Item.Kept_Newest := 0;
 
       --  And the last state was the last of a context that is over.
@@ -17096,6 +17136,7 @@ package body Model_Runner.Llama is
       --  The ring as the device left it, where a layer before this one
       --  went whole there.
       Fetch_States (Item'Unchecked_Access);
+      Item.Ring_Written := True;
 
       while Taken < Rows.Count loop
          declare
@@ -17482,6 +17523,7 @@ package body Model_Runner.Llama is
       --  The host's copy of the memory and the state, where a layer before
       --  this one went whole on the device and left them there.
       Fetch_States (Item'Unchecked_Access);
+      Item.Ring_Written := True;
 
       if Own then
          XZ  := Item.Mamba_XZ;
@@ -17951,6 +17993,7 @@ package body Model_Runner.Llama is
       --  The host's copy of the memory and the state, where a mixer before
       --  this one left them on the device.
       Fetch_States (Item'Unchecked_Access);
+      Item.Ring_Written := True;
 
       if Own then
          XZ := Item.Mamba_XZ;
@@ -18504,9 +18547,11 @@ package body Model_Runner.Llama is
             --  Whatever the device did with the state before it refused,
             --  the host's copy is the one the host goes on from.
             Fetch_States (Item'Unchecked_Access);
+            Item.Ring_Written := True;
          end;
       else
          Fetch_States (Item'Unchecked_Access);
+         Item.Ring_Written := True;
       end if;
 
       T.Allocate (Rows, Sx);       T.Allocate (Rows, Xs);
@@ -19367,7 +19412,9 @@ package body Model_Runner.Llama is
       --  Whichever of the two a layer is: what the carry from the layer
       --  before asks of the layer after.
       function Layer_Fits (L : Layer; Index : Natural) return Boolean
-      is (if Pure_SSM (Settings.Kind) then Mamba2_Fits (Item, L)
+      is (if Pure_SSM (Settings.Kind)
+            or else (Is_Jamba (Settings.Kind) and then Linear (Settings, Index))
+          then Mamba2_Fits (Item, L)
           elsif Linear (Settings, Index) then Linear_Layer_Fits (L)
           else Whole_Layer_Fits (L, Index));
 
@@ -21496,7 +21543,9 @@ package body Model_Runner.Llama is
       --  Whichever of the two a layer is: what the carry from the layer
       --  before asks of the layer after.
       function Layer_Fits (L : Layer; Index : Natural) return Boolean
-      is (if Pure_SSM (Settings.Kind) then Mamba2_Fits (Item, L)
+      is (if Pure_SSM (Settings.Kind)
+            or else (Is_Jamba (Settings.Kind) and then Linear (Settings, Index))
+          then Mamba2_Fits (Item, L)
           elsif Linear (Settings, Index) then Linear_Layer_Fits (L)
           else Whole_Layer_Fits (L, Index));
 

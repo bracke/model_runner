@@ -1127,7 +1127,7 @@ package Model_Runner.Platform.Device.Products is
    function Runs_Rwkv (Item : Engine) return Boolean;
 
    --  What a Mamba2 step does: see Add_Mamba2.
-   type Mamba2_Mode is (Conv, Save, Scan, Gate);
+   type Mamba2_Mode is (Conv, Save, Scan, Gate, Dbc_Norm);
 
    --  A Mamba2 step's shape. Offsets into the pack are in elements; the
    --  state offsets are in elements of the state buffer.
@@ -1197,7 +1197,9 @@ package Model_Runner.Platform.Device.Products is
    --  rows and dt and writes Inner a position, a head a workgroup with the
    --  state in registers, Head and State as the kernel takes them. Gate
    --  reads the scan's rows and z and writes them gated and normalized a
-   --  group.
+   --  group. Dbc_Norm, Mamba 1's only, reads the x-projection's rows and
+   --  writes them with dt's rank, B and C each normalized by its own gain,
+   --  the three gains one after another at Gain_At, as Jamba asks.
    --
    --  @param Steps Sequence to add to.
    --  @param Base First byte of the layer's pack.
