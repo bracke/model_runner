@@ -1,3 +1,4 @@
+with Model_Runner.Project_Manifests;
 with AUnit.Assertions;
 
 with Interfaces;
@@ -2632,6 +2633,47 @@ package body Tests.CLI_Cases is
          Assert (Status /= 0 and then Model_Runner.Presentation.Errors_Reported (Screen) = Before + 1
                  and then Model_Runner.Presentation.First_Failure (Screen) = 0,
                  "a project command's failure was not its status, or was said twice");
+         --  What a crate builds, read from its manifests as their formats
+         --  are written: a key in a table, a comment, a string or an empty
+         --  list is not a program.
+         Assert (Model_Runner.Project_Manifests.Alire_Names_Executables
+                   ("name = ""x""" & ASCII.LF & "executables = [""x""]") = True,
+                 "an Alire manifest misread: a top-level executables key");
+         Assert (Model_Runner.Project_Manifests.Alire_Names_Executables
+                   ("  executables   =   [" & ASCII.LF & "  ""a""," & ASCII.LF & "]") = True,
+                 "an Alire manifest misread: spacing and an array over lines");
+         Assert (Model_Runner.Project_Manifests.Alire_Names_Executables
+                   ("""executables"" = [""x""]") = True,
+                 "an Alire manifest misread: a quoted key");
+         Assert (Model_Runner.Project_Manifests.Alire_Names_Executables
+                   ("executables = []") = False,
+                 "an Alire manifest misread: an empty array");
+         Assert (Model_Runner.Project_Manifests.Alire_Names_Executables
+                   ("# executables = [""x""]") = False,
+                 "an Alire manifest misread: a commented-out line");
+         Assert (Model_Runner.Project_Manifests.Alire_Names_Executables
+                   ("[build]" & ASCII.LF & "executables = [""x""]") = False,
+                 "an Alire manifest misread: a key inside a table");
+         Assert (Model_Runner.Project_Manifests.Alire_Names_Executables
+                   ("description = ""executables = [x]""") = False,
+                 "an Alire manifest misread: the word inside a string");
+         Assert (Model_Runner.Project_Manifests.Gpr_Names_Main
+                   ("project P is" & ASCII.LF & "   for Main use (""main.adb"");" & ASCII.LF & "end P;") = True,
+                 "a project file misread: a Main attribute");
+         Assert (Model_Runner.Project_Manifests.Gpr_Names_Main
+                   ("project P is" & ASCII.LF & "   FOR main USE" & ASCII.LF
+                    & "     (""m.adb"");" & ASCII.LF & "end P;") = True,
+                 "a project file misread: any case, over lines");
+         Assert (Model_Runner.Project_Manifests.Gpr_Names_Main
+                   ("-- for Main use (""x.adb"");" & ASCII.LF & "project P is end P;") = False,
+                 "a project file misread: a commented-out Main");
+         Assert (Model_Runner.Project_Manifests.Gpr_Names_Main
+                   ("project P is for Main use (); end P;") = False,
+                 "a project file misread: an empty list");
+         Assert (Model_Runner.Project_Manifests.Gpr_Names_Main
+                   ("project P is for Source_Dirs use (""src""); -- for main use"
+                    & ASCII.LF & "end P;") = False,
+                 "a project file misread: the words in a comment");
          --  A directory /init cannot look into is not taken for an empty
          --  one: what it offers first depends on what is there, so it
          --  stops, says so, and makes nothing.

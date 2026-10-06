@@ -1,5 +1,5 @@
 with Ada.Exceptions;
-with Ada.Characters.Handling;
+with Model_Runner.Project_Manifests;
 with Ada.Directories;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
@@ -77,13 +77,41 @@ package body Model_Runner.CLI.Init is
       --  is offered first depends on the answer.
       Has_Content : Boolean := False;
 
+      --  And whether it is an Alire crate, and one that builds a program:
+      --  its manifest naming executables, or a project file naming a main.
+      Is_Alire : Boolean := False;
+      Runs     : Boolean := False;
+
       procedure Look_Inside (Status : out E.Error_Info) is
          use Ada.Directories;
          Search : Search_Type;
          Found  : Directory_Entry_Type;
+         Manifest : constant String := Hostkit.Fs.Join (Directory, "alire.toml");
+
+         --  A file's whole text; one that cannot be read raises, and the
+         --  look fails naming it.
+         function Whole (Path : String) return String is
+            File : Ada.Text_IO.File_Type;
+            Text : Unbounded_String;
+         begin
+            Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
+            while not Ada.Text_IO.End_Of_File (File) loop
+               Append (Text, Ada.Text_IO.Get_Line (File) & ASCII.LF);
+            end loop;
+            Ada.Text_IO.Close (File);
+            return To_String (Text);
+         exception
+            when others =>
+               if Ada.Text_IO.Is_Open (File) then
+                  Ada.Text_IO.Close (File);
+               end if;
+               raise;
+         end Whole;
       begin
          Status := E.Success;
          Has_Content := False;
+         Is_Alire := False;
+         Runs := False;
          if not Exists (Directory) then
             return;
          end if;
@@ -93,6 +121,19 @@ package body Model_Runner.CLI.Init is
             Has_Content := Simple_Name (Found) not in "." | ".." | ".git" | ".hg" | ".svn";
          end loop;
          End_Search (Search);
+
+         Is_Alire := Exists (Manifest);
+         if Is_Alire then
+            Runs := Model_Runner.Project_Manifests.Alire_Names_Executables (Whole (Manifest));
+            if not Runs then
+               Start_Search (Search, Directory, "*.gpr", [Ordinary_File => True, others => False]);
+               while More_Entries (Search) and then not Runs loop
+                  Get_Next_Entry (Search, Found);
+                  Runs := Model_Runner.Project_Manifests.Gpr_Names_Main (Whole (Full_Name (Found)));
+               end loop;
+               End_Search (Search);
+            end if;
+         end if;
       exception
          when Failure : others =>
             Status := E.Make (E.IO_Read_Failed);
@@ -118,54 +159,7 @@ package body Model_Runner.CLI.Init is
       --  language; in an empty one, as installed.
       function Kinds return Model_Runner.Framework.Name_Lists.Vector is
          Result : Model_Runner.Framework.Name_Lists.Vector;
-         Manifest : constant String := Hostkit.Fs.Join (Directory, "alire.toml");
-         Alire    : constant Boolean := Ada.Directories.Exists (Manifest);
-
-         function Executables return Boolean is
-            File : Ada.Text_IO.File_Type;
-            Said : Boolean := False;
-         begin
-            Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Manifest);
-            while not Ada.Text_IO.End_Of_File (File) and then not Said loop
-               Said := Ada.Strings.Fixed.Index (Ada.Text_IO.Get_Line (File), "executables") = 1;
-            end loop;
-            Ada.Text_IO.Close (File);
-            return Said;
-         exception
-            when others =>
-               if Ada.Text_IO.Is_Open (File) then
-                  Ada.Text_IO.Close (File);
-               end if;
-               return False;
-         end Executables;
-         --  A project file naming a main procedure: a program too.
-         function Gpr_Main return Boolean is
-            Search : Ada.Directories.Search_Type;
-            Found  : Ada.Directories.Directory_Entry_Type;
-            File   : Ada.Text_IO.File_Type;
-            Said   : Boolean := False;
-         begin
-            Ada.Directories.Start_Search
-              (Search, Directory, "*.gpr", [Ada.Directories.Ordinary_File => True, others => False]);
-            while Ada.Directories.More_Entries (Search) and then not Said loop
-               Ada.Directories.Get_Next_Entry (Search, Found);
-               Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Ada.Directories.Full_Name (Found));
-               while not Ada.Text_IO.End_Of_File (File) and then not Said loop
-                  Said := Ada.Strings.Fixed.Index
-                            (Ada.Characters.Handling.To_Lower (Ada.Text_IO.Get_Line (File)), "for main use") > 0;
-               end loop;
-               Ada.Text_IO.Close (File);
-            end loop;
-            Ada.Directories.End_Search (Search);
-            return Said;
-         exception
-            when others =>
-               if Ada.Text_IO.Is_Open (File) then
-                  Ada.Text_IO.Close (File);
-               end if;
-               return Said;
-         end Gpr_Main;
-         Runs : constant Boolean := Alire and then (Executables or else Gpr_Main);
+         Alire : Boolean renames Is_Alire;
 
          function Rank (Index : Positive) return Natural is
             Category : constant String := Tp.Category (Tp.Template_At (Registry, Index));
