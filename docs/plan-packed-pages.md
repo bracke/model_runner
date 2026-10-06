@@ -9,9 +9,10 @@ kept packed -- keys and values as bytes or nibbles with their scales beside
 them -- which is a quarter or an eighth of the exact cache the session would
 otherwise hold.
 
-A session may have either, and not both. `Take_Pages` refuses any session that
-is not `Exact` (`src/library/model_runner-llama.adb`, the guard that reads
-`Item.Held /= Exact`): a paged session keeps its cache in full precision. This
+A session could have either, and not both. `Take_Pages` refused any session that
+was not `Exact` (now `src/library/model_runner-llama-take_pages.adb`, where the
+guard reads `Item.Held not in Exact | Eighth | Fourth` since the stages below):
+a paged session kept its cache in full precision. This
 plan lets the two meet, so a paged session may keep its pages packed and the
 two savings compound -- thirty-two times fewer positions, and a quarter to an
 eighth of each. On the workload the Pages section measures that is 33 MB

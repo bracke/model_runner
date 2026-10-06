@@ -6209,6 +6209,45 @@ package body Tests.Framework_Cases is
       Assert (Ada.Strings.Fixed.Index (To_String (Done.Reason), "put back") > 0
               and then not Dirs.Exists (Dirs.Containing_Directory (S.Root (Store)) & "/src/hello.adb"),
               "a file an agent may not write was left in the project: " & To_String (Done.Reason));
+
+      --  The files it may not write are kept before it starts, to be put
+      --  back should it write them; where they cannot be kept, it does not
+      --  start -- it would run with nothing to put back.
+      declare
+         --  The agent the next run makes: the first run's, numbered on.
+         First   : constant String := To_String (Done.Agent_Id);
+         Next    : constant String :=
+           First (First'First .. First'Last - 6)
+           & Ada.Strings.Fixed.Tail
+               (Ada.Strings.Fixed.Trim
+                  (Natural'Image (Natural'Value (First (First'Last - 5 .. First'Last)) + 1),
+                   Ada.Strings.Both),
+                6, '0');
+         Blocker : constant String := S.Root (Store) & "/runtime/kept-" & Next;
+         Second  : Unbounded_String;
+         Again   : Wk.Report;
+      begin
+         Tk.Create (Store, Change, Fields ("Hello again", "analysis"), "user", "", Second, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Second), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Put_File (Dirs.Containing_Directory (S.Root (Store)) & "/README.md", "not the agent's to write");
+         Put_File (Blocker, "not a directory");
+         Wk.Execute (Store, To_String (Second),
+                     Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                                     Answer => To_Unbounded_String
+                                       ("status: done" & LF & "summary: x"),
+                                     Broken => False),
+                     Cx.Profile (Store, ""), Again, Status);
+         --  A run that went ahead clears the keeping place, blocker and all.
+         if Dirs.Exists (Blocker) then
+            Dirs.Delete_File (Blocker);
+         end if;
+         Assert (E.Is_Error (Status)
+                 and then not Dirs.Exists (Dirs.Containing_Directory (S.Root (Store)) & "/src/hello.adb"),
+                 "a task started though the files its agent may not write could not be kept: "
+                 & Code_Of (Status) & " " & To_String (Again.Final_State));
+      end;
       S.Close (Store);
    end Writes_Stay_In_Bounds;
 
