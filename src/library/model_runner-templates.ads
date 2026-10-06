@@ -438,6 +438,10 @@ private
       --  wrote is the value.
       Term_Macro,
 
+      --  name=value among a macro call's arguments: Offset and Length
+      --  hold the name, and the operand kept after this one the value.
+      Term_Keyword,
+
       --  A list written out: Index_At the first of its elements among the
       --  kept operands and Length how many. Its value is a JSON array made
       --  of them when it is read, each element a number where it is one by
@@ -596,6 +600,12 @@ private
       Method_Split_First,
       Method_Split_Last,
 
+      --  A cut at the first marker only, text.split(marker, 1), and the
+      --  side after it: [1] gives nothing where there is no marker, [-1]
+      --  the whole text, as the two-piece list the language makes would.
+      Method_Split_Once_After,
+      Method_Split_Once_Rest,
+
       --  A cut whose side has not been said yet: text.split(marker) with
       --  neither [0] nor [-1] after it. The language answers a list there,
       --  and the only thing a template does with that list is take one end
@@ -647,7 +657,11 @@ private
       Method_Upper,
       Method_Lower,
       Method_Title,
-      Method_Capitalize);
+      Method_Capitalize,
+
+      --  str.format: each {} (or {0}, {1}) in the text replaced by the
+      --  argument it names, of the two at most this keeps.
+      Method_Format);
 
    --  One method and where its one argument was kept: the characters to
    --  take off, or the marker to cut at.
@@ -806,7 +820,11 @@ private
       Compare_Is_Sequence,
       Compare_Is_Not_Sequence,
       Compare_Is_Undefined,
-      Compare_Is_Not_Undefined);
+      Compare_Is_Not_Undefined,
+
+      --  'is boolean': true or false, assigned or read out of JSON.
+      Compare_Is_Boolean,
+      Compare_Is_Not_Boolean);
 
    type Clause is record
       Negated : Boolean := False;
@@ -852,6 +870,11 @@ private
       Op_Set_None,      --  assign none
       Op_Set_Copy,      --  assign another variable's value, whatever it is
       Op_Set_Slice,     --  assign a list with its first Length entries gone
+
+      --  A namespace made afresh under the name in Offset: its fields
+      --  belong to the loop or macro body that made it, and the ones it
+      --  hid are put back when that body ends.
+      Op_Namespace_New,
 
       --  Iterate over whole numbers rather than over messages. Value_At
       --  names the first of three consecutive operands -- where the count

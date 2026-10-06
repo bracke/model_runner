@@ -883,7 +883,12 @@ package body Tests.Template_Cases is
       Same ("{{ ' 42x' | int }}", "42", "int reads the leading number");
       Same ("{{ 'x' | string }}", "x", "string is the text as it is");
       Same ("{{ 'x' | safe }}", "x", "safe is the text as it is");
-      Same ("{{ '' | default('d') }}", "d", "default stands in for nothing");
+      Same ("{{ '' | default('d') }}|{{ '' | default('d', true) }}"
+            & "|{{ never_set | default('d') }}"
+            & "|{% if never_set | default(false) %}T{% else %}F{% endif %}",
+            "|d|d|F",
+            "default stands in for what was never set, and for anything "
+            & "false only when told; its stand-in is what it is");
       Same ("{{ 'v' | default('d') }}", "v", "default keeps a value");
       Same ("{{ 'a-b-c' | replace('-', '+') }}", "a+b+c", "replace");
       Same ("{{ ' Ab ' | trim | lower | replace('a', 'x') }}", "xb",
@@ -958,6 +963,90 @@ package body Tests.Template_Cases is
             & "{{ c.get('function').name }}|{{ c.type }}{% endfor %}"
             & "{% endfor %}",
             "f|f|function", "a call's function and type", With_Call => True);
+
+      --  The second crossing, each against what jinja2 writes: tuples,
+      --  a cut made once, a filtered loop, the generation tag, a list of
+      --  messages cut, a brace inside a string, a mapping's pairs.
+      Same ("{% for a in [('x', 1), ('y', 2)] %}{{ a[0] }}{{ a[1] }}"
+            & "{% endfor %}", "x1y2", "a list of tuples");
+      Same ("{{ 'a=b=c'.split('=', 1)[1] }}|{{ 'a=b=c'.split('=', 1)[0] }}",
+            "b=c|a", "a cut at the first marker");
+      Same ("{% for x in [1, 2, 3, 4] if x > 2 %}{{ x }}{% endfor %}", "34",
+            "a loop with a filter");
+      Same ("{% generation %}g{% endgeneration %}", "g",
+            "the generation tag writes its body");
+      Same ("{% for message in messages[1:] %}{{ message.role }}{% endfor %}",
+            "assistant", "a list of messages cut at the front");
+      Same ("{{ '{""a"": {""b"": 1}}' }}", "{""a"": {""b"": 1}}",
+            "closing braces inside a string");
+      Same ("{% for k, v in {'a': 1}.items() %}{{ k }}{{ v }}{% endfor %}"
+            & "|{{ {'a': 1}.items() | list | length }}", "a1|1",
+            "a mapping's items as pairs");
+      Same ("{{ nope is iterable }}|{% set m = {'a': 1} %}"
+            & "{{ m[nope] is defined }}", "True|False",
+            "undefined is iterable, and no key finds nothing");
+
+      --  Messages: compared with what a filter kept of them, indexed from
+      --  the end, cut at the end, asked for a field, taken as a mapping.
+      Same ("{% set u = messages | selectattr('role', 'equalto', 'user')"
+            & " | list %}{% for message in messages %}{{ message == u[-1] }}"
+            & "{{ u[0].role }}{% endfor %}", "TrueuserFalseuser",
+            "a message against what selectattr kept");
+      Same ("{{ messages[-1].role }}|{{ messages[:-1] | length }}|"
+            & "{% for message in messages[:-1] %}{{ message.role }}"
+            & "{{ loop.last }}{% endfor %}", "assistant|1|userTrue",
+            "the last message, and the list without it");
+      Same ("{% for message in messages %}{{ loop.first }}{% endfor %}",
+            "TrueFalse", "loop.first printed");
+      Same ("{% for message in messages %}{{ 'role' not in message }}"
+            & "{{ message is mapping }}{% endfor %}", "FalseTrueFalseTrue",
+            "a message's fields, not in, and a message is a mapping");
+
+      --  Namespaces: a field on a line of its own and a quoted comma,
+      --  one made below the macro that reads it, a list in one grown
+      --  and cut, and one made in a macro hiding the template's.
+      Same ("{% set ns = namespace(a='1,2'," & ASCII.LF
+            & " b=[1, 2]) %}{{ ns.a }}{{ ns.b | length }}", "1,22",
+            "a namespace over two lines");
+      Same ("{% macro m() %}{{ t.s }}{% endmacro %}"
+            & "{% set t = namespace(s='S') %}{{ m() }}", "S",
+            "a namespace made below the macro that reads it");
+      Same ("{% set q = namespace(ids=[]) %}{% set _ = q.ids.append('a') %}"
+            & "{% set _ = q.ids.append('b') %}{{ q.ids[0] }}"
+            & "{% set v = q.ids.pop(0) %}{{ v }}{{ q.ids }}", "aa['b']",
+            "append and pop on a namespace's list");
+      Same ("{% macro m() %}{% set ns = namespace(o='in') %}{{ ns.o }}"
+            & "{% endmacro %}{% set ns = namespace(o='top') %}{{ m() }}"
+            & "{{ ns.o }}", "intop", "a macro's namespace is its own");
+
+      --  Macros: one defined below its caller, keyword arguments.
+      Same ("{% macro a(x) %}[{{ b(x, c=2) }}]{% endmacro %}"
+            & "{% macro b(y, c=1, d=3) %}{{ y }}{{ c }}{{ d }}{% endmacro %}"
+            & "{{ a(0) }}", "[023]",
+            "a macro defined below its caller, called with a keyword");
+
+      --  Values: tests, text, sums.
+      Same ("{% set t = true %}{{ t is boolean }}{{ t is number }}"
+            & "{{ 1 is boolean }}", "TrueTrueFalse", "is boolean");
+      Same ("{% set bos_token = '<b>' %}{{ bos_token }}", "<b>",
+            "a template's own bos_token");
+      Same ("{% set bos_token = bos_token or '' %}[{{ bos_token }}]", "[<s>]",
+            "a template's bos_token set from the model's");
+      Same ("{{ 4 - 'ab' | length }}", "2", "the length of a literal");
+      Same ("{{ '<{}|{}>'.format('a', 1) }}", "<a|1>", "str.format");
+      Same ("{{ '" & ASCII.LF & " a " & ASCII.LF & "' | trim }}", "a",
+            "trim takes line breaks");
+      Same ("{% set d = {'a': 1} %}{{ d.get('b') is none }}", "True",
+            "get answers None");
+      Same ("{{ 'ab' * 2 }}|{{ ('x' * 3) | length }}", "abab|3",
+            "text times a number");
+      Same ("{% set h = '" & [1 .. 600 => 'a'] & "' + 'X' + '"
+            & [1 .. 600 => 'b'] & "' + 'Y' %}{{ h | length }}{{ h[-1] }}",
+            "1202Y", "a sum longer than a kilobyte");
+      Same ("{% if 0 or 0 or 0 or 0 or 0 or 0 or 0 or 0 or 1 %}Y{% endif %}",
+            "Y", "a long chain of or");
+      Same ("{% for k, v in {'c': 1, 'a': 2, 'b': 3} | dictsort %}{{ k }}"
+            & "{% endfor %}", "abc", "dictsort in key order");
    end Expressions_Render_As_The_Language_Would;
 
    --  The value model: what a template holds that is not text -- a list it
