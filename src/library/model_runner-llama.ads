@@ -2832,6 +2832,14 @@ private
       Half_Keys  : Model_Runner.Tensors.Half_Array_Access := null;
       Half_Values : Model_Runner.Tensors.Half_Array_Access := null;
 
+      --  The block past the stack's own keys and values, in full, where the
+      --  stack's cache is not: the block only proposes, attends over its
+      --  own positions alone, and reads them with the exact kernel, so it
+      --  keeps them so whatever the stack keeps -- one layer's worth. Null
+      --  where the stack's cache is exact and holds them itself.
+      Next_Keys   : Model_Runner.Tensors.Real_Array_Access := null;
+      Next_Values : Model_Runner.Tensors.Real_Array_Access := null;
+
       --  And the third storage: one byte an element, with one scale for
       --  every row. The bytes hold a signed value biased by 128, so that a
       --  cache written by this build is bytes rather than a signed type the

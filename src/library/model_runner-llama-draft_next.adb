@@ -47,8 +47,15 @@ begin
 
    declare
       Current : Layer renames Source.Next.all (0);
-      Base    : constant Element_Count := Keys_At (Item, Layer_Index);
-      V_Base  : constant Element_Count := Values_At (Item, Layer_Index);
+      --  In the stack's cache where it is exact, in the block's own where
+      --  it is not.
+      Own     : constant Boolean := Item.Next_Keys /= null;
+      Keys    : constant Model_Runner.Tensors.Real_Array_Access :=
+        (if Own then Item.Next_Keys else Item.Keys);
+      Values  : constant Model_Runner.Tensors.Real_Array_Access :=
+        (if Own then Item.Next_Values else Item.Values);
+      Base    : constant Element_Count := (if Own then 0 else Keys_At (Item, Layer_Index));
+      V_Base  : constant Element_Count := (if Own then 0 else Values_At (Item, Layer_Index));
       Cell    : constant Element_Count := Element_Count (Position);
       Slot    : constant Element_Count := Base + Cell * KV_Width;
       V_Slot  : constant Element_Count := V_Base + Cell * V_Width;
@@ -117,14 +124,14 @@ begin
          Place => K.Everywhere (Rope_Next (Item, Position)));
 
       for Offset in 0 .. KV_Width - 1 loop
-         Item.Keys.all (Slot + Offset) := Item.Key_Row.all (Offset);
+         Keys.all (Slot + Offset) := Item.Key_Row.all (Offset);
       end loop;
       for Offset in 0 .. V_Width - 1 loop
-         Item.Values.all (V_Slot + Offset) := Item.Value_Row.all (Offset);
+         Values.all (V_Slot + Offset) := Item.Value_Row.all (Offset);
       end loop;
 
       Blend_Exact
-        (Item.Query.all, Item.Keys.all, Item.Values.all,
+        (Item.Query.all, Keys.all, Values.all,
          Base, V_Base, KV_Width, V_Width, Heads, Head_Size, Value_Size,
          Element_Count (Settings.Group_Size),
          First => 0, Last => Cell, Scale => Scale,

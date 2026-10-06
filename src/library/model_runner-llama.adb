@@ -7134,6 +7134,8 @@ package body Model_Runner.Llama is
       T.Free (Item.Query_Full);
       T.Free (Item.Last_Final);
       T.Free (Item.Next_Input);
+      T.Free (Item.Next_Keys);
+      T.Free (Item.Next_Values);
       T.Free (Item.Head_Gate);
       T.Free (Item.Mix_Row);
       T.Free (Item.Z_Row);
@@ -9146,7 +9148,7 @@ package body Model_Runner.Llama is
        and then Item.Owner /= null
        and then Item.Owner.Next /= null
        and then Item.Next_Input /= null
-       and then Item.Held = Exact);
+       and then (Item.Held = Exact or else Item.Next_Keys /= null));
 
    function Last_State (Item : Session) return N.Real_Array
    is (if Item.Has_Final and then Item.Last_Final /= null

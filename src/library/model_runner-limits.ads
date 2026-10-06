@@ -47,8 +47,12 @@ package Model_Runner.Limits is
       --  four; the supported architecture uses at most two.
       Max_Tensor_Rank : Natural := 4;
 
-      --  Largest element count in a single tensor.
-      Max_Tensor_Elements : U64 := 1024 * 1024 * 1024;
+      --  Largest element count in a single tensor: the most a Natural
+      --  index reaches, which is what reading one is done with. A gigabyte of
+      --  elements was too few -- a 248,320-token vocabulary over a 5,120-wide
+      --  model, Qwen3.8-27B's head, is 1.27 billion -- and the bytes a tensor
+      --  may take are bounded below either way.
+      Max_Tensor_Elements : U64 := 2 ** 31 - 1;
 
       --  Largest byte size of a single tensor.
       Max_Tensor_Bytes : U64 := 16 * 1024 * 1024 * 1024;

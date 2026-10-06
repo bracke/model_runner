@@ -308,6 +308,13 @@ begin
               (Rows * Blocks_Of (Item.Held_Values, KV_Out), Item.Value_Scales);
       end case;
 
+      --  The block past the stack keeps its own in full where the stack's
+      --  are not: it drafts from them with the exact kernel, at any cache.
+      if Settings.Next_Layers > 0 and then Item.Held /= Exact then
+         T.Allocate (Item.Cells.all (Settings.Layers) * KV, Item.Next_Keys);
+         T.Allocate (Item.Cells.all (Settings.Layers) * KV_Out, Item.Next_Values);
+      end if;
+
       --  The cache in large pages where the host gives them: it is
       --  written a position at a time, and in ordinary pages a generated
       --  token's rows faulted in a page or two a layer.
